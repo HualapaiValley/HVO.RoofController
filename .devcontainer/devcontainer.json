@@ -1,33 +1,100 @@
 {
-  "name": "HVO RoofController",
-  "image": "mcr.microsoft.com/devcontainers/dotnet:9.0",
+  "name": "HVO.RoofController Dev Container",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb",
+    "storage": "16gb"
+  },
   "features": {
-    "ghcr.io/devcontainers/features/docker-from-docker:1": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/git:1": {
+      "ppa": true,
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "installDirectlyFromGitHubRelease": true,
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "configureZshAsDefaultShell": true,
+      "username": "vscode",
+      "userUid": "automatic",
+      "userGid": "automatic",
+      "upgradePackages": false
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true,
+      "dockerDashComposeVersion": "v2",
+      "installDockerComposeSwitch": false
+    }
   },
   "customizations": {
     "vscode": {
-      "settings": {
-        "dotnet.defaultSolution": "src/HVO.RoofController.sln",
-        "dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true,
-        "dotnet.unitTests.runSettingsPath": "src/coverage.runsettings",
-        "csharp.semanticHighlighting.enabled": true,
-        "editor.tabSize": 2,
-        "editor.insertSpaces": true,
-        "editor.formatOnSave": true
-      },
       "extensions": [
         "ms-dotnettools.csdevkit",
         "ms-dotnettools.csharp",
         "ms-dotnettools.vscode-dotnet-runtime",
+        "ms-dotnettools.blazorwasm-companion",
         "ms-azuretools.vscode-docker",
-        "GitHub.vscode-pull-request-github"
-      ]
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        "dotnet.defaultSolution": "src/HVO.RoofController.sln",
+        "dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true,
+        "dotnet.unitTests.runSettingsPath": "src/coverage.runsettings",
+        "omnisharp.enableRoslynAnalyzers": true,
+        "omnisharp.enableEditorConfigSupport": true,
+        "omnisharp.enableImportCompletion": true,
+        "csharp.semanticHighlighting.enabled": true,
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll": "explicit",
+          "source.organizeImports": "explicit"
+        },
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "zsh": { "path": "/bin/zsh" },
+          "bash": { "path": "/bin/bash" }
+        }
+      }
     }
+  },
+  "containerEnv": {
+    "ASPNETCORE_ENVIRONMENT": "Development",
+    "DOTNET_ENVIRONMENT": "Development"
   },
   "forwardPorts": [
     5200,
     8080
   ],
-  "postCreateCommand": "dotnet restore src/HVO.RoofController.sln --configfile src/NuGet.config && sudo apt-get update && sudo apt-get install -y --no-install-recommends libgpiod-dev i2c-tools fontconfig fonts-dejavu-core fonts-open-sans && sudo fc-cache -f"
+  "portsAttributes": {
+    "5200": {
+      "onAutoForward": "silent",
+      "elevateIfNeeded": true
+    },
+    "8080": {
+      "onAutoForward": "silent",
+      "elevateIfNeeded": true
+    }
+  },
+  "otherPortsAttributes": {
+    "onAutoForward": "silent"
+  },
+  "mounts": [
+    {
+      "type": "volume",
+      "source": "x509stores",
+      "target": "/home/vscode/.dotnet/corefx/cryptography/x509stores"
+    }
+  ],
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteUser": "vscode"
 }

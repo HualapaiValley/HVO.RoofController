@@ -1,16 +1,110 @@
 {
-  "name": "HVO RoofController (Raspberry Pi)",
-  "extends": "devcontainer.json",
+  "name": "HVO.RoofController (Raspberry Pi)",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb",
+    "storage": "16gb"
+  },
   "runArgs": [
     "--device=/dev/i2c-1",
     "--device=/dev/gpiomem"
   ],
   "privileged": true,
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {
+      "ppa": true,
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "installDirectlyFromGitHubRelease": true,
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "configureZshAsDefaultShell": true,
+      "username": "vscode",
+      "userUid": "automatic",
+      "userGid": "automatic",
+      "upgradePackages": false
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true,
+      "dockerDashComposeVersion": "v2",
+      "installDockerComposeSwitch": false
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-dotnettools.csharp",
+        "ms-dotnettools.vscode-dotnet-runtime",
+        "ms-dotnettools.blazorwasm-companion",
+        "ms-azuretools.vscode-docker",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        "dotnet.defaultSolution": "src/HVO.RoofController.sln",
+        "dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true,
+        "dotnet.unitTests.runSettingsPath": "src/coverage.runsettings",
+        "omnisharp.enableRoslynAnalyzers": true,
+        "omnisharp.enableEditorConfigSupport": true,
+        "omnisharp.enableImportCompletion": true,
+        "csharp.semanticHighlighting.enabled": true,
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll": "explicit",
+          "source.organizeImports": "explicit"
+        },
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "zsh": { "path": "/bin/zsh" },
+          "bash": { "path": "/bin/bash" }
+        }
+      }
+    }
+  },
+  "containerEnv": {
+    "ASPNETCORE_ENVIRONMENT": "Development",
+    "DOTNET_ENVIRONMENT": "Development"
+  },
+  "forwardPorts": [
+    5200,
+    8080
+  ],
+  "portsAttributes": {
+    "5200": {
+      "onAutoForward": "silent",
+      "elevateIfNeeded": true
+    },
+    "8080": {
+      "onAutoForward": "silent",
+      "elevateIfNeeded": true
+    }
+  },
+  "otherPortsAttributes": {
+    "onAutoForward": "silent"
+  },
   "mounts": [
+    {
+      "type": "volume",
+      "source": "x509stores",
+      "target": "/home/vscode/.dotnet/corefx/cryptography/x509stores"
+    },
     {
       "type": "bind",
       "source": "/proc/device-tree/model",
       "target": "/proc/device-tree/model"
     }
-  ]
+  ],
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteUser": "vscode"
 }
