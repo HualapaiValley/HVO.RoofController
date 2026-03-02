@@ -30,10 +30,12 @@ jobs:
           global-json-file: src/global.json
 
       - name: Restore
-        run: dotnet restore src/HVO.RoofController.sln --configfile src/NuGet.config --nologo -v minimal
+        run: |
+          dotnet restore tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj --configfile src/NuGet.config --nologo -v minimal
 
       - name: Build (Debug)
-        run: dotnet build src/HVO.RoofController.sln --no-restore -c Debug --nologo -v minimal /p:ContinuousIntegrationBuild=true /p:BuildProject=false
+        run: |
+          dotnet build tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj --no-restore -c Debug --nologo -v minimal /p:ContinuousIntegrationBuild=true
 
       - name: Test (Unit)
         run: >
