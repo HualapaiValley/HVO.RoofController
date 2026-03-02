@@ -68,7 +68,7 @@ jobs:
 
       - name: Upload iOS build outputs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-build-artifacts-${{ github.run_id }}
           path: src/HVO.RoofControllerV4.iPad/bin/Debug/**
