@@ -19,11 +19,11 @@
     <PackageVersion Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.0" />
     <PackageVersion Include="Scalar.AspNetCore" Version="2.9.0" />
     <!-- IoT and Hardware -->
-    <PackageVersion Include="System.Device.Gpio" Version="4.0.1" />
+    <PackageVersion Include="System.Device.Gpio" Version="4.1.0" />
     <!-- HVO SDK -->
     <PackageVersion Include="HVO.Core" Version="1.1.0" />
     <PackageVersion Include="HVO.Core.SourceGenerators" Version="1.1.0" />
-    <PackageVersion Include="HVO.Iot.Devices" Version="1.0.0" />
+    <PackageVersion Include="HVO.Iot.Devices" Version="1.1.0" />
     <!-- MAUI / iOS -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageVersion Include="CommunityToolkit.Maui" Version="11.0.0" />
