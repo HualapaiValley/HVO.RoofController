@@ -1,0 +1,16 @@
+{
+  "name": "HVO RoofController (Raspberry Pi)",
+  "extends": "devcontainer.json",
+  "runArgs": [
+    "--device=/dev/i2c-1",
+    "--device=/dev/gpiomem"
+  ],
+  "privileged": true,
+  "mounts": [
+    {
+      "type": "bind",
+      "source": "/proc/device-tree/model",
+      "target": "/proc/device-tree/model"
+    }
+  ]
+}

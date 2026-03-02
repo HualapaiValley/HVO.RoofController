@@ -1,0 +1,33 @@
+{
+  "name": "HVO RoofController",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:9.0",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-from-docker:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "dotnet.defaultSolution": "src/HVO.RoofController.sln",
+        "dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true,
+        "dotnet.unitTests.runSettingsPath": "src/coverage.runsettings",
+        "csharp.semanticHighlighting.enabled": true,
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.formatOnSave": true
+      },
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-dotnettools.csharp",
+        "ms-dotnettools.vscode-dotnet-runtime",
+        "ms-azuretools.vscode-docker",
+        "GitHub.vscode-pull-request-github"
+      ]
+    }
+  },
+  "forwardPorts": [
+    5200,
+    8080
+  ],
+  "postCreateCommand": "dotnet restore src/HVO.RoofController.sln --configfile src/NuGet.config && sudo apt-get update && sudo apt-get install -y --no-install-recommends libgpiod-dev i2c-tools fontconfig fonts-dejavu-core fonts-open-sans && sudo fc-cache -f"
+}
