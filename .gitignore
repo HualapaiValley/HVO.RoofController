@@ -16,7 +16,6 @@
 ## NuGet
 *.nupkg
 *.snupkg
-!.LocalPackages/*.nupkg
 
 ## OS
 .DS_Store

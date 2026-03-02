@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
+- Removed `LocalPackages` NuGet source from `NuGet.config`
+- Removed `.LocalPackages` COPY from Dockerfile
 - Repository documentation standardization
 
 ## [1.0.0] - 2025-03-01
