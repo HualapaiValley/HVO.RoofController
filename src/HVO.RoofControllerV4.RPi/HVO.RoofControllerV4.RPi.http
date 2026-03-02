@@ -1,0 +1,68 @@
+# HVO Roof Controller V4 REST Client Collection
+# Requires the VS Code REST Client extension (humao.rest-client)
+
+# Usage
+# 1. Press Cmd+Shift+P (Ctrl+Shift+P on Windows/Linux)
+# 2. Choose "Tasks: Run Task" ➜ "prepare:roofv4:debug" to launch the API locally
+# 3. Wait for the application to bind to http://localhost:5136 (default)
+# 4. Highlight any request below and use the REST Client "Send Request" action
+
+### Variables
+@baseUrl = http://localhost:5136
+@apiVersion = 4.0
+@contentType = application/json
+
+### Health - Ready
+GET {{baseUrl}}/health/ready
+Accept: {{contentType}}
+
+### Roof status
+# Returns the current controller state, movement flags, and watchdog info
+GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Status
+Accept: {{contentType}}
+
+### Read configuration snapshot
+GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Configuration
+Accept: {{contentType}}
+
+### Update configuration
+POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Configuration
+Content-Type: {{contentType}}
+Accept: {{contentType}}
+
+{
+  "safetyWatchdogTimeoutSeconds": 45,
+  "openRelayId": 1,
+  "closeRelayId": 2,
+  "clearFaultRelayId": 3,
+  "stopRelayId": 4,
+  "enableDigitalInputPolling": true,
+  "digitalInputPollIntervalMilliseconds": 200,
+  "enablePeriodicVerificationWhileMoving": true,
+  "periodicVerificationIntervalSeconds": 10,
+  "useNormallyClosedLimitSwitches": true,
+  "limitSwitchDebounceMilliseconds": 150,
+  "ignorePhysicalLimitSwitches": false
+}
+
+### Open roof
+GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Open
+Accept: {{contentType}}
+
+### Close roof
+GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Close
+Accept: {{contentType}}
+
+### Stop roof
+GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Stop
+Accept: {{contentType}}
+
+### Clear controller fault
+# `pulseMs` controls the relay pulse duration (default 250)
+POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/ClearFault?pulseMs=250
+Accept: {{contentType}}
+
+### Notes
+# - All operations return ProblemDetails on errors with structured logging in the API
+# - Configuration updates are validated; check the response body for validation errors
+# - Status responses reflect the latest hardware poll and include watchdog countdown values

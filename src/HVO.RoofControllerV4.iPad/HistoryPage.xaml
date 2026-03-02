@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:viewModels="clr-namespace:HVO.RoofControllerV4.iPad.ViewModels"
+             xmlns:models="clr-namespace:HVO.RoofControllerV4.iPad.Models"
+             xmlns:converters="clr-namespace:HVO.RoofControllerV4.iPad.Converters"
+             x:Class="HVO.RoofControllerV4.iPad.HistoryPage"
+             x:DataType="viewModels:RoofControllerViewModel"
+             BackgroundColor="#10131A">
+
+    <ContentPage.Resources>
+        <ResourceDictionary>
+            <converters:BoolInvertConverter x:Key="BoolInvertConverter" />
+        </ResourceDictionary>
+    </ContentPage.Resources>
+
+    <Grid Padding="32" RowSpacing="24">
+        <VerticalStackLayout Spacing="12">
+            <Label Text="Activity History"
+                   FontSize="32"
+                   FontAttributes="Bold"
+                   TextColor="#F8F9FA" />
+            <Label Text="Full log of recent commands, status changes, and system notifications."
+                   TextColor="#CED4DA"
+                   FontSize="16"
+                   LineHeight="1.35" />
+        </VerticalStackLayout>
+
+        <Border Grid.Row="1"
+                BackgroundColor="#181C24"
+                StrokeThickness="0"
+                Padding="0"
+                Margin="0,8,0,0">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="24" />
+            </Border.StrokeShape>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0"
+                      Padding="24"
+                      ColumnDefinitions="*,Auto"
+                      BackgroundColor="#222630">
+                    <Label Grid.Column="0"
+                           Text="Recent Activity"
+                           FontSize="20"
+                           FontAttributes="Bold"
+                           TextColor="#F8F9FA" />
+                    <Label Grid.Column="1"
+                           Text="Most recent first"
+                           TextColor="#ADB5BD"
+                           FontSize="14" />
+                </Grid>
+
+                <CollectionView Grid.Row="1"
+                                ItemsSource="{Binding NotificationHistory}"
+                                Margin="0"
+                                BackgroundColor="Transparent">
+                    <CollectionView.EmptyView>
+                        <StackLayout Padding="24" Spacing="8">
+                            <Label Text="No recent events yet."
+                                   TextColor="#ADB5BD"
+                                   FontSize="16" />
+                            <Label Text="Commands and status changes appear here as they occur."
+                                   TextColor="#6C757D"
+                                   FontSize="14" />
+                        </StackLayout>
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate x:DataType="models:NotificationItem">
+                            <Border Padding="20"
+                                    Margin="24,12"
+                                    StrokeThickness="0"
+                                    BackgroundColor="#1F2531"
+                                    Opacity="0.95">
+                                <Border.StrokeShape>
+                                    <RoundRectangle CornerRadius="16" />
+                                </Border.StrokeShape>
+                                <VerticalStackLayout Spacing="6">
+                                    <Label Text="{Binding Title}"
+                                           FontAttributes="Bold"
+                                           FontSize="18"
+                                           TextColor="#F8F9FA" />
+                                    <Label Text="{Binding Message}"
+                                           TextColor="#CED4DA"
+                                           FontSize="15"
+                                           LineBreakMode="WordWrap" />
+                                    <Label Text="{Binding Timestamp, StringFormat='{}{0:yyyy-MM-dd HH:mm:ss}'}"
+                                           TextColor="#868E96"
+                                           FontSize="13" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </Grid>
+        </Border>
+    </Grid>
+
+</ContentPage>

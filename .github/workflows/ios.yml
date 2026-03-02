@@ -1,0 +1,76 @@
+name: iOS (iPad) CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/HVO.RoofControllerV4.iPad/**'
+      - 'src/HVO.RoofControllerV4.Common/**'
+      - 'src/NuGet.config'
+      - 'src/global.json'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    branches: [ main, feature/** ]
+    paths:
+      - 'src/HVO.RoofControllerV4.iPad/**'
+      - 'src/HVO.RoofControllerV4.Common/**'
+      - 'src/NuGet.config'
+      - 'src/global.json'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - '.github/workflows/ios.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios-simulator:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup .NET 9.0 only
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Remove .NET 10 to avoid iOS SDK 26 conflict
+        run: |
+          rm -rf /Users/runner/.dotnet/sdk/10.* 2>/dev/null || true
+          rm -rf /Users/runner/.dotnet/sdk-manifests/10.* 2>/dev/null || true
+          rm -rf /Users/runner/.dotnet/packs/Microsoft.iOS.Sdk.net9.0_26.* 2>/dev/null || true
+          rm -rf /Users/runner/.dotnet/metadata/workloads/10.* 2>/dev/null || true
+          echo "Remaining SDKs:"
+          dotnet --list-sdks
+
+      - name: Install .NET MAUI workload (compatible with Xcode 16)
+        run: dotnet workload install maui --from-rollback-file src/HVO.RoofControllerV4.iPad/workload-rollback.json --ignore-failed-sources
+
+      - name: Restore
+        run: dotnet restore src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj --configfile src/NuGet.config --nologo -v minimal
+
+      - name: Build iOS (Simulator, no codesign) - Debug
+        run: >
+          dotnet build src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
+          -c Debug --no-restore --nologo -v minimal
+          -p:ContinuousIntegrationBuild=true
+          -p:RuntimeIdentifier=iossimulator-arm64
+          -p:Codesign=false
+
+      - name: Upload iOS build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-artifacts-${{ github.run_id }}
+          path: src/HVO.RoofControllerV4.iPad/bin/Debug/**
+          if-no-files-found: warn
+          retention-days: 3

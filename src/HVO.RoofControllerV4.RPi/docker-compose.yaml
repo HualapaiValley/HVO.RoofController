@@ -1,0 +1,30 @@
+services:
+  roof-controller:
+    image: hvov9/roof-controller:v4
+    build:
+      context: .
+      dockerfile: "src/HVO.RoofControllerV4.RPi/Dockerfile"
+      platforms:
+        - linux/arm64
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "true"
+    devices:
+      - "/dev/gpiomem0:/dev/gpiomem"
+      - "/dev/i2c-1:/dev/i2c-1"
+    volumes:
+      - type: bind
+        source: /sys/class/thermal/thermal_zone0/temp
+        target: /sys/class/thermal/thermal_zone0/temp
+        read_only: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - pi

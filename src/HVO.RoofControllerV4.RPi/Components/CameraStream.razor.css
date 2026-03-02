@@ -1,0 +1,119 @@
+.camera-stream {
+    position: relative;
+    max-width: 900px;
+}
+
+.player-frame {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--hvo-body-bg);
+    outline: none;
+}
+
+.player-frame:focus-visible {
+    box-shadow: 0 0 0 0.1rem var(--hvo-focus-ring-inner), 0 0 0 0.25rem var(--hvo-focus-ring-outer);
+}
+
+.player-frame canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: var(--hvo-body-bg);
+}
+
+.player-frame img {
+    display: none;
+}
+
+.controls-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--hvo-body-bg) 0%, transparent) 0%,
+        color-mix(in srgb, var(--hvo-body-bg) 78%, transparent) 100%
+    );
+    backdrop-filter: blur(3px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.controls-bar.is-hidden {
+    opacity: 0;
+    transform: translateY(110%);
+    pointer-events: none;
+}
+
+.control-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    border: 1px solid var(--hvo-border-muted);
+    background: var(--hvo-card-glass);
+    color: var(--hvo-body-color);
+    transition: background-color 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+}
+
+.control-btn i {
+    font-size: 0.95rem;
+    line-height: 1;
+}
+
+.control-btn:hover:not(:disabled) {
+    background: var(--hvo-surface-hover);
+    border-color: var(--hvo-border-stronger);
+    transform: scale(1.05);
+}
+
+.control-btn:active:not(:disabled) {
+    transform: scale(0.94);
+}
+
+.control-btn:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+}
+
+.record-btn.is-active {
+    background: var(--hvo-danger-strong);
+    border-color: var(--hvo-danger-bg);
+}
+
+.record-btn.is-active:hover:not(:disabled) {
+    background: var(--hvo-danger-strong);
+}
+
+.status-chip {
+    margin-left: auto;
+    font-size: 0.72rem;
+    color: var(--hvo-body-color);
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    opacity: 0.82;
+}
+
+.download-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.35rem;
+    font-size: 0.82rem;
+    color: var(--hvo-accent);
+    text-decoration: none;
+}
+
+.download-link:hover {
+    color: var(--hvo-accent-strong);
+    text-decoration: underline;
+}

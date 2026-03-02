@@ -1,0 +1,37 @@
+﻿@rendermode @(new InteractiveServerRenderMode(prerender: false))
+<div class="camera-stream">
+    <div id="@_playerId" class="player-frame" tabindex="0" role="region" aria-label="Camera stream player">
+        <!-- We draw the MJPEG into this canvas so we can snapshot/record -->
+        <canvas id="@_canvasId" width="1280" height="720"></canvas>
+
+        <!-- Hidden <img> keeps the MJPEG stream open -->
+        <img id="@_imageId" alt="Cam02 stream" src="@_src" crossorigin="anonymous" />
+
+        <div class="controls-bar">
+            <button class="control-btn" @onclick="TogglePlayback" disabled="@(!_inited)"
+                    title="@PlaybackButtonTitle" aria-label="@PlaybackButtonTitle">
+                <i class="bi @PlaybackButtonIcon"></i>
+            </button>
+            <button class="control-btn" @onclick="Restart" disabled="@(!_inited)"
+                    title="Restart stream" aria-label="Restart stream">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+            <button class="control-btn" @onclick="Snapshot" disabled="@(!_inited)"
+                    title="Snapshot" aria-label="Snapshot">
+                <i class="bi bi-camera-fill"></i>
+            </button>
+            <button class="control-btn record-btn @GetRecordingClass()" @onclick="ToggleRecord" disabled="@(!_inited)"
+                    title="@RecordButtonTitle" aria-label="@RecordButtonTitle">
+                <i class="bi @RecordButtonIcon"></i>
+            </button>
+            <button class="control-btn" @onclick="Fullscreen" disabled="@(!_inited)"
+                    title="Fullscreen" aria-label="Fullscreen">
+                <i class="bi bi-arrows-fullscreen"></i>
+            </button>
+
+            <span class="status-chip" role="status">@StatusText</span>
+        </div>
+    </div>
+
+    <a id="@_downloadLinkId" class="download-link" style="display:none;" download>Download</a>
+</div>

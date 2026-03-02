@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main, feature/** ]
+  schedule:
+    - cron: '0 2 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: src/global.json
+
+      - name: Restore
+        run: dotnet restore src/HVO.RoofController.sln --configfile src/NuGet.config --nologo -v minimal
+
+      - name: Build (Debug)
+        run: dotnet build src/HVO.RoofController.sln --no-restore -c Debug --nologo -v minimal /p:ContinuousIntegrationBuild=true /p:BuildProject=false
+
+      - name: Test (Unit)
+        run: >
+          dotnet test tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+          --no-build -c Debug --nologo -v minimal
+          --filter "TestCategory!=Integration"
+          --logger "trx;LogFileName=tests.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+
+      - name: Test (Integration - gated)
+        if: |
+          github.ref == 'refs/heads/main' || 
+          github.event_name == 'schedule' || 
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'integration-tests'))
+        run: >
+          dotnet test tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+          --no-build -c Debug --nologo -v minimal
+          --filter "TestCategory=Integration"
+          --logger "trx;LogFileName=tests-integration.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: TestResults/**
+          retention-days: 7

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
+    <RuntimeIdentifiers>linux-arm64;linux-x64;win-x64</RuntimeIdentifiers>
+    <RootNamespace>HVO.RoofControllerV4.RPi</RootNamespace>
+
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" />
+  <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+  <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+    <PackageReference Include="Scalar.AspNetCore" />
+    <PackageReference Include="System.Device.Gpio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="HVO.Iot.Devices" />
+    <PackageReference Include="HVO.Core" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj" />
+    <ProjectReference Include="../HVO.WebSite.Themes/HVO.WebSite.Themes.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Logic/RoofControllerServiceWithSimulatedEvents.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Services/" />
+    <Folder Include="wwwroot/css/" />
+  </ItemGroup>
+
+  <!-- Exclude legacy/unused UI assets to keep V2-only and clean static web assets -->
+  <ItemGroup>
+    <Compile Remove="Components/Pages/RoofControl.razor.cs" />
+  </ItemGroup>
+
+</Project>

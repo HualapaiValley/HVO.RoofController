@@ -1,0 +1,100 @@
+﻿@using System.Linq
+@using Microsoft.AspNetCore.Components
+@using HVO.RoofControllerV4.RPi.Services
+@implements IDisposable
+
+<footer class="global-footer">
+        <section class="global-footer__section global-footer__section--left">
+            @if (_status.LeftNotifications.Count > 0)
+            {
+                var notification = _status.LeftNotifications[0];
+                <span class="footer-chip @GetChipCss(notification.Level)">
+                    <i class="@GetLevelIcon(notification.Level) me-2"></i>@FormatNotification(notification)
+                </span>
+            }
+            else
+            {
+                <span class="text-muted small">No recent notifications</span>
+            }
+        </section>
+
+        <section class="global-footer__section global-footer__section--center">
+            @if (_status.Center is not null)
+            {
+                <span class="footer-chip @GetChipCss(_status.Center.Level)">
+                    <i class="@GetLevelIcon(_status.Center.Level) me-2"></i>@_status.Center.Text
+                </span>
+            }
+            else
+            {
+                <span class="text-muted small">Roof Controller V4</span>
+            }
+        </section>
+
+        <section class="global-footer__section global-footer__section--right">
+            @if (_status.Right is not null)
+            {
+                <span class="footer-chip @GetChipCss(_status.Right.Level)">@_status.Right.Text</span>
+            }
+            else
+            {
+                <span class="text-muted small">Observatory automation ready</span>
+            }
+        </section>
+    </footer>
+
+@code {
+    [Inject]
+    public FooterStatusService FooterStatusService { get; set; } = default!;
+
+    private FooterStatusSnapshot _status = FooterStatusSnapshot.Empty;
+
+    protected override void OnInitialized()
+    {
+        _status = FooterStatusService.Snapshot;
+        FooterStatusService.StatusChanged += HandleStatusChanged;
+    }
+
+    private void HandleStatusChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            _status = FooterStatusService.Snapshot;
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        FooterStatusService.StatusChanged -= HandleStatusChanged;
+        FooterStatusService.Reset();
+    }
+
+    private static string GetChipCss(FooterStatusLevel level) => level switch
+    {
+        FooterStatusLevel.Error => "footer-chip footer-chip--error",
+        FooterStatusLevel.Warning => "footer-chip footer-chip--warning",
+        FooterStatusLevel.Success => "footer-chip footer-chip--success",
+        _ => "footer-chip footer-chip--info"
+    };
+
+    private static string GetLevelIcon(FooterStatusLevel level) => level switch
+    {
+        FooterStatusLevel.Error => "bi bi-exclamation-octagon-fill",
+        FooterStatusLevel.Warning => "bi bi-exclamation-triangle-fill",
+        FooterStatusLevel.Success => "bi bi-check-circle-fill",
+        _ => "bi bi-info-circle-fill"
+    };
+
+    private static string FormatNotification(FooterNotification notification)
+    {
+        if (string.IsNullOrWhiteSpace(notification.Title))
+        {
+            return notification.Message;
+        }
+
+        return string.IsNullOrWhiteSpace(notification.Message)
+            ? notification.Title
+            : $"{notification.Title}: {notification.Message}";
+    }
+}
