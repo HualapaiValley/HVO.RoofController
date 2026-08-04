@@ -151,14 +151,14 @@ public class RoofControllerRelayBehaviorTests
         (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
 
         var errorTransitions = 0;
-        using var errorSignal = new ManualResetEventSlim(false);
+        var errorSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         EventHandler<RoofStatusChangedEventArgs>? handler = null;
         handler = (_, args) =>
         {
             if (args.Status.Status == RoofControllerStatus.Error)
             {
                 Interlocked.Increment(ref errorTransitions);
-                errorSignal.Set();
+                errorSignal.TrySetResult();
             }
         };
         svc.StatusChanged += handler;
@@ -173,10 +173,7 @@ public class RoofControllerRelayBehaviorTests
         svc.SimForwardLimitRaw(false);
         svc.SimReverseLimitRaw(false);
 
-        errorSignal.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue("Error transition should occur exactly once");
-
-        // Allow background event invocation to finish
-        await Task.Delay(20);
+        await errorSignal.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         errorTransitions.Should().Be(1, "Error state should be published only once during both-limit glitch");
         svc.Status.Should().Be(RoofControllerStatus.Error);

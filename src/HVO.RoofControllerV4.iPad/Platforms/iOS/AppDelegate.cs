@@ -8,7 +8,7 @@ public class AppDelegate : MauiUIApplicationDelegate
 {
 	protected override MauiApp CreateMauiApp() => MauiProgram.CreateMauiApp();
 
-	public override bool FinishedLaunching(UIApplication app, NSDictionary options)
+	public override bool FinishedLaunching(UIApplication app, NSDictionary? options)
 	{
 		var launched = base.FinishedLaunching(app, options);
 		ConfigureGlobalAppearance();

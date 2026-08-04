@@ -642,7 +642,7 @@ public sealed partial class RoofControllerViewModel : ObservableObject, IDisposa
         }
     }
 
-    private void OnHealthPopupClosed(object? sender, PopupClosedEventArgs e)
+    private void OnHealthPopupClosed(object? sender, EventArgs e)
     {
         if (sender is HealthStatusPopup popup)
         {
