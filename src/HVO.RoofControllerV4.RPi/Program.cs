@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 using Asp.Versioning;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.OpenApi.Models;
 using Scalar.AspNetCore;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;

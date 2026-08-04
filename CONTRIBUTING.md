@@ -5,7 +5,7 @@ and instructions for contributing to this project.
 
 ## Prerequisites
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker](https://www.docker.com/) (for RPi deployment)
 - A code editor (VS Code with Dev Containers recommended)
 

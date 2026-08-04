@@ -13,9 +13,11 @@ IMAGE_TAG=${IMAGE_TAG:-hvov9/roof-controller:v4}
 CONTAINER_NAME=${CONTAINER_NAME:-roof-controller}
 HOST_PORT=${HOST_PORT:-8080}
 EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
+HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
+IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-true}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REPO_ROOT=$(cd "${SCRIPT_DIR}/../../.." && pwd)
+REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 DOCKERFILE_PATH="${SCRIPT_DIR}/Dockerfile"
 
 if ! docker --context "${DOCKER_CONTEXT}" info >/dev/null 2>&1; then
@@ -54,6 +56,8 @@ run_cmd=(
   --name "${CONTAINER_NAME}"
   --restart unless-stopped
   -p "${HOST_PORT}:8080"
+  --env "HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI}"
+  --env "RoofControllerOptionsV4__IgnorePhysicalLimitSwitches=${IGNORE_PHYSICAL_LIMIT_SWITCHES}"
   --device /dev/gpiomem:/dev/gpiomem
   --device /dev/i2c-1:/dev/i2c-1
   --mount type=bind,src=/sys/class/thermal/thermal_zone0/temp,dst=/sys/class/thermal/thermal_zone0/temp,readonly

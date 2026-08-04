@@ -1,6 +1,6 @@
 # HVO Roof Controller V4
 
-A .NET 9 Blazor Server + ASP.NET Core application that automates the Hualapai Valley Observatory roof. It drives a Lenze SMVector VFD through the Sequent Microsystems 4-Relay/4-Input HAT, exposing a safety-focused REST API, background watchdog service, and modern control UI.
+A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai Valley Observatory roof. It drives a Lenze SMVector VFD through the Sequent Microsystems 4-Relay/4-Input HAT, exposing a safety-focused REST API, background watchdog service, and modern control UI.
 
 ## Highlights
 - Safety-first motion sequencing (STOP-first relay logic, watchdog timers, limit switch handling)
@@ -10,7 +10,7 @@ A .NET 9 Blazor Server + ASP.NET Core application that automates the Hualapai Va
 - Configurable hardware abstractions, including development bypass for disconnected limit wiring
 
 ## Getting Started
-1. Install the .NET 9 SDK (see `global.json` for the pinned version).
+1. Install the .NET 10 SDK (see `global.json` for the pinned version).
 2. Restore and build:
    ```bash
    dotnet build src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj

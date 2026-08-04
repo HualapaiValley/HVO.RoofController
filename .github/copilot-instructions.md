@@ -26,8 +26,8 @@ remote roof control.
 
 ### Technology Stack
 
-- .NET 9 (RPi server and shared libraries)
-- .NET 9 MAUI (iPad client)
+- .NET 10 (RPi server and shared libraries)
+- .NET 10 MAUI (iPad client)
 - ASP.NET Core + Blazor Server (SSR)
 - GPIO / I2C hardware interfaces
 - Docker (RPi deployment)

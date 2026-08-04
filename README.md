@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ci.yml/badge.svg)](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ci.yml)
 [![iOS](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ios.yml/badge.svg)](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ios.yml)
-![.NET 9](https://img.shields.io/badge/.NET-9-512BD4)
+![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 
 Roof Controller V4 for the HVO observatory — Raspberry Pi (Blazor SSR + API)

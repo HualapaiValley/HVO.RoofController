@@ -11,9 +11,10 @@ services:
       - "8080:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      HVO_FORCE_RASPBERRY_PI: "true"
       RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "true"
     devices:
-      - "/dev/gpiomem0:/dev/gpiomem"
+      - "/dev/gpiomem:/dev/gpiomem"
       - "/dev/i2c-1:/dev/i2c-1"
     volumes:
       - type: bind

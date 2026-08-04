@@ -3,7 +3,7 @@
 # -------------------------
 # Build the application
 # -------------------------
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy solution metadata and project files to warm the restore cache
@@ -33,7 +33,7 @@ RUN dotnet publish "HVO.RoofControllerV4.RPi.csproj" \
 # -------------------------
 # Runtime image
 # -------------------------
-FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 ARG HVO_FORCE_RASPBERRY_PI=false
 ARG HVO_CONTAINER_RPI_HINT=""
 WORKDIR /app
