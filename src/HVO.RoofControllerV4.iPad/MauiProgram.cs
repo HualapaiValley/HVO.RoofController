@@ -1,7 +1,6 @@
 ﻿using System.IO;
 using System.Reflection;
 using CommunityToolkit.Maui;
-using CommunityToolkit.Maui.Core;
 using HVO.RoofControllerV4.iPad.Configuration;
 using HVO.RoofControllerV4.iPad.Popups;
 using HVO.RoofControllerV4.iPad.Services;
@@ -82,8 +81,6 @@ public static class MauiProgram
 
 	services.AddHttpClient<IRoofControllerApiClient, RoofControllerApiClient>();
 	services.AddSingleton<IDialogService, DialogService>();
-	services.AddSingleton<IPopupService, PopupService>();
-	services.AddSingleton<IPopupLifecycleController, PopupLifecycleController>();
 	services.AddSingleton<IRoofControllerConfigurationService, RoofControllerConfigurationService>();
 	services.AddTransientPopup<HealthStatusPopup, HealthStatusPopupViewModel>();
 

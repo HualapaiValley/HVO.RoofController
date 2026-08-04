@@ -8,7 +8,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Maui;
-using CommunityToolkit.Maui.Core;
+using CommunityToolkit.Maui.Extensions;
 using CommunityToolkit.Maui.Views;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -18,6 +18,7 @@ using HVO.RoofControllerV4.iPad.Popups;
 using HVO.RoofControllerV4.iPad.Services;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.Core.Results;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Maui.ApplicationModel;
@@ -36,7 +37,7 @@ public sealed partial class RoofControllerViewModel : ObservableObject, IDisposa
     private readonly ILogger<RoofControllerViewModel> _logger;
     private readonly IDialogService _dialogService;
     private readonly IRoofControllerConfigurationService _configurationService;
-    private readonly IPopupService _popupService;
+    private readonly IServiceProvider _serviceProvider;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private readonly SemaphoreSlim _promptSemaphore = new(1, 1);
     private int _promptThreshold;
@@ -63,14 +64,14 @@ public sealed partial class RoofControllerViewModel : ObservableObject, IDisposa
         ILogger<RoofControllerViewModel> logger,
         IDialogService dialogService,
         IRoofControllerConfigurationService configurationService,
-        IPopupService popupService)
+        IServiceProvider serviceProvider)
     {
         _apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
         _options = (options ?? throw new ArgumentNullException(nameof(options))).Value;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
         _configurationService = configurationService ?? throw new ArgumentNullException(nameof(configurationService));
-        _popupService = popupService ?? throw new ArgumentNullException(nameof(popupService));
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _promptThreshold = Math.Max(1, _options.ConnectionFailurePromptThreshold);
         NotificationHistory = new ReadOnlyObservableCollection<NotificationItem>(_notificationHistory);
         _notificationHistory.CollectionChanged += OnNotificationHistoryChanged;
@@ -583,9 +584,11 @@ public sealed partial class RoofControllerViewModel : ObservableObject, IDisposa
     }
 
     [RelayCommand]
-    private void CloseHealthDialog()
+    private async Task CloseHealthDialogAsync()
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        HealthStatusPopup? popup = null;
+
+        await MainThread.InvokeOnMainThreadAsync(() =>
         {
             if (!IsHealthDialogOpen)
             {
@@ -594,8 +597,13 @@ public sealed partial class RoofControllerViewModel : ObservableObject, IDisposa
 
             IsHealthDialogOpen = false;
             HealthDialogError = null;
-            _activeHealthPopup?.Close();
-        });
+            popup = _activeHealthPopup;
+        }).ConfigureAwait(false);
+
+        if (popup is not null)
+        {
+            await MainThread.InvokeOnMainThreadAsync(popup.CloseAsync).ConfigureAwait(false);
+        }
     }
 
     private async Task EnsureHealthDialogPopupAsync()
@@ -617,27 +625,16 @@ public sealed partial class RoofControllerViewModel : ObservableObject, IDisposa
         {
             await MainThread.InvokeOnMainThreadAsync(() =>
             {
-                HealthStatusPopup? createdPopup = null;
-
-                _popupService.ShowPopup<HealthStatusPopupViewModel>(viewModel =>
+                var popup = _serviceProvider.GetRequiredService<HealthStatusPopup>();
+                if (popup.BindingContext is not HealthStatusPopupViewModel viewModel)
                 {
-                    if (viewModel is null)
-                    {
-                        throw new InvalidOperationException("Popup view model was not provided.");
-                    }
-
-                    viewModel.Dashboard = this;
-
-                    createdPopup = viewModel.Popup;
-                });
-
-                if (createdPopup is null)
-                {
-                    throw new InvalidOperationException("Health status popup instance was not created.");
+                    throw new InvalidOperationException("Health status popup view model was not provided.");
                 }
 
-                _activeHealthPopup = createdPopup;
+                viewModel.Dashboard = this;
+                _activeHealthPopup = popup;
                 _activeHealthPopup.Closed += OnHealthPopupClosed;
+                (Shell.Current ?? throw new InvalidOperationException("Shell is not initialized.")).ShowPopup(_activeHealthPopup);
             }).ConfigureAwait(false);
         }
     }
