@@ -12,7 +12,7 @@ This review covers the Raspberry Pi control service, iPad client, hardware abstr
 - iOS: validated by the macOS 26 / Xcode 26.6 GitHub Actions workflow
 - Stable package updates: none available from configured sources
 - Deprecated packages: none
-- Known advisory: transitive `Microsoft.OpenApi 2.0.0` is affected by `GHSA-v5pm-xwqc-g5wc`; the advisory is narrowly suppressed because `Microsoft.AspNetCore.OpenApi 10.0.10` currently fixes that transitive version
+- Known advisory: transitive `Microsoft.OpenApi 2.0.0` is affected by `GHSA-v5pm-xwqc-g5wc`; the advisory is narrowly suppressed pending remediation in the upstream `Microsoft.AspNetCore.OpenApi` dependency graph
 
 The full solution cannot be built on Linux because `net10.0-ios` requires the Apple toolchain. Linux validation must build the RPi test project, which covers the server, common library, theme library, and tests.
 

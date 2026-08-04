@@ -4,6 +4,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.RPi.Middleware;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Middleware;
@@ -14,8 +15,9 @@ public sealed class HvoServiceExceptionHandlerTests
     [TestMethod]
     public async Task TryHandleAsync_ShouldReturnBadRequest_ForArgumentException()
     {
-        var context = CreateHttpContext();
-        var handler = new HvoServiceExceptionHandler(NullLogger<HvoServiceExceptionHandler>.Instance);
+        using var services = CreateServices();
+        var context = CreateHttpContext(services);
+        var handler = CreateHandler(services);
         var exception = new ArgumentException("bad request");
 
         var handled = await handler.TryHandleAsync(context, exception, CancellationToken.None);
@@ -28,8 +30,9 @@ public sealed class HvoServiceExceptionHandlerTests
     [TestMethod]
     public async Task TryHandleAsync_ShouldReturnTimeout_ForTimeoutException()
     {
-        var context = CreateHttpContext();
-        var handler = new HvoServiceExceptionHandler(NullLogger<HvoServiceExceptionHandler>.Instance);
+        using var services = CreateServices();
+        var context = CreateHttpContext(services);
+        var handler = CreateHandler(services);
         var exception = new TimeoutException("timed out");
 
         var handled = await handler.TryHandleAsync(context, exception, CancellationToken.None);
@@ -42,8 +45,9 @@ public sealed class HvoServiceExceptionHandlerTests
     [TestMethod]
     public async Task TryHandleAsync_ShouldReturnInternalServerError_ForUnknownException()
     {
-        var context = CreateHttpContext();
-        var handler = new HvoServiceExceptionHandler(NullLogger<HvoServiceExceptionHandler>.Instance);
+        using var services = CreateServices();
+        var context = CreateHttpContext(services);
+        var handler = CreateHandler(services);
         var exception = new InvalidOperationException("boom");
 
         var handled = await handler.TryHandleAsync(context, exception, CancellationToken.None);
@@ -54,17 +58,39 @@ public sealed class HvoServiceExceptionHandlerTests
         problem.Detail.Should().NotContain(exception.Message);
     }
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static ServiceProvider CreateServices()
+    {
+        var services = new ServiceCollection();
+        services.AddProblemDetails(options =>
+        {
+            options.CustomizeProblemDetails = context =>
+            {
+                context.ProblemDetails.Instance = $"{context.HttpContext.Request.Method} {context.HttpContext.Request.Path}";
+                context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
+                context.ProblemDetails.Extensions["timestamp"] = DateTime.UtcNow;
+            };
+        });
+        return services.BuildServiceProvider();
+    }
+
+    private static HvoServiceExceptionHandler CreateHandler(IServiceProvider services) =>
+        new(
+            NullLogger<HvoServiceExceptionHandler>.Instance,
+            services.GetRequiredService<IProblemDetailsService>());
+
+    private static DefaultHttpContext CreateHttpContext(IServiceProvider services)
     {
         var context = new DefaultHttpContext();
+        context.RequestServices = services;
         context.Response.Body = new MemoryStream();
+        context.Request.Method = HttpMethods.Get;
         context.Request.Path = "/api/test";
         return context;
     }
 
     private static async Task<ProblemDetails> AssertProblemDetailsAsync(HttpContext context, string expectedTitle, string expectedDetail)
     {
-        context.Response.ContentType.Should().StartWith("application/json");
+        context.Response.ContentType.Should().StartWith("application/problem+json");
         context.Response.Body.Seek(0, SeekOrigin.Begin);
 
         var problem = await JsonSerializer.DeserializeAsync<ProblemDetails>(context.Response.Body, new JsonSerializerOptions
@@ -75,7 +101,7 @@ public sealed class HvoServiceExceptionHandlerTests
         problem.Should().NotBeNull();
         problem!.Title.Should().Be(expectedTitle);
         problem.Detail.Should().Be(expectedDetail);
-        problem.Instance.Should().Be("/api/test");
+        problem.Instance.Should().Be("GET /api/test");
         problem.Extensions.Should().ContainKey("traceId");
         problem.Extensions.Should().ContainKey("timestamp");
         return problem;
