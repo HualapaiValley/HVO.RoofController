@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -17,6 +20,7 @@ using HVO.Core.Results;
 namespace HVO.RoofControllerV4.RPi.Tests.Controllers;
 
 [TestClass]
+[DoNotParallelize]
 public class RoofControllerApiTests
 {
     private WebApplicationFactory<Program> _factory = null!;
@@ -154,6 +158,61 @@ public class RoofControllerApiTests
     Assert.IsTrue(payload.IsUsingPhysicalHardware);
     Assert.IsTrue(payload.IsIgnoringPhysicalLimitSwitches);
         _roofServiceMock.Verify(s => s.Open(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Open_Success_EmitsRoofCommandTraceAndMetric()
+    {
+        var activities = new ConcurrentQueue<Activity>();
+        var commandMeasurements = new ConcurrentQueue<(long Value, string? Command, string? Outcome)>();
+
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = static source => source.Name == "HVO.RoofController.RPi",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activities.Enqueue
+        };
+        ActivitySource.AddActivityListener(activityListener);
+
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "HVO.RoofController.RPi"
+                && instrument.Name == "roof.controller.commands")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
+        {
+            string? command = null;
+            string? outcome = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "roof.command")
+                {
+                    command = tag.Value?.ToString();
+                }
+                else if (tag.Key == "roof.outcome")
+                {
+                    outcome = tag.Value?.ToString();
+                }
+            }
+
+            commandMeasurements.Enqueue((measurement, command, outcome));
+        });
+        meterListener.Start();
+
+        var response = await _client.GetAsync("/api/v4.0/RoofControl/Open");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var activity = activities.SingleOrDefault(stoppedActivity =>
+            Equals(stoppedActivity.GetTagItem("roof.command"), "open"));
+        Assert.IsNotNull(activity);
+        Assert.AreEqual("roof.command", activity.OperationName);
+        Assert.AreEqual("open", activity.GetTagItem("roof.command"));
+        Assert.AreEqual("success", activity.GetTagItem("roof.outcome"));
+        Assert.IsTrue(commandMeasurements.Any(measurement => measurement is (1, "open", "success")));
     }
 
     [TestMethod]

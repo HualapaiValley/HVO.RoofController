@@ -78,6 +78,7 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
 
             _lastIn1 = isHigh; // store raw electrical level (HIGH = circuit closed / not at limit)
             bool limitReached = _roofControllerOptions.UseNormallyClosedLimitSwitches ? !isHigh : isHigh;
+            RoofControllerTelemetry.RecordLimitSwitchTransition("open", limitReached);
             if (limitReached)
             {
                 InternalStop(RoofControllerStopReason.LimitSwitchReached);
@@ -114,6 +115,7 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
 
             _lastIn2 = isHigh;
             bool limitReached = _roofControllerOptions.UseNormallyClosedLimitSwitches ? !isHigh : isHigh;
+            RoofControllerTelemetry.RecordLimitSwitchTransition("closed", limitReached);
             if (limitReached)
             {
                 InternalStop(RoofControllerStopReason.LimitSwitchReached);
@@ -133,6 +135,7 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
         lock (_syncLock)
         {
             _lastIn3 = isHigh;
+            RoofControllerTelemetry.RecordFaultTransition(isHigh);
             if (isHigh)
             {
                 // Fail-safe: stop movement immediately on fault and set error
@@ -806,6 +809,12 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
                 if (IsDisposed)
                     return;
 
+                if (!ReferenceEquals(sender, _safetyWatchdogTimer) || !_watchdogActive)
+                {
+                    _logger.LogTrace("Ignoring stale safety watchdog callback");
+                    return;
+                }
+
                 InternalStop(RoofControllerStopReason.SafetyWatchdogTimeout);
                 var previousStatus = Status;
                 Status = RoofControllerStatus.Error;
@@ -1209,6 +1218,7 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
             StopSafetyWatchdog_NoLock();
             // Set the last stop reason for external access
             this.LastStopReason = reason;
+            RoofControllerTelemetry.RecordSafetyStop(reason, GetSafetyStopSource(reason));
 
             // DON'T set status to Stopped here - let UpdateRoofStatus determine the correct status
             if (_logger.IsEnabled(LogLevel.Information))
@@ -1236,6 +1246,35 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
         }
     }
 
+    private RoofSafetyStopSource GetSafetyStopSource(RoofControllerStopReason reason)
+    {
+        if (reason == RoofControllerStopReason.SafetyWatchdogTimeout)
+        {
+            return RoofSafetyStopSource.Watchdog;
+        }
+
+        if (reason == RoofControllerStopReason.EmergencyStop && _lastIn3 == true)
+        {
+            return RoofSafetyStopSource.Fault;
+        }
+
+        if (reason != RoofControllerStopReason.LimitSwitchReached || _roofControllerOptions.IgnorePhysicalLimitSwitches)
+        {
+            return RoofSafetyStopSource.Unknown;
+        }
+
+        var normalState = _roofControllerOptions.UseNormallyClosedLimitSwitches;
+        var openReached = _lastIn1.HasValue && _lastIn1.Value != normalState;
+        var closedReached = _lastIn2.HasValue && _lastIn2.Value != normalState;
+
+        return (openReached, closedReached) switch
+        {
+            (true, false) => RoofSafetyStopSource.OpenLimitSwitch,
+            (false, true) => RoofSafetyStopSource.ClosedLimitSwitch,
+            _ => RoofSafetyStopSource.Unknown
+        };
+    }
+
     public virtual Result<RoofControllerStatus> Open()
     {
         try
@@ -1260,8 +1299,9 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
                 {
                     if (_logger.IsEnabled(LogLevel.Debug))
                     {
-                        _logger.LogDebug("Open command ignored: already opening");
+                        _logger.LogDebug("Open command refreshed while already opening");
                     }
+                    StartSafetyWatchdog();
                     return Result<RoofControllerStatus>.Success(this.Status);
                 }
 
@@ -1369,8 +1409,9 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
                 {
                     if (_logger.IsEnabled(LogLevel.Debug))
                     {
-                        _logger.LogDebug("Close command ignored: already closing");
+                        _logger.LogDebug("Close command refreshed while already closing");
                     }
+                    StartSafetyWatchdog();
                     return Result<RoofControllerStatus>.Success(this.Status);
                 }
 
@@ -1699,6 +1740,8 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
 
     private void RaiseStatusChanged_NoLock()
     {
+        RecordTelemetryState_NoLock();
+
         // Build snapshot and capture handlers while holding lock, then release before invoking
         var handler = StatusChanged;
         RoofStatusChangedEventArgs? args = null;
@@ -1739,6 +1782,26 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
             }
             catch { }
         }
+    }
+
+    private void RecordTelemetryState_NoLock()
+    {
+        var normalState = _roofControllerOptions.UseNormallyClosedLimitSwitches;
+        var openLimitReached = !_roofControllerOptions.IgnorePhysicalLimitSwitches
+            && _lastIn1.HasValue
+            && _lastIn1.Value != normalState;
+        var closedLimitReached = !_roofControllerOptions.IgnorePhysicalLimitSwitches
+            && _lastIn2.HasValue
+            && _lastIn2.Value != normalState;
+
+        RoofControllerTelemetry.RecordControllerState(
+            openLimitReached,
+            closedLimitReached,
+            _lastIn3 ?? false,
+            _lastIn4 ?? false,
+            _watchdogActive,
+            WatchdogSecondsRemaining,
+            Status);
     }
 }
 }

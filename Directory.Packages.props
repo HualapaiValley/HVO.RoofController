@@ -22,7 +22,14 @@
     <!-- HVO SDK -->
     <PackageVersion Include="HVO.Core" Version="1.1.1" />
     <PackageVersion Include="HVO.Core.SourceGenerators" Version="1.1.1" />
+    <PackageVersion Include="HVO.Enterprise.Telemetry" Version="1.0.3" />
+    <PackageVersion Include="HVO.Enterprise.Telemetry.OpenTelemetry" Version="1.1.2" />
     <PackageVersion Include="HVO.Iot.Devices" Version="1.2.0" />
+    <!-- OpenTelemetry -->
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.16.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.16.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.16.0" />
     <!-- MAUI / iOS -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="CommunityToolkit.Maui" Version="15.0.0" />
