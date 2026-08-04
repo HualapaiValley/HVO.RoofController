@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using HVO.Core.Results;
 using System.Collections.Generic;
 using System.Linq;
@@ -151,7 +152,10 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public ActionResult<RoofStatusResponse> DoRoofOpen()
         {
+            var startTimestamp = Stopwatch.GetTimestamp();
+            using var activity = RoofControllerTelemetry.StartCommand("open");
             var result = this._roofController.Open();
+            RoofControllerTelemetry.CompleteCommand(activity, "open", result.IsSuccessful, startTimestamp);
             
             return result.Match(
                 success: status => Ok(CreateStatus(status)),
@@ -183,7 +187,10 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public ActionResult<RoofStatusResponse> DoRoofClose()
         {
+            var startTimestamp = Stopwatch.GetTimestamp();
+            using var activity = RoofControllerTelemetry.StartCommand("close");
             var result = this._roofController.Close();
+            RoofControllerTelemetry.CompleteCommand(activity, "close", result.IsSuccessful, startTimestamp);
             
             return result.Match(
                 success: status => Ok(CreateStatus(status)),
@@ -215,7 +222,10 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public ActionResult<RoofStatusResponse> DoRoofStop()
         {
+            var startTimestamp = Stopwatch.GetTimestamp();
+            using var activity = RoofControllerTelemetry.StartCommand("stop");
             var result = this._roofController.Stop();
+            RoofControllerTelemetry.CompleteCommand(activity, "stop", result.IsSuccessful, startTimestamp);
             
             return result.Match(
                 success: status => Ok(CreateStatus(status)),
@@ -248,7 +258,10 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<bool>> DoClearFault([FromQuery] int pulseMs = 250, CancellationToken cancellationToken = default)
         {
+            var startTimestamp = Stopwatch.GetTimestamp();
+            using var activity = RoofControllerTelemetry.StartCommand("clear_fault");
             var result = await this._roofController.ClearFault(pulseMs, cancellationToken).ConfigureAwait(false); // ClearFaultRelayId used internally
+            RoofControllerTelemetry.CompleteCommand(activity, "clear_fault", result.IsSuccessful, startTimestamp);
             return result.Match(
                 success: ok => Ok(ok),
                 failure: error => error switch

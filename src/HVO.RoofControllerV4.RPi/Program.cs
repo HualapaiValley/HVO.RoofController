@@ -1,8 +1,12 @@
 using System;
 using System.Text.Json.Serialization;
 using Asp.Versioning;
+using HVO.Enterprise.Telemetry;
+using HVO.Enterprise.Telemetry.OpenTelemetry;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
@@ -44,6 +48,7 @@ public class Program
         services.Configure<RoofControllerOptionsV4>(Configuration.GetSection(nameof(RoofControllerOptionsV4)));
         services.AddSingleton<IValidateOptions<RoofControllerOptionsV4>, RoofControllerOptionsV4Validator>();
         services.Configure<RoofControllerHostOptionsV4>(Configuration.GetSection(nameof(RoofControllerHostOptionsV4)));
+        ConfigureTelemetry(services, Configuration, Environment);
 
         // Add Razor Components for Blazor Server
         services.AddRazorComponents()
@@ -135,6 +140,39 @@ public class Program
 
         // Add HttpContextAccessor for Blazor components
         services.AddHttpContextAccessor();
+    }
+
+    private static void ConfigureTelemetry(
+        IServiceCollection services,
+        IConfiguration configuration,
+        IWebHostEnvironment environment)
+    {
+        services.AddTelemetry(configuration.GetSection("Telemetry"));
+
+        var endpoint = configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return;
+        }
+
+        services.AddOpenTelemetryExport(options =>
+        {
+            options.EnableTraceExport = false;
+            options.EnableMetricsExport = false;
+            options.EnableStandardMeters = true;
+            options.AdditionalActivitySources.Add(RoofControllerTelemetry.InstrumentationName);
+            options.AdditionalMeterNames.Add(RoofControllerTelemetry.InstrumentationName);
+        });
+
+        services.AddOpenTelemetry()
+            .WithTracing(tracerProvider => tracerProvider
+                .AddSource(RoofControllerTelemetry.InstrumentationName)
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddOtlpExporter())
+            .WithMetrics(meterProvider => meterProvider
+                .AddMeter(RoofControllerTelemetry.InstrumentationName)
+                .AddOtlpExporter());
     }
 
     private static void ApplyHardwareDetectionOverrides(ConfigurationManager configuration)

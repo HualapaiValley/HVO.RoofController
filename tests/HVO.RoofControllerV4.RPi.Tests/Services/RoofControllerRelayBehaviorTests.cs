@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Linq;
+using System.Diagnostics.Metrics;
 using FluentAssertions;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
@@ -14,6 +15,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace HVO.RoofControllerV4.RPi.Tests.Services;
 
 [TestClass]
+[DoNotParallelize]
 public class RoofControllerRelayBehaviorTests
 {
     private const int OpenRelayIndex = 1;
@@ -41,6 +43,8 @@ public class RoofControllerRelayBehaviorTests
             InternalStopCallCount++;
             base.InternalStop(reason);
         }
+
+        public void TriggerSafetyWatchdog() => SafetyWatchdog_Elapsed(_safetyWatchdogTimer, null!);
     }
 
     private static TestableRoofControllerService Create(FakeRoofHat hat, TimeSpan? watchdog = null, TimeSpan? debounce = null)
@@ -238,6 +242,213 @@ public class RoofControllerRelayBehaviorTests
             ((byte)0x02, (byte)CloseRelayIndex),
             ((byte)0x02, (byte)StopRelayIndex)
         }, "Limit stop should drop direction relays before de-energizing STOP");
+    }
+
+    [TestMethod]
+    public async Task LimitStop_ShouldRecordBoundedSafetyStopMetric()
+    {
+        var safetyStops = new List<(string? Reason, string? Source)>();
+        var limitTransitions = new List<(string? Switch, string? State)>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "HVO.RoofController.RPi"
+                && instrument.Name is "roof.controller.safety.stops" or "roof.controller.limit.switch.events")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            string? reason = null;
+            string? source = null;
+            string? limitSwitch = null;
+            string? limitState = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "roof.stop.reason")
+                {
+                    reason = tag.Value?.ToString();
+                }
+                else if (tag.Key == "roof.stop.source")
+                {
+                    source = tag.Value?.ToString();
+                }
+                else if (tag.Key == "roof.limit.switch")
+                {
+                    limitSwitch = tag.Value?.ToString();
+                }
+                else if (tag.Key == "roof.limit.state")
+                {
+                    limitState = tag.Value?.ToString();
+                }
+            }
+
+            if (reason is not null)
+            {
+                safetyStops.Add((reason, source));
+            }
+            else if (limitSwitch is not null)
+            {
+                limitTransitions.Add((limitSwitch, limitState));
+            }
+        });
+        meterListener.Start();
+
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var service = Create(hat);
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Open().IsSuccessful.Should().BeTrue();
+
+        hat.SetInputs(false, true, false, false);
+        service.SimForwardLimitRaw(false);
+
+        safetyStops.Should().Contain((RoofControllerStopReason.LimitSwitchReached.ToString(), "open-limit"));
+        limitTransitions.Should().Contain(("open", "reached"));
+
+        var closedHat = new FakeRoofHat();
+        closedHat.SetInputs(true, true, false, false);
+        var closedService = Create(closedHat);
+        (await closedService.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        closedService.Close().IsSuccessful.Should().BeTrue();
+
+        closedHat.SetInputs(true, false, false, false);
+        closedService.SimReverseLimitRaw(false);
+
+        safetyStops.Should().Contain((RoofControllerStopReason.LimitSwitchReached.ToString(), "closed-limit"));
+        limitTransitions.Should().Contain(("closed", "reached"));
+    }
+
+    [TestMethod]
+    public async Task FaultAndWatchdogStops_ShouldRecordDistinctTelemetrySources()
+    {
+        var safetyStops = new List<(string? Reason, string? Source)>();
+        var faultStates = new List<string?>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "HVO.RoofController.RPi"
+                && instrument.Name is "roof.controller.safety.stops" or "roof.controller.fault.events")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((instrument, _, tags, _) =>
+        {
+            string? reason = null;
+            string? source = null;
+            string? faultState = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "roof.stop.reason")
+                {
+                    reason = tag.Value?.ToString();
+                }
+                else if (tag.Key == "roof.stop.source")
+                {
+                    source = tag.Value?.ToString();
+                }
+                else if (tag.Key == "roof.fault.state")
+                {
+                    faultState = tag.Value?.ToString();
+                }
+            }
+
+            if (instrument.Name == "roof.controller.safety.stops")
+            {
+                safetyStops.Add((reason, source));
+            }
+            else if (faultState is not null)
+            {
+                faultStates.Add(faultState);
+            }
+        });
+        meterListener.Start();
+
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var service = Create(hat);
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Open().IsSuccessful.Should().BeTrue();
+
+        hat.SetInputs(true, true, true, false);
+        service.SimFaultRaw(true);
+
+        safetyStops.Should().Contain((RoofControllerStopReason.EmergencyStop.ToString(), "fault"));
+        faultStates.Should().Contain("active");
+
+        var watchdogHat = new FakeRoofHat();
+        watchdogHat.SetInputs(true, true, false, false);
+        var watchdogService = Create(watchdogHat);
+        (await watchdogService.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        watchdogService.Open().IsSuccessful.Should().BeTrue();
+        watchdogService.TriggerSafetyWatchdog();
+
+        safetyStops.Should().Contain((RoofControllerStopReason.SafetyWatchdogTimeout.ToString(), "watchdog"));
+    }
+
+    [TestMethod]
+    public async Task ControllerStateGauges_ShouldPublishLiveSafetyState()
+    {
+        var longMeasurements = new List<(string Name, long Value, string? TagValue)>();
+        var doubleMeasurements = new List<(string Name, double Value)>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "HVO.RoofController.RPi"
+                && instrument.Name is "roof.controller.limit.switch.state"
+                    or "roof.controller.fault.active"
+                    or "roof.controller.watchdog.active"
+                    or "roof.controller.watchdog.remaining"
+                    or "roof.controller.drive.at_speed"
+                    or "roof.controller.status")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+        {
+            string? tagValue = null;
+            foreach (var tag in tags)
+            {
+                tagValue = tag.Value?.ToString();
+            }
+
+            longMeasurements.Add((instrument.Name, measurement, tagValue));
+        });
+        meterListener.SetMeasurementEventCallback<double>((instrument, measurement, _, _) =>
+        {
+            doubleMeasurements.Add((instrument.Name, measurement));
+        });
+        meterListener.Start();
+
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var service = Create(hat);
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Open().IsSuccessful.Should().BeTrue();
+        hat.SetInputs(true, true, false, true);
+        service.SimAtSpeedRaw(true);
+
+        meterListener.RecordObservableInstruments();
+
+        longMeasurements.Should().Contain(("roof.controller.limit.switch.state", 0, "open"));
+        longMeasurements.Should().Contain(("roof.controller.limit.switch.state", 0, "closed"));
+        longMeasurements.Should().Contain(("roof.controller.fault.active", 0, null));
+        longMeasurements.Should().Contain(("roof.controller.watchdog.active", 1, null));
+        longMeasurements.Should().Contain(("roof.controller.drive.at_speed", 1, null));
+        longMeasurements.Should().Contain(("roof.controller.status", 1, RoofControllerStatus.Opening.ToString()));
+        doubleMeasurements.Should().Contain(measurement =>
+            measurement.Name == "roof.controller.watchdog.remaining"
+            && measurement.Value > 0
+            && measurement.Value <= 10);
+
+        hat.SetInputs(true, true, true, true);
+        service.SimFaultRaw(true);
+        meterListener.RecordObservableInstruments();
+
+        longMeasurements.Should().Contain(("roof.controller.fault.active", 1, null));
     }
 
     [TestMethod]
