@@ -29,13 +29,15 @@ and iPad (.NET MAUI) applications.
 ## Quick Start
 
 ```bash
-# Build
+# Build the portable server graph
 cd src
-dotnet build HVO.RoofController.sln
+dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
 
-# Test
+# Test the server
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/
 ```
+
+The full solution includes the `net10.0-ios` project and must be built on macOS with the MAUI workload and a supported Xcode version. GitHub Actions performs that iOS validation.
 
 ## Docker Deployment
 

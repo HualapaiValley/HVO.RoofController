@@ -58,6 +58,9 @@ public class RoofControllerPeriodicVerificationTests
 
             // Assert
             svc.Status.Should().Be(RoofControllerStatus.Open, "periodic verification should force hardware refresh and detect open limit");
+            svc.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
+            svc.IsWatchdogActive.Should().BeFalse();
+            hat.RelayMask.Should().Be(0x00, "periodic verification must de-energize all relays after detecting a limit");
         }
         finally
         {

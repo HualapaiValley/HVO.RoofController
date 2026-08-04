@@ -18,18 +18,20 @@ and instructions for contributing to this project.
    cd HVO.RoofController
    ```
 
-2. Build the solution:
+2. Build the portable server graph:
 
    ```bash
    cd src
-   dotnet build HVO.RoofController.sln
+   dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
    ```
 
 3. Run tests:
 
    ```bash
-   dotnet test tests/HVO.RoofControllerV4.RPi.Tests/
+   dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/
    ```
+
+   The full solution includes the `net10.0-ios` project and requires macOS, the MAUI workload, and a supported Xcode version.
 
 ## Development Workflow
 

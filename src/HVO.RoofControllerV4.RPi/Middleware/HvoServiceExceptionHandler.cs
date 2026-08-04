@@ -11,10 +11,14 @@ namespace HVO.RoofControllerV4.RPi.Middleware
     public class HvoServiceExceptionHandler : IExceptionHandler
     {
         private readonly ILogger<HvoServiceExceptionHandler> _logger;
+        private readonly IProblemDetailsService _problemDetailsService;
 
-        public HvoServiceExceptionHandler(ILogger<HvoServiceExceptionHandler> logger)
+        public HvoServiceExceptionHandler(
+            ILogger<HvoServiceExceptionHandler> logger,
+            IProblemDetailsService problemDetailsService)
         {
             _logger = logger;
+            _problemDetailsService = problemDetailsService;
         }
 
         public async ValueTask<bool> TryHandleAsync(
@@ -30,16 +34,18 @@ namespace HVO.RoofControllerV4.RPi.Middleware
             {
                 Status = statusCode,
                 Title = title,
-                Detail = exception.Message,
-                Instance = httpContext.Request.Path
+                Detail = statusCode >= StatusCodes.Status500InternalServerError
+                    ? "An unexpected error occurred. Use the trace ID when contacting support."
+                    : exception.Message
             };
 
             httpContext.Response.StatusCode = statusCode;
-            httpContext.Response.ContentType = "application/json";
-
-            await httpContext.Response.WriteAsJsonAsync(problemDetails, cancellationToken);
-
-            return true;
+            return await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
+            {
+                HttpContext = httpContext,
+                Exception = exception,
+                ProblemDetails = problemDetails
+            });
         }
 
         private static (int StatusCode, string Title) MapExceptionToResponse(Exception exception)

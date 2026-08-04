@@ -56,6 +56,9 @@ run_cmd=(
   --name "${CONTAINER_NAME}"
   --restart unless-stopped
   -p "${HOST_PORT}:8080"
+  --log-driver local
+  --log-opt max-size=10m
+  --log-opt max-file=5
   --env "HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI}"
   --env "RoofControllerOptionsV4__IgnorePhysicalLimitSwitches=${IGNORE_PHYSICAL_LIMIT_SWITCHES}"
   --device /dev/gpiomem:/dev/gpiomem

@@ -738,6 +738,15 @@ public class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncDisposabl
                         {
                             _logger.LogTrace("Periodic verification tick - forcing hardware status refresh");
                             UpdateRoofStatus(forceRead: true);
+
+                            if (Status is RoofControllerStatus.Open or RoofControllerStatus.Closed or RoofControllerStatus.Error)
+                            {
+                                var stopReason = Status == RoofControllerStatus.Error
+                                    ? RoofControllerStopReason.EmergencyStop
+                                    : RoofControllerStopReason.LimitSwitchReached;
+                                InternalStop(stopReason);
+                                shouldContinue = false;
+                            }
                         }
                         else
                         {
