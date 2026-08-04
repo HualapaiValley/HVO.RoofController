@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build-ios-simulator:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
@@ -42,6 +42,9 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: src/global.json
+
+      - name: Select Xcode 26.6
+        run: sudo xcode-select --switch /Applications/Xcode_26.6.app
 
       - name: Install .NET MAUI workload
         run: dotnet workload install maui --ignore-failed-sources
