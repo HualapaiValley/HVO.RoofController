@@ -602,7 +602,7 @@ public sealed partial class RoofControllerViewModel : ObservableObject, IDisposa
 
         if (popup is not null)
         {
-            await MainThread.InvokeOnMainThreadAsync(popup.CloseAsync).ConfigureAwait(false);
+            await MainThread.InvokeOnMainThreadAsync(async () => await popup.CloseAsync()).ConfigureAwait(false);
         }
     }
 
