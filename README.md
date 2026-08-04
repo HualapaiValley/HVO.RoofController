@@ -60,6 +60,7 @@ a consistent development environment. Open in VS Code and use
 
 | Document | Description |
 |----------|-------------|
+| [Roof controller hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md) | Canonical SMVector, relay, limit-switch, monitoring, and safety wiring reference |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines and development workflow |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
 | [copilot-instructions.md](.github/copilot-instructions.md) | Architecture and coding standards |

@@ -1,0 +1,68 @@
+
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.2", nodesep="0.5", ranksep="0.8",
+         labelloc="t", label="Hardwired VFD Control and Fail-Safe End Stops", fontsize=20, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="#FAFAFA", color="#333333",
+        fontname="Arial", fontsize=10, margin="0.13,0.08"];
+  edge [fontname="Arial", fontsize=9, penwidth=2.2];
+
+  subgraph cluster_vfd {
+    label="SMVector VFD";
+    color="#999999";
+    TB11 [label="TB-11\n+12 V / 50 mA max", fillcolor="#FFEBEE"];
+    TB1 [label="TB-1\nSTOP input"];
+    TB4 [label="TB-4\nDigital COM"];
+    TB13A [label="TB-13A\nRun Forward"];
+    TB13B [label="TB-13B\nRun Reverse"];
+    TB13C [label="TB-13C\nClear Fault"];
+  }
+
+  DB12 [label="DB-12V-A\n1 in → 5 out\nInput from TB-11", fillcolor="#FFCDD2"];
+  DB0 [label="DB-0V\n1 in → 4 out\nInput from TB-4", fillcolor="#E0E0E0"];
+
+  subgraph cluster_sm {
+    label="SM-I-010 relay terminals";
+    color="#999999";
+    R1C [label="RLY1 COM"];
+    R1NO [label="RLY1 NO"];
+    R2C [label="RLY2 COM"];
+    R2NO [label="RLY2 NO"];
+    R3C [label="RLY3 COM"];
+    R3NO [label="RLY3 NO"];
+    R4C [label="RLY4 COM"];
+    R4NO [label="RLY4 NO"];
+  }
+
+  FWDJOIN [label="DB-FWD-CTL\n1 in → 1 out"];
+  REVJOIN [label="DB-REV-CTL\n1 in → 1 out"];
+
+  subgraph cluster_limits {
+    label="ME-8108 limit switches";
+    color="#999999";
+    L1NC [label="FWD limit\nTerminal 1 — NC — Terminal 2"];
+    L2NC [label="REV limit\nTerminal 1 — NC — Terminal 2"];
+  }
+
+  TB11 -> DB12 [color="#D32F2F", fontcolor="#D32F2F", label="+12 V"];
+  TB4 -> DB0 [color="#111111", fontcolor="#111111", label="0 V / COM"];
+
+  DB12 -> R1C [color="#D32F2F", label="OUT1"];
+  R1NO -> FWDJOIN [color="#1976D2", label="FWD command"];
+  FWDJOIN -> L1NC [color="#1976D2", label="to terminal 1"];
+  L1NC -> TB13A [color="#1976D2", label="terminal 2"];
+
+  DB12 -> R2C [color="#D32F2F", label="OUT2"];
+  R2NO -> REVJOIN [color="#2E7D32", label="REV command"];
+  REVJOIN -> L2NC [color="#2E7D32", label="to terminal 1"];
+  L2NC -> TB13B [color="#2E7D32", label="terminal 2"];
+
+  DB12 -> R3C [color="#D32F2F", label="OUT3"];
+  R3NO -> TB13C [color="#F57C00", label="pulse 100–300 ms"];
+
+  TB1 -> R4C [color="#6D4C41", label="STOP permissive"];
+  R4NO -> DB0 [color="#111111", label="to OUT4 / TB-4"];
+
+  note [shape=note, fillcolor="#FFF8E1",
+        label="RLY4 uses NO for a fail-safe permissive:\nRLY4 ON = TB-1 connected to TB-4 (drive enabled)\nRLY4 OFF or loss of HAT power = STOP input opens."];
+  R4NO -> note [style=dashed, arrowhead=none, color="#777777"];
+}

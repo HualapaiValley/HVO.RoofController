@@ -32,7 +32,7 @@ A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai V
 - [Operator Cheat Sheet](../../docs/projects/roof-controller-v4-rpi/operator-cheat-sheet.md) – quick reference for field operations
 - [Troubleshooting Guide](../../docs/projects/roof-controller-v4-rpi/troubleshooting-guide.md) – symptom → diagnosis mapping
 - [Logging Reference](../../docs/projects/roof-controller-v4-rpi/logging-reference.md) – structured logging templates and conventions
-- Roof diagrams bundle: `../../docs/projects/roof-controller-v4-rpi/RoofController_Diagrams_2025-09-26.zip`
+- [Wiring diagrams](../../docs/projects/roof-controller-v4-rpi/diagrams/) – source Graphviz DOT files, SVG diagrams, and PNG renderings for the hardware overview
 
 ## Configuration Notes
 - Operational settings live in `appsettings*.json` under `RoofControllerOptionsV4` and `RoofControllerHostOptionsV4`.

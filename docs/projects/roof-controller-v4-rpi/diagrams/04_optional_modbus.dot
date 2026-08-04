@@ -1,0 +1,21 @@
+
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.2", nodesep="0.7", ranksep="0.9",
+         labelloc="t", label="Optional RS-485 / Modbus RTU", fontsize=20, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="#FAFAFA", color="#333333",
+        fontname="Arial", fontsize=10, margin="0.13,0.08"];
+  edge [fontname="Arial", fontsize=9, penwidth=2.2];
+
+  Pi [label="Raspberry Pi 5\nUART (/dev/serial0)"];
+  SM [label="SM-I-010 RS-485 bridge\nTX=ON, RX=ON\nTERM=ON at Pi end"];
+  Cable [label="120 Ω shielded twisted pair\n2–3 ft"];
+  Mod [label="SMVector ESVZAR0 option\nTerminal 1 = shield/earth\nTerminal 2 = TXA\nTerminal 4 = TXB"];
+
+  Pi -> SM [label="GPIO UART through HAT"];
+  SM -> Cable [label="A / B"];
+  Cable -> Mod [label="A→2 (TXA)\nB→4 (TXB)\nshield→1 / PE"];
+
+  note [shape=note, fillcolor="#FFF8E1",
+        label="Required for a 1 HP SMVector:\nESVZAR0 is an optional module.\nOfficial documentation specifies 120 Ω termination at both ends."];
+  Mod -> note [style=dashed, arrowhead=none, color="#777777"];
+}
