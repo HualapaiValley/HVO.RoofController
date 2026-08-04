@@ -42,7 +42,7 @@ public sealed class DialogService : IDialogService
                     ? title
                     : $"{title}\n\n{displayMessage}";
 
-                return await page.DisplayActionSheet(
+                return await page.DisplayActionSheetAsync(
                     sheetTitle,
                     "Cancel",
                     "Exit",

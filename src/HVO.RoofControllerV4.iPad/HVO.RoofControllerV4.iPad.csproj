@@ -7,7 +7,7 @@
 	</PropertyGroup>
 
 	<PropertyGroup>
-		<TargetFramework>net9.0-ios</TargetFramework>
+		<TargetFramework>net10.0-ios</TargetFramework>
 		<OutputType>Exe</OutputType>
 		<RootNamespace>HVO.RoofControllerV4.iPad</RootNamespace>
 		<UseMaui>true</UseMaui>
@@ -22,7 +22,7 @@
 		<SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
 	</PropertyGroup>
 
-	<PropertyGroup Condition="'$(Configuration)'=='Debug' And '$(TargetFramework)'=='net9.0-ios'">
+	<PropertyGroup Condition="'$(Configuration)'=='Debug' And '$(TargetFramework)'=='net10.0-ios'">
         <MtouchUseLlvm>false</MtouchUseLlvm>
     </PropertyGroup>
 

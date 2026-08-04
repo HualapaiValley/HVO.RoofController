@@ -4,7 +4,7 @@ Razor Class Library providing the **HVO Dark** design system, shared web assets,
 
 ## 📦 Package Information
 
-- **Target Framework**: .NET 9.0
+- **Target Framework**: .NET 10.0
 - **Type**: Razor Class Library (RCL)
 - **Static Web Assets**: CSS themes, fonts, icons
 - **Package Name**: `HVO.WebSite.Themes` (future NuGet)

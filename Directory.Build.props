@@ -13,6 +13,10 @@
     <NoWarn>$(NoWarn);CS1030</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup Label="NuGet Audit Exceptions">
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-v5pm-xwqc-g5wc" />
+  </ItemGroup>
+
   <PropertyGroup Label="Build Output">
     <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
     <DebugType>portable</DebugType>

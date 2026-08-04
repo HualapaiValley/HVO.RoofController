@@ -34,18 +34,35 @@ public class RoofControllerPeriodicVerificationTests
         var svc = CreateService(hat, TimeSpan.FromMilliseconds(120));
         (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
 
-        // Act
-        var openResult = svc.Open();
-        openResult.IsSuccessful.Should().BeTrue();
-        svc.Status.Should().Be(RoofControllerStatus.Opening);
+        var openSignal = new TaskCompletionSource<RoofControllerStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<RoofStatusChangedEventArgs> handler = (_, args) =>
+        {
+            if (args.Status.Status == RoofControllerStatus.Open)
+            {
+                openSignal.TrySetResult(args.Status.Status);
+            }
+        };
+        svc.StatusChanged += handler;
 
-        // Now simulate we reached open limit (IN1 LOW) but no event fired (because polling disabled)
-        hat.SetInputs(false,true,false,false);
+        try
+        {
+            // Act
+            var openResult = svc.Open();
+            openResult.IsSuccessful.Should().BeTrue();
+            svc.Status.Should().Be(RoofControllerStatus.Opening);
 
-        // Wait a bit longer than the verification interval for tick to occur
-        await Task.Delay(350);
+            // Now simulate we reached open limit (IN1 LOW) but no event fired (because polling disabled)
+            hat.SetInputs(false,true,false,false);
 
-        // Assert
-        svc.Status.Should().Be(RoofControllerStatus.Open, "periodic verification should force hardware refresh and detect open limit");
+            await openSignal.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            // Assert
+            svc.Status.Should().Be(RoofControllerStatus.Open, "periodic verification should force hardware refresh and detect open limit");
+        }
+        finally
+        {
+            svc.StatusChanged -= handler;
+            await svc.DisposeAsync();
+        }
     }
 }

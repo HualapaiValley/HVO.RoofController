@@ -40,7 +40,7 @@ If you need to bypass the helper script (for example when debugging MSBuild targ
 ```bash
 dotnet build src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj \
   -t:Run \
-  -f net9.0-ios \
+  -f net10.0-ios \
   -p:_DeviceName=:v2:udid=F878E277-60EC-43CF-90EC-B1C9050549E6
 ```
 

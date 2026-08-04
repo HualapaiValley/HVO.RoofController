@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build-ios-simulator:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
@@ -38,22 +38,16 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup .NET 9.0 only
+      - name: Setup .NET SDK
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '9.0.x'
+          global-json-file: src/global.json
 
-      - name: Remove .NET 10 to avoid iOS SDK 26 conflict
-        run: |
-          rm -rf /Users/runner/.dotnet/sdk/10.* 2>/dev/null || true
-          rm -rf /Users/runner/.dotnet/sdk-manifests/10.* 2>/dev/null || true
-          rm -rf /Users/runner/.dotnet/packs/Microsoft.iOS.Sdk.net9.0_26.* 2>/dev/null || true
-          rm -rf /Users/runner/.dotnet/metadata/workloads/10.* 2>/dev/null || true
-          echo "Remaining SDKs:"
-          dotnet --list-sdks
+      - name: Select Xcode 26.6
+        run: sudo xcode-select --switch /Applications/Xcode_26.6.app
 
-      - name: Install .NET MAUI workload (compatible with Xcode 16)
-        run: dotnet workload install maui --from-rollback-file src/HVO.RoofControllerV4.iPad/workload-rollback.json --ignore-failed-sources
+      - name: Install .NET MAUI workload
+        run: dotnet workload install maui --ignore-failed-sources
 
       - name: Restore
         run: dotnet restore src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj --configfile src/NuGet.config --nologo -v minimal
