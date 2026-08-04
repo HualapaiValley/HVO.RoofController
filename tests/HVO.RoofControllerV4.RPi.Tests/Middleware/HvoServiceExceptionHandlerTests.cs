@@ -50,7 +50,8 @@ public sealed class HvoServiceExceptionHandlerTests
 
         handled.Should().BeTrue();
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.InternalServerError);
-        await AssertProblemDetailsAsync(context, "Internal Server Error", exception.Message);
+        var problem = await AssertProblemDetailsAsync(context, "Internal Server Error", "An unexpected error occurred. Use the trace ID when contacting support.");
+        problem.Detail.Should().NotContain(exception.Message);
     }
 
     private static DefaultHttpContext CreateHttpContext()
@@ -61,9 +62,9 @@ public sealed class HvoServiceExceptionHandlerTests
         return context;
     }
 
-    private static async Task AssertProblemDetailsAsync(HttpContext context, string expectedTitle, string expectedDetail)
+    private static async Task<ProblemDetails> AssertProblemDetailsAsync(HttpContext context, string expectedTitle, string expectedDetail)
     {
-    context.Response.ContentType.Should().StartWith("application/json");
+        context.Response.ContentType.Should().StartWith("application/json");
         context.Response.Body.Seek(0, SeekOrigin.Begin);
 
         var problem = await JsonSerializer.DeserializeAsync<ProblemDetails>(context.Response.Body, new JsonSerializerOptions
@@ -75,5 +76,8 @@ public sealed class HvoServiceExceptionHandlerTests
         problem!.Title.Should().Be(expectedTitle);
         problem.Detail.Should().Be(expectedDetail);
         problem.Instance.Should().Be("/api/test");
+        problem.Extensions.Should().ContainKey("traceId");
+        problem.Extensions.Should().ContainKey("timestamp");
+        return problem;
     }
 }

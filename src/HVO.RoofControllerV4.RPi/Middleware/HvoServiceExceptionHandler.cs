@@ -30,9 +30,13 @@ namespace HVO.RoofControllerV4.RPi.Middleware
             {
                 Status = statusCode,
                 Title = title,
-                Detail = exception.Message,
+                Detail = statusCode >= StatusCodes.Status500InternalServerError
+                    ? "An unexpected error occurred. Use the trace ID when contacting support."
+                    : exception.Message,
                 Instance = httpContext.Request.Path
             };
+            problemDetails.Extensions["traceId"] = httpContext.TraceIdentifier;
+            problemDetails.Extensions["timestamp"] = DateTimeOffset.UtcNow;
 
             httpContext.Response.StatusCode = statusCode;
             httpContext.Response.ContentType = "application/json";

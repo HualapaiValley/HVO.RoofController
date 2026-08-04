@@ -71,9 +71,9 @@ ENV ASPNETCORE_URLS=http://+:8080 \
 # Expose the HTTP port used by the site
 EXPOSE 8080
 
-# Lightweight health check endpoint
+# Hardware-aware readiness check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8080/health/live || exit 1
+    CMD curl -f http://localhost:8080/health/ready || exit 1
 
 # Run the web site
 ENTRYPOINT ["dotnet", "HVO.RoofControllerV4.RPi.dll"]

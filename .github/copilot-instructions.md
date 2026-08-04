@@ -65,9 +65,11 @@ tests/
 
 ```bash
 cd src
-dotnet build HVO.RoofController.sln
+dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/
 ```
+
+The full solution includes the `net10.0-ios` project and requires macOS, the MAUI workload, and a supported Xcode version. On Linux, validate the portable graph through the RPi test project as shown above.
 
 ## Deployment
 
