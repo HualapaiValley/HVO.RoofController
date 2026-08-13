@@ -30,7 +30,7 @@ public class RoofControllerPeriodicVerificationTests
     {
         // Arrange
         var hat = new FakeRoofHat();
-        hat.SetInputs(true,true,false,false); // Mid travel (NC: both HIGH)
+        hat.SetInputs(true, true, false, false); // Mid travel (NC: both HIGH)
         var svc = CreateService(hat, TimeSpan.FromMilliseconds(120));
         (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
 
@@ -52,7 +52,7 @@ public class RoofControllerPeriodicVerificationTests
             svc.Status.Should().Be(RoofControllerStatus.Opening);
 
             // Now simulate we reached open limit (IN1 LOW) but no event fired (because polling disabled)
-            hat.SetInputs(false,true,false,false);
+            hat.SetInputs(false, true, false, false);
 
             await openSignal.Task.WaitAsync(TimeSpan.FromSeconds(2));
 

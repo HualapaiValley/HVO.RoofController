@@ -41,18 +41,18 @@ WORKDIR /app
 # Install the minimal native dependencies needed for GPIO/I2C access and health checks
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        fontconfig \
-        fonts-dejavu-core \
-        fonts-liberation2 \
-        fonts-noto-core \
-        fonts-noto-mono \
-        fonts-noto-color-emoji \
-        fonts-roboto \
-        fonts-open-sans \
-        libgpiod2 \
-        i2c-tools && \
+    ca-certificates \
+    curl \
+    fontconfig \
+    fonts-dejavu-core \
+    fonts-liberation2 \
+    fonts-noto-core \
+    fonts-noto-mono \
+    fonts-noto-color-emoji \
+    fonts-roboto \
+    fonts-open-sans \
+    libgpiod2 \
+    i2c-tools && \
     rm -rf /var/lib/apt/lists/* && \
     fc-cache -f
 

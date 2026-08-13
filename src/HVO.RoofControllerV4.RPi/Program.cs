@@ -62,15 +62,15 @@ public class Program
         });
 
 
-    services.AddHostedService<RoofControllerServiceV4Host>();
+        services.AddHostedService<RoofControllerServiceV4Host>();
 
-    // Register RoofController based on configuration
-    services.AddSingleton<IRoofControllerServiceV4, RoofControllerServiceV4>();
-    services.AddScoped<FooterStatusService>();
+        // Register RoofController based on configuration
+        services.AddSingleton<IRoofControllerServiceV4, RoofControllerServiceV4>();
+        services.AddScoped<FooterStatusService>();
 
-    services.Configure<ConsoleLogBufferOptions>(Configuration.GetSection("ConsoleLogBuffer"));
-    services.AddSingleton<ConsoleLogBuffer>();
-    services.AddSingleton<ILoggerProvider, ConsoleLogLoggerProvider>();
+        services.Configure<ConsoleLogBufferOptions>(Configuration.GetSection("ConsoleLogBuffer"));
+        services.AddSingleton<ConsoleLogBuffer>();
+        services.AddSingleton<ILoggerProvider, ConsoleLogLoggerProvider>();
 
         // Add exception handling middleware
         // NOTE: Use built-in exception handling instead of custom error controllers
