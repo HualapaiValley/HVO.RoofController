@@ -27,11 +27,13 @@ jobs:
         run: |
           test "$(id -un)" = actions-roof
           test "$HOME" = /Users/actions-roof
-          case "$RUNNER_TOOL_CACHE" in
+          tool_cache=$(cd "$RUNNER_TOOL_CACHE" && pwd -P)
+          case "$tool_cache" in
             /Users/actions-roof/*) ;;
             *) exit 1 ;;
           esac
-          test -w "$RUNNER_TOOL_CACHE"
+          test "$(stat -f %Su "$tool_cache")" = actions-roof
+          test -w "$tool_cache"
 
       - name: Checkout default-branch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
