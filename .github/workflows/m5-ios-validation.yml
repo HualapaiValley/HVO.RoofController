@@ -23,6 +23,16 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      - name: Verify isolated runner identity
+        run: |
+          test "$(id -un)" = actions-roof
+          test "$HOME" = /Users/actions-roof
+          case "$RUNNER_TOOL_CACHE" in
+            /Users/actions-roof/*) ;;
+            *) exit 1 ;;
+          esac
+          test -w "$RUNNER_TOOL_CACHE"
+
       - name: Checkout default-branch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,6 +71,15 @@ jobs:
           -c Debug --no-restore --nologo -v minimal
           -p:ContinuousIntegrationBuild=true
           -p:RuntimeIdentifier=iossimulator-arm64
-          -p:Codesign=false
+          -p:EnableCodeSigning=false
           -p:CodesignKey=""
           -p:CodesignProvision=""
+
+      - name: Verify app is unsigned
+        run: |
+          app=src/HVO.RoofControllerV4.iPad/bin/Debug/net10.0-ios/iossimulator-arm64/HVO.RoofControllerV4.iPad.app
+          test -d "$app"
+          if /usr/bin/codesign --verify "$app" >/dev/null 2>&1; then
+            printf 'Expected an unsigned simulator app, but code signing verification passed.\n' >&2
+            exit 1
+          fi
