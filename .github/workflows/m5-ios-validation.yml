@@ -1,0 +1,87 @@
+name: M5 iOS Operational Validation
+
+on:
+  repository_dispatch:
+    types: [m5-roof-validation]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m5-roof-ios-validation
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build-ios-simulator:
+    name: M5 iOS Simulator Build
+    runs-on: [self-hosted, macOS, ARM64, m5-roof]
+    timeout-minutes: 45
+
+    steps:
+      - name: Verify isolated runner identity
+        run: |
+          test "$(id -un)" = actions-roof
+          test "$HOME" = /Users/actions-roof
+          tool_cache=$(cd "$RUNNER_TOOL_CACHE" && pwd -P)
+          case "$tool_cache" in
+            /Users/actions-roof/*) ;;
+            *) exit 1 ;;
+          esac
+          test "$(stat -f %Su "$tool_cache")" = actions-roof
+          test -w "$tool_cache"
+
+      - name: Checkout default-branch source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET from global.json
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Verify Apple ARM64 toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(dotnet --version)" = "$(jq -r '.sdk.version' src/global.json)"
+          xcrun simctl list runtimes --json | jq --exit-status '
+            any(.runtimes[];
+              .identifier == "com.apple.CoreSimulator.SimRuntime.iOS-26-5" and
+              .isAvailable == true)
+          ' >/dev/null
+          sw_vers
+          xcodebuild -version
+          swift --version
+          dotnet --version
+
+      - name: Install .NET MAUI workload
+        run: dotnet workload install maui --ignore-failed-sources
+
+      - name: Restore iPad app
+        run: >
+          dotnet restore src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
+          --configfile src/NuGet.config --nologo -v minimal
+
+      - name: Build unsigned iOS simulator app
+        run: >
+          dotnet build src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
+          -c Debug --no-restore --nologo -v minimal
+          -p:ContinuousIntegrationBuild=true
+          -p:RuntimeIdentifier=iossimulator-arm64
+          -p:EnableCodeSigning=false
+          -p:CodesignKey=""
+          -p:CodesignProvision=""
+
+      - name: Verify app is unsigned
+        run: |
+          app=src/HVO.RoofControllerV4.iPad/bin/Debug/net10.0-ios/iossimulator-arm64/HVO.RoofControllerV4.iPad.app
+          test -d "$app"
+          if /usr/bin/codesign --verify "$app" >/dev/null 2>&1; then
+            printf 'Expected an unsigned simulator app, but code signing verification passed.\n' >&2
+            exit 1
+          fi
