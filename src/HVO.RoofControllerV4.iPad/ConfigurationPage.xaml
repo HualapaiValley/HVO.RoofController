@@ -3,11 +3,14 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:viewModels="clr-namespace:HVO.RoofControllerV4.iPad.ViewModels"
              x:Class="HVO.RoofControllerV4.iPad.ConfigurationPage"
+             xmlns:converters="clr-namespace:HVO.RoofControllerV4.iPad.Converters"
              x:DataType="viewModels:RoofControllerViewModel"
              BackgroundColor="#10131A">
 
     <ContentPage.Resources>
         <ResourceDictionary>
+            <converters:BoolInvertConverter x:Key="BoolInvertConverter" />
+
             <Style x:Key="ConfigLabelStyle" TargetType="Label">
                 <Setter Property="TextColor" Value="#ADB5BD" />
                 <Setter Property="FontSize" Value="16" />
@@ -71,6 +74,36 @@
                     Style="{StaticResource ConfigEntryStyle}"
                     Keyboard="Url"
                     Placeholder="https://observatory.local:7151/api/v4.0/" />
+                <Label Text="Use https:// where the controller supports it. With http:// the API key and every command cross the network unencrypted."
+                    TextColor="#F0AD4E"
+                    FontSize="14"
+                    LineHeight="1.3"
+                    IsVisible="{Binding ConfigurationUsesHttp}" />
+                <Label Text="{Binding ActiveControllerHost, StringFormat='Currently connected to {0}'}"
+                    TextColor="#6C757D"
+                    FontSize="13" />
+               </VerticalStackLayout>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="API Key"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding ConfigurationApiKey}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    IsPassword="True"
+                    IsSpellCheckEnabled="False"
+                    IsTextPredictionEnabled="False"
+                    Placeholder="{Binding ConfigurationApiKeyPlaceholder}" />
+                <Label Text="{Binding ApiKeyStatusText}"
+                    TextColor="#6C757D"
+                    FontSize="13"
+                    LineHeight="1.3" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" IsVisible="{Binding HasApiKey}">
+                    <Label Text="Remove the stored API key"
+                        Style="{StaticResource ConfigLabelStyle}"
+                        VerticalOptions="Center" />
+                    <Switch Grid.Column="1"
+                         IsToggled="{Binding ConfigurationRemoveApiKey}" />
+                </Grid>
                </VerticalStackLayout>
 
                <VerticalStackLayout Spacing="8">
@@ -79,7 +112,7 @@
                 <Entry Text="{Binding ConfigurationCameraStreamUrl}"
                     Style="{StaticResource ConfigEntryStyle}"
                     Keyboard="Url"
-                    Placeholder="http://camera.local/stream" />
+                    Placeholder="https://observatory.local:7151/api/v1.0/camera/02/mjpeg" />
                </VerticalStackLayout>
 
                <VerticalStackLayout Spacing="8">
@@ -101,7 +134,7 @@
                </VerticalStackLayout>
 
                <VerticalStackLayout Spacing="8">
-                <Label Text="Request Retry Count"
+                <Label Text="Status Request Attempts (1-3; Open, Close, Clear Fault and settings are never repeated)"
                     Style="{StaticResource ConfigLabelStyle}" />
                 <Entry Text="{Binding ConfigurationRequestRetryCount}"
                     Style="{StaticResource ConfigEntryStyle}"
@@ -142,7 +175,7 @@
                              Color="#0DCAF0" />
                </Grid>
 
-               <Label Text="Changes are stored locally in the device's app data folder. Restart the app to reload the updated configuration from disk."
+               <Label Text="Saved settings apply immediately: requests in flight to the old controller are cancelled and the dashboard reconnects. Settings are stored in the app data folder; the API key is stored in the iOS Keychain."
                    TextColor="#ADB5BD"
                    FontSize="14"
                    LineHeight="1.3" />
@@ -157,10 +190,19 @@
               </Border.StrokeShape>
 
               <VerticalStackLayout Spacing="24">
-               <Label Text="Remote Controller Settings"
-                   FontSize="22"
-                   FontAttributes="Bold"
-                   TextColor="#F8F9FA" />
+               <VerticalStackLayout Spacing="6">
+                <Label Text="Remote Controller Settings"
+                    FontSize="22"
+                    FontAttributes="Bold"
+                    TextColor="#F8F9FA" />
+                <Label Text="{Binding RemoteConfigurationVersionDisplay}"
+                    TextColor="#6C757D"
+                    FontSize="13" />
+                <Label Text="Changes to relay IDs, limit switch wiring, the drive fault input or ignoring the limit switches must be confirmed before they are sent. If the configuration was changed elsewhere since it was loaded, nothing is applied and the current values are reloaded."
+                    TextColor="#ADB5BD"
+                    FontSize="13"
+                    LineHeight="1.3" />
+               </VerticalStackLayout>
 
                <VerticalStackLayout Spacing="8">
                 <Label Text="Safety Watchdog Timeout (s)"
@@ -238,7 +280,7 @@
                 <Entry Text="{Binding RemotePeriodicVerificationIntervalSeconds}"
                     Style="{StaticResource ConfigEntryStyle}"
                     Keyboard="Numeric"
-                    Placeholder="10" />
+                    Placeholder="0.5" />
                </VerticalStackLayout>
 
                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
@@ -262,6 +304,45 @@
                     Style="{StaticResource ConfigLabelStyle}" />
                 <Switch Grid.Column="1"
                      IsToggled="{Binding RemoteIgnorePhysicalLimitSwitches}" />
+               </Grid>
+               <Label Text="The controller only accepts this on physical hardware when its own configuration allows it."
+                   TextColor="#6C757D"
+                   FontSize="12"
+                   IsVisible="{Binding RemoteAllowsIgnoringLimitSwitchesOnHardware, Converter={StaticResource BoolInvertConverter}}" />
+
+               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <Label Text="Drive Fault Input Active High"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Switch Grid.Column="1"
+                     IsToggled="{Binding RemoteFaultInputActiveHigh}" />
+               </Grid>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Max Consecutive Input Read Failures"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding RemoteMaxConsecutiveInputReadFailures}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="3" />
+               </VerticalStackLayout>
+
+               <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Operator Lease (s, blank = off)"
+                        Style="{StaticResource ConfigLabelStyle}" />
+                    <Entry Text="{Binding RemoteOperatorLeaseTimeoutSeconds}"
+                        Style="{StaticResource ConfigEntryStyle}"
+                        Keyboard="Numeric"
+                        Placeholder="Off" />
+                </VerticalStackLayout>
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="At-Speed Confirmation (s, blank = off)"
+                        Style="{StaticResource ConfigLabelStyle}" />
+                    <Entry Text="{Binding RemoteAtSpeedConfirmationTimeoutSeconds}"
+                        Style="{StaticResource ConfigEntryStyle}"
+                        Keyboard="Numeric"
+                        Placeholder="Off" />
+                </VerticalStackLayout>
                </Grid>
 
                         <Border BackgroundColor="#12161E"
