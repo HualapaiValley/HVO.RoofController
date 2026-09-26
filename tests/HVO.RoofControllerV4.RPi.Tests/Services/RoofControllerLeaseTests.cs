@@ -1,0 +1,162 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Tests.TestSupport;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace HVO.RoofControllerV4.RPi.Tests.Services;
+
+/// <summary>
+/// Optional operator lease (dead-man): motion stops unless the operator renews it (RenewLease or a repeat of the same
+/// Open/Close command). The lease is enforced by supervision; the watchdog stays the absolute cap.
+/// </summary>
+[TestClass]
+public class RoofControllerLeaseTests
+{
+    private static readonly TimeSpan Lease = TimeSpan.FromSeconds(3);
+
+    private static async Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat, ManualTimeProvider Time)> CreateAsync(TimeSpan? lease)
+    {
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var time = new ManualTimeProvider();
+        var svc = SimulatedRoofControllerService.Create(hat, time, opts =>
+        {
+            opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(10);
+            opts.OperatorLeaseTimeout = lease;
+        });
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        return (svc, hat, time);
+    }
+
+    [TestMethod]
+    public async Task ExpiredLease_ShouldStopOnTheNextSupervisionCycle_WithoutLatching()
+    {
+        var (svc, hat, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+        svc.GetCurrentStatusSnapshot().LeaseSecondsRemaining.Should().Be(3);
+
+        time.Advance(Lease - TimeSpan.FromMilliseconds(1));
+        svc.RunSupervisionCycle();
+        svc.IsMoving.Should().BeTrue();
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        svc.RunSupervisionCycle();
+
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        var snapshot = svc.GetCurrentStatusSnapshot();
+        snapshot.IsFaultLatched.Should().BeFalse("an expired lease is an operator stop, not a fault");
+        snapshot.Status.Should().Be(RoofControllerStatus.PartiallyOpen);
+        snapshot.LeaseSecondsRemaining.Should().BeNull();
+        hat.RelayMask.Should().Be(0x00);
+        svc.Open().IsSuccessful.Should().BeTrue("motion may be commanded again");
+    }
+
+    [TestMethod]
+    public async Task RenewLease_ShouldExtendTheLease()
+    {
+        var (svc, _, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        svc.Close().IsSuccessful.Should().BeTrue();
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        var renewed = svc.RenewLease();
+        renewed.IsSuccessful.Should().BeTrue();
+        renewed.Value.LeaseSecondsRemaining.Should().Be(3);
+
+        time.Advance(TimeSpan.FromSeconds(2)); // 4 s after start, 2 s after renewal
+        svc.RunSupervisionCycle();
+        svc.IsMoving.Should().BeTrue();
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        svc.RunSupervisionCycle();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task RepeatOfTheSameCommand_ShouldRenewTheLease(bool opening)
+    {
+        var (svc, hat, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        (opening ? svc.Open() : svc.Close()).IsSuccessful.Should().BeTrue();
+        hat.ClearRelayWriteLog();
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        (opening ? svc.Open() : svc.Close()).IsSuccessful.Should().BeTrue();
+        hat.RelayWriteLog.Should().BeEmpty("a repeat only renews the lease");
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        svc.RunSupervisionCycle();
+        svc.IsMoving.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task RenewLease_ShouldNeverExtendTheWatchdog()
+    {
+        var (svc, _, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+
+        for (var i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            svc.RenewLease().IsSuccessful.Should().BeTrue();
+        }
+
+        // Renewed at 8 s, so the lease runs to 11 s; the absolute 10 s cap fires first.
+        time.Advance(TimeSpan.FromSeconds(2));
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        svc.RenewLease().ErrorCode().Should().Be(RoofControllerErrorCode.LeaseNotActive);
+    }
+
+    [TestMethod]
+    public async Task RenewLease_AfterExpiry_ShouldStopAndReturnLeaseNotActive()
+    {
+        var (svc, hat, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+
+        time.Advance(Lease); // expired, but no supervision cycle has run yet
+        svc.IsMoving.Should().BeTrue();
+
+        svc.RenewLease().ErrorCode().Should().Be(RoofControllerErrorCode.LeaseNotActive);
+
+        svc.IsMoving.Should().BeFalse("an expired lease is never revived");
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task RenewLease_WhileIdle_ShouldReturnLeaseNotActive()
+    {
+        var (svc, _, _) = await CreateAsync(Lease);
+        using var _ = svc;
+
+        svc.RenewLease().ErrorCode().Should().Be(RoofControllerErrorCode.LeaseNotActive);
+    }
+
+    [TestMethod]
+    public async Task RenewLease_WithoutALeaseConfigured_ShouldReturnLeaseNotActive_AndNotStop()
+    {
+        var (svc, hat, time) = await CreateAsync(lease: null);
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+        svc.GetCurrentStatusSnapshot().LeaseSecondsRemaining.Should().BeNull();
+
+        svc.RenewLease().ErrorCode().Should().Be(RoofControllerErrorCode.LeaseNotActive);
+
+        svc.IsMoving.Should().BeTrue("renewing a non-existent lease does not affect motion");
+        time.Advance(TimeSpan.FromSeconds(5));
+        svc.RunSupervisionCycle();
+        svc.IsMoving.Should().BeTrue("without a lease only the watchdog and limits stop the roof");
+        hat.RelayMask.Should().Be(0x09);
+    }
+}

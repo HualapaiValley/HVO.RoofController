@@ -1,11 +1,8 @@
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Services;
@@ -13,66 +10,63 @@ namespace HVO.RoofControllerV4.RPi.Tests.Services;
 [TestClass]
 public class RoofControllerPartialStatusTests
 {
-    private RoofControllerServiceV4 CreateService(FakeRoofHat hat)
+    private static async Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat)> CreateMidTravelAsync()
     {
-        var options = RoofControllerTestFactory.CreateDefaultOptions(opts =>
-        {
-            opts.DigitalInputPollInterval = TimeSpan.FromMilliseconds(10);
-            opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(30);
-        });
-        return new RoofControllerServiceV4(new NullLogger<RoofControllerServiceV4>(), Options.Create(options), hat);
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false); // NC: both limits released (mid-travel)
+        var svc = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), opts => opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(30));
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        return (svc, hat);
     }
 
     [TestMethod]
     public async Task Open_ThenManualStop_ShouldTransitionToPartiallyOpen()
     {
-        // Arrange
-        var hat = new FakeRoofHat();
-        var svc = CreateService(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat) = await CreateMidTravelAsync();
+        using var _ = svc;
+        svc.Status.Should().Be(RoofControllerStatus.Stopped);
 
-        // Ensure we start with no limits active (mid-travel scenario, NC => HIGH/HIGH)
-        hat.SetInputs(true,true,false,false);
-        svc.ForceStatusRefresh();
-        svc.Status.Should().NotBe(RoofControllerStatus.Open); // not actually at open
-
-        // Issue Open command -> should enter Opening
-        // Act
-        var openResult = svc.Open();
-        openResult.IsSuccessful.Should().BeTrue();
+        svc.Open().IsSuccessful.Should().BeTrue();
         svc.Status.Should().Be(RoofControllerStatus.Opening);
 
-        // Immediately stop (simulate manual stop while mid-travel)
-        // Assert
-        var stopResult = svc.Stop(RoofControllerStopReason.NormalStop);
-        stopResult.IsSuccessful.Should().BeTrue();
+        svc.Stop(RoofControllerStopReason.NormalStop).IsSuccessful.Should().BeTrue();
+
         svc.Status.Should().Be(RoofControllerStatus.PartiallyOpen);
         svc.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
+        svc.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeFalse("an operator stop is not a fault");
+        hat.RelayMask.Should().Be(0x00);
     }
 
     [TestMethod]
     public async Task Close_ThenManualStop_ShouldTransitionToPartiallyClose()
     {
-        // Arrange
-        var hat = new FakeRoofHat();
-        var svc = CreateService(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat) = await CreateMidTravelAsync();
+        using var _ = svc;
 
-        // Mid-travel scenario (NC => HIGH/HIGH)
-        hat.SetInputs(true,true,false,false);
-        svc.ForceStatusRefresh();
-
-        // Act
-        var closeResult = svc.Close();
-        closeResult.IsSuccessful.Should().BeTrue();
+        svc.Close().IsSuccessful.Should().BeTrue();
         svc.Status.Should().Be(RoofControllerStatus.Closing);
 
-        // Assert
-        var stopResult = svc.Stop(RoofControllerStopReason.NormalStop);
-        stopResult.IsSuccessful.Should().BeTrue();
+        svc.Stop(RoofControllerStopReason.NormalStop).IsSuccessful.Should().BeTrue();
+
         svc.Status.Should().Be(RoofControllerStatus.PartiallyClose);
         svc.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
+        hat.RelayMask.Should().Be(0x00);
     }
 
-    // Reflection helper removed; using internal ForceStatusRefresh instead via InternalsVisibleTo
+    [TestMethod]
+    public async Task IdleStop_ShouldNotChangeLastStopReasonOrPartialStatus()
+    {
+        var (svc, _) = await CreateMidTravelAsync();
+        using var __ = svc;
+
+        svc.Open().IsSuccessful.Should().BeTrue();
+        svc.Stop().IsSuccessful.Should().BeTrue();
+        var count = svc.StopSequenceCount;
+
+        svc.Stop(RoofControllerStopReason.EmergencyStop).IsSuccessful.Should().BeTrue();
+
+        svc.StopSequenceCount.Should().Be(count + 1, "an idle stop still re-asserts and verifies all-off");
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop, "an idle stop does not rewrite motion history");
+        svc.Status.Should().Be(RoofControllerStatus.PartiallyOpen);
+    }
 }

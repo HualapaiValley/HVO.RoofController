@@ -8,8 +8,6 @@ using HVO.Core.Results;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Services;
@@ -42,6 +40,7 @@ public class RoofControllerHatConcurrencyTests
         }
 
         _sharedHat.ClearRelayWriteLog();
+        _sharedHat.ClearMaskHistory();
     }
 
     [TestMethod]
@@ -118,10 +117,14 @@ public class RoofControllerHatConcurrencyTests
     }
 
     [TestMethod]
-    public async Task ConcurrentServices_ShouldNotConflictOnSharedHat()
+    public async Task ConcurrentServices_ShouldNeverEnergizeBothDirectionsOnSharedHat()
     {
-        var serviceA = CreateService();
-        var serviceB = CreateService();
+        // Two controllers on one HAT is not a supported deployment. This checks that the per-HAT transaction lock keeps
+        // each energize sequence atomic, so the register never holds both direction bits. The HAT inputs stay at
+        // mid-travel (every start reads them fresh); each service stops on its own destination edge via its edge hook.
+        _sharedHat.SetInputs(true, true, false, false);
+        using var serviceA = CreateService();
+        using var serviceB = CreateService();
 
         (await serviceA.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
         (await serviceB.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
@@ -132,13 +135,10 @@ public class RoofControllerHatConcurrencyTests
         {
             for (var i = 0; i < iterations; i++)
             {
-                _sharedHat.SetInputs(true, true, false, false);
                 EnsureSuccess(serviceA.Open(), "ServiceA.Open");
-
-                _sharedHat.SetInputs(false, true, false, false);
-                serviceA.SimForwardLimitRaw(false);
-
-                await Task.Delay(1);
+                serviceA.SimForwardLimitRaw(false); // open limit reached: stop
+                serviceA.SimForwardLimitRaw(true);  // cached level back to mid-travel
+                await Task.Yield();
             }
         });
 
@@ -146,28 +146,23 @@ public class RoofControllerHatConcurrencyTests
         {
             for (var i = 0; i < iterations; i++)
             {
-                _sharedHat.SetInputs(true, true, false, false);
                 EnsureSuccess(serviceB.Close(), "ServiceB.Close");
-
-                _sharedHat.SetInputs(true, false, false, false);
-                serviceB.SimReverseLimitRaw(false);
-
-                await Task.Delay(1);
+                serviceB.SimReverseLimitRaw(false); // closed limit reached: stop
+                serviceB.SimReverseLimitRaw(true);
+                await Task.Yield();
             }
         });
 
-        await Task.WhenAll(openSequence, closeSequence);
+        await Task.WhenAll(openSequence, closeSequence).WaitAsync(TimeSpan.FromSeconds(30));
 
-        await Task.Delay(5); // allow final stop transitions to settle
-
-        _sharedHat.RelayMask.Should().Be(0x00, "shared hat should not leave any direction relays energized");
-        serviceA.Status.Should().NotBe(RoofControllerStatus.Error);
-        serviceB.Status.Should().NotBe(RoofControllerStatus.Error);
+        _sharedHat.EverBothDirectionBits.Should().BeFalse("open and close must never be energized together on the shared HAT");
+        _sharedHat.RelayMask.Should().Be(0x00, "shared hat should not leave any relay energized");
+        serviceA.IsMoving.Should().BeFalse();
+        serviceB.IsMoving.Should().BeFalse();
     }
 
-    private static TestableRoofControllerService CreateService()
-    {
-        var options = RoofControllerTestFactory.CreateWrappedOptions(opts =>
+    private static SimulatedRoofControllerService CreateService()
+        => SimulatedRoofControllerService.Create(_sharedHat, new ManualTimeProvider(), opts =>
         {
             opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(10);
             opts.LimitSwitchDebounce = TimeSpan.FromMilliseconds(10);
@@ -177,25 +172,11 @@ public class RoofControllerHatConcurrencyTests
             opts.StopRelayId = StopRelayIndex;
         });
 
-        return new TestableRoofControllerService(options, _sharedHat);
-    }
-
     private static void EnsureSuccess<T>(Result<T> result, string operation)
     {
         if (!result.IsSuccessful)
         {
             throw new AssertFailedException($"Operation '{operation}' failed: {result.Error?.Message}");
         }
-    }
-
-    private sealed class TestableRoofControllerService : RoofControllerServiceV4
-    {
-        public TestableRoofControllerService(IOptions<RoofControllerOptionsV4> options, FakeRoofHat hat)
-            : base(new NullLogger<RoofControllerServiceV4>(), options, hat)
-        {
-        }
-
-        public void SimForwardLimitRaw(bool high) => OnForwardLimitSwitchChanged(high);
-        public void SimReverseLimitRaw(bool high) => OnReverseLimitSwitchChanged(high);
     }
 }

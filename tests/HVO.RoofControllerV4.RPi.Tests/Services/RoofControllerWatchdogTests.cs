@@ -4,129 +4,112 @@ using System.Diagnostics.Metrics;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Services;
 
+/// <summary>
+/// The safety watchdog is an absolute movement cap measured from motion start. All tests run on a
+/// <see cref="ManualTimeProvider"/>, so no test depends on wall-clock timing.
+/// </summary>
 [TestClass]
 [DoNotParallelize]
 public class RoofControllerWatchdogTests
 {
-    private sealed class TestableRoofControllerService : RoofControllerServiceV4
+    private static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(10);
+
+    private static async Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat, ManualTimeProvider Time, CapturingLogger<RoofControllerServiceV4> Logger)> CreateInitializedAsync(
+        Action<RoofControllerOptionsV4>? configure = null)
     {
-        public TestableRoofControllerService(IOptions<RoofControllerOptionsV4> options, FakeRoofHat hat)
-            : base(new NullLogger<RoofControllerServiceV4>(), options, hat)
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false); // mid-travel
+        var time = new ManualTimeProvider();
+        var logger = new CapturingLogger<RoofControllerServiceV4>();
+        var service = SimulatedRoofControllerService.Create(hat, time, opts =>
         {
-        }
-
-        public object? CurrentWatchdogTimer => _safetyWatchdogTimer;
-
-        public void TriggerWatchdogCallback(object? sender) => SafetyWatchdog_Elapsed(sender, null!);
-    }
-
-    private TestableRoofControllerService CreateService(FakeRoofHat hat, TimeSpan watchdog)
-    {
-        var options = RoofControllerTestFactory.CreateDefaultOptions(opts => opts.SafetyWatchdogTimeout = watchdog);
-        return new TestableRoofControllerService(Options.Create(options), hat);
+            opts.SafetyWatchdogTimeout = Watchdog;
+            configure?.Invoke(opts);
+        }, logger);
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        return (service, hat, time, logger);
     }
 
     [TestMethod]
-    public async Task WatchdogTimeoutWhileOpening_ShouldStopRoofAndPublishSafetyTelemetry()
+    public async Task WatchdogTimeoutWhileOpening_ShouldStopLatchAndPublishSafetyTelemetry()
     {
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false);
-        var svc = CreateService(hat, TimeSpan.FromMilliseconds(150));
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat, time, logger) = await CreateInitializedAsync();
+        using var _ = svc;
 
         var safetyStops = new List<(string? Reason, string? Source)>();
-        var watchdogStates = new List<long>();
+        var gate = new object();
         using var meterListener = new MeterListener();
         meterListener.InstrumentPublished = (instrument, listener) =>
         {
-            if (instrument.Meter.Name == "HVO.RoofController.RPi"
-                && instrument.Name is "roof.controller.safety.stops" or "roof.controller.watchdog.active")
+            if (instrument.Meter.Name == "HVO.RoofController.RPi" && instrument.Name == "roof.controller.safety.stops")
             {
                 listener.EnableMeasurementEvents(instrument);
             }
         };
-        meterListener.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+        meterListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
         {
-            if (instrument.Name == "roof.controller.watchdog.active")
-            {
-                watchdogStates.Add(measurement);
-                return;
-            }
-
-            string? reason = null;
-            string? source = null;
+            string? reason = null, source = null;
             foreach (var tag in tags)
             {
-                if (tag.Key == "roof.stop.reason")
-                {
-                    reason = tag.Value?.ToString();
-                }
-                else if (tag.Key == "roof.stop.source")
-                {
-                    source = tag.Value?.ToString();
-                }
+                if (tag.Key == "roof.stop.reason") reason = tag.Value?.ToString();
+                else if (tag.Key == "roof.stop.source") source = tag.Value?.ToString();
             }
 
-            safetyStops.Add((reason, source));
+            lock (gate)
+            {
+                safetyStops.Add((reason, source));
+            }
         });
         meterListener.Start();
 
-        var errorSignal = CreateStatusSignal(svc, RoofControllerStatus.Error, out var handler);
-        var result = svc.Open();
-        result.IsSuccessful.Should().BeTrue();
+        svc.Open().IsSuccessful.Should().BeTrue();
         svc.Status.Should().Be(RoofControllerStatus.Opening);
         var startTransition = svc.LastTransitionUtc;
 
-        try
-        {
-            await errorSignal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            svc.StatusChanged -= handler;
-        }
+        time.Advance(Watchdog - TimeSpan.FromMilliseconds(1));
+        svc.IsMoving.Should().BeTrue("the watchdog has not elapsed yet");
+        svc.WatchdogSecondsRemaining.Should().BeApproximately(0.001, 0.0005);
 
-        svc.Status.Should().Be(RoofControllerStatus.Error, "watchdog should force error state");
+        time.Advance(TimeSpan.FromMilliseconds(1));
+
+        svc.IsMoving.Should().BeFalse();
+        svc.Status.Should().Be(RoofControllerStatus.Error, "a watchdog stop latches a safety fault");
         svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
-        svc.LastTransitionUtc.Should().NotBeNull();
         svc.LastTransitionUtc.Should().NotBe(startTransition);
         svc.IsWatchdogActive.Should().BeFalse();
         hat.RelayMask.Should().Be(0x00);
-        safetyStops.Should().Contain((RoofControllerStopReason.SafetyWatchdogTimeout.ToString(), "watchdog"));
 
-        meterListener.RecordObservableInstruments();
-        watchdogStates.Should().Contain(0);
+        var snapshot = svc.GetCurrentStatusSnapshot();
+        snapshot.IsFaultLatched.Should().BeTrue();
+        snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        logger.Contains(LogLevel.Warning, "Safety watchdog TRIGGERED").Should().BeTrue();
+
+        lock (gate)
+        {
+            safetyStops.Should().Contain((RoofControllerStopReason.SafetyWatchdogTimeout.ToString(), "watchdog"));
+        }
+
+        svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched, "motion stays refused until ClearFault");
     }
 
     [TestMethod]
     public async Task WatchdogTimeoutWhileClosing_ShouldStopRoof()
     {
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false);
-        var svc = CreateService(hat, TimeSpan.FromMilliseconds(150));
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat, time, _) = await CreateInitializedAsync();
+        using var __ = svc;
 
-        var errorSignal = CreateStatusSignal(svc, RoofControllerStatus.Error, out var handler);
-        try
-        {
-            svc.Close().IsSuccessful.Should().BeTrue();
-            svc.Status.Should().Be(RoofControllerStatus.Closing);
+        svc.Close().IsSuccessful.Should().BeTrue();
+        svc.Status.Should().Be(RoofControllerStatus.Closing);
 
-            await errorSignal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            svc.StatusChanged -= handler;
-        }
+        time.Advance(Watchdog);
 
         svc.Status.Should().Be(RoofControllerStatus.Error);
         svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
@@ -137,123 +120,134 @@ public class RoofControllerWatchdogTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
-    public async Task RepeatedMovementCommand_ShouldRefreshWatchdogDeadline(bool close)
+    public async Task RepeatedMovementCommand_ShouldNotExtendTheAbsoluteWatchdogCap(bool close)
     {
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false);
-        var svc = CreateService(hat, TimeSpan.FromSeconds(1));
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat, time, _) = await CreateInitializedAsync();
+        using var __ = svc;
 
-        var errorSignal = CreateStatusSignal(svc, RoofControllerStatus.Error, out var handler);
-        try
-        {
-            var firstCommand = close ? svc.Close() : svc.Open();
-            firstCommand.IsSuccessful.Should().BeTrue();
+        (close ? svc.Close() : svc.Open()).IsSuccessful.Should().BeTrue();
+        time.Advance(TimeSpan.FromSeconds(3));
 
-            await Task.Delay(300);
+        var generation = svc.CurrentMotionGeneration;
+        (close ? svc.Close() : svc.Open()).IsSuccessful.Should().BeTrue("a repeat command is accepted");
+        svc.CurrentMotionGeneration.Should().Be(generation, "a repeat command does not restart motion");
+        svc.WatchdogSecondsRemaining.Should().BeApproximately(7, 0.001, "the watchdog deadline is measured from motion start");
 
-            var refreshCommand = close ? svc.Close() : svc.Open();
-            refreshCommand.IsSuccessful.Should().BeTrue();
+        time.Advance(TimeSpan.FromSeconds(7));
 
-            await Task.Delay(800);
-
-            svc.Status.Should().Be(close ? RoofControllerStatus.Closing : RoofControllerStatus.Opening);
-            svc.IsWatchdogActive.Should().BeTrue();
-
-            await errorSignal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            svc.StatusChanged -= handler;
-        }
-
+        svc.IsMoving.Should().BeFalse("the cap is absolute: 10 s after the first command, not after the repeat");
         svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        hat.RelayMask.Should().Be(0x00);
     }
 
     [TestMethod]
     public async Task DirectionChange_ShouldCreateFreshWatchdogDeadline()
     {
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false);
-        var svc = CreateService(hat, TimeSpan.FromSeconds(1));
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, _, time, _) = await CreateInitializedAsync();
+        using var __ = svc;
 
-        var errorSignal = CreateStatusSignal(svc, RoofControllerStatus.Error, out var handler);
-        try
-        {
-            svc.Open().IsSuccessful.Should().BeTrue();
-            await Task.Delay(300);
+        svc.Open().IsSuccessful.Should().BeTrue();
+        time.Advance(TimeSpan.FromSeconds(3));
 
-            svc.Close().IsSuccessful.Should().BeTrue();
-            await Task.Delay(800);
+        svc.Close().IsSuccessful.Should().BeTrue();
+        time.Advance(TimeSpan.FromSeconds(8));
 
-            svc.Status.Should().Be(RoofControllerStatus.Closing);
-            svc.IsWatchdogActive.Should().BeTrue();
+        svc.Status.Should().Be(RoofControllerStatus.Closing, "the reversal started a new motion with a new cap");
+        svc.IsWatchdogActive.Should().BeTrue();
 
-            await errorSignal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            svc.StatusChanged -= handler;
-        }
-
+        time.Advance(TimeSpan.FromSeconds(2));
         svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        svc.IsMoving.Should().BeFalse();
     }
 
     [TestMethod]
-    public async Task StaleWatchdogCallbackAfterRefresh_ShouldNotStopRoof()
+    public async Task StaleWatchdogCallback_FromEarlierMotion_ShouldNotStopRoof()
     {
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false);
-        var svc = CreateService(hat, TimeSpan.FromSeconds(5));
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, _, _, _) = await CreateInitializedAsync();
+        using var __ = svc;
 
         svc.Open().IsSuccessful.Should().BeTrue();
-        var staleTimer = svc.CurrentWatchdogTimer;
-
+        var staleGeneration = svc.CurrentMotionGeneration;
+        svc.Stop().IsSuccessful.Should().BeTrue();
         svc.Open().IsSuccessful.Should().BeTrue();
-        svc.CurrentWatchdogTimer.Should().NotBeSameAs(staleTimer);
+        svc.CurrentMotionGeneration.Should().NotBe(staleGeneration);
 
-        svc.TriggerWatchdogCallback(staleTimer);
+        svc.TriggerWatchdog(staleGeneration);
 
         svc.Status.Should().Be(RoofControllerStatus.Opening);
         svc.IsWatchdogActive.Should().BeTrue();
-        svc.LastStopReason.Should().NotBe(RoofControllerStopReason.SafetyWatchdogTimeout);
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
+
+        svc.TriggerWatchdog(svc.CurrentMotionGeneration);
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout, "the current generation's callback stops motion");
     }
 
     [TestMethod]
     public async Task ManualStop_ShouldCancelWatchdog()
     {
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false);
-        var svc = CreateService(hat, TimeSpan.FromMilliseconds(150));
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat, time, _) = await CreateInitializedAsync();
+        using var __ = svc;
 
         svc.Open().IsSuccessful.Should().BeTrue();
+        time.ActiveTimerCount.Should().Be(1, "the watchdog timer is armed");
         svc.Stop(RoofControllerStopReason.NormalStop).IsSuccessful.Should().BeTrue();
+        time.ActiveTimerCount.Should().Be(0, "the stop disposes the watchdog timer");
 
-        await Task.Delay(350);
+        time.Advance(Watchdog + Watchdog);
 
         svc.Status.Should().Be(RoofControllerStatus.PartiallyOpen);
         svc.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
         svc.IsWatchdogActive.Should().BeFalse();
+        svc.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeFalse();
         hat.RelayMask.Should().Be(0x00);
     }
 
-    private static TaskCompletionSource<RoofStatusChangedEventArgs> CreateStatusSignal(
-        RoofControllerServiceV4 service,
-        RoofControllerStatus expectedStatus,
-        out EventHandler<RoofStatusChangedEventArgs> handler)
+    [TestMethod]
+    public async Task LostWatchdogCallback_ShouldBeCaughtBySupervisionBackstop()
     {
-        var signal = new TaskCompletionSource<RoofStatusChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-        handler = (_, args) =>
-        {
-            if (args.Status.Status == expectedStatus)
-            {
-                signal.TrySetResult(args);
-            }
-        };
-        service.StatusChanged += handler;
-        return signal;
+        var (svc, hat, time, logger) = await CreateInitializedAsync();
+        using var __ = svc;
+
+        svc.Open().IsSuccessful.Should().BeTrue();
+        time.SuppressTimerCallbacks = true; // the timer "fires" but its callback is lost
+        time.Advance(Watchdog);
+        svc.IsMoving.Should().BeTrue("the timer callback was lost");
+
+        svc.RunSupervisionCycle();
+
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        svc.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        hat.RelayMask.Should().Be(0x00);
+        logger.Contains(LogLevel.Warning, "supervision backstop").Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task WatchdogLatch_ShouldBeResetOnlyByClearFault()
+    {
+        var (svc, hat, time, _) = await CreateInitializedAsync();
+        using var __ = svc;
+
+        svc.Open().IsSuccessful.Should().BeTrue();
+        time.Advance(Watchdog);
+        svc.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeTrue();
+
+        // Stop, a supervision cycle and a refresh do not reset the latch.
+        svc.Stop().IsSuccessful.Should().BeTrue();
+        svc.RunSupervisionCycle();
+        svc.RefreshStatus(forceHardwareRead: true);
+        svc.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeTrue();
+        svc.Close().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+
+        var clear = svc.ClearFault(RoofControllerLimits.MinClearFaultPulseMilliseconds, CancellationToken.None);
+        time.Advance(TimeSpan.FromMilliseconds(RoofControllerLimits.MinClearFaultPulseMilliseconds));
+        (await clear.WaitAsync(TimeSpan.FromSeconds(5))).IsSuccessful.Should().BeTrue();
+
+        var snapshot = svc.GetCurrentStatusSnapshot();
+        snapshot.IsFaultLatched.Should().BeFalse();
+        snapshot.LatchedFaultReason.Should().BeNull();
+        snapshot.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout, "the stop reason is history, not the latch");
+        svc.Close().IsSuccessful.Should().BeTrue();
+        hat.RelayMask.Should().Be(0x0A);
     }
 }

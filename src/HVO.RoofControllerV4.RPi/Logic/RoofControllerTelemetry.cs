@@ -12,7 +12,13 @@ internal enum RoofSafetyStopSource
     OpenLimitSwitch,
     ClosedLimitSwitch,
     Fault,
-    Watchdog
+    Watchdog,
+    Relay,
+    Inputs,
+    Lease,
+    Drive,
+    Limits,
+    Operator
 }
 
 internal static class RoofControllerTelemetry
@@ -26,6 +32,7 @@ internal static class RoofControllerTelemetry
     private static readonly Counter<long> SafetyStopCounter = Meter.CreateCounter<long>("roof.controller.safety.stops");
     private static readonly Counter<long> LimitSwitchEventCounter = Meter.CreateCounter<long>("roof.controller.limit.switch.events");
     private static readonly Counter<long> FaultEventCounter = Meter.CreateCounter<long>("roof.controller.fault.events");
+    private static readonly Counter<long> ClearFaultCounter = Meter.CreateCounter<long>("roof.controller.clear_fault");
     private static RoofControllerTelemetryState _currentState = RoofControllerTelemetryState.Initial;
     private static readonly ObservableGauge<long> LimitSwitchStateGauge = Meter.CreateObservableGauge("roof.controller.limit.switch.state", ObserveLimitSwitchStates);
     private static readonly ObservableGauge<long> FaultActiveGauge = Meter.CreateObservableGauge("roof.controller.fault.active", ObserveFaultActive);
@@ -61,9 +68,17 @@ internal static class RoofControllerTelemetry
 
     internal static void RecordSafetyStop(RoofControllerStopReason reason, RoofSafetyStopSource source)
     {
+        // Only safety-relevant reasons are counted; operator/host stops (NormalStop, HostShutdown, ...) are not.
         if (reason is not (RoofControllerStopReason.LimitSwitchReached
             or RoofControllerStopReason.SafetyWatchdogTimeout
-            or RoofControllerStopReason.EmergencyStop))
+            or RoofControllerStopReason.EmergencyStop
+            or RoofControllerStopReason.InputReadFailure
+            or RoofControllerStopReason.ContradictoryLimitInputs
+            or RoofControllerStopReason.StartLimitReasserted
+            or RoofControllerStopReason.DriveFault
+            or RoofControllerStopReason.RelayVerificationFailed
+            or RoofControllerStopReason.OperatorLeaseExpired
+            or RoofControllerStopReason.DriveNotRunning))
         {
             return;
         }
@@ -89,6 +104,18 @@ internal static class RoofControllerTelemetry
         FaultEventCounter.Add(1, new TagList
         {
             { "roof.fault.state", active ? "active" : "cleared" }
+        });
+    }
+
+    /// <summary>
+    /// Records the outcome of a clear-fault request. Outcomes are a small fixed set (for example "cleared",
+    /// "fault_active", "preempted", "relay_unverified", "inputs_unavailable", "rejected"). Never recorded as a safety stop.
+    /// </summary>
+    internal static void RecordClearFault(string outcome)
+    {
+        ClearFaultCounter.Add(1, new TagList
+        {
+            { "roof.clear_fault.outcome", outcome }
         });
     }
 
@@ -160,6 +187,12 @@ internal static class RoofControllerTelemetry
         RoofSafetyStopSource.ClosedLimitSwitch => "closed-limit",
         RoofSafetyStopSource.Fault => "fault",
         RoofSafetyStopSource.Watchdog => "watchdog",
+        RoofSafetyStopSource.Relay => "relay",
+        RoofSafetyStopSource.Inputs => "inputs",
+        RoofSafetyStopSource.Lease => "lease",
+        RoofSafetyStopSource.Drive => "drive",
+        RoofSafetyStopSource.Limits => "limits",
+        RoofSafetyStopSource.Operator => "operator",
         _ => "unknown"
     };
 
