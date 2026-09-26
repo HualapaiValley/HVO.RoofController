@@ -110,6 +110,16 @@ jobs:
           -p:RuntimeIdentifier=iossimulator-arm64
           -p:Codesign=false
 
+      # Release enforces TreatWarningsAsErrors and reports XAML compiled-binding errors that a
+      # Debug build can let through, so both configurations must build.
+      - name: Build iOS (Simulator, no codesign) - Release
+        run: >
+          dotnet build "$IPAD_PROJECT"
+          -c Release --no-restore -v minimal
+          -p:ContinuousIntegrationBuild=true
+          -p:RuntimeIdentifier=iossimulator-arm64
+          -p:Codesign=false
+
       - name: Upload iOS build outputs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
