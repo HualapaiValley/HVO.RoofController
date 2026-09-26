@@ -20,6 +20,9 @@
 		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
 		<ApplicationVersion>1</ApplicationVersion>
 		<SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+		<!-- Directory.Build.props enables ReadyToRun for Release; iOS has no ReadyToRun runtime pack (it uses AOT),
+		     so a Release build fails with NETSDK1094 unless this is off. -->
+		<PublishReadyToRun>false</PublishReadyToRun>
 	</PropertyGroup>
 
 	<PropertyGroup Condition="'$(Configuration)'=='Debug' And '$(TargetFramework)'=='net10.0-ios'">
