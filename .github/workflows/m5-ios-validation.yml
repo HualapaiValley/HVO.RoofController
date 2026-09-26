@@ -16,9 +16,9 @@ on:
 permissions:
   contents: read
 
-# Every dispatch gets its own result. A fixed group keeps at most one pending run and a newer
-# dispatch cancels the pending one (M5-07). The single m5-roof runner executes one job at a
-# time, so queued runs wait for it instead of being cancelled.
+# Every dispatch gets its own result (M5-07). A fixed group would keep at most one pending run
+# and silently drop older pending dispatches, so each run uses its own group. The single m5-roof
+# runner executes one job at a time, so runs queue for it instead of being cancelled.
 concurrency:
   group: m5-roof-ios-validation-${{ github.run_id }}
   cancel-in-progress: false
