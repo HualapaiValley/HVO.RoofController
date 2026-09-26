@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<toolkit:Popup
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:toolkit="http://schemas.microsoft.com/dotnet/2022/maui/toolkit"
+    xmlns:behaviors="clr-namespace:CommunityToolkit.Maui.Behaviors;assembly=CommunityToolkit.Maui"
+    xmlns:viewModels="clr-namespace:HVO.RoofControllerV4.iPad.ViewModels"
+    xmlns:models="clr-namespace:HVO.RoofControllerV4.iPad.Models"
+    xmlns:converters="clr-namespace:HVO.RoofControllerV4.iPad.Converters"
+    x:Class="HVO.RoofControllerV4.iPad.Popups.HealthStatusPopup"
+    x:DataType="viewModels:HealthStatusPopupViewModel"
+    Color="Transparent"
+    CanBeDismissedByTappingOutsideOfPopup="False">
+
+    <toolkit:Popup.Resources>
+        <ResourceDictionary>
+            <converters:BoolInvertConverter x:Key="BoolInvertConverter" />
+            <converters:StringHasValueConverter x:Key="StringHasValueConverter" />
+
+            <Style x:Key="HealthDialogActionButtonStyle" TargetType="Button">
+                <Setter Property="FontAttributes" Value="Bold" />
+                <Setter Property="FontSize" Value="15" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Padding" Value="16,10" />
+                <Setter Property="BackgroundColor" Value="#2F343C" />
+                <Setter Property="TextColor" Value="White" />
+                <Setter Property="BorderWidth" Value="0" />
+            </Style>
+        </ResourceDictionary>
+    </toolkit:Popup.Resources>
+
+    <Grid>
+        <BoxView BackgroundColor="#150E141F">
+            <BoxView.GestureRecognizers>
+                <TapGestureRecognizer Command="{Binding Dashboard.CloseHealthDialogCommand}" />
+            </BoxView.GestureRecognizers>
+        </BoxView>
+
+        <Border
+            HorizontalOptions="Center"
+            VerticalOptions="Center"
+            Margin="24,40"
+            WidthRequest="640"
+            MaximumWidthRequest="860"
+            BackgroundColor="#181C24"
+            Opacity="0.96"
+            StrokeThickness="0"
+            Padding="24">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="24" />
+            </Border.StrokeShape>
+
+            <VerticalStackLayout Spacing="18">
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
+                    <Border
+                        BackgroundColor="{Binding Dashboard.HealthDialogStatusColor}"
+                        Padding="12,6"
+                        StrokeThickness="0"
+                        VerticalOptions="Center">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="16" />
+                        </Border.StrokeShape>
+                        <Label
+                            Text="{Binding Dashboard.HealthDialogStatusText}"
+                            TextColor="{Binding Dashboard.HealthDialogStatusTextColor}"
+                            FontAttributes="Bold"
+                            FontSize="16" />
+                    </Border>
+
+                    <Label
+                        Grid.Column="1"
+                        Text="{Binding Dashboard.HealthDialogDuration, StringFormat='Total Duration: {0}'}"
+                        TextColor="#ADB5BD"
+                        FontSize="13"
+                        VerticalTextAlignment="Center"
+                        IsVisible="{Binding Dashboard.HealthDialogDuration, Converter={StaticResource StringHasValueConverter}}" />
+
+                    <HorizontalStackLayout
+                        Grid.Column="2"
+                        Spacing="10"
+                        VerticalOptions="Center">
+                        <Button
+                            Text="Refresh"
+                            Command="{Binding Dashboard.RefreshHealthDialogCommand}"
+                            Style="{StaticResource HealthDialogActionButtonStyle}"
+                            IsEnabled="{Binding Dashboard.IsHealthDialogLoading, Converter={StaticResource BoolInvertConverter}}">
+                            <Button.Behaviors>
+                                <behaviors:TouchBehavior PressedOpacity="0.9"
+                                                         PressedScale="0.96"
+                                                         DefaultScale="1" />
+                            </Button.Behaviors>
+                        </Button>
+                        <Button
+                            Text="Close"
+                            Command="{Binding Dashboard.CloseHealthDialogCommand}"
+                            Style="{StaticResource HealthDialogActionButtonStyle}"
+                            BackgroundColor="#3A3F47">
+                            <Button.Behaviors>
+                                <behaviors:TouchBehavior PressedOpacity="0.9"
+                                                         PressedScale="0.96"
+                                                         DefaultScale="1" />
+                            </Button.Behaviors>
+                        </Button>
+                    </HorizontalStackLayout>
+                </Grid>
+
+                <StackLayout
+                    Spacing="8"
+                    HorizontalOptions="Center"
+                    IsVisible="{Binding Dashboard.IsHealthDialogLoading}">
+                    <ActivityIndicator IsRunning="True" Color="#0dcaf0" />
+                    <Label
+                        Text="Loading health information…"
+                        TextColor="#E9ECEF"
+                        FontSize="14"
+                        HorizontalTextAlignment="Center" />
+                </StackLayout>
+
+                <Border
+                    BackgroundColor="#51311A"
+                    Padding="12"
+                    StrokeThickness="0"
+                    IsVisible="{Binding Dashboard.HasHealthDialogError}">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="16" />
+                    </Border.StrokeShape>
+                    <Label
+                        Text="{Binding Dashboard.HealthDialogError}"
+                        TextColor="#FFD8A8"
+                        FontSize="14" />
+                </Border>
+
+                <Label
+                    Text="No individual health checks reported."
+                    TextColor="#ADB5BD"
+                    FontSize="14"
+                    IsVisible="{Binding Dashboard.ShowNoHealthChecksMessage}" />
+
+                <CollectionView
+                    ItemsSource="{Binding Dashboard.HealthChecks}"
+                    IsVisible="{Binding Dashboard.HasHealthChecks}"
+                    HeightRequest="360"
+                    BackgroundColor="Transparent"
+                    SelectionMode="None">
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate x:DataType="models:HealthCheckDisplay">
+                            <Border
+                                Margin="0,0,0,14"
+                                BackgroundColor="#1C2129"
+                                StrokeThickness="0"
+                                Padding="16">
+                                <Border.StrokeShape>
+                                    <RoundRectangle CornerRadius="18" />
+                                </Border.StrokeShape>
+                                <VerticalStackLayout Spacing="10">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                                        <Border
+                                            BackgroundColor="{Binding StatusBackground}"
+                                            StrokeThickness="0"
+                                            Padding="8,4"
+                                            VerticalOptions="Start">
+                                            <Border.StrokeShape>
+                                                <RoundRectangle CornerRadius="12" />
+                                            </Border.StrokeShape>
+                                            <Label
+                                                Text="{Binding Status}"
+                                                TextColor="{Binding StatusTextColor}"
+                                                FontAttributes="Bold"
+                                                FontSize="13" />
+                                        </Border>
+                                        <Label
+                                            Grid.Column="1"
+                                            Text="{Binding Name}"
+                                            FontSize="18"
+                                            FontAttributes="Bold"
+                                            TextColor="#F8F9FA" />
+                                        <Label
+                                            Grid.Column="2"
+                                            Text="{Binding Duration}"
+                                            TextColor="#ADB5BD"
+                                            FontSize="13"
+                                            HorizontalTextAlignment="End"
+                                            IsVisible="{Binding HasDuration}" />
+                                    </Grid>
+
+                                    <Label
+                                        Text="{Binding Description}"
+                                        TextColor="#E9ECEF"
+                                        FontSize="14"
+                                        IsVisible="{Binding HasDescription}" />
+
+                                    <Border
+                                        BackgroundColor="#4C1E24"
+                                        Padding="12"
+                                        StrokeThickness="0"
+                                        IsVisible="{Binding HasException}">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="12" />
+                                        </Border.StrokeShape>
+                                        <Label
+                                            Text="{Binding Exception}"
+                                            TextColor="#F8D7DA"
+                                            FontSize="13" />
+                                    </Border>
+
+                                    <Border
+                                        BackgroundColor="#141820"
+                                        Padding="12"
+                                        StrokeThickness="0"
+                                        IsVisible="{Binding HasData}">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="12" />
+                                        </Border.StrokeShape>
+                                        <Label
+                                            Text="{Binding Data}"
+                                            TextColor="#E9ECEF"
+                                            FontFamily="Courier New"
+                                            FontSize="12" />
+                                    </Border>
+
+                                    <Label
+                                        Text="{Binding TagsDisplay}"
+                                        TextColor="#ADB5BD"
+                                        FontSize="12"
+                                        IsVisible="{Binding HasTags}" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </Border>
+    </Grid>
+</toolkit:Popup>

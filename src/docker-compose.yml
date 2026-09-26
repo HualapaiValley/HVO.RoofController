@@ -1,0 +1,19 @@
+services:
+  roofcontroller:
+    build:
+      context: ..
+      dockerfile: src/HVO.RoofControllerV4.RPi/Dockerfile
+    image: hvo/roofcontrollerv4:rpi-dev
+    container_name: hvo-roofcontrollerv4
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+    ports:
+      - "5200:8080"
+    networks:
+      - hvo-network
+
+networks:
+  hvo-network:
+    name: hvo-network
+    driver: bridge

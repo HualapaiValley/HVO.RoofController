@@ -1,0 +1,30 @@
+:root[data-theme="hvo-dark"],
+body[data-theme="hvo-dark"] {
+    min-height: 100%;
+}
+
+body[data-theme="hvo-dark"] {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--hvo-body-color);
+    font-family: var(--hvo-font-family);
+    background-color: var(--hvo-body-bg);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-position: center;
+    background-image: linear-gradient(
+            color-mix(in srgb, var(--hvo-body-bg) 78%, transparent),
+            color-mix(in srgb, var(--hvo-body-bg) 78%, transparent)
+        ),
+        url('https://www.hualapaivalleyobservatory.org/images/ngc-3372-closeX.jpg');
+}
+
+body[data-theme="hvo-dark"]::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, var(--hvo-body-bg) 55%, transparent);
+    z-index: -1;
+    pointer-events: none;
+}

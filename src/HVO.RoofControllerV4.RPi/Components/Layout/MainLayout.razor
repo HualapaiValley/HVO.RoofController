@@ -1,0 +1,46 @@
+@using System.Linq
+@using HVO.RoofControllerV4.RPi.Services
+@namespace HVO.RoofControllerV4.RPi.Components.Layout
+@inherits LayoutComponentBase
+
+<div class="app-frame">
+    <header>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow-sm app-navbar">
+            <div class="container">
+                <a class="navbar-brand" href="/">
+                    <i class="fas fa-home"></i>Roof Conntroller v4
+                </a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbarNav">
+                    <ul class="navbar-nav ms-auto">
+                        <li class="nav-item">
+                            <a class="nav-link" href="/roof-control">
+                                <i class="bi bi-house-door"></i> Home
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <main class="app-main container-fluid">
+        <div class="row">
+            <div class="col-12">
+                <CascadingValue Value="@FooterStatusService" IsFixed="true">
+                    @Body
+                </CascadingValue>
+            </div>
+        </div>
+    </main>
+
+    <!-- Correct syntax for applying a render mode with a parameter -->
+    <MainLayoutFooter @rendermode="@(new InteractiveServerRenderMode(prerender: false))" />
+</div>
+
+@code {
+    [Inject]
+    public FooterStatusService FooterStatusService { get; set; } = default!;
+}

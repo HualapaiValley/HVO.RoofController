@@ -1,0 +1,70 @@
+
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.2", nodesep="0.55", ranksep="0.9",
+         labelloc="t", label="Limit, Fault, and Motion Monitoring", fontsize=20, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="#FAFAFA", color="#333333",
+        fontname="Arial", fontsize=10, margin="0.13,0.08"];
+  edge [fontname="Arial", fontsize=9, penwidth=2.2];
+
+  subgraph cluster_vfd {
+    label="SMVector VFD";
+    color="#999999";
+    TB11 [label="TB-11\n+12 V", fillcolor="#FFEBEE"];
+    TB4 [label="TB-4\nDigital COM"];
+    TB14 [label="TB-14\nNPN digital output\nP142"];
+    TB16 [label="TB-16\nProgrammable relay contact"];
+    TB17 [label="TB-17\nProgrammable relay contact"];
+  }
+
+  DB12A [label="DB-12V-A\n1→5", fillcolor="#FFCDD2"];
+  DB12B [label="DB-12V-B\n1→4 expansion", fillcolor="#FFCDD2"];
+  DB0 [label="DB-0V\n1→4", fillcolor="#E0E0E0"];
+  FJOIN [label="DB-FWD-MON\n1→1"];
+  RJOIN [label="DB-REV-MON\n1→1"];
+
+  subgraph cluster_limits {
+    label="ME-8108 monitor contacts";
+    color="#999999";
+    L1NO [label="FWD limit\nTerminal 3 — NO — Terminal 4"];
+    L2NO [label="REV limit\nTerminal 3 — NO — Terminal 4"];
+  }
+
+  subgraph cluster_inputs {
+    label="SM-I-010 low-voltage input terminals (12 V)";
+    color="#999999";
+    LV1 [label="LV-IN1"];
+    C1 [label="IN1-COM"];
+    LV2 [label="LV-IN2"];
+    C2 [label="IN2-COM"];
+    LV3 [label="LV-IN3"];
+    C3 [label="IN3-COM"];
+    LV4 [label="LV-IN4"];
+    C4 [label="IN4-COM"];
+  }
+
+  TB11 -> DB12A [color="#D32F2F", label="+12 V"];
+  DB12A -> DB12B [color="#D32F2F", label="expansion"];
+  TB4 -> DB0 [color="#111111", label="0 V / COM"];
+
+  DB12B -> L1NO [color="#D32F2F", label="OUT1 → terminal 3"];
+  L1NO -> FJOIN [color="#7B1FA2", label="terminal 4"];
+  FJOIN -> LV1 [color="#7B1FA2"];
+  DB0 -> C1 [color="#111111", label="OUT1"];
+
+  DB12B -> L2NO [color="#D32F2F", label="OUT2 → terminal 3"];
+  L2NO -> RJOIN [color="#7B1FA2", label="terminal 4"];
+  RJOIN -> LV2 [color="#7B1FA2"];
+  DB0 -> C2 [color="#111111", label="OUT2"];
+
+  DB12A -> TB16 [color="#D32F2F", label="OUT4"];
+  TB16 -> TB17 [dir=none, color="#AD1457", label="P140=3 Fault\nclosed while healthy"];
+  TB17 -> LV3 [color="#AD1457"];
+  DB0 -> C3 [color="#111111", label="OUT3"];
+
+  DB12B -> LV4 [color="#D32F2F", label="OUT3"];
+  C4 -> TB14 [color="#00897B", label="P142=1 Run\nNPN sink"];
+
+  note1 [shape=note, fillcolor="#FFF8E1",
+         label="Input semantics:\nIN1/IN2: HIGH = limit actuated (NO contact closed)\nIN3: HIGH = VFD healthy; LOW = fault/power loss/wire break\nIN4: HIGH = drive running"];
+  LV3 -> note1 [style=dashed, arrowhead=none, color="#777777"];
+}

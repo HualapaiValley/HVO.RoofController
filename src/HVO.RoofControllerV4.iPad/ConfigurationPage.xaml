@@ -1,0 +1,324 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:viewModels="clr-namespace:HVO.RoofControllerV4.iPad.ViewModels"
+             x:Class="HVO.RoofControllerV4.iPad.ConfigurationPage"
+             x:DataType="viewModels:RoofControllerViewModel"
+             BackgroundColor="#10131A">
+
+    <ContentPage.Resources>
+        <ResourceDictionary>
+            <Style x:Key="ConfigLabelStyle" TargetType="Label">
+                <Setter Property="TextColor" Value="#ADB5BD" />
+                <Setter Property="FontSize" Value="16" />
+            </Style>
+
+            <Style x:Key="ConfigEntryStyle" TargetType="Entry">
+                <Setter Property="FontSize" Value="18" />
+                <Setter Property="TextColor" Value="#F8F9FA" />
+                <Setter Property="PlaceholderColor" Value="#6C757D" />
+                <Setter Property="BackgroundColor" Value="#1B212D" />
+                <Setter Property="Margin" Value="0" />
+                <Setter Property="HeightRequest" Value="52" />
+                <Setter Property="HorizontalOptions" Value="Fill" />
+            </Style>
+
+            <Style x:Key="ConfigButtonStyle" TargetType="Button">
+                <Setter Property="FontSize" Value="18" />
+                <Setter Property="FontAttributes" Value="Bold" />
+                <Setter Property="TextColor" Value="White" />
+                <Setter Property="BackgroundColor" Value="#0D6EFD" />
+                <Setter Property="CornerRadius" Value="16" />
+                <Setter Property="Padding" Value="24,16" />
+                <Setter Property="HeightRequest" Value="56" />
+            </Style>
+        </ResourceDictionary>
+    </ContentPage.Resources>
+
+    <Grid Padding="32"
+          RowSpacing="24"
+          RowDefinitions="Auto,*">
+        <VerticalStackLayout Spacing="12">
+            <Label Text="Configuration"
+                   FontSize="32"
+                   FontAttributes="Bold"
+                   TextColor="#F8F9FA" />
+            <Label Text="Update connection details and safety thresholds for the roof controller client. Saved values persist on this device."
+                   TextColor="#CED4DA"
+                   FontSize="16"
+                   LineHeight="1.35" />
+        </VerticalStackLayout>
+
+     <ScrollView Grid.Row="1">
+         <VerticalStackLayout Spacing="24">
+          <Border BackgroundColor="#181C24"
+               StrokeThickness="0"
+               Padding="28">
+              <Border.StrokeShape>
+               <RoundRectangle CornerRadius="24" />
+              </Border.StrokeShape>
+
+              <VerticalStackLayout Spacing="24">
+               <Label Text="Local Client Settings"
+                   FontSize="22"
+                   FontAttributes="Bold"
+                   TextColor="#F8F9FA" />
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="API Base URL"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding ConfigurationBaseUrl}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Url"
+                    Placeholder="https://observatory.local:7151/api/v4.0/" />
+               </VerticalStackLayout>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Camera Stream URL"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding ConfigurationCameraStreamUrl}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Url"
+                    Placeholder="http://camera.local/stream" />
+               </VerticalStackLayout>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Status Poll Interval (s)"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding ConfigurationStatusPollIntervalSeconds}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="3" />
+               </VerticalStackLayout>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Clear Fault Pulse (ms)"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding ConfigurationClearFaultPulseMs}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="250" />
+               </VerticalStackLayout>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Request Retry Count"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding ConfigurationRequestRetryCount}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="3" />
+               </VerticalStackLayout>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Failure Prompt Threshold"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding ConfigurationFailurePromptThreshold}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="3" />
+               </VerticalStackLayout>
+
+               <BoxView HeightRequest="1" BackgroundColor="#1F2530" />
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="{Binding ConfigurationErrorMessage}"
+                    TextColor="#DC3545"
+                    FontSize="14"
+                    IsVisible="{Binding HasConfigurationError}" />
+                <Label Text="{Binding ConfigurationSuccessMessage}"
+                    TextColor="#198754"
+                    FontSize="14"
+                    IsVisible="{Binding HasConfigurationSuccess}" />
+               </VerticalStackLayout>
+
+               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" RowSpacing="0">
+                <Button Grid.Column="0"
+                     Text="Save Local Settings"
+                     Command="{Binding SaveConfigurationCommand}"
+                     Style="{StaticResource ConfigButtonStyle}" />
+                <ActivityIndicator Grid.Column="1"
+                             IsRunning="{Binding IsConfigurationSaving}"
+                             IsVisible="{Binding IsConfigurationSaving}"
+                             Color="#0DCAF0" />
+               </Grid>
+
+               <Label Text="Changes are stored locally in the device's app data folder. Restart the app to reload the updated configuration from disk."
+                   TextColor="#ADB5BD"
+                   FontSize="14"
+                   LineHeight="1.3" />
+              </VerticalStackLayout>
+          </Border>
+
+          <Border BackgroundColor="#181C24"
+               StrokeThickness="0"
+               Padding="28">
+              <Border.StrokeShape>
+               <RoundRectangle CornerRadius="24" />
+              </Border.StrokeShape>
+
+              <VerticalStackLayout Spacing="24">
+               <Label Text="Remote Controller Settings"
+                   FontSize="22"
+                   FontAttributes="Bold"
+                   TextColor="#F8F9FA" />
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Safety Watchdog Timeout (s)"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding RemoteSafetyWatchdogTimeoutSeconds}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="150" />
+               </VerticalStackLayout>
+
+               <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Open Relay ID"
+                        Style="{StaticResource ConfigLabelStyle}" />
+                    <Entry Text="{Binding RemoteOpenRelayId}"
+                        Style="{StaticResource ConfigEntryStyle}"
+                        Keyboard="Numeric"
+                        Placeholder="1" />
+                </VerticalStackLayout>
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Close Relay ID"
+                        Style="{StaticResource ConfigLabelStyle}" />
+                    <Entry Text="{Binding RemoteCloseRelayId}"
+                        Style="{StaticResource ConfigEntryStyle}"
+                        Keyboard="Numeric"
+                        Placeholder="2" />
+                </VerticalStackLayout>
+               </Grid>
+
+               <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Clear Fault Relay ID"
+                        Style="{StaticResource ConfigLabelStyle}" />
+                    <Entry Text="{Binding RemoteClearFaultRelayId}"
+                        Style="{StaticResource ConfigEntryStyle}"
+                        Keyboard="Numeric"
+                        Placeholder="3" />
+                </VerticalStackLayout>
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Stop Relay ID"
+                        Style="{StaticResource ConfigLabelStyle}" />
+                    <Entry Text="{Binding RemoteStopRelayId}"
+                        Style="{StaticResource ConfigEntryStyle}"
+                        Keyboard="Numeric"
+                        Placeholder="4" />
+                </VerticalStackLayout>
+               </Grid>
+
+               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <Label Text="Enable Digital Input Polling"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Switch Grid.Column="1"
+                     IsToggled="{Binding RemoteEnableDigitalInputPolling}" />
+               </Grid>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Digital Input Poll Interval (ms)"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding RemoteDigitalInputPollIntervalMilliseconds}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="25" />
+               </VerticalStackLayout>
+
+               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <Label Text="Verify While Moving"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Switch Grid.Column="1"
+                     IsToggled="{Binding RemoteEnablePeriodicVerificationWhileMoving}" />
+               </Grid>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Verification Interval (s)"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding RemotePeriodicVerificationIntervalSeconds}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="10" />
+               </VerticalStackLayout>
+
+               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <Label Text="Use Normally Closed Limit Switches"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Switch Grid.Column="1"
+                     IsToggled="{Binding RemoteUseNormallyClosedLimitSwitches}" />
+               </Grid>
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="Limit Switch Debounce (ms)"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Entry Text="{Binding RemoteLimitSwitchDebounceMilliseconds}"
+                    Style="{StaticResource ConfigEntryStyle}"
+                    Keyboard="Numeric"
+                    Placeholder="50" />
+               </VerticalStackLayout>
+
+               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                <Label Text="Ignore Physical Limit Switches"
+                    Style="{StaticResource ConfigLabelStyle}" />
+                <Switch Grid.Column="1"
+                     IsToggled="{Binding RemoteIgnorePhysicalLimitSwitches}" />
+               </Grid>
+
+                        <Border BackgroundColor="#12161E"
+                                Padding="16"
+                                StrokeThickness="0">
+                            <Border.StrokeShape>
+                                <RoundRectangle CornerRadius="12" />
+                            </Border.StrokeShape>
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="Restart On Failure Wait (s)"
+                        Style="{StaticResource ConfigLabelStyle}" />
+                    <Label Text="{Binding RemoteRestartOnFailureWaitTimeSeconds}"
+                        TextColor="#F8F9FA"
+                        FontAttributes="Bold"
+                        FontSize="18" />
+                    <Label Text="Value reported by the controller; modify via server configuration file."
+                        TextColor="#6C757D"
+                        FontSize="12"
+                        LineHeight="1.2" />
+                </VerticalStackLayout>
+                        </Border>
+
+               <BoxView HeightRequest="1" BackgroundColor="#1F2530" />
+
+               <VerticalStackLayout Spacing="8">
+                <Label Text="{Binding RemoteConfigurationErrorMessage}"
+                    TextColor="#DC3545"
+                    FontSize="14"
+                    IsVisible="{Binding HasRemoteConfigurationError}" />
+                <Label Text="{Binding RemoteConfigurationSuccessMessage}"
+                    TextColor="#198754"
+                    FontSize="14"
+                    IsVisible="{Binding HasRemoteConfigurationSuccess}" />
+               </VerticalStackLayout>
+
+               <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="16" RowSpacing="0">
+                <Button Grid.Column="0"
+                     Text="Save Controller Settings"
+                     Command="{Binding SaveRemoteConfigurationCommand}"
+                     Style="{StaticResource ConfigButtonStyle}" />
+                <Button Grid.Column="1"
+                     Text="Refresh Snapshot"
+                     Command="{Binding RefreshRemoteConfigurationCommand}"
+                     BackgroundColor="#495057"
+                     TextColor="White"
+                     CornerRadius="16"
+                     Padding="24,16"
+                     HeightRequest="56" />
+                <ActivityIndicator Grid.Column="2"
+                             IsRunning="{Binding IsRemoteConfigurationBusy}"
+                             IsVisible="{Binding IsRemoteConfigurationBusy}"
+                             Color="#0DCAF0" />
+               </Grid>
+              </VerticalStackLayout>
+          </Border>
+         </VerticalStackLayout>
+     </ScrollView>
+    </Grid>
+
+</ContentPage>

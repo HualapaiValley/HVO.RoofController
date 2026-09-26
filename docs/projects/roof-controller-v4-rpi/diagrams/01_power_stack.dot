@@ -1,0 +1,27 @@
+
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.2", nodesep="0.6", ranksep="0.8",
+         labelloc="t", label="Power and HAT Stack", fontsize=20, fontname="Arial"];
+  node [shape=box, style="rounded,filled", fillcolor="#F7F7F7", color="#333333",
+        fontname="Arial", fontsize=11, margin="0.15,0.1"];
+  edge [fontname="Arial", fontsize=10, penwidth=2];
+
+  PSU [label="Mean Well MDR-60-12\n12 VDC DIN PSU"];
+  Fuse [label="2 A slow-blow\nDIN fuse"];
+  UPS [label="Super Watchdog UPS HAT\n10–24 V input\n5 V output to GPIO stack"];
+  Pi [label="Raspberry Pi 5"];
+  Fan [label="Smart Fan HAT"];
+  SM [label="SM-I-010\n4 relays / 4 isolated inputs"];
+
+  PSU -> Fuse [label="+12 V", color="#D32F2F", fontcolor="#D32F2F"];
+  PSU -> UPS [label="0 V", color="#111111", fontcolor="#111111", constraint=false];
+  Fuse -> UPS [label="+12 V to 10–24 V input", color="#D32F2F", fontcolor="#D32F2F"];
+
+  Pi -> Fan [label="40-pin stack"];
+  Fan -> UPS [label="40-pin stack"];
+  UPS -> SM [label="40-pin stack / 5 V / I²C"];
+
+  Note [shape=note, fillcolor="#FFF8E1",
+        label="Stack order, bottom → top:\nPi 5 → Smart Fan → Super Watchdog → SM-I-010\n\nDo not power Pi USB-C while UPS HAT powers the stack."];
+  UPS -> Note [style=dashed, arrowhead=none, color="#777777"];
+}

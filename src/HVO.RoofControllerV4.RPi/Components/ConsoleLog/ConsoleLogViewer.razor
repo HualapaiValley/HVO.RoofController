@@ -1,0 +1,43 @@
+@using HVO.RoofControllerV4.RPi.Logging
+
+<div class="hvo-console-viewer">
+    <div class="hvo-console-toolbar">
+        <span class="hvo-console-meta" role="status">@Entries.Count log @(Entries.Count == 1 ? "entry" : "entries")</span>
+        @if (ShowAutoScrollToggle)
+        {
+            <label class="form-check form-switch hvo-console-autoscroll">
+                <input class="form-check-input" type="checkbox" checked="@AutoScroll" @onchange="HandleAutoScrollChanged" />
+                <span class="form-check-label">Auto-scroll</span>
+            </label>
+        }
+    </div>
+
+    <div class="hvo-console-log" @ref="_viewport" role="log" aria-live="polite" aria-label="@EffectiveAriaLabel">
+        @if (Entries.Count == 0)
+        {
+            <div class="hvo-console-empty">@EffectiveEmptyMessage</div>
+        }
+        else
+        {
+            @foreach (var entry in Entries)
+            {
+                <div class="hvo-console-line">
+                    <div class="hvo-console-line-meta">
+                        <span class="hvo-console-time" title="@entry.TimestampUtc.ToString("u")">@entry.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")</span>
+                        <span class="hvo-console-level @GetLogLevelCssClass(entry.Level)" title="@entry.Level">@GetLogLevelLabel(entry.Level)</span>
+                        <span class="hvo-console-category" title="@entry.Category">@entry.Category</span>
+                        @if (entry.Scopes.Count > 0)
+                        {
+                            <span class="hvo-console-scopes" title="Scopes">@string.Join(" › ", entry.Scopes)</span>
+                        }
+                    </div>
+                    <div class="hvo-console-message">@entry.Message</div>
+                    @if (!string.IsNullOrWhiteSpace(entry.Exception))
+                    {
+                        <pre class="hvo-console-exception">@entry.Exception</pre>
+                    }
+                </div>
+            }
+        }
+    </div>
+</div>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="hvo-dark">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HVO Roof Controller</title>
+    <base href="/" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css" rel="stylesheet">
+
+    <!-- Project-scoped CSS isolation bundle -->
+    <link rel="stylesheet" href="_content/HVO.WebSite.Themes/css/themes/hvo-dark.css" />
+    <link rel="stylesheet" href="css/overrides/roofcontroller-overrides.css" />
+    <link href="HVO.RoofControllerV4.RPi.styles.css" rel="stylesheet">
+    
+    <!-- Blazor Head Outlet for CSS isolation and dynamic head content -->
+    <HeadOutlet />
+</head>
+
+<body data-theme="hvo-dark">
+    <Routes />
+
+    <div id="components-reconnect-modal">
+        <div class="reconnect-dialog">
+            <div class="components-reconnect-show reconnect-state reconnect-attempting" role="status" aria-live="polite">
+                <div class="reconnect-icon reconnect-icon--attempting">
+                    <i class="bi bi-arrow-repeat"></i>
+                </div>
+                <h3 class="reconnect-heading">Reconnecting…</h3>
+                <p class="reconnect-copy">The observatory is not responding. Please wait while we attempt to reconnect.</p>
+            </div>
+            <div class="components-reconnect-failed reconnect-state reconnect-failed" role="alert" aria-live="assertive">
+                <div class="reconnect-icon reconnect-icon--failed">
+                    <i class="bi bi-wifi-off"></i>
+                </div>
+                <h3 class="reconnect-heading">Connection lost</h3>
+                <p class="reconnect-copy">We couldn't reach the observatory. Check the network connection, then try reloading.</p>
+                <div class="reconnect-actions">
+                    <button class="btn btn-outline-light" type="button" onclick="location.reload()">Reload</button>
+                </div>
+            </div>
+            <div class="components-reconnect-rejected reconnect-state reconnect-rejected" role="alert" aria-live="assertive">
+                <div class="reconnect-icon reconnect-icon--rejected">
+                    <i class="bi bi-shield-exclamation"></i>
+                </div>
+                <h3 class="reconnect-heading">Reconnection refused</h3>
+                <p class="reconnect-copy">Another session is active or the server rejected the request. Reload to start a new session.</p>
+                <div class="reconnect-actions">
+                    <button class="btn btn-primary" type="button" onclick="location.reload()">Reload</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss">🗙</a>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+
+</html>
