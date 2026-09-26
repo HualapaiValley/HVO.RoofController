@@ -172,8 +172,7 @@ public sealed class RoofControllerApiTests
         var response = await client.PostAsync($"{BasePath}/Open", content: null);
 
         Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
-        // [Produces("application/json")] on the controller wins over application/problem+json; clients key off the status.
-        response.Content.Headers.ContentType?.MediaType.Should().BeOneOf("application/json", "application/problem+json");
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/problem+json");
         var problem = await ApiJson.ReadElementAsync(response);
         Assert.AreEqual("FaultLatched", problem.GetProperty("code").GetString());
         Assert.AreEqual("urn:hvo:roof-controller:FaultLatched", problem.GetProperty("type").GetString());

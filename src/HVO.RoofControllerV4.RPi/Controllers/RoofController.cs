@@ -21,7 +21,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
     /// console cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
     /// coherent status snapshot; refusals are RFC 7807 ProblemDetails with <c>code</c> and <c>roofStatus</c> extensions.
     /// </summary>
-    [ApiController, ApiVersion("4.0"), Produces("application/json")]
+    // No class-level [Produces]: it would override the application/problem+json content type of refusals.
+    [ApiController, ApiVersion("4.0")]
     [Route("api/v{version:apiVersion}/RoofControl")]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
