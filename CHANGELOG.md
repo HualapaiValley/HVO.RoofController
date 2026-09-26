@@ -43,6 +43,10 @@ the roof against this server.
 - **Limit override on hardware.** `IgnorePhysicalLimitSwitches` is refused on physical
   hardware unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local
   configuration (it cannot be set through the API).
+- **Camera.** Blue Iris credentials come from `BlueIris:UserName` and `BlueIris:Password`
+  (environment variables or Docker secrets); the hard-coded credential was removed and must be
+  rotated because it remains in the git history. `GET api/v1.0/Camera/{id}/mjpeg` needs a
+  Viewer key, the console sign-in, or a ticket from `POST api/v1.0/Camera/{id}/ticket`.
 - **Deployment.** `deploy-roofcontroller-rpi.sh` needs the operator key
   (`ROOF_OPERATOR_API_KEY` or `~/.config/hvo-roof/operator.key`) and aborts unless the Stop it
   sends is verified. See [docs/deployment.md](docs/deployment.md).
