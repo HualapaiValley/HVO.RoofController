@@ -21,6 +21,9 @@ public static class RoofControllerApiContract
     public const string AdminRole = "RoofAdmin";
 
     /// <summary>Problem-details extension holding the <see cref="RoofControllerErrorCode"/> name.</summary>
+    /// <summary>Query-string parameter carrying a <see cref="CameraStreamTicketResponse"/> ticket on the MJPEG route.</summary>
+    public const string CameraTicketQueryParameter = "ticket";
+
     public const string ProblemCodeExtension = "code";
 
     /// <summary>Problem-details extension holding a <see cref="RoofStatusResponse"/> snapshot, when available.</summary>
