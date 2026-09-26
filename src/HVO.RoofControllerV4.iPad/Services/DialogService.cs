@@ -8,6 +8,9 @@ namespace HVO.RoofControllerV4.iPad.Services;
 /// <inheritdoc />
 public sealed class DialogService : IDialogService
 {
+    private const string RetryButton = "Retry";
+    private const string KeepOfflineButton = "Keep offline";
+
     private readonly ILogger<DialogService> _logger;
 
     public DialogService(ILogger<DialogService> logger)
@@ -18,11 +21,11 @@ public sealed class DialogService : IDialogService
     /// <inheritdoc />
     public async Task<ConnectivityPromptResult> ShowConnectivityPromptAsync(string title, string message, string? detail = null, CancellationToken cancellationToken = default)
     {
-        var page = Application.Current?.Windows.FirstOrDefault()?.Page;
+        var page = GetActivePage();
         if (page is null)
         {
             _logger.LogWarning("No active page available to display connectivity prompt");
-            return ConnectivityPromptResult.Retry;
+            return ConnectivityPromptResult.KeepOffline;
         }
 
         var displayMessage = string.IsNullOrWhiteSpace(detail)
@@ -44,45 +47,60 @@ public sealed class DialogService : IDialogService
 
                 return await page.DisplayActionSheetAsync(
                     sheetTitle,
-                    "Cancel",
-                    "Exit",
-                    "Retry");
+                    KeepOfflineButton,
+                    null,
+                    RetryButton);
             }).ConfigureAwait(false);
 
-            return response switch
-            {
-                "Retry" => ConnectivityPromptResult.Retry,
-                "Exit" => ConnectivityPromptResult.Exit,
-                _ => ConnectivityPromptResult.Cancel
-            };
+            return response == RetryButton ? ConnectivityPromptResult.Retry : ConnectivityPromptResult.KeepOffline;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to display connectivity prompt");
-            return ConnectivityPromptResult.Retry;
+            return ConnectivityPromptResult.KeepOffline;
         }
     }
 
     /// <inheritdoc />
-    public async Task ExitApplicationAsync()
+    public async Task<bool> ConfirmAsync(string title, string message, string accept, string cancel)
     {
+        var page = GetActivePage();
+        if (page is null)
+        {
+            _logger.LogWarning("No active page available to display confirmation {Title}", title);
+            return false;
+        }
+
         try
         {
-            await MainThread.InvokeOnMainThreadAsync(() =>
-            {
-                try
-                {
-                    Application.Current?.Quit();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Unable to quit application programmatically");
-                }
-            }).ConfigureAwait(false);
+            return await MainThread.InvokeOnMainThreadAsync(() => page.DisplayAlertAsync(title, message, accept, cancel)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error while attempting to exit application");
+            _logger.LogError(ex, "Failed to display confirmation {Title}", title);
+            return false;
         }
     }
+
+    /// <inheritdoc />
+    public async Task AlertAsync(string title, string message, string dismiss = "OK")
+    {
+        var page = GetActivePage();
+        if (page is null)
+        {
+            _logger.LogWarning("No active page available to display alert {Title}", title);
+            return;
+        }
+
+        try
+        {
+            await MainThread.InvokeOnMainThreadAsync(() => page.DisplayAlertAsync(title, message, dismiss)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to display alert {Title}", title);
+        }
+    }
+
+    private static Page? GetActivePage() => Application.Current?.Windows.FirstOrDefault()?.Page;
 }

@@ -9,7 +9,7 @@
     xmlns:converters="clr-namespace:HVO.RoofControllerV4.iPad.Converters"
     x:Class="HVO.RoofControllerV4.iPad.Popups.HealthStatusPopup"
     x:DataType="viewModels:HealthStatusPopupViewModel"
-    Color="Transparent"
+    BackgroundColor="Transparent"
     CanBeDismissedByTappingOutsideOfPopup="False">
 
     <toolkit:Popup.Resources>
