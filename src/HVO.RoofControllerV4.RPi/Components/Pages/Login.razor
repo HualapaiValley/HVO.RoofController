@@ -10,7 +10,13 @@
     </h1>
     <p class="login-subtitle">Enter your access key to continue.</p>
 
-    @if (HasError)
+    @if (IsFormExpired)
+    {
+        <div class="alert alert-warning" role="alert" data-testid="login-error">
+            The sign-in form expired. Enter your access key again.
+        </div>
+    }
+    else if (HasError)
     {
         <div class="alert alert-danger" role="alert" data-testid="login-error">
             The access key was not accepted. Check it and try again.
@@ -46,6 +52,9 @@
     public string? Error { get; set; }
 
     private bool HasError => !string.IsNullOrWhiteSpace(Error);
+
+    // error=2: the antiforgery token was missing or expired (see RoofAccountEndpoints), not a wrong key.
+    private bool IsFormExpired => string.Equals(Error, "2", StringComparison.Ordinal);
 
     private string SafeReturnUrl => SanitizeReturnUrl(ReturnUrl);
 

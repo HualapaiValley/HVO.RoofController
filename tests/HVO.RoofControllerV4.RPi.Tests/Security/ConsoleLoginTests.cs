@@ -192,6 +192,41 @@ public sealed class ConsoleLoginTests
         Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    [TestMethod]
+    public async Task Console_EndToEnd_AnonymousRedirectsToLoginFormAndSignedInUserSeesConsole()
+    {
+        using var client = _host.CreateApiClient();
+
+        var anonymous = await client.GetAsync("/");
+        Assert.AreEqual(HttpStatusCode.Redirect, anonymous.StatusCode);
+        var location = anonymous.Headers.Location!;
+        var loginUri = location.IsAbsoluteUri ? location : new Uri(new Uri("http://localhost"), location);
+        Assert.AreEqual(RoofControllerSecurityDefaults.LoginPath, loginUri.AbsolutePath);
+        StringAssert.Contains(loginUri.Query, RoofControllerSecurityDefaults.ReturnUrlFormField + "=%2F");
+
+        var loginPage = await client.GetAsync(loginUri.PathAndQuery);
+        Assert.AreEqual(HttpStatusCode.OK, loginPage.StatusCode);
+        var html = await loginPage.Content.ReadAsStringAsync();
+        StringAssert.Contains(html, $"action=\"{RoofControllerSecurityDefaults.LoginPostPath}\"");
+        StringAssert.Contains(html, $"name=\"{RoofControllerSecurityDefaults.AccessKeyFormField}\"");
+        StringAssert.Contains(html, $"name=\"{RoofControllerSecurityDefaults.ReturnUrlFormField}\"");
+        StringAssert.Contains(html, "__RequestVerificationToken");
+
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        var console = await SendWithCookieAsync(client, HttpMethod.Get, "/", cookie);
+        Assert.AreEqual(HttpStatusCode.OK, console.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task LoginPage_ExpiredFormError_ShowsDistinctMessage()
+    {
+        using var client = _host.CreateApiClient();
+
+        var html = await client.GetStringAsync($"{RoofControllerSecurityDefaults.LoginPath}?error={RoofAccountEndpoints.ExpiredFormError}");
+
+        StringAssert.Contains(html, "The sign-in form expired");
+    }
+
     private HttpRequestMessage LoginRequest(string accessKey, string returnUrl)
     {
         var antiforgery = _host.Services.GetRequiredService<IAntiforgery>();

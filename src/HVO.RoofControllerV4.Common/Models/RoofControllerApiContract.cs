@@ -14,16 +14,19 @@ public static class RoofControllerApiContract
     /// <summary>Role that may read status, health details and the camera.</summary>
     public const string ViewerRole = "RoofViewer";
 
-    /// <summary>Role that may command motion (Open, Close, Stop, ClearFault, lease renewal).</summary>
+    /// <summary>
+    /// Role that may command motion (Open, Close, ClearFault, lease renewal). Stop is deliberately weaker: any
+    /// authenticated role may Stop, or anyone when the controller is configured with AllowAnonymousStop.
+    /// </summary>
     public const string OperatorRole = "RoofOperator";
 
     /// <summary>Role that may change configuration and read logs/diagnostics.</summary>
     public const string AdminRole = "RoofAdmin";
 
-    /// <summary>Problem-details extension holding the <see cref="RoofControllerErrorCode"/> name.</summary>
     /// <summary>Query-string parameter carrying a <see cref="CameraStreamTicketResponse"/> ticket on the MJPEG route.</summary>
     public const string CameraTicketQueryParameter = "ticket";
 
+    /// <summary>Problem-details extension holding the <see cref="RoofControllerErrorCode"/> name.</summary>
     public const string ProblemCodeExtension = "code";
 
     /// <summary>Problem-details extension holding a <see cref="RoofStatusResponse"/> snapshot, when available.</summary>
