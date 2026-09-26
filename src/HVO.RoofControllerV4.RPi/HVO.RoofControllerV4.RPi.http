@@ -2,67 +2,99 @@
 # Requires the VS Code REST Client extension (humao.rest-client)
 
 # Usage
-# 1. Press Cmd+Shift+P (Ctrl+Shift+P on Windows/Linux)
-# 2. Choose "Tasks: Run Task" ➜ "prepare:roofv4:debug" to launch the API locally
-# 3. Wait for the application to bind to http://localhost:5136 (default)
-# 4. Highlight any request below and use the REST Client "Send Request" action
+# 1. Export an API key before starting VS Code (never paste keys into this file):
+#      export ROOF_API_KEY=<operator or admin key>      (see docs/security.md)
+# 2. Start the app ("Debug" launch profile binds http://localhost:5195)
+# 3. Highlight any request below and use the REST Client "Send Request" action
+#
+# Roles: Status = Viewer; Open/Close/ClearFault/Lease = Operator; Stop = any key; Configuration and System = Admin.
+# Commands are POST; GET returns 405. Failures are ProblemDetails with "code" and "roofStatus" (409 refused by an
+# interlock, 503 not ready / relay state unverified, 401 missing key, 403 wrong role).
 
 ### Variables
-@baseUrl = http://localhost:5136
+@baseUrl = http://localhost:5195
 @apiVersion = 4.0
 @contentType = application/json
+@apiKey = {{$processEnv ROOF_API_KEY}}
 
-### Health - Ready
+### Health - Ready (anonymous)
 GET {{baseUrl}}/health/ready
-Accept: {{contentType}}
 
-### Roof status
-# Returns the current controller state, movement flags, and watchdog info
+### Health - details (Viewer; 503 with a JSON body when Unhealthy)
+GET {{baseUrl}}/health
+Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
+
+### Roof status (Viewer)
 GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Status
 Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
 
-### Read configuration snapshot
+### Stop roof (any key)
+POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Stop
+Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
+
+### Open roof (Operator)
+POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Open
+Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
+
+### Close roof (Operator)
+POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Close
+Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
+
+### Renew the operator lease while moving (Operator; 409 LeaseNotActive when idle)
+POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Lease
+Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
+
+### Clear controller fault (Operator); pulseMs 50-2000, default 250
+POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/ClearFault?pulseMs=250
+Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
+
+### Read configuration (Admin); note "version" for the update below
 GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Configuration
 Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
 
-### Update configuration
+### Update configuration (Admin)
+# Every field is required. expectedVersion must equal the version just read (409 on mismatch). Changing relay ids,
+# limit/fault polarity or ignorePhysicalLimitSwitches also needs "confirmSafetyCriticalChange": true.
 POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Configuration
 Content-Type: {{contentType}}
 Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
 
 {
-  "safetyWatchdogTimeoutSeconds": 45,
+  "expectedVersion": 1,
+  "confirmSafetyCriticalChange": false,
+  "safetyWatchdogTimeoutSeconds": 150,
   "openRelayId": 1,
   "closeRelayId": 2,
   "clearFaultRelayId": 3,
   "stopRelayId": 4,
   "enableDigitalInputPolling": true,
-  "digitalInputPollIntervalMilliseconds": 200,
+  "digitalInputPollIntervalMilliseconds": 25,
   "enablePeriodicVerificationWhileMoving": true,
-  "periodicVerificationIntervalSeconds": 10,
+  "periodicVerificationIntervalSeconds": 1,
   "useNormallyClosedLimitSwitches": true,
-  "limitSwitchDebounceMilliseconds": 150,
-  "ignorePhysicalLimitSwitches": false
+  "limitSwitchDebounceMilliseconds": 50,
+  "ignorePhysicalLimitSwitches": false,
+  "faultInputActiveHigh": true,
+  "maxConsecutiveInputReadFailures": 3,
+  "operatorLeaseTimeoutSeconds": null,
+  "atSpeedConfirmationTimeoutSeconds": null
 }
 
-### Open roof
-GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Open
+### System information (Admin)
+GET {{baseUrl}}/api/v1.0/System/info
 Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
 
-### Close roof
-GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Close
+### Camera stream ticket (Viewer); open the returned relative "url" within 60 s, no header needed
+POST {{baseUrl}}/api/v1.0/Camera/1/ticket
 Accept: {{contentType}}
-
-### Stop roof
-GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Stop
-Accept: {{contentType}}
-
-### Clear controller fault
-# `pulseMs` controls the relay pulse duration (default 250)
-POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/ClearFault?pulseMs=250
-Accept: {{contentType}}
-
-### Notes
-# - All operations return ProblemDetails on errors with structured logging in the API
-# - Configuration updates are validated; check the response body for validation errors
-# - Status responses reflect the latest hardware poll and include watchdog countdown values
+X-Api-Key: {{apiKey}}

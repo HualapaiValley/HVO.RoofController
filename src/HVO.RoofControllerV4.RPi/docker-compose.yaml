@@ -7,12 +7,26 @@ services:
       platforms:
         - linux/arm64
     restart: unless-stopped
+    # SIGTERM first: the host stops the roof (verified all-off) and ends camera streams before exiting.
+    # Must stay above the app's HostOptions.ShutdownTimeout (20 s).
+    stop_grace_period: 30s
     ports:
       - "8080:8080"
+      # HTTPS (recommended): see docs/deployment.md.
+      # - "8443:8443"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       HVO_FORCE_RASPBERRY_PI: "true"
       RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
+      # Host names/IPs clients use to reach the controller (semicolon-separated); "*" logs a startup warning.
+      AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
+      # HTTPS is required for non-loopback clients in Production (403 https_required otherwise). Either configure
+      # the certificate below, or set HVO_ROOF_REQUIRE_HTTPS=false to accept plain HTTP (keys then cross the LAN
+      # in clear text; a warning is logged at startup).
+      RoofControllerSecurity__RequireHttps: ${HVO_ROOF_REQUIRE_HTTPS:-true}
+      # ASPNETCORE_URLS: "http://+:8080;https://+:8443"
+      # Kestrel__Certificates__Default__Path: /https/roof-controller.pfx
+      # (put the PFX password in the secrets directory as a file named Kestrel__Certificates__Default__Password)
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://192.168.1.238:4318}
@@ -26,6 +40,16 @@ services:
         source: /sys/class/thermal/thermal_zone0/temp
         target: /sys/class/thermal/thermal_zone0/temp
         read_only: true
+      # One file per secret setting, named after its configuration key (API keys, BlueIris__Password, certificate
+      # password). Read by the app through AddKeyPerFile("/run/secrets"). Never commit these files.
+      - type: bind
+        source: ${HVO_ROOF_SECRETS_DIR:-/etc/hvo-roof/secrets}
+        target: /run/secrets
+        read_only: true
+      # - type: bind
+      #   source: ${HVO_ROOF_CERT_DIR:-/etc/hvo-roof/https}
+      #   target: /https
+      #   read_only: true
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
       interval: 30s
