@@ -1,22 +1,30 @@
 using System;
-using System.Diagnostics;
-using HVO.Core.Results;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using Asp.Versioning;
+using HVO.Core.Results;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using HVO.RoofControllerV4.RPi.Logic;
-using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.RPi.Controllers
 {
     /// <summary>
-    /// Roof Controller API v4.0 - Controls the observatory roof operations
+    /// Roof Controller API v4.0 - controls the observatory roof. Accepts only the <c>X-Api-Key</c> header (never the
+    /// console cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
+    /// coherent status snapshot; refusals are RFC 7807 ProblemDetails with <c>code</c> and <c>roofStatus</c> extensions.
     /// </summary>
     [ApiController, ApiVersion("4.0"), Produces("application/json")]
     [Route("api/v{version:apiVersion}/RoofControl")]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     [Tags("Roof Control")]
     public class RoofController : ControllerBase
@@ -39,45 +47,127 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         }
 
         /// <summary>
-        /// Gets the current status of the roof controller
+        /// Gets the current status of the roof controller (Viewer).
         /// </summary>
-        /// <returns>Current roof controller status</returns>
-        /// <response code="200">Returns the current roof status</response>
-        /// <response code="500">Internal server error occurred</response>
-        [HttpGet, Route("Status", Name = nameof(GetRoofStatus))]
+        /// <response code="200">Coherent status snapshot.</response>
+        [HttpGet("Status", Name = nameof(GetRoofStatus))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
-        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public ActionResult<RoofStatusResponse> GetRoofStatus()
         {
+            // Re-read the inputs so the snapshot reflects current hardware when input events are not flowing.
             _roofController.RefreshStatus(forceHardwareRead: true);
-            return Ok(CreateStatus());
+            return Ok(_roofController.GetCurrentStatusSnapshot());
         }
 
         /// <summary>
-        /// Retrieves the current configuration applied to the roof controller service.
+        /// Starts opening the roof (Operator).
         /// </summary>
-        /// <returns>Current controller configuration values.</returns>
-        /// <response code="200">Returns the configuration snapshot.</response>
-        [HttpGet, Route("Configuration", Name = nameof(GetRoofConfiguration))]
+        /// <response code="200">Motion started; status snapshot after the command.</response>
+        /// <response code="409">Refused by an interlock (fault latched, limit, operation in progress).</response>
+        /// <response code="503">Controller not ready (not initialized, shutting down, hardware or relay state unverified).</response>
+        [HttpPost("Open", Name = nameof(DoRoofOpen))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+        public ActionResult<RoofStatusResponse> DoRoofOpen()
+            => RunCommand("open", () => _roofController.Open());
+
+        /// <summary>
+        /// Starts closing the roof (Operator).
+        /// </summary>
+        /// <response code="200">Motion started; status snapshot after the command.</response>
+        /// <response code="409">Refused by an interlock (fault latched, limit, operation in progress).</response>
+        /// <response code="503">Controller not ready (not initialized, shutting down, hardware or relay state unverified).</response>
+        [HttpPost("Close", Name = nameof(DoRoofClose))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+        public ActionResult<RoofStatusResponse> DoRoofClose()
+            => RunCommand("close", () => _roofController.Close());
+
+        /// <summary>
+        /// Stops the roof (any authenticated key; anonymous only when RoofControllerSecurity:AllowAnonymousStop is true).
+        /// </summary>
+        /// <response code="200">Stop verified; status snapshot after the command.</response>
+        /// <response code="503">The stop could not be verified (relay register unverified) or hardware is unavailable.</response>
+        [HttpPost("Stop", Name = nameof(DoRoofStop))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.StopPolicy)]
+        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+        public ActionResult<RoofStatusResponse> DoRoofStop()
+            => RunCommand("stop", () => _roofController.Stop());
+
+        /// <summary>
+        /// Renews the operator lease while the roof is moving (Operator). Never starts motion.
+        /// </summary>
+        /// <response code="200">Lease renewed; status snapshot after the command.</response>
+        /// <response code="409">No lease is active (roof not moving or lease disabled).</response>
+        [HttpPost("Lease", Name = nameof(RenewRoofLease))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+        public ActionResult<RoofStatusResponse> RenewRoofLease()
+            => RunCommand("lease", () => _roofController.RenewLease());
+
+        /// <summary>
+        /// Pulses the clear-fault relay to reset the drive and, when inputs are healthy, clear a latched fault (Operator).
+        /// </summary>
+        /// <param name="pulseMs">Pulse length in milliseconds (50-2000, default 250).</param>
+        /// <param name="cancellationToken">Request cancellation.</param>
+        /// <response code="200">Pulse completed; status snapshot afterwards (check IsFaultLatched).</response>
+        /// <response code="400">pulseMs out of range.</response>
+        /// <response code="409">Refused (roof moving, another clear in progress).</response>
+        [HttpPost("ClearFault", Name = nameof(DoClearFault))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+        public async Task<ActionResult<RoofStatusResponse>> DoClearFault(
+            [FromQuery, Range(RoofControllerLimits.MinClearFaultPulseMilliseconds, RoofControllerLimits.MaxClearFaultPulseMilliseconds)]
+            int pulseMs = RoofControllerLimits.DefaultClearFaultPulseMilliseconds,
+            CancellationToken cancellationToken = default)
+        {
+            LogCommand("clear_fault");
+            var startTimestamp = Stopwatch.GetTimestamp();
+            using var activity = RoofControllerTelemetry.StartCommand("clear_fault");
+            var result = await _roofController.ClearFault(pulseMs, cancellationToken).ConfigureAwait(false);
+            RoofControllerTelemetry.CompleteCommand(activity, "clear_fault", result.IsSuccessful, startTimestamp);
+
+            return result.IsSuccessful
+                ? Ok(_roofController.GetCurrentStatusSnapshot())
+                : RoofProblem(result.Error, "clear_fault");
+        }
+
+        /// <summary>
+        /// Retrieves the configuration applied to the roof controller service (Admin).
+        /// </summary>
+        /// <response code="200">Configuration snapshot including its Version.</response>
+        [HttpGet("Configuration", Name = nameof(GetRoofConfiguration))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
         [ProducesResponseType(typeof(RoofConfigurationResponse), StatusCodes.Status200OK)]
         public ActionResult<RoofConfigurationResponse> GetRoofConfiguration()
         {
-            var snapshot = _roofController.GetConfigurationSnapshot();
-            return Ok(CreateConfigurationResponse(snapshot));
+            var state = _roofController.GetConfigurationState();
+            return Ok(CreateConfigurationResponse(state.Options, state.Version));
         }
 
         /// <summary>
-        /// Applies a configuration update to the roof controller service.
+        /// Replaces the remotely editable configuration (Admin). Every safety field is required, ExpectedVersion must
+        /// match the current version, and changes to relay mapping, limit/fault polarity or IgnorePhysicalLimitSwitches
+        /// also need ConfirmSafetyCriticalChange=true. Refused while the roof is moving.
         /// </summary>
-        /// <param name="request">The desired configuration values.</param>
-        /// <returns>The effective configuration after applying the update.</returns>
-        /// <response code="200">Configuration updated successfully.</response>
-        /// <response code="400">Validation failed for one or more configuration values.</response>
-        /// <response code="500">Internal server error or service state issue occurred.</response>
-        [HttpPost, Route("Configuration", Name = nameof(UpdateRoofConfiguration))]
+        /// <response code="200">Configuration applied; the new configuration and version.</response>
+        /// <response code="400">Missing or invalid values.</response>
+        /// <response code="409">Version conflict, unconfirmed safety-critical change, or refused by the controller.</response>
+        [HttpPost("Configuration", Name = nameof(UpdateRoofConfiguration))]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
         [ProducesResponseType(typeof(RoofConfigurationResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
         public ActionResult<RoofConfigurationResponse> UpdateRoofConfiguration([FromBody] RoofConfigurationRequest? request)
         {
             if (request is null)
@@ -91,8 +181,35 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 return ValidationProblem(ModelState);
             }
 
+            var caller = RoofPrincipalFactory.DescribeCaller(User);
             var current = _roofController.GetConfigurationState();
+            if (request.ExpectedVersion != current.Version)
+            {
+                return RoofProblem(
+                    new RoofControllerException(
+                        RoofControllerErrorCode.ConfigurationVersionConflict,
+                        string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"The configuration changed since it was read (expected version {request.ExpectedVersion}, current version {current.Version}). Reload and retry.")),
+                    "update_configuration");
+            }
+
             var updatedOptions = request.ToOptions(current.Options);
+            var changes = DescribeChanges(current.Options, updatedOptions);
+            var safetyCritical = request.ChangesSafetyCriticalSettings(current.Options);
+            if (safetyCritical && !request.ConfirmSafetyCriticalChange)
+            {
+                _logger.LogWarning(
+                    "Configuration update by {Caller} rejected: safety-critical change not confirmed ({Changes})",
+                    caller,
+                    changes);
+                return RoofProblem(
+                    new RoofControllerException(
+                        RoofControllerErrorCode.ConfigurationRejected,
+                        "This change affects relay mapping, limit-switch or fault polarity, or ignoring limit switches. " +
+                        "Resend with ConfirmSafetyCriticalChange=true after checking the wiring."),
+                    "update_configuration");
+            }
 
             var validationFailures = _configurationValidators
                 .Select(validator => validator.Validate(Options.DefaultName, updatedOptions))
@@ -112,183 +229,135 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             }
 
             var result = _roofController.UpdateConfiguration(updatedOptions, request.ExpectedVersion!.Value);
+            if (!result.IsSuccessful)
+            {
+                _logger.LogWarning(
+                    "Configuration update by {Caller} refused by the controller: {Error}",
+                    caller,
+                    result.Error?.Message);
+                return RoofProblem(result.Error, "update_configuration");
+            }
 
-            return result.Match(
-                success: options => Ok(CreateConfigurationResponse(options)),
-                failure: error => error switch
-                {
-                    InvalidOperationException => Problem(
-                        title: "Service Error",
-                        detail: error.Message,
-                        statusCode: StatusCodes.Status500InternalServerError),
-                    _ => Problem(
-                        title: "Internal Server Error",
-                        detail: "An error occurred while updating configuration",
-                        statusCode: StatusCodes.Status500InternalServerError)
-                });
+            var applied = _roofController.GetConfigurationState();
+            _logger.Log(
+                safetyCritical ? LogLevel.Warning : LogLevel.Information,
+                "AUDIT configuration updated by {Caller} (version {OldVersion} -> {NewVersion}, safety-critical: {SafetyCritical}): {Changes}",
+                caller,
+                current.Version,
+                applied.Version,
+                safetyCritical,
+                changes);
+
+            return Ok(CreateConfigurationResponse(result.Value, applied.Version));
+        }
+
+        private ActionResult<RoofStatusResponse> RunCommand<T>(string command, Func<Result<T>> execute)
+        {
+            LogCommand(command);
+            var startTimestamp = Stopwatch.GetTimestamp();
+            using var activity = RoofControllerTelemetry.StartCommand(command);
+            var result = execute();
+            RoofControllerTelemetry.CompleteCommand(activity, command, result.IsSuccessful, startTimestamp);
+
+            return result.IsSuccessful
+                ? Ok(_roofController.GetCurrentStatusSnapshot())
+                : RoofProblem(result.Error, command);
+        }
+
+        private void LogCommand(string command)
+        {
+            _logger.LogInformation(
+                "Roof command {Command} requested by {Caller} from {RemoteIp}",
+                command,
+                RoofPrincipalFactory.DescribeCaller(User),
+                HttpContext.Connection.RemoteIpAddress);
         }
 
         /// <summary>
-        /// Opens the observatory roof
+        /// Maps a failure to ProblemDetails: <see cref="RoofControllerException"/> codes use
+        /// <see cref="RoofControllerApiContract.HttpStatusFor"/>; anything else is 500 <c>Unknown</c> with a generic detail.
         /// </summary>
-        /// <returns>Updated roof controller status after opening operation</returns>
-        /// <response code="200">Roof opening operation completed successfully</response>
-        /// <response code="500">Internal server error or service state issue occurred</response>
-        [HttpGet, Route("Open", Name = nameof(DoRoofOpen))]
-        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
-        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
-        public ActionResult<RoofStatusResponse> DoRoofOpen()
+        private ObjectResult RoofProblem(Exception? error, string operation)
         {
-            var startTimestamp = Stopwatch.GetTimestamp();
-            using var activity = RoofControllerTelemetry.StartCommand("open");
-            var result = this._roofController.Open();
-            RoofControllerTelemetry.CompleteCommand(activity, "open", result.IsSuccessful, startTimestamp);
-            
-            return result.Match(
-                success: status => Ok(CreateStatus(status)),
-                failure: error => error switch
+            RoofControllerErrorCode code;
+            string detail;
+            RoofStatusResponse? snapshot;
+
+            if (error is RoofControllerException roofError)
+            {
+                code = roofError.Code;
+                detail = roofError.Message;
+                snapshot = roofError.Snapshot ?? TryGetSnapshot();
+                _logger.LogInformation("Roof {Operation} refused: {Code} {Detail}", operation, code, detail);
+            }
+            else
+            {
+                code = RoofControllerErrorCode.Unknown;
+                detail = $"An unexpected error occurred during '{operation}'. See the controller log.";
+                snapshot = TryGetSnapshot();
+                _logger.LogError(error, "Roof {Operation} failed unexpectedly", operation);
+            }
+
+            var status = RoofControllerApiContract.HttpStatusFor(code);
+            var problem = Problem(
+                statusCode: status,
+                title: TitleFor(code),
+                type: RoofControllerApiContract.ProblemType(code),
+                detail: detail);
+
+            if (problem.Value is ProblemDetails details)
+            {
+                details.Extensions[RoofControllerApiContract.ProblemCodeExtension] = code.ToString();
+                if (snapshot is not null)
                 {
-                    // Service state issues should return 500
-                    InvalidOperationException => Problem(
-                        title: "Service Error",
-                        detail: error.Message,
-                        statusCode: StatusCodes.Status500InternalServerError
-                    ),
-                    _ => Problem(
-                        title: "Internal Server Error", 
-                        detail: "An error occurred while opening the roof",
-                        statusCode: StatusCodes.Status500InternalServerError
-                    )
+                    details.Extensions[RoofControllerApiContract.ProblemStatusExtension] = snapshot;
                 }
-            );
+            }
+
+            if (status == StatusCodes.Status503ServiceUnavailable)
+            {
+                Response.Headers.RetryAfter = "2";
+            }
+
+            return problem;
         }
 
-        /// <summary>
-        /// Closes the observatory roof
-        /// </summary>
-        /// <returns>Updated roof controller status after closing operation</returns>
-        /// <response code="200">Roof closing operation completed successfully</response>
-        /// <response code="500">Internal server error or service state issue occurred</response>
-        [HttpGet, Route("Close", Name = nameof(DoRoofClose))]
-        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
-        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
-        public ActionResult<RoofStatusResponse> DoRoofClose()
+        private RoofStatusResponse? TryGetSnapshot()
         {
-            var startTimestamp = Stopwatch.GetTimestamp();
-            using var activity = RoofControllerTelemetry.StartCommand("close");
-            var result = this._roofController.Close();
-            RoofControllerTelemetry.CompleteCommand(activity, "close", result.IsSuccessful, startTimestamp);
-            
-            return result.Match(
-                success: status => Ok(CreateStatus(status)),
-                failure: error => error switch
-                {
-                    // Service state issues should return 500
-                    InvalidOperationException => Problem(
-                        title: "Service Error",
-                        detail: error.Message,
-                        statusCode: StatusCodes.Status500InternalServerError
-                    ),
-                    _ => Problem(
-                        title: "Internal Server Error", 
-                        detail: "An error occurred while closing the roof",
-                        statusCode: StatusCodes.Status500InternalServerError
-                    )
-                }
-            );
+            try
+            {
+                return _roofController.GetCurrentStatusSnapshot();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not capture a status snapshot for a problem response");
+                return null;
+            }
         }
 
-        /// <summary>
-        /// Stops the current roof operation
-        /// </summary>
-        /// <returns>Updated roof controller status after stop operation</returns>
-        /// <response code="200">Roof stop operation completed successfully</response>
-        /// <response code="500">Internal server error or service state issue occurred</response>
-        [HttpGet, Route("Stop", Name = nameof(DoRoofStop))]
-        [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
-        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
-        public ActionResult<RoofStatusResponse> DoRoofStop()
+        private static string TitleFor(RoofControllerErrorCode code) => code switch
         {
-            var startTimestamp = Stopwatch.GetTimestamp();
-            using var activity = RoofControllerTelemetry.StartCommand("stop");
-            var result = this._roofController.Stop();
-            RoofControllerTelemetry.CompleteCommand(activity, "stop", result.IsSuccessful, startTimestamp);
-            
-            return result.Match(
-                success: status => Ok(CreateStatus(status)),
-                failure: error => error switch
-                {
-                    // Service state issues should return 500
-                    InvalidOperationException => Problem(
-                        title: "Service Error",
-                        detail: error.Message,
-                        statusCode: StatusCodes.Status500InternalServerError
-                    ),
-                    _ => Problem(
-                        title: "Internal Server Error", 
-                        detail: "An error occurred while stopping the roof",
-                        statusCode: StatusCodes.Status500InternalServerError
-                    )
-                }
-            );
-        }
+            RoofControllerErrorCode.NotInitialized => "Roof controller not initialized",
+            RoofControllerErrorCode.ShuttingDown => "Roof controller shutting down",
+            RoofControllerErrorCode.HardwareUnavailable => "Roof hardware unavailable",
+            RoofControllerErrorCode.RelayStateUnverified => "Relay state unverified",
+            RoofControllerErrorCode.FaultLatched => "Fault latched",
+            RoofControllerErrorCode.InterlockActive => "Interlock active",
+            RoofControllerErrorCode.OperationInProgress => "Operation in progress",
+            RoofControllerErrorCode.LeaseNotActive => "No active lease",
+            RoofControllerErrorCode.ConfigurationVersionConflict => "Configuration version conflict",
+            RoofControllerErrorCode.ConfigurationRejected => "Configuration rejected",
+            RoofControllerErrorCode.InvalidRequest => "Invalid request",
+            _ => "Roof controller error"
+        };
 
-        /// <summary>
-        /// Clears controller/motor fault by pulsing the clear-fault relay.
-        /// </summary>
-        /// <param name="pulseMs">Pulse duration in milliseconds</param>
-        /// <returns>True when the pulse completed</returns>
-        /// <response code="200">Fault clear pulse issued successfully</response>
-        /// <response code="500">Internal server error or service state issue occurred</response>
-        [HttpPost, Route("ClearFault", Name = nameof(DoClearFault))]
-        [ProducesResponseType(typeof(bool), StatusCodes.Status200OK)]
-        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
-        public async Task<ActionResult<bool>> DoClearFault([FromQuery] int pulseMs = 250, CancellationToken cancellationToken = default)
-        {
-            var startTimestamp = Stopwatch.GetTimestamp();
-            using var activity = RoofControllerTelemetry.StartCommand("clear_fault");
-            var result = await this._roofController.ClearFault(pulseMs, cancellationToken).ConfigureAwait(false); // ClearFaultRelayId used internally
-            RoofControllerTelemetry.CompleteCommand(activity, "clear_fault", result.IsSuccessful, startTimestamp);
-            return result.Match(
-                success: ok => Ok(ok),
-                failure: error => error switch
-                {
-                    InvalidOperationException => Problem(
-                        title: "Service Error",
-                        detail: error.Message,
-                        statusCode: StatusCodes.Status500InternalServerError
-                    ),
-                    _ => Problem(
-                        title: "Internal Server Error",
-                        detail: "An error occurred while clearing fault",
-                        statusCode: StatusCodes.Status500InternalServerError
-                    )
-                }
-            );
-        }
-        private RoofStatusResponse CreateStatus(RoofControllerStatus? overrideStatus = null)
-        {
-            // Force a refresh so AtSpeed/Run input is current
-            this._roofController.RefreshStatus(forceHardwareRead: false);
-            return new RoofStatusResponse(
-                overrideStatus ?? this._roofController.Status,
-                this._roofController.IsMoving,
-                this._roofController.LastStopReason,
-                this._roofController.LastTransitionUtc,
-                this._roofController.IsWatchdogActive,
-                this._roofController.WatchdogSecondsRemaining,
-                this._roofController.IsAtSpeed,
-                this._roofController.IsUsingPhysicalHardware,
-                this._roofController.IsIgnoringPhysicalLimitSwitches);
-        }
-
-        private RoofConfigurationResponse CreateConfigurationResponse(RoofControllerOptionsV4 options)
+        private RoofConfigurationResponse CreateConfigurationResponse(RoofControllerOptionsV4 options, long version)
         {
             var host = _hostOptions.CurrentValue;
 
             return new RoofConfigurationResponse
             {
-                Version = _roofController.GetConfigurationState().Version,
+                Version = version,
                 SafetyWatchdogTimeoutSeconds = options.SafetyWatchdogTimeout.TotalSeconds,
                 OpenRelayId = options.OpenRelayId,
                 CloseRelayId = options.CloseRelayId,
@@ -310,6 +379,35 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             };
         }
 
-        
+        /// <summary>Human-readable list of changed API-editable settings for the audit log ("none" when unchanged).</summary>
+        internal static string DescribeChanges(RoofControllerOptionsV4 before, RoofControllerOptionsV4 after)
+        {
+            var changes = new List<string>();
+            Compare(nameof(RoofControllerOptionsV4.SafetyWatchdogTimeout), before.SafetyWatchdogTimeout, after.SafetyWatchdogTimeout);
+            Compare(nameof(RoofControllerOptionsV4.OpenRelayId), before.OpenRelayId, after.OpenRelayId);
+            Compare(nameof(RoofControllerOptionsV4.CloseRelayId), before.CloseRelayId, after.CloseRelayId);
+            Compare(nameof(RoofControllerOptionsV4.ClearFaultRelayId), before.ClearFaultRelayId, after.ClearFaultRelayId);
+            Compare(nameof(RoofControllerOptionsV4.StopRelayId), before.StopRelayId, after.StopRelayId);
+            Compare(nameof(RoofControllerOptionsV4.EnableDigitalInputPolling), before.EnableDigitalInputPolling, after.EnableDigitalInputPolling);
+            Compare(nameof(RoofControllerOptionsV4.DigitalInputPollInterval), before.DigitalInputPollInterval, after.DigitalInputPollInterval);
+            Compare(nameof(RoofControllerOptionsV4.EnablePeriodicVerificationWhileMoving), before.EnablePeriodicVerificationWhileMoving, after.EnablePeriodicVerificationWhileMoving);
+            Compare(nameof(RoofControllerOptionsV4.PeriodicVerificationInterval), before.PeriodicVerificationInterval, after.PeriodicVerificationInterval);
+            Compare(nameof(RoofControllerOptionsV4.UseNormallyClosedLimitSwitches), before.UseNormallyClosedLimitSwitches, after.UseNormallyClosedLimitSwitches);
+            Compare(nameof(RoofControllerOptionsV4.LimitSwitchDebounce), before.LimitSwitchDebounce, after.LimitSwitchDebounce);
+            Compare(nameof(RoofControllerOptionsV4.IgnorePhysicalLimitSwitches), before.IgnorePhysicalLimitSwitches, after.IgnorePhysicalLimitSwitches);
+            Compare(nameof(RoofControllerOptionsV4.FaultInputActiveHigh), before.FaultInputActiveHigh, after.FaultInputActiveHigh);
+            Compare(nameof(RoofControllerOptionsV4.MaxConsecutiveInputReadFailures), before.MaxConsecutiveInputReadFailures, after.MaxConsecutiveInputReadFailures);
+            Compare(nameof(RoofControllerOptionsV4.OperatorLeaseTimeout), before.OperatorLeaseTimeout, after.OperatorLeaseTimeout);
+            Compare(nameof(RoofControllerOptionsV4.AtSpeedConfirmationTimeout), before.AtSpeedConfirmationTimeout, after.AtSpeedConfirmationTimeout);
+            return changes.Count == 0 ? "none" : string.Join("; ", changes);
+
+            void Compare<T>(string name, T oldValue, T newValue)
+            {
+                if (!EqualityComparer<T>.Default.Equals(oldValue, newValue))
+                {
+                    changes.Add(string.Create(CultureInfo.InvariantCulture, $"{name}: {oldValue?.ToString() ?? "null"} -> {newValue?.ToString() ?? "null"}"));
+                }
+            }
+        }
     }
 }

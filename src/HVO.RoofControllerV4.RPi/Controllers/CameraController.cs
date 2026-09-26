@@ -1,88 +1,227 @@
+using System;
+using System.Buffers;
+using System.IO;
+using System.Net.Http;
+using Asp.Versioning;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Controllers.Camera;
+using HVO.RoofControllerV4.RPi.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Asp.Versioning;
-using System.IO;
-using System.Net.Http.Headers;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
-namespace HVO.RoofControllerV4.RPi.Controllers
+namespace HVO.RoofControllerV4.RPi.Controllers;
+
+/// <summary>
+/// Camera proxy API v1.0: relays the Blue Iris MJPEG stream so clients never see the Blue Iris credentials.
+/// </summary>
+[ApiController, ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/Camera")]
+[Tags("Camera Control")]
+public sealed class CameraController : ControllerBase
 {
-    /// <summary>
-    /// Roof Controller API v4.0 - Controls the observatory roof operations
-    /// </summary>
-    [ApiController, ApiVersion("1.0"), Produces("application/json")]
-    [Route("api/v{version:apiVersion}/Camera")]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
-    [Tags("Camera Control")]
-    public class CameraController : ControllerBase
+    private readonly ILogger<CameraController> _logger;
+    private readonly BlueIrisCameraClient _cameraClient;
+    private readonly CameraStreamLimiter _limiter;
+    private readonly CameraStreamTicketService _tickets;
+    private readonly IOptionsMonitor<BlueIrisOptions> _options;
+    private readonly IHostApplicationLifetime _lifetime;
+
+    public CameraController(
+        ILogger<CameraController> logger,
+        BlueIrisCameraClient cameraClient,
+        CameraStreamLimiter limiter,
+        CameraStreamTicketService tickets,
+        IOptionsMonitor<BlueIrisOptions> options,
+        IHostApplicationLifetime lifetime)
     {
-        private const string BlueIrisBase = "http://192.168.0.4:80";
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _cameraClient = cameraClient ?? throw new ArgumentNullException(nameof(cameraClient));
+        _limiter = limiter ?? throw new ArgumentNullException(nameof(limiter));
+        _tickets = tickets ?? throw new ArgumentNullException(nameof(tickets));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _lifetime = lifetime ?? throw new ArgumentNullException(nameof(lifetime));
+    }
 
-        private readonly ILogger<CameraController> _logger;
+    /// <summary>
+    /// Issues a 60-second ticket that lets a client which cannot send headers (e.g. an image element in a WebView)
+    /// start the MJPEG stream for one camera. Requires a Viewer API key.
+    /// </summary>
+    /// <param name="cameraId">Camera number (1-99).</param>
+    /// <response code="200">Relative stream URL carrying the ticket, and its expiry.</response>
+    /// <response code="401">No valid API key.</response>
+    [HttpPost("{cameraId:int:range(1, 99)}/ticket", Name = nameof(CreateCameraStreamTicket))]
+    [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
+    [Produces("application/json")]
+    [ProducesResponseType(typeof(CameraStreamTicketResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public ActionResult<CameraStreamTicketResponse> CreateCameraStreamTicket(int cameraId)
+    {
+        var ticket = _tickets.Issue(cameraId);
+        _logger.LogDebug(
+            "Issued camera {CameraId} stream ticket to {Caller}, valid until {ExpiresUtc}",
+            cameraId,
+            RoofPrincipalFactory.DescribeCaller(User),
+            ticket.ExpiresUtc);
+        return Ok(ticket);
+    }
 
-        public CameraController(ILogger<CameraController> logger)
+    /// <summary>
+    /// Streams the camera's MJPEG feed. Accepts a Viewer API key, a signed-in console cookie, or a valid
+    /// <c>?ticket=</c> from <see cref="CreateCameraStreamTicket"/>.
+    /// </summary>
+    /// <param name="cameraId">Camera number (1-99).</param>
+    /// <response code="200">multipart/x-mixed-replace MJPEG stream.</response>
+    /// <response code="401">No valid credentials or ticket.</response>
+    /// <response code="502">Blue Iris failed or answered with an error.</response>
+    /// <response code="503">The proxy is not configured, or too many streams are open.</response>
+    /// <response code="504">Blue Iris did not answer in time.</response>
+    [HttpGet("{cameraId:int:range(1, 99)}/mjpeg", Name = nameof(CameraMotionJpeg))]
+    [Authorize(AuthenticationSchemes = RoofSecurityServiceCollectionExtensions.ApiKeyOrCookieSchemes, Policy = CameraStreamRequirement.PolicyName)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status502BadGateway)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status504GatewayTimeout)]
+    public async Task<IActionResult> CameraMotionJpeg(int cameraId)
+    {
+        var options = _options.CurrentValue;
+        var configurationProblem = options.GetConfigurationProblem();
+        if (configurationProblem is not null)
         {
-            this._logger = logger;
+            return CameraProblem(StatusCodes.Status503ServiceUnavailable, "Camera proxy unavailable", configurationProblem);
         }
 
-        private static HttpClient CreateBlueIrisClient()
+        using var lease = _limiter.TryAcquire();
+        if (lease is null)
         {
-            var h = new HttpClientHandler();
-            var c = new HttpClient(h) { Timeout = Timeout.InfiniteTimeSpan };
-            var basic = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes("roys:salisbury"));
-            c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", basic);
-            return c;
+            _logger.LogWarning("Refused camera {CameraId} stream: {MaxStreams} streams already open", cameraId, _limiter.MaxStreams);
+            Response.Headers.RetryAfter = "5";
+            return CameraProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "Too many camera streams",
+                $"At most {_limiter.MaxStreams} camera streams can be open at once. Close another viewer and retry.");
         }
 
-        // MJPEG passthrough. Example URL: /api/v1.0/camera/cam02/mjpeg
-        [HttpGet("{cameraId:int:range(1, 99)}/mjpeg")]
-        public async Task<IActionResult> CameraMotionJpeg(int cameraId)
+        // Ends the stream when the viewer disconnects or the host starts shutting down, so an open viewer never holds
+        // up the graceful shutdown (and with it the roof stop).
+        using var streamCancellation = CancellationTokenSource.CreateLinkedTokenSource(HttpContext.RequestAborted, _lifetime.ApplicationStopping);
+        var streamToken = streamCancellation.Token;
+
+        HttpResponseMessage? upstream = null;
+        try
         {
-            var cancellationToken = HttpContext.RequestAborted;
-
-            try
+            using (var headersTimeout = CancellationTokenSource.CreateLinkedTokenSource(streamToken))
             {
-                using var http = CreateBlueIrisClient();
-                using var upstream = await http.GetAsync($"{BlueIrisBase}/mjpg/cam{cameraId:D2}/video.mjpg", HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-
-                if (!upstream.IsSuccessStatusCode)
+                headersTimeout.CancelAfter(options.ResponseHeadersTimeout);
+                try
                 {
-                    _logger.LogWarning("Camera stream upstream returned non-success status {StatusCode} for camera {CameraId}", (int)upstream.StatusCode, cameraId);
-                    return StatusCode((int)upstream.StatusCode);
+                    upstream = await _cameraClient.OpenMjpegStreamAsync(cameraId, headersTimeout.Token).ConfigureAwait(false);
                 }
-
-                // Forward Content-Type EXACTLY as-is (don’t “fix” boundary)
-                if (upstream.Content.Headers.TryGetValues("Content-Type", out var ct))
+                catch (OperationCanceledException) when (!streamToken.IsCancellationRequested)
                 {
-                    Response.Headers["Content-Type"] = ct.ToArray();
+                    _logger.LogWarning("Camera {CameraId}: Blue Iris did not answer within {Timeout}", cameraId, options.ResponseHeadersTimeout);
+                    return CameraProblem(StatusCodes.Status504GatewayTimeout, "Camera timeout", "The camera server did not respond in time.");
                 }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogWarning("Camera {CameraId}: Blue Iris request failed: {Error}", cameraId, ex.Message);
+                    return CameraProblem(StatusCodes.Status502BadGateway, "Camera unavailable", "The camera server could not be reached.");
+                }
+            }
 
-                // Helpful streaming headers
-                Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
-                Response.Headers["Pragma"] = "no-cache";
-                Response.Headers["Expires"] = "0";
-                Response.Headers["X-Accel-Buffering"] = "no";
+            if (!upstream.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Camera {CameraId}: Blue Iris answered {StatusCode}", cameraId, (int)upstream.StatusCode);
+                return CameraProblem(
+                    StatusCodes.Status502BadGateway,
+                    "Camera unavailable",
+                    $"The camera server answered HTTP {(int)upstream.StatusCode}.");
+            }
 
-                // Copy the upstream bytes to the client; don't dispose early
-                await using var s = await upstream.Content.ReadAsStreamAsync(cancellationToken);
-                await s.CopyToAsync(Response.Body, cancellationToken);
+            await using var source = await upstream.Content.ReadAsStreamAsync(streamToken).ConfigureAwait(false);
 
+            Response.StatusCode = StatusCodes.Status200OK;
+            Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "multipart/x-mixed-replace";
+            Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+            Response.Headers.Pragma = "no-cache";
+            Response.Headers.Expires = "0";
+            Response.Headers.XContentTypeOptions = "nosniff";
+            Response.Headers["X-Accel-Buffering"] = "no";
+
+            _logger.LogDebug("Camera {CameraId} stream started for {Caller}", cameraId, RoofPrincipalFactory.DescribeCaller(User));
+            await CopyWithIdleTimeoutAsync(source, Response.Body, options.StreamIdleTimeout, streamToken).ConfigureAwait(false);
+            return new EmptyResult();
+        }
+        catch (Exception ex) when (streamToken.IsCancellationRequested && ex is OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            _logger.LogDebug(
+                "Camera {CameraId} stream ended ({Reason})",
+                cameraId,
+                _lifetime.ApplicationStopping.IsCancellationRequested ? "host stopping" : "viewer disconnected");
+            return new EmptyResult();
+        }
+        catch (Exception ex)
+        {
+            if (Response.HasStarted)
+            {
+                // Headers and frames were already sent: a ProblemDetails body cannot be written any more. Abort the
+                // connection so the viewer sees a failed stream instead of a silently frozen frame.
+                _logger.LogWarning("Camera {CameraId} stream failed after it started: {Error}", cameraId, ex.Message);
+                HttpContext.Abort();
                 return new EmptyResult();
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                _logger.LogDebug("Camera stream cancelled by client for camera {CameraId}", cameraId);
-                return new EmptyResult();
-            }
-            catch (IOException ex) when (cancellationToken.IsCancellationRequested)
-            {
-                _logger.LogTrace(ex, "Camera stream ended due to client disconnect for camera {CameraId}", cameraId);
-                return new EmptyResult();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error proxying camera stream for camera {CameraId}", cameraId);
-                return Problem(title: "Camera Stream Error", detail: "The camera stream could not be proxied.", statusCode: StatusCodes.Status502BadGateway);
-            }
+
+            _logger.LogError(ex, "Camera {CameraId} stream failed", cameraId);
+            return CameraProblem(StatusCodes.Status502BadGateway, "Camera stream error", "The camera stream could not be relayed.");
+        }
+        finally
+        {
+            upstream?.Dispose();
         }
     }
+
+    /// <summary>
+    /// Copies <paramref name="source"/> to <paramref name="destination"/>; throws <see cref="TimeoutException"/> when no
+    /// data arrives for <paramref name="idleTimeout"/>.
+    /// </summary>
+    internal static async Task CopyWithIdleTimeoutAsync(Stream source, Stream destination, TimeSpan idleTimeout, CancellationToken cancellationToken)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
+        {
+            using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            while (true)
+            {
+                idle.CancelAfter(idleTimeout);
+                int read;
+                try
+                {
+                    read = await source.ReadAsync(buffer.AsMemory(), idle.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"No camera data received for {idleTimeout}.");
+                }
+
+                if (read == 0)
+                {
+                    return;
+                }
+
+                idle.CancelAfter(Timeout.InfiniteTimeSpan);
+                await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private ObjectResult CameraProblem(int statusCode, string title, string detail)
+        => Problem(statusCode: statusCode, title: title, detail: detail);
 }
