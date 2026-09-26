@@ -2,77 +2,51 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Services;
 
 /// <summary>
-/// Negative / defensive tests focused on invalid or fault scenarios and idempotency.
-/// These tests complement the positive-path relay behavior suite.
+/// Refused commands, the relay guard and idempotency. Deterministic: manual time, no background supervision.
 /// </summary>
 [TestClass]
 public class RoofControllerNegativeTests
 {
-    private class TestableRoofControllerService : RoofControllerServiceV4
+    private static async Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat)> CreateAsync(bool in1, bool in2, bool in3, bool in4 = false)
     {
-        public TestableRoofControllerService(IOptions<RoofControllerOptionsV4> opts, FakeRoofHat hat)
-            : base(new NullLogger<RoofControllerServiceV4>(), opts, hat) { }
-
-        public void SimFaultRaw(bool high) => OnFaultNotificationChanged(high);
-        public void SimForwardLimitRaw(bool high) => OnForwardLimitSwitchChanged(high);
-        public void SimReverseLimitRaw(bool high) => OnReverseLimitSwitchChanged(high);
-
-        // Expose protected relay setter for guard validation
-        public void ForceRelayStates(bool stop, bool open, bool close) => SetRelayStatesAtomically(stop, open, close);
-    }
-
-    private static TestableRoofControllerService Create(FakeRoofHat hat)
-    {
-        var options = RoofControllerTestFactory.CreateDefaultOptions(opts =>
-        {
-            opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(5);
-        });
-        return new TestableRoofControllerService(Options.Create(options), hat);
+        var hat = new FakeRoofHat();
+        hat.SetInputs(in1, in2, in3, in4);
+        var svc = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), opts => opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(10));
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        hat.ClearRelayWriteLog();
+        return (svc, hat);
     }
 
     [TestMethod]
-    public async Task Open_WithBothLimitsActive_ShouldFailAndSetErrorStatus()
+    public async Task Open_WithBothLimitsActive_ShouldBeRefusedAsFaultLatched()
     {
-        // Arrange
-        // Both limits active (NC -> raw LOW means triggered) => in1 LOW, in2 LOW
-        var hat = new FakeRoofHat();
-        hat.SetInputs(false, false, false, false);
-        var svc = Create(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        // NC: raw LOW on both = both limits "active" = wiring fault, latched at initialization.
+        var (svc, hat) = await CreateAsync(false, false, false);
+        using var _ = svc;
 
-        // Act
-        var result = svc.Open();
+        svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
 
-        // Assert
-        result.IsSuccessful.Should().BeFalse();
         svc.Status.Should().Be(RoofControllerStatus.Error);
-        hat.RelayMask.Should().Be(0x00, "No relays energized when command refused");
+        hat.RelayMask.Should().Be(0x00);
+        hat.RelayWriteLog.Should().BeEmpty("a refused command writes nothing");
     }
 
     [TestMethod]
-    public async Task Close_WithBothLimitsActive_ShouldFailAndSetErrorStatus()
+    public async Task Close_WithBothLimitsActive_ShouldBeRefusedAsFaultLatched()
     {
-        // Arrange
-        var hat = new FakeRoofHat();
-        hat.SetInputs(false, false, false, false);
-        var svc = Create(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat) = await CreateAsync(false, false, false);
+        using var _ = svc;
 
-        // Act
-        var result = svc.Close();
+        svc.Close().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
 
-        // Assert
-        result.IsSuccessful.Should().BeFalse();
         svc.Status.Should().Be(RoofControllerStatus.Error);
         hat.RelayMask.Should().Be(0x00);
     }
@@ -80,84 +54,89 @@ public class RoofControllerNegativeTests
     [TestMethod]
     public async Task MovementAttemptWhileFaultActive_ShouldBeRefused()
     {
-        // Arrange
-        // Mid travel (both HIGH) but fault HIGH
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, true, false);
-        var svc = Create(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat) = await CreateAsync(true, true, true); // mid-travel, IN3 active (active-high default)
+        using var _ = svc;
 
-        // Act
-        // Open refused
-        var open = svc.Open();
+        svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+        svc.Close().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
 
-        // Assert
-        open.IsSuccessful.Should().BeFalse();
-        svc.Status.Should().Be(RoofControllerStatus.Stopped);
+        svc.Status.Should().Be(RoofControllerStatus.Error);
+        svc.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
         hat.RelayMask.Should().Be(0x00);
-
-        // Close also refused
-        var close = svc.Close();
-        close.IsSuccessful.Should().BeFalse();
-        svc.Status.Should().Be(RoofControllerStatus.Stopped);
     }
 
     [TestMethod]
-    public async Task RelayGuard_ShouldPreventSimultaneousOpenAndClose()
+    public async Task FaultAppearingAfterInitialization_ShouldRefuseTheNextStartAsInterlockActive()
     {
-        // Arrange
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false); // mid travel
-        var svc = Create(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat) = await CreateAsync(true, true, false);
+        using var _ = svc;
 
-        // Act
-        // Force an invalid request (open & close true). Guard should neutralize open/close and leave STOP energized or not based on logic.
-        svc.ForceRelayStates(stop: true, open: true, close: true);
+        hat.SetInputs(true, true, true, false); // IN3 asserts; nothing has evaluated it yet
 
-        // Assert
-        // After guard: open & close must NOT both be present
-        var mask = hat.RelayMask;
-        (mask & 0x06).Should().NotBe(0x06, "Open and Close relays must never be energized simultaneously");
+        var result = svc.Open();
+
+        result.ErrorCode().Should().Be(RoofControllerErrorCode.InterlockActive, "the fresh read at start sees IN3");
+        svc.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    [DataRow(true, true, true, DisplayName = "Both directions")]
+    [DataRow(false, true, false, DisplayName = "Open without STOP permit")]
+    [DataRow(false, false, true, DisplayName = "Close without STOP permit")]
+    public async Task RelayGuard_ShouldRefuseInvalidCombinations_AndDriveAllOff(bool stop, bool open, bool close)
+    {
+        var (svc, hat) = await CreateAsync(true, true, false);
+        using var _ = svc;
+
+        svc.ForceRelayStates(stop, open, close).Should().BeFalse();
+
+        hat.EverBothDirectionBits.Should().BeFalse("open and close are never energized together");
+        hat.RelayMask.Should().Be(0x00, "an invalid request drives every relay off");
     }
 
     [TestMethod]
     public async Task Stop_ShouldBeIdempotent_WhenAlreadyStopped()
     {
-        // Arrange
-        var hat = new FakeRoofHat();
-        hat.SetInputs(true, true, false, false); // mid travel -> initializes as Stopped
-        var svc = Create(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat) = await CreateAsync(true, true, false);
+        using var _ = svc;
 
-        // Act
-        var first = svc.Stop(RoofControllerStopReason.NormalStop);
-        first.IsSuccessful.Should().BeTrue();
-        var mask1 = hat.RelayMask;
-        mask1.Should().Be(0x00);
+        svc.Stop(RoofControllerStopReason.NormalStop).IsSuccessful.Should().BeTrue();
+        hat.RelayMask.Should().Be(0x00);
+        svc.Stop(RoofControllerStopReason.NormalStop).IsSuccessful.Should().BeTrue();
 
-        var second = svc.Stop(RoofControllerStopReason.NormalStop);
-
-        // Assert
-        second.IsSuccessful.Should().BeTrue();
-        hat.RelayMask.Should().Be(mask1);
+        hat.RelayMask.Should().Be(0x00);
         svc.Status.Should().Be(RoofControllerStatus.Stopped);
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.None, "idle stops do not rewrite motion history");
     }
 
     [TestMethod]
     public async Task BothLimitsError_ShouldContinueToRefuseSubsequentCommands()
     {
-        // Arrange
-        var hat = new FakeRoofHat();
-        hat.SetInputs(false, false, false, false); // both limits
-        var svc = Create(hat);
-        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var (svc, hat) = await CreateAsync(false, false, false);
+        using var _ = svc;
 
-        // Act & Assert
-        svc.Open().IsSuccessful.Should().BeFalse();
-        svc.Status.Should().Be(RoofControllerStatus.Error);
-        svc.Close().IsSuccessful.Should().BeFalse();
-        svc.Status.Should().Be(RoofControllerStatus.Error);
+        for (var i = 0; i < 3; i++)
+        {
+            svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+            svc.Close().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+            svc.Status.Should().Be(RoofControllerStatus.Error);
+        }
+
+        hat.RelayMask.Should().Be(0x00);
+        hat.EverBothDirectionBits.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void CommandsBeforeInitialize_ShouldBeRefusedAsNotInitialized_ExceptStop()
+    {
+        var hat = new FakeRoofHat();
+        using var svc = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+
+        svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.NotInitialized);
+        svc.Close().ErrorCode().Should().Be(RoofControllerErrorCode.NotInitialized);
+        svc.RenewLease().ErrorCode().Should().Be(RoofControllerErrorCode.NotInitialized);
+        svc.Stop().IsSuccessful.Should().BeTrue("Stop is always allowed and re-asserts all-off");
         hat.RelayMask.Should().Be(0x00);
     }
 }

@@ -6,94 +6,151 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.RPi.HealthChecks
 {
     /// <summary>
-    /// Health check for the roof controller system to monitor its operational status.
+    /// Health check for the roof controller. All status data comes from one coherent snapshot.
     /// </summary>
+    /// <remarks>
+    /// Unhealthy: disposed, shutting down, not initialized, safety inputs unhealthy (stale or failing reads), relay register
+    /// unverified, a latched safety fault, or <see cref="RoofControllerStatus.Error"/>.
+    /// Degraded: status Unknown, simulation (no physical hardware), physical limit switches ignored, or input polling
+    /// disabled (edge detection relies on periodic verification only).
+    /// </remarks>
     public class RoofControllerHealthCheck : IHealthCheck
     {
         private readonly IRoofControllerServiceV4 _roofController;
         private readonly ILogger<RoofControllerHealthCheck> _logger;
-        private readonly RoofControllerOptionsV4 _options;
+        private readonly RoofControllerOptionsV4 _startupOptions;
 
         public RoofControllerHealthCheck(IRoofControllerServiceV4 roofController, ILogger<RoofControllerHealthCheck> logger, IOptions<RoofControllerOptionsV4> options)
         {
             _roofController = roofController;
             _logger = logger;
-            _options = options.Value;
+            _startupOptions = options.Value;
         }
 
         public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
         {
             try
             {
+                var disposed = _roofController.IsServiceDisposed;
+                var snapshot = _roofController.GetCurrentStatusSnapshot();
+                var pollingEnabled = GetLiveConfiguration().EnableDigitalInputPolling;
+
                 var data = new Dictionary<string, object>
                 {
-                    ["IsInitialized"] = _roofController.IsInitialized,
-                    ["IsServiceDisposed"] = _roofController.IsServiceDisposed,
-                    ["Status"] = _roofController.Status.ToString(),
-                    ["IsMoving"] = _roofController.IsMoving,
-                    ["LastStopReason"] = _roofController.LastStopReason.ToString(),
-                    ["LastTransitionUtc"] = _roofController.LastTransitionUtc?.UtcDateTime.ToString("O") ?? string.Empty,
-                    ["IsWatchdogActive"] = _roofController.IsWatchdogActive,
-                    ["WatchdogSecondsRemaining"] = _roofController.WatchdogSecondsRemaining ?? 0d,
-                    ["Ready"] = _roofController.IsInitialized && !_roofController.IsServiceDisposed,
+                    ["IsInitialized"] = snapshot.IsInitialized,
+                    ["IsServiceDisposed"] = disposed,
+                    ["IsShuttingDown"] = snapshot.IsShuttingDown,
+                    ["Status"] = snapshot.Status.ToString(),
+                    ["IsMoving"] = snapshot.IsMoving,
+                    ["CommandedMotion"] = snapshot.CommandedMotion.ToString(),
+                    ["LastStopReason"] = snapshot.LastStopReason.ToString(),
+                    ["LastTransitionUtc"] = snapshot.LastTransitionUtc?.UtcDateTime.ToString("O") ?? string.Empty,
+                    ["IsWatchdogActive"] = snapshot.IsWatchdogActive,
+                    ["WatchdogSecondsRemaining"] = snapshot.WatchdogSecondsRemaining ?? 0d,
+                    ["Ready"] = snapshot.IsInitialized && !disposed && !snapshot.IsShuttingDown,
                     ["CheckTime"] = DateTime.UtcNow,
-                    ["IgnorePhysicalLimitSwitches"] = _options.IgnorePhysicalLimitSwitches,
-                    ["HardwareMode"] = _roofController.IsUsingPhysicalHardware ? "Physical" : "Simulation"
+                    ["IgnorePhysicalLimitSwitches"] = snapshot.IsIgnoringPhysicalLimitSwitches,
+                    ["HardwareMode"] = snapshot.IsUsingPhysicalHardware ? "Physical" : "Simulation",
+                    ["StatusVersion"] = snapshot.StatusVersion,
+                    ["InputsHealthy"] = snapshot.InputsHealthy,
+                    ["LastSuccessfulInputReadUtc"] = snapshot.LastSuccessfulInputReadUtc?.UtcDateTime.ToString("O") ?? string.Empty,
+                    ["ConsecutiveInputReadFailures"] = snapshot.ConsecutiveInputReadFailures,
+                    ["RelayRegisterState"] = snapshot.RelayRegisterState.ToString(),
+                    ["IsFaultLatched"] = snapshot.IsFaultLatched,
+                    ["LatchedFaultReason"] = snapshot.LatchedFaultReason?.ToString() ?? string.Empty,
+                    ["IsClearFaultInProgress"] = snapshot.IsClearFaultInProgress,
+                    ["DigitalInputPollingEnabled"] = pollingEnabled,
+                    ["LastError"] = snapshot.LastError ?? string.Empty
                 };
 
-                // Service disposed is a hard failure for readiness
-                if (_roofController.IsServiceDisposed)
+                if (disposed)
                 {
-                    _logger.LogError("Roof controller service is disposed");
-                    return Task.FromResult(HealthCheckResult.Unhealthy(
-                        "Roof controller service is disposed",
-                        null,
-                        data));
+                    return Unhealthy("Roof controller service is disposed", data);
                 }
 
-                // Check if the roof controller is initialized
-                if (!_roofController.IsInitialized)
+                if (snapshot.IsShuttingDown)
                 {
-                    _logger.LogWarning("Roof controller is not initialized");
-                    return Task.FromResult(HealthCheckResult.Unhealthy(
-                        "Roof controller is not initialized", 
-                        null, 
-                        data));
+                    return Unhealthy("Roof controller is shutting down", data);
                 }
 
-                // Check if the roof controller is in an error state
-                if (_roofController.Status == RoofControllerStatus.Error)
+                if (!snapshot.IsInitialized)
                 {
-                    _logger.LogError("Roof controller is in error state");
-                    return Task.FromResult(HealthCheckResult.Unhealthy(
-                        "Roof controller is in error state", 
-                        null, 
-                        data));
+                    return Unhealthy("Roof controller is not initialized", data);
                 }
 
-                // Check if the roof controller is in an unknown state
-                if (_roofController.Status == RoofControllerStatus.Unknown)
+                if (snapshot.RelayRegisterState == RoofRelayRegisterState.Unverified)
                 {
-                    _logger.LogWarning("Roof controller status is unknown");
-                    return Task.FromResult(HealthCheckResult.Degraded(
-                        "Roof controller status is unknown", 
-                        null, 
-                        data));
+                    return Unhealthy("Roof controller relay register state is unverified", data);
                 }
 
-                // All checks passed
+                if (snapshot.IsFaultLatched)
+                {
+                    return Unhealthy($"Roof controller safety fault is latched ({snapshot.LatchedFaultReason})", data);
+                }
+
+                if (!snapshot.InputsHealthy)
+                {
+                    return Unhealthy("Roof controller safety inputs are not healthy", data);
+                }
+
+                if (snapshot.Status == RoofControllerStatus.Error)
+                {
+                    return Unhealthy("Roof controller is in error state", data);
+                }
+
+                if (snapshot.Status == RoofControllerStatus.Unknown)
+                {
+                    return Degraded("Roof controller status is unknown", data);
+                }
+
+                if (snapshot.IsIgnoringPhysicalLimitSwitches)
+                {
+                    return Degraded("Roof controller is ignoring physical limit switches", data);
+                }
+
+                if (!snapshot.IsUsingPhysicalHardware)
+                {
+                    return Degraded("Roof controller is running in simulation mode", data);
+                }
+
+                if (!pollingEnabled)
+                {
+                    return Degraded("Roof controller digital input polling is disabled", data);
+                }
+
                 _logger.LogDebug("Roof controller health check passed");
-                return Task.FromResult(HealthCheckResult.Healthy(
-                    "Roof controller is operational", 
-                    data));
+                return Task.FromResult(HealthCheckResult.Healthy("Roof controller is operational", data));
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during roof controller health check");
-                return Task.FromResult(HealthCheckResult.Unhealthy(
-                    "Error checking roof controller health", 
-                    ex));
+                return Task.FromResult(HealthCheckResult.Unhealthy("Error checking roof controller health", ex));
             }
+        }
+
+        private RoofControllerOptionsV4 GetLiveConfiguration()
+        {
+            try
+            {
+                return _roofController.GetConfigurationSnapshot() ?? _startupOptions;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not read the live configuration; using startup options");
+                return _startupOptions;
+            }
+        }
+
+        private Task<HealthCheckResult> Unhealthy(string description, IReadOnlyDictionary<string, object> data)
+        {
+            _logger.LogWarning("Roof controller health: {Description}", description);
+            return Task.FromResult(HealthCheckResult.Unhealthy(description, null, data));
+        }
+
+        private Task<HealthCheckResult> Degraded(string description, IReadOnlyDictionary<string, object> data)
+        {
+            _logger.LogDebug("Roof controller health degraded: {Description}", description);
+            return Task.FromResult(HealthCheckResult.Degraded(description, null, data));
         }
     }
 }

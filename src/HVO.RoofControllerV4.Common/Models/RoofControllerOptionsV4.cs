@@ -65,8 +65,11 @@ public record class RoofControllerOptionsV4
     public bool UseNormallyClosedLimitSwitches { get; set; } = true;
 
     /// <summary>
-    /// Optional debounce window applied to limit switch edge events. Mechanical switches tend to chatter when toggling,
-    /// so this window suppresses rapid consecutive transitions. Set to <see cref="TimeSpan.Zero"/> to disable.
+    /// Departure-release confirmation window. When motion starts on a limit (for example opening from Closed), that
+    /// limit's release must be observed continuously for at least this long before a later reassertion is treated as
+    /// <see cref="RoofControllerStopReason.StartLimitReasserted"/>; reassertion inside the window is treated as switch
+    /// chatter and restarts the window. It never delays a stop: the destination limit, contradictory limits and the drive
+    /// fault input act immediately. Set to <see cref="TimeSpan.Zero"/> to verify the release on the first reading.
     /// </summary>
     public TimeSpan LimitSwitchDebounce { get; set; } = TimeSpan.FromMilliseconds(25);
 
