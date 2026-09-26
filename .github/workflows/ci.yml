@@ -8,6 +8,9 @@ on:
   schedule:
     - cron: '0 2 * * *'
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -15,54 +18,89 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      TEST_PROJECT: ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+    defaults:
+      run:
+        # The dotnet host resolves global.json from the working directory upward, not from
+        # the project path, so every dotnet command runs from src/ where the SDK pin lives.
+        working-directory: src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: src/global.json
 
-      - name: Restore
+      - name: Verify SDK selected by global.json
         run: |
-          dotnet restore tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj --configfile src/NuGet.config --nologo -v minimal
+          pin=$(jq -r '.sdk.version' global.json)
+          actual=$(dotnet --version)
+          echo "src/global.json pins SDK ${pin} (rollForward: $(jq -r '.sdk.rollForward' global.json)); dotnet resolves ${actual}"
+          # rollForward "patch" accepts later patches in the same feature band (10.0.3xx).
+          case "${actual}" in
+            "${pin%??}"[0-9][0-9]) ;;
+            *) echo "::error file=src/global.json::Resolved SDK ${actual} is not in the feature band of the pinned SDK ${pin}"; exit 1 ;;
+          esac
+          if [ "${actual##*.}" -lt "${pin##*.}" ]; then
+            echo "::error file=src/global.json::Resolved SDK ${actual} is older than the pinned SDK ${pin}"
+            exit 1
+          fi
+
+      - name: Restore
+        run: dotnet restore "$TEST_PROJECT" --configfile NuGet.config -v minimal
 
       - name: Build (Debug)
-        run: |
-          dotnet build tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj --no-restore -c Debug --nologo -v minimal /p:ContinuousIntegrationBuild=true
+        run: dotnet build "$TEST_PROJECT" --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
 
-      - name: Test (Unit)
+      # There is no separate integration tier: every test, including the WebApplicationFactory
+      # API tests, runs here. TreatNoTestsAsError fails the step if discovery finds nothing.
+      - name: Test
         run: >
-          dotnet test tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
-          --no-build -c Debug --nologo -v minimal
-          --filter "TestCategory!=Integration"
+          dotnet test "$TEST_PROJECT"
+          --no-build -c Debug -v minimal
+          --settings coverage.runsettings
+          --collect:"XPlat Code Coverage"
           --logger "trx;LogFileName=tests.trx"
-          --collect:"XPlat Code Coverage"
           --results-directory TestResults
+          -- RunConfiguration.TreatNoTestsAsError=true
 
-      - name: Test (Integration - gated)
-        if: |
-          github.ref == 'refs/heads/main' || 
-          github.event_name == 'schedule' || 
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'integration-tests'))
-        run: >
-          dotnet test tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
-          --no-build -c Debug --nologo -v minimal
-          --filter "TestCategory=Integration"
-          --logger "trx;LogFileName=tests-integration.trx"
-          --collect:"XPlat Code Coverage"
-          --results-directory TestResults
+      - name: Verify coverage report is not empty
+        run: |
+          shopt -s globstar nullglob
+          reports=(TestResults/**/coverage.cobertura.xml)
+          if [ "${#reports[@]}" -eq 0 ]; then
+            echo "::error::No coverage.cobertura.xml was produced under src/TestResults"
+            exit 1
+          fi
+          for report in "${reports[@]}"; do
+            lines=$(grep -o -m1 'lines-valid="[0-9]*"' "$report" | tr -dc '0-9')
+            echo "${report}: lines-valid=${lines:-0}"
+            if [ "${lines:-0}" -eq 0 ]; then
+              echo "::error file=src/coverage.runsettings::${report} instruments no lines; check the coverlet Include filter"
+              exit 1
+            fi
+          done
+
+      # Directory.Build.props enables TreatWarningsAsErrors only for Release, which is what the
+      # Pi image publishes. Restore again under Release so NuGet audit warnings fail here too.
+      # The Debug output used by the test step above is left untouched.
+      - name: Build (Release, warnings as errors)
+        run: dotnet build "$TEST_PROJECT" -c Release -v minimal -p:ContinuousIntegrationBuild=true
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-results-${{ github.run_id }}
-          path: TestResults/**
+          path: src/TestResults/**
+          if-no-files-found: warn
           retention-days: 7

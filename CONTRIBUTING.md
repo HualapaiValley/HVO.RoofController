@@ -5,8 +5,9 @@ and instructions for contributing to this project.
 
 ## Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Docker](https://www.docker.com/) (for RPi deployment)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) matching `src/global.json`
+  (10.0.302 or a later 10.0.3xx patch)
+- [Docker](https://www.docker.com/) with Buildx (for building the Pi image)
 - A code editor (VS Code with Dev Containers recommended)
 
 ## Getting Started
@@ -14,24 +15,41 @@ and instructions for contributing to this project.
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/RoySalisbury/HVO.RoofController.git
+   git clone https://github.com/HualapaiValley/HVO.RoofController.git
    cd HVO.RoofController
    ```
 
-2. Build the portable server graph:
+2. Build the portable server graph. Run `dotnet` from `src/` so `src/global.json` selects
+   the SDK:
 
    ```bash
    cd src
    dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
    ```
 
-3. Run tests:
+3. Run tests, and build Release (warnings are errors in Release; CI checks both):
 
    ```bash
-   dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/
+   dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+   dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj -c Release
+   ```
+
+   Coverage, as in CI:
+
+   ```bash
+   dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj \
+     --settings coverage.runsettings --collect:"XPlat Code Coverage"
    ```
 
    The full solution includes the `net10.0-ios` project and requires macOS, the MAUI workload, and a supported Xcode version.
+
+4. Run the server locally with the simulated HAT (`http://localhost:5195`):
+
+   ```bash
+   dotnet run --project HVO.RoofControllerV4.RPi
+   ```
+
+   Protected endpoints need an API key; see [docs/security.md](docs/security.md).
 
 ## Development Workflow
 
@@ -62,6 +80,18 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - PRs are squash-merged into `main`
 - Link the relevant issue in the PR description
 - Ensure CI passes before requesting review
+- Changes to relays, inputs, limits, the watchdog, the operator lease, the fault latch or
+  the Stop path need tests, and anything that can only be checked on the Pi and HAT must
+  be added to [docs/commissioning.md](docs/commissioning.md)
+
+### CI workflows
+
+- Pin actions to a full commit SHA with a `# vX.Y.Z` comment; the repository rejects
+  tag references.
+- Keep `permissions: contents: read` at the top of each workflow.
+- Do not add `pull_request` or `pull_request_target` triggers, or any trigger for code
+  other than `main`, to a workflow that runs on the self-hosted M5 runner. See
+  [docs/ci-runners.md](docs/ci-runners.md).
 
 ## Coding Standards
 
@@ -70,6 +100,12 @@ detailed coding standards and architectural guidelines.
 
 ## Dev Container
 
-This repository includes a Dev Container configuration in `.devcontainer/`
+This repository includes Dev Container configurations in `.devcontainer/`
 for a consistent development environment. Open the repository in VS Code and
 use the "Reopen in Container" command to get started.
+
+- `devcontainer.json` is the standard configuration (simulated HAT, no devices).
+- `devcontainer.rpi.json` runs on a Raspberry Pi with the real I2C bus and GPIO, so it can
+  move the roof. It forces `IgnorePhysicalLimitSwitches=false`. Use it only on a
+  commissioned bench or with the roof mechanism isolated (see
+  [docs/commissioning.md](docs/commissioning.md)).

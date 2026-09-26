@@ -1,0 +1,61 @@
+# Build context for src/HVO.RoofControllerV4.RPi/Dockerfile is the repository root
+# (docker-compose.yaml uses context ../.., deploy-roofcontroller-rpi.sh passes the repo
+# root). Docker only reads .dockerignore from the context root, so it lives here.
+#
+# The Dockerfile needs: Directory.Build.props, Directory.Packages.props, src/global.json,
+# src/NuGet.config and the Common, RPi and WebSite.Themes project folders under src/.
+# Do not exclude any of those.
+
+# VCS, CI and editor metadata
+.git
+.gitignore
+.gitattributes
+.github
+.devcontainer
+**/.vs
+**/.vscode
+**/.idea
+**/*.user
+**/*.suo
+**/.DS_Store
+
+# Build output (host bin/obj must never overwrite the container's restore/publish output)
+**/bin
+**/obj
+**/TestResults
+**/coverage
+**/coverage.json
+**/coverage.xml
+**/*.nupkg
+**/*.snupkg
+
+# Projects and folders the Pi image does not build
+tests
+docs
+src/HVO.RoofControllerV4.iPad
+src/HVO.RoofController.sln
+
+# Local secrets, certificates and environment files: never send them to a builder
+**/.env
+**/.env.*
+**/secrets
+**/secrets.*
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key
+**/*.crt
+
+# Container and deployment definitions (not needed inside the image)
+**/.dockerignore
+**/Dockerfile*
+**/docker-compose*
+**/*.sh
+
+# Miscellaneous
+**/node_modules
+**/npm-debug.log
+LICENSE
+README.md
+CHANGELOG.md
+CONTRIBUTING.md

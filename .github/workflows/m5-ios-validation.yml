@@ -1,43 +1,111 @@
 name: M5 iOS Operational Validation
 
+# This workflow runs on a persistent self-hosted Mac (label m5-roof). It must only ever run
+# trusted code from this repository's main branch:
+# - Triggers are repository_dispatch (needs a token with write access and always runs the
+#   default-branch workflow file) and manual workflow_dispatch. Never add pull_request,
+#   pull_request_target, or push triggers for other refs.
+# - The job-level `if` refuses forks, other repositories and any ref other than main.
+# The workflow file alone cannot keep other workflows off the runner; see docs/ci-runners.md
+# for the runner-group and fork-approval settings that do.
 on:
   repository_dispatch:
     types: [m5-roof-validation]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# Every dispatch gets its own result. A fixed group keeps at most one pending run and a newer
+# dispatch cancels the pending one (M5-07). The single m5-roof runner executes one job at a
+# time, so queued runs wait for it instead of being cancelled.
 concurrency:
-  group: m5-roof-ios-validation
+  group: m5-roof-ios-validation-${{ github.run_id }}
   cancel-in-progress: false
 
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_NOLOGO: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  RUNNER_ACCOUNT: actions-roof
+  # Toolchain pins; keep in step with ios.yml. The SDK comes from src/global.json.
+  WORKLOAD_SET_VERSION: 10.0.303.1
+  EXPECTED_XCODE_VERSION: '26.6'
+  IPAD_PROJECT: HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
 
 jobs:
   build-ios-simulator:
     name: M5 iOS Simulator Build
+    if: github.repository == 'HualapaiValley/HVO.RoofController' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, macOS, ARM64, m5-roof]
     timeout-minutes: 45
+    env:
+      # Select Xcode for this job only; never rely on the machine-wide xcode-select setting.
+      # Set the repository variable M5_XCODE_DEVELOPER_DIR if Xcode lives elsewhere on the M5.
+      DEVELOPER_DIR: ${{ vars.M5_XCODE_DEVELOPER_DIR || '/Applications/Xcode_26.6.app/Contents/Developer' }}
 
     steps:
-      - name: Verify isolated runner identity
+      # These checks are diagnostics, not isolation: a previous job running as the same account
+      # could have modified these paths. Only ephemeral runners give per-job isolation.
+      - name: Check runner account and cache ownership
+        working-directory: ${{ runner.temp }}
         run: |
-          test "$(id -un)" = actions-roof
-          test "$HOME" = /Users/actions-roof
-          tool_cache=$(cd "$RUNNER_TOOL_CACHE" && pwd -P)
-          case "$tool_cache" in
-            /Users/actions-roof/*) ;;
-            *) exit 1 ;;
+          : "${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE is not set}"
+          echo "account=$(id -un) HOME=${HOME} RUNNER_TOOL_CACHE=${RUNNER_TOOL_CACHE}"
+          fail=0
+          if [ "$(id -un)" != "$RUNNER_ACCOUNT" ]; then
+            echo "::error::Job runs as $(id -un), expected ${RUNNER_ACCOUNT}"
+            fail=1
+          fi
+          if [ "$HOME" != "/Users/${RUNNER_ACCOUNT}" ]; then
+            echo "::error::HOME is ${HOME}, expected /Users/${RUNNER_ACCOUNT}"
+            fail=1
+          fi
+          # setup-dotnet installs into ~/.dotnet on macOS and NuGet restores into
+          # ~/.nuget/packages (or NUGET_PACKAGES); check the paths the build actually uses.
+          for path in "$RUNNER_TOOL_CACHE" "$HOME/.dotnet" "${NUGET_PACKAGES:-$HOME/.nuget/packages}"; do
+            if [ ! -e "$path" ]; then
+              echo "${path}: not present yet (created by this job)"
+              continue
+            fi
+            real=$(cd "$path" && pwd -P)
+            case "$real" in
+              "/Users/${RUNNER_ACCOUNT}/"*) ;;
+              *) echo "::error::${path} resolves to ${real}, outside /Users/${RUNNER_ACCOUNT}"; fail=1; continue ;;
+            esac
+            owner=$(stat -f %Su "$real")
+            echo "${path} -> ${real} (owner ${owner})"
+            if [ "$owner" != "$RUNNER_ACCOUNT" ] || [ ! -w "$real" ]; then
+              echo "::error::${real} must be owned and writable by ${RUNNER_ACCOUNT}"
+              fail=1
+            fi
+            foreign=$(find "$real" ! -type l \( ! -user "$RUNNER_ACCOUNT" -o -perm -o+w \) -print 2>/dev/null | head -n 5)
+            if [ -n "$foreign" ]; then
+              echo "::error::${real} contains entries not owned by ${RUNNER_ACCOUNT} or writable by others:"
+              printf '  %s\n' "$foreign"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+      # Remove everything a previous job left in the workspace (including .git/hooks) before
+      # checking out, so no earlier state or hook can run as part of this job.
+      - name: Clean workspace
+        working-directory: ${{ runner.temp }}
+        run: |
+          : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
+          case "$GITHUB_WORKSPACE" in
+            "/Users/${RUNNER_ACCOUNT}/"*/HVO.RoofController) ;;
+            *) echo "::error::Refusing to clean unexpected workspace path ${GITHUB_WORKSPACE}"; exit 1 ;;
           esac
-          test "$(stat -f %Su "$tool_cache")" = actions-roof
-          test -w "$tool_cache"
+          if [ -d "$GITHUB_WORKSPACE" ]; then
+            find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          fi
 
       - name: Checkout default-branch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Setup .NET from global.json
@@ -45,43 +113,96 @@ jobs:
         with:
           global-json-file: src/global.json
 
+      # Print everything first so a failed assertion below still leaves the versions in the log.
       - name: Verify Apple ARM64 toolchain
+        working-directory: src
         run: |
-          test "$(uname -m)" = arm64
-          test "$(dotnet --version)" = "$(jq -r '.sdk.version' src/global.json)"
-          xcrun simctl list runtimes --json | jq --exit-status '
-            any(.runtimes[];
-              .identifier == "com.apple.CoreSimulator.SimRuntime.iOS-26-5" and
-              .isAvailable == true)
-          ' >/dev/null
           sw_vers
-          xcodebuild -version
-          swift --version
-          dotnet --version
+          echo "arch: $(uname -m)"
+          echo "DEVELOPER_DIR=${DEVELOPER_DIR} (machine-wide selection: $(/usr/bin/xcode-select -p 2>/dev/null || echo none))"
+          xcode_version=$(xcodebuild -version 2>&1) || true
+          echo "$xcode_version"
+          swift --version 2>&1 || true
+          dotnet --list-sdks
+          sdk=$(dotnet --version)
+          pin=$(jq -r '.sdk.version' global.json)
+          echo "src/global.json pins SDK ${pin} (rollForward: $(jq -r '.sdk.rollForward' global.json)); dotnet resolves ${sdk}"
+          echo "Available iOS simulator runtimes (informational; this job does not boot a simulator):"
+          xcrun simctl list runtimes 2>&1 | grep -i ios || echo "  none"
 
-      - name: Install .NET MAUI workload
-        run: dotnet workload install maui --ignore-failed-sources
+          fail=0
+          if [ "$(uname -m)" != arm64 ]; then
+            echo "::error::Expected an arm64 host, got $(uname -m)"
+            fail=1
+          fi
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::Xcode developer directory ${DEVELOPER_DIR} does not exist; set the M5_XCODE_DEVELOPER_DIR repository variable"
+            ls -d /Applications/Xcode*.app 2>/dev/null || true
+            fail=1
+          fi
+          case "$(head -n 1 <<<"$xcode_version")" in
+            "Xcode ${EXPECTED_XCODE_VERSION}"|"Xcode ${EXPECTED_XCODE_VERSION}".*) ;;
+            *) echo "::error::Expected Xcode ${EXPECTED_XCODE_VERSION} at ${DEVELOPER_DIR}"; fail=1 ;;
+          esac
+          # rollForward "patch" accepts later patches in the pinned feature band only.
+          case "$sdk" in
+            "${pin%??}"[0-9][0-9]) [ "${sdk##*.}" -ge "${pin##*.}" ] || { echo "::error::SDK ${sdk} is older than the pinned ${pin}"; fail=1; } ;;
+            *) echo "::error::SDK ${sdk} is not in the feature band of the pinned ${pin}"; fail=1 ;;
+          esac
+          exit "$fail"
+
+      # Installs only the workloads the iPad project needs, at the pinned workload set, from
+      # the repo's NuGet.config. Feed failures fail the job (no --ignore-failed-sources).
+      - name: Restore pinned workloads
+        working-directory: src
+        run: |
+          dotnet workload restore "$IPAD_PROJECT" --configfile NuGet.config --version "$WORKLOAD_SET_VERSION"
+          dotnet workload --version
+          dotnet workload list
 
       - name: Restore iPad app
-        run: >
-          dotnet restore src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
-          --configfile src/NuGet.config --nologo -v minimal
+        working-directory: src
+        run: dotnet restore "$IPAD_PROJECT" --configfile NuGet.config -v minimal
 
       - name: Build unsigned iOS simulator app
+        working-directory: src
         run: >
-          dotnet build src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
-          -c Debug --no-restore --nologo -v minimal
+          dotnet build "$IPAD_PROJECT"
+          -c Debug --no-restore -v minimal
           -p:ContinuousIntegrationBuild=true
           -p:RuntimeIdentifier=iossimulator-arm64
           -p:EnableCodeSigning=false
           -p:CodesignKey=""
           -p:CodesignProvision=""
 
+      # The linker ad-hoc signs arm64 executables, so "not signed at all" is not a reliable
+      # expectation. What must be absent is a bundle seal (_CodeSignature) and any signing
+      # identity (Authority=). Any other codesign outcome fails the job instead of passing.
       - name: Verify app is unsigned
+        working-directory: src
         run: |
-          app=src/HVO.RoofControllerV4.iPad/bin/Debug/net10.0-ios/iossimulator-arm64/HVO.RoofControllerV4.iPad.app
-          test -d "$app"
-          if /usr/bin/codesign --verify "$app" >/dev/null 2>&1; then
-            printf 'Expected an unsigned simulator app, but code signing verification passed.\n' >&2
+          app=HVO.RoofControllerV4.iPad/bin/Debug/net10.0-ios/iossimulator-arm64/HVO.RoofControllerV4.iPad.app
+          if [ ! -d "$app" ]; then
+            echo "::error::Simulator app bundle not found at src/${app}"
+            exit 1
+          fi
+          ls -la "$app"
+          status=0
+          sig=$(/usr/bin/codesign -dv --verbose=4 "$app" 2>&1) || status=$?
+          printf 'codesign -dv exit %s:\n%s\n' "$status" "$sig"
+          if [ -e "$app/_CodeSignature" ]; then
+            echo "::error::Expected an unsigned simulator app, but it has a bundle seal (_CodeSignature)"
+            exit 1
+          fi
+          if grep -q '^Authority=' <<<"$sig"; then
+            echo "::error::Expected an unsigned simulator app, but it carries a signing identity"
+            exit 1
+          fi
+          if grep -q 'code object is not signed at all' <<<"$sig"; then
+            echo "App is not signed."
+          elif [ "$status" -eq 0 ] && grep -q '^Signature=adhoc' <<<"$sig"; then
+            echo "App has only an ad-hoc (linker) signature, no identity and no bundle seal."
+          else
+            echo "::error::Unexpected codesign result; cannot confirm the app is unsigned"
             exit 1
           fi
