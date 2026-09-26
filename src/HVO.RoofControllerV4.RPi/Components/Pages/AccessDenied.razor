@@ -1,0 +1,23 @@
+@page "/access-denied"
+@attribute [AllowAnonymous]
+
+<PageTitle>Access denied - HVO Roof Controller</PageTitle>
+
+<div class="container py-3" style="max-width: 720px;">
+    <div class="alert alert-warning" role="alert">
+        <h1 class="h4 alert-heading">
+            <i class="bi bi-shield-exclamation" aria-hidden="true"></i> Access denied
+        </h1>
+        <p class="mb-2">Your access key does not allow that action or page.</p>
+        <ul class="mb-0">
+            <li><strong>Viewer</strong> can watch the roof status and camera, and can always press Stop.</li>
+            <li><strong>Operator</strong> can also open and close the roof and clear faults.</li>
+            <li><strong>Admin</strong> can also view the console log and diagnostic details.</li>
+        </ul>
+    </div>
+
+    <p>
+        <a class="btn btn-primary" href="/">Back to the roof console</a>
+        <a class="btn btn-outline-light ms-2" href="@RoofControllerSecurityDefaults.LoginPath">Sign in with a different key</a>
+    </p>
+</div>

@@ -1,6 +1,6 @@
 .camera-stream {
     position: relative;
-    max-width: 900px;
+    width: 100%;
 }
 
 .player-frame {
@@ -15,15 +15,45 @@
     box-shadow: 0 0 0 0.1rem var(--hvo-focus-ring-inner), 0 0 0 0.25rem var(--hvo-focus-ring-outer);
 }
 
-.player-frame canvas {
+.camera-stream__canvas {
+    display: block;
     width: 100%;
     height: auto;
-    display: block;
+    aspect-ratio: 16 / 9;
+    object-fit: contain;
     background: var(--hvo-body-bg);
 }
 
-.player-frame img {
-    display: none;
+.player-frame.is-stale .camera-stream__canvas {
+    filter: grayscale(0.85) brightness(0.55);
+}
+
+.camera-stream__overlay {
+    position: absolute;
+    inset: 0 0 2.75rem 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 1rem;
+    text-align: center;
+    color: var(--hvo-body-color);
+    pointer-events: none;
+}
+
+.camera-stream__overlay .bi {
+    font-size: 2rem;
+    opacity: 0.85;
+}
+
+.camera-stream__overlay-title {
+    font-weight: 600;
+}
+
+.camera-stream__overlay-detail {
+    font-size: 0.85rem;
+    color: var(--hvo-muted-strong);
 }
 
 .controls-bar {
@@ -96,11 +126,25 @@
 
 .status-chip {
     margin-left: auto;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
     font-size: 0.72rem;
     color: var(--hvo-body-color);
     letter-spacing: 0.045em;
     text-transform: uppercase;
-    opacity: 0.82;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+
+.status-chip--live {
+    color: var(--hvo-success-fg);
+    opacity: 1;
+}
+
+.status-chip--bad {
+    color: var(--hvo-danger-fg);
+    background: var(--hvo-danger-bg);
+    opacity: 1;
 }
 
 .download-link {
@@ -116,4 +160,17 @@
 .download-link:hover {
     color: var(--hvo-accent-strong);
     text-decoration: underline;
+}
+
+.player-frame:fullscreen .camera-stream__canvas {
+    height: 100%;
+    max-height: none;
+    aspect-ratio: auto;
+}
+
+/* On tablets the camera sits between the controls and the details; cap it so it never pushes the page around. */
+@media (max-width: 1100px) {
+    .camera-stream__canvas {
+        max-height: 38vh;
+    }
 }

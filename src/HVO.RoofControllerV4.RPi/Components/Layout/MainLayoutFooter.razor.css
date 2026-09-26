@@ -1,1 +1,46 @@
-/* Theme supplies footer styling; add overrides here if needed. */
+/* The theme styles the footer; these rules keep long roof status text inside its section. */
+
+.global-footer .global-footer__section--center {
+    justify-content: safe center;
+}
+
+.global-footer .footer-chip {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.global-footer .footer-chip > i {
+    flex-shrink: 0;
+}
+
+.global-footer .footer-chip__text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Stacked footer: roof status first and full width, notifications and lease/watchdog share one row below it. */
+@media (max-width: 992px) {
+    .global-footer.global-footer {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.35rem 0.5rem;
+    }
+
+    .global-footer .global-footer__section--center {
+        grid-column: 1 / -1;
+        order: -1;
+    }
+}
+
+@media (max-width: 576px) {
+    .global-footer .global-footer__section--center .footer-chip {
+        border-radius: 0.75rem;
+    }
+
+    .global-footer .global-footer__section--center .footer-chip__text {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}

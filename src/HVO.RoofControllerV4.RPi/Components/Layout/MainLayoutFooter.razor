@@ -8,8 +8,9 @@
             @if (_status.LeftNotifications.Count > 0)
             {
                 var notification = _status.LeftNotifications[0];
-                <span class="footer-chip @GetChipCss(notification.Level)">
-                    <i class="@GetLevelIcon(notification.Level) me-2"></i>@FormatNotification(notification)
+                var notificationText = FormatNotification(notification);
+                <span class="footer-chip @GetChipCss(notification.Level)" title="@notificationText">
+                    <i class="@GetLevelIcon(notification.Level)" aria-hidden="true"></i><span class="footer-chip__text">@notificationText</span>
                 </span>
             }
             else
@@ -21,8 +22,8 @@
         <section class="global-footer__section global-footer__section--center">
             @if (_status.Center is not null)
             {
-                <span class="footer-chip @GetChipCss(_status.Center.Level)">
-                    <i class="@GetLevelIcon(_status.Center.Level) me-2"></i>@_status.Center.Text
+                <span class="footer-chip @GetChipCss(_status.Center.Level)" title="@_status.Center.Text" role="status" data-testid="footer-status">
+                    <i class="@GetLevelIcon(_status.Center.Level)" aria-hidden="true"></i><span class="footer-chip__text">@_status.Center.Text</span>
                 </span>
             }
             else
@@ -34,7 +35,7 @@
         <section class="global-footer__section global-footer__section--right">
             @if (_status.Right is not null)
             {
-                <span class="footer-chip @GetChipCss(_status.Right.Level)">@_status.Right.Text</span>
+                <span class="footer-chip @GetChipCss(_status.Right.Level)" title="@_status.Right.Text"><span class="footer-chip__text">@_status.Right.Text</span></span>
             }
             else
             {
@@ -48,6 +49,7 @@
     public FooterStatusService FooterStatusService { get; set; } = default!;
 
     private FooterStatusSnapshot _status = FooterStatusSnapshot.Empty;
+    private bool _disposed;
 
     protected override void OnInitialized()
     {
@@ -57,15 +59,38 @@
 
     private void HandleStatusChanged()
     {
-        _ = InvokeAsync(() =>
+        if (_disposed)
         {
-            _status = FooterStatusService.Snapshot;
-            StateHasChanged();
-        });
+            return;
+        }
+
+        _ = RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _status = FooterStatusService.Snapshot;
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // The circuit is shutting down.
+        }
     }
 
     public void Dispose()
     {
+        _disposed = true;
         FooterStatusService.StatusChanged -= HandleStatusChanged;
         FooterStatusService.Reset();
     }
