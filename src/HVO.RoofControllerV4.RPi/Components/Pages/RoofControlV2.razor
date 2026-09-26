@@ -2,161 +2,254 @@
 @page "/roof-control-v2"
 @page "/roof-control"
 @inherits RoofControlBase
-@using HVO.RoofControllerV4.RPi.Logic
-@using HVO.RoofControllerV4.Common.Models
+@attribute [Authorize(Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
 @using HVO.RoofControllerV4.RPi.Components.ConsoleLog
-@using Microsoft.AspNetCore.Components.Web
-@using Microsoft.AspNetCore.Components
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
 
-<PageTitle>Roof Control V2 - HVOv9</PageTitle>
+<PageTitle>@ControllerName - HVO Roof Controller</PageTitle>
 
 <div class="rc2-shell">
-    <div class="rc2-top">
-        <div class="rc2-intro">
-            <h1 class="rc2-intro-title">Observatory Roof Controller</h1>
+    <header class="rc2-header">
+        <div class="rc2-header-text">
+            <h1 class="rc2-title">@ControllerName</h1>
             <p class="rc2-intro-text">
-                The observatory roof can be opened or closed from the controls below. Safety systems automatically
-                monitor motion and will stop the motors on timeout or fault. Status indicators reflect the live
-                state of the controller. Only one motion may be active at a time.
+                Open or close the roof from the controls below. Safety systems monitor motion and stop the motor on
+                timeout or fault. Only one motion may be active at a time.
             </p>
-
-            <div class="rc2-status-pill">
-                <span class="badge rc2-badge @(IsInitialized ? "bg-success" : "bg-secondary") me-2">@(IsInitialized ? "Initialized" : "Initializing…")</span>
-                <span class="badge rc2-badge @(GetHardwareBadgeClass()) me-2"><i class="bi bi-cpu me-1"></i>@GetHardwareModeLabel()</span>
-                @if (IsIgnoringLimitSwitches)
-                {
-                    <span class="badge rc2-badge @(GetLimitSwitchBadgeClass()) me-2"><i class="bi bi-exclamation-triangle me-1"></i>@GetLimitSwitchLabel()</span>
-                }
-                <button type="button" class="rc2-badge rc2-badge-button @GetHealthCheckBadgeClass() me-2" @onclick="OpenHealthDialogAsync">
-                    <i class="bi bi-heart me-1"></i>Health
-                </button>
-                @if (!string.IsNullOrEmpty(GetLastStopTypeLabel()))
-                {
-                    <span class="badge rc2-badge @(WasEmergencyStop ? "bg-danger" : "bg-secondary")"><i class="bi bi-stop-circle me-1"></i>@GetLastStopTypeLabel() Stop</span>
-                }
-            </div>
-
-            @if (!IsServiceAvailable)
-            {
-                <div class="rc2-banner-row">
-                    @if (IsServiceDisposed)
-                    {
-                        <div class="rc2-banner rc2-banner-danger" role="alert">
-                            <i class="bi bi-plug-x-fill me-2"></i>
-                            <div>
-                                <strong>Service unavailable</strong>
-                                <div class="small text-muted">The roof controller service is stopped or disposed. Controls are disabled until it is restored.</div>
-                            </div>
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="rc2-banner rc2-banner-warn" role="alert">
-                            <i class="bi bi-hourglass-split me-2"></i>
-                            <div class="flex-grow-1">
-                                <strong>Initializing service…</strong>
-                                <div class="small text-muted">Please wait. Controls will enable automatically when ready.</div>
-                            </div>
-                            <span class="ms-3 spinner-border spinner-border-sm text-warning" role="status" aria-hidden="true"></span>
-                        </div>
-                    }
-                </div>
-            }
-
-            @if (CurrentStatus == RoofControllerStatus.Error)
-            {
-                <div class="alert rc2-alert rc2-alert-danger" role="alert">
-                    <div class="d-flex align-items-center w-100">
-                        <i class="bi bi-exclamation-octagon-fill me-2"></i>
-                        <div class="flex-grow-1">
-                            <strong>Fault detected.</strong> Review system and clear fault when safe.
-                        </div>
-                        <button class="btn btn-outline-light" disabled="@IsClearFaultDisabled" @onclick="ClearFaultAsync">
-                            <i class="bi bi-bandaid me-1"></i>Clear Fault
-                        </button>
-                    </div>
-                </div>
-            }
         </div>
 
-        <div class="rc2-camera">
-            <div class="rc2-card rc2-card--glass">
-                <div class="rc2-card-head d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0"><i class="bi bi-camera-video me-2"></i>Roof Camera</h5>
-                    <span class="badge bg-dark-subtle text-light">Preview</span>
-                </div>
-                <div class="rc2-card-body rc2-camera-body">
-                    <div class="rc2-camera-placeholder">
-                        <CameraStream />
-                    </div>
+        <div class="rc2-status-pill">
+            <span class="badge rc2-badge @(IsInitialized ? "bg-success" : "bg-secondary")">@(IsInitialized ? "Initialized" : "Initializing…")</span>
+            <span class="badge rc2-badge @GetHardwareBadgeClass()"><i class="bi bi-cpu"></i>@GetHardwareModeLabel()</span>
+            @if (IsIgnoringLimitSwitches)
+            {
+                <span class="badge rc2-badge @GetLimitSwitchBadgeClass()"><i class="bi bi-exclamation-triangle"></i>@GetLimitSwitchLabel()</span>
+            }
+            @if (IsRelayRegisterUnverified)
+            {
+                <span class="badge rc2-badge bg-warning text-dark"><i class="bi bi-question-diamond"></i>Relay unverified</span>
+            }
+            @if (AreInputsUnhealthy)
+            {
+                <span class="badge rc2-badge bg-warning text-dark"><i class="bi bi-activity"></i>Inputs unhealthy</span>
+            }
+            @if (LeaseSecondsRemaining is not null)
+            {
+                <span class="badge rc2-badge bg-info text-dark" title="Operator lease remaining"><i class="bi bi-stopwatch"></i>@GetLeaseLabel()</span>
+            }
+            <button type="button" class="rc2-badge rc2-badge-button @GetHealthCheckBadgeClass()" @onclick="OpenHealthDialogAsync">
+                <i class="bi bi-heart"></i>Health
+            </button>
+            @if (!string.IsNullOrEmpty(GetLastStopTypeLabel()))
+            {
+                <span class="badge rc2-badge @(WasEmergencyStop ? "bg-danger" : "bg-secondary")" title="@GetLastStopTooltip()"><i class="bi bi-stop-circle"></i>@GetLastStopTypeLabel() stop</span>
+            }
+        </div>
+    </header>
+
+    <div class="rc2-banners">
+        @if (IsServiceDisposed || IsShuttingDown)
+        {
+            <div class="rc2-banner rc2-banner-danger" role="alert">
+                <i class="bi bi-plug-x-fill"></i>
+                <div>
+                    <strong>Service unavailable.</strong>
+                    <span class="rc2-banner-detail">The roof controller service is @(IsServiceDisposed ? "stopped" : "shutting down"). Open, Close and Clear Fault are disabled. Stop is still sent.</span>
                 </div>
             </div>
-        </div>
+        }
+        else if (!IsInitialized)
+        {
+            <div class="rc2-banner rc2-banner-warn" role="status">
+                <i class="bi bi-hourglass-split"></i>
+                <div class="flex-grow-1">
+                    <strong>Initializing service…</strong>
+                    <span class="rc2-banner-detail">Controls enable automatically when the controller is ready.</span>
+                </div>
+                <span class="spinner-border spinner-border-sm text-warning" aria-hidden="true"></span>
+            </div>
+        }
+
+        @if (HasFault)
+        {
+            <div class="alert alert-danger rc2-alert rc2-alert-danger" role="alert">
+                <i class="bi bi-exclamation-octagon-fill"></i>
+                <div class="flex-grow-1">
+                    <strong>@(IsFaultLatched ? "Fault latched:" : "Fault:")</strong> @FaultDescription
+                    <span class="rc2-banner-detail">Motion is blocked. Resolve the cause, then clear the fault.@(CanOperate ? string.Empty : " An operator must clear it.")</span>
+                </div>
+                @if (CanOperate)
+                {
+                    <button type="button" class="btn btn-sm btn-outline-light" disabled="@IsClearFaultDisabled" title="@GetClearFaultTitle()" @onclick="ClearFaultAsync">
+                        <i class="bi bi-bandaid me-1"></i>Clear Fault
+                    </button>
+                }
+            </div>
+        }
+
+        @if (IsRelayRegisterUnverified)
+        {
+            <div class="rc2-banner rc2-banner-warn" role="alert">
+                <i class="bi bi-question-diamond-fill"></i>
+                <div>
+                    <strong>Relay register unverified.</strong>
+                    <span class="rc2-banner-detail">The controller could not read back the relay register. Confirm at the roof that the motor is in the expected state.</span>
+                </div>
+            </div>
+        }
+
+        @if (AreInputsUnhealthy)
+        {
+            <div class="rc2-banner rc2-banner-warn" role="alert">
+                <i class="bi bi-activity"></i>
+                <div>
+                    <strong>Safety inputs unhealthy.</strong>
+                    <span class="rc2-banner-detail">Limit and fault inputs are not being read reliably@(Snapshot.ConsecutiveInputReadFailures > 0 ? $" ({Snapshot.ConsecutiveInputReadFailures} consecutive failures)" : string.Empty). Motion may be refused.</span>
+                </div>
+            </div>
+        }
     </div>
 
-    <div class="rc2-grid">
-        <!-- Controls -->
-        <div class="rc2-card rc2-panel">
+    <div class="rc2-main">
+        <section class="rc2-card rc2-controls" aria-labelledby="rc2-controls-title">
             <div class="rc2-card-head">
-                <h5 class="mb-0"><i class="bi bi-controller me-2"></i>Controls</h5>
+                <h2 class="rc2-card-title" id="rc2-controls-title"><i class="bi bi-controller me-2"></i>Controls</h2>
             </div>
             <div class="rc2-card-body">
+                <div class="rc2-state" aria-live="polite">
+                    <div class="rc2-state-item">
+                        <div class="rc2-state-label">Position</div>
+                        <div class="rc2-state-value rc2-state-value--position" data-testid="position">@PositionLabel</div>
+                    </div>
+                    <div class="rc2-state-item">
+                        <div class="rc2-state-label">Commanded</div>
+                        <div class="rc2-state-value" data-testid="commanded"><i class="bi @GetCommandedMotionIcon() me-2"></i>@CommandedMotionLabel</div>
+                    </div>
+                    <div class="rc2-state-limits">
+                        <span class="@GetLimitChipClass(Snapshot.IsOpenLimitActive)">Open limit: @GetLimitLabel(Snapshot.IsOpenLimitActive)</span>
+                        <span class="@GetLimitChipClass(Snapshot.IsClosedLimitActive)">Closed limit: @GetLimitLabel(Snapshot.IsClosedLimitActive)</span>
+                        @if (IsSafetyWatchdogRunning)
+                        {
+                            <span class="rc2-chip rc2-chip--on">Watchdog @Math.Ceiling(SafetyWatchdogTimeRemaining)s</span>
+                        }
+                    </div>
+                </div>
+
                 <div class="rc2-action-grid">
-                    <button class="@GetOpenButtonClass() rc2-action" type="button" disabled="@IsOpenDisabled" @onclick="OpenRoof">
+                    <button class="btn btn-warning btn-lg control-btn rc2-action rc2-action--stop" type="button" data-testid="stop"
+                            title="Stop the roof" aria-describedby="rc2-stop-outcome" @onclick="StopRoofAsync">
+                        <i class="bi bi-stop-circle-fill me-2"></i>Stop
+                    </button>
+                    <button class="btn btn-success btn-lg control-btn rc2-action rc2-action--open" type="button" data-testid="open"
+                            disabled="@IsOpenDisabled" title="@GetOpenTitle()" @onclick="OpenRoofAsync">
                         <i class="bi bi-arrow-up-circle me-2"></i>Open
                     </button>
-                    <button class="@GetStopButtonClass() rc2-action" type="button" disabled="@IsStopDisabled" @onclick="StopRoof">
-                        <i class="bi bi-stop-circle me-2"></i>Stop
-                    </button>
-                    <button class="@GetCloseButtonClass() rc2-action" type="button" disabled="@IsCloseDisabled" @onclick="CloseRoof">
+                    <button class="btn btn-danger btn-lg control-btn rc2-action rc2-action--close" type="button" data-testid="close"
+                            disabled="@IsCloseDisabled" title="@GetCloseTitle()" @onclick="CloseRoofAsync">
                         <i class="bi bi-arrow-down-circle me-2"></i>Close
                     </button>
-                    <button class="btn btn-outline-danger btn-lg control-btn rc2-action" type="button" disabled="@IsClearFaultDisabled" @onclick="ClearFaultAsync">
+                    <button class="btn btn-outline-danger btn-lg control-btn rc2-action rc2-action--clear" type="button" data-testid="clear-fault"
+                            disabled="@IsClearFaultDisabled" title="@GetClearFaultTitle()" @onclick="ClearFaultAsync">
                         <i class="bi bi-bandaid me-2"></i>Clear Fault
                     </button>
                 </div>
-            </div>
-        </div>
 
-        <!-- System Details -->
-        <div class="rc2-card rc2-panel rc2-details">
+                <div id="rc2-stop-outcome" class="@GetStopOutcomeClass()" role="status" aria-live="assertive" data-testid="stop-outcome">
+                    @if (StopOutcome != RoofStopOutcome.None)
+                    {
+                        <i class="bi @GetStopOutcomeIcon() me-2"></i>
+                        <span>@StopOutcomeMessage</span>
+                        <span class="rc2-stop-outcome-time">@StopOutcomeTime?.ToString("HH:mm:ss")</span>
+                    }
+                </div>
+
+                @if (!CanOperate)
+                {
+                    <p class="rc2-role-hint" data-testid="role-hint">
+                        <i class="bi bi-person-lock me-1"></i>
+                        Signed in as @RoleLabel. Open, Close and Clear Fault require the Operator role. Stop is always available.
+                    </p>
+                }
+            </div>
+        </section>
+
+        <section class="rc2-card rc2-card--glass rc2-camera" aria-labelledby="rc2-camera-title">
+            <div class="rc2-card-head d-flex justify-content-between align-items-center">
+                <h2 class="rc2-card-title" id="rc2-camera-title"><i class="bi bi-camera-video me-2"></i>Roof Camera</h2>
+            </div>
+            <div class="rc2-card-body rc2-camera-body">
+                <ErrorBoundary @ref="_cameraErrorBoundary">
+                    <ChildContent>
+                        <CameraStream />
+                    </ChildContent>
+                    <ErrorContent>
+                        <div class="rc2-camera-error" role="alert">
+                            <i class="bi bi-camera-video-off"></i>
+                            <span>The camera view failed. The roof controls are unaffected.</span>
+                            <button type="button" class="btn btn-sm btn-outline-light" @onclick="RecoverCamera">Retry</button>
+                        </div>
+                    </ErrorContent>
+                </ErrorBoundary>
+            </div>
+        </section>
+
+        <section class="rc2-card rc2-details" aria-labelledby="rc2-details-title">
             <div class="rc2-card-head">
-                <h5 class="mb-0"><i class="bi bi-activity me-2"></i>System Status</h5>
+                <h2 class="rc2-card-title" id="rc2-details-title"><i class="bi bi-activity me-2"></i>System Status</h2>
             </div>
             <div class="rc2-card-body">
                 <div class="rc2-kpis">
-                    <div class="rc2-kpi"><div class="rc2-kpi-label">Controller</div><div class="rc2-kpi-value">@(IsInitialized ? "Ready" : "Initializing…")</div></div>
+                    <div class="rc2-kpi"><div class="rc2-kpi-label">Controller</div><div class="rc2-kpi-value">@(IsServiceAvailable ? "Ready" : IsInitialized ? "Unavailable" : "Initializing…")</div></div>
                     <div class="rc2-kpi"><div class="rc2-kpi-label">Health</div><div class="rc2-kpi-value">@GetHealthCheckStatus()</div></div>
-                    <div class="rc2-kpi"><div class="rc2-kpi-label">Movement</div><div class="rc2-kpi-value">@(IsMoving ? "In Progress" : "Idle")</div></div>
-                    <div class="rc2-kpi" title="@GetLastTransitionTooltip()"><div class="rc2-kpi-label">Last Transition</div><div class="rc2-kpi-value">@GetLastTransitionFriendly()</div></div>
+                    <div class="rc2-kpi"><div class="rc2-kpi-label">Movement</div><div class="rc2-kpi-value">@(IsMoving ? "In progress" : "Idle")</div></div>
+                    <div class="rc2-kpi" title="@GetLastTransitionTooltip()"><div class="rc2-kpi-label">Last transition</div><div class="rc2-kpi-value">@GetLastTransitionFriendly()</div></div>
                 </div>
 
-                <div class="rc2-console-section">
-                    <button class="rc2-console-toggle" type="button" @onclick="ToggleConsoleLog">
-                        <span class="rc2-console-toggle-main">
-                            <i class="bi @(IsConsoleLogExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i>
-                            <span class="rc2-console-toggle-label">Real-time Console Output</span>
-                        </span>
-                        <span class="rc2-console-count" aria-hidden="true">(@_consoleLogEntryCount)</span>
-                    </button>
+                <ErrorBoundary @ref="_consoleErrorBoundary">
+                    <ChildContent>
+                        <CascadingAuthenticationState>
+                            <AuthorizeView Policy="@RoofControllerSecurityDefaults.AdminPolicy">
+                                <Authorized>
+                                    <div class="rc2-console-section">
+                                        <button class="rc2-console-toggle" type="button" @onclick="ToggleConsoleLog">
+                                            <span class="rc2-console-toggle-main">
+                                                <i class="bi @(IsConsoleLogExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i>
+                                                <span class="rc2-console-toggle-label">Real-time console output</span>
+                                            </span>
+                                            <span class="rc2-console-count" aria-hidden="true">(@_consoleLogEntryCount)</span>
+                                        </button>
 
-                    @if (IsConsoleLogExpanded)
-                    {
-                        <ConsoleLogViewer AutoScroll="@AutoScrollLogs"
-                                          AutoScrollChanged="OnAutoScrollChanged"
-                                          EntryCountChanged="OnLogEntryCountChanged"
-                                          EmptyMessage="No console output has been captured yet."
-                                          AriaLabel="Roof controller console output" />
-                    }
-                </div>
+                                        @if (IsConsoleLogExpanded)
+                                        {
+                                            <ConsoleLogViewer AutoScroll="@AutoScrollLogs"
+                                                              AutoScrollChanged="OnAutoScrollChanged"
+                                                              EntryCountChanged="OnLogEntryCountChanged"
+                                                              EmptyMessage="No console output has been captured yet."
+                                                              AriaLabel="Roof controller console output" />
+                                        }
+                                    </div>
+                                </Authorized>
+                                <NotAuthorized>
+                                    <p class="rc2-role-hint mt-3 mb-0">Console output is available to administrators.</p>
+                                </NotAuthorized>
+                            </AuthorizeView>
+                        </CascadingAuthenticationState>
+                    </ChildContent>
+                    <ErrorContent>
+                        <div class="rc2-banner rc2-banner-warn mt-3" role="alert">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <span class="flex-grow-1">The console output view failed.</span>
+                            <button type="button" class="btn btn-sm btn-outline-light" @onclick="RecoverConsole">Retry</button>
+                        </div>
+                    </ErrorContent>
+                </ErrorBoundary>
             </div>
-        </div>
+        </section>
     </div>
 
     <div class="rc2-note">
         <i class="bi bi-info-circle me-2"></i>
-        Only one operation at a time. Use Stop for normal interruption; emergency stops are automatic on fault/watchdog.
+        Only one operation at a time. Stop is always available; safety stops are automatic on fault, lost inputs or watchdog timeout.
     </div>
 </div>
 
@@ -166,7 +259,7 @@
         <div class="rc2-modal-card" @onclick:stopPropagation="true">
             <div class="rc2-modal-header">
                 <h3 class="rc2-modal-title" id="healthDialogTitle">
-                    <span class="badge @GetHealthStatusBadgeClass(HealthReport?.Status)"><i class="bi bi-heart-pulse-fill me-2"></i>@(HealthReport?.Status ?? "Unknown")</span>
+                    <span class="badge @GetHealthStatusBadgeClass(HealthReport?.Status)"><i class="bi bi-heart-pulse-fill me-2"></i>@(HealthReport?.Status ?? (IsHealthDialogLoading ? "Checking…" : "Unknown"))</span>
                 </h3>
                 <button type="button" class="btn-close btn-close-white" aria-label="Close" @onclick="CloseHealthDialog"></button>
             </div>
@@ -175,7 +268,7 @@
                 {
                     <div class="text-center py-4">
                         <div class="spinner-border text-info" role="status" aria-hidden="true"></div>
-                        <div class="mt-3 text-muted">Loading health information…</div>
+                        <div class="mt-3 text-muted">Running health checks…</div>
                     </div>
                 }
                 else if (!string.IsNullOrEmpty(HealthDialogError))
@@ -188,14 +281,14 @@
                 {
                     var checks = GetOrderedHealthChecks().ToList();
                     <div class="rc2-health-summary">
-                        <div class="rc2-health-meta">Overall Status: <strong>@(HealthReport.Status)</strong></div>
+                        <div class="rc2-health-meta">Overall status: <strong>@HealthReport.Status</strong></div>
                         @if (!string.IsNullOrWhiteSpace(HealthReport.TotalDuration))
                         {
-                            <div class="rc2-health-meta">Total Duration: <span>@HealthReport.TotalDuration</span></div>
+                            <div class="rc2-health-meta">Total duration: <span>@HealthReport.TotalDuration</span></div>
                         }
                     </div>
 
-                    @if (!checks.Any())
+                    @if (checks.Count == 0)
                     {
                         <div class="text-muted">No individual health checks reported.</div>
                     }
@@ -204,7 +297,7 @@
                         <div class="rc2-health-list">
                             @foreach (var check in checks)
                             {
-                                <div class="rc2-health-check">
+                                <div class="rc2-health-check" data-testid="health-check">
                                     <div class="rc2-health-check-head">
                                         <span class="badge @GetHealthStatusBadgeClass(check.Status)">@check.Status</span>
                                         <div class="rc2-health-check-name">@check.Name</div>

@@ -40,9 +40,4 @@
     <Folder Include="wwwroot/css/" />
   </ItemGroup>
 
-  <!-- Exclude legacy/unused UI assets to keep V2-only and clean static web assets -->
-  <ItemGroup>
-    <Compile Remove="Components/Pages/RoofControl.razor.cs" />
-  </ItemGroup>
-
 </Project>

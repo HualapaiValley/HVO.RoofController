@@ -36,7 +36,24 @@ public sealed class ConsoleLogBuffer
             _entries.Enqueue(entry);
         }
 
-        EntryAdded?.Invoke(this, entry);
+        var handlers = EntryAdded;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                ((EventHandler<ConsoleLogEntry>)handler)(this, entry);
+            }
+            catch (Exception)
+            {
+                // A failing subscriber must not break logging for the caller or the other subscribers,
+                // and logging the failure here would re-enter this method.
+            }
+        }
     }
 
     public IReadOnlyList<ConsoleLogEntry> GetSnapshot()
