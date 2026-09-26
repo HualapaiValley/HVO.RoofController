@@ -49,24 +49,75 @@ public sealed class RoofControllerOptionsV4Validator : IValidateOptions<RoofCont
             AddFailure("Relay identifiers (Open, Close, ClearFault, Stop) must be unique.");
         }
 
-        if (options.SafetyWatchdogTimeout <= TimeSpan.Zero)
+        static bool InRange(TimeSpan value, double minMilliseconds, double maxMilliseconds)
+            => value.TotalMilliseconds >= minMilliseconds && value.TotalMilliseconds <= maxMilliseconds;
+
+        // The watchdog is the absolute movement cap. An unbounded value can exceed the timer's maximum interval,
+        // so arming would fail after the relays were energized.
+        if (!InRange(options.SafetyWatchdogTimeout, RoofControllerLimits.MinSafetyWatchdogTimeoutSeconds * 1000, RoofControllerLimits.MaxSafetyWatchdogTimeoutSeconds * 1000))
         {
-            AddFailure("SafetyWatchdogTimeout must be greater than zero.");
+            AddFailure($"SafetyWatchdogTimeout must be between {RoofControllerLimits.MinSafetyWatchdogTimeoutSeconds} and {RoofControllerLimits.MaxSafetyWatchdogTimeoutSeconds} seconds.");
         }
 
-        if (options.PeriodicVerificationInterval <= TimeSpan.Zero)
+        if (!InRange(options.DigitalInputPollInterval, RoofControllerLimits.MinDigitalInputPollIntervalMilliseconds, RoofControllerLimits.MaxDigitalInputPollIntervalMilliseconds))
         {
-            AddFailure("PeriodicVerificationInterval must be greater than zero.");
-        }
-        else if (options.SafetyWatchdogTimeout > TimeSpan.Zero && options.PeriodicVerificationInterval > options.SafetyWatchdogTimeout)
-        {
-            AddFailure("PeriodicVerificationInterval must be less than or equal to SafetyWatchdogTimeout.");
+            AddFailure($"DigitalInputPollInterval must be between {RoofControllerLimits.MinDigitalInputPollIntervalMilliseconds} and {RoofControllerLimits.MaxDigitalInputPollIntervalMilliseconds} ms.");
         }
 
-        if (options.EnablePeriodicVerificationWhileMoving && !options.EnableDigitalInputPolling)
+        // Sub-millisecond intervals truncate to zero in the periodic loop and silently disable verification.
+        if (!InRange(options.PeriodicVerificationInterval, RoofControllerLimits.MinPeriodicVerificationIntervalMilliseconds, RoofControllerLimits.MaxPeriodicVerificationIntervalMilliseconds))
         {
-            AddFailure("EnablePeriodicVerificationWhileMoving requires EnableDigitalInputPolling to also be enabled.");
+            AddFailure($"PeriodicVerificationInterval must be between {RoofControllerLimits.MinPeriodicVerificationIntervalMilliseconds} and {RoofControllerLimits.MaxPeriodicVerificationIntervalMilliseconds} ms.");
         }
+        else if (options.PeriodicVerificationInterval >= options.SafetyWatchdogTimeout)
+        {
+            AddFailure("PeriodicVerificationInterval must be shorter than SafetyWatchdogTimeout.");
+        }
+
+        if (!InRange(options.LimitSwitchDebounce, 0, RoofControllerLimits.MaxLimitSwitchDebounceMilliseconds))
+        {
+            AddFailure($"LimitSwitchDebounce must be between 0 and {RoofControllerLimits.MaxLimitSwitchDebounceMilliseconds} ms.");
+        }
+
+        // Periodic verification is the software fallback when input edges are missed or polling is disabled,
+        // so it is valid on its own. With neither enabled, no software limit or fault stop exists.
+        if (!options.EnableDigitalInputPolling && !options.EnablePeriodicVerificationWhileMoving)
+        {
+            AddFailure("At least one of EnableDigitalInputPolling or EnablePeriodicVerificationWhileMoving must be enabled; otherwise limits and faults are never supervised in software.");
+        }
+
+        if (options.MaxConsecutiveInputReadFailures < RoofControllerLimits.MinConsecutiveInputReadFailures
+            || options.MaxConsecutiveInputReadFailures > RoofControllerLimits.MaxConsecutiveInputReadFailures)
+        {
+            AddFailure($"MaxConsecutiveInputReadFailures must be between {RoofControllerLimits.MinConsecutiveInputReadFailures} and {RoofControllerLimits.MaxConsecutiveInputReadFailures}.");
+        }
+
+        if (options.OperatorLeaseTimeout is { } lease)
+        {
+            if (!InRange(lease, RoofControllerLimits.MinOperatorLeaseSeconds * 1000, RoofControllerLimits.MaxOperatorLeaseSeconds * 1000))
+            {
+                AddFailure($"OperatorLeaseTimeout must be between {RoofControllerLimits.MinOperatorLeaseSeconds} and {RoofControllerLimits.MaxOperatorLeaseSeconds} seconds when set.");
+            }
+            else if (lease >= options.SafetyWatchdogTimeout)
+            {
+                AddFailure("OperatorLeaseTimeout must be shorter than SafetyWatchdogTimeout; the lease is renewable, the watchdog is the absolute cap.");
+            }
+        }
+
+        if (options.AtSpeedConfirmationTimeout is { } atSpeed)
+        {
+            if (!InRange(atSpeed, RoofControllerLimits.MinAtSpeedConfirmationSeconds * 1000, RoofControllerLimits.MaxAtSpeedConfirmationSeconds * 1000))
+            {
+                AddFailure($"AtSpeedConfirmationTimeout must be between {RoofControllerLimits.MinAtSpeedConfirmationSeconds} and {RoofControllerLimits.MaxAtSpeedConfirmationSeconds} seconds when set.");
+            }
+            else if (atSpeed >= options.SafetyWatchdogTimeout)
+            {
+                AddFailure("AtSpeedConfirmationTimeout must be shorter than SafetyWatchdogTimeout.");
+            }
+        }
+
+        // Hardware-mode checks (for example IgnorePhysicalLimitSwitches on real hardware) depend on runtime state
+        // and are enforced by the controller service, not here.
 
         return failures is null ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }

@@ -7,7 +7,9 @@ namespace HVO.RoofControllerV4.RPi.Logic;
 public interface IRoofControllerServiceV4
 {
         /// <summary>
-        /// Event raised when status or watchdog telemetry changes.
+        /// Event raised when status or watchdog telemetry changes. Snapshots are delivered in order on a background
+        /// dispatcher (never on the caller's thread and never under the controller lock); handlers must marshal to their
+        /// own context and must not block. Handler exceptions are logged and do not affect delivery to other handlers.
         /// </summary>
         event EventHandler<RoofStatusChangedEventArgs>? StatusChanged;
 
@@ -63,7 +65,8 @@ public interface IRoofControllerServiceV4
         bool IsAtSpeed { get; }
 
         /// <summary>
-        /// Returns a current snapshot of status for UI/API consumption.
+        /// Returns a coherent snapshot of status, taken under the controller lock, for UI/API/health consumption.
+        /// Prefer this over reading individual properties, which can change between reads.
         /// </summary>
         RoofStatusResponse GetCurrentStatusSnapshot();
 
@@ -80,9 +83,41 @@ public interface IRoofControllerServiceV4
         Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions);
 
         /// <summary>
+        /// Applies a configuration update only if the current configuration version equals <paramref name="expectedVersion"/>.
+        /// Fails with <see cref="RoofControllerErrorCode.ConfigurationVersionConflict"/> on mismatch, and with
+        /// <see cref="RoofControllerErrorCode.ConfigurationRejected"/> when the options are unsafe for the current hardware mode.
+        /// The update is transactional: on failure the previous options, timers and subscriptions remain in effect.
+        /// </summary>
+        Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion);
+
+        /// <summary>
+        /// Returns the configuration and its version, read atomically.
+        /// </summary>
+        RoofControllerConfigurationState GetConfigurationState();
+
+        /// <summary>
         /// True if the underlying service has been disposed (not available for use).
         /// </summary>
         bool IsServiceDisposed { get; }
+
+        /// <summary>
+        /// True once shutdown or disposal has begun. No new motion or clear-fault pulse is admitted after this becomes true.
+        /// </summary>
+        bool IsShuttingDown { get; }
+
+        /// <summary>
+        /// Renews the optional operator lease for the motion in progress. Never starts motion.
+        /// Fails with <see cref="RoofControllerErrorCode.LeaseNotActive"/> when no leased motion is active.
+        /// </summary>
+        Result<RoofStatusResponse> RenewLease();
+
+        /// <summary>
+        /// Begins host shutdown: publishes the shutting-down state so no new command is admitted, cancels any clear-fault
+        /// pulse, and stops motion with <see cref="RoofControllerStopReason.HostShutdown"/>. The result fails with
+        /// <see cref="RoofControllerErrorCode.RelayStateUnverified"/> when the de-energized state could not be verified.
+        /// Safe to call more than once.
+        /// </summary>
+        Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken);
 
         /// <summary>
         /// Initializes the roof controller hardware and prepares it for operation.

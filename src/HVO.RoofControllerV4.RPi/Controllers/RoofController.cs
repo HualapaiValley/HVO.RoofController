@@ -91,21 +91,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 return ValidationProblem(ModelState);
             }
 
-            var updatedOptions = new RoofControllerOptionsV4
-            {
-                SafetyWatchdogTimeout = TimeSpan.FromSeconds(request.SafetyWatchdogTimeoutSeconds),
-                OpenRelayId = request.OpenRelayId,
-                CloseRelayId = request.CloseRelayId,
-                ClearFaultRelayId = request.ClearFaultRelayId,
-                StopRelayId = request.StopRelayId,
-                EnableDigitalInputPolling = request.EnableDigitalInputPolling,
-                DigitalInputPollInterval = TimeSpan.FromMilliseconds(request.DigitalInputPollIntervalMilliseconds),
-                EnablePeriodicVerificationWhileMoving = request.EnablePeriodicVerificationWhileMoving,
-                PeriodicVerificationInterval = TimeSpan.FromSeconds(request.PeriodicVerificationIntervalSeconds),
-                UseNormallyClosedLimitSwitches = request.UseNormallyClosedLimitSwitches,
-                LimitSwitchDebounce = TimeSpan.FromMilliseconds(request.LimitSwitchDebounceMilliseconds),
-                IgnorePhysicalLimitSwitches = request.IgnorePhysicalLimitSwitches
-            };
+            var current = _roofController.GetConfigurationState();
+            var updatedOptions = request.ToOptions(current.Options);
 
             var validationFailures = _configurationValidators
                 .Select(validator => validator.Validate(Options.DefaultName, updatedOptions))
@@ -124,7 +111,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 return ValidationProblem(ModelState);
             }
 
-            var result = _roofController.UpdateConfiguration(updatedOptions);
+            var result = _roofController.UpdateConfiguration(updatedOptions, request.ExpectedVersion!.Value);
 
             return result.Match(
                 success: options => Ok(CreateConfigurationResponse(options)),
@@ -301,6 +288,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
 
             return new RoofConfigurationResponse
             {
+                Version = _roofController.GetConfigurationState().Version,
                 SafetyWatchdogTimeoutSeconds = options.SafetyWatchdogTimeout.TotalSeconds,
                 OpenRelayId = options.OpenRelayId,
                 CloseRelayId = options.CloseRelayId,
@@ -313,6 +301,11 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 UseNormallyClosedLimitSwitches = options.UseNormallyClosedLimitSwitches,
                 LimitSwitchDebounceMilliseconds = options.LimitSwitchDebounce.TotalMilliseconds,
                 IgnorePhysicalLimitSwitches = options.IgnorePhysicalLimitSwitches,
+                FaultInputActiveHigh = options.FaultInputActiveHigh,
+                MaxConsecutiveInputReadFailures = options.MaxConsecutiveInputReadFailures,
+                OperatorLeaseTimeoutSeconds = options.OperatorLeaseTimeout?.TotalSeconds,
+                AtSpeedConfirmationTimeoutSeconds = options.AtSpeedConfirmationTimeout?.TotalSeconds,
+                AllowIgnoringLimitSwitchesOnPhysicalHardware = options.AllowIgnoringLimitSwitchesOnPhysicalHardware,
                 RestartOnFailureWaitTimeSeconds = host.RestartOnFailureWaitTime
             };
         }

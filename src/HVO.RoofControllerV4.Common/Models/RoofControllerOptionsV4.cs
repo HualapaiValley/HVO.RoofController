@@ -75,4 +75,34 @@ public record class RoofControllerOptionsV4
     /// where the physical limit circuits are not present or are intentionally disconnected. Never enable in production.
     /// </summary>
     public bool IgnorePhysicalLimitSwitches { get; set; }
+
+    /// <summary>
+    /// Local-configuration-only safeguard. <see cref="IgnorePhysicalLimitSwitches"/> is refused on physical hardware
+    /// unless this is true. The remote configuration API never changes this value.
+    /// </summary>
+    public bool AllowIgnoringLimitSwitchesOnPhysicalHardware { get; set; }
+
+    /// <summary>
+    /// Electrical polarity of the drive fault input (IN3). True (default, current wiring) means a RAW HIGH level is a fault.
+    /// Set false for fail-safe wiring where the drive holds IN3 HIGH while healthy. Confirm during commissioning.
+    /// </summary>
+    public bool FaultInputActiveHigh { get; set; } = true;
+
+    /// <summary>
+    /// Number of consecutive failed safety-input reads tolerated while moving before a safety stop.
+    /// Startup and motion commands never tolerate a failed read. Must be validated on the bench.
+    /// </summary>
+    public int MaxConsecutiveInputReadFailures { get; set; } = 3;
+
+    /// <summary>
+    /// Optional renewable operator lease. When set, motion stops unless a client renews the lease within this window.
+    /// The absolute movement cap (<see cref="SafetyWatchdogTimeout"/>) applies regardless. Null (default) disables the lease.
+    /// </summary>
+    public TimeSpan? OperatorLeaseTimeout { get; set; }
+
+    /// <summary>
+    /// Optional drive run confirmation. When set, motion stops if the drive does not report at-speed (IN4) within this
+    /// window after motion is commanded. Null (default) disables the interlock. Enable only after bench commissioning.
+    /// </summary>
+    public TimeSpan? AtSpeedConfirmationTimeout { get; set; }
 }

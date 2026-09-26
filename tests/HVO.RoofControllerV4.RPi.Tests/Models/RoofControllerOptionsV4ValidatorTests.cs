@@ -82,9 +82,56 @@ public sealed class RoofControllerOptionsV4ValidatorTests
         var result = validator.Validate(string.Empty, options);
 
         result.Succeeded.Should().BeFalse();
-        result.Failures.Should().Contain(f => f.Contains("SafetyWatchdogTimeout"));
-        result.Failures.Should().Contain(f => f.Contains("PeriodicVerificationInterval must be greater than zero"));
-        result.Failures.Should().Contain(f => f.Contains("requires EnableDigitalInputPolling"));
+        result.Failures.Should().Contain(f => f.Contains("SafetyWatchdogTimeout must be between"));
+        result.Failures.Should().Contain(f => f.Contains("PeriodicVerificationInterval must be between"));
+    }
+
+    [TestMethod]
+    public void Validate_ShouldSucceed_WhenOnlyPeriodicVerificationSupervisesInputs()
+    {
+        // Periodic verification is the software fallback when polling is disabled (CORE-04), so this is valid.
+        var validator = new RoofControllerOptionsV4Validator();
+        var options = new RoofControllerOptionsV4
+        {
+            EnableDigitalInputPolling = false,
+            EnablePeriodicVerificationWhileMoving = true
+        };
+
+        var result = validator.Validate(string.Empty, options);
+
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Validate_ShouldFail_WhenNeitherPollingNorPeriodicVerificationIsEnabled()
+    {
+        var validator = new RoofControllerOptionsV4Validator();
+        var options = new RoofControllerOptionsV4
+        {
+            EnableDigitalInputPolling = false,
+            EnablePeriodicVerificationWhileMoving = false
+        };
+
+        var result = validator.Validate(string.Empty, options);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failures.Should().Contain(f => f.Contains("At least one of EnableDigitalInputPolling or EnablePeriodicVerificationWhileMoving"));
+    }
+
+    [TestMethod]
+    public void Validate_ShouldFail_WhenLeaseIsNotShorterThanWatchdog()
+    {
+        var validator = new RoofControllerOptionsV4Validator();
+        var options = new RoofControllerOptionsV4
+        {
+            SafetyWatchdogTimeout = TimeSpan.FromSeconds(30),
+            OperatorLeaseTimeout = TimeSpan.FromSeconds(30)
+        };
+
+        var result = validator.Validate(string.Empty, options);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failures.Should().Contain(f => f.Contains("OperatorLeaseTimeout must be shorter than SafetyWatchdogTimeout"));
     }
 
     [TestMethod]
@@ -93,13 +140,13 @@ public sealed class RoofControllerOptionsV4ValidatorTests
         var validator = new RoofControllerOptionsV4Validator();
         var options = new RoofControllerOptionsV4
         {
-            SafetyWatchdogTimeout = TimeSpan.FromSeconds(30),
-            PeriodicVerificationInterval = TimeSpan.FromSeconds(40)
+            SafetyWatchdogTimeout = TimeSpan.FromSeconds(5),
+            PeriodicVerificationInterval = TimeSpan.FromSeconds(5)
         };
 
         var result = validator.Validate(string.Empty, options);
 
         result.Succeeded.Should().BeFalse();
-        result.Failures.Should().Contain(f => f.Contains("less than or equal"));
+        result.Failures.Should().Contain(f => f.Contains("PeriodicVerificationInterval must be shorter than SafetyWatchdogTimeout"));
     }
 }

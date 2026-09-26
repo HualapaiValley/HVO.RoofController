@@ -46,6 +46,7 @@ public class RoofControllerApiTests
         _roofServiceMock.Setup(s => s.Initialize(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<bool>.Success(true));
         _roofServiceMock.Setup(s => s.GetConfigurationSnapshot()).Returns(new RoofControllerOptionsV4());
+        _roofServiceMock.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(new RoofControllerOptionsV4(), 7));
 
         // Default success setups (overridden per test where needed)
         _roofServiceMock.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening));
@@ -403,6 +404,7 @@ public class RoofControllerApiTests
         Assert.AreEqual(2, payload.PeriodicVerificationIntervalSeconds);
         Assert.AreEqual(25, payload.LimitSwitchDebounceMilliseconds);
         Assert.AreEqual(42, payload.RestartOnFailureWaitTimeSeconds);
+        Assert.AreEqual(7, payload.Version);
         _roofServiceMock.Verify(s => s.GetConfigurationSnapshot(), Times.Once);
     }
 
@@ -412,6 +414,7 @@ public class RoofControllerApiTests
         // Arrange
         var request = new RoofConfigurationRequest
         {
+            ExpectedVersion = 7,
             SafetyWatchdogTimeoutSeconds = 120,
             OpenRelayId = 1,
             CloseRelayId = 2,
@@ -421,9 +424,11 @@ public class RoofControllerApiTests
             DigitalInputPollIntervalMilliseconds = 75,
             EnablePeriodicVerificationWhileMoving = true,
             PeriodicVerificationIntervalSeconds = 5,
-            UseNormallyClosedLimitSwitches = false,
+            UseNormallyClosedLimitSwitches = true,
             LimitSwitchDebounceMilliseconds = 15,
-            IgnorePhysicalLimitSwitches = true
+            IgnorePhysicalLimitSwitches = false,
+            FaultInputActiveHigh = true,
+            MaxConsecutiveInputReadFailures = 3
         };
 
         RoofControllerOptionsV4? capturedOptions = null;
@@ -443,8 +448,8 @@ public class RoofControllerApiTests
             IgnorePhysicalLimitSwitches = false
         };
 
-        _roofServiceMock.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>()))
-            .Callback<RoofControllerOptionsV4>(options => capturedOptions = options)
+        _roofServiceMock.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
+            .Callback<RoofControllerOptionsV4, long>((options, _) => capturedOptions = options)
             .Returns(Result<RoofControllerOptionsV4>.Success(updatedOptions));
 
         // Act
@@ -459,7 +464,7 @@ public class RoofControllerApiTests
         Assert.AreEqual(TimeSpan.FromSeconds(120), capturedOptions!.SafetyWatchdogTimeout);
         Assert.AreEqual(TimeSpan.FromMilliseconds(75), capturedOptions.DigitalInputPollInterval);
         Assert.AreEqual(TimeSpan.FromSeconds(5), capturedOptions.PeriodicVerificationInterval);
-        _roofServiceMock.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>()), Times.Once);
+        _roofServiceMock.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7), Times.Once);
     }
 
     [TestMethod]
@@ -468,6 +473,7 @@ public class RoofControllerApiTests
         // Arrange
         var request = new RoofConfigurationRequest
         {
+            ExpectedVersion = 7,
             SafetyWatchdogTimeoutSeconds = 0,
             OpenRelayId = 1,
             CloseRelayId = 1,
@@ -475,11 +481,13 @@ public class RoofControllerApiTests
             StopRelayId = 4,
             EnableDigitalInputPolling = false,
             DigitalInputPollIntervalMilliseconds = -10,
-            EnablePeriodicVerificationWhileMoving = true,
+            EnablePeriodicVerificationWhileMoving = false,
             PeriodicVerificationIntervalSeconds = 0,
             UseNormallyClosedLimitSwitches = true,
             LimitSwitchDebounceMilliseconds = -1,
-            IgnorePhysicalLimitSwitches = false
+            IgnorePhysicalLimitSwitches = false,
+            FaultInputActiveHigh = true,
+            MaxConsecutiveInputReadFailures = 0
         };
 
         // Act
@@ -492,8 +500,26 @@ public class RoofControllerApiTests
         Assert.IsTrue(problem!.Errors.ContainsKey(nameof(RoofConfigurationRequest.SafetyWatchdogTimeoutSeconds)));
         Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.DigitalInputPollIntervalMilliseconds)));
         Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.EnablePeriodicVerificationWhileMoving)));
-    Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.OpenRelayId)));
-        _roofServiceMock.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>()), Times.Never);
+        Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.OpenRelayId)));
+        Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.MaxConsecutiveInputReadFailures)));
+        _roofServiceMock.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_MissingSafetyFields_ReturnsValidationProblem()
+    {
+        // A partial body must be rejected, never defaulted: omitted limit/fault settings could disable supervision.
+        var body = new { ExpectedVersion = 7, SafetyWatchdogTimeoutSeconds = 90, OpenRelayId = 1, CloseRelayId = 2, ClearFaultRelayId = 3, StopRelayId = 4 };
+
+        var response = await _client.PostAsJsonAsync("/api/v4.0/RoofControl/Configuration", body);
+        var problem = await response.Content.ReadFromJsonAsync<ValidationProblemDetails>();
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.IsNotNull(problem);
+        Assert.IsTrue(problem!.Errors.ContainsKey(nameof(RoofConfigurationRequest.IgnorePhysicalLimitSwitches)));
+        Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.UseNormallyClosedLimitSwitches)));
+        Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.FaultInputActiveHigh)));
+        _roofServiceMock.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()), Times.Never);
     }
 
     [TestMethod]

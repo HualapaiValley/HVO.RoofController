@@ -119,6 +119,11 @@ public sealed class RoofControllerServiceV4HostTests
 
         public RoofControllerOptionsV4 GetConfigurationSnapshot() => _options;
 
+        public bool IsShuttingDown => false;
+        public RoofControllerConfigurationState GetConfigurationState() => new(new RoofControllerOptionsV4(), 0);
+        public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion) => UpdateConfiguration(updatedOptions);
+        public Result<RoofStatusResponse> RenewLease() => throw new NotSupportedException();
+        public Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions)
         {
             _options = updatedOptions;

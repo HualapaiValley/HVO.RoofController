@@ -420,6 +420,25 @@ namespace HVO.RoofControllerV4.RPi.Logic
             }
         }
 
+        // TODO(#16/#17): contract stubs; replaced by the safety-contract implementation.
+        public bool IsShuttingDown => _disposed;
+
+        public RoofControllerConfigurationState GetConfigurationState() => new(GetConfigurationSnapshot(), 0);
+
+        public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion)
+            => UpdateConfiguration(updatedOptions);
+
+        public Result<RoofStatusResponse> RenewLease()
+            => Result<RoofStatusResponse>.Failure(new RoofControllerException(RoofControllerErrorCode.LeaseNotActive, "No leased motion is active.", GetCurrentStatusSnapshot()));
+
+        public Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken)
+        {
+            var result = Stop(RoofControllerStopReason.HostShutdown);
+            return Task.FromResult(result.IsSuccessful
+                ? Result<RoofStatusResponse>.Success(GetCurrentStatusSnapshot())
+                : Result<RoofStatusResponse>.Failure(new RoofControllerException(RoofControllerErrorCode.RelayStateUnverified, "Shutdown stop failed.", GetCurrentStatusSnapshot())));
+        }
+
         /// <summary>
         /// Gets a value indicating whether the roof is currently moving (opening or closing).
         /// This property returns true when the roof is actively in motion and not at a limit switch position.

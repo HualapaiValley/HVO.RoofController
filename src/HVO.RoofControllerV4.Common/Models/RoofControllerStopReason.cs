@@ -39,6 +39,46 @@ namespace HVO.RoofControllerV4.Common.Models
         /// <summary>
         /// Operation stopped due to system disposal or shutdown.
         /// </summary>
-        SystemDisposal = 6
+        SystemDisposal = 6,
+
+        /// <summary>
+        /// Safety inputs (limits / fault) could not be read, or were stale, for longer than the configured tolerance.
+        /// </summary>
+        InputReadFailure = 7,
+
+        /// <summary>
+        /// Both limit switches reported active at the same time (wiring or switch failure).
+        /// </summary>
+        ContradictoryLimitInputs = 8,
+
+        /// <summary>
+        /// The limit the roof started from was released and then reasserted while moving away from it.
+        /// </summary>
+        StartLimitReasserted = 9,
+
+        /// <summary>
+        /// The drive fault input (IN3) reported an active fault.
+        /// </summary>
+        DriveFault = 10,
+
+        /// <summary>
+        /// A relay write could not be verified by register read-back.
+        /// </summary>
+        RelayVerificationFailed = 11,
+
+        /// <summary>
+        /// The optional renewable operator lease expired before it was renewed.
+        /// </summary>
+        OperatorLeaseExpired = 12,
+
+        /// <summary>
+        /// The drive did not report at-speed (IN4) within the configured confirmation window.
+        /// </summary>
+        DriveNotRunning = 13,
+
+        /// <summary>
+        /// The host application is shutting down.
+        /// </summary>
+        HostShutdown = 14
     }
 }

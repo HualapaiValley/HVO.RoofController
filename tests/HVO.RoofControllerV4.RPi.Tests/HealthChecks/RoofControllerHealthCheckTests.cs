@@ -149,6 +149,11 @@ public sealed class RoofControllerHealthCheckTests
 
         public RoofControllerOptionsV4 GetConfigurationSnapshot() => _configuration;
 
+        public bool IsShuttingDown => false;
+        public RoofControllerConfigurationState GetConfigurationState() => new(new RoofControllerOptionsV4(), 0);
+        public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion) => UpdateConfiguration(updatedOptions);
+        public Result<RoofStatusResponse> RenewLease() => throw new NotSupportedException();
+        public Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 configuration)
         {
             _configuration = configuration;
@@ -187,6 +192,11 @@ public sealed class RoofControllerHealthCheckTests
 
         public RoofControllerOptionsV4 GetConfigurationSnapshot() => _configuration;
 
+        public bool IsShuttingDown => false;
+        public RoofControllerConfigurationState GetConfigurationState() => new(new RoofControllerOptionsV4(), 0);
+        public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion) => UpdateConfiguration(updatedOptions);
+        public Result<RoofStatusResponse> RenewLease() => throw new NotSupportedException();
+        public Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 configuration) => throw new InvalidOperationException("configuration failure");
     }
 }
