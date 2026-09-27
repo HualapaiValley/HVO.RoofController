@@ -138,9 +138,13 @@ public sealed class RoofControllerServiceV4HostTests
     [TestMethod]
     public void ShutdownTimeouts_ShouldFitInsideTheHostShutdownTimeout()
     {
-        // Program.cs gives the host 20 s to stop; the controller call and its abandon grace must fit well inside it.
-        (RoofControllerServiceV4Host.ShutdownTimeout + RoofControllerServiceV4Host.ShutdownAbandonGrace)
-            .Should().BeLessThan(TimeSpan.FromSeconds(20));
+        // Program.cs sets HostOptions.ShutdownTimeout to 20 s (there is no shared constant). An unverified first call
+        // is followed by a second, sequential one from the end of ExecuteAsync (base.StopAsync), and each may run for the
+        // full wait plus the abandon grace. Both must fit inside the host's budget.
+        var hostShutdownTimeout = TimeSpan.FromSeconds(20);
+        var perCall = RoofControllerServiceV4Host.ShutdownTimeout + RoofControllerServiceV4Host.ShutdownAbandonGrace;
+
+        TimeSpan.FromTicks(perCall.Ticks * 2).Should().BeLessThan(hostShutdownTimeout);
     }
 
     [TestMethod]
@@ -170,6 +174,40 @@ public sealed class RoofControllerServiceV4HostTests
             logger.Contains(LogLevel.Critical, "did not complete").Should().BeTrue();
             logger.Contains(LogLevel.Critical, "abandoned").Should().BeTrue();
             service.ShutdownCallCount.Should().Be(1, "the second trigger shared the blocked call");
+        }
+        finally
+        {
+            wedged.Set();
+        }
+    }
+
+    [TestMethod]
+    public async Task TriggerAfterAnAbandonedShutdownCall_ShouldNotCallAgain_AndBeLoggedCritical()
+    {
+        using var wedged = new ManualResetEventSlim(false);
+        var service = new FakeRoofControllerService
+        {
+            ShutdownBehavior = _ =>
+            {
+                wedged.Wait();
+                return Task.FromResult(Result<RoofStatusResponse>.Success(FakeRoofControllerService.HealthySnapshot()));
+            }
+        };
+        var logger = new CapturingLogger<RoofControllerServiceV4Host>();
+        using var host = new TestableHost(service, logger) { ShutdownWaitTimeout = TimeSpan.FromMilliseconds(100) };
+
+        try
+        {
+            (await host.ShutdownControllerAsync("first").WaitAsync(TimeSpan.FromSeconds(10))).Should().BeFalse();
+            logger.Contains(LogLevel.Critical, "abandoned").Should().BeTrue();
+
+            var second = host.ShutdownControllerAsync("second");
+            second.IsCompleted.Should().BeTrue("a trigger never waits behind a call that is still blocked");
+            (await second).Should().BeFalse();
+            await host.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1));
+
+            service.ShutdownCallCount.Should().Be(1, "no further call is queued behind the blocked one");
+            logger.Entries.Count(e => e.Level == LogLevel.Critical && e.Message.Contains("still blocked in HAT I/O")).Should().Be(2);
         }
         finally
         {

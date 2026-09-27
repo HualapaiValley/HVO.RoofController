@@ -155,19 +155,27 @@ public partial class RoofControllerServiceV4
 
             var now = Now;
 
-            // A repeat of the current command renews the operator lease only. It never extends the watchdog, which is
-            // an absolute cap measured from motion start.
-            if (_commandedMotion == direction)
+            // A deadline can pass before the watchdog timer callback or the next supervision cycle acts on it. Enforce it
+            // first, so neither a repeat nor a reversal revives an expired lease or outlives a missed watchdog or at-speed
+            // deadline, and the stop is recorded (and latched) with the deadline's reason.
+            if (_commandedMotion != RoofMotionDirection.None)
             {
-                // A deadline can pass before the next supervision cycle sees it. Enforce it first, so a repeat never
-                // revives an expired lease or outlives a missed watchdog or at-speed deadline.
+                var repeat = _commandedMotion == direction;
                 CheckDeadlines_NoLock(now);
-                if (_commandedMotion == RoofMotionDirection.None)
+                if (_commandedMotion == RoofMotionDirection.None
+                    && (repeat || _faultLatched || _relayRegisterState != RoofRelayRegisterState.Verified))
                 {
                     FinishMutation_NoLock();
                     return RejectAfterDeadlineStop_NoLock<RoofControllerStatus>();
                 }
 
+                // Only the lease expired under a reversal: the roof is now stopped (verified) and the reversal is a start.
+            }
+
+            // A repeat of the current command renews the operator lease only. It never extends the watchdog, which is
+            // an absolute cap measured from motion start.
+            if (_commandedMotion == direction)
+            {
                 if (_options.OperatorLeaseTimeout is { } leaseTimeout && _leaseDeadlineUtc is not null)
                 {
                     _leaseDeadlineUtc = now + leaseTimeout;
@@ -276,6 +284,13 @@ public partial class RoofControllerServiceV4
                 // A stop preempts a clear-fault pulse; the all-off sequence below also drops the clear-fault relay.
                 _clearFaultCts?.Cancel();
 
+                // A deadline that has already passed stops the motion first, so the recorded stop reason (and any latch)
+                // is the deadline's rather than the operator's. The stop below then re-asserts and verifies all-off.
+                if (_commandedMotion != RoofMotionDirection.None)
+                {
+                    CheckDeadlines_NoLock(Now);
+                }
+
                 var verified = _commandedMotion != RoofMotionDirection.None
                     ? StopMotion_NoLock(reason, null)
                     : StopIdle_NoLock(reason);
@@ -329,7 +344,8 @@ public partial class RoofControllerServiceV4
     }
 
     /// <summary>
-    /// Rejection for a lease renewal or repeated Open/Close that found a passed deadline and stopped motion instead.
+    /// Rejection for a lease renewal, repeated Open/Close or reversal that found a passed deadline and stopped motion
+    /// instead. (A reversal that found only an expired lease, with the stop verified, proceeds as a start.)
     /// </summary>
     private Result<T> RejectAfterDeadlineStop_NoLock<T>()
     {
@@ -890,15 +906,39 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// Publishes the disposed state first (so no new command is admitted), then stops and verifies all relays off.
-    /// Returns false when disposal already happened.
+    /// Returns false when there is nothing to wait for: disposal already happened, or the controller lock could not be
+    /// acquired within <see cref="DisposeWaitTimeout"/>.
     /// </summary>
+    /// <remarks>
+    /// The lock is held across synchronous HAT I/O, which cannot be interrupted if an I2C transfer wedges. Disposal then
+    /// gives up on the lock rather than block the host's teardown: it marks the controller disposed (the supervision loop,
+    /// the shutdown retry and any queued command see it once the lock is released), completes the status channel, logs
+    /// Critical and returns.
+    /// </remarks>
     private bool BeginDispose(out Task[] pending)
     {
-        lock (_syncLock)
+        pending = [];
+        if (_disposed)
         {
+            return false;
+        }
+
+        var lockTaken = false;
+        try
+        {
+            Monitor.TryEnter(_syncLock, DisposeWaitTimeout, ref lockTaken);
+            if (!lockTaken)
+            {
+                _shuttingDown = true;
+                _disposed = true;
+                _statusChannel.Writer.TryComplete();
+                _logger.LogCritical("Disposal could not acquire the controller lock within {Timeout}: a call is still blocked in HAT I/O. The all-off stop was not attempted and relay state is unknown; use the independent hardware stop.",
+                    DisposeWaitTimeout);
+                return false;
+            }
+
             if (_disposed)
             {
-                pending = [];
                 return false;
             }
 
@@ -924,6 +964,13 @@ public partial class RoofControllerServiceV4
             // Disposal made its own all-off attempt above; the cancelled shutdown retry ends at its next wake.
             pending = new[] { _supervisionTask, _shutdownStopRetryTask, _statusDispatcherTask }.OfType<Task>().ToArray();
             return true;
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                Monitor.Exit(_syncLock);
+            }
         }
     }
 

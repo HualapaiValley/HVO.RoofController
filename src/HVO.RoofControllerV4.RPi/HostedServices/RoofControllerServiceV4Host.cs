@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
 using Microsoft.Extensions.Hosting;
@@ -19,7 +20,9 @@ namespace HVO.RoofControllerV4.RPi.HostedServices;
 /// <para>The controller's first stop attempt performs synchronous HAT I/O under its lock, so the call is offloaded to the
 /// thread pool and the wait is bounded independently of it. A wedged I2C transfer cannot be interrupted from managed
 /// code: after the bound the host abandons the wait (the blocked thread is left behind), logs Critical and lets the host
-/// continue stopping. The relay state is then unknown and the independent hardware stop is the only safe stop.</para>
+/// continue stopping. The relay state is then unknown and the independent hardware stop is the only safe stop. While an
+/// abandoned call is still blocked, later triggers log Critical and return at once rather than queue another call (and
+/// another pool thread) behind the same lock.</para>
 /// </remarks>
 public class RoofControllerServiceV4Host : BackgroundService
 {
@@ -41,6 +44,7 @@ public class RoofControllerServiceV4Host : BackgroundService
     private readonly CancellationTokenRegistration _stoppingRegistration;
     private readonly object _shutdownGate = new();
     private Task<bool>? _shutdownInFlight;
+    private Task? _shutdownCall;
     private int _shutdownVerified;
 
     public RoofControllerServiceV4Host(
@@ -126,18 +130,19 @@ public class RoofControllerServiceV4Host : BackgroundService
                 return;
             }
 
+            // Scheduled on the monotonic clock, so a wall-clock step neither floods nor suppresses the heartbeat.
             var logInterval = TimeSpan.FromMinutes(5);
-            var nextLogTime = DateTime.UtcNow.Add(logInterval);
+            var lastLogTimestamp = Stopwatch.GetTimestamp();
 
             // Run loop
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    if (DateTime.UtcNow >= nextLogTime)
+                    if (Stopwatch.GetElapsedTime(lastLogTimestamp) >= logInterval)
                     {
                         _logger.LogInformation("{backgroundServiceName} heartbeat at: {time}", nameof(RoofControllerServiceV4Host), DateTimeOffset.Now);
-                        nextLogTime = DateTime.UtcNow.Add(logInterval);
+                        lastLogTimestamp = Stopwatch.GetTimestamp();
                     }
 
                     await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken).ConfigureAwait(false);
@@ -159,7 +164,8 @@ public class RoofControllerServiceV4Host : BackgroundService
 
     /// <summary>
     /// Requests the controller's verified shutdown stop, bounded by <see cref="ShutdownWaitTimeout"/> plus
-    /// <see cref="ShutdownAbandonGrace"/> even when the call blocks. Concurrent triggers share one call. Never throws.
+    /// <see cref="ShutdownAbandonGrace"/> even when the call blocks. Concurrent triggers share one call; a trigger that
+    /// finds an abandoned call still running returns false without calling again. Never throws.
     /// </summary>
     internal Task<bool> ShutdownControllerAsync(string trigger)
     {
@@ -174,6 +180,15 @@ public class RoofControllerServiceV4Host : BackgroundService
             if (_shutdownInFlight is { IsCompleted: false } inFlight)
             {
                 return inFlight;
+            }
+
+            if (_shutdownCall is { IsCompleted: false })
+            {
+                // A previous call was abandoned and has still not returned. Another call would block behind it too.
+                _logger.LogCritical(
+                    "Roof controller shutdown stop not attempted ({Trigger}): the previous shutdown call is still blocked in HAT I/O. Relay state is unknown; use the independent hardware stop.",
+                    trigger);
+                return Task.FromResult(false);
             }
 
             _shutdownInFlight = RunShutdownAsync(trigger);
@@ -192,6 +207,7 @@ public class RoofControllerServiceV4Host : BackgroundService
             // callback) past the bound.
             var token = cancellation.Token;
             var shutdown = Task.Run(() => _roofControllerServiceV4.ShutdownAsync(token));
+            _shutdownCall = shutdown;
             _ = shutdown.ContinueWith(static (_, state) => ((CancellationTokenSource)state!).Dispose(), cancellation,
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             cancellation = null;

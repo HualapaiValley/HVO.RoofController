@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,6 +7,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
+using Microsoft.Extensions.Logging;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Services;
 
@@ -141,6 +143,55 @@ public sealed class RoofControllerDisposalTests
             hat.EverBothDirectionBits.Should().BeFalse();
             service.Open().ErrorCode().Should().Be(RoofControllerErrorCode.ShuttingDown);
         }
+    }
+
+    [TestMethod]
+    [DataRow(false, DisplayName = "Dispose")]
+    [DataRow(true, DisplayName = "DisposeAsync")]
+    public async Task Dispose_WhileACallIsBlockedInHatIo_ShouldReturnAfterTheWaitTimeout_AndLogCritical(bool disposeAsync)
+    {
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var logger = new CapturingLogger<RoofControllerServiceV4>();
+        var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), logger: logger);
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+
+        // A wedged I2C transfer: the shutdown stop blocks in a relay write while holding the controller lock.
+        using var wedged = new ManualResetEventSlim(false);
+        using var blocked = new ManualResetEventSlim(false);
+        hat.Registers.RelayWriteObserver = (_, _, _) =>
+        {
+            blocked.Set();
+            wedged.Wait();
+        };
+        var shutdown = Task.Run(() => service.ShutdownAsync(CancellationToken.None));
+
+        try
+        {
+            blocked.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+            var stopwatch = Stopwatch.StartNew();
+            var dispose = disposeAsync ? Task.Run(async () => await service.DisposeAsync()) : Task.Run(service.Dispose);
+            await dispose.WaitAsync(RoofControllerServiceV4.DisposeWaitTimeout + TimeSpan.FromSeconds(5));
+            stopwatch.Elapsed.Should().BeGreaterThanOrEqualTo(RoofControllerServiceV4.DisposeWaitTimeout - TimeSpan.FromMilliseconds(100))
+                .And.BeLessThan(RoofControllerServiceV4.DisposeWaitTimeout + TimeSpan.FromSeconds(2));
+
+            service.IsServiceDisposed.Should().BeTrue();
+            service.IsShuttingDown.Should().BeTrue();
+            logger.Contains(LogLevel.Critical, "could not acquire the controller lock").Should().BeTrue();
+            shutdown.IsCompleted.Should().BeFalse("the blocked call is still inside the HAT write");
+
+            // A repeated disposal returns at once.
+            await Task.Run(service.Dispose).WaitAsync(TimeSpan.FromMilliseconds(500));
+        }
+        finally
+        {
+            wedged.Set();
+        }
+
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(5));
+        service.Open().ErrorCode().Should().Be(RoofControllerErrorCode.ShuttingDown, "the controller stays disposed once the lock is free");
+        hat.RelayMask.Should().Be(0x00);
     }
 
     [TestMethod]
