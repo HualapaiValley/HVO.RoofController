@@ -18,7 +18,7 @@
 # -------------------------
 # The build stage runs on the builder's native platform and cross-compiles for the target,
 # so an arm64 image built on an x64 machine does not run the SDK under emulation.
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.302 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
 ARG TARGETARCH
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
