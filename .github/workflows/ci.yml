@@ -128,3 +128,34 @@ jobs:
           path: src/TestResults/**
           if-no-files-found: warn
           retention-days: 7
+
+  # The Pi deploy path: the deploy script (against fake docker/curl, see tests/deploy) and the compose profiles.
+  deploy-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Syntax and ShellCheck
+        run: |
+          bash -n src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh
+          bash -n tests/deploy/deploy-script-tests.sh
+          shellcheck --version
+          shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh
+
+      - name: Deploy script tests
+        run: tests/deploy/deploy-script-tests.sh
+
+      - name: Compose profiles
+        working-directory: src/HVO.RoofControllerV4.RPi
+        run: |
+          docker compose --profile pi config --quiet
+          docker compose --profile pi-lan-http config --quiet
+          # Both profiles at once must be rejected: they would drive the HAT twice.
+          if docker compose --profile pi --profile pi-lan-http config --quiet 2>/dev/null; then
+            echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the pi and pi-lan-http profiles can be enabled together"
+            exit 1
+          fi

@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Fake `docker` CLI for deploy-script-tests.sh.
+
+Keeps containers in $FAKE_STATE_DIR/state.json and appends every call's argv (as JSON) to $FAKE_STATE_DIR/calls.log.
+Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
+  FAKE_<KIND>_READY=false          /health/ready fails
+  FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
+  FAKE_<KIND>_STOP=unverified      the in-container POST Stop is not verified (error: the exec fails)
+Other switches: FAKE_PREFLIGHT_EXIT (exit code of `run --rm ... --validate-deployment`), FAKE_RUN_FAIL=true,
+FAKE_STOP_FAIL=true. Containers created by `run -d` have kind "new". Authenticated calls must send
+FAKE_EXPECTED_KEY on stdin (-H @-), otherwise they get 401.
+"""
+import json
+import os
+import sys
+
+STATE_DIR = os.environ["FAKE_STATE_DIR"]
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+VERIFIED = {"relayRegisterState": "Verified", "relayRegisterMask": 0, "commandedMotion": "None"}
+UNVERIFIED = {"relayRegisterState": "Unknown", "relayRegisterMask": None, "commandedMotion": "None"}
+
+
+def load():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"containers": {}}
+
+
+def save(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def behaviour(kind, name, default):
+    return os.environ.get(f"FAKE_{kind.upper()}_{name}", default)
+
+
+def die(message, code=1):
+    print(f"Error response from daemon: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def container(state, name):
+    c = state["containers"].get(name)
+    if c is None:
+        die(f"No such container: {name}")
+    return c
+
+
+def exec_curl(state, name, curl_args, stdin_text):
+    c = container(state, name)
+    if not c["running"]:
+        die(f"container {name} is not running")
+    kind = c["kind"]
+    url = curl_args[-1]
+    method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"
+
+    if url.endswith("/health/ready"):
+        sys.exit(0 if behaviour(kind, "READY", "true") == "true" else 22)
+
+    if "@-" in curl_args and stdin_text.strip() != f"X-Api-Key: {os.environ['FAKE_EXPECTED_KEY']}":
+        print('{"error":"unauthorized"}\n401', end="")
+        return
+
+    if url.endswith("/Status") and method == "GET":
+        code = behaviour(kind, "STATUS_CODE", "200")
+        print(json.dumps(VERIFIED) + "\n" + code, end="")
+    elif url.endswith("/Stop") and method == "POST":
+        stop = behaviour(kind, "STOP", "verified")
+        if stop == "error":
+            die("exec failed")
+        print(json.dumps(VERIFIED if stop == "verified" else UNVERIFIED) + "\n200", end="")
+    else:
+        print("{}\n404", end="")
+
+
+def main():
+    argv = sys.argv[1:]
+    with open(os.path.join(STATE_DIR, "calls.log"), "a") as log:
+        log.write(json.dumps(argv) + "\n")
+
+    if argv[:1] == ["--context"]:
+        argv = argv[2:]
+    if not argv:
+        die("no command")
+
+    state = load()
+    command, args = argv[0], argv[1:]
+    image = os.environ["IMAGE_TAG"]
+
+    if command in ("info", "buildx"):
+        return
+    if command == "save":
+        with open(args[args.index("-o") + 1], "w") as f:
+            f.write("image")
+        return
+    if command == "load":
+        sys.stdin.read()
+        print(f"Loaded image: {image}")
+        return
+
+    if command == "inspect":
+        name = args[-1]
+        c = state["containers"].get(name)
+        if c is None:
+            die(f"No such object: {name}")
+        print("true" if c["running"] else "false")
+        return
+
+    if command == "exec":
+        interactive = args[0] == "-i"
+        if interactive:
+            args = args[1:]
+        name, curl_args = args[0], args[1:]
+        exec_curl(state, name, curl_args, sys.stdin.read() if interactive else "")
+        return
+
+    if command == "stop":
+        name = args[-1]
+        c = container(state, name)
+        if os.environ.get("FAKE_STOP_FAIL") == "true":
+            die(f"cannot stop container: {name}")
+        c["running"] = False
+        save(state)
+        print(name)
+        return
+
+    if command == "start":
+        name = args[-1]
+        container(state, name)["running"] = True
+        save(state)
+        print(name)
+        return
+
+    if command == "rm":
+        force = "-f" in args
+        name = args[-1]
+        c = state["containers"].get(name)
+        if c is None:
+            if force:
+                return
+            die(f"No such container: {name}")
+        if c["running"] and not force:
+            die(f"cannot remove container {name}: container is running")
+        del state["containers"][name]
+        save(state)
+        print(name)
+        return
+
+    if command == "rename":
+        old, new = args
+        c = container(state, old)
+        if new in state["containers"]:
+            die(f'Conflict. The container name "/{new}" is already in use')
+        state["containers"][new] = c
+        del state["containers"][old]
+        save(state)
+        return
+
+    if command == "update":
+        name = args[-1]
+        container(state, name)["restart"] = args[args.index("--restart") + 1]
+        save(state)
+        print(name)
+        return
+
+    if command == "logs":
+        print("fake controller log line")
+        return
+
+    if command == "ps":
+        print("NAMES\tSTATUS\tIMAGE")
+        for name, c in state["containers"].items():
+            print(f"{name}\t{'Up' if c['running'] else 'Exited (0)'}\t{c.get('image', image)}")
+        return
+
+    if command == "run":
+        position = args.index(image)
+        options, trailing = args[:position], args[position + 1:]
+        if "--rm" in options:
+            print("Deployment check (Production):")
+            code = int(os.environ.get("FAKE_PREFLIGHT_EXIT", "0"))
+            print("Deployment check passed." if code == 0 else "  PROBLEM: fake problem")
+            sys.exit(code)
+        if os.environ.get("FAKE_RUN_FAIL") == "true":
+            die("driver failed programming external connectivity")
+        name = options[options.index("--name") + 1]
+        if name in state["containers"]:
+            die(f'Conflict. The container name "/{name}" is already in use')
+        publish = [options[i + 1] for i, value in enumerate(options) if value == "-p"]
+        state["containers"][name] = {
+            "kind": "new",
+            "running": True,
+            "restart": options[options.index("--restart") + 1],
+            "publish": publish,
+            "image": image,
+            "trailing": trailing,
+        }
+        save(state)
+        print("0123456789ab")
+        return
+
+    die(f"fake docker: unsupported command {command}")
+
+
+main()
