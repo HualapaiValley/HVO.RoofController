@@ -109,6 +109,16 @@ public sealed class RoofApiKeyStore : IDisposable
 
     public void Dispose() => _changeRegistration?.Dispose();
 
+    /// <summary>
+    /// Loads <paramref name="options"/> with the same rules as the store and returns the usable keys' identities and the
+    /// problems found. Used by the deployment check; never returns key values.
+    /// </summary>
+    internal static (IReadOnlyList<RoofApiKeyIdentity> Keys, IReadOnlyList<string> Problems) Inspect(RoofControllerSecurityOptions? options)
+    {
+        var snapshot = Build(options);
+        return (Array.ConvertAll(snapshot.Entries, entry => entry.Identity), snapshot.Problems);
+    }
+
     internal static string ComputeKeyId(ReadOnlySpan<byte> keyHash)
     {
         Span<byte> buffer = stackalloc byte[SHA256.HashSizeInBytes];

@@ -30,13 +30,17 @@ namespace HVO.RoofControllerV4.RPi;
 
 public class Program
 {
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
-        var builder = WebApplication.CreateBuilder(args);
+        if (args.Contains(DeploymentValidator.CommandLineSwitch, StringComparer.Ordinal))
+        {
+            // Pre-deployment check (deploy-roofcontroller-rpi.sh): reads the same configuration sources as the controller,
+            // but never builds the host, opens a listener or touches the HAT.
+            var validationBuilder = CreateBuilder(args.Where(arg => arg != DeploymentValidator.CommandLineSwitch).ToArray());
+            return DeploymentValidator.Run(validationBuilder.Configuration, validationBuilder.Environment, TimeProvider.System, Console.Out);
+        }
 
-        // Docker secrets: a file named e.g. RoofControllerSecurity__ApiKeys__0__Key or BlueIris__Password under
-        // /run/secrets becomes that configuration key. Never commit keys or passwords to appsettings.
-        builder.Configuration.AddKeyPerFile("/run/secrets", optional: true);
+        var builder = CreateBuilder(args);
 
         ApplyHardwareDetectionOverrides(builder.Configuration);
         ConfigureServices(builder.Services, builder.Configuration, builder.Environment);
@@ -47,6 +51,17 @@ public class Program
         Configure(app);
 
         app.Run();
+        return 0;
+    }
+
+    private static WebApplicationBuilder CreateBuilder(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+
+        // Docker secrets: a file named e.g. RoofControllerSecurity__ApiKeys__0__Key or BlueIris__Password under
+        // /run/secrets becomes that configuration key. Never commit keys or passwords to appsettings.
+        builder.Configuration.AddKeyPerFile("/run/secrets", optional: true);
+        return builder;
     }
 
 
