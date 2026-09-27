@@ -128,8 +128,9 @@ published and plain HTTP (8080) listens on loopback inside the container; plain 
 LAN is an explicit opt-out (`ALLOW_INSECURE_HTTP=true`, compose profile `pi-lan-http`).
 Deploy with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`: it runs the image's
 `--validate-deployment` check first, requires a verified Stop before replacing the
-container, verifies the new one from the deploying machine and rolls back to
-`roof-controller-previous` on failure; see `docs/deployment.md`. The production compose file
+container, verifies the new one from the deploying machine and restores
+`roof-controller-previous` on any failure, signal or lost terminal after the stop begins
+(removing only the container it created); see `docs/deployment.md`. The production compose file
 is `src/HVO.RoofControllerV4.RPi/docker-compose.yaml` (profiles `pi` and `pi-lan-http`).
 Keep the script, its tests (`tests/deploy/deploy-script-tests.sh`) and the compose file in
 step.

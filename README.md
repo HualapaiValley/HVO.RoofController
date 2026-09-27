@@ -101,8 +101,9 @@ listener and certificate. It then sends Stop to the running controller and abort
 response shows a verified all-off relay register and no commanded motion (an explicit, typed
 operator override exists for emergencies). The old container is stopped gracefully and kept
 as `roof-controller-previous`. The new one must become ready and answer an authenticated
-Status and a verified Stop at its published HTTPS URL from the deploying machine; otherwise
-the script rolls back to the previous controller. `--rollback` swaps them on demand.
+Status and a verified Stop at its published HTTPS URL from the deploying machine. If it does
+not, or anything fails or interrupts the script after the old controller's stop begins, the
+script restores the previous controller. `--rollback` swaps them on demand.
 
 The production compose file, `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, has an
 HTTPS profile (`pi`, port 8443) and an explicit plain-HTTP profile for an isolated LAN

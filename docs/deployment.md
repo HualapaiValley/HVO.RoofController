@@ -164,18 +164,32 @@ deploy.
 | `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts`. A list must include `localhost`: the health check and the script's in-container calls use it. |
 | `REMOTE_CA_CERT` | (empty) | PEM file on this machine that verifies the Pi's certificate, for the remote check |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
-| `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Do not publish ports here. |
+| `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them. |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout` |
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
 | `ROOF_OPERATOR_API_KEY` / `OPERATOR_KEY_FILE` | / `~/.config/hvo-roof/operator.key` | Key for the Stop and Status checks |
 
+`STOP_TIMEOUT_SECONDS` and `READY_TIMEOUT_SECONDS` must be whole numbers from 1 to 86400, and the ports whole numbers
+from 1 to 65535. They are read as decimal, so `010` means 10. `POLL_INTERVAL_SECONDS` may have a fraction, such as
+`0.5`.
+
+The machine that runs the script needs Docker CLI 20.10 or later (the script reads container state with
+`docker ps --format '{{.State}}'`), and `jq` or `python3` to parse the Stop response. Without either, the stop is
+treated as unverified.
+
 ### What the script does, in order
 
 1. **Checks what it needs.** The script stops at the first failure:
-   - the Docker context is available
+   - the settings above and `EXTRA_DOCKER_ARGS` are valid, and `REMOTE_CA_CERT` is readable. This is checked before
+     the script contacts Docker.
    - either an HTTPS certificate directory is set or insecure HTTP was chosen explicitly
+   - the Docker context is available
    - an operator key is available
+   - Docker reports the state of `<name>` and `<name>-previous`. If the query fails or matches more than one
+     container, the script stops and nothing is changed.
+   - `<name>-previous` is not running, restarting or paused, even when there is no `<name>`: two controllers must never
+     drive the HAT. Stop it and retry.
 2. **Builds** the arm64 image and loads it on the Pi.
 3. **Runs the pre-flight check** on the Pi: the new image with `--validate-deployment` and exactly the environment,
    devices and mounts the controller will get (see [The deployment check](#the-deployment-check)), plus the SHA-256 of
@@ -193,8 +207,9 @@ deploy.
    you can see the roof and that it is not moving, or that the drive is isolated.
 5. **Stops the old container gracefully** with `docker stop -t 30` (SIGTERM). The app's shutdown path stops the roof
    again and ends camera streams. The old container is renamed `<name>-previous` with restart policy `no`, so it can
-   be restored but never starts by itself. An older `<name>-previous` is removed first. A **running**
-   `<name>-previous` aborts the deploy before anything is stopped: two controllers must never drive the HAT.
+   be restored but never starts by itself. An older, stopped `<name>-previous` is removed only after this stop has
+   succeeded, just before the rename, so an aborted deploy keeps it. The script reads the container states again
+   after the pre-flight, and a `<name>-previous` that is running by then still aborts before anything is stopped.
 6. **Starts the new container** with `--restart unless-stopped` and `--stop-timeout 30`. In HTTPS mode only
    `HTTPS_HOST_PORT` is published; plain HTTP listens on loopback inside the container, for the health check and the
    script's `docker exec` calls.
@@ -204,13 +219,18 @@ deploy.
    - from the machine running the script, at `https://$PI_HOST:$HTTPS_HOST_PORT` (or `http://$PI_HOST:$HOST_PORT` in
      insecure mode): an authenticated `GET Status` returns 200 and `POST Stop` returns a verified stop. This proves the
      published port, the certificate, `AllowedHosts` and the key from a real client's point of view.
-8. **Rolls back on failure.** If step 6 or 7 fails, or the script is interrupted after step 5, the script prints the
-   new container's last 60 log lines, stops (SIGTERM) and removes it, renames `<name>-previous` back and starts it if
-   it was running before. It then waits for readiness and exits non-zero with "Rolled back". With no previous
-   controller (a first deploy), it exits non-zero and says the roof controller is not running.
+8. **Restores the old controller on failure.** Once the old controller's stop begins in step 5, any failure restores
+   it. That includes a failed `docker stop` and an interruption: Ctrl-C, SIGTERM, or a closed terminal or SSH
+   session. The script:
+   - prints the new container's last 60 log lines, then stops (SIGTERM) and removes it
+   - renames `<name>-previous` back to `<name>` and starts it if it was running before, then waits for readiness
 
-`jq` or `python3` is needed on the machine that runs the script to parse the Stop response. Without either, the stop
-is treated as unverified.
+   It removes only the container it created, found by the ID Docker wrote to the run's `--cidfile`. If another
+   container has taken `<name>` meanwhile, the script leaves it alone and keeps the old controller, stopped, as
+   `<name>-previous`. Further signals are ignored and failed writes to the terminal are skipped until the restore
+   ends. The last line is `[deploy] ERROR: Deployment failed (<reason>). <outcome>`; the outcome starts with
+   `Rolled back:` when the old controller is back. The script exits 1, or 129, 130 or 143 after SIGHUP, SIGINT or
+   SIGTERM. With no previous controller (a first deploy), the outcome says the roof controller is not running.
 
 ### Rolling back
 
@@ -218,11 +238,20 @@ is treated as unverified.
 PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./deploy-roofcontroller-rpi.sh --rollback
 ```
 
-`--rollback` swaps the running controller with `<name>-previous`. It uses the same verified stop gate as a deploy,
-then swaps the names and restart policies, starts the restored controller and runs the checks from step 7 against it.
-Nothing is built. Run it again to swap back. Set `HTTPS_CERT_DIR` or `ALLOW_INSECURE_HTTP` as for the version being
-restored, since that decides the URL of the remote check. If the checks fail, the restored controller is left running
-and the script exits non-zero.
+`--rollback` swaps the running controller with `<name>-previous`. It uses the same checks from step 1 and the same
+verified stop gate as a deploy. It then swaps the names and restart policies through a temporary `<name>-swap`, starts
+the restored controller and runs the checks from step 7 against it. Nothing is built. Run it again to swap back.
+
+Set `HTTPS_CERT_DIR` or `ALLOW_INSECURE_HTTP=true` as for the version being restored, since that decides the URL of
+the remote check. Without either, `--rollback` stops before contacting Docker.
+
+If the swap or the start fails, or the script is interrupted, the swap is undone. The original controller is back as
+`<name>` and restarted if it was running, `<name>-previous` is unchanged, and the outcome starts with `Undone:`. If
+the checks after the start fail, the restored controller is left running and the script exits non-zero.
+
+A rollback that could not be undone leaves `<name>-swap` behind. Later rollbacks refuse to run until it is gone, and
+change nothing. Find out which version it is (`docker ps -a --filter name=<name>`), then either rename it to whichever
+of `<name>` and `<name>-previous` is free (`docker rename <name>-swap <name>`) or remove it if it is not needed.
 
 ### First deploy over an older controller
 

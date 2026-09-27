@@ -137,8 +137,11 @@ dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build
 ```
 
-The deploy script has its own tests, `tests/deploy/deploy-script-tests.sh` (bash, `python3` and `jq`). They run the
-script against fake `docker` and `curl` commands (`tests/deploy/fakes`) that keep containers in a temporary state
-file: pre-flight parity with the controller's options, HTTPS-only publishing, the verified-stop gate, the remote
-check, rollback, `--rollback` and that the key never appears in an argument list. Run
+The deploy script has its own tests, `tests/deploy/deploy-script-tests.sh` (bash 3.2 or later, `python3`, `jq`, and
+`sha256sum` or `shasum`). They run the script against fake `docker` and `curl` commands (`tests/deploy/fakes`) that
+keep containers in a temporary state file: settings checked before any Docker call, pre-flight parity with the
+controller's options, HTTPS-only publishing, the verified-stop gate, the remote check, restoring the old controller
+after a failure, a signal or a lost terminal (`tests/deploy/on-terminal` runs the script on a pseudo-terminal),
+`--rollback` and its undo, and that the key never appears in an argument list. An unknown test name counts as a
+failure. Run
 `tests/deploy/deploy-script-tests.sh [test_name ...]` from the repository root.
