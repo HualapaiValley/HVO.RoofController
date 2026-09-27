@@ -18,6 +18,9 @@ public static class RoofControllerSecurityDefaults
     public const string LogoutPostPath = "/account/logout";
     public const string AccessDeniedPath = "/access-denied";
 
+    /// <summary>Console Stop that does not need the Blazor circuit (used by the reconnect dialog).</summary>
+    public const string ConsoleStopPath = "/console/stop";
+
     /// <summary>Form field names posted to <see cref="LoginPostPath"/>.</summary>
     public const string AccessKeyFormField = "accessKey";
     public const string ReturnUrlFormField = "returnUrl";

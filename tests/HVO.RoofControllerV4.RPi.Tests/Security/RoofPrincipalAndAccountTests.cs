@@ -47,9 +47,9 @@ public sealed class RoofPrincipalAndAccountTests
     [TestMethod]
     public void DescribeCaller_UsesKeyNameOrAnonymous()
     {
-        var principal = RoofPrincipalFactory.Create(new RoofApiKeyIdentity("ipad-dome", "RoofViewer", "id"), "Test");
+        var principal = RoofPrincipalFactory.Create(new RoofApiKeyIdentity("console-operator", "RoofViewer", "id"), "Test");
 
-        Assert.AreEqual("ipad-dome", RoofPrincipalFactory.DescribeCaller(principal));
+        Assert.AreEqual("console-operator", RoofPrincipalFactory.DescribeCaller(principal));
         Assert.AreEqual("anonymous", RoofPrincipalFactory.DescribeCaller(new ClaimsPrincipal(new ClaimsIdentity())));
         Assert.AreEqual("anonymous", RoofPrincipalFactory.DescribeCaller(null));
     }

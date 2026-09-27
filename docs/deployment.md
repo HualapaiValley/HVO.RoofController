@@ -20,7 +20,7 @@ file per setting from there. The file name is the setting name with `__` in plac
   RoofControllerSecurity__ApiKeys__0__Name                  e.g. console-operator
   RoofControllerSecurity__ApiKeys__0__Role                  RoofOperator
   RoofControllerSecurity__ApiKeys__0__Key                   <random, >= 24 chars>
-  RoofControllerSecurity__ApiKeys__1__...                   more keys (viewer, admin, deploy, console)
+  RoofControllerSecurity__ApiKeys__1__...                   more keys (viewer, admin, deploy)
   BlueIris__UserName                                        dedicated view-only Blue Iris user
   BlueIris__Password
   Kestrel__Certificates__Default__Password                  PFX password (when using HTTPS)
@@ -149,9 +149,9 @@ them. For that one deploy:
 2. Run the script with `--force-unverified-stop` and type `STOP-UNVERIFIED` when asked.
 3. The old container still gets SIGTERM with the 30-second grace period.
 
-Before that deploy, provision `/etc/hvo-roof/secrets`, including the operator key used by the script. Then update the
-browser console and any API automation clients, because they now need authentication and
-`POST` commands.
+Before that deploy, provision `/etc/hvo-roof/secrets`, including the operator key used by the script. Then update any
+API automation clients (they now need `X-Api-Key` and `POST` commands). Operators sign in to the console with a key
+from the secrets directory.
 
 ## Deploying with compose
 

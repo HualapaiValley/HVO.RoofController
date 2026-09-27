@@ -191,13 +191,22 @@ Only if `OperatorLeaseTimeout` is used (2-120 s).
 2. Stop renewing. The roof must stop with `OperatorLeaseExpired` within the lease time plus one
    `PeriodicVerificationInterval`.
 3. `POST .../Lease` while idle returns 409 `LeaseNotActive` and starts nothing.
-4. Client loss: start a move from a mobile browser and turn its Wi-Fi off; separately,
-   close the browser tab during a move from the console. Each must stop within the lease time
-   when a lease-renewing client is in use. If the web console does not renew leases, record
-   this as a failed prerequisite rather than claiming client-loss protection.
+4. Client loss. The console renews the lease on the server only while its browser connection is
+   up; when the server sees the connection drop it stops renewing, and renewal does not resume
+   after a reconnect.
+   - Close the browser tab during a move: the roof must stop within the lease time plus a few
+     seconds.
+   - Start a move from a mobile browser and turn its Wi-Fi off. The server notices a silent
+     drop within about 30 s (the SignalR client timeout), then the lease runs out, so the roof
+     must stop within about 30 s plus the lease time. Record the measured time.
+   - Reconnect inside the lease: set the lease to 60 s and a watchdog cap longer than the test,
+     start a move from the mobile browser, turn its Wi-Fi off, and turn it back on about 45 s
+     later (the server has noticed the drop by then, and the lease has not run out). The console
+     must reconnect and show a "Lease" warning, and the roof must still stop with
+     `OperatorLeaseExpired` about 60-90 s after Wi-Fi went off.
 
 **Pass:** steps 1-4 behave as described. If the lease is not used, record that losing the client
-does not stop motion and that only the watchdog and limits bound a move.
+does not stop motion and that only the watchdog and limits bound a move; C15 still applies.
 
 ### C10. Starting at a limit: departure from both limits **[mechanism]**
 
@@ -215,8 +224,7 @@ Do this after C1-C9 pass, or first with the limit contacts simulated by a switch
 
 ### C11. Container stop with an active camera stream
 
-1. Open a camera stream in the console (or through a stream ticket) and command a move with the
-   motor decoupled.
+1. Open a camera stream in the console and command a move with the motor decoupled.
 2. Stop the container as the deployment script does (`docker stop -t 30 <container>`).
 3. Check the logs for a stop with reason `HostShutdown` and verified relays, and check the exit
    status: `docker inspect --format '{{.State.ExitCode}}' <container>` must not be 137 (killed
@@ -292,6 +300,24 @@ Sample every minute and keep the samples:
   entry.
 - Hourly Stop latency stays within the C13 baseline.
 
+### C15. Stop from the console's reconnect dialog
+
+The reconnect dialog's **Stop roof** button posts `POST /console/stop` without the console's
+live connection. Run this with the motor decoupled, `OperatorLeaseTimeout` unset and a watchdog
+cap longer than the test, so that only the dialog's Stop can end the move.
+
+1. Start a move from the console in a mobile browser and turn its Wi-Fi off. The reconnect
+   dialog appears within about 30 s.
+2. With Wi-Fi still off, press **Stop roof**. Within about 5 s the dialog must say that Stop
+   could not reach the controller and point to the stop control at the roof.
+3. Turn Wi-Fi back on and press **Stop roof** again before the console reconnects. The dialog
+   must report the stop as acknowledged, and the roof must stop with reason `NormalStop`. If
+   the console reconnects first, the dialog closes: stop the roof from the console and repeat
+   from step 1.
+
+**Pass:** step 2 reports that the controller could not be reached, and step 3 stops the roof
+from the dialog.
+
 ## Results
 
 Update this table as checks are completed. Keep private details (keys, hosts, addresses) out.
@@ -312,3 +338,4 @@ Update this table as checks are completed. Keep private details (keys, hosts, ad
 | C12 Deployment stop gate / failed container | Open | | | | |
 | C13 RV-5 telemetry outage | Open | | | | |
 | C14 RV-6 soak | Open | | | | |
+| C15 Stop from the reconnect dialog | Open | | | | |

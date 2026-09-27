@@ -125,8 +125,9 @@ devices, port 5200). Never use it on the observatory Pi. `dotnet run` uses port 
 
 ## CI/CD
 
-- `ci.yml` — ubuntu; restores, builds (Debug) and tests the RPi test project graph from
-  `src/`, checks that coverage is not empty, then builds Release with warnings as errors.
+- `ci.yml` — ubuntu; from `src/`, checks the dev container SDK against `global.json`,
+  restores and builds `HVO.RoofController.sln` (Debug), runs the RPi tests, checks that
+  coverage is not empty, then builds the solution in Release with warnings as errors.
 - `pi-image.yml` — builds the Pi image for `linux/arm64` (no push) and checks that the
   Dockerfile SDK tag matches `src/global.json`.
 

@@ -45,7 +45,7 @@ jobs:
           pin=$(jq -r '.sdk.version' global.json)
           actual=$(dotnet --version)
           echo "src/global.json pins SDK ${pin} (rollForward: $(jq -r '.sdk.rollForward' global.json)); dotnet resolves ${actual}"
-          # rollForward "patch" accepts later patches in the same feature band (10.0.3xx).
+          # rollForward "patch" accepts later patches in the pinned feature band.
           case "${actual}" in
             "${pin%??}"[0-9][0-9]) ;;
             *) echo "::error file=src/global.json::Resolved SDK ${actual} is not in the feature band of the pinned SDK ${pin}"; exit 1 ;;
@@ -55,11 +55,35 @@ jobs:
             exit 1
           fi
 
+      # post-create.sh restores from src/ inside the dev container, so its SDK has to satisfy
+      # global.json as well. Dependabot bumps the image tag; this catches a tag outside the band.
+      - name: Check dev container SDK
+        run: |
+          pin=$(jq -r '.sdk.version' global.json)
+          image=$(sed -n 's#^FROM \(mcr\.microsoft\.com/devcontainers/dotnet:[^ @]*\).*#\1#p' ../.devcontainer/Dockerfile | head -n 1)
+          if [ -z "${image}" ]; then
+            echo "::error file=.devcontainer/Dockerfile::No mcr.microsoft.com/devcontainers/dotnet FROM line found"
+            exit 1
+          fi
+          sdk=$(docker buildx imagetools inspect "${image}" --format '{{json .Image}}' \
+            | jq -r '."linux/amd64".config.Env[] | select(startswith("DOTNET_SDK_VERSION=")) | ltrimstr("DOTNET_SDK_VERSION=")')
+          echo "src/global.json pins SDK ${pin}; ${image} ships SDK ${sdk:-unknown}"
+          case "${sdk}" in
+            "${pin%??}"[0-9][0-9]) ;;
+            *) echo "::error file=.devcontainer/Dockerfile::Dev container SDK ${sdk:-unknown} is not in the feature band of the pinned SDK ${pin}"; exit 1 ;;
+          esac
+          if [ "${sdk##*.}" -lt "${pin##*.}" ]; then
+            echo "::error file=.devcontainer/Dockerfile::Dev container SDK ${sdk} is older than the pinned SDK ${pin}"
+            exit 1
+          fi
+
+      # Build the whole solution (what the README, CONTRIBUTING and the dev container use); the
+      # tests run from the test project, which references everything else in it.
       - name: Restore
-        run: dotnet restore "$TEST_PROJECT" --configfile NuGet.config -v minimal
+        run: dotnet restore HVO.RoofController.sln --configfile NuGet.config -v minimal
 
       - name: Build (Debug)
-        run: dotnet build "$TEST_PROJECT" --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
+        run: dotnet build HVO.RoofController.sln --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
 
       # There is no separate integration tier: every test, including the WebApplicationFactory
       # API tests, runs here. TreatNoTestsAsError fails the step if discovery finds nothing.
@@ -94,7 +118,7 @@ jobs:
       # Pi image publishes. Restore again under Release so NuGet audit warnings fail here too.
       # The Debug output used by the test step above is left untouched.
       - name: Build (Release, warnings as errors)
-        run: dotnet build "$TEST_PROJECT" -c Release -v minimal -p:ContinuousIntegrationBuild=true
+        run: dotnet build HVO.RoofController.sln -c Release -v minimal -p:ContinuousIntegrationBuild=true
 
       - name: Upload test results
         if: always()

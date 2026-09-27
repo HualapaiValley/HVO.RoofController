@@ -1,7 +1,7 @@
 namespace HVO.RoofControllerV4.Common.Models;
 
 /// <summary>
-/// Wire-level constants shared by the Pi web host, the Blazor console, the iPad client and the request samples.
+/// Wire-level constants shared by the Pi web host, the Blazor console, API clients and the request samples.
 /// </summary>
 public static class RoofControllerApiContract
 {
@@ -22,9 +22,6 @@ public static class RoofControllerApiContract
 
     /// <summary>Role that may change configuration and read logs/diagnostics.</summary>
     public const string AdminRole = "RoofAdmin";
-
-    /// <summary>Query-string parameter carrying a <see cref="CameraStreamTicketResponse"/> ticket on the MJPEG route.</summary>
-    public const string CameraTicketQueryParameter = "ticket";
 
     /// <summary>Problem-details extension holding the <see cref="RoofControllerErrorCode"/> name.</summary>
     public const string ProblemCodeExtension = "code";

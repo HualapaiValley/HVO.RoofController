@@ -24,6 +24,7 @@ using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Security;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 
 namespace HVO.RoofControllerV4.RPi;
 
@@ -68,6 +69,10 @@ public class Program
         // Add Razor Components for Blazor Server
         services.AddRazorComponents()
             .AddInteractiveServerComponents();
+
+        // One per circuit: tells the console when the browser connection drops, so it stops renewing the operator lease.
+        services.AddScoped<ConsoleCircuitMonitor>();
+        services.AddScoped<CircuitHandler>(serviceProvider => serviceProvider.GetRequiredService<ConsoleCircuitMonitor>());
 
         services.AddSingleton<IGpioControllerClient>(_ => GpioControllerClientFactory.CreateAutoSelecting());
 
@@ -328,6 +333,9 @@ public class Program
 
         // POST /account/login and /account/logout for the web console (the /login page itself is a Razor component).
         app.MapRoofAccountEndpoints();
+
+        // POST /console/stop: Stop from the reconnect dialog while the Blazor circuit is down.
+        app.MapRoofConsoleEndpoints();
 
         // Map Razor components for Blazor Server
         app.MapRazorComponents<Components.App>()

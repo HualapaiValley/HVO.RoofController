@@ -34,8 +34,8 @@ public sealed class RoofControllerSecurityOptions
     public bool? RequireHttps { get; set; }
 
     /// <summary>
-    /// Extra origins (scheme://host[:port]) allowed to open the Blazor console and post to <c>/account/*</c>, in
-    /// addition to the request's own origin. Needed only behind a reverse proxy that changes the host name.
+    /// Extra origins (scheme://host[:port]) allowed to open the Blazor console and post to <c>/account/*</c> and
+    /// <c>/console/*</c>, in addition to the request's own origin. Needed only behind a reverse proxy that changes the host name.
     /// </summary>
     public List<string> AllowedOrigins { get; set; } = new();
 }
@@ -43,7 +43,7 @@ public sealed class RoofControllerSecurityOptions
 /// <summary>One accepted API key. Provide either <see cref="Key"/> or <see cref="KeySha256"/>, not both.</summary>
 public sealed class RoofApiKeyOptions
 {
-    /// <summary>Identifies the key holder in logs and audit records (for example <c>ipad-dome</c>). Not secret.</summary>
+    /// <summary>Identifies the key holder in logs and audit records (for example <c>console-operator</c>). Not secret.</summary>
     public string? Name { get; set; }
 
     /// <summary>One of <c>RoofViewer</c>, <c>RoofOperator</c>, <c>RoofAdmin</c>.</summary>

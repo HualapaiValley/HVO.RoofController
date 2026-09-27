@@ -19,3 +19,10 @@ updates:
     directory: "/src/HVO.RoofControllerV4.RPi"
     schedule:
       interval: "weekly"
+
+  # Dev container image (mcr.microsoft.com/devcontainers/dotnet). Its SDK must be in the
+  # feature band that src/global.json pins; CI ("Check dev container SDK") fails until it is.
+  - package-ecosystem: "docker"
+    directory: "/.devcontainer"
+    schedule:
+      interval: "weekly"

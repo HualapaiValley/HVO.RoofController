@@ -93,8 +93,3 @@ X-Api-Key: {{apiKey}}
 GET {{baseUrl}}/api/v1.0/System/info
 Accept: {{contentType}}
 X-Api-Key: {{apiKey}}
-
-### Camera stream ticket (Viewer); open the returned relative "url" within 60 s, no header needed
-POST {{baseUrl}}/api/v1.0/Camera/1/ticket
-Accept: {{contentType}}
-X-Api-Key: {{apiKey}}

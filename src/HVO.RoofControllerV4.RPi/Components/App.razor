@@ -50,6 +50,13 @@
                     <button class="btn btn-primary" type="button" onclick="location.reload()">Reload</button>
                 </div>
             </div>
+            @* Stop without the circuit: js/console-stop.js posts this form with fetch and shows the controller's answer. *@
+            <form class="reconnect-stop" method="post" action="@RoofControllerSecurityDefaults.ConsoleStopPath" data-console-stop>
+                <AntiforgeryToken />
+                <p class="reconnect-copy">Stop still works while the console is disconnected.</p>
+                <button class="btn btn-danger" type="submit"><i class="bi bi-stop-circle"></i> Stop roof</button>
+                <p class="reconnect-stop-result" data-console-stop-result role="status" aria-live="assertive"></p>
+            </form>
         </div>
     </div>
 
@@ -60,6 +67,7 @@
     </div>
 
     <script src="_framework/blazor.web.js"></script>
+    <script src="js/console-stop.js"></script>
     <script src="lib/bootstrap/js/bootstrap.bundle.min.js" defer></script>
 </body>
 

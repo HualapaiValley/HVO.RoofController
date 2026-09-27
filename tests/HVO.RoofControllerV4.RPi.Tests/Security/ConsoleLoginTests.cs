@@ -1,5 +1,10 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using FluentAssertions;
+using HVO.Core.Results;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Components.Pages;
+using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using Microsoft.AspNetCore.Antiforgery;
@@ -11,7 +16,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Security;
 
 /// <summary>
 /// Web console sign-in: POST /account/login exchanges an access key for an HttpOnly, SameSite=Strict cookie. The cookie
-/// works for console-only surfaces (health details, camera, Blazor hub) but never for the api/* command routes.
+/// works for console-only surfaces (health details, camera, Blazor hub, the reconnect dialog's POST /console/stop) but
+/// never for the api/* command routes.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -225,6 +231,122 @@ public sealed class ConsoleLoginTests
         var html = await client.GetStringAsync($"{RoofControllerSecurityDefaults.LoginPath}?error={RoofAccountEndpoints.ExpiredFormError}");
 
         StringAssert.Contains(html, "The sign-in form expired");
+    }
+
+    [TestMethod]
+    public async Task ConsoleStop_SignedInViewerWithTheDialogForm_StopsTheRoof()
+    {
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+        using var request = await ConsoleStopRequestAsync(client, cookie);
+        request.Headers.Add("Origin", "http://localhost");
+
+        var response = await client.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var body = await ApiJson.ReadAsync<ConsoleStopResponse>(response);
+        Assert.AreEqual(nameof(RoofStopOutcome.Acknowledged), body.Outcome);
+        body.Message.Should().Contain("Relay register verified");
+        _host.RoofService.Verify(s => s.Stop(RoofControllerStopReason.NormalStop), Moq.Times.Once);
+    }
+
+    [TestMethod]
+    public async Task ConsoleStop_RelayUnverified_Returns503WithTheWarning()
+    {
+        _host.RoofService.Setup(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>())).Returns(Result<RoofControllerStatus>.Failure(
+            new RoofControllerException(
+                RoofControllerErrorCode.RelayStateUnverified,
+                "Relay read-back did not confirm all relays off.",
+                RoofServiceMock.Snapshot(relayState: RoofRelayRegisterState.Unverified, relayMask: null))));
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+        using var request = await ConsoleStopRequestAsync(client, cookie);
+
+        var response = await client.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await ApiJson.ReadAsync<ConsoleStopResponse>(response);
+        Assert.AreEqual(nameof(RoofStopOutcome.RelayUnverified), body.Outcome);
+        body.Message.Should().Contain("Confirm at the roof");
+    }
+
+    [TestMethod]
+    public async Task ConsoleStop_WithoutTheFormToken_Returns400AndDoesNotStop()
+    {
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, RoofControllerSecurityDefaults.ConsoleStopPath)
+        {
+            Content = new FormUrlEncodedContent(new Dictionary<string, string>())
+        };
+        request.Headers.Add("Cookie", cookie);
+
+        var response = await client.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await ApiJson.ReadAsync<ConsoleStopResponse>(response);
+        Assert.AreEqual(nameof(RoofStopOutcome.Failed), body.Outcome);
+        body.Message.Should().Contain("out of date");
+        _host.RoofService.Verify(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>()), Moq.Times.Never);
+    }
+
+    [TestMethod]
+    public async Task ConsoleStop_AnonymousOrApiKey_Returns401AndDoesNotStop()
+    {
+        using var anonymous = _host.CreateApiClient();
+        using var withKey = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var anonymousResponse = await anonymous.PostAsync(RoofControllerSecurityDefaults.ConsoleStopPath, content: null);
+        var keyResponse = await withKey.PostAsync(RoofControllerSecurityDefaults.ConsoleStopPath, content: null);
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
+        Assert.AreEqual(HttpStatusCode.Unauthorized, keyResponse.StatusCode, "the endpoint accepts only the console cookie");
+        _host.RoofService.Verify(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>()), Moq.Times.Never);
+    }
+
+    [TestMethod]
+    public async Task ConsoleStop_CrossOrigin_Returns403AndDoesNotStop()
+    {
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+        using var request = await ConsoleStopRequestAsync(client, cookie);
+        request.Headers.Add("Origin", "http://evil.example");
+
+        var response = await client.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+        _host.RoofService.Verify(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>()), Moq.Times.Never);
+    }
+
+    /// <summary>
+    /// Loads the console as the signed-in user and builds the POST the reconnect dialog's form sends: the rendered
+    /// antiforgery field plus the antiforgery cookie issued with the page.
+    /// </summary>
+    private async Task<HttpRequestMessage> ConsoleStopRequestAsync(HttpClient client, string consoleCookie)
+    {
+        var page = await SendWithCookieAsync(client, HttpMethod.Get, "/", consoleCookie);
+        Assert.AreEqual(HttpStatusCode.OK, page.StatusCode);
+        var html = await page.Content.ReadAsStringAsync();
+
+        var form = Regex.Match(html, "<form[^>]*data-console-stop[^>]*>(?<body>.*?)</form>", RegexOptions.Singleline);
+        form.Success.Should().BeTrue("the reconnect dialog renders the stop form");
+        form.Value.Should().Contain($"action=\"{RoofControllerSecurityDefaults.ConsoleStopPath}\"");
+        var fieldName = _host.Services.GetRequiredService<IOptions<AntiforgeryOptions>>().Value.FormFieldName;
+        var field = Regex.Match(form.Groups["body"].Value, $"<input[^>]*name=\"{Regex.Escape(fieldName)}\"[^>]*>");
+        field.Success.Should().BeTrue("the stop form carries an antiforgery field");
+        var token = WebUtility.HtmlDecode(Regex.Match(field.Value, "value=\"(?<value>[^\"]+)\"").Groups["value"].Value);
+        token.Should().NotBeNullOrEmpty();
+
+        var antiforgeryCookieName = _host.Services.GetRequiredService<IOptions<AntiforgeryOptions>>().Value.Cookie.Name!;
+        page.Headers.TryGetValues("Set-Cookie", out var setCookies).Should().BeTrue("the page issues the antiforgery cookie");
+        var antiforgeryCookie = setCookies!.Single(v => v.StartsWith(antiforgeryCookieName + "=", StringComparison.Ordinal)).Split(';')[0];
+
+        var request = new HttpRequestMessage(HttpMethod.Post, RoofControllerSecurityDefaults.ConsoleStopPath)
+        {
+            Content = new FormUrlEncodedContent(new Dictionary<string, string> { [fieldName] = token })
+        };
+        request.Headers.Add("Cookie", $"{consoleCookie}; {antiforgeryCookie}");
+        return request;
     }
 
     private HttpRequestMessage LoginRequest(string accessKey, string returnUrl)

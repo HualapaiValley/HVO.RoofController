@@ -12,11 +12,15 @@ public sealed class OriginCheckMiddlewareTests
     [DataRow("GET", "/_BLAZOR/disconnect", true)]
     [DataRow("POST", "/account/login", true)]
     [DataRow("POST", "/account/logout", true)]
+    [DataRow("POST", "/console/stop", true)]
+    [DataRow("POST", "/CONSOLE/stop", true)]
     [DataRow("GET", "/account/login", false)]
+    [DataRow("GET", "/console/stop", false)]
+    [DataRow("POST", "/consolex/stop", false)]
     [DataRow("GET", "/_blazorx", false)]
     [DataRow("POST", "/api/v4.0/RoofControl/Stop", false)]
     [DataRow("GET", "/health", false)]
-    public void AppliesTo_CoversHubAndAccountPostsOnly(string method, string path, bool expected)
+    public void AppliesTo_CoversHubAndAccountAndConsolePostsOnly(string method, string path, bool expected)
     {
         var context = new DefaultHttpContext();
         context.Request.Method = method;

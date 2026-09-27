@@ -18,7 +18,8 @@ authenticated web console and HTTP API.
 - **Authenticated API** — every protected request needs an `X-Api-Key`; commands are `POST`
   only ([docs/security.md](docs/security.md))
 - **Web Console** — browser-based roof control for desktop, tablet and phone;
-  mobile usability and physical Stop behavior still require validation (issues #20 and #24)
+  mobile usability and physical Stop behavior still require validation (issues #20 and #26;
+  physical commissioning in #24)
 - **Docker Deployment** — containerized deployment to Raspberry Pi (linux-arm64) through a
   fail-closed deployment script ([docs/deployment.md](docs/deployment.md))
 
@@ -29,9 +30,13 @@ authenticated web console and HTTP API.
   not extend it. Expiry stops the roof and latches a fault. This is not a dead-man control.
 - **Operator lease** (optional, `OperatorLeaseTimeout`, 2–120 s, off when unset): Open and
   Close start a lease that the client renews (`POST .../Lease`) while the roof moves. If the
-  client stops renewing, for example because it lost Wi-Fi, the roof stops with
-  `OperatorLeaseExpired`. Without a lease, losing the client does not stop motion; the
-  watchdog and limit switches still do.
+  client stops renewing, the roof stops with `OperatorLeaseExpired`. The web console renews
+  only while its browser connection is up: a closed tab stops renewal at once, a silent drop
+  such as lost Wi-Fi within about 30 s, and renewal does not resume on reconnect. Without a
+  lease, losing the client does not stop motion; the watchdog and limit switches still do.
+- **Stop without the connection**: the console's reconnect dialog has a Stop button that
+  posts to the controller directly (`POST /console/stop`), so Stop works while the console
+  is disconnected as long as the controller is reachable.
 - **Fault latch**: watchdog expiry, a VFD fault (IN3), a relay verification failure, repeated
   input read failures, contradictory limit inputs and a reasserted start limit latch the
   fault. Open and Close are refused until an explicit `ClearFault` succeeds with healthy

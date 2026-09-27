@@ -19,7 +19,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Components;
 
 /// <summary>
 /// bUnit host for the operator console: a mocked controller whose snapshot the test controls, a mocked health-check
-/// service, stubbed camera and log viewer, and test authorization with the console's policies.
+/// service, a circuit monitor the test can drop and restore, stubbed camera and log viewer, and test authorization with
+/// the console's policies.
 /// </summary>
 internal sealed class RoofConsoleHarness : IAsyncDisposable
 {
@@ -38,11 +39,13 @@ internal sealed class RoofConsoleHarness : IAsyncDisposable
 
         Health = new Mock<HealthCheckService>();
         Footer = new FooterStatusService();
+        Circuit = new ConsoleCircuitMonitor();
 
         Context.Services.AddLogging();
         Context.Services.AddSingleton(Roof.Object);
         Context.Services.AddSingleton(Health.Object);
         Context.Services.AddSingleton(Footer);
+        Context.Services.AddSingleton(Circuit);
         Context.Services.AddSingleton(Options.Create(new RoofControllerOptionsV4()));
 
         Context.ComponentFactories.AddStub<CameraStream>();
@@ -58,6 +61,9 @@ internal sealed class RoofConsoleHarness : IAsyncDisposable
     public Mock<HealthCheckService> Health { get; }
 
     public FooterStatusService Footer { get; }
+
+    /// <summary>The console's circuit monitor: <c>SetConnected(false)</c> simulates the browser connection dropping.</summary>
+    public ConsoleCircuitMonitor Circuit { get; }
 
     public BunitAuthorizationContext Authorization { get; }
 

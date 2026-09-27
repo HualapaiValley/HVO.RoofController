@@ -3,7 +3,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using FluentAssertions;
-using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Controllers;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,8 +12,8 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Tests.Controllers;
 
 /// <summary>
-/// Camera proxy: credentials come from configuration and are only sent upstream, callers need a Viewer key, the console
-/// cookie or a short-lived ticket, and upstream failures map to 502/503/504 instead of hanging.
+/// Camera proxy: credentials come from configuration and are only sent upstream, callers need a Viewer key or the console
+/// cookie, and upstream failures map to 502/503/504 instead of hanging.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -22,44 +21,6 @@ public sealed class CameraControllerTests
 {
     private const string FakeBlueIris = "http://blueiris.test";
     private static readonly byte[] FakeFrames = Encoding.ASCII.GetBytes("--frame\r\nContent-Type: image/jpeg\r\n\r\nFAKEJPEG\r\n");
-
-    [TestMethod]
-    public async Task Ticket_Viewer_ReturnsRelativeStreamUrlValidFor60Seconds()
-    {
-        using var host = CreateHost(Upstream.Frames());
-        using var client = host.CreateApiClient(TestApiKeys.Viewer);
-
-        var response = await client.PostAsync("/api/v1.0/Camera/3/ticket", content: null);
-
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-        var ticket = await ApiJson.ReadAsync<CameraStreamTicketResponse>(response);
-        ticket.Url.Should().StartWith("/api/v1.0/Camera/3/mjpeg?ticket=");
-        ticket.ExpiresUtc.Should().BeCloseTo(DateTimeOffset.UtcNow.AddSeconds(60), TimeSpan.FromSeconds(5));
-    }
-
-    [TestMethod]
-    public async Task Ticket_WithoutKey_Returns401()
-    {
-        using var host = CreateHost(Upstream.Frames());
-        using var client = host.CreateApiClient();
-
-        var response = await client.PostAsync("/api/v1.0/Camera/3/ticket", content: null);
-
-        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [TestMethod]
-    [DataRow(0)]
-    [DataRow(100)]
-    public async Task Ticket_CameraOutOfRange_Returns404(int cameraId)
-    {
-        using var host = CreateHost(Upstream.Frames());
-        using var client = host.CreateApiClient(TestApiKeys.Viewer);
-
-        var response = await client.PostAsync($"/api/v1.0/Camera/{cameraId}/ticket", content: null);
-
-        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
-    }
 
     [TestMethod]
     public async Task Mjpeg_Anonymous_Returns401AndNeverCallsUpstream()
@@ -75,15 +36,37 @@ public sealed class CameraControllerTests
     }
 
     [TestMethod]
-    public async Task Mjpeg_WithTicket_ProxiesUpstreamWithoutCredentialsWhenNoneConfigured()
+    public async Task Mjpeg_TicketQueryWithoutKey_Returns401AndNeverCallsUpstream()
     {
         var upstream = Upstream.Frames();
         using var host = CreateHost(upstream);
-        using var issuer = host.CreateApiClient(TestApiKeys.Viewer);
-        var ticket = await ApiJson.ReadAsync<CameraStreamTicketResponse>(await issuer.PostAsync("/api/v1.0/Camera/3/ticket", content: null));
-        using var viewer = host.CreateApiClient();
+        using var client = host.CreateApiClient();
 
-        var response = await viewer.GetAsync(ticket.Url);
+        var response = await client.GetAsync("/api/v1.0/Camera/3/mjpeg?ticket=anything");
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+        upstream.Requests.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TicketEndpoint_IsGone()
+    {
+        using var host = CreateHost(Upstream.Frames());
+        using var client = host.CreateApiClient(TestApiKeys.Viewer);
+
+        var response = await client.PostAsync("/api/v1.0/Camera/3/ticket", content: null);
+
+        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task Mjpeg_Viewer_ProxiesUpstreamWithoutCredentialsWhenNoneConfigured()
+    {
+        var upstream = Upstream.Frames();
+        using var host = CreateHost(upstream);
+        using var client = host.CreateApiClient(TestApiKeys.Viewer);
+
+        var response = await client.GetAsync("/api/v1.0/Camera/3/mjpeg");
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         Assert.AreEqual("multipart/x-mixed-replace", response.Content.Headers.ContentType?.MediaType);
@@ -115,38 +98,6 @@ public sealed class CameraControllerTests
         Assert.AreEqual("test-user:test-password", Encoding.UTF8.GetString(Convert.FromBase64String(authorization.Parameter!)));
         response.Headers.Contains("Authorization").Should().BeFalse();
         (await response.Content.ReadAsStringAsync()).Should().NotContain("test-password");
-    }
-
-    [TestMethod]
-    public async Task Mjpeg_TicketForAnotherCamera_Returns401()
-    {
-        var upstream = Upstream.Frames();
-        using var host = CreateHost(upstream);
-        using var issuer = host.CreateApiClient(TestApiKeys.Viewer);
-        var ticket = await ApiJson.ReadAsync<CameraStreamTicketResponse>(await issuer.PostAsync("/api/v1.0/Camera/3/ticket", content: null));
-        using var viewer = host.CreateApiClient();
-
-        var response = await viewer.GetAsync(ticket.Url.Replace("/Camera/3/", "/Camera/4/", StringComparison.Ordinal));
-
-        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
-        upstream.Requests.Should().BeEmpty();
-    }
-
-    [TestMethod]
-    public async Task Mjpeg_TamperedTicket_Returns401()
-    {
-        var upstream = Upstream.Frames();
-        using var host = CreateHost(upstream);
-        using var issuer = host.CreateApiClient(TestApiKeys.Viewer);
-        var ticket = await ApiJson.ReadAsync<CameraStreamTicketResponse>(await issuer.PostAsync("/api/v1.0/Camera/3/ticket", content: null));
-        var value = Uri.UnescapeDataString(ticket.Url[(ticket.Url.IndexOf("ticket=", StringComparison.Ordinal) + "ticket=".Length)..]);
-        var tampered = value[..^1] + (value[^1] == 'A' ? 'B' : 'A');
-        using var viewer = host.CreateApiClient();
-
-        var response = await viewer.GetAsync("/api/v1.0/Camera/3/mjpeg?ticket=" + Uri.EscapeDataString(tampered));
-
-        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
-        upstream.Requests.Should().BeEmpty();
     }
 
     [TestMethod]

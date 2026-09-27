@@ -19,7 +19,7 @@ Each API key grants exactly one role. Roles are hierarchical: Admin includes Ope
 
 | Role (`Role` value) | Policy name        | Allows                                                                |
 |---------------------|--------------------|-----------------------------------------------------------------------|
-| `RoofViewer`        | `RoofViewerPolicy` | Roof status, `/health` details, camera tickets and streams, console (read-only) |
+| `RoofViewer`        | `RoofViewerPolicy` | Roof status, `/health` details, camera streams, console (read-only) |
 | `RoofOperator`      | `RoofOperatorPolicy` | Everything above, plus Open, Close, ClearFault and lease renewal       |
 | `RoofAdmin`         | `RoofAdminPolicy`  | Everything above, plus configuration, `System/*` and the OpenAPI document |
 
@@ -42,12 +42,12 @@ use `POST`; a `GET` to a command route returns 405.
 | `GET  /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` (includes `version`) | 401, 403 |
 | `POST /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` | 400, 401, 403, 409 |
 | `GET  /api/v1.0/System/info`, `GET /api/v1.0/System/metrics` | Admin         | 200 | 401, 403 |
-| `POST /api/v1.0/Camera/{cameraId}/ticket` (1-99)         | Viewer (API key)  | 200 `CameraStreamTicketResponse` | 401, 403 |
-| `GET  /api/v1.0/Camera/{cameraId}/mjpeg`                 | API key, console cookie, or `?ticket=` | 200 MJPEG | 401, 502, 503, 504 |
+| `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key or console cookie) | 200 MJPEG | 401, 502, 503, 504 |
 | `GET  /openapi/v4.json`                                  | Admin (API key) outside Development | 200 | 401, 403 |
 | `GET  /health`                                           | Viewer (API key or cookie) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
 | `GET  /health/live`, `GET /health/ready`                 | anonymous         | 200 / 503 | none |
 | `POST /account/login`, `POST /account/logout`            | anonymous (form)  | 302 | 403 (`origin_not_allowed`) |
+| `POST /console/stop`                                     | Stop (console cookie and antiforgery token only) | 200 `{outcome, message}` | 400 (stale form token), 401, 403 (`origin_not_allowed`), 503 (stop not verified), 500 |
 
 When a request has no key or an unknown key, the response is 401 with `WWW-Authenticate: ApiKey`. When a valid key
 lacks the required role, the response is 403.
@@ -114,7 +114,7 @@ cd /etc/hvo-roof/secrets
 printf '%s' 'console-operator' | sudo tee RoofControllerSecurity__ApiKeys__0__Name >/dev/null
 printf '%s' 'RoofOperator' | sudo tee RoofControllerSecurity__ApiKeys__0__Role >/dev/null
 printf '%s' "$KEY"         | sudo tee RoofControllerSecurity__ApiKeys__0__Key  >/dev/null
-# ...repeat with index 1, 2, ... for a viewer key, an admin key, the web console key, etc.
+# ...repeat with index 1, 2, ... for a viewer key, an admin key, etc.
 sudo chmod 600 /etc/hvo-roof/secrets/*
 ```
 
@@ -176,22 +176,25 @@ Signing in works like this:
 
 A user with the wrong role for a page is redirected to `/access-denied`.
 
-The Blazor hub (`/_blazor`) refuses unauthenticated connections with 401. The hub, and `POST /account/*`, also refuse a
-cross-site `Origin` with 403 `origin_not_allowed`. Behind a reverse proxy that changes the host name, add the public
-origin to `RoofControllerSecurity:AllowedOrigins`.
+The Blazor hub (`/_blazor`) refuses unauthenticated connections with 401. The hub, `POST /account/*` and
+`POST /console/*` also refuse a cross-site `Origin` with 403 `origin_not_allowed`. Behind a reverse proxy that changes
+the host name, add the public origin to `RoofControllerSecurity:AllowedOrigins`.
+
+The console runs over a SignalR connection, so two things do not depend on it:
+
+- **Stop in the reconnect dialog.** While the connection is down, the dialog's **Stop roof** button posts to
+  `POST /console/stop` with `fetch`. The endpoint accepts only the console cookie, applies the Stop policy, and needs
+  the antiforgery token rendered into the dialog. It answers with the same outcome the console's own Stop reports
+  (`Acknowledged`, `RelayUnverified` or `Failed`, with a message). When the cookie is no longer accepted (it expired,
+  or its key was removed or rotated), the endpoint returns 401 and the dialog reports that the session has ended.
+- **Operator lease.** The console renews the lease on the server only while the browser connection is up. When the
+  server sees the connection drop (at once for a closed tab, within about 30 s for a silent network loss) renewal
+  stops, and it does not resume on reconnect, so the lease runs out and stops the roof.
 
 ## Camera proxy
 
-The controller proxies the Blue Iris MJPEG stream so clients never see Blue Iris credentials. Clients that can send
-headers call `GET /api/v1.0/Camera/{id}/mjpeg` with `X-Api-Key`. The console's `<img>` uses its cookie.
-
-Clients that cannot attach headers, such as a WebView image, work like this:
-
-1. Call `POST /api/v1.0/Camera/{id}/ticket` with a Viewer key.
-2. Open the returned relative `url` (`/api/v1.0/Camera/{id}/mjpeg?ticket=...`) within 60 seconds.
-
-A ticket is HMAC-signed with a per-process random key. It is bound to one camera, and it only authorizes *starting* a
-stream.
+The controller proxies the Blue Iris MJPEG stream so clients never see Blue Iris credentials. API clients call
+`GET /api/v1.0/Camera/{id}/mjpeg` with a Viewer `X-Api-Key`. The console's player uses its cookie.
 
 Stream limits and failure responses:
 
