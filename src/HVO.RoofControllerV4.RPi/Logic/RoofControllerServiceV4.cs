@@ -49,7 +49,16 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     /// </summary>
     internal const int MaxConsecutiveRelayReadFailures = 2;
 
-    /// <summary>How long dispose waits for the supervision loop and the status dispatcher to finish.</summary>
+    /// <summary>
+    /// Interval between all-off attempts after a shutdown stop could not verify the relay register. Supervision has
+    /// stopped by then, so this retry is the only path that re-drives the relays off before the process exits.
+    /// </summary>
+    internal static readonly TimeSpan ShutdownStopRetryInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>How long the shutdown stop retry keeps trying before it gives up (it also ends at disposal).</summary>
+    internal static readonly TimeSpan ShutdownStopRetryWindow = TimeSpan.FromSeconds(15);
+
+    /// <summary>How long dispose waits for the supervision loop, the shutdown stop retry and the status dispatcher to finish.</summary>
     internal static readonly TimeSpan DisposeWaitTimeout = TimeSpan.FromSeconds(2);
 
     // One relay transaction lock per HAT instance, so relay sequences from different service instances sharing a HAT
@@ -78,6 +87,10 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private bool _initialized;
     private volatile bool _shuttingDown;
     private volatile bool _disposed;
+
+    // Bounded all-off retry after an unverified shutdown stop (see ShutdownStopRetryInterval).
+    private Task<bool>? _shutdownStopRetryTask;
+    private CancellationTokenSource? _shutdownStopRetryCts;
 
     // Commanded motion and supervision deadlines.
     private RoofMotionDirection _commandedMotion = RoofMotionDirection.None;

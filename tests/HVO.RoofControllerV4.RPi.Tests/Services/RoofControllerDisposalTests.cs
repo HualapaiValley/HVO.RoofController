@@ -92,7 +92,10 @@ public sealed class RoofControllerDisposalTests
         service.Open().IsSuccessful.Should().BeTrue();
         hat.Registers.StuckRelayBits = 0x01;
 
-        var result = await service.ShutdownAsync(CancellationToken.None);
+        // A cancelled wait returns at once; the bounded retry is covered by RoofControllerShutdownRetryTests.
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var result = await service.ShutdownAsync(cts.Token);
 
         result.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
         var snapshot = service.GetCurrentStatusSnapshot();

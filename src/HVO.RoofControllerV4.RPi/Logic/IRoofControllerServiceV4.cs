@@ -117,10 +117,19 @@ public interface IRoofControllerServiceV4
 
         /// <summary>
         /// Begins host shutdown: publishes the shutting-down state so no new command is admitted, cancels any clear-fault
-        /// pulse, and stops motion with <see cref="RoofControllerStopReason.HostShutdown"/>. The result fails with
-        /// <see cref="RoofControllerErrorCode.RelayStateUnverified"/> when the de-energized state could not be verified.
-        /// Safe to call more than once.
+        /// pulse, stops supervision, and stops motion with <see cref="RoofControllerStopReason.HostShutdown"/>.
         /// </summary>
+        /// <remarks>
+        /// <para>When the all-off state cannot be verified, a bounded background retry re-runs the all-off sequence every
+        /// 500 ms for up to 15 s, or until disposal. Motion stays rejected throughout, and the relay verification fault
+        /// stays latched even if a retry verifies. The returned task completes when the register verifies, when the retry
+        /// gives up, or when <paramref name="cancellationToken"/> is cancelled (the retry then continues in the
+        /// background). It fails with <see cref="RoofControllerErrorCode.RelayStateUnverified"/> unless the register
+        /// verified all-off.</para>
+        /// <para>The first stop attempt runs synchronously on the calling thread and performs HAT I/O under the controller
+        /// lock, so a caller that must bound the call has to offload it. Safe to call more than once; a call made while a
+        /// retry is running joins that retry.</para>
+        /// </remarks>
         Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken);
 
         /// <summary>
