@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh. The script runs against fake `docker` and `curl`
 # commands (tests/deploy/fakes) that keep the containers in a temporary state file, so no Docker, Pi or network is
-# needed. Requires bash, python3 and jq. Run: tests/deploy/deploy-script-tests.sh [test-name ...]
+# needed. Requires bash (3.2 or later), python3, jq and sha256sum or shasum.
+# Run: tests/deploy/deploy-script-tests.sh [test-name ...]
 set -uo pipefail
 
 TESTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -33,34 +34,67 @@ teardown() {
   rm -rf "${WORK}"
 }
 
-# seed_container <name> <kind> <running:true|false> [publish...]
+# seed_container <name> <kind> <true|false|paused|restarting|created> [publish...]. paused and restarting count as
+# running (as in Docker), created as not running; each container gets a random 64-hex ID.
 seed_container() {
-  local name=$1 kind=$2 running=$3
+  local name=$1 kind=$2 running=$3 docker_state="" id publish
   shift 3
-  local publish
+  case "${running}" in
+    paused|restarting) docker_state=${running}; running=true ;;
+    created) docker_state=${running}; running=false ;;
+  esac
+  id=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
   publish=$(printf '%s\n' "$@" | jq -R . | jq -s 'map(select(length > 0))')
   jq --arg name "${name}" --arg kind "${kind}" --argjson running "${running}" --argjson publish "${publish}" \
-    '.containers[$name] = {kind: $kind, running: $running, restart: "unless-stopped", publish: $publish}' \
+    --arg state "${docker_state}" --arg id "${id}" \
+    '.containers[$name] = ({kind: $kind, running: $running, restart: "unless-stopped", publish: $publish, id: $id}
+                           + (if $state == "" then {} else {state: $state} end))' \
     "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
 }
 
-# Runs the deploy script with the test environment plus any NAME=value pairs before "--" and script args after it.
-deploy() {
-  local env_pairs=() script_args=()
+# build_command [NAME=value...] [-- script args...]: sets RUN_CMD to run the deploy script with the test environment
+# plus the given variables. The script runs in ${WORK} and records its PID in script.pid (for FAKE_SIGNAL_ON).
+build_command() {
+  local env_pairs=()
   while (( $# > 0 )) && [[ "$1" != "--" ]]; do
     env_pairs+=("$1")
     shift
   done
   [[ "${1:-}" == "--" ]] && shift
-  script_args=("$@")
 
-  OUTPUT=$(env -i \
-    PATH="${WORK}/bin:${PATH}" HOME="${WORK}/home" TMPDIR="${WORK}" FAKE_STATE_DIR="${FAKE_STATE_DIR}" \
-    FAKE_EXPECTED_KEY="${KEY}" PI_HOST=pi.test DOCKER_CONTEXT=test-context IMAGE_TAG="${IMAGE}" ROOF_OPERATOR_API_KEY="${KEY}" \
-    READY_TIMEOUT_SECONDS=1 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=5 \
-    ${env_pairs[@]+"${env_pairs[@]}"} \
-    bash "${SCRIPT}" ${script_args[@]+"${script_args[@]}"} 2>&1 </dev/null)
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  RUN_CMD=(env -i
+    PATH="${WORK}/bin:${PATH}" HOME="${WORK}/home" TMPDIR="${WORK}" FAKE_STATE_DIR="${FAKE_STATE_DIR}"
+    FAKE_EXPECTED_KEY="${KEY}" PI_HOST=pi.test DOCKER_CONTEXT=test-context IMAGE_TAG="${IMAGE}" ROOF_OPERATOR_API_KEY="${KEY}"
+    READY_TIMEOUT_SECONDS=1 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=5
+    ${env_pairs[@]+"${env_pairs[@]}"}
+    bash -c 'cd "$1" && echo "$$" > "${FAKE_STATE_DIR}/script.pid" && shift && exec bash "$@"'
+    deploy-test "${WORK}" "${SCRIPT}" "$@")
+}
+
+# Runs the deploy script with the test environment plus any NAME=value pairs before "--" and script args after it.
+# Sets OUTPUT (stdout and stderr) and STATUS.
+deploy() {
+  build_command "$@"
+  OUTPUT=$("${RUN_CMD[@]}" 2>&1 </dev/null)
   STATUS=$?
+}
+
+# As deploy, with the script's stderr closed (writes to it fail with EBADF). OUTPUT is stdout only.
+deploy_without_stderr() {
+  build_command "$@"
+  OUTPUT=$("${RUN_CMD[@]}" 2>&- </dev/null)
+  STATUS=$?
+}
+
+# As deploy, on a pseudo-terminal (tests/deploy/on-terminal) whose reader process (pid in output.pid) the fake docker
+# can kill (FAKE_SIGNAL_KILLS_OUTPUT), as when the terminal window or the SSH session goes away: the script gets SIGHUP
+# and its later writes to the terminal fail with EIO. OUTPUT is what reached the terminal before that.
+deploy_on_terminal() {
+  build_command "$@"
+  STATUS=0
+  "${TESTS_DIR}/on-terminal" "${FAKE_STATE_DIR}/output.pid" "${WORK}/output.log" "${RUN_CMD[@]}" || STATUS=$?
+  OUTPUT=$(tr -d '\r' < "${WORK}/output.log")
 }
 
 # Environment for the default HTTPS deployment.
@@ -75,6 +109,10 @@ assert_status() {
   if [[ "$1" == "0" && "${STATUS}" != "0" ]] || [[ "$1" != "0" && "${STATUS}" == "0" ]]; then
     fail_test "expected exit status $1, got ${STATUS}"
   fi
+}
+
+assert_status_is() {
+  [[ "${STATUS}" == "$1" ]] || fail_test "expected exit status $1, got ${STATUS}"
 }
 
 assert_output_contains() {
@@ -107,6 +145,15 @@ assert_container() {
   fi
 }
 
+# kind_count <kind>: how many containers of that kind exist.
+kind_count() {
+  jq --arg kind "$1" '[.containers[] | select(.kind == $kind)] | length' "${FAKE_STATE_DIR}/state.json"
+}
+
+assert_no_docker_calls() {
+  [[ ! -s "${FAKE_STATE_DIR}/calls.log" ]] || fail_test "$1: docker was called: $(head -n 1 "${FAKE_STATE_DIR}/calls.log")"
+}
+
 # docker_calls <subcommand>: the matching docker calls, one JSON argv per line (the --context prefix removed).
 docker_calls() {
   jq -c --arg command "$1" 'if .[0] == "--context" then .[2:] else . end | select(.[0] == $command)' \
@@ -128,6 +175,14 @@ controller_run_args() {
   docker_calls run | jq -c 'select(index("-d"))' | head -n 1
 }
 
+sha256_hex() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d ' ' -f 1
+  else
+    shasum -a 256 | cut -d ' ' -f 1
+  fi
+}
+
 assert_key_never_in_argv() {
   if grep -qF -- "${KEY}" "${FAKE_STATE_DIR}/calls.log" "${FAKE_STATE_DIR}/remote.log"; then
     fail_test "the API key appeared in a docker or curl argument list"
@@ -138,8 +193,15 @@ assert_key_never_in_argv() {
 run_test() {
   local name=$1
   CURRENT_FAILED=false
-  setup
+  OUTPUT=""
   echo "  ${name}"
+  if ! declare -F "${name}" >/dev/null; then
+    echo "    FAIL: no such test"
+    FAILED=$((FAILED + 1))
+    FAILURES+=("${name}")
+    return
+  fi
+  setup
   "${name}"
   if [[ "${CURRENT_FAILED}" == "true" ]]; then
     FAILED=$((FAILED + 1))
@@ -183,7 +245,7 @@ test_https_deploy_validates_first_publishes_only_https_and_keeps_previous() {
   [[ "${preflight_config}" == "${run_config}" ]] \
     || fail_test "pre-flight configuration differs from the controller's:"$'\n'"      pre-flight: ${preflight_config}"$'\n'"      controller: ${run_config}"
 
-  expected_sha=$(printf '%s' "${KEY}" | sha256sum | cut -d ' ' -f 1)
+  expected_sha=$(printf '%s' "${KEY}" | sha256_hex)
   jq -e --arg env "DeploymentCheck__DeployKeySha256=${expected_sha}" 'index($env)' <<<"${preflight}" >/dev/null \
     || fail_test "pre-flight is not given the SHA-256 of the deploy key"
 
@@ -329,12 +391,15 @@ test_unverified_stop_aborts_without_stopping() {
 
 test_failed_docker_stop_does_not_remove_old_controller() {
   seed_container roof-controller old true 8080:8080
+  seed_container roof-controller-previous older false
   deploy "${HTTPS_ENV[@]}" FAKE_STOP_FAIL=true
 
   assert_status 1
-  assert_output_contains "Could not stop roof-controller; it was not replaced."
-  assert_container roof-controller old true
-  [[ -z "$(docker_calls rm)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "the controller was removed, renamed or replaced"
+  assert_output_contains "Could not stop roof-controller; it was not replaced"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous older false
+  [[ -z "$(docker_calls rm)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "a container was removed, renamed or replaced"
 }
 
 test_running_previous_container_aborts_before_stop() {
@@ -351,11 +416,23 @@ test_running_previous_container_aborts_before_stop() {
 test_older_previous_is_replaced_after_successful_deploy() {
   seed_container roof-controller old true 8080:8080
   seed_container roof-controller-previous older false
+  local older_id
+  older_id=$(container_field roof-controller-previous id)
   deploy "${HTTPS_ENV[@]}"
 
   assert_status 0
   assert_container roof-controller new true
   assert_container roof-controller-previous old false no
+  [[ "$(kind_count older)" == "0" ]] || fail_test "the older roof-controller-previous was kept"
+
+  # The older -previous is removed (by ID) only after the old controller has stopped, just before the rename.
+  local i_stop i_rm i_rename
+  i_stop=$(call_index '"stop", "-t"')
+  i_rm=$(call_index "\"rm\", \"${older_id}\"")
+  i_rename=$(call_index '"rename", "roof-controller", "roof-controller-previous"')
+  if ! (( i_stop > 0 && i_stop < i_rm && i_rm < i_rename )); then
+    fail_test "unexpected order: stop=${i_stop} rm=${i_rm} rename=${i_rename}"
+  fi
 }
 
 test_stopped_old_controller_is_restored_stopped() {
@@ -448,20 +525,370 @@ test_key_file_is_used_and_never_passed_as_argument() {
   assert_key_never_in_argv
 }
 
+# --- Settings (validated before any Docker call) ---------------------------------------------------------------------
+
+test_malformed_numeric_settings_fail_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local setting
+  for setting in READY_TIMEOUT_SECONDS=90.5 READY_TIMEOUT_SECONDS=0 READY_TIMEOUT_SECONDS=1234567890123 \
+      STOP_TIMEOUT_SECONDS=120s STOP_TIMEOUT_SECONDS=-5 HOST_PORT=http HTTPS_HOST_PORT=70000 \
+      POLL_INTERVAL_SECONDS=1.2.3 POLL_INTERVAL_SECONDS=. POLL_INTERVAL_SECONDS=1s; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "${setting}"
+    assert_status 1
+    assert_output_contains "${setting%%=*} must be"
+    assert_no_docker_calls "${setting}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_malformed_setting_with_rollback_does_not_build() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" READY_TIMEOUT_SECONDS=2m -- --rollback
+
+  assert_status 1
+  assert_output_contains "READY_TIMEOUT_SECONDS must be a whole number"
+  assert_no_docker_calls "--rollback"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+test_numbers_with_leading_zeros_are_decimal() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" STOP_TIMEOUT_SECONDS=010 READY_TIMEOUT_SECONDS=09 HTTPS_HOST_PORT=08443
+
+  assert_status 0
+  assert_output_contains "Waiting up to 9s"
+  assert_output_contains "verified at https://pi.test:8443"
+  docker_calls stop | jq -e -s '.[0] | .[index("-t") + 1] == "10"' >/dev/null \
+    || fail_test "docker stop was not given -t 10: $(docker_calls stop)"
+  controller_run_args | jq -e '.[index("--stop-timeout") + 1] == "10" and index("8443:8443")' >/dev/null \
+    || fail_test "unexpected run arguments: $(controller_run_args)"
+}
+
+test_rollback_path_cannot_fall_through_into_build() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  # An expansion error in the rollback block (here injected into echo) makes bash abandon the whole block without
+  # tripping set -e, after the current controller has been stopped. The script must not go on to build and deploy.
+  # shellcheck disable=SC2016 # a function definition for the script's environment
+  deploy "${HTTPS_ENV[@]}" \
+    'BASH_FUNC_echo%%=() { if [[ "$*" == "[rollback] Swapping"* ]]; then local x=$((1/0)); fi; builtin echo "$@"; }' \
+    -- --rollback
+
+  assert_status 1
+  assert_output_contains "internal error: the --rollback path did not finish; nothing was built or deployed."
+  assert_output_contains "Undone: the original controller is running and ready as roof-controller"
+  [[ -z "$(docker_calls buildx)$(docker_calls load)$(docker_calls run)" ]] || fail_test "the rollback went on into a build or deploy"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+test_extra_docker_args_cannot_override_name_restart_or_ports() {
+  seed_container roof-controller old true 8443:8443
+  local value
+  for value in "--name other" "--name=other" "-d" "--detach" "--detach=true" "--rm" "--restart always" \
+      "--restart=always" "--cidfile /tmp/cid" "-p 80:8080" "-p8080:8080" "--publish 80:8080" "--publish=80:8080" \
+      "-P" "--publish-all" "-itd" "-tp 80:8080"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
+    assert_status 1
+    assert_output_contains "EXTRA_DOCKER_ARGS must not contain '${value%% *}'"
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_extra_docker_args_are_passed_without_glob_expansion() {
+  seed_container roof-controller old true 8443:8443
+  : > "${WORK}/GLOB=expanded"
+  deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2   --env GLOB=*"
+
+  assert_status 0
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e '(.[index("--cpus") + 1] == "2") and (.[index("GLOB=*") - 1] == "--env") and (index("GLOB=expanded") | not)' \
+      <<<"${args}" >/dev/null || fail_test "EXTRA_DOCKER_ARGS not passed as given: ${args}"
+  done
+}
+
+test_rollback_requires_certificate_or_explicit_insecure_opt_in() {
+  seed_container roof-controller current true 8080:8080
+  seed_container roof-controller-previous old false 8080:8080
+  deploy -- --rollback
+
+  assert_status 1
+  assert_output_contains "Set HTTPS_CERT_DIR"
+  assert_no_docker_calls "--rollback without HTTPS"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+
+  deploy ALLOW_INSECURE_HTTP=true -- --rollback
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous current false no
+}
+
+# --- Container state (fail closed) ------------------------------------------------------------------------------------
+
+test_docker_state_query_failure_fails_closed() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_FAIL="ps -a --no-trunc@1"
+
+  assert_status 1
+  assert_output_contains "Could not read the state of roof-controller from Docker"
+  assert_output_contains "Nothing was changed"
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls buildx)$(docker_calls run)" ]] \
+    || fail_test "the script went on after the state query failed"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_state_query_failure_after_preflight_changes_nothing() {
+  seed_container roof-controller old true 8443:8443
+  # Queries 1 and 2 read roof-controller and roof-controller-previous; query 3 reads them again after the pre-flight.
+  deploy "${HTTPS_ENV[@]}" FAKE_FAIL="ps -a --no-trunc@3"
+
+  assert_status 1
+  assert_output_contains "Could not read the state of roof-controller from Docker"
+  [[ -n "$(preflight_args)" ]] || fail_test "the pre-flight did not run"
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "the controller was stopped or replaced"
+  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_paused_controller_is_not_treated_as_missing() {
+  seed_container roof-controller old paused 8443:8443
+  deploy "${HTTPS_ENV[@]}"
+
+  assert_status 1
+  assert_output_contains "Existing container roof-controller: running"
+  assert_output_contains "The roof stop could not be verified"
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "the controller was stopped or replaced"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_restarting_previous_aborts_before_stop() {
+  seed_container roof-controller old true 8443:8443
+  seed_container roof-controller-previous older restarting
+  deploy "${HTTPS_ENV[@]}"
+
+  assert_status 1
+  assert_output_contains "roof-controller-previous is running: two controllers must never share the HAT"
+  [[ -z "$(docker_calls stop)$(docker_calls rm)$(docker_calls buildx)" ]] || fail_test "a container was stopped or removed, or an image built"
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous older true
+}
+
+test_running_previous_without_current_controller_aborts() {
+  seed_container roof-controller-previous older true 8443:8443
+  deploy "${HTTPS_ENV[@]}"
+
+  assert_status 1
+  assert_output_contains "roof-controller-previous is running"
+  [[ -z "$(docker_calls run)$(docker_calls buildx)" ]] || fail_test "a second controller was built or started"
+  assert_container roof-controller missing false
+}
+
+test_failed_run_that_left_a_created_container_is_cleaned_up() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_RUN_FAIL=created
+
+  assert_status 1
+  assert_output_contains "docker run failed for the new controller"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+  [[ "$(kind_count new)" == "0" ]] || fail_test "the container left by the failed run was not removed"
+  # Removed by the ID docker wrote to the --cidfile, not by name.
+  jq -e 'index("--cidfile")' <<<"$(controller_run_args)" >/dev/null || fail_test "docker run was not given a --cidfile"
+  docker_calls rm | jq -e -s 'length == 1 and (.[0][-1] | test("^[0-9a-f]{64}$"))' >/dev/null \
+    || fail_test "unexpected rm calls: $(docker_calls rm)"
+}
+
+test_restore_never_touches_a_container_it_did_not_create() {
+  seed_container roof-controller old true 8443:8443
+  # Another client creates a container named roof-controller between the rename and docker run.
+  deploy "${HTTPS_ENV[@]}" FAKE_RUN_FAIL=foreign
+
+  assert_status 1
+  assert_output_contains "roof-controller is taken by a container this run did not create"
+  assert_output_contains "kept, stopped, as roof-controller-previous"
+  assert_container roof-controller foreign true always
+  assert_container roof-controller-previous old false
+  [[ -z "$(docker_calls rm)" ]] || fail_test "a container was removed: $(docker_calls rm)"
+  [[ "$(docker_calls stop | wc -l | tr -d ' ')" == "1" ]] || fail_test "unexpected stop calls: $(docker_calls stop)"
+}
+
+# --- Restore under failure and interruption ---------------------------------------------------------------------------
+
+test_restore_completes_when_stderr_is_closed() {
+  seed_container roof-controller old true 8443:8443
+  deploy_without_stderr "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
+
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+  [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller was not removed"
+}
+
+test_hangup_with_terminal_gone_still_restores_previous() {
+  seed_container roof-controller old true 8443:8443
+  # The terminal goes away right after the old controller was renamed: SIGHUP, and every later write fails with EIO.
+  deploy_on_terminal "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="update --restart no roof-controller-previous" FAKE_SIGNAL=HUP \
+    FAKE_SIGNAL_KILLS_OUTPUT=true
+
+  assert_status_is 129
+  assert_output_contains "Keeping the old controller as roof-controller-previous"
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+  [[ -z "$(controller_run_args)" ]] || fail_test "the new controller was started after the hangup"
+}
+
+test_hangup_while_verifying_removes_new_controller() {
+  seed_container roof-controller old true 8443:8443
+  deploy_on_terminal "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON=/health/ready FAKE_SIGNAL=HUP FAKE_SIGNAL_KILLS_OUTPUT=true
+
+  assert_status_is 129
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+  [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller was not removed"
+}
+
+test_interrupt_during_docker_stop_restarts_old_controller() {
+  seed_container roof-controller old true 8443:8443
+  seed_container roof-controller-previous older false
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="stop -t" FAKE_SIGNAL=INT
+
+  assert_status_is 130
+  assert_output_contains "the script stopped unexpectedly (exit 130) while switching controllers"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous older false
+  [[ -z "$(controller_run_args)$(docker_calls rm)" ]] || fail_test "the deploy went on after the interrupt"
+}
+
+test_interrupt_after_rename_restores_old_controller() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="rename roof-controller roof-controller-previous" FAKE_SIGNAL=TERM
+
+  assert_status_is 143
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+  [[ -z "$(controller_run_args)" ]] || fail_test "the new controller was started after the interrupt"
+}
+
+test_stop_gate_abort_keeps_older_previous() {
+  seed_container roof-controller old true 8443:8443
+  seed_container roof-controller-previous older false
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_STOP=unverified
+
+  assert_status 1
+  assert_output_contains "The roof stop could not be verified"
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous older false
+  [[ -z "$(docker_calls rm)$(docker_calls stop)" ]] || fail_test "a container was stopped or removed"
+}
+
+# --- Rollback recovery ------------------------------------------------------------------------------------------------
+
+test_rollback_refuses_when_swap_container_exists() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_container roof-controller-swap older false 8443:8443
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+
+  assert_status 1
+  assert_output_contains "roof-controller-swap exists"
+  assert_output_contains "docker rename roof-controller-swap <name>"
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls start)" ]] || fail_test "a container was changed"
+  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+  assert_container roof-controller-swap older false
+}
+
+test_rollback_failed_rename_restores_original() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_FAIL="rename roof-controller-previous roof-controller" -- --rollback
+
+  assert_status 1
+  assert_output_contains "Rollback failed (Could not rename roof-controller-previous to roof-controller)"
+  assert_output_contains "Undone: the original controller is running and ready as roof-controller"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false no
+  assert_container roof-controller-swap missing false
+}
+
+test_rollback_failed_start_restores_original() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_FAIL="start roof-controller@1" -- --rollback
+
+  assert_status 1
+  assert_output_contains "Could not start the rolled-back controller roof-controller"
+  assert_output_contains "Undone: the original controller is running and ready as roof-controller"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false no
+  assert_container roof-controller-swap missing false
+}
+
+test_interrupted_rollback_is_undone() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="update --restart no roof-controller-swap" FAKE_SIGNAL=TERM -- --rollback
+
+  assert_status_is 143
+  assert_output_contains "Undone: the original controller is running and ready as roof-controller"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false no
+  assert_container roof-controller-swap missing false
+}
+
+test_rollback_without_current_controller_is_undone_on_failed_start() {
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_FAIL="start roof-controller" -- --rollback
+
+  assert_status 1
+  assert_output_contains "Undone: roof-controller-previous is back, stopped"
+  assert_container roof-controller missing false
+  assert_container roof-controller-previous old false no
+}
+
+# --- Harness ----------------------------------------------------------------------------------------------------------
+
+test_unknown_test_name_counts_as_failure() {
+  OUTPUT=$(bash "${TESTS_DIR}/deploy-script-tests.sh" test_no_such_test 2>&1)
+  STATUS=$?
+
+  assert_status 1
+  assert_output_contains "FAIL: no such test"
+  assert_output_contains "0 passed, 1 failed"
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 
-for tool in python3 jq sha256sum; do
+for tool in python3 jq; do
   command -v "${tool}" >/dev/null 2>&1 || { echo "deploy-script-tests: ${tool} is required" >&2; exit 2; }
 done
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  echo "deploy-script-tests: sha256sum or shasum is required" >&2
+  exit 2
+fi
 
+tests=()
 if (( $# > 0 )); then
   tests=("$@")
 else
-  mapfile -t tests < <(declare -F | awk '{print $3}' | grep '^test_')
+  while IFS= read -r test; do
+    tests+=("${test}")
+  done < <(declare -F | awk '{print $3}' | grep '^test_')
 fi
 
 echo "deploy-roofcontroller-rpi.sh tests"
-for test in "${tests[@]}"; do
+for test in ${tests[@]+"${tests[@]}"}; do
   run_test "${test}"
 done
 

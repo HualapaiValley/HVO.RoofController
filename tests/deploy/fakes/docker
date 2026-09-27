@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
 """Fake `docker` CLI for deploy-script-tests.sh.
 
-Keeps containers in $FAKE_STATE_DIR/state.json and appends every call's argv (as JSON) to $FAKE_STATE_DIR/calls.log.
+Keeps containers in $FAKE_STATE_DIR/state.json (keyed by name, each with a 64-hex "id") and appends every call's argv
+(as JSON) to $FAKE_STATE_DIR/calls.log. Commands take a container name or an ID prefix, as docker does. A container's
+docker state is "running" or "exited" from its "running" flag, or its optional "state" (paused, restarting, created);
+stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex>|id=<prefix> and Go-style --format.
 Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
   FAKE_<KIND>_READY=false          /health/ready fails
   FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
   FAKE_<KIND>_STOP=unverified      the in-container POST Stop is not verified (error: the exec fails)
-Other switches: FAKE_PREFLIGHT_EXIT (exit code of `run --rm ... --validate-deployment`), FAKE_RUN_FAIL=true,
-FAKE_STOP_FAIL=true. Containers created by `run -d` have kind "new". Authenticated calls must send
-FAKE_EXPECTED_KEY on stdin (-H @-), otherwise they get 401.
+Other switches:
+  FAKE_PREFLIGHT_EXIT=<code>       exit code of `run --rm ... --validate-deployment`
+  FAKE_RUN_FAIL=true               `run -d` fails before creating the container
+  FAKE_RUN_FAIL=created            `run -d` creates the container (state created, ID in the --cidfile), then fails
+  FAKE_RUN_FAIL=foreign            another client's running container (kind foreign) takes the name; `run -d` fails
+  FAKE_STOP_FAIL=true              `stop` fails
+  FAKE_FAIL="<text>[@N];..."       a call whose argv (space-joined, without --context) contains <text> fails; with @N
+                                   only the N-th such call
+  FAKE_SIGNAL_ON=<text>            the first call containing <text> sends FAKE_SIGNAL (default TERM) to the script
+                                   (pid in script.pid), then runs normally; with FAKE_SIGNAL_KILLS_OUTPUT=true it first
+                                   kills the process reading the script's output (pid in output.pid)
+Containers created by `run -d` have kind "new". Authenticated calls must send FAKE_EXPECTED_KEY on stdin (-H @-),
+otherwise they get 401. Output errors (closed or broken stdout/stderr) are ignored, as they would not change Docker.
 """
 import json
 import os
+import re
+import secrets
+import signal
 import sys
+import time
 
 STATE_DIR = os.environ["FAKE_STATE_DIR"]
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
@@ -20,12 +37,42 @@ VERIFIED = {"relayRegisterState": "Verified", "relayRegisterMask": 0, "commanded
 UNVERIFIED = {"relayRegisterState": "Unknown", "relayRegisterMask": None, "commandedMotion": "None"}
 
 
+def out(text="", end="\n"):
+    try:
+        if sys.stdout is not None:
+            sys.stdout.write(text + end)
+    except (OSError, ValueError):
+        pass
+
+
+def err(text):
+    try:
+        if sys.stderr is not None:
+            sys.stderr.write(text + "\n")
+            sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def die(message, code=1):
+    err(f"Error response from daemon: {message}")
+    sys.exit(code)
+
+
 def load():
     try:
         with open(STATE_FILE) as f:
-            return json.load(f)
+            state = json.load(f)
     except FileNotFoundError:
-        return {"containers": {}}
+        state = {"containers": {}}
+    changed = False
+    for c in state["containers"].values():
+        if not c.get("id"):
+            c["id"] = secrets.token_hex(32)
+            changed = True
+    if changed:
+        save(state)
+    return state
 
 
 def save(state):
@@ -37,20 +84,96 @@ def behaviour(kind, name, default):
     return os.environ.get(f"FAKE_{kind.upper()}_{name}", default)
 
 
-def die(message, code=1):
-    print(f"Error response from daemon: {message}", file=sys.stderr)
-    sys.exit(code)
+def docker_state(c):
+    return c.get("state") or ("running" if c["running"] else "exited")
 
 
-def container(state, name):
-    c = state["containers"].get(name)
-    if c is None:
-        die(f"No such container: {name}")
-    return c
+def resolve(state, ref):
+    """(name, container) for a name, a full ID or a unique ID prefix; None when there is no such container."""
+    containers = state["containers"]
+    if ref in containers:
+        return ref, containers[ref]
+    matches = [(n, c) for n, c in containers.items() if c["id"].startswith(ref)] if ref else []
+    if len(matches) > 1:
+        die(f"multiple IDs found with provided prefix: {ref}")
+    return matches[0] if matches else None
 
 
-def exec_curl(state, name, curl_args, stdin_text):
-    c = container(state, name)
+def container(state, ref):
+    found = resolve(state, ref)
+    if found is None:
+        die(f"No such container: {ref}")
+    return found
+
+
+def new_id():
+    return secrets.token_hex(32)
+
+
+def fail_if_requested(command_line):
+    spec = os.environ.get("FAKE_FAIL", "")
+    if not spec:
+        return
+    counts_file = os.path.join(STATE_DIR, "fail-counts.json")
+    try:
+        with open(counts_file) as f:
+            counts = json.load(f)
+    except FileNotFoundError:
+        counts = {}
+    fail = None
+    for entry in filter(None, spec.split(";")):
+        text, nth = entry, None
+        if "@" in entry and entry.rsplit("@", 1)[1].isdigit():
+            text, nth = entry.rsplit("@", 1)[0], int(entry.rsplit("@", 1)[1])
+        if text in command_line:
+            counts[entry] = counts.get(entry, 0) + 1
+            if nth is None or counts[entry] == nth:
+                fail = text
+    with open(counts_file, "w") as f:
+        json.dump(counts, f)
+    if fail is not None:
+        die(f"fake failure ({fail})")
+
+
+def read_pid(name, wait_seconds=0.0):
+    path = os.path.join(STATE_DIR, name)
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            with open(path) as f:
+                return int(f.read().strip())
+        except (FileNotFoundError, ValueError):
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
+
+def signal_if_requested(command_line):
+    trigger = os.environ.get("FAKE_SIGNAL_ON", "")
+    marker = os.path.join(STATE_DIR, "signal.sent")
+    if not trigger or trigger not in command_line or os.path.exists(marker):
+        return
+    open(marker, "w").close()
+    if os.environ.get("FAKE_SIGNAL_KILLS_OUTPUT") == "true":
+        reader = read_pid("output.pid", wait_seconds=5.0)
+        if reader is not None:
+            try:
+                os.kill(reader, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            time.sleep(0.2)
+    script = read_pid("script.pid")
+    if script is not None:
+        os.kill(script, getattr(signal, "SIG" + os.environ.get("FAKE_SIGNAL", "TERM")))
+
+
+def exec_curl(state, ref, curl_args, stdin_text):
+    name, c = container(state, ref)
+    current = docker_state(c)
+    if current == "paused":
+        die(f"Container {c['id']} is paused, unpause the container before exec")
+    if current == "restarting":
+        die(f"Container {c['id']} is restarting, wait until the container is running")
     if not c["running"]:
         die(f"container {name} is not running")
     kind = c["kind"]
@@ -61,19 +184,143 @@ def exec_curl(state, name, curl_args, stdin_text):
         sys.exit(0 if behaviour(kind, "READY", "true") == "true" else 22)
 
     if "@-" in curl_args and stdin_text.strip() != f"X-Api-Key: {os.environ['FAKE_EXPECTED_KEY']}":
-        print('{"error":"unauthorized"}\n401', end="")
+        out('{"error":"unauthorized"}\n401', end="")
         return
 
     if url.endswith("/Status") and method == "GET":
         code = behaviour(kind, "STATUS_CODE", "200")
-        print(json.dumps(VERIFIED) + "\n" + code, end="")
+        out(json.dumps(VERIFIED) + "\n" + code, end="")
     elif url.endswith("/Stop") and method == "POST":
         stop = behaviour(kind, "STOP", "verified")
         if stop == "error":
             die("exec failed")
-        print(json.dumps(VERIFIED if stop == "verified" else UNVERIFIED) + "\n200", end="")
+        out(json.dumps(VERIFIED if stop == "verified" else UNVERIFIED) + "\n200", end="")
     else:
-        print("{}\n404", end="")
+        out("{}\n404", end="")
+
+
+def status_text(c):
+    return {
+        "running": "Up 2 minutes",
+        "paused": "Up 2 minutes (Paused)",
+        "restarting": "Restarting (1) 3 seconds ago",
+        "created": "Created",
+    }.get(docker_state(c), "Exited (0) 1 minute ago")
+
+
+def ps(state, args):
+    show_all = no_trunc = False
+    filters, fmt = [], None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-a", "--all"):
+            show_all = True
+        elif a == "--no-trunc":
+            no_trunc = True
+        elif a == "--filter":
+            filters.append(args[i + 1])
+            i += 1
+        elif a == "--format":
+            fmt = args[i + 1]
+            i += 1
+        else:
+            die(f"fake docker: unsupported ps option {a}")
+        i += 1
+
+    def matches(name, c):
+        if not show_all and not c["running"]:
+            return False
+        for f in filters:
+            key, _, value = f.partition("=")
+            if key == "name":
+                if not (re.search(value, "/" + name) or re.search(value, name)):
+                    return False
+            elif key == "id":
+                if not c["id"].startswith(value):
+                    return False
+            else:
+                die(f"fake docker: unsupported ps filter {key}")
+        return True
+
+    fmt = fmt or "table {{.ID}}\t{{.Names}}\t{{.Status}}"
+    table = fmt.startswith("table ")
+    if table:
+        fmt = fmt[len("table "):]
+    fmt = fmt.replace("\\t", "\t")
+    headers = {"ID": "CONTAINER ID", "Names": "NAMES", "Status": "STATUS", "Image": "IMAGE", "State": "STATE"}
+    if table:
+        out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: headers[m.group(1)], fmt))
+    for name, c in state["containers"].items():
+        if matches(name, c):
+            fields = {
+                "ID": c["id"] if no_trunc else c["id"][:12],
+                "Names": name,
+                "Status": status_text(c),
+                "Image": c.get("image", os.environ["IMAGE_TAG"]),
+                "State": docker_state(c),
+            }
+            out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: fields[m.group(1)], fmt))
+
+
+def run(state, args, image):
+    position = args.index(image)
+    options, trailing = args[:position], args[position + 1:]
+    if "--rm" in options:
+        out("Deployment check (Production):")
+        code = int(os.environ.get("FAKE_PREFLIGHT_EXIT", "0"))
+        out("Deployment check passed." if code == 0 else "  PROBLEM: fake problem")
+        sys.exit(code)
+
+    name, cidfile, restart, publish = None, None, None, []
+    for i, value in enumerate(options):
+        following = options[i + 1] if i + 1 < len(options) else None
+        if value == "--name":
+            name = following
+        elif value.startswith("--name="):
+            name = value[len("--name="):]
+        elif value == "--cidfile":
+            cidfile = following
+        elif value == "--restart":
+            restart = following
+        elif value == "-p":
+            publish.append(following)
+    if name is None:
+        die("fake docker: run without --name")
+    if cidfile is not None and os.path.exists(cidfile):
+        err(f"docker: container ID file found, make sure the other container isn't running or delete {cidfile}")
+        sys.exit(125)
+
+    run_fail = os.environ.get("FAKE_RUN_FAIL", "")
+    if run_fail == "true":
+        die("driver failed programming external connectivity")
+    if run_fail == "foreign":
+        state["containers"][name] = {"kind": "foreign", "running": True, "restart": "always", "publish": [],
+                                     "image": "someone/else", "id": new_id()}
+        save(state)
+    if name in state["containers"]:
+        die(f'Conflict. The container name "/{name}" is already in use')
+
+    cid = new_id()
+    state["containers"][name] = {
+        "kind": "new",
+        "running": True,
+        "restart": restart,
+        "publish": publish,
+        "image": image,
+        "trailing": trailing,
+        "options": options,
+        "id": cid,
+    }
+    if run_fail == "created":
+        state["containers"][name].update(running=False, state="created")
+    save(state)
+    if cidfile is not None:
+        with open(cidfile, "w") as f:
+            f.write(cid)
+    if run_fail == "created":
+        die("driver failed programming external connectivity on endpoint: Bind for 0.0.0.0:8443 failed: port is already allocated")
+    out(cid)
 
 
 def main():
@@ -85,6 +332,10 @@ def main():
         argv = argv[2:]
     if not argv:
         die("no command")
+
+    command_line = " ".join(argv)
+    signal_if_requested(command_line)
+    fail_if_requested(command_line)
 
     state = load()
     command, args = argv[0], argv[1:]
@@ -98,111 +349,98 @@ def main():
         return
     if command == "load":
         sys.stdin.read()
-        print(f"Loaded image: {image}")
-        return
-
-    if command == "inspect":
-        name = args[-1]
-        c = state["containers"].get(name)
-        if c is None:
-            die(f"No such object: {name}")
-        print("true" if c["running"] else "false")
+        out(f"Loaded image: {image}")
         return
 
     if command == "exec":
         interactive = args[0] == "-i"
         if interactive:
             args = args[1:]
-        name, curl_args = args[0], args[1:]
-        exec_curl(state, name, curl_args, sys.stdin.read() if interactive else "")
+        ref, curl_args = args[0], args[1:]
+        exec_curl(state, ref, curl_args, sys.stdin.read() if interactive else "")
         return
 
     if command == "stop":
-        name = args[-1]
-        c = container(state, name)
+        ref = args[-1]
+        _, c = container(state, ref)
         if os.environ.get("FAKE_STOP_FAIL") == "true":
-            die(f"cannot stop container: {name}")
+            die(f"cannot stop container: {ref}")
         c["running"] = False
+        c.pop("state", None)
         save(state)
-        print(name)
+        out(ref)
         return
 
     if command == "start":
-        name = args[-1]
-        container(state, name)["running"] = True
+        ref = args[-1]
+        _, c = container(state, ref)
+        c["running"] = True
+        c.pop("state", None)
         save(state)
-        print(name)
+        out(ref)
         return
 
     if command == "rm":
         force = "-f" in args
-        name = args[-1]
-        c = state["containers"].get(name)
-        if c is None:
+        ref = args[-1]
+        found = resolve(state, ref)
+        if found is None:
             if force:
                 return
-            die(f"No such container: {name}")
+            die(f"No such container: {ref}")
+        name, c = found
         if c["running"] and not force:
             die(f"cannot remove container {name}: container is running")
         del state["containers"][name]
         save(state)
-        print(name)
+        out(ref)
         return
 
     if command == "rename":
-        old, new = args
-        c = container(state, old)
+        ref, new = args
+        name, c = container(state, ref)
         if new in state["containers"]:
             die(f'Conflict. The container name "/{new}" is already in use')
         state["containers"][new] = c
-        del state["containers"][old]
+        del state["containers"][name]
         save(state)
         return
 
     if command == "update":
-        name = args[-1]
-        container(state, name)["restart"] = args[args.index("--restart") + 1]
+        ref = args[-1]
+        container(state, ref)[1]["restart"] = args[args.index("--restart") + 1]
         save(state)
-        print(name)
+        out(ref)
         return
 
     if command == "logs":
-        print("fake controller log line")
+        container(state, args[-1])
+        out("fake controller log line")
         return
 
     if command == "ps":
-        print("NAMES\tSTATUS\tIMAGE")
-        for name, c in state["containers"].items():
-            print(f"{name}\t{'Up' if c['running'] else 'Exited (0)'}\t{c.get('image', image)}")
+        ps(state, args)
         return
 
     if command == "run":
-        position = args.index(image)
-        options, trailing = args[:position], args[position + 1:]
-        if "--rm" in options:
-            print("Deployment check (Production):")
-            code = int(os.environ.get("FAKE_PREFLIGHT_EXIT", "0"))
-            print("Deployment check passed." if code == 0 else "  PROBLEM: fake problem")
-            sys.exit(code)
-        if os.environ.get("FAKE_RUN_FAIL") == "true":
-            die("driver failed programming external connectivity")
-        name = options[options.index("--name") + 1]
-        if name in state["containers"]:
-            die(f'Conflict. The container name "/{name}" is already in use')
-        publish = [options[i + 1] for i, value in enumerate(options) if value == "-p"]
-        state["containers"][name] = {
-            "kind": "new",
-            "running": True,
-            "restart": options[options.index("--restart") + 1],
-            "publish": publish,
-            "image": image,
-            "trailing": trailing,
-        }
-        save(state)
-        print("0123456789ab")
+        run(state, args, image)
         return
 
     die(f"fake docker: unsupported command {command}")
 
 
-main()
+def entry():
+    code = 0
+    try:
+        main()
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    try:
+        if sys.stdout is not None:
+            sys.stdout.flush()
+    except (OSError, ValueError):
+        pass
+    os._exit(code)
+
+
+entry()

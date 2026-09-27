@@ -3,20 +3,27 @@ set -euo pipefail
 
 # Project-local deploy script for Roof Controller V4 (RPi). See docs/deployment.md.
 #
+# 0. Settings are checked before any Docker call (numbers, EXTRA_DOCKER_ARGS, the HTTPS choice). If Docker cannot
+#    report the containers' state, the script stops without changing anything.
 # 1. Pre-flight: the new image runs --validate-deployment on the Pi with the final container's environment, devices,
 #    secrets and certificate mounts (roof options, a usable RoofOperator/RoofAdmin key, this script's key, the
 #    HTTPS listener and certificate). If it fails, the running controller is not touched.
 # 2. The running controller is replaced only after a VERIFIED stop: POST /Stop (from inside the container, over
 #    loopback) must return 200 with relayRegisterState=Verified, relayRegisterMask=0 and commandedMotion=None.
 #    Anything else aborts, unless --force-unverified-stop is given AND the operator types a confirmation. The old
-#    container is stopped gracefully (SIGTERM) and kept, not started, as <name>-previous.
+#    container is stopped gracefully (SIGTERM) and kept, not started, as <name>-previous; an older stopped
+#    <name>-previous is removed only once that stop has succeeded.
 # 3. The new controller must become ready, answer an authenticated Status inside the container, and answer an
 #    authenticated Status and a verified Stop from this machine at the published URL (HTTPS unless
-#    ALLOW_INSECURE_HTTP=true). Otherwise it is stopped and removed, and <name>-previous is restored and started.
+#    ALLOW_INSECURE_HTTP=true). Otherwise it is stopped and removed, and <name>-previous is restored as <name> and
+#    started again if it was running. A failure or an interrupt (Ctrl-C, SIGTERM, a lost terminal) anywhere after the
+#    old controller's stop began restores it the same way. Only the container this run created is ever removed.
 #
 # Usage: PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh [--dry-run] [--force-unverified-stop] [--rollback]
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
-#               as in step 3. Run it again to swap back.
+#               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
+#               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
+#               rollback that could not be undone) exists.
 
 usage() {
   sed -n '/^# Project-local/,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -44,10 +51,13 @@ DOCKER_CONTEXT=${DOCKER_CONTEXT:-rpi-remote}
 IMAGE_TAG=${IMAGE_TAG:-hvov9/roof-controller:v4}
 CONTAINER_NAME=${CONTAINER_NAME:-roof-controller}
 PREVIOUS_CONTAINER_NAME="${CONTAINER_NAME}-previous"
+# Holds the current controller for a moment while --rollback swaps the names.
+SWAP_CONTAINER_NAME="${CONTAINER_NAME}-swap"
 HOST_PORT=${HOST_PORT:-8080}
 HTTPS_HOST_PORT=${HTTPS_HOST_PORT:-8443}
-# Extra `docker run` arguments for the controller; also applied to the pre-flight container, so do not publish
-# ports here (use HOST_PORT / HTTPS_HOST_PORT).
+# Extra `docker run` options for the controller, split on whitespace (no quoting). Also applied to the pre-flight
+# container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports) are refused:
+# use CONTAINER_NAME, HOST_PORT and HTTPS_HOST_PORT.
 EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
 HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
 IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-false}
@@ -64,7 +74,8 @@ SECRETS_DIR=${SECRETS_DIR:-/etc/hvo-roof/secrets}
 HTTPS_CERT_DIR=${HTTPS_CERT_DIR:-}
 HTTPS_CERT_FILE=${HTTPS_CERT_FILE:-roof-controller.pfx}
 ALLOW_INSECURE_HTTP=${ALLOW_INSECURE_HTTP:-false}
-# Semicolon-separated host names/IPs clients use (AllowedHosts). Empty keeps the image default.
+# Semicolon-separated host names/IPs clients use (AllowedHosts); include localhost (the health check and this script's
+# in-container calls use it). Empty keeps the image default.
 ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
 STOP_TIMEOUT_SECONDS=${STOP_TIMEOUT_SECONDS:-30}
 READY_TIMEOUT_SECONDS=${READY_TIMEOUT_SECONDS:-120}
@@ -83,27 +94,98 @@ REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 DOCKERFILE_PATH="${SCRIPT_DIR}/Dockerfile"
 API_PATH="api/v4.0/RoofControl"
 
+# What a failure or an interrupt during the switch must undo (restore_original; the EXIT trap runs it when the script
+# dies). RESTORE_MODE is the state the original controller was in before the switch: none (there was none), stopped
+# or running. It is set before the first change and cleared only when the switch is complete or the restore has run.
+# The restore finds the original controller by ID (ORIGINAL_ID) wherever the switch got to and puts it back under
+# CONTAINER_NAME. A deploy removes only the container it created (NEW_CONTAINER_ID, or the ID docker wrote to
+# NEW_CIDFILE when `docker run` failed after creating it); a rollback stops the version it was bringing back
+# (ROLLBACK_TARGET_ID) and puts it back as <name>-previous.
+RESTORE_MODE=""
+RESTORING=false
+ORIGINAL_ID=""
+NEW_CONTAINER_ID=""
+NEW_CIDFILE=""
+ROLLBACK_TARGET_ID=""
+RESTORE_OUTCOME=""
+FAILURE=""
+WORK_DIR=""
+
+dockerc() {
+  docker --context "${DOCKER_CONTEXT}" "$@"
+}
+
+# Output that must never stop the script: during a restore the terminal or the pipe may be gone (EIO/EPIPE).
+log_err() {
+  echo "$*" >&2 || true
+}
+
+fail() {
+  log_err "[deploy] ERROR: $*"
+  exit 1
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Settings, checked before any Docker call. A malformed number must stop the script here: in a bash arithmetic
+# expression it aborts the whole surrounding command without tripping set -e, which could skip a check or a restore.
+
+# require_number <variable> <min> <max>: a whole number in range, normalized to plain decimal (so 010 is 10, not 8).
+require_number() {
+  local name=$1 min=$2 max=$3 value=${!1}
+  case "${value}" in
+    ''|*[!0-9]*) fail "${name} must be a whole number from ${min} to ${max}, got '${value}'." ;;
+  esac
+  if (( ${#value} > 9 || 10#${value} < min || 10#${value} > max )); then
+    fail "${name} must be a whole number from ${min} to ${max}, got '${value}'."
+  fi
+  printf -v "${name}" '%d' "$((10#${value}))"
+}
+
+require_number READY_TIMEOUT_SECONDS 1 86400
+require_number STOP_TIMEOUT_SECONDS 1 86400
+require_number HOST_PORT 1 65535
+require_number HTTPS_HOST_PORT 1 65535
+case "${POLL_INTERVAL_SECONDS}" in
+  ''|.|*[!0-9.]*|*.*.*) fail "POLL_INTERVAL_SECONDS must be a number of seconds such as 3 or 0.5, got '${POLL_INTERVAL_SECONDS}'." ;;
+esac
+
+# A second --name would make Docker run the controller under that name: the checks and the restore would then act on
+# the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
+# break the restore, the restart policy or the pre-flight container. Short options may be combined (-itd, -p8443:8443).
+extra_args=()
+if [[ -n "${EXTRA_DOCKER_ARGS}" ]]; then
+  read -r -d '' -a extra_args <<<"${EXTRA_DOCKER_ARGS}" || true
+fi
+for arg in ${extra_args[@]+"${extra_args[@]}"}; do
+  case "${arg}" in
+    --name|--name=*|--detach|--detach=*|--rm|--rm=*|--restart|--restart=*|--cidfile|--cidfile=*|--publish|--publish=*|--publish-all|--publish-all=*)
+      reserved=true ;;
+    *)
+      reserved=false
+      if [[ "${arg}" =~ ^-[ditPq]*[dPp] ]]; then reserved=true; fi
+      ;;
+  esac
+  if [[ "${reserved}" == "true" ]]; then
+    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile and the published ports itself (use CONTAINER_NAME, HOST_PORT and HTTPS_HOST_PORT)."
+  fi
+done
+
+# Applies to --rollback too: its checks send the key to the published URL.
+if [[ -z "${HTTPS_CERT_DIR}" && "${ALLOW_INSECURE_HTTP}" != "true" ]]; then
+  fail "Set HTTPS_CERT_DIR (directory on the Pi with ${HTTPS_CERT_FILE}) or ALLOW_INSECURE_HTTP=true (for --rollback, as for the version being restored). Without HTTPS, API keys cross the network in clear text and LAN clients get 403 https_required unless RequireHttps is disabled. See docs/deployment.md."
+fi
+
+if [[ -n "${REMOTE_CA_CERT}" && ! -r "${REMOTE_CA_CERT}" ]]; then
+  fail "REMOTE_CA_CERT '${REMOTE_CA_CERT}' is not a readable file on this machine."
+fi
+
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
   REMOTE_BASE_URL="https://${PI_HOST}:${HTTPS_HOST_PORT}"
 else
   REMOTE_BASE_URL="http://${PI_HOST}:${HOST_PORT}"
 fi
 
-# While the new controller is not yet verified, what a failure restores: none (no old controller), stopped (rename
-# <name>-previous back, leave it stopped) or running (rename it back and start it). Empty outside the switch; the
-# EXIT trap restores when the script dies during the switch.
-RESTORE_MODE=""
-FAILURE=""
-TMP_TAR=""
-
-dockerc() {
-  docker --context "${DOCKER_CONTEXT}" "$@"
-}
-
-fail() {
-  echo "[deploy] ERROR: $*" >&2
-  exit 1
-}
+# ---------------------------------------------------------------------------------------------------------------------
 
 file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
@@ -139,15 +221,53 @@ resolve_operator_key() {
   fail "No API key for the Stop and Status checks. Set ROOF_OPERATOR_API_KEY or create ${OPERATOR_KEY_FILE} (mode 600)."
 }
 
+# docker ps filter for exactly one container name (Docker matches the regex against "/<name>").
+name_filter() {
+  printf 'name=^/%s$' "${1//./\\.}"
+}
+
+# lookup_container <docker ps filter>: sets CSTATE (running | stopped | missing), CID (full ID) and CNAME for the one
+# container matching the filter. Returns 1 when Docker cannot be asked or the answer is ambiguous; callers must then
+# stop, because treating an unknown container as missing could start a second controller next to it or remove it while
+# it runs. Anything but exited, created or dead counts as running: a restarting or paused container still owns its
+# name and can drive the HAT.
+lookup_container() {
+  local lines state
+  CSTATE="" CID="" CNAME=""
+  lines=$(dockerc ps -a --no-trunc --filter "$1" --format '{{.State}} {{.ID}} {{.Names}}') || return 1
+  if [[ -z "${lines}" ]]; then
+    CSTATE=missing
+    return 0
+  fi
+  [[ "${lines}" != *$'\n'* ]] || return 1
+  read -r state CID CNAME <<<"${lines}"
+  [[ -n "${CID}" ]] || return 1
+  case "${state}" in
+    exited|created|dead) CSTATE=stopped ;;
+    *) CSTATE=running ;;
+  esac
+}
+
+# Prints running | stopped | missing for a container name; returns 1 when Docker cannot be asked.
 container_state() {
-  # Prints running | stopped | missing
-  local name=${1:-${CONTAINER_NAME}} running
-  if ! running=$(dockerc inspect -f '{{.State.Running}}' "${name}" 2>/dev/null); then
-    echo missing
-  elif [[ "${running}" == "true" ]]; then
-    echo running
-  else
-    echo stopped
+  lookup_container "$(name_filter "${1:-${CONTAINER_NAME}}")" && echo "${CSTATE}"
+}
+
+# Sets STATE/CURRENT_ID and PREVIOUS_STATE/PREVIOUS_ID, or stops the script (nothing has been changed when it runs).
+read_container_states() {
+  lookup_container "$(name_filter "${CONTAINER_NAME}")" \
+    || fail "Could not read the state of ${CONTAINER_NAME} from Docker (docker ps failed or matched more than one container). Nothing was changed; check the Docker context and retry."
+  STATE=${CSTATE} CURRENT_ID=${CID}
+  lookup_container "$(name_filter "${PREVIOUS_CONTAINER_NAME}")" \
+    || fail "Could not read the state of ${PREVIOUS_CONTAINER_NAME} from Docker (docker ps failed or matched more than one container). Nothing was changed; check the Docker context and retry."
+  PREVIOUS_STATE=${CSTATE} PREVIOUS_ID=${CID}
+}
+
+# Two controllers must never drive the HAT, so a running <name>-previous stops a deploy or a rollback before anything
+# is stopped.
+refuse_running_previous() {
+  if [[ "${PREVIOUS_STATE}" == "running" ]]; then
+    fail "${PREVIOUS_CONTAINER_NAME} is running: two controllers must never share the HAT. Stop it (docker stop ${PREVIOUS_CONTAINER_NAME}) and retry."
   fi
 }
 
@@ -194,12 +314,12 @@ check_verified_stop() {
   body=$(sed '$d' <<<"${response}")
 
   if [[ "${http_status}" != "200" ]]; then
-    echo "[deploy] Stop returned HTTP ${http_status:-<none>}: ${body}" >&2
+    log_err "[deploy] Stop returned HTTP ${http_status:-<none>}: ${body}"
     return 1
   fi
 
   if ! parsed=$(parse_status <<<"${body}"); then
-    echo "[deploy] Cannot parse the Stop response (install jq or python3); treating the stop as unverified." >&2
+    log_err "[deploy] Cannot parse the Stop response (install jq or python3); treating the stop as unverified."
     return 1
   fi
 
@@ -217,8 +337,8 @@ confirm_unverified_stop() {
     fail "--force-unverified-stop needs an interactive terminal for the confirmation."
   fi
 
-  echo "[deploy] WARNING: the roof stop is NOT verified. Relays may still be energized while the controller is replaced." >&2
-  echo "[deploy] Confirm you can SEE the roof and it is not moving (or the drive is isolated)." >&2
+  log_err "[deploy] WARNING: the roof stop is NOT verified. Relays may still be energized while the controller is replaced."
+  log_err "[deploy] Confirm you can SEE the roof and it is not moving (or the drive is isolated)."
   local answer
   printf 'Type STOP-UNVERIFIED to continue: ' >&2
   read -r -u 3 answer || answer=""
@@ -230,7 +350,7 @@ stop_roof_before_replacing() {
   echo "[deploy] Requesting a verified roof stop from ${CONTAINER_NAME}"
   local response
   if ! response=$(container_api POST Stop); then
-    echo "[deploy] Could not call Stop inside ${CONTAINER_NAME}." >&2
+    log_err "[deploy] Could not call Stop inside ${CONTAINER_NAME}."
     confirm_unverified_stop
     return
   fi
@@ -242,23 +362,12 @@ stop_roof_before_replacing() {
   fi
 }
 
-# Makes sure <name>-previous can take the current controller: an older stopped one is removed, a running one aborts.
-clear_previous_slot() {
-  case "$(container_state "${PREVIOUS_CONTAINER_NAME}")" in
-    running)
-      fail "${PREVIOUS_CONTAINER_NAME} is running: two controllers must never share the HAT. Stop it (docker stop ${PREVIOUS_CONTAINER_NAME}) and retry."
-      ;;
-    stopped)
-      echo "[deploy] Removing the older ${PREVIOUS_CONTAINER_NAME}"
-      dockerc rm "${PREVIOUS_CONTAINER_NAME}" >/dev/null
-      ;;
-  esac
-}
-
 wait_ready() {
-  local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS))
+  local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) state
   while (( SECONDS < deadline )); do
-    if [[ "$(container_state "${name}")" != "running" ]]; then
+    # A container that has stopped will not become ready. If Docker cannot be asked, keep polling until the deadline.
+    state=$(container_state "${name}") || state=unknown
+    if [[ "${state}" == "stopped" || "${state}" == "missing" ]]; then
       return 1
     fi
     if dockerc exec "${name}" curl -fsS --max-time 5 http://localhost:8080/health/ready >/dev/null 2>&1; then
@@ -291,7 +400,7 @@ verify_controller() {
   echo "[verify] Ready; authenticated Status inside the container: HTTP 200"
 
   if [[ "${SKIP_REMOTE_CHECK}" == "true" ]]; then
-    echo "[verify] WARNING: SKIP_REMOTE_CHECK=true: ${REMOTE_BASE_URL} was not checked from this machine. Check it from a client before relying on remote control." >&2
+    log_err "[verify] WARNING: SKIP_REMOTE_CHECK=true: ${REMOTE_BASE_URL} was not checked from this machine. Check it from a client before relying on remote control."
     return 0
   fi
 
@@ -316,77 +425,204 @@ show_containers() {
   dockerc ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" || true
 }
 
-# Removes the new controller and brings <name>-previous back as <name>, as it was before the deploy (RESTORE_MODE).
-# Always exits non-zero.
-restore_previous() {
-  local reason=$1 mode=${RESTORE_MODE}
-  RESTORE_MODE=""
-  echo "[rollback] ${reason}" >&2
+# ---------------------------------------------------------------------------------------------------------------------
+# Restore. Everything here runs without errexit, and every step checks its own result.
 
-  if [[ "$(container_state "${CONTAINER_NAME}")" != "missing" ]]; then
-    echo "[rollback] Last log lines of the new controller:" >&2
-    dockerc logs --tail 60 "${CONTAINER_NAME}" >&2 || true
-    echo "[rollback] Stopping and removing the new controller (SIGTERM first, so it stops the roof)" >&2
-    dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-    dockerc rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+# The ID of the container this deploy created: from `docker run -d`, or from the cidfile docker writes on creation
+# (a run that failed after creating the container, or was interrupted, prints no ID).
+new_container_id() {
+  if [[ -n "${NEW_CONTAINER_ID}" ]]; then
+    echo "${NEW_CONTAINER_ID}"
+  elif [[ -n "${NEW_CIDFILE}" && -s "${NEW_CIDFILE}" ]]; then
+    tr -d '[:space:]' < "${NEW_CIDFILE}"
+  fi
+}
+
+# rename_back <id> <name>: sets RESTORE_OUTCOME and returns 1 on failure.
+rename_back() {
+  log_err "[rollback] Renaming container ${1:0:12} to $2"
+  if ! dockerc rename "$1" "$2" >/dev/null; then
+    RESTORE_OUTCOME="Could not rename container ${1:0:12} to $2. The roof controller is NOT running; check the containers."
+    return 1
+  fi
+}
+
+# Makes sure no container this run started can run next to the original controller: a deploy stops and removes the
+# container it created (by ID; a container it did not create is never touched), a rollback stops the version it was
+# bringing back. Sets RESTORE_OUTCOME and returns 1 when that cannot be confirmed.
+retire_switch_container() {
+  local id
+  if [[ "${ROLLBACK}" == "true" ]]; then
+    id=${ROLLBACK_TARGET_ID}
+    if lookup_container "id=${id}" && [[ "${CSTATE}" == "running" ]]; then
+      log_err "[rollback] Stopping the version being rolled back to (SIGTERM first, so it stops the roof)"
+      dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${id}" >/dev/null
+    fi
+    if ! lookup_container "id=${id}" || [[ "${CSTATE}" == "running" ]]; then
+      RESTORE_OUTCOME="The version being rolled back to (container ${id:0:12}) could not be stopped, so the original controller was NOT restarted: two controllers must never drive the HAT. Stop it by hand, then check the containers."
+      return 1
+    fi
+    return 0
   fi
 
-  if [[ "${mode}" == "none" ]]; then
-    fail "Deployment failed (${reason}). There was no previous controller to restore: the roof controller is NOT running and the roof cannot be controlled remotely until this is fixed."
+  id=$(new_container_id)
+  [[ -n "${id}" ]] || return 0
+  log_err "[rollback] Last log lines of the new controller:"
+  dockerc logs --tail 60 "${id}" >&2 2>&1 || true
+  log_err "[rollback] Stopping and removing the new controller (SIGTERM first, so it stops the roof)"
+  dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${id}" >/dev/null 2>&1
+  dockerc rm -f "${id}" >/dev/null 2>&1
+  if ! lookup_container "id=${id}" || [[ "${CSTATE}" != "missing" ]]; then
+    RESTORE_OUTCOME="The new controller (container ${id:0:12}) could not be removed, so the previous controller was NOT restarted: two controllers must never drive the HAT. Remove it (docker rm -f ${id:0:12}), then restore ${PREVIOUS_CONTAINER_NAME} by hand."
+    return 1
+  fi
+}
+
+# Puts the rollback target back as <name>-previous (restart policy no) and the original controller back as <name>
+# (restart policy unless-stopped), wherever the switch got to. Sets RESTORE_OUTCOME and returns 1 on failure.
+put_names_back() {
+  local original_name="" target_name=""
+  if [[ -n "${ORIGINAL_ID}" ]]; then
+    if ! lookup_container "id=${ORIGINAL_ID}" || [[ "${CSTATE}" == "missing" ]]; then
+      RESTORE_OUTCOME="The original controller (container ${ORIGINAL_ID:0:12}) could not be found. The roof controller is NOT running; check the containers."
+      return 1
+    fi
+    original_name=${CNAME}
+  fi
+  if [[ -n "${ROLLBACK_TARGET_ID}" ]]; then
+    if ! lookup_container "id=${ROLLBACK_TARGET_ID}" || [[ "${CSTATE}" == "missing" ]]; then
+      RESTORE_OUTCOME="The version being rolled back to (container ${ROLLBACK_TARGET_ID:0:12}) could not be found; the swap was NOT undone. Check the containers."
+      return 1
+    fi
+    target_name=${CNAME}
   fi
 
-  echo "[rollback] Restoring ${PREVIOUS_CONTAINER_NAME} as ${CONTAINER_NAME}" >&2
-  if ! { dockerc rename "${PREVIOUS_CONTAINER_NAME}" "${CONTAINER_NAME}" \
-      && dockerc update --restart unless-stopped "${CONTAINER_NAME}" >/dev/null; }; then
-    show_containers >&2
-    fail "Deployment failed (${reason}) and ${PREVIOUS_CONTAINER_NAME} could not be restored. The roof controller is NOT running."
+  if [[ -n "${target_name}" && "${target_name}" != "${PREVIOUS_CONTAINER_NAME}" ]]; then
+    if [[ "${original_name}" == "${PREVIOUS_CONTAINER_NAME}" ]]; then
+      rename_back "${ORIGINAL_ID}" "${SWAP_CONTAINER_NAME}" || return 1
+      original_name=${SWAP_CONTAINER_NAME}
+    fi
+    rename_back "${ROLLBACK_TARGET_ID}" "${PREVIOUS_CONTAINER_NAME}" || return 1
+  fi
+  if [[ -n "${ROLLBACK_TARGET_ID}" ]]; then
+    dockerc update --restart no "${ROLLBACK_TARGET_ID}" >/dev/null \
+      || log_err "[rollback] WARNING: could not set restart policy no on ${PREVIOUS_CONTAINER_NAME}"
   fi
 
-  if [[ "${mode}" == "stopped" ]]; then
-    show_containers
-    fail "Deployment failed (${reason}). Rolled back: the previous controller is restored as ${CONTAINER_NAME}, stopped as it was before the deploy."
+  if [[ -n "${original_name}" && "${original_name}" != "${CONTAINER_NAME}" ]]; then
+    if ! lookup_container "$(name_filter "${CONTAINER_NAME}")"; then
+      RESTORE_OUTCOME="Docker could not report whether ${CONTAINER_NAME} is free; the original controller was NOT restored (it is kept, stopped, as ${original_name})."
+      return 1
+    fi
+    if [[ "${CSTATE}" != "missing" ]]; then
+      RESTORE_OUTCOME="${CONTAINER_NAME} is taken by a container this run did not create (${CID:0:12}); it was left alone, and the original controller was NOT restored: it is kept, stopped, as ${original_name}. Check the containers."
+      return 1
+    fi
+    rename_back "${ORIGINAL_ID}" "${CONTAINER_NAME}" || return 1
+    dockerc update --restart unless-stopped "${ORIGINAL_ID}" >/dev/null \
+      || log_err "[rollback] WARNING: could not set restart policy unless-stopped on ${CONTAINER_NAME}"
   fi
+}
 
-  if ! dockerc start "${CONTAINER_NAME}" >/dev/null; then
-    show_containers >&2
-    fail "Deployment failed (${reason}) and the previous controller could not be restarted. The roof controller is NOT running."
+# Starts the original controller again if it was running before the switch. Sets RESTORE_OUTCOME.
+restart_original() {
+  local mode=$1
+  case "${mode}" in
+    none)
+      if [[ "${ROLLBACK}" == "true" ]]; then
+        RESTORE_OUTCOME="Undone: ${PREVIOUS_CONTAINER_NAME} is back, stopped. There was no ${CONTAINER_NAME} before the rollback, so no controller is running."
+      else
+        RESTORE_OUTCOME="There was no previous controller to restore: the roof controller is NOT running and the roof cannot be controlled remotely until this is fixed."
+      fi
+      return
+      ;;
+    stopped)
+      if [[ "${ROLLBACK}" == "true" ]]; then
+        RESTORE_OUTCOME="Undone: the original controller is back as ${CONTAINER_NAME}, stopped as it was before; ${PREVIOUS_CONTAINER_NAME} is unchanged."
+      else
+        RESTORE_OUTCOME="Rolled back: the previous controller is restored as ${CONTAINER_NAME}, stopped as it was before the deploy."
+      fi
+      return
+      ;;
+  esac
+
+  log_err "[rollback] Starting the original controller as ${CONTAINER_NAME}"
+  if ! dockerc start "${ORIGINAL_ID}" >/dev/null; then
+    RESTORE_OUTCOME="The previous controller could not be restarted. The roof controller is NOT running."
+    return
   fi
-
   if wait_ready "${CONTAINER_NAME}"; then
-    show_containers
-    fail "Deployment failed (${reason}). Rolled back: the previous controller is running and ready."
+    if [[ "${ROLLBACK}" == "true" ]]; then
+      RESTORE_OUTCOME="Undone: the original controller is running and ready as ${CONTAINER_NAME}; ${PREVIOUS_CONTAINER_NAME} is unchanged."
+    else
+      RESTORE_OUTCOME="Rolled back: the previous controller is running and ready."
+    fi
+    return
+  fi
+  dockerc logs --tail 60 "${CONTAINER_NAME}" >&2 2>&1 || true
+  RESTORE_OUTCOME="The previous controller was restarted but did not become ready. The roof cannot be controlled remotely until this is fixed."
+}
+
+# Undoes an unfinished switch (RESTORE_MODE) and reports the outcome; the caller exits non-zero. Further signals are
+# ignored and failed writes do not matter, so a second Ctrl-C or a lost terminal cannot cut the restore short.
+restore_original() {
+  local reason=$1 mode=${RESTORE_MODE} what=Deployment
+  set +e
+  trap '' HUP INT TERM PIPE
+  RESTORING=true
+  [[ "${ROLLBACK}" != "true" ]] || what=Rollback
+  log_err "[rollback] ${reason}"
+
+  RESTORE_OUTCOME=""
+  if retire_switch_container && put_names_back; then
+    restart_original "${mode}"
   fi
 
-  dockerc logs --tail 60 "${CONTAINER_NAME}" >&2 || true
-  fail "Deployment failed (${reason}). The previous controller was restarted but did not become ready. The roof cannot be controlled remotely until this is fixed."
+  show_containers >&2
+  log_err "[deploy] ERROR: ${what} failed (${reason}). ${RESTORE_OUTCOME}"
+  RESTORE_MODE=""
+}
+
+# Restores the original controller and exits non-zero. For failures during the switch.
+abort_switch() {
+  restore_original "$1"
+  exit 1
 }
 
 on_exit() {
   local status=$?
-  if [[ -n "${TMP_TAR}" ]]; then
-    rm -f "${TMP_TAR}"
-  fi
+  # This runs on every exit, including a signal or a lost terminal: no errexit and no further interruptions.
+  set +e
+  trap '' HUP INT TERM PIPE
   if [[ -n "${RESTORE_MODE}" ]]; then
-    restore_previous "the deploy stopped unexpectedly (exit ${status}) while switching controllers"
+    if [[ "${RESTORING}" == "true" ]]; then
+      log_err "[deploy] ERROR: the restore did not finish; check the containers (docker ps -a --filter name=${CONTAINER_NAME})."
+    else
+      restore_original "the script stopped unexpectedly (exit ${status}) while switching controllers"
+    fi
+    [[ "${status}" != "0" ]] || status=1
   fi
+  if [[ -n "${WORK_DIR}" ]]; then
+    rm -rf "${WORK_DIR}"
+  fi
+  exit "${status}"
 }
 trap on_exit EXIT
+# Signals end the script through the EXIT trap (which restores during the switch) with the usual 128+N status.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 141' PIPE
+trap 'exit 143' TERM
+
+# ---------------------------------------------------------------------------------------------------------------------
 
 if ! dockerc info >/dev/null 2>&1; then
   fail "Docker context '${DOCKER_CONTEXT}' is not available. Configure it first (e.g. docker context use ${DOCKER_CONTEXT})."
 fi
 
-if [[ "${ROLLBACK}" != "true" && -z "${HTTPS_CERT_DIR}" && "${ALLOW_INSECURE_HTTP}" != "true" ]]; then
-  fail "Set HTTPS_CERT_DIR (directory on the Pi with ${HTTPS_CERT_FILE}) or ALLOW_INSECURE_HTTP=true. Without HTTPS, API keys cross the network in clear text and LAN clients get 403 https_required unless RequireHttps is disabled. See docs/deployment.md."
-fi
-
-if [[ -n "${REMOTE_CA_CERT}" && ! -r "${REMOTE_CA_CERT}" ]]; then
-  fail "REMOTE_CA_CERT '${REMOTE_CA_CERT}' is not a readable file on this machine."
-fi
-
 resolve_operator_key
-STATE=$(container_state)
-echo "[deploy] Existing container ${CONTAINER_NAME}: ${STATE}; ${PREVIOUS_CONTAINER_NAME}: $(container_state "${PREVIOUS_CONTAINER_NAME}")"
+read_container_states
+echo "[deploy] Existing container ${CONTAINER_NAME}: ${STATE}; ${PREVIOUS_CONTAINER_NAME}: ${PREVIOUS_STATE}"
 
 if [[ "${DRY_RUN}" == "true" ]]; then
   if [[ "${STATE}" == "running" ]]; then
@@ -415,27 +651,60 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   exit 0
 fi
 
+# The dry-run block above and the rollback block below always exit. A top-level command that bash abandons (an
+# expansion error does that without tripping set -e) must never fall through into a swap, a build or a deploy.
+[[ "${DRY_RUN}" != "true" ]] || fail "internal error: the --dry-run path did not finish; nothing was changed."
+
+refuse_running_previous
+
 if [[ "${ROLLBACK}" == "true" ]]; then
-  [[ "$(container_state "${PREVIOUS_CONTAINER_NAME}")" == "stopped" ]] \
+  lookup_container "$(name_filter "${SWAP_CONTAINER_NAME}")" \
+    || fail "Could not read the state of ${SWAP_CONTAINER_NAME} from Docker. Nothing was changed; check the Docker context and retry."
+  if [[ "${CSTATE}" != "missing" ]]; then
+    fail "${SWAP_CONTAINER_NAME} exists: an earlier --rollback stopped halfway and could not be undone. Nothing was changed. Find out which version it is (docker ps -a --filter name=${CONTAINER_NAME}), rename it to whichever of ${CONTAINER_NAME} and ${PREVIOUS_CONTAINER_NAME} is free (docker rename ${SWAP_CONTAINER_NAME} <name>) or remove it if it is not needed, then retry."
+  fi
+  [[ "${PREVIOUS_STATE}" == "stopped" ]] \
     || fail "There is no stopped ${PREVIOUS_CONTAINER_NAME} to roll back to."
 
   if [[ "${STATE}" == "running" ]]; then
     stop_roof_before_replacing
+  fi
+
+  # From here until the restored version has started, a failure or an interrupt undoes the swap (restore_original).
+  ORIGINAL_ID=${CURRENT_ID}
+  ROLLBACK_TARGET_ID=${PREVIOUS_ID}
+  if [[ "${STATE}" == "missing" ]]; then
+    RESTORE_MODE=none
+  else
+    RESTORE_MODE=${STATE}
+  fi
+
+  if [[ "${STATE}" == "running" ]]; then
     echo "[rollback] Stopping ${CONTAINER_NAME} gracefully (SIGTERM, up to ${STOP_TIMEOUT_SECONDS}s)"
-    dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${CONTAINER_NAME}" >/dev/null
+    dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${CONTAINER_NAME}" >/dev/null \
+      || abort_switch "Could not stop ${CONTAINER_NAME}"
   fi
 
   echo "[rollback] Swapping ${CONTAINER_NAME} and ${PREVIOUS_CONTAINER_NAME}"
   if [[ "${STATE}" != "missing" ]]; then
-    dockerc rename "${CONTAINER_NAME}" "${CONTAINER_NAME}-swap"
-    dockerc update --restart no "${CONTAINER_NAME}-swap" >/dev/null
+    dockerc rename "${CONTAINER_NAME}" "${SWAP_CONTAINER_NAME}" \
+      || abort_switch "Could not rename ${CONTAINER_NAME} to ${SWAP_CONTAINER_NAME}"
+    dockerc update --restart no "${SWAP_CONTAINER_NAME}" >/dev/null \
+      || abort_switch "Could not set restart policy no on ${SWAP_CONTAINER_NAME}"
   fi
-  dockerc rename "${PREVIOUS_CONTAINER_NAME}" "${CONTAINER_NAME}"
+  dockerc rename "${PREVIOUS_CONTAINER_NAME}" "${CONTAINER_NAME}" \
+    || abort_switch "Could not rename ${PREVIOUS_CONTAINER_NAME} to ${CONTAINER_NAME}"
   if [[ "${STATE}" != "missing" ]]; then
-    dockerc rename "${CONTAINER_NAME}-swap" "${PREVIOUS_CONTAINER_NAME}"
+    dockerc rename "${SWAP_CONTAINER_NAME}" "${PREVIOUS_CONTAINER_NAME}" \
+      || abort_switch "Could not rename ${SWAP_CONTAINER_NAME} to ${PREVIOUS_CONTAINER_NAME}"
   fi
-  dockerc update --restart unless-stopped "${CONTAINER_NAME}" >/dev/null
-  dockerc start "${CONTAINER_NAME}" >/dev/null
+  dockerc update --restart unless-stopped "${CONTAINER_NAME}" >/dev/null \
+    || abort_switch "Could not set restart policy unless-stopped on ${CONTAINER_NAME}"
+  echo "[rollback] Starting ${CONTAINER_NAME}"
+  dockerc start "${CONTAINER_NAME}" >/dev/null \
+    || abort_switch "Could not start the rolled-back controller ${CONTAINER_NAME}"
+  # Started: whatever the checks say, it is left running (run --rollback again to swap back).
+  RESTORE_MODE=""
 
   if ! verify_controller "${CONTAINER_NAME}"; then
     show_containers
@@ -445,6 +714,8 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   echo "[done] Rolled back. ${CONTAINER_NAME} is verified at ${REMOTE_BASE_URL}; the replaced version is kept as ${PREVIOUS_CONTAINER_NAME}."
   exit 0
 fi
+
+[[ "${ROLLBACK}" != "true" ]] || fail "internal error: the --rollback path did not finish; nothing was built or deployed."
 
 if ! docker buildx version >/dev/null 2>&1; then
   fail "docker buildx is required but not available. Install Docker Buildx and try again."
@@ -458,11 +729,11 @@ docker buildx build \
   --load \
   "${REPO_ROOT}"
 
-TMP_TAR=$(mktemp)
-docker save "${IMAGE_TAG}" -o "${TMP_TAR}"
+WORK_DIR=$(mktemp -d)
+docker save "${IMAGE_TAG}" -o "${WORK_DIR}/image.tar"
 
 echo "[deploy] Loading image into Docker context '${DOCKER_CONTEXT}'"
-dockerc load < "${TMP_TAR}"
+dockerc load < "${WORK_DIR}/image.tar"
 
 # Environment, devices and mounts of the controller container. The pre-flight check runs with exactly these.
 # shellcheck disable=SC2054 # commas are part of --mount values
@@ -501,11 +772,7 @@ if [[ -n "${ALLOWED_HOSTS}" ]]; then
   container_args+=(--env "AllowedHosts=${ALLOWED_HOSTS}")
 fi
 
-if [[ -n "${EXTRA_DOCKER_ARGS}" ]]; then
-  # shellcheck disable=SC2206
-  extra_args=(${EXTRA_DOCKER_ARGS})
-  container_args+=("${extra_args[@]}")
-fi
+container_args+=(${extra_args[@]+"${extra_args[@]}"})
 
 # Pre-flight on the Pi with the new image and the final container's configuration, before touching the running
 # controller. Docker checks the devices and mount sources; --validate-deployment checks the configuration (it does
@@ -517,51 +784,55 @@ if ! dockerc run --rm "${container_args[@]}" --env "DeploymentCheck__DeployKeySh
   fail "Pre-flight failed (see above). The running controller was not touched."
 fi
 
+# The build and the pre-flight take minutes: decide on the containers as they are now.
+read_container_states
+refuse_running_previous
+
+# From the first change on, a failure or an interrupt restores the original controller (restore_original).
+ORIGINAL_ID=${CURRENT_ID}
 case "${STATE}" in
   running)
-    clear_previous_slot
     stop_roof_before_replacing
+    RESTORE_MODE=running
     echo "[deploy] Stopping ${CONTAINER_NAME} gracefully (SIGTERM, up to ${STOP_TIMEOUT_SECONDS}s)"
-    if ! dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${CONTAINER_NAME}" >/dev/null; then
-      show_containers >&2
-      fail "Could not stop ${CONTAINER_NAME}; it was not replaced. Check its state before retrying."
-    fi
+    dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${CONTAINER_NAME}" >/dev/null \
+      || abort_switch "Could not stop ${CONTAINER_NAME}; it was not replaced"
     ;;
   stopped)
-    clear_previous_slot
+    RESTORE_MODE=stopped
     echo "[deploy] ${CONTAINER_NAME} is not running (nothing to stop). The new controller turns all relays off when it initializes."
     ;;
   missing)
     # Any existing <name>-previous is left alone.
+    RESTORE_MODE=none
     echo "[deploy] No existing container."
     ;;
 esac
 
-if [[ "${STATE}" == "missing" ]]; then
-  RESTORE_MODE=none
-else
-  echo "[deploy] Keeping the old controller as ${PREVIOUS_CONTAINER_NAME} (not restarted automatically)"
-  if ! dockerc rename "${CONTAINER_NAME}" "${PREVIOUS_CONTAINER_NAME}"; then
-    if [[ "${STATE}" == "running" ]]; then
-      dockerc start "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-    fi
-    show_containers >&2
-    fail "Could not rename ${CONTAINER_NAME} to ${PREVIOUS_CONTAINER_NAME}; it was not replaced."
+if [[ "${STATE}" != "missing" ]]; then
+  # Only now, once the old controller has stopped, is an older stopped <name>-previous removed (by ID).
+  if [[ "${PREVIOUS_STATE}" == "stopped" ]]; then
+    echo "[deploy] Removing the older ${PREVIOUS_CONTAINER_NAME}"
+    dockerc rm "${PREVIOUS_ID}" >/dev/null \
+      || abort_switch "Could not remove the older ${PREVIOUS_CONTAINER_NAME}; ${CONTAINER_NAME} was not replaced"
   fi
-  RESTORE_MODE=${STATE}
-  dockerc update --restart no "${PREVIOUS_CONTAINER_NAME}" >/dev/null
+  echo "[deploy] Keeping the old controller as ${PREVIOUS_CONTAINER_NAME} (not restarted automatically)"
+  dockerc rename "${CONTAINER_NAME}" "${PREVIOUS_CONTAINER_NAME}" \
+    || abort_switch "Could not rename ${CONTAINER_NAME} to ${PREVIOUS_CONTAINER_NAME}; it was not replaced"
+  dockerc update --restart no "${PREVIOUS_CONTAINER_NAME}" >/dev/null \
+    || abort_switch "Could not set restart policy no on ${PREVIOUS_CONTAINER_NAME}"
 fi
 
 echo "[deploy] Starting the new container on ${PI_HOST}"
-if ! dockerc run -d --name "${CONTAINER_NAME}" --restart unless-stopped --stop-timeout "${STOP_TIMEOUT_SECONDS}" \
-    --log-driver local --log-opt max-size=10m --log-opt max-file=5 \
-    "${publish_args[@]}" "${container_args[@]}" "${IMAGE_TAG}" >/dev/null; then
-  restore_previous "docker run failed for the new controller"
-fi
+# Docker writes the new container's ID to the cidfile as soon as it is created, so the restore can remove it even
+# when `docker run` fails after creating it (e.g. a port already in use).
+NEW_CIDFILE="${WORK_DIR}/new-controller.cid"
+NEW_CONTAINER_ID=$(dockerc run -d --cidfile "${NEW_CIDFILE}" --name "${CONTAINER_NAME}" --restart unless-stopped \
+    --stop-timeout "${STOP_TIMEOUT_SECONDS}" --log-driver local --log-opt max-size=10m --log-opt max-file=5 \
+    "${publish_args[@]}" "${container_args[@]}" "${IMAGE_TAG}") \
+  || abort_switch "docker run failed for the new controller"
 
-if ! verify_controller "${CONTAINER_NAME}"; then
-  restore_previous "${FAILURE}"
-fi
+verify_controller "${CONTAINER_NAME}" || abort_switch "${FAILURE}"
 RESTORE_MODE=""
 
 echo "[deploy] Container status"
