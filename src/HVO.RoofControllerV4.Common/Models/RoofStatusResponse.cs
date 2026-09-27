@@ -31,6 +31,19 @@ namespace HVO.RoofControllerV4.Common.Models
         /// <summary>Last relay register value read back (bits 0-3 = relays 1-4), or null when unknown.</summary>
         public int? RelayRegisterMask { get; init; }
 
+        /// <summary>
+        /// True when the most recent relay register read succeeded and is recent. False while reads fail or when
+        /// supervision has not read the register recently; <see cref="RelayRegisterState"/> then reports the last result
+        /// that was read, not the current register.
+        /// </summary>
+        public bool RelayRegisterReadsHealthy { get; init; }
+
+        /// <summary>UTC time of the most recent successful relay register read.</summary>
+        public DateTimeOffset? LastSuccessfulRelayReadUtc { get; init; }
+
+        /// <summary>Number of consecutive failed relay register reads.</summary>
+        public int ConsecutiveRelayReadFailures { get; init; }
+
         /// <summary>True when a safety fault is latched and must be reset (ClearFault) before motion is allowed.</summary>
         public bool IsFaultLatched { get; init; }
 

@@ -10,7 +10,7 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
     /// </summary>
     /// <remarks>
     /// Unhealthy: disposed, shutting down, not initialized, safety inputs unhealthy (stale or failing reads), relay register
-    /// unverified, a latched safety fault, or <see cref="RoofControllerStatus.Error"/>.
+    /// unverified, relay register reads failing or stale, a latched safety fault, or <see cref="RoofControllerStatus.Error"/>.
     /// Degraded: status Unknown, simulation (no physical hardware), physical limit switches ignored, or input polling
     /// disabled (edge detection relies on periodic verification only).
     /// </remarks>
@@ -56,6 +56,9 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                     ["LastSuccessfulInputReadUtc"] = snapshot.LastSuccessfulInputReadUtc?.UtcDateTime.ToString("O") ?? string.Empty,
                     ["ConsecutiveInputReadFailures"] = snapshot.ConsecutiveInputReadFailures,
                     ["RelayRegisterState"] = snapshot.RelayRegisterState.ToString(),
+                    ["RelayRegisterReadsHealthy"] = snapshot.RelayRegisterReadsHealthy,
+                    ["LastSuccessfulRelayReadUtc"] = snapshot.LastSuccessfulRelayReadUtc?.UtcDateTime.ToString("O") ?? string.Empty,
+                    ["ConsecutiveRelayReadFailures"] = snapshot.ConsecutiveRelayReadFailures,
                     ["IsFaultLatched"] = snapshot.IsFaultLatched,
                     ["LatchedFaultReason"] = snapshot.LatchedFaultReason?.ToString() ?? string.Empty,
                     ["IsClearFaultInProgress"] = snapshot.IsClearFaultInProgress,
@@ -91,6 +94,11 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                 if (!snapshot.InputsHealthy)
                 {
                     return Unhealthy("Roof controller safety inputs are not healthy", data);
+                }
+
+                if (!snapshot.RelayRegisterReadsHealthy)
+                {
+                    return Unhealthy("Roof controller relay register reads are failing or stale", data);
                 }
 
                 if (snapshot.Status == RoofControllerStatus.Error)

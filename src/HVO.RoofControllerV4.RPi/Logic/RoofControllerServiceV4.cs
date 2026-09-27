@@ -38,10 +38,30 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     /// <summary>Shortest delay between supervision cycles, so a passed deadline cannot spin the loop.</summary>
     internal static readonly TimeSpan MinimumSupervisionDelay = TimeSpan.FromMilliseconds(10);
 
-    /// <summary>Minimum age after which the cached safety inputs are considered stale.</summary>
-    internal static readonly TimeSpan MinimumInputStaleness = TimeSpan.FromSeconds(5);
+    /// <summary>Minimum age after which the cached safety inputs, or the last relay register read, are considered stale.</summary>
+    internal static readonly TimeSpan MinimumReadStaleness = TimeSpan.FromSeconds(5);
 
-    /// <summary>How long dispose waits for the supervision loop and the status dispatcher to finish.</summary>
+    /// <summary>
+    /// Consecutive failed relay register reads after which supervision stops motion (latching
+    /// <see cref="RoofControllerStopReason.RelayVerificationFailed"/>) or, when idle, re-runs the all-off sequence.
+    /// Fixed rather than configurable: the register read-back is the only evidence of the relay state, so a single
+    /// failure is tolerated and a second one is not.
+    /// </summary>
+    internal const int MaxConsecutiveRelayReadFailures = 2;
+
+    /// <summary>
+    /// Interval between all-off attempts after a shutdown stop could not verify the relay register. Supervision has
+    /// stopped by then, so this retry is the only path that re-drives the relays off before the process exits.
+    /// </summary>
+    internal static readonly TimeSpan ShutdownStopRetryInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>How long the shutdown stop retry keeps trying before it gives up (it also ends at disposal).</summary>
+    internal static readonly TimeSpan ShutdownStopRetryWindow = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// How long dispose waits for the controller lock (held by a call blocked in HAT I/O, for example), and then for the
+    /// supervision loop, the shutdown stop retry and the status dispatcher to finish.
+    /// </summary>
     internal static readonly TimeSpan DisposeWaitTimeout = TimeSpan.FromSeconds(2);
 
     // One relay transaction lock per HAT instance, so relay sequences from different service instances sharing a HAT
@@ -57,6 +77,11 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private readonly ILogger<RoofControllerServiceV4> _logger;
     private readonly FourRelayFourInputHat _hat;
     private readonly TimeProvider _timeProvider;
+
+    // Anchor of the monotonic controller clock (see Now): the wall clock and the monotonic timestamp at construction.
+    private readonly DateTimeOffset _clockOriginUtc;
+    private readonly long _clockOriginTimestamp;
+
     private readonly object _hatTransactionLock;
     private readonly string _controllerName;
     private readonly string _controllerInstanceId = Guid.NewGuid().ToString();
@@ -70,6 +95,13 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private bool _initialized;
     private volatile bool _shuttingDown;
     private volatile bool _disposed;
+
+    // Set once when disposal timed out on the lock; runs the all-off stop when the blocked call returns.
+    private Task? _deferredDisposalTask;
+
+    // Bounded all-off retry after an unverified shutdown stop (see ShutdownStopRetryInterval).
+    private Task<bool>? _shutdownStopRetryTask;
+    private CancellationTokenSource? _shutdownStopRetryCts;
 
     // Commanded motion and supervision deadlines.
     private RoofMotionDirection _commandedMotion = RoofMotionDirection.None;
@@ -89,6 +121,8 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     // Relay register state (read-back of the HAT register, not contact state).
     private RoofRelayRegisterState _relayRegisterState = RoofRelayRegisterState.Unknown;
     private int? _relayRegisterMask;
+    private DateTimeOffset? _lastSuccessfulRelayReadUtc;
+    private int _consecutiveRelayReadFailures;
 
     // Raw electrical input levels from the last successful read or edge event (null until known).
     private bool? _rawIn1;
@@ -152,6 +186,8 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         _logger = logger;
         _hat = fourRelayFourInputHat;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _clockOriginUtc = _timeProvider.GetUtcNow();
+        _clockOriginTimestamp = _timeProvider.GetTimestamp();
         _options = (roofControllerOptions.Value ?? new RoofControllerOptionsV4()) with { };
         _hatTransactionLock = HatTransactionLocks.GetValue(fourRelayFourInputHat, static _ => new object());
 
@@ -188,7 +224,19 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         get { lock (_syncLock) { return _motionGeneration; } }
     }
 
-    private DateTimeOffset Now => _timeProvider.GetUtcNow();
+    /// <summary>
+    /// Controller time: monotonic, anchored to the wall clock at construction. Every deadline, staleness check and internal
+    /// timestamp uses it, so a wall-clock step (an NTP correction, or a Pi without an RTC battery setting its clock after
+    /// boot) neither keeps an expired lease alive nor expires one early. Published timestamps are converted to wall-clock
+    /// UTC with <see cref="WallClockOffset"/>.
+    /// </summary>
+    private DateTimeOffset Now => _clockOriginUtc + _timeProvider.GetElapsedTime(_clockOriginTimestamp);
+
+    /// <summary>
+    /// Current wall clock minus controller time (<see cref="Now"/>): zero until the wall clock is stepped or drifts. Adding
+    /// it to a controller-time timestamp gives the wall-clock UTC with the same age.
+    /// </summary>
+    private TimeSpan WallClockOffset => _timeProvider.GetUtcNow() - Now;
 
     public bool IsInitialized
     {
@@ -213,7 +261,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     public DateTimeOffset? LastTransitionUtc
     {
-        get { lock (_syncLock) { return _lastTransitionUtc; } }
+        get { lock (_syncLock) { return _lastTransitionUtc + WallClockOffset; } }
     }
 
     public bool IsWatchdogActive
@@ -317,7 +365,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     private bool LimitsContradictory_NoLock => OpenLimitActive_NoLock == true && ClosedLimitActive_NoLock == true;
 
-    private TimeSpan InputStalenessLimit_NoLock
+    private TimeSpan ReadStalenessLimit_NoLock
     {
         get
         {
@@ -328,14 +376,19 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             }
 
             var limit = TimeSpan.FromTicks(cadence.Ticks * 3);
-            return limit > MinimumInputStaleness ? limit : MinimumInputStaleness;
+            return limit > MinimumReadStaleness ? limit : MinimumReadStaleness;
         }
     }
 
     private bool InputsHealthy_NoLock(DateTimeOffset now)
         => _lastSuccessfulInputReadUtc is { } lastRead
            && _consecutiveInputReadFailures == 0
-           && now - lastRead <= InputStalenessLimit_NoLock;
+           && now - lastRead <= ReadStalenessLimit_NoLock;
+
+    private bool RelayRegisterReadsHealthy_NoLock(DateTimeOffset now)
+        => _lastSuccessfulRelayReadUtc is { } lastRead
+           && _consecutiveRelayReadFailures == 0
+           && now - lastRead <= ReadStalenessLimit_NoLock;
 
     private bool IsWatchdogActive_NoLock => _commandedMotion != RoofMotionDirection.None && _watchdogDeadlineUtc is not null;
 
@@ -441,11 +494,15 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             leaseRemaining = leaseRemaining is { } l ? Math.Ceiling(l) : null;
         }
 
+        // Published timestamps are wall-clock UTC. The key keeps controller time, so a wall-clock step (or drift between
+        // the two clocks) is never a change by itself. Countdowns are differences of controller time and need no offset.
+        var toWallClock = forKey ? TimeSpan.Zero : WallClockOffset;
+
         return new RoofStatusResponse(
             _status,
             _commandedMotion != RoofMotionDirection.None,
             _lastStopReason,
-            _lastTransitionUtc,
+            _lastTransitionUtc + toWallClock,
             IsWatchdogActive_NoLock,
             watchdogRemaining,
             _rawIn4 == true,
@@ -453,10 +510,13 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             _options.IgnorePhysicalLimitSwitches)
         {
             StatusVersion = forKey ? 0 : _statusVersion,
-            SnapshotUtc = forKey ? default : now,
+            SnapshotUtc = forKey ? default : now + toWallClock,
             CommandedMotion = _commandedMotion,
             RelayRegisterState = _relayRegisterState,
             RelayRegisterMask = _relayRegisterMask,
+            RelayRegisterReadsHealthy = RelayRegisterReadsHealthy_NoLock(now),
+            LastSuccessfulRelayReadUtc = forKey ? null : _lastSuccessfulRelayReadUtc + toWallClock,
+            ConsecutiveRelayReadFailures = _consecutiveRelayReadFailures,
             IsFaultLatched = _faultLatched,
             LatchedFaultReason = _faultLatched ? _latchedFaultReason : null,
             IsDriveFaultActive = DriveFaultActive_NoLock,
@@ -464,7 +524,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             IsClosedLimitActive = ClosedLimitActive_NoLock,
             InputsHealthy = InputsHealthy_NoLock(now),
             // The read timestamp advances every supervision cycle; it is reported but does not by itself bump the version.
-            LastSuccessfulInputReadUtc = forKey ? null : _lastSuccessfulInputReadUtc,
+            LastSuccessfulInputReadUtc = forKey ? null : _lastSuccessfulInputReadUtc + toWallClock,
             ConsecutiveInputReadFailures = _consecutiveInputReadFailures,
             LeaseSecondsRemaining = leaseRemaining,
             IsClearFaultInProgress = _clearFaultInProgress,

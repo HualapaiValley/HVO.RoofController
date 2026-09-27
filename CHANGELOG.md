@@ -50,7 +50,11 @@ the roof against this server; use the authenticated browser console for operator
   Viewer key or the console sign-in.
 - **Deployment.** `deploy-roofcontroller-rpi.sh` needs the operator key
   (`ROOF_OPERATOR_API_KEY` or `~/.config/hvo-roof/operator.key`) and aborts unless the Stop it
-  sends is verified. See [docs/deployment.md](docs/deployment.md).
+  sends is verified. It needs `HTTPS_CERT_DIR` (or `ALLOW_INSECURE_HTTP=true`); with HTTPS it
+  publishes only port 8443 and plain HTTP stays on loopback inside the container, so automation
+  that used `http://<pi>:8080` must move to `https://<pi>:8443`. The compose `pi` profile
+  likewise needs a certificate and publishes only 8443; the new `pi-lan-http` profile is the
+  explicit plain-HTTP opt-out. See [docs/deployment.md](docs/deployment.md).
 
 ### Added
 
@@ -73,11 +77,49 @@ the roof against this server; use the authenticated browser console for operator
 - [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
   telemetry-outage and RV-6 soak procedures) and [docs/ci-runners.md](docs/ci-runners.md).
 - Root `.dockerignore` for the repository-root build context.
+- Deployment check: `dotnet HVO.RoofControllerV4.RPi.dll --validate-deployment` validates the
+  configuration without starting the host or touching the HAT: the roof options (including the
+  limit-switch override when `/dev/i2c-1` is mapped), the other options sections and log levels,
+  the API keys and the deploying key's role, the listeners Kestrel would actually use (including
+  the `http://localhost:8080` listener the health check needs, and endpoints Kestrel would refuse),
+  every configured certificate (loaded as Kestrel loads it, with the Server Authentication usage)
+  and that `AllowedHosts` includes `localhost`. The deploy script runs it with the final
+  container's configuration before stopping anything; both compose profiles run it before the
+  controller starts.
+- The deploy script verifies the new controller from the deploying machine (authenticated
+  Status and a verified Stop at the published URL, `REMOTE_CA_CERT` for a private CA), keeps
+  the old container as `roof-controller-previous` and rolls back to it when the new one fails.
+  `--rollback` swaps them on demand.
+- The deploy script checks its settings before contacting Docker (whole decimal numbers, the
+  poll interval, `EXTRA_DOCKER_ARGS`, which may not set the name, detach, removal, restart
+  policy, cidfile, ports, stop timeout or stop signal, and the HTTPS choice, now also for
+  `--rollback`). It stops with nothing changed when Docker cannot report the containers' state,
+  or when `roof-controller-previous` is running, restarting or paused. Once the old controller's
+  stop begins, any failure, signal or lost terminal restores it; only the container the run
+  created is removed. From that stop on, docker runs in its own session, so an interrupt waits
+  for the call in progress instead of cutting it short, and the restore stops an old controller
+  that is still running before starting it again. An older `roof-controller-previous` is removed
+  only after the stop succeeds. `--rollback` undoes a failed or interrupted swap and refuses to
+  run while `roof-controller-swap` exists. Needs Docker CLI 20.10 or later, and `setsid` or
+  `perl`; the Docker context must connect without prompting, which is checked before anything
+  changes.
+- Relay register read supervision: `relayRegisterReadsHealthy`, `lastSuccessfulRelayReadUtc`
+  and `consecutiveRelayReadFailures` in Status. One failed or stale read fails readiness; two
+  consecutive failures stop motion and latch `RelayVerificationFailed`.
+- An unverified shutdown stop is retried (all-off every 500 ms until it verifies, the controller
+  is disposed or 15 s pass), and the host's shutdown wait is bounded even if a HAT call blocks
+  (it logs Critical and moves on). While that call is still blocked, later shutdown triggers do
+  not queue another one, and disposal stops waiting for the controller lock after 2 s (its
+  all-off stop runs if the stuck call returns; until then the controller is shutting down, not
+  disposed).
+- CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
+  `docker`/`curl`, and `docker compose config` for both profiles.
 
 ### Changed
 
 - The safety watchdog is an absolute cap on each movement; repeating a command no longer
-  extends it.
+  extends it. A repeated Open/Close or a lease renewal first enforces the watchdog, lease and
+  at-speed deadlines, so it cannot revive an expired lease.
 - CI: all actions pinned to commit SHAs, read-only token permissions, `dotnet` run from `src/`
   so `src/global.json` applies, the whole solution built in Debug and in Release with warnings
   as errors, a coverage filter that matches the project assemblies, and a check that the dev

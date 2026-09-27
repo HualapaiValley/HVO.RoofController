@@ -46,7 +46,8 @@ These stop reasons **latch** a safety fault:
 
 - `SafetyWatchdogTimeout`
 - `DriveFault` (IN3 active while moving, or IN3 active while idle, including at start-up)
-- `RelayVerificationFailed` (a relay transition or supervision check did not read back the expected register value)
+- `RelayVerificationFailed` (a relay transition or supervision check did not read back the expected register value, or
+  two consecutive periodic relay register reads failed)
 - `InputReadFailure` (`MaxConsecutiveInputReadFailures` consecutive failed input reads while moving)
 - `ContradictoryLimitInputs` (both limits active, while moving or idle)
 - `StartLimitReasserted` (the departure limit reasserted after its release was verified)
@@ -114,8 +115,12 @@ models exactly that register.
 | `Services/RoofControllerClearFaultTests` | Pulse bounds, serialization, Stop preemption, release/assert failures, reset conditions |
 | `Services/RoofControllerConfigurationTests` | Versioned and transactional updates, local-only consent, validation |
 | `Services/RoofControllerStatusDispatchTests` | Ordered delivery, `StatusVersion`, drop-oldest queue, handler isolation |
+| `Services/RoofControllerRelayReadFailureTests` | Failed and stale periodic relay register reads: unhealthy after one, stop and latch after two, idle all-off |
 | `Services/RoofControllerDisposalTests`, `HatConcurrencyTests` | Shutdown and disposal, two controllers on one HAT |
-| `HostedServices/…`, `HealthChecks/…`, `Models/…` | Host shutdown path, health rules, options validation |
+| `Services/RoofControllerShutdownRetryTests` | Unverified shutdown stop: background all-off retry, give-up, disposal cancels it |
+| `HostedServices/…`, `HealthChecks/…`, `Models/…` | Host shutdown path (bounded wait, abandoned blocking call), health rules, options validation |
+| `Security/DeploymentValidatorTests` | `--validate-deployment`: roof options (and whether the HAT device is mapped), other options sections and log levels, keys and deploy key, the listeners and endpoints Kestrel would use, certificate loading and expiry, `AllowedHosts` |
+| `Security/DeploymentValidationCommandTests` | The `--validate-deployment` command as `Program.Main` runs it, with real configuration sources and a temporary secrets directory |
 
 ## Adding new tests
 
@@ -132,3 +137,14 @@ cd src
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build
 ```
+
+The deploy script has its own tests, `tests/deploy/deploy-script-tests.sh` (bash 3.2 or later, `python3`, `jq`,
+`sha256sum` or `shasum`, and `setsid` or `perl` for the script itself). They run the script against fake `docker` and
+`curl` commands (`tests/deploy/fakes`) that keep containers in a temporary state file: settings checked before any
+Docker call, a Docker context that would prompt, pre-flight parity with the controller's options, HTTPS-only
+publishing, the verified-stop gate, the remote check, restoring the old controller after a failure, a signal
+(including a Ctrl-C that reaches docker, a second one during the restore, and a stop the daemon finishes after its
+client was cut off) or a lost terminal (`tests/deploy/on-terminal` runs the script on a pseudo-terminal), the
+restore's report when Docker cannot be read, `--rollback` and its undo, and that the key never appears in an argument
+list. An unknown test name counts as a failure. Run `tests/deploy/deploy-script-tests.sh [test_name ...]` from the
+repository root.

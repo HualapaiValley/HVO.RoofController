@@ -32,6 +32,7 @@ public sealed class RoofControllerHealthCheckTests
         result.Data.Should().ContainKey("Ready").WhoseValue.Should().Be(true);
         result.Data.Should().ContainKey("RelayRegisterState").WhoseValue.Should().Be(nameof(RoofRelayRegisterState.Verified));
         result.Data.Should().ContainKey("InputsHealthy").WhoseValue.Should().Be(true);
+        result.Data.Should().ContainKey("RelayRegisterReadsHealthy").WhoseValue.Should().Be(true);
     }
 
     [TestMethod]
@@ -124,6 +125,21 @@ public sealed class RoofControllerHealthCheckTests
         result.Status.Should().Be(HealthStatus.Unhealthy);
         result.Description.Should().Be("Roof controller safety inputs are not healthy");
         result.Data.Should().ContainKey("ConsecutiveInputReadFailures").WhoseValue.Should().Be(2);
+    }
+
+    [TestMethod]
+    public async Task Unhealthy_WhenRelayRegisterReadsNotHealthy()
+    {
+        var service = new FakeRoofControllerService
+        {
+            Snapshot = FakeRoofControllerService.HealthySnapshot() with { RelayRegisterReadsHealthy = false, ConsecutiveRelayReadFailures = 1 }
+        };
+
+        var result = await CheckAsync(service);
+
+        result.Status.Should().Be(HealthStatus.Unhealthy);
+        result.Description.Should().Be("Roof controller relay register reads are failing or stale");
+        result.Data.Should().ContainKey("ConsecutiveRelayReadFailures").WhoseValue.Should().Be(1);
     }
 
     [TestMethod]

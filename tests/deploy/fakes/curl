@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Fake `curl` for deploy-script-tests.sh: the remote check from the deploying machine.
+
+Appends argv (as JSON) to $FAKE_STATE_DIR/remote.log. The request reaches the running container that publishes the
+URL's port (from state.json); HTTPS must hit container port 8443 and HTTP container port 8080, otherwise the call fails
+as curl would. The key (FAKE_EXPECTED_KEY) must arrive on stdin (-H @-), otherwise the call gets 401.
+FAKE_REMOTE_STATUS_CODE overrides the Status response code, FAKE_REMOTE_STOP=unverified the Stop result, and
+FAKE_REQUIRE_CACERT=true fails HTTPS without --cacert.
+"""
+import json
+import os
+import sys
+from urllib.parse import urlparse
+
+STATE_DIR = os.environ["FAKE_STATE_DIR"]
+VERIFIED = {"relayRegisterState": "Verified", "relayRegisterMask": 0, "commandedMotion": "None"}
+UNVERIFIED = {"relayRegisterState": "Unknown", "relayRegisterMask": None, "commandedMotion": "None"}
+
+
+def fail(code, message):
+    print(f"curl: ({code}) {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def main():
+    args = sys.argv[1:]
+    with open(os.path.join(STATE_DIR, "remote.log"), "a") as log:
+        log.write(json.dumps(args) + "\n")
+
+    url = urlparse(args[-1])
+    method = args[args.index("-X") + 1] if "-X" in args else "GET"
+    stdin_text = sys.stdin.read() if "@-" in args else ""
+
+    with open(os.path.join(STATE_DIR, "state.json")) as f:
+        containers = json.load(f)["containers"]
+
+    target = None
+    for c in containers.values():
+        for mapping in c.get("publish", []) if c["running"] else []:
+            host_port, container_port = mapping.split(":")
+            if int(host_port) == url.port:
+                target = int(container_port)
+    if target is None:
+        fail(7, f"Failed to connect to {url.hostname} port {url.port}: Connection refused")
+    if url.scheme == "https" and target != 8443:
+        fail(35, "OpenSSL: error:0A00010B:SSL routines::wrong version number")
+    if url.scheme == "https" and os.environ.get("FAKE_REQUIRE_CACERT") == "true" and "--cacert" not in args:
+        fail(60, "SSL certificate problem: self-signed certificate")
+    if url.scheme == "http" and target == 8443:
+        fail(52, "Empty reply from server")
+
+    if stdin_text.strip() != f"X-Api-Key: {os.environ['FAKE_EXPECTED_KEY']}":
+        print('{"error":"unauthorized"}\n401', end="")
+        return
+
+    if url.path.endswith("/Status") and method == "GET":
+        print(json.dumps(VERIFIED) + "\n" + os.environ.get("FAKE_REMOTE_STATUS_CODE", "200"), end="")
+    elif url.path.endswith("/Stop") and method == "POST":
+        body = UNVERIFIED if os.environ.get("FAKE_REMOTE_STOP") == "unverified" else VERIFIED
+        print(json.dumps(body) + "\n200", end="")
+    else:
+        print("{}\n404", end="")
+
+
+main()

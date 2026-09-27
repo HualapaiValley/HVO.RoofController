@@ -155,6 +155,23 @@ public partial class RoofControllerServiceV4
 
             var now = Now;
 
+            // A deadline can pass before the watchdog timer callback or the next supervision cycle acts on it. Enforce it
+            // first, so neither a repeat nor a reversal revives an expired lease or outlives a missed watchdog or at-speed
+            // deadline, and the stop is recorded (and latched) with the deadline's reason.
+            if (_commandedMotion != RoofMotionDirection.None)
+            {
+                var repeat = _commandedMotion == direction;
+                CheckDeadlines_NoLock(now);
+                if (_commandedMotion == RoofMotionDirection.None
+                    && (repeat || _faultLatched || _relayRegisterState != RoofRelayRegisterState.Verified))
+                {
+                    FinishMutation_NoLock();
+                    return RejectAfterDeadlineStop_NoLock<RoofControllerStatus>();
+                }
+
+                // Only the lease expired under a reversal: the roof is now stopped (verified) and the reversal is a start.
+            }
+
             // A repeat of the current command renews the operator lease only. It never extends the watchdog, which is
             // an absolute cap measured from motion start.
             if (_commandedMotion == direction)
@@ -267,6 +284,13 @@ public partial class RoofControllerServiceV4
                 // A stop preempts a clear-fault pulse; the all-off sequence below also drops the clear-fault relay.
                 _clearFaultCts?.Cancel();
 
+                // A deadline that has already passed stops the motion first, so the recorded stop reason (and any latch)
+                // is the deadline's rather than the operator's. The stop below then re-asserts and verifies all-off.
+                if (_commandedMotion != RoofMotionDirection.None)
+                {
+                    CheckDeadlines_NoLock(Now);
+                }
+
                 var verified = _commandedMotion != RoofMotionDirection.None
                     ? StopMotion_NoLock(reason, null)
                     : StopIdle_NoLock(reason);
@@ -299,23 +323,45 @@ public partial class RoofControllerServiceV4
             }
 
             var now = Now;
-            if (_commandedMotion == RoofMotionDirection.None || _leaseDeadlineUtc is not { } deadline || _options.OperatorLeaseTimeout is not { } leaseTimeout)
+            if (_commandedMotion == RoofMotionDirection.None || _leaseDeadlineUtc is null || _options.OperatorLeaseTimeout is not { } leaseTimeout)
             {
                 return Reject_NoLock<RoofStatusResponse>(RoofControllerErrorCode.LeaseNotActive, "No leased motion is active.");
             }
 
-            if (now >= deadline)
+            // Never revive an expired lease, or renew past a missed watchdog or at-speed deadline; stop now instead of
+            // waiting for the next supervision cycle.
+            CheckDeadlines_NoLock(now);
+            if (_commandedMotion == RoofMotionDirection.None)
             {
-                // Never revive an expired lease; stop now instead of waiting for the next supervision cycle.
-                StopMotion_NoLock(RoofControllerStopReason.OperatorLeaseExpired, "The operator lease expired before it was renewed.");
                 FinishMutation_NoLock();
-                return Reject_NoLock<RoofStatusResponse>(RoofControllerErrorCode.LeaseNotActive, "The operator lease had already expired; motion stopped.");
+                return RejectAfterDeadlineStop_NoLock<RoofStatusResponse>();
             }
 
             _leaseDeadlineUtc = now + leaseTimeout;
             FinishMutation_NoLock();
             return Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(now, forKey: false));
         }
+    }
+
+    /// <summary>
+    /// Rejection for a lease renewal, repeated Open/Close or reversal that found a passed deadline and stopped motion
+    /// instead. (A reversal that found only an expired lease, with the stop verified, proceeds as a start.)
+    /// </summary>
+    private Result<T> RejectAfterDeadlineStop_NoLock<T>()
+    {
+        if (_relayRegisterState == RoofRelayRegisterState.Unverified)
+        {
+            return Reject_NoLock<T>(RoofControllerErrorCode.RelayStateUnverified,
+                $"Motion had passed a deadline ({_lastStopReason}) and the stop could not verify the relay register. Use the independent hardware stop.");
+        }
+
+        if (_faultLatched)
+        {
+            return Reject_NoLock<T>(RoofControllerErrorCode.FaultLatched,
+                $"Motion had passed a safety deadline ({_lastStopReason}); motion stopped and the fault is latched.");
+        }
+
+        return Reject_NoLock<T>(RoofControllerErrorCode.LeaseNotActive, "The operator lease had already expired; motion stopped.");
     }
 
     #endregion
@@ -669,43 +715,139 @@ public partial class RoofControllerServiceV4
     #region Shutdown and disposal
 
     /// <inheritdoc />
-    public Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken)
+    public async Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken)
     {
+        Task<bool> retry;
         lock (_syncLock)
         {
             if (_disposed)
             {
-                return Task.FromResult(_relayRegisterState == RoofRelayRegisterState.Unverified
+                return _relayRegisterState == RoofRelayRegisterState.Unverified
                     ? Result<RoofStatusResponse>.Failure(Rejection_NoLock(RoofControllerErrorCode.RelayStateUnverified,
                         "The controller was disposed with an unverified relay register state."))
-                    : Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(Now, forKey: false)));
+                    : Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(Now, forKey: false));
             }
 
-            var firstCall = !_shuttingDown;
-            _shuttingDown = true;
-            _clearFaultCts?.Cancel();
-
-            var verified = _commandedMotion != RoofMotionDirection.None
-                ? StopMotion_NoLock(RoofControllerStopReason.HostShutdown, null)
-                : StopIdle_NoLock(RoofControllerStopReason.HostShutdown);
-
-            StopSupervision_NoLock();
-            UnsubscribeInputs_NoLock();
-            FinishMutation_NoLock();
-
-            if (!verified)
+            if (_shutdownStopRetryTask is { IsCompleted: false } running)
             {
-                const string message = "Shutdown could not verify the relay register all-off state. Use the independent hardware stop.";
-                _logger.LogCritical("{Message} Register {Mask}.", message, FormatMask(_relayRegisterMask));
-                return Task.FromResult(Result<RoofStatusResponse>.Failure(Rejection_NoLock(RoofControllerErrorCode.RelayStateUnverified, message)));
+                // An earlier call's retry is still driving the relays off: join it rather than start another.
+                retry = running;
             }
-
-            if (firstCall)
+            else
             {
-                _logger.LogInformation("Roof controller shutting down; relay register verified all-off");
-            }
+                var firstCall = !_shuttingDown;
+                _shuttingDown = true;
+                _clearFaultCts?.Cancel();
 
-            return Task.FromResult(Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(Now, forKey: false)));
+                var verified = _commandedMotion != RoofMotionDirection.None
+                    ? StopMotion_NoLock(RoofControllerStopReason.HostShutdown, null)
+                    : StopIdle_NoLock(RoofControllerStopReason.HostShutdown);
+
+                StopSupervision_NoLock();
+                UnsubscribeInputs_NoLock();
+
+                if (verified)
+                {
+                    FinishMutation_NoLock();
+                    if (firstCall)
+                    {
+                        _logger.LogInformation("Roof controller shutting down; relay register verified all-off");
+                    }
+
+                    return Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(Now, forKey: false));
+                }
+
+                // Supervision has stopped, so nothing else would re-drive the relays off before the process exits.
+                _lastError = $"Shutdown could not verify the relay register all-off state; retrying every {ShutdownStopRetryInterval.TotalMilliseconds:0} ms for up to {ShutdownStopRetryWindow.TotalSeconds:0} s. Use the independent hardware stop.";
+                _logger.LogCritical("Shutdown could not verify the relay register all-off state (register {Mask}); retrying the all-off sequence every {Interval} for up to {Window}. Use the independent hardware stop.",
+                    FormatMask(_relayRegisterMask), ShutdownStopRetryInterval, ShutdownStopRetryWindow);
+                FinishMutation_NoLock();
+                retry = StartShutdownStopRetry_NoLock();
+            }
+        }
+
+        bool verifiedByRetry;
+        try
+        {
+            verifiedByRetry = await retry.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            lock (_syncLock)
+            {
+                return Result<RoofStatusResponse>.Failure(Rejection_NoLock(RoofControllerErrorCode.RelayStateUnverified,
+                    "Shutdown could not verify the relay register all-off state; the all-off sequence is still being retried in the background. Use the independent hardware stop."));
+            }
+        }
+
+        lock (_syncLock)
+        {
+            return verifiedByRetry
+                ? Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(Now, forKey: false))
+                : Result<RoofStatusResponse>.Failure(Rejection_NoLock(RoofControllerErrorCode.RelayStateUnverified,
+                    "Shutdown could not verify the relay register all-off state. Use the independent hardware stop."));
+        }
+    }
+
+    /// <summary>
+    /// Starts the bounded all-off retry after an unverified shutdown stop. The retry runs synchronously up to its first
+    /// delay, so its timer exists before this returns; it never awaits while holding the lock.
+    /// </summary>
+    private Task<bool> StartShutdownStopRetry_NoLock()
+    {
+        _shutdownStopRetryCts?.Dispose();
+        _shutdownStopRetryCts = new CancellationTokenSource();
+        _shutdownStopRetryTask = RetryShutdownStopAsync(Now + ShutdownStopRetryWindow, _shutdownStopRetryCts.Token);
+        return _shutdownStopRetryTask;
+    }
+
+    /// <summary>
+    /// Re-runs the all-off sequence every <see cref="ShutdownStopRetryInterval"/> until the relay register verifies, the
+    /// window passes, or disposal cancels it. Motion stays rejected throughout (the controller is shutting down), and the
+    /// <see cref="RoofControllerStopReason.RelayVerificationFailed"/> latch is kept even when a retry verifies.
+    /// Returns true when the register verified all-off.
+    /// </summary>
+    private async Task<bool> RetryShutdownStopAsync(DateTimeOffset deadline, CancellationToken token)
+    {
+        var attempts = 0;
+        while (true)
+        {
+            await Task.Delay(ShutdownStopRetryInterval, _timeProvider, token)
+                .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ForceYielding);
+
+            lock (_syncLock)
+            {
+                if (_relayRegisterState == RoofRelayRegisterState.Verified)
+                {
+                    // Another stop sequence (an operator Stop, or disposal) verified the register.
+                    return true;
+                }
+
+                if (_disposed || token.IsCancellationRequested)
+                {
+                    return false;
+                }
+
+                attempts++;
+                if (AllRelaysOff_NoLock())
+                {
+                    _lastError = $"The shutdown stop verified the relay register all-off after {attempts} retries; the relay verification fault stays latched.";
+                    _logger.LogWarning("Shutdown stop retry {Attempt} verified the relay register all-off", attempts);
+                    FinishMutation_NoLock();
+                    return true;
+                }
+
+                if (Now >= deadline)
+                {
+                    _lastError = $"Shutdown could not verify the relay register all-off state after {attempts} retries; relay state is unknown. Use the independent hardware stop.";
+                    _logger.LogCritical("Shutdown stop retry gave up after {Attempts} attempts over {Window}; relay register {Mask} is UNVERIFIED. Use the independent hardware stop.",
+                        attempts, ShutdownStopRetryWindow, FormatMask(_relayRegisterMask));
+                    FinishMutation_NoLock();
+                    return false;
+                }
+
+                FinishMutation_NoLock();
+            }
         }
     }
 
@@ -764,41 +906,95 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// Publishes the disposed state first (so no new command is admitted), then stops and verifies all relays off.
-    /// Returns false when disposal already happened.
+    /// Returns false when there is nothing to wait for: disposal already happened or is deferred, or the controller lock
+    /// could not be acquired within <see cref="DisposeWaitTimeout"/>.
     /// </summary>
+    /// <remarks>
+    /// The lock is held across synchronous HAT I/O, which cannot be interrupted if an I2C transfer wedges. Disposal then
+    /// stops waiting rather than block the host's teardown: it marks the controller shutting down (no new command is
+    /// admitted), logs Critical and hands the disposal to <see cref="DeferredDisposalTask"/>, which takes the lock when
+    /// the blocked call returns and runs the same all-off stop. The call that was blocked (a reversal, say) may energize
+    /// relays when it resumes, so the controller is not marked disposed until that stop has run.
+    /// </remarks>
     private bool BeginDispose(out Task[] pending)
+    {
+        pending = [];
+        if (_disposed || Volatile.Read(ref _deferredDisposalTask) is not null)
+        {
+            return false;
+        }
+
+        var lockTaken = false;
+        try
+        {
+            Monitor.TryEnter(_syncLock, DisposeWaitTimeout, ref lockTaken);
+            if (!lockTaken)
+            {
+                _shuttingDown = true;
+                var deferred = new Task(RunDeferredDisposal);
+                if (Interlocked.CompareExchange(ref _deferredDisposalTask, deferred, null) is null)
+                {
+                    _logger.LogCritical("Disposal could not acquire the controller lock within {Timeout}: a call is still blocked in HAT I/O. The all-off stop will run when the call returns; until then relay state is unknown, so use the independent hardware stop.",
+                        DisposeWaitTimeout);
+                    deferred.Start(TaskScheduler.Default);
+                }
+
+                return false;
+            }
+
+            return !_disposed && DisposeCore_NoLock(out pending);
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                Monitor.Exit(_syncLock);
+            }
+        }
+    }
+
+    /// <summary>The disposal that <see cref="BeginDispose"/> deferred because the lock was held, or null.</summary>
+    internal Task? DeferredDisposalTask => Volatile.Read(ref _deferredDisposalTask);
+
+    private void RunDeferredDisposal()
     {
         lock (_syncLock)
         {
             if (_disposed)
             {
-                pending = [];
-                return false;
+                return;
             }
 
-            _shuttingDown = true;
-            _disposed = true;
-            _clearFaultCts?.Cancel();
-
-            var verified = _commandedMotion != RoofMotionDirection.None
-                ? StopMotion_NoLock(RoofControllerStopReason.SystemDisposal, null)
-                : StopIdle_NoLock(RoofControllerStopReason.SystemDisposal);
-            if (!verified)
-            {
-                _logger.LogCritical("Disposal could not verify the relay register all-off state (register {Mask}). Use the independent hardware stop.",
-                    FormatMask(_relayRegisterMask));
-            }
-
-            StopSupervision_NoLock();
-            UnsubscribeInputs_NoLock();
-            FinishMutation_NoLock();
-            _statusChannel.Writer.TryComplete();
-
-            pending = _supervisionTask is null
-                ? [_statusDispatcherTask]
-                : [_supervisionTask, _statusDispatcherTask];
-            return true;
+            DisposeCore_NoLock(out _);
+            _logger.LogWarning("Deferred disposal ran after the blocked HAT call returned; relay register {Mask} is {State}.",
+                FormatMask(_relayRegisterMask), _relayRegisterState);
         }
+    }
+
+    private bool DisposeCore_NoLock(out Task[] pending)
+    {
+        _shuttingDown = true;
+        _disposed = true;
+        _clearFaultCts?.Cancel();
+        _shutdownStopRetryCts?.Cancel();
+
+        var verified = _commandedMotion != RoofMotionDirection.None
+            ? StopMotion_NoLock(RoofControllerStopReason.SystemDisposal, null)
+            : StopIdle_NoLock(RoofControllerStopReason.SystemDisposal);
+        if (!verified)
+        {
+            _logger.LogCritical("Disposal could not verify the relay register all-off state (register {Mask}). Use the independent hardware stop.",
+                FormatMask(_relayRegisterMask));
+        }
+
+        StopSupervision_NoLock();
+        UnsubscribeInputs_NoLock();
+        FinishMutation_NoLock();
+        _statusChannel.Writer.TryComplete();
+
+        // Disposal made its own all-off attempt above; the cancelled shutdown retry ends at its next wake.
+        pending = new[] { _supervisionTask, _shutdownStopRetryTask, _statusDispatcherTask }.OfType<Task>().ToArray();
+        return true;
     }
 
     #endregion

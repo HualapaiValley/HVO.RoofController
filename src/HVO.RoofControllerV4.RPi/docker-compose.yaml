@@ -1,65 +1,159 @@
+# Roof controller on the Raspberry Pi. See docs/deployment.md.
+#
+# Two mutually exclusive profiles (both name the container roof-controller, so they cannot run together and they
+# collide with a controller started by deploy-roofcontroller-rpi.sh instead of driving the HAT twice):
+#
+#   pi           HTTPS (default). Publishes only 8443; plain HTTP listens on loopback inside the container for the
+#                health check. Needs the certificate directory (HVO_ROOF_CERT_DIR, default /etc/hvo-roof/https) with
+#                HVO_ROOF_CERT_FILE (default roof-controller.pfx); its password goes in the secrets directory as a file
+#                named Kestrel__Certificates__Default__Password.
+#                  docker compose --profile pi up -d
+#   pi-lan-http  Plain HTTP on 8080 with RequireHttps off. For an isolated LAN only: API keys and the console access
+#                key cross the network in clear text.
+#                  docker compose --profile pi-lan-http up -d
+#
+# Each profile first runs a one-shot deployment check (--validate-deployment) with the same environment and mounts,
+# and the new controller starts only if it passes: roof options valid, a usable RoofOperator or RoofAdmin key, and,
+# for HTTPS, a loadable, unexpired certificate with its private key. The check reads configuration; it maps
+# /dev/i2c-1 only to see whether the HAT is present and never opens it.
+# `up` stops and replaces a running controller before the check runs, so a failed check leaves NO controller
+# running. Run the check on its own first (docs/deployment.md):
+#   docker compose --profile pi build && docker compose --profile pi run --rm roof-controller-check
+
+x-roof-environment: &roof-environment
+  ASPNETCORE_ENVIRONMENT: Production
+  HVO_FORCE_RASPBERRY_PI: "true"
+  RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
+  # Host names/IPs clients use to reach the controller (semicolon-separated). A list must include localhost (the
+  # health check calls it); "*" logs a startup warning.
+  AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
+  OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
+  OTEL_RESOURCE_ATTRIBUTES: service.instance.id=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://192.168.1.238:4318}
+  OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+  OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-10000}
+
+x-https-environment: &https-environment
+  <<: *roof-environment
+  # HTTP on loopback only (health check, in-container calls); remote clients use HTTPS.
+  ASPNETCORE_URLS: "http://localhost:8080;https://+:8443"
+  RoofControllerSecurity__RequireHttps: "true"
+  Kestrel__Certificates__Default__Path: /https/${HVO_ROOF_CERT_FILE:-roof-controller.pfx}
+
+x-lan-http-environment: &lan-http-environment
+  <<: *roof-environment
+  ASPNETCORE_URLS: "http://+:8080"
+  # Explicit opt-out: accept plain HTTP from the LAN (a warning is logged at startup).
+  RoofControllerSecurity__RequireHttps: "false"
+
+# One file per secret setting, named after its configuration key (API keys, BlueIris__Password, certificate
+# password). Read by the app through AddKeyPerFile("/run/secrets"). Never commit these files. The directory must
+# exist: it is not created (an empty directory would start a controller with no keys).
+x-secrets-mount: &secrets-mount
+  type: bind
+  source: ${HVO_ROOF_SECRETS_DIR:-/etc/hvo-roof/secrets}
+  target: /run/secrets
+  read_only: true
+  bind:
+    create_host_path: false
+
+x-cert-mount: &cert-mount
+  type: bind
+  source: ${HVO_ROOF_CERT_DIR:-/etc/hvo-roof/https}
+  target: /https
+  read_only: true
+  bind:
+    create_host_path: false
+
+x-thermal-mount: &thermal-mount
+  type: bind
+  source: /sys/class/thermal/thermal_zone0/temp
+  target: /sys/class/thermal/thermal_zone0/temp
+  read_only: true
+
+x-roof-controller: &roof-controller
+  image: hvov9/roof-controller:v4
+  build:
+    context: ../..
+    dockerfile: "src/HVO.RoofControllerV4.RPi/Dockerfile"
+    platforms:
+      - linux/arm64
+  container_name: roof-controller
+  restart: unless-stopped
+  # SIGTERM first: the host stops the roof (verified all-off) and ends camera streams before exiting.
+  # Must stay above the app's HostOptions.ShutdownTimeout (20 s).
+  stop_grace_period: 30s
+  devices:
+    - "/dev/gpiomem:/dev/gpiomem"
+    - "/dev/i2c-1:/dev/i2c-1"
+  healthcheck:
+    test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-deployment-check: &deployment-check
+  image: hvov9/roof-controller:v4
+  # Built by the controller service; never pulled.
+  pull_policy: never
+  command: [ "--validate-deployment" ]
+  restart: "no"
+  network_mode: none
+  # Its presence decides whether the limit-switch override is on the roof hardware; the check never opens it.
+  devices:
+    - "/dev/i2c-1:/dev/i2c-1"
+  healthcheck:
+    disable: true
+
 services:
-  roof-controller:
-    image: hvov9/roof-controller:v4
-    build:
-      context: ../..
-      dockerfile: "src/HVO.RoofControllerV4.RPi/Dockerfile"
-      platforms:
-        - linux/arm64
-    restart: unless-stopped
-    # SIGTERM first: the host stops the roof (verified all-off) and ends camera streams before exiting.
-    # Must stay above the app's HostOptions.ShutdownTimeout (20 s).
-    stop_grace_period: 30s
-    ports:
-      - "8080:8080"
-      # HTTPS (recommended): see docs/deployment.md.
-      # - "8443:8443"
-    environment:
-      ASPNETCORE_ENVIRONMENT: Production
-      HVO_FORCE_RASPBERRY_PI: "true"
-      RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
-      # Host names/IPs clients use to reach the controller (semicolon-separated); "*" logs a startup warning.
-      AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
-      # HTTPS is required for non-loopback clients in Production (403 https_required otherwise). Either configure
-      # the certificate below, or set HVO_ROOF_REQUIRE_HTTPS=false to accept plain HTTP (keys then cross the LAN
-      # in clear text; a warning is logged at startup).
-      RoofControllerSecurity__RequireHttps: ${HVO_ROOF_REQUIRE_HTTPS:-true}
-      # ASPNETCORE_URLS: "http://+:8080;https://+:8443"
-      # Kestrel__Certificates__Default__Path: /https/roof-controller.pfx
-      # (put the PFX password in the secrets directory as a file named Kestrel__Certificates__Default__Password)
-      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
-      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://192.168.1.238:4318}
-      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
-      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-10000}
-    devices:
-      - "/dev/gpiomem:/dev/gpiomem"
-      - "/dev/i2c-1:/dev/i2c-1"
+  roof-controller-check:
+    <<: *deployment-check
+    environment: *https-environment
     volumes:
-      - type: bind
-        source: /sys/class/thermal/thermal_zone0/temp
-        target: /sys/class/thermal/thermal_zone0/temp
-        read_only: true
-      # One file per secret setting, named after its configuration key (API keys, BlueIris__Password, certificate
-      # password). Read by the app through AddKeyPerFile("/run/secrets"). Never commit these files.
-      - type: bind
-        source: ${HVO_ROOF_SECRETS_DIR:-/etc/hvo-roof/secrets}
-        target: /run/secrets
-        read_only: true
-      # - type: bind
-      #   source: ${HVO_ROOF_CERT_DIR:-/etc/hvo-roof/https}
-      #   target: /https
-      #   read_only: true
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: local
-      options:
-        max-size: "10m"
-        max-file: "5"
+      - *secrets-mount
+      - *cert-mount
     profiles:
       - pi
+
+  roof-controller:
+    <<: *roof-controller
+    depends_on:
+      roof-controller-check:
+        condition: service_completed_successfully
+    ports:
+      - "8443:8443"
+    environment: *https-environment
+    volumes:
+      - *thermal-mount
+      - *secrets-mount
+      - *cert-mount
+    profiles:
+      - pi
+
+  roof-controller-lan-http-check:
+    <<: *deployment-check
+    environment: *lan-http-environment
+    volumes:
+      - *secrets-mount
+    profiles:
+      - pi-lan-http
+
+  roof-controller-lan-http:
+    <<: *roof-controller
+    depends_on:
+      roof-controller-lan-http-check:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    environment: *lan-http-environment
+    volumes:
+      - *thermal-mount
+      - *secrets-mount
+    profiles:
+      - pi-lan-http

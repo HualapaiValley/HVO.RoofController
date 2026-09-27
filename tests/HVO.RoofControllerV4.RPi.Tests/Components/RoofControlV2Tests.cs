@@ -120,6 +120,47 @@ public class RoofControlV2Tests
     }
 
     [TestMethod]
+    public async Task RelayReadsFailing_ShowsBadgeAndBanner_WithTheFailureCount()
+    {
+        var failing = Status(RoofControllerStatus.Opening, 1) with { RelayRegisterReadsHealthy = false, ConsecutiveRelayReadFailures = 1 };
+        await using var harness = new RoofConsoleHarness(failing).SignInAsViewer();
+
+        var cut = harness.Render();
+
+        cut.Markup.Should().Contain("Relay reads failing");
+        cut.Markup.Should().Contain("Relay register reads failing.").And.Contain("(1 consecutive failures)");
+        cut.Markup.Should().NotContain("Relay register unverified.");
+    }
+
+    [TestMethod]
+    public async Task RelayReadsFailing_DefersToTheUnverifiedBanner_OnceTheRegisterIsUnverified()
+    {
+        var unverified = Status(RoofControllerStatus.Error, 1) with
+        {
+            RelayRegisterReadsHealthy = false,
+            ConsecutiveRelayReadFailures = 2,
+            RelayRegisterState = RoofRelayRegisterState.Unverified
+        };
+        await using var harness = new RoofConsoleHarness(unverified).SignInAsViewer();
+
+        var cut = harness.Render();
+
+        cut.Markup.Should().Contain("Relay register unverified.");
+        cut.Markup.Should().NotContain("Relay register reads failing.");
+        cut.Markup.Should().Contain("Relay reads failing", "the header badge still shows the read failures");
+    }
+
+    [TestMethod]
+    public async Task RelayReadsHealthy_ShowsNoRelayReadWarning()
+    {
+        await using var harness = new RoofConsoleHarness(Status(RoofControllerStatus.Opening, 1)).SignInAsViewer();
+
+        var cut = harness.Render();
+
+        cut.Markup.Should().NotContain("Relay reads failing").And.NotContain("Relay register reads failing.");
+    }
+
+    [TestMethod]
     public async Task Stop_ReportsFailureWithCode_WhenControllerRefuses()
     {
         await using var harness = new RoofConsoleHarness(Status(RoofControllerStatus.Opening, 1)).SignInAsViewer();
