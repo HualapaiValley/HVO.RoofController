@@ -1,13 +1,12 @@
 # HVO.RoofController
 
 [![CI](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ci.yml/badge.svg)](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ci.yml)
-[![iOS](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ios.yml/badge.svg)](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ios.yml)
 [![Pi image](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/pi-image.yml/badge.svg)](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/pi-image.yml)
 ![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 
-Roof Controller V4 for the HVO observatory — Raspberry Pi (Blazor SSR + API)
-and iPad (.NET MAUI) applications.
+Roof Controller V4 for the HVO observatory: a Raspberry Pi controller with an
+authenticated web console and HTTP API.
 
 ## Features
 
@@ -18,7 +17,8 @@ and iPad (.NET MAUI) applications.
 - **GPIO / I2C** — direct hardware interface on Raspberry Pi for motor and sensor management
 - **Authenticated API** — every protected request needs an `X-Api-Key`; commands are `POST`
   only ([docs/security.md](docs/security.md))
-- **iPad Control** — .NET MAUI companion app for touch-based roof operation
+- **Web Console** — browser-based roof control for desktop, tablet and phone;
+  mobile usability and physical Stop behavior still require validation (issues #20 and #24)
 - **Docker Deployment** — containerized deployment to Raspberry Pi (linux-arm64) through a
   fail-closed deployment script ([docs/deployment.md](docs/deployment.md))
 
@@ -61,7 +61,6 @@ Before connecting the roof mechanism, complete the bench checklist in
 | Project | Description |
 |---------|-------------|
 | `HVO.RoofControllerV4.RPi` | ASP.NET Core web app for Raspberry Pi (GPIO/I2C roof control) |
-| `HVO.RoofControllerV4.iPad` | .NET MAUI iPad client |
 | `HVO.RoofControllerV4.Common` | Shared models and options |
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
 | `HVO.RoofControllerV4.RPi.Tests` | Unit and API tests (`tests/`) |
@@ -72,8 +71,8 @@ Before connecting the roof mechanism, complete the bench checklist in
 # Run dotnet from src/ so src/global.json selects the SDK
 cd src
 
-# Build the portable server graph
-dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+# Build the whole solution (server, shared libraries and tests)
+dotnet build HVO.RoofController.sln
 
 # Test the server
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
@@ -85,7 +84,7 @@ dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Te
 dotnet run --project HVO.RoofControllerV4.RPi
 ```
 
-The full solution includes the `net10.0-ios` project and must be built on macOS with the MAUI workload and a supported Xcode version. GitHub Actions performs that iOS validation.
+The solution builds on Linux without Apple tooling.
 
 ## Docker Deployment
 
@@ -125,7 +124,7 @@ a commissioned bench.
 | [Commissioning checklist](docs/commissioning.md) | Bench and HAT checks required before connecting the roof mechanism |
 | [Security](docs/security.md) | API keys, roles, HTTPS and console sign-in |
 | [Deployment](docs/deployment.md) | Pi deployment script, verified stop, rollback |
-| [CI runners](docs/ci-runners.md) | Self-hosted M5 runner rules and required GitHub settings |
+| [CI runners](docs/ci-runners.md) | Active CI workflows and runner security settings |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines and development workflow |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
 | [copilot-instructions.md](.github/copilot-instructions.md) | Architecture and coding standards |

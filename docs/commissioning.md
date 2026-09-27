@@ -17,7 +17,7 @@ green CI run says nothing about relay contacts, input polarity or drive timing.
   need the mechanism are marked **[mechanism]**; do them only after every bench step has passed,
   with nobody in the roof's path and someone at the independent stop.
 - Do not automate physical roof cycling (scripts that repeatedly open and close the real roof)
-  without an approved test rig and interlocks. Automated cycling is limited to the simulator or a
+  without an approved test rig and interlocks. Automated cycling is limited to simulation or a
   bench rig with the motor decoupled (see C14).
 - The software controls described in the [README](../README.md#safety-behavior) do not replace an
   independent hardware stop path. Do C1 first.
@@ -191,8 +191,10 @@ Only if `OperatorLeaseTimeout` is used (2-120 s).
 2. Stop renewing. The roof must stop with `OperatorLeaseExpired` within the lease time plus one
    `PeriodicVerificationInterval`.
 3. `POST .../Lease` while idle returns 409 `LeaseNotActive` and starts nothing.
-4. Client loss: start a move from the iPad and turn its Wi-Fi off; separately, close the browser
-   tab during a move from the console. Each must stop within the lease time.
+4. Client loss: start a move from a mobile browser and turn its Wi-Fi off; separately,
+   close the browser tab during a move from the console. Each must stop within the lease time
+   when a lease-renewing client is in use. If the web console does not renew leases, record
+   this as a failed prerequisite rather than claiming client-loss protection.
 
 **Pass:** steps 1-4 behave as described. If the lease is not used, record that losing the client
 does not stop motion and that only the watchdog and limits bound a move.

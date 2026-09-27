@@ -283,7 +283,6 @@ Use Bootstrap Icons (already integrated via CDN in consuming apps) or add custom
 
 - `HVO.WebSite.v9` - Main observatory website
 - `HVO.WebSite.Playground` - Development/testing site
-- `HVO.RoofControllerV4.iPad` - iPad control app (future)
 - `HVO.SkyMonitorV5.Viewer` - WASM sky monitor viewer (future)
 
 ## 🌙 Design Philosophy

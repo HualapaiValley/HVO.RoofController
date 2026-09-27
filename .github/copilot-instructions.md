@@ -3,18 +3,16 @@
 ## Project Overview
 
 HVO.RoofController is the observatory roof automation system for HVO. It
-consists of a Raspberry Pi server application and an iPad companion client for
-remote roof control.
+consists of a Raspberry Pi server application with a browser-based operator console
+and an authenticated HTTP API.
 
 ### Architecture
 
 - **RPi Server** — ASP.NET Core + Blazor Server (SSR) application that manages
   GPIO and I2C hardware for roof motor control, limit switches, and relay
   management. Deployed via Docker to a Raspberry Pi (linux-arm64).
-- **iPad Client** — .NET MAUI application providing a touch-optimized interface
-  for monitoring and controlling the roof from the observatory floor.
-- **Common Library** — Shared models, options, and DTOs used by both the RPi
-  server and iPad client.
+- **Web Console** — responsive Blazor interface for desktop, tablet and phone.
+- **Common Library** — Shared server and HTTP API models, options and DTOs.
 - **WebSite.Themes** — Razor Class Library providing shared CSS themes.
 
 ### Key Safety Systems
@@ -45,7 +43,7 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   assert within that window after a start, otherwise the roof stops with `DriveNotRunning`.
 - Input read failures — `MaxConsecutiveInputReadFailures` consecutive failed reads while
   moving stop the roof with `InputReadFailure`.
-- `IgnorePhysicalLimitSwitches` is for the simulator. On physical hardware it is refused
+- `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused
   unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration
   (never through the API).
 - None of this replaces an independent hardware stop path (E-stop / VFD STOP input); see
@@ -67,7 +65,6 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 ### Technology Stack
 
 - .NET 10 (RPi server and shared libraries)
-- .NET 10 MAUI (iPad client)
 - ASP.NET Core + Blazor Server (SSR)
 - GPIO / I2C hardware interfaces
 - Docker (RPi deployment)
@@ -83,7 +80,6 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 ```text
 src/
   HVO.RoofControllerV4.RPi/         # Raspberry Pi server
-  HVO.RoofControllerV4.iPad/        # iPad MAUI client
   HVO.RoofControllerV4.Common/      # Shared models
   HVO.WebSite.Themes/               # CSS theme RCL
   HVO.RoofController.sln            # Solution file
@@ -114,7 +110,7 @@ dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tes
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj -c Release
 ```
 
-The full solution includes the `net10.0-ios` project and requires macOS, the MAUI workload, and a supported Xcode version. On Linux, validate the portable graph through the RPi test project as shown above.
+The full solution builds on Linux. Use the RPi test project for focused safety checks.
 
 ## Deployment
 
@@ -131,13 +127,8 @@ devices, port 5200). Never use it on the observatory Pi. `dotnet run` uses port 
 
 - `ci.yml` — ubuntu; restores, builds (Debug) and tests the RPi test project graph from
   `src/`, checks that coverage is not empty, then builds Release with warnings as errors.
-  It does not build the solution (the iOS project cannot build on Linux).
-- `ios.yml` — `macos-26`, Xcode 26.6 via `DEVELOPER_DIR`, pinned workload set; builds the
-  iPad app for the simulator without signing.
 - `pi-image.yml` — builds the Pi image for `linux/arm64` (no push) and checks that the
   Dockerfile SDK tag matches `src/global.json`.
-- `m5-ios-validation.yml` — self-hosted M5 runner; trusted triggers on `main` only. Read
-  `docs/ci-runners.md` before changing it.
 
 Pin every action to a full commit SHA with a `# vX.Y.Z` comment (the repository requires
 SHA pinning) and keep `permissions: contents: read` unless a job needs more.

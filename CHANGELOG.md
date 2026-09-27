@@ -7,14 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Safety, security and operations fixes from the August 2026 architecture review
-(issues #16-#22). The hardware checks in [docs/commissioning.md](docs/commissioning.md) are
-still open; do not treat this release as validated on the roof until they pass.
+### Retired client
+
+- Retired the native iPad/MAUI app and its iOS/M5 build workflows. The authenticated web
+  console is the supported operator client; tablet and phone use require the browser checks
+  tracked in #20 and #26. Server API and physical safety commissioning remain in #24.
+- Updated the pinned SDK image and `src/global.json` together to 10.0.401 (Dependabot #25).
+
+The August 2026 architecture review led to safety, security and operations changes
+(issues #16-#22). The hardware checks in [docs/commissioning.md](docs/commissioning.md)
+are still open; do not treat this release as validated on the roof until they pass.
 
 ### BREAKING
 
-Upgrade the controller, the iPad app and any scripts together. Older clients cannot operate
-the roof against this server.
+Upgrade the controller and API automation scripts together. Older clients cannot operate
+the roof against this server; use the authenticated browser console for operator access.
 
 - **API keys required.** Every protected endpoint needs an `X-Api-Key` header with a key
   from `RoofControllerSecurity:ApiKeys` (roles `RoofViewer`, `RoofOperator`, `RoofAdmin`).
@@ -38,8 +45,6 @@ the roof against this server.
   loopback and for `/health/live` and `/health/ready`. Provide a certificate or opt out
   explicitly (the controller logs a warning). `/health` now needs a Viewer key; `/health/live`
   and `/health/ready` stay anonymous.
-- **iPad settings.** After upgrading, enter an API key in the iPad app's settings. It is
-  stored in the iOS Keychain, not the settings file. Use an `https://` controller address.
 - **Limit override on hardware.** `IgnorePhysicalLimitSwitches` is refused on physical
   hardware unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local
   configuration (it cannot be set through the API).
@@ -75,11 +80,8 @@ the roof against this server.
 - The safety watchdog is an absolute cap on each movement; repeating a command no longer
   extends it.
 - CI: all actions pinned to commit SHAs, read-only token permissions, `dotnet` run from `src/`
-  so `src/global.json` applies, a Release build with warnings as errors, a coverage filter
-  that matches the project assemblies, and a pinned iOS workload set and Xcode.
-- The self-hosted M5 workflow accepts only trusted triggers on `main`, starts from a clean
-  workspace without stored credentials, checks runner-account ownership, selects Xcode per job
-  and fails closed when the app's signing state is unexpected.
+  so `src/global.json` applies, a Release build with warnings as errors, and a coverage filter
+  that matches the project assemblies.
 - The Pi Dockerfile pins the SDK to `src/global.json` and the runtime to a patch version, and
   cross-compiles on the build platform.
 - Documentation describes the implemented safety behavior, API, ports and deployment path.
@@ -97,6 +99,6 @@ the roof against this server.
 - RPi controller (ASP.NET Core + Blazor Server with GPIO/I2C roof control)
 - iPad .NET MAUI client
 - Shared Common models and options library
-- CI/CD workflows (ci.yml for tests, ios.yml for iPad build)
+- CI/CD workflows for tests and the Pi image (the iOS workflow was retired later)
 - Dev Container setup for consistent development environment
 - Docker deployment configuration for Raspberry Pi (linux-arm64)

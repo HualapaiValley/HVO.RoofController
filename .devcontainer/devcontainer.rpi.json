@@ -74,7 +74,7 @@
     }
   },
   // This container gets the real I2C bus and GPIO, so the roof motor can move. Development
-  // settings are for the simulator: keep the physical limit switches in force here. Environment
+  // settings are for local simulation: keep the physical limit switches in force here. Environment
   // variables override appsettings.Development.json and launchSettings.json. The controller also
   // refuses IgnorePhysicalLimitSwitches on physical hardware unless
   // AllowIgnoringLimitSwitchesOnPhysicalHardware is set in local configuration.

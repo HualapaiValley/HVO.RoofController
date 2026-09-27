@@ -87,7 +87,7 @@ Each entry has these settings:
 
 | Setting | Meaning |
 |---------|---------|
-| `RoofControllerSecurity:ApiKeys:N:Name` | Identifies the holder in logs and audit entries (for example `ipad-dome`). Not secret. |
+| `RoofControllerSecurity:ApiKeys:N:Name` | Identifies the holder in logs and audit entries (for example `console-operator`). Not secret. |
 | `RoofControllerSecurity:ApiKeys:N:Role` | `RoofViewer`, `RoofOperator` or `RoofAdmin`. |
 | `RoofControllerSecurity:ApiKeys:N:Key` | The key, at least 24 characters. |
 | `RoofControllerSecurity:ApiKeys:N:KeySha256` | Alternative to `Key`: 64 hex characters of SHA-256 over the key's UTF-8 bytes. Use it so the controller never stores the key itself. |
@@ -111,7 +111,7 @@ in place of `:`. The deploy script and `docker-compose.yaml` bind-mount `/etc/hv
 ```bash
 sudo install -d -m 700 /etc/hvo-roof/secrets
 cd /etc/hvo-roof/secrets
-printf '%s' 'ipad-dome'    | sudo tee RoofControllerSecurity__ApiKeys__0__Name >/dev/null
+printf '%s' 'console-operator' | sudo tee RoofControllerSecurity__ApiKeys__0__Name >/dev/null
 printf '%s' 'RoofOperator' | sudo tee RoofControllerSecurity__ApiKeys__0__Role >/dev/null
 printf '%s' "$KEY"         | sudo tee RoofControllerSecurity__ApiKeys__0__Key  >/dev/null
 # ...repeat with index 1, 2, ... for a viewer key, an admin key, the web console key, etc.
@@ -128,7 +128,7 @@ Recommended keys:
 
 | Holder | Role |
 |--------|------|
-| iPad app | `RoofOperator` |
+| Console operator | `RoofOperator` |
 | Deploy script | `RoofOperator` (used for the pre-deploy Stop) |
 | Monitoring | `RoofViewer` |
 | Maintainer | `RoofAdmin` (configuration and OpenAPI) |
