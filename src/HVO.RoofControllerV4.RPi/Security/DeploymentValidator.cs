@@ -5,7 +5,12 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.RegularExpressions;
+using HVO.Enterprise.Telemetry.Configuration;
+using HVO.Iot.Devices.Abstractions;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Controllers.Camera;
+using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Middleware;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -32,12 +37,15 @@ public sealed record DeploymentValidationResult(
 /// build the host, open a listener or touch the HAT, so it is safe while another controller owns the hardware.
 /// </summary>
 /// <remarks>
-/// Fails when the roof options do not validate; when no usable API key is configured, a configured key entry is
-/// rejected, or no key can operate the roof (RoofOperator or RoofAdmin); when HTTPS is required but no HTTPS listener
-/// is configured; or when an HTTPS listener's certificate cannot be loaded, has no private key, or is outside its
-/// validity period. Reachability from the network is checked by the deploy script after the switch.
+/// Fails when the roof options do not validate, or ignore the limit switches on the roof hardware without consent;
+/// when another options section cannot be bound or the telemetry options do not validate; when no usable API key is
+/// configured, a configured key entry is rejected, no key can operate the roof (RoofOperator or RoofAdmin), or the
+/// deploy script's key is missing or cannot stop the roof; when HTTPS is required but Kestrel would not listen on
+/// HTTPS; when an HTTPS listener has no certificate, or its certificate cannot be loaded, has no private key, is not
+/// for server authentication, or is outside its validity period; or when AllowedHosts would refuse localhost.
+/// Reachability from the network is checked by the deploy script after the switch.
 /// </remarks>
-public static class DeploymentValidator
+public static partial class DeploymentValidator
 {
     /// <summary>Command-line switch that runs the check instead of the controller.</summary>
     public const string CommandLineSwitch = "--validate-deployment";
@@ -51,6 +59,12 @@ public static class DeploymentValidator
     /// <summary>A certificate expiring sooner than this produces a warning.</summary>
     internal static readonly TimeSpan CertificateExpiryWarning = TimeSpan.FromDays(30);
 
+    private const string DefaultCertificateSection = "Kestrel:Certificates:Default";
+    private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
+    private const string RsaOid = "1.2.840.113549.1.1.1";
+    private const string EcdsaOid = "1.2.840.10045.2.1";
+    private const string DsaOid = "1.2.840.10040.4.1";
+
     /// <summary>Validates <paramref name="configuration"/> as the controller would load it in <paramref name="environment"/>.</summary>
     public static DeploymentValidationResult Validate(IConfiguration configuration, IHostEnvironment environment, TimeProvider timeProvider)
     {
@@ -62,7 +76,8 @@ public static class DeploymentValidator
         var warnings = new List<string>();
         var notes = new List<string>();
 
-        ValidateRoofOptions(configuration, problems);
+        ValidateRoofOptions(configuration, environment, problems);
+        ValidateOtherOptions(configuration, problems, warnings);
         var security = ValidateApiKeys(configuration, problems, notes);
         ValidateTransport(configuration, environment, security, timeProvider.GetUtcNow(), problems, warnings, notes);
 
@@ -71,22 +86,35 @@ public static class DeploymentValidator
             warnings.Add("RoofControllerSecurity:AllowAnonymousStop is enabled: anyone who can reach the controller can stop the roof.");
         }
 
-        var allowedHosts = configuration["AllowedHosts"];
-        if (environment.IsProduction() && (string.IsNullOrWhiteSpace(allowedHosts) || allowedHosts.Trim() == "*"))
-        {
-            warnings.Add("AllowedHosts is '*' in Production; set it to the controller's host names to refuse DNS-rebinding requests.");
-        }
-
+        ValidateAllowedHosts(configuration, environment, problems, warnings);
         return new DeploymentValidationResult(problems, warnings, notes);
     }
 
     /// <summary>Runs <see cref="Validate"/>, writes the report to <paramref name="output"/> and returns the process exit code.</summary>
     public static int Run(IConfiguration configuration, IHostEnvironment environment, TimeProvider timeProvider, TextWriter output)
     {
+        ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(output);
 
-        var result = Validate(configuration, environment, timeProvider);
-        output.WriteLine($"Deployment check ({environment.EnvironmentName}):");
+        return Report(environment.EnvironmentName, Validate(configuration, environment, timeProvider), output);
+    }
+
+    /// <summary>
+    /// Reports a check that could not run (for example a malformed appsettings file) as a single problem naming the
+    /// exception type and message, and returns the failing exit code. Configuration loaders name the file, not values.
+    /// </summary>
+    internal static int ReportFailure(Exception exception, TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ArgumentNullException.ThrowIfNull(output);
+
+        var problem = $"The deployment check could not complete ({exception.GetType().Name}: {exception.Message}).";
+        return Report(null, new DeploymentValidationResult([problem], [], []), output);
+    }
+
+    private static int Report(string? environmentName, DeploymentValidationResult result, TextWriter output)
+    {
+        output.WriteLine(environmentName is null ? "Deployment check:" : $"Deployment check ({environmentName}):");
         foreach (var note in result.Notes)
         {
             output.WriteLine($"  {note}");
@@ -108,16 +136,11 @@ public static class DeploymentValidator
         return result.IsValid ? 0 : 1;
     }
 
-    private static void ValidateRoofOptions(IConfiguration configuration, List<string> problems)
+    private static void ValidateRoofOptions(IConfiguration configuration, IHostEnvironment environment, List<string> problems)
     {
-        RoofControllerOptionsV4 options;
-        try
+        var options = Bind<RoofControllerOptionsV4>(configuration, nameof(RoofControllerOptionsV4), problems);
+        if (options is null)
         {
-            options = configuration.GetSection(nameof(RoofControllerOptionsV4)).Get<RoofControllerOptionsV4>() ?? new RoofControllerOptionsV4();
-        }
-        catch (InvalidOperationException ex)
-        {
-            problems.Add($"{nameof(RoofControllerOptionsV4)} could not be read: {ex.Message}");
             return;
         }
 
@@ -126,19 +149,105 @@ public static class DeploymentValidator
         {
             problems.AddRange(result.Failures.Select(failure => $"{nameof(RoofControllerOptionsV4)}: {failure}"));
         }
+
+        // The controller checks this at initialization, against the HAT it actually found.
+        if (options.IgnorePhysicalLimitSwitches
+            && !options.AllowIgnoringLimitSwitchesOnPhysicalHardware
+            && ExpectsPhysicalHardware(configuration, environment))
+        {
+            problems.Add(
+                $"{nameof(RoofControllerOptionsV4)}: IgnorePhysicalLimitSwitches is true without AllowIgnoringLimitSwitchesOnPhysicalHardware, " +
+                "so on the roof hardware the controller would refuse to initialize and accept no roof commands. Set " +
+                "IgnorePhysicalLimitSwitches to false (or, for supervised testing only, AllowIgnoringLimitSwitchesOnPhysicalHardware to true).");
+        }
     }
 
-    private static RoofControllerSecurityOptions? ValidateApiKeys(IConfiguration configuration, List<string> problems, List<string> notes)
+    /// <summary>
+    /// True when the controller will drive the real HAT, following the hardware detection's overrides:
+    /// HVO_FORCE_RASPBERRY_PI decides when it is a boolean, USE_REAL_GPIO=true means hardware, and otherwise a
+    /// Production deployment is taken to run on the Pi. Program copies HardwareDetection:ForceRaspberryPi and
+    /// HardwareDetection:UseRealGpio into those variables when they are unset.
+    /// </summary>
+    private static bool ExpectsPhysicalHardware(IConfiguration configuration, IHostEnvironment environment)
     {
-        RoofControllerSecurityOptions? security;
+        if (bool.TryParse(Setting("HVO_FORCE_RASPBERRY_PI", "HardwareDetection:ForceRaspberryPi"), out var forced))
+        {
+            return forced;
+        }
+
+        if (bool.TryParse(Setting(IGpioControllerClient.UseRealHardwareEnvironmentVariable, "HardwareDetection:UseRealGpio"), out var realGpio)
+            && realGpio)
+        {
+            return true;
+        }
+
+        return environment.IsProduction();
+
+        string? Setting(string variable, string fallbackKey)
+            => string.IsNullOrWhiteSpace(configuration[variable]) ? configuration[fallbackKey] : configuration[variable];
+    }
+
+    /// <summary>
+    /// Binds the other sections the controller reads at startup or on first use, and runs their checks. A value that
+    /// cannot be converted would otherwise throw when the options are first resolved.
+    /// </summary>
+    private static void ValidateOtherOptions(IConfiguration configuration, List<string> problems, List<string> warnings)
+    {
+        Bind<RoofControllerHostOptionsV4>(configuration, nameof(RoofControllerHostOptionsV4), problems);
+        Bind<ConsoleLogBufferOptions>(configuration, "ConsoleLogBuffer", problems);
+
+        var blueIris = Bind<BlueIrisOptions>(configuration, BlueIrisOptions.SectionName, problems);
+        if (!string.IsNullOrWhiteSpace(blueIris?.BaseUrl) && blueIris.GetConfigurationProblem() is { } cameraProblem)
+        {
+            // The camera is optional: the roof works without it, but the camera endpoint would answer 503.
+            warnings.Add(cameraProblem);
+        }
+
+        var telemetry = Bind<TelemetryOptions>(configuration, "Telemetry", problems);
         try
         {
-            security = configuration.GetSection(RoofControllerSecurityOptions.SectionName).Get<RoofControllerSecurityOptions>()
-                ?? new RoofControllerSecurityOptions();
+            telemetry?.Validate();
         }
         catch (InvalidOperationException ex)
         {
-            problems.Add($"{RoofControllerSecurityOptions.SectionName} could not be read: {ex.Message}");
+            // TelemetryOptionsValidator fails startup with the same message; it names settings and ranges, not values.
+            problems.Add($"Telemetry: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Binds <paramref name="sectionName"/> onto new options as <c>services.Configure</c> does, or reports why it cannot
+    /// be bound and returns null. The binder's message quotes the offending value, which may be a secret, so the report
+    /// names only the setting and the type it should have.
+    /// </summary>
+    private static T? Bind<T>(IConfiguration configuration, string sectionName, List<string> problems)
+        where T : class, new()
+    {
+        var options = new T();
+        try
+        {
+            configuration.GetSection(sectionName).Bind(options);
+            return options;
+        }
+        catch (InvalidOperationException ex)
+        {
+            var conversion = FailedConversion().Match(ex.Message);
+            problems.Add(conversion.Success
+                ? $"{sectionName} could not be read: the value of {conversion.Groups["path"].Value} is not a valid {conversion.Groups["type"].Value}."
+                : $"{sectionName} could not be read: a setting has a value that cannot be converted to its type.");
+            return null;
+        }
+    }
+
+    // "Failed to convert configuration value '<value>' at '<path>' to type '<type>'.": match from the end, past the value.
+    [GeneratedRegex(@"at '(?<path>[^']*)' to type '(?<type>[^']*)'\.?$", RegexOptions.CultureInvariant)]
+    private static partial Regex FailedConversion();
+
+    private static RoofControllerSecurityOptions? ValidateApiKeys(IConfiguration configuration, List<string> problems, List<string> notes)
+    {
+        var security = Bind<RoofControllerSecurityOptions>(configuration, RoofControllerSecurityOptions.SectionName, problems);
+        if (security is null)
+        {
             return null;
         }
 
@@ -154,7 +263,7 @@ public static class DeploymentValidator
         }
 
         notes.Add("API keys: " + string.Join(", ", keys.Select(key => $"{key.Name} ({key.Role})")));
-        if (!keys.Any(key => key.Role is RoofControllerApiContract.OperatorRole or RoofControllerApiContract.AdminRole))
+        if (!keys.Any(key => CanOperate(key.Role)))
         {
             problems.Add("No API key has the RoofOperator or RoofAdmin role, so nobody could open, close or stop the roof through the API or console.");
         }
@@ -162,6 +271,8 @@ public static class DeploymentValidator
         ValidateDeployKey(configuration[DeployKeySha256Key], keys, problems, notes);
         return security;
     }
+
+    private static bool CanOperate(string role) => role is RoofControllerApiContract.OperatorRole or RoofControllerApiContract.AdminRole;
 
     private static void ValidateDeployKey(string? deployKeySha256, IReadOnlyList<RoofApiKeyIdentity> keys, List<string> problems, List<string> notes)
     {
@@ -188,6 +299,12 @@ public static class DeploymentValidator
         }
 
         notes.Add($"Deploy key: {match.Name} ({match.Role}).");
+        if (!CanOperate(match.Role))
+        {
+            problems.Add(
+                $"The deploy script's API key ({match.Name}) has the {match.Role} role, so the new controller would answer 403 to its " +
+                "verified stop and the deployment would be rolled back. Point the script at a RoofOperator or RoofAdmin key.");
+        }
     }
 
     private static void ValidateTransport(
@@ -199,16 +316,18 @@ public static class DeploymentValidator
         List<string> warnings,
         List<string> notes)
     {
-        var httpsConfigured = RoofSecurityStartup.IsHttpsConfigured(configuration);
+        var listeners = RoofSecurityStartup.ResolveListeners(configuration);
         var httpsRequired = security is not null && RequireHttpsMiddleware.IsHttpsRequired(security, environment);
-        notes.Add($"Listeners: {DescribeListeners(configuration)}; HTTPS required: {(httpsRequired ? "yes" : "no")}.");
+        notes.Add($"Listeners: {listeners}; HTTPS required: {(httpsRequired ? "yes" : "no")}.");
 
-        if (httpsRequired && !httpsConfigured)
+        if (httpsRequired && !listeners.HasHttps)
         {
             problems.Add(
-                "RoofControllerSecurity:RequireHttps is in effect but no HTTPS listener is configured (ASPNETCORE_URLS, HTTPS_PORTS or " +
-                "Kestrel:Endpoints), so every remote request would get 403 https_required while /health/ready still passes. Configure " +
-                "a certificate (docs/deployment.md) or, on an isolated LAN only, set RoofControllerSecurity__RequireHttps=false.");
+                $"RoofControllerSecurity:RequireHttps is in effect but no HTTPS listener is configured: Kestrel would listen on {listeners} " +
+                "only, so every remote request would get 403 https_required while /health/ready still passes. Kestrel takes its listeners " +
+                "from Kestrel:Endpoints when any is set, otherwise from ASPNETCORE_URLS, otherwise from ASPNETCORE_HTTP_PORTS and " +
+                "ASPNETCORE_HTTPS_PORTS. Configure an HTTPS listener with a certificate (docs/deployment.md) or, on an isolated LAN only, " +
+                "set RoofControllerSecurity__RequireHttps=false.");
         }
         else if (!httpsRequired && !environment.IsDevelopment())
         {
@@ -217,65 +336,70 @@ public static class DeploymentValidator
                 "isolated LAN (docs/deployment.md).");
         }
 
-        if (!httpsConfigured)
+        if (!listeners.HasHttps)
         {
             return;
         }
 
-        var certificates = CertificateSources(configuration).ToList();
-        if (certificates.Count == 0)
+        var withoutCertificate = ListenersWithoutCertificate(configuration, listeners);
+        if (withoutCertificate.Count > 0)
         {
             problems.Add(
-                "An HTTPS listener is configured without a certificate. Set Kestrel__Certificates__Default__Path (and " +
+                $"An HTTPS listener is configured without a certificate ({string.Join(", ", withoutCertificate)}). Set " +
+                "Kestrel__Certificates__Default__Path (with Kestrel__Certificates__Default__KeyPath for a PEM key, or " +
                 "Kestrel__Certificates__Default__Password for a protected PFX) to a certificate mounted into the container.");
-            return;
         }
 
-        foreach (var source in certificates)
+        foreach (var source in CertificateSources(configuration))
         {
             ValidateCertificate(source, environment.ContentRootPath, now, problems, warnings, notes);
         }
     }
 
-    private static string DescribeListeners(IConfiguration configuration)
+    /// <summary>
+    /// The HTTPS listeners Kestrel would have no certificate for. An https endpoint uses its own Certificate, else the
+    /// default certificate; https URLs and ports always use the default certificate (there is no development
+    /// certificate in the container).
+    /// </summary>
+    private static List<string> ListenersWithoutCertificate(IConfiguration configuration, ResolvedListeners listeners)
     {
-        var values = new[] { configuration["urls"], configuration["ASPNETCORE_URLS"] }
-            .Concat(configuration.GetSection("Kestrel:Endpoints").GetChildren().Select(endpoint => endpoint["Url"]))
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .SelectMany(value => value!.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        foreach (var (key, scheme) in new[] { ("http_ports", "http"), ("HTTP_PORTS", "http"), ("https_ports", "https"), ("HTTPS_PORTS", "https") })
+        if (IsConfigured(configuration.GetSection(DefaultCertificateSection)))
         {
-            var ports = configuration[key];
-            if (!string.IsNullOrWhiteSpace(ports))
-            {
-                values.Add($"{scheme} port(s) {ports}");
-            }
+            return [];
         }
 
-        return values.Count == 0 ? "default" : string.Join(", ", values.Distinct(StringComparer.OrdinalIgnoreCase));
+        if (listeners.Source != ListenerSource.KestrelEndpoints)
+        {
+            return [RoofSecurityStartup.DescribeSource(listeners.Source)];
+        }
+
+        return configuration.GetSection("Kestrel:Endpoints").GetChildren()
+            .Where(endpoint => RoofSecurityStartup.IsHttpsAddress(endpoint["Url"]) && !IsConfigured(endpoint.GetSection("Certificate")))
+            .Select(endpoint => $"Kestrel:Endpoints:{endpoint.Key}")
+            .ToList();
     }
 
     /// <summary>The Kestrel default certificate plus the certificates of https endpoints, as configured paths.</summary>
     private static IEnumerable<CertificateSource> CertificateSources(IConfiguration configuration)
     {
-        var defaultCertificate = configuration.GetSection("Kestrel:Certificates:Default");
-        if (!string.IsNullOrWhiteSpace(defaultCertificate["Path"]) || !string.IsNullOrWhiteSpace(defaultCertificate["Subject"]))
+        var defaultCertificate = configuration.GetSection(DefaultCertificateSection);
+        if (IsConfigured(defaultCertificate))
         {
-            yield return new CertificateSource("Kestrel:Certificates:Default", defaultCertificate);
+            yield return new CertificateSource(DefaultCertificateSection, defaultCertificate);
         }
 
         foreach (var endpoint in configuration.GetSection("Kestrel:Endpoints").GetChildren())
         {
             var certificate = endpoint.GetSection("Certificate");
-            if (!string.IsNullOrWhiteSpace(certificate["Path"]) || !string.IsNullOrWhiteSpace(certificate["Subject"]))
+            if (IsConfigured(certificate))
             {
                 yield return new CertificateSource($"Kestrel:Endpoints:{endpoint.Key}:Certificate", certificate);
             }
         }
     }
+
+    private static bool IsConfigured(IConfigurationSection certificate)
+        => !string.IsNullOrWhiteSpace(certificate["Path"]) || !string.IsNullOrWhiteSpace(certificate["Subject"]);
 
     private static void ValidateCertificate(
         CertificateSource source,
@@ -292,9 +416,9 @@ public static class DeploymentValidator
             return;
         }
 
-        // Kestrel resolves relative certificate paths against the content root.
+        // Kestrel resolves relative certificate paths against the content root, and pairs a key whenever KeyPath is set.
         var path = Path.Combine(contentRoot, configuredPath);
-        var keyPath = source.Section["KeyPath"] is { Length: > 0 } configuredKeyPath ? Path.Combine(contentRoot, configuredKeyPath) : null;
+        var keyPath = source.Section["KeyPath"] is { } configuredKeyPath ? Path.Combine(contentRoot, configuredKeyPath) : null;
 
         if (!File.Exists(path))
         {
@@ -307,7 +431,7 @@ public static class DeploymentValidator
         {
             certificate = Load(path, keyPath, source.Section["Password"]);
         }
-        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             // Loader messages name the file and the failure (e.g. a wrong password); they never contain the password.
             problems.Add($"{source.Name}: certificate '{path}' could not be loaded ({ex.GetType().Name}: {ex.Message}).");
@@ -327,6 +451,13 @@ public static class DeploymentValidator
                 problems.Add($"{source.Name}: certificate '{path}' has no private key, so Kestrel cannot serve HTTPS with it.");
             }
 
+            if (!IsAllowedForServerAuthentication(certificate))
+            {
+                problems.Add(
+                    $"{source.Name}: certificate '{path}' has an Extended Key Usage extension without Server Authentication " +
+                    $"({ServerAuthenticationOid}), so Kestrel refuses to serve HTTPS with it.");
+            }
+
             if (now < notBefore)
             {
                 problems.Add(string.Create(CultureInfo.InvariantCulture, $"{source.Name}: certificate '{path}' is not valid until {notBefore:u}."));
@@ -342,17 +473,112 @@ public static class DeploymentValidator
         }
     }
 
-    /// <summary>Loads the certificate the way Kestrel does: PEM with a key file when KeyPath is set, otherwise PKCS#12.</summary>
+    /// <summary>Kestrel's rule: a certificate without an Extended Key Usage extension may serve; one with it must list Server Authentication.</summary>
+    private static bool IsAllowedForServerAuthentication(X509Certificate2 certificate)
+    {
+        var extensions = certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>().ToList();
+        return extensions.Count == 0
+            || extensions.Any(extension => extension.EnhancedKeyUsages.Cast<Oid>().Any(usage => usage.Value == ServerAuthenticationOid));
+    }
+
+    /// <summary>
+    /// Loads the certificate the way Kestrel's certificate loader does. With a KeyPath, the file must hold a single PEM
+    /// or DER certificate, and the PEM key is imported for the certificate's algorithm: as an encrypted key whenever a
+    /// password is configured (even an empty one), as a plain key only when none is. Without a KeyPath, the file is
+    /// PKCS#12 (PFX) or, carrying no key, a plain certificate.
+    /// </summary>
     private static X509Certificate2 Load(string path, string? keyPath, string? password)
     {
-        if (!string.IsNullOrWhiteSpace(keyPath))
+        // Kestrel first reads the file as a PEM chain, so a malformed PEM certificate fails here as it would there.
+        var chain = new X509Certificate2Collection();
+        chain.ImportFromPemFile(path);
+        foreach (var chainCertificate in chain)
         {
-            return string.IsNullOrEmpty(password)
-                ? X509Certificate2.CreateFromPemFile(path, keyPath)
-                : X509Certificate2.CreateFromEncryptedPemFile(path, password, keyPath);
+            chainCertificate.Dispose();
         }
 
-        return X509CertificateLoader.LoadPkcs12FromFile(path, password, X509KeyStorageFlags.EphemeralKeySet);
+        var contentType = X509Certificate2.GetCertContentType(path);
+        if (keyPath is null)
+        {
+            return contentType == X509ContentType.Pkcs12
+                ? X509CertificateLoader.LoadPkcs12FromFile(path, password, X509KeyStorageFlags.EphemeralKeySet)
+                : X509CertificateLoader.LoadCertificateFromFile(path);
+        }
+
+        if (contentType != X509ContentType.Cert)
+        {
+            throw new CryptographicException("The file is not a PEM or DER certificate, so the KeyPath key cannot be paired with it.");
+        }
+
+        using var certificate = X509CertificateLoader.LoadCertificateFromFile(path);
+        var keyText = File.ReadAllText(keyPath);
+        switch (certificate.PublicKey.Oid.Value)
+        {
+            case RsaOid:
+            {
+                using var rsa = RSA.Create();
+                ImportKey(rsa, keyText, password);
+                return certificate.CopyWithPrivateKey(rsa);
+            }
+
+            case EcdsaOid:
+            {
+                using var ecdsa = ECDsa.Create();
+                ImportKey(ecdsa, keyText, password);
+                return certificate.CopyWithPrivateKey(ecdsa);
+            }
+
+            case DsaOid:
+            {
+                using var dsa = DSA.Create();
+                ImportKey(dsa, keyText, password);
+                return certificate.CopyWithPrivateKey(dsa);
+            }
+
+            default:
+                throw new CryptographicException(
+                    $"The certificate's key algorithm ({certificate.PublicKey.Oid.Value}) is not checked here; use an RSA or ECDSA certificate.");
+        }
+
+        static void ImportKey(AsymmetricAlgorithm key, string keyText, string? password)
+        {
+            if (password is null)
+            {
+                key.ImportFromPem(keyText);
+            }
+            else
+            {
+                key.ImportFromEncryptedPem(keyText, password);
+            }
+        }
+    }
+
+    /// <summary>
+    /// AllowedHosts as host filtering applies it: split on ';' without trimming, any entry "*", "[::]" or "0.0.0.0"
+    /// (or none at all) allows every host, and other entries must match the Host header's name exactly, ignoring case.
+    /// The container health check requests http://localhost:8080/health/ready.
+    /// </summary>
+    private static void ValidateAllowedHosts(IConfiguration configuration, IHostEnvironment environment, List<string> problems, List<string> warnings)
+    {
+        var entries = configuration["AllowedHosts"]?.Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [];
+        if (entries.Length == 0 || entries.Any(entry => entry is "*" or "[::]" or "0.0.0.0"))
+        {
+            if (environment.IsProduction())
+            {
+                warnings.Add("AllowedHosts is '*' in Production; set it to the controller's host names to refuse DNS-rebinding requests.");
+            }
+
+            return;
+        }
+
+        if (!entries.Any(entry => string.Equals(entry, "localhost", StringComparison.OrdinalIgnoreCase)))
+        {
+            problems.Add(
+                "AllowedHosts does not include localhost, so host filtering would answer 400 to the container health check " +
+                "(http://localhost:8080/health/ready), the container would never become healthy and the deployment would be rolled " +
+                "back. Add localhost to the ';'-separated list; entries must match exactly (no spaces or ports), and a *.domain " +
+                "wildcard does not cover localhost.");
+        }
     }
 
     private sealed record CertificateSource(string Name, IConfigurationSection Section);

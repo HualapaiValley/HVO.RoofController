@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using HVO.RoofControllerV4.RPi.Middleware;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -16,6 +17,17 @@ public static class RoofSecurityStartup
 {
     /// <summary>Logger category used for the startup security report.</summary>
     public const string LoggerCategory = "HVO.RoofControllerV4.RPi.Security";
+
+    // Listener settings as Kestrel reads them. The ASPNETCORE_ environment provider maps ASPNETCORE_URLS to urls and
+    // ASPNETCORE_HTTP_PORTS/ASPNETCORE_HTTPS_PORTS to http_ports/https_ports (configuration keys ignore case).
+    private const string UrlsKey = "urls";
+    private const string HttpPortsKey = "http_ports";
+    private const string HttpsPortsKey = "https_ports";
+    private const string PreferHostingUrlsKey = "preferHostingUrls";
+    private const string EndpointsSection = "Kestrel:Endpoints";
+    private const string DefaultAddress = "http://localhost:5000";
+    private const string HttpPortsName = "ASPNETCORE_HTTP_PORTS";
+    private const string HttpsPortsName = "ASPNETCORE_HTTPS_PORTS";
 
     /// <summary>
     /// Logs the key inventory (names and roles only), a Critical entry with provisioning instructions when no key is
@@ -92,25 +104,132 @@ public static class RoofSecurityStartup
         }
     }
 
-    /// <summary>True when configuration declares an HTTPS listener (urls, https_ports or a Kestrel https endpoint).</summary>
-    public static bool IsHttpsConfigured(IConfiguration configuration)
+    /// <summary>
+    /// True when Kestrel will listen on HTTPS: at least one of the listeners <see cref="ResolveListeners"/> resolves is
+    /// an https URL. Settings Kestrel ignores (for example HTTPS_PORTS while ASPNETCORE_URLS is set) do not count.
+    /// </summary>
+    public static bool IsHttpsConfigured(IConfiguration configuration) => ResolveListeners(configuration).HasHttps;
+
+    /// <summary>
+    /// Resolves the listeners Kestrel will bind from configuration, with its precedence: <c>Kestrel:Endpoints</c> when
+    /// any endpoint is configured (unless <c>preferHostingUrls</c> is true and server URLs are set), otherwise the
+    /// server URLs, which are <c>urls</c> (ASPNETCORE_URLS) when set and otherwise <c>http_ports</c>/<c>https_ports</c>
+    /// (ASPNETCORE_HTTP_PORTS/ASPNETCORE_HTTPS_PORTS), otherwise Kestrel's default http://localhost:5000.
+    /// </summary>
+    /// <remarks>
+    /// Kestrel reads only the <c>urls</c>, <c>http_ports</c> and <c>https_ports</c> keys (the ASPNETCORE_ environment
+    /// provider strips the prefix). A raw <c>ASPNETCORE_URLS</c> key, which the unprefixed environment provider or a
+    /// secret file named that way produces, is not read by Kestrel and is ignored here too.
+    /// </remarks>
+    internal static ResolvedListeners ResolveListeners(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (ContainsHttps(configuration["urls"]) || ContainsHttps(configuration["ASPNETCORE_URLS"]))
+        // Server addresses, as GenericWebHostService builds them: urls wins over the port settings.
+        var urls = configuration[UrlsKey];
+        var httpPorts = configuration[HttpPortsKey];
+        var httpsPorts = configuration[HttpsPortsKey];
+        var serverAddressSource = string.IsNullOrEmpty(urls) ? ListenerSource.Ports : ListenerSource.Urls;
+        var serverAddresses = serverAddressSource == ListenerSource.Urls
+            ? SplitList(urls)
+            : ExpandPorts(httpPorts, "http").Concat(ExpandPorts(httpsPorts, "https")).ToList();
+
+        // Endpoints from configuration; Kestrel refuses to start when one has no Url, so only those with one count.
+        var endpoints = configuration.GetSection(EndpointsSection).GetChildren()
+            .Select(endpoint => endpoint["Url"])
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Select(url => url!.Trim())
+            .ToList();
+
+        var preferHostingUrls = configuration[PreferHostingUrlsKey] is { } prefer
+            && (string.Equals(prefer, "true", StringComparison.OrdinalIgnoreCase) || prefer == "1");
+
+        ListenerSource source;
+        IReadOnlyList<string> addresses;
+        if (serverAddresses.Count > 0 && (endpoints.Count == 0 || preferHostingUrls))
         {
-            return true;
+            (source, addresses) = (serverAddressSource, serverAddresses);
+        }
+        else if (endpoints.Count > 0)
+        {
+            (source, addresses) = (ListenerSource.KestrelEndpoints, endpoints);
+        }
+        else
+        {
+            (source, addresses) = (ListenerSource.Default, [DefaultAddress]);
         }
 
-        if (!string.IsNullOrWhiteSpace(configuration["https_ports"]) || !string.IsNullOrWhiteSpace(configuration["HTTPS_PORTS"]))
+        var ignored = new List<string>();
+        if (!string.IsNullOrEmpty(urls) && source != ListenerSource.Urls)
         {
-            return true;
+            ignored.Add(DescribeSource(ListenerSource.Urls));
         }
 
-        return configuration.GetSection("Kestrel:Endpoints").GetChildren()
-            .Any(endpoint => ContainsHttps(endpoint["Url"]));
+        if (!string.IsNullOrEmpty(httpPorts) && source != ListenerSource.Ports)
+        {
+            ignored.Add(HttpPortsName);
+        }
 
-        static bool ContainsHttps(string? value)
-            => !string.IsNullOrWhiteSpace(value) && value.Contains("https://", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(httpsPorts) && source != ListenerSource.Ports)
+        {
+            ignored.Add(HttpsPortsName);
+        }
+
+        if (endpoints.Count > 0 && source != ListenerSource.KestrelEndpoints)
+        {
+            ignored.Add(DescribeSource(ListenerSource.KestrelEndpoints));
+        }
+
+        return new ResolvedListeners(source, addresses, ignored);
+
+        static List<string> SplitList(string? value)
+            => (value ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+        static IEnumerable<string> ExpandPorts(string? ports, string scheme)
+            => SplitList(ports).Select(port => $"{scheme}://*:{port}");
     }
+
+    /// <summary>Operator-facing name of a listener source: the environment variable a container sets for it.</summary>
+    internal static string DescribeSource(ListenerSource source) => source switch
+    {
+        ListenerSource.KestrelEndpoints => "Kestrel:Endpoints",
+        ListenerSource.Urls => "ASPNETCORE_URLS",
+        ListenerSource.Ports => $"{HttpPortsName}/{HttpsPortsName}",
+        _ => "Kestrel's default"
+    };
+
+    /// <summary>True for an https listener URL (Kestrel decides by the scheme alone).</summary>
+    internal static bool IsHttpsAddress(string? address)
+        => address is not null && address.TrimStart().StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Where Kestrel takes its listeners from; it uses exactly one source.</summary>
+internal enum ListenerSource
+{
+    /// <summary>The <c>Kestrel:Endpoints</c> configuration section.</summary>
+    KestrelEndpoints,
+
+    /// <summary>The <c>urls</c> setting (ASPNETCORE_URLS).</summary>
+    Urls,
+
+    /// <summary>The <c>http_ports</c>/<c>https_ports</c> settings (ASPNETCORE_HTTP_PORTS/ASPNETCORE_HTTPS_PORTS).</summary>
+    Ports,
+
+    /// <summary>Nothing configured: Kestrel listens on http://localhost:5000.</summary>
+    Default
+}
+
+/// <summary>The listeners Kestrel will bind, as <see cref="RoofSecurityStartup.ResolveListeners"/> resolved them.</summary>
+/// <param name="Source">The configuration the listeners come from.</param>
+/// <param name="Addresses">The listener URLs (ports expanded to http://*:port and https://*:port, as Kestrel does).</param>
+/// <param name="Ignored">Listener settings that are present but overridden by <paramref name="Source"/>.</param>
+internal sealed record ResolvedListeners(ListenerSource Source, IReadOnlyList<string> Addresses, IReadOnlyList<string> Ignored)
+{
+    /// <summary>True when at least one listener is an https URL.</summary>
+    public bool HasHttps => Addresses.Any(RoofSecurityStartup.IsHttpsAddress);
+
+    /// <summary>For reports, e.g. "http://+:8080 (from ASPNETCORE_URLS; ignored: ASPNETCORE_HTTPS_PORTS)".</summary>
+    public override string ToString()
+        => $"{string.Join(", ", Addresses)} (from {RoofSecurityStartup.DescribeSource(Source)}"
+            + (Ignored.Count > 0 ? $"; ignored: {string.Join(", ", Ignored)})" : ")");
 }

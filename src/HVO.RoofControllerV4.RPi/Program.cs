@@ -30,17 +30,19 @@ namespace HVO.RoofControllerV4.RPi;
 
 public class Program
 {
+    /// <summary>Docker secrets directory: each file becomes the configuration key it is named after.</summary>
+    internal const string SecretsDirectory = "/run/secrets";
+
     public static int Main(string[] args)
     {
         if (args.Contains(DeploymentValidator.CommandLineSwitch, StringComparer.Ordinal))
         {
             // Pre-deployment check (deploy-roofcontroller-rpi.sh): reads the same configuration sources as the controller,
             // but never builds the host, opens a listener or touches the HAT.
-            var validationBuilder = CreateBuilder(args.Where(arg => arg != DeploymentValidator.CommandLineSwitch).ToArray());
-            return DeploymentValidator.Run(validationBuilder.Configuration, validationBuilder.Environment, TimeProvider.System, Console.Out);
+            return RunValidation(args, SecretsDirectory, Console.Out);
         }
 
-        var builder = CreateBuilder(args);
+        var builder = CreateBuilder(args, SecretsDirectory);
 
         ApplyHardwareDetectionOverrides(builder.Configuration);
         ConfigureServices(builder.Services, builder.Configuration, builder.Environment);
@@ -54,13 +56,43 @@ public class Program
         return 0;
     }
 
-    private static WebApplicationBuilder CreateBuilder(string[] args)
+    /// <summary>
+    /// Runs the deployment check against the configuration the controller would load from <paramref name="args"/>
+    /// (without <see cref="DeploymentValidator.CommandLineSwitch"/>) and <paramref name="secretsDirectory"/>, writes the
+    /// report to <paramref name="output"/> and returns the exit code. A configuration that cannot be loaded at all (for
+    /// example malformed JSON) is reported as a problem with the exception type and message, never with values.
+    /// </summary>
+    internal static int RunValidation(string[] args, string secretsDirectory, TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(output);
+
+        ConfigurationManager? configuration = null;
+        try
+        {
+            // The switch is not a setting: left in, the command-line provider would take the next argument as its value.
+            var builder = CreateBuilder(args.Where(arg => arg != DeploymentValidator.CommandLineSwitch).ToArray(), secretsDirectory);
+            configuration = builder.Configuration;
+            return DeploymentValidator.Run(configuration, builder.Environment, TimeProvider.System, output);
+        }
+        catch (Exception ex)
+        {
+            return DeploymentValidator.ReportFailure(ex, output);
+        }
+        finally
+        {
+            // Releases the file watchers of the appsettings and secrets providers; the host is never built.
+            configuration?.Dispose();
+        }
+    }
+
+    private static WebApplicationBuilder CreateBuilder(string[] args, string secretsDirectory)
     {
         var builder = WebApplication.CreateBuilder(args);
 
         // Docker secrets: a file named e.g. RoofControllerSecurity__ApiKeys__0__Key or BlueIris__Password under
-        // /run/secrets becomes that configuration key. Never commit keys or passwords to appsettings.
-        builder.Configuration.AddKeyPerFile("/run/secrets", optional: true);
+        // the secrets directory becomes that configuration key. Never commit keys or passwords to appsettings.
+        builder.Configuration.AddKeyPerFile(secretsDirectory, optional: true);
         return builder;
     }
 
