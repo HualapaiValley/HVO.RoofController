@@ -243,13 +243,14 @@ If the log shows `Shutdown could not verify the relay register all-off state`, t
 re-runs the all-off sequence every 500 ms until it verifies, the controller is disposed or 15 s
 pass. Disposal usually comes first: the host waits up to 5 s for each of its shutdown calls
 (usually two, at most three), so the retry ends about 10 s after the stop request plus the time
-the web server takes to stop (roughly 20 attempts), or at the 15 s limit when all three run. Record whether a retry verified it (`Shutdown stop retry N verified the
-relay register all-off`) or gave up, and check the relays with the meter. A Critical `Roof
-controller shutdown stop did not complete within` entry from the host means a HAT call was stuck
-and was abandoned. Later triggers then log `shutdown stop not attempted` and disposal logs
-`Disposal could not acquire the controller lock` instead of waiting behind it (its all-off stop
-runs only if the stuck call returns before the process ends). Treat the relay state as unknown
-and use the independent stop (C1).
+the web server takes to stop (roughly 20 attempts), or at the 15 s limit when all three run.
+Record whether a retry verified it (`Shutdown stop retry N verified the relay register all-off`)
+or gave up, and check the relays with the meter. A Critical `Roof controller shutdown stop did
+not complete within` entry from the host means a HAT call was stuck and was abandoned. Later
+triggers then log `shutdown stop not attempted` and disposal logs `Disposal could not acquire the
+controller lock` instead of waiting behind it (its all-off stop runs only if the stuck call
+returns before the process ends). Treat the relay state as unknown and use the independent stop
+(C1).
 
 ### C12. Deployment script stop gate, pre-flight, remote check and rollback
 
