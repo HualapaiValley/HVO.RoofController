@@ -64,9 +64,17 @@ Install `roof.crt`, or your CA certificate, as trusted on browsers that use the 
 that runs the deploy script too: pass it as `REMOTE_CA_CERT` so the script can check the HTTPS endpoint after a deploy
 (not needed when that machine already trusts the CA).
 
-The deployment check loads the certificate with its password before anything is replaced. It fails when the file is
-missing or unreadable, the password is wrong, the private key is missing or the certificate has expired, and it warns
-from 30 days before expiry.
+The deployment check loads the certificate as Kestrel does, with its password, before anything is replaced. It fails
+when the file is missing or unreadable, the password is wrong, the private key is missing, the certificate is not for
+server authentication or has expired, and it warns from 30 days before expiry. A PEM or DER certificate needs
+`KeyPath` for its PEM key, and a PFX must not have one. With `KeyPath`, a `Password` that is set, even to an empty
+string, means the key is encrypted.
+
+Kestrel takes its listeners from one place only: `Kestrel:Endpoints` when any endpoint is configured, otherwise
+`ASPNETCORE_URLS`, otherwise `ASPNETCORE_HTTP_PORTS` and `ASPNETCORE_HTTPS_PORTS`. So `ASPNETCORE_HTTPS_PORTS` does
+nothing while `ASPNETCORE_URLS` is set, as it is in the image. `ASPNETCORE_URLS` works only as an environment variable
+or the `--urls` option; a secret file of that name has no effect (name it `urls`). The deployment check resolves the
+listeners the same way and prints them, with any settings that are ignored.
 
 HSTS is sent only when an HTTPS endpoint is configured.
 
@@ -99,15 +107,26 @@ docker run --rm <same --env, --device and --mount options as the controller> hvo
 
 It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fails on:
 
-- `RoofControllerOptionsV4` values that the controller would refuse at startup
+- `RoofControllerOptionsV4` values that the controller would refuse at startup, including
+  `IgnorePhysicalLimitSwitches` without `AllowIgnoringLimitSwitchesOnPhysicalHardware` when the controller would run
+  on the roof hardware: `HVO_FORCE_RASPBERRY_PI=true`, or `USE_REAL_GPIO=true`, or Production unless
+  `HVO_FORCE_RASPBERRY_PI=false`
+- a value that cannot be converted in `RoofControllerOptionsV4`, `RoofControllerSecurity`,
+  `RoofControllerHostOptionsV4`, `ConsoleLogBuffer`, `BlueIris` or `Telemetry` (the report names the setting, not the
+  value), and `Telemetry` options that the controller would refuse
 - API key entries that would be ignored, no usable key, or no `RoofOperator`/`RoofAdmin` key
-- `RoofControllerSecurity:RequireHttps` in effect without an HTTPS listener
-- an HTTPS listener without a certificate, or a certificate that cannot be loaded, has no private key, is not yet
-  valid or has expired
-- with `DeploymentCheck__DeployKeySha256` set (the deploy script sets it): no configured key has that SHA-256
+- with `DeploymentCheck__DeployKeySha256` set (the deploy script sets it): no configured key has that SHA-256, or
+  that key has neither the `RoofOperator` nor the `RoofAdmin` role
+- `RoofControllerSecurity:RequireHttps` in effect when Kestrel would not listen on HTTPS
+- an HTTPS listener without a certificate, or a certificate that cannot be loaded, has no private key, has an
+  Extended Key Usage without Server Authentication, is not yet valid or has expired
+- an `AllowedHosts` list without `localhost`: the container health check would get 400. Entries must match exactly,
+  with no spaces or ports.
+- a configuration that cannot be loaded at all, such as a malformed settings file
 
 It warns on plain HTTP outside Development, a certificate that expires within 30 days, a certificate given only by
-store subject, `AllowAnonymousStop`, and `AllowedHosts=*` in Production. It never prints key values or passwords.
+store subject, `AllowAnonymousStop`, a misconfigured camera proxy (the roof still works), and `AllowedHosts=*` in
+Production. It never prints key values, passwords or other setting values.
 
 The deploy script runs it as its pre-flight, and each compose profile runs it as a one-shot service that the controller
 depends on.
