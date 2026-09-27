@@ -67,6 +67,7 @@ public partial class RoofControllerServiceV4
 
             _initialized = true;
             ApplyHardwareSettings_NoLock();
+            ApplyIndicatorLedModes_NoLock();
 
             // 4. A fault present at startup (IN3 active, contradictory limits) latches here.
             Evaluate_NoLock(Now);
@@ -162,6 +163,16 @@ public partial class RoofControllerServiceV4
             {
                 var repeat = _commandedMotion == direction;
                 CheckDeadlines_NoLock(now);
+
+                // The inputs re-read at an input deadline can show the destination limit: the roof arrived, so a
+                // repeat has nothing left to do.
+                if (repeat && _commandedMotion == RoofMotionDirection.None && _lastStopReason == RoofControllerStopReason.LimitSwitchReached
+                    && !_faultLatched && _relayRegisterState == RoofRelayRegisterState.Verified)
+                {
+                    FinishMutation_NoLock();
+                    return Result<RoofControllerStatus>.Success(_status);
+                }
+
                 if (_commandedMotion == RoofMotionDirection.None
                     && (repeat || _faultLatched || _relayRegisterState != RoofRelayRegisterState.Verified))
                 {
@@ -169,7 +180,8 @@ public partial class RoofControllerServiceV4
                     return RejectAfterDeadlineStop_NoLock<RoofControllerStatus>();
                 }
 
-                // Only the lease expired under a reversal: the roof is now stopped (verified) and the reversal is a start.
+                // Only the lease expired, or the destination limit was reached, under a reversal: the roof is now
+                // stopped (verified) and the reversal is a start.
             }
 
             // A repeat of the current command renews the operator lease only. It never extends the watchdog, which is
@@ -224,6 +236,16 @@ public partial class RoofControllerServiceV4
                     $"A safety fault is latched ({_latchedFaultReason}); run ClearFault before commanding motion.");
             }
 
+            // With the run interlock configured, the start must be confirmed by IN4 rising. A drive that already reports
+            // running (still decelerating after a stop or reversal, or running without a command) would confirm it at
+            // once, so the start waits until the drive has stopped.
+            if (_options.AtSpeedConfirmationTimeout is not null && _rawIn4 == true)
+            {
+                FinishMutation_NoLock();
+                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.InterlockActive,
+                    "The drive still reports running (IN4); motion refused until it stops.");
+            }
+
             // Already at the destination: nothing to energize.
             var destinationActive = direction == RoofMotionDirection.Opening ? OpenLimitActive_NoLock : ClosedLimitActive_NoLock;
             if (destinationActive == true)
@@ -245,8 +267,10 @@ public partial class RoofControllerServiceV4
             _leaseDeadlineUtc = _options.OperatorLeaseTimeout is { } lease ? now + lease : null;
             _atSpeedDeadlineUtc = _options.AtSpeedConfirmationTimeout is { } atSpeed ? now + atSpeed : null;
             _atSpeedConfirmed = false;
+            _runLostUtc = null;
             _departureReleaseVerified = departureLimit != true;
             _releaseObservedUtc = null;
+            _departureDeadlineUtc = departureLimit == true && _options.DepartureReleaseTimeout is { } departure ? now + departure : null;
 
             if (!SetRelayStatesAtomically(stopRelay: true, openRelay: direction == RoofMotionDirection.Opening, closeRelay: direction == RoofMotionDirection.Closing))
             {
@@ -257,8 +281,9 @@ public partial class RoofControllerServiceV4
                     $"{direction} aborted: the relay register did not verify the requested state.");
             }
 
-            _logger.LogInformation("Roof {Direction} started. Watchdog={Watchdog}s Lease={Lease} AtSpeedTimeout={AtSpeed} DepartingFromLimit={Departing}",
-                direction, _options.SafetyWatchdogTimeout.TotalSeconds, _options.OperatorLeaseTimeout, _options.AtSpeedConfirmationTimeout, departureLimit == true);
+            _logger.LogInformation("Roof {Direction} started. Watchdog={Watchdog}s Lease={Lease} AtSpeedTimeout={AtSpeed} DepartingFromLimit={Departing} DepartureTimeout={DepartureTimeout}",
+                direction, _options.SafetyWatchdogTimeout.TotalSeconds, _options.OperatorLeaseTimeout, _options.AtSpeedConfirmationTimeout, departureLimit == true,
+                _departureDeadlineUtc is null ? null : _options.DepartureReleaseTimeout);
 
             // Edges may have been missed between the read and the relay writes; the supervision cycle re-reads promptly.
             FinishMutation_NoLock();
@@ -345,7 +370,9 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// Rejection for a lease renewal, repeated Open/Close or reversal that found a passed deadline and stopped motion
-    /// instead. (A reversal that found only an expired lease, with the stop verified, proceeds as a start.)
+    /// instead, or whose input re-read at a deadline found the destination limit. (A reversal that found only an expired
+    /// lease or the destination limit, with the stop verified, proceeds as a start; a repeat that found the destination
+    /// limit succeeds.)
     /// </summary>
     private Result<T> RejectAfterDeadlineStop_NoLock<T>()
     {
@@ -359,6 +386,11 @@ public partial class RoofControllerServiceV4
         {
             return Reject_NoLock<T>(RoofControllerErrorCode.FaultLatched,
                 $"Motion had passed a safety deadline ({_lastStopReason}); motion stopped and the fault is latched.");
+        }
+
+        if (_lastStopReason == RoofControllerStopReason.LimitSwitchReached)
+        {
+            return Reject_NoLock<T>(RoofControllerErrorCode.LeaseNotActive, "Motion had already ended at the destination limit.");
         }
 
         return Reject_NoLock<T>(RoofControllerErrorCode.LeaseNotActive, "The operator lease had already expired; motion stopped.");

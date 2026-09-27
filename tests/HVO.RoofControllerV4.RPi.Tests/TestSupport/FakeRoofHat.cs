@@ -54,6 +54,9 @@ internal sealed class FakeRoofHat : FourRelayFourInputHat
     /// </summary>
     public byte LedMask => Registers.LedMask;
 
+    /// <summary>LED mode register (8).</summary>
+    public byte LedModeMask => Registers.LedModeMask;
+
     /// <summary>Relay register value after each relay write.</summary>
     public IReadOnlyList<byte> MaskHistory => Registers.MaskHistory;
 

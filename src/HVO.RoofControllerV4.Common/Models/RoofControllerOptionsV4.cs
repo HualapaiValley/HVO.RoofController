@@ -104,8 +104,36 @@ public record class RoofControllerOptionsV4
     public TimeSpan? OperatorLeaseTimeout { get; set; }
 
     /// <summary>
-    /// Optional drive run confirmation. When set, motion stops if the drive does not report at-speed (IN4) within this
-    /// window after motion is commanded. Null (default) disables the interlock. Enable only after bench commissioning.
+    /// Optional drive run interlock on IN4 (the drive's run output: SMVector TB-14 with P142 = 1). When set:
+    /// <list type="bullet">
+    /// <item>a start is refused with <see cref="RoofControllerErrorCode.InterlockActive"/> while IN4 already reports the
+    /// drive running, so confirmation is always a fresh LOW to HIGH transition (an immediate reversal is refused until
+    /// the drive has stopped);</item>
+    /// <item>motion stops and latches <see cref="RoofControllerStopReason.DriveNotRunning"/> when IN4 does not report
+    /// running within this window of the motion command;</item>
+    /// <item>after IN4 has confirmed, motion stops and latches <see cref="RoofControllerStopReason.DriveNotRunning"/> when
+    /// IN4 drops and stays low without the destination limit (for example an external stop opened TB-1).</item>
+    /// </list>
+    /// Null (default) disables the interlock. Set it from the measured start time (commissioning C6).
     /// </summary>
     public TimeSpan? AtSpeedConfirmationTimeout { get; set; }
+
+    /// <summary>
+    /// Optional window for the drive to stop reporting running (IN4) after the relays are released. A drive that still
+    /// reports running after it is logged as Critical once per stop; the relays are already off, so only the independent
+    /// hardware stop can act on it. With a ramped stop (SMVector P111 = 2 or 3) the run output stays on while the drive
+    /// decelerates, so set this longer than the P105 deceleration time. Null (default) uses
+    /// <see cref="AtSpeedConfirmationTimeout"/>; with both null the check is off. Local configuration only: the remote
+    /// configuration API reports it but never changes it.
+    /// </summary>
+    public TimeSpan? DriveStopConfirmationTimeout { get; set; }
+
+    /// <summary>
+    /// Optional departure-release timeout. When motion starts on a limit, that limit must release within this window,
+    /// otherwise motion stops and latches <see cref="RoofControllerStopReason.DepartureLimitNotReleased"/>: the roof is
+    /// jammed, stalled or moving the wrong way (for example swapped motor leads pushing it into the stop behind the
+    /// limit). Null (default) disables it. Set it from measured release times with margin for the drive's acceleration
+    /// (P104). Local configuration only: the remote configuration API reports it but never changes it.
+    /// </summary>
+    public TimeSpan? DepartureReleaseTimeout { get; set; }
 }

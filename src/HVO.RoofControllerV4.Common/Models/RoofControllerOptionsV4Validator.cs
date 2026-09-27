@@ -116,6 +116,28 @@ public sealed class RoofControllerOptionsV4Validator : IValidateOptions<RoofCont
             }
         }
 
+        if (options.DriveStopConfirmationTimeout is { } driveStop
+            && !InRange(driveStop, RoofControllerLimits.MinDriveStopConfirmationSeconds * 1000, RoofControllerLimits.MaxDriveStopConfirmationSeconds * 1000))
+        {
+            AddFailure($"DriveStopConfirmationTimeout must be between {RoofControllerLimits.MinDriveStopConfirmationSeconds} and {RoofControllerLimits.MaxDriveStopConfirmationSeconds} seconds when set.");
+        }
+
+        if (options.DepartureReleaseTimeout is { } departure)
+        {
+            if (!InRange(departure, RoofControllerLimits.MinDepartureReleaseSeconds * 1000, RoofControllerLimits.MaxDepartureReleaseSeconds * 1000))
+            {
+                AddFailure($"DepartureReleaseTimeout must be between {RoofControllerLimits.MinDepartureReleaseSeconds} and {RoofControllerLimits.MaxDepartureReleaseSeconds} seconds when set.");
+            }
+            else if (departure >= options.SafetyWatchdogTimeout)
+            {
+                AddFailure("DepartureReleaseTimeout must be shorter than SafetyWatchdogTimeout.");
+            }
+            else if (departure <= options.LimitSwitchDebounce)
+            {
+                AddFailure("DepartureReleaseTimeout must be longer than LimitSwitchDebounce; the release is verified only after the debounce.");
+            }
+        }
+
         // Hardware-mode checks (for example IgnorePhysicalLimitSwitches on real hardware) depend on runtime state
         // and are enforced by the controller service, not here.
 

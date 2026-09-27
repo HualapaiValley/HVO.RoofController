@@ -117,15 +117,15 @@ public class RoofControllerAtSpeedTests
 
         time.Advance(Window - TimeSpan.FromMilliseconds(1));
         svc.RunSupervisionCycle();
-        logger.Contains(LogLevel.Critical, "Drive still reports at-speed").Should().BeFalse("the drive gets the same window to stop");
+        logger.Contains(LogLevel.Critical, "Drive still reports running").Should().BeFalse("the drive gets the same window to stop");
 
         time.Advance(TimeSpan.FromMilliseconds(1));
         svc.RunSupervisionCycle();
         svc.RunSupervisionCycle();
 
-        logger.MessagesAt(LogLevel.Critical).Count(m => m.Contains("Drive still reports at-speed")).Should().Be(1);
+        logger.MessagesAt(LogLevel.Critical).Count(m => m.Contains("Drive still reports running")).Should().Be(1);
         var snapshot = svc.GetCurrentStatusSnapshot();
-        snapshot.LastError.Should().Contain("at-speed");
+        snapshot.LastError.Should().Contain("running");
         snapshot.IsFaultLatched.Should().BeFalse("the relays already read back off; this is a diagnostic");
         hat.RelayMask.Should().Be(0x00);
     }
@@ -143,6 +143,6 @@ public class RoofControllerAtSpeedTests
         time.Advance(TimeSpan.FromSeconds(30));
         svc.RunSupervisionCycle();
 
-        logger.Contains(LogLevel.Critical, "Drive still reports at-speed").Should().BeFalse();
+        logger.Contains(LogLevel.Critical, "Drive still reports running").Should().BeFalse();
     }
 }

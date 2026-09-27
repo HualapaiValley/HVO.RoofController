@@ -38,27 +38,43 @@ authenticated web console and HTTP API.
   posts to the controller directly (`POST /console/stop`), so Stop works while the console
   is disconnected as long as the controller is reachable.
 - **Fault latch**: watchdog expiry, a VFD fault (IN3), a relay verification failure, repeated
-  input read failures, contradictory limit inputs and a reasserted start limit latch the
-  fault. Open and Close are refused until an explicit `ClearFault` succeeds with healthy
+  input read failures, contradictory limit inputs, a reasserted start limit, a failed
+  drive-running check (IN4) and an unreleased start limit latch the fault. Open and Close are refused until an explicit `ClearFault` succeeds with healthy
   inputs. Stop is never blocked by the latch and does not clear it.
 - **Relay register read-back**: after every relay change the controller reads the HAT's
   relay register back and reports `Verified` or `Unverified`. This proves what the HAT
   register holds, not that the relay contacts opened; commissioning checks the contacts
   with a meter. A stop that cannot be verified is reported as a failure.
-- **Limit switches** (IN1/IN2, polarity `UseNormallyClosedLimitSwitches`): the roof stops at
-  the destination limit; leaving a limit is handled as a departure phase, and both limits
+- **Limit switches** (IN1/IN2, polarity `UseNormallyClosedLimitSwitches`, `false` in
+  production because IN1/IN2 are on the ME-8108 normally open pair): the roof stops at the
+  destination limit; leaving a limit is handled as a departure phase, and both limits
   active at once stops motion and refuses starts.
-- **VFD fault input** (IN3): `FaultInputActiveHigh` (default `true`, raw HIGH = fault) must
-  be confirmed against the real wiring during commissioning.
-- **Drive-running interlock** (IN4, optional): with `AtSpeedConfirmationTimeout` set, the
-  drive must report running within that window after a start, otherwise the roof stops
-  with `DriveNotRunning`.
+- **VFD fault input** (IN3): `FaultInputActiveHigh` is `false` in production, because the
+  drive's fault relay (`P140 = 3`) holds IN3 HIGH while the drive is healthy. The code
+  default stays `true` (raw HIGH = fault).
+- **Drive-running interlock** (IN4, the drive's run output; `AtSpeedConfirmationTimeout`,
+  3 s in production, off when unset): a start is refused with `InterlockActive` while the
+  drive still reports running, so a reversal waits until the drive has stopped. The drive
+  must report running within the window after a start, and IN4 dropping for 250 ms while
+  moving without the destination limit (a trip, an external stop, drive power loss) stops
+  the roof; both latch `DriveNotRunning`. IN4 still HIGH after a stop is logged as
+  Critical once `DriveStopConfirmationTimeout` (default: the same window) has passed.
+- **Departure-release timeout** (optional, `DepartureReleaseTimeout`, off when unset): a
+  start limit that has not released within the window stops the roof with
+  `DepartureLimitNotReleased`. It catches a jammed roof or swapped motor leads before the
+  roof reaches the hard stop behind the limit. Set it from the release time measured with
+  the installed acceleration (`P104`).
 - **Input read failures**: `MaxConsecutiveInputReadFailures` (default 3) consecutive failed
   reads while moving stop the roof with `InputReadFailure`.
 - `IgnorePhysicalLimitSwitches` is for simulation; on physical hardware it is refused
   unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration.
 
-Before connecting the roof mechanism, complete the bench checklist in
+The wiring these settings assume, and the settings' limits (stopping distance, `P104` and
+`P105`), are in the
+[hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md). Tests run
+the controller against an emulated roof, drive, limit switches and HAT built from the
+vendor documentation (`HVO.RoofControllerV4.Simulation`), including wrong-wiring and
+wrong-setting variants. Before connecting the roof mechanism, complete the bench checklist in
 [docs/commissioning.md](docs/commissioning.md).
 
 ## Projects
@@ -67,8 +83,9 @@ Before connecting the roof mechanism, complete the bench checklist in
 |---------|-------------|
 | `HVO.RoofControllerV4.RPi` | ASP.NET Core web app for Raspberry Pi (GPIO/I2C roof control) |
 | `HVO.RoofControllerV4.Common` | Shared models and options |
+| `HVO.RoofControllerV4.Simulation` | Emulated roof plant: SMVector drive, ME-8108 limit switches, SM-I-010 HAT and the wiring, for tests |
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
-| `HVO.RoofControllerV4.RPi.Tests` | Unit and API tests (`tests/`) |
+| `HVO.RoofControllerV4.RPi.Tests` | Unit, API, simulation and emulated-plant tests (`tests/`) |
 
 ## Quick Start
 

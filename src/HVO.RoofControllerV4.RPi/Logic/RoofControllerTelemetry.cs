@@ -78,7 +78,8 @@ internal static class RoofControllerTelemetry
             or RoofControllerStopReason.DriveFault
             or RoofControllerStopReason.RelayVerificationFailed
             or RoofControllerStopReason.OperatorLeaseExpired
-            or RoofControllerStopReason.DriveNotRunning))
+            or RoofControllerStopReason.DriveNotRunning
+            or RoofControllerStopReason.DepartureLimitNotReleased))
         {
             return;
         }

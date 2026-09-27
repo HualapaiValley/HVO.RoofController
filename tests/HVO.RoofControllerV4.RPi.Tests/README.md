@@ -1,7 +1,8 @@
 # Roof Controller V4 Test Suite
 
 This test project validates safety, motion control and API-facing status semantics for `RoofControllerServiceV4`,
-its hosted service and its health check.
+its hosted service and its health check, and runs the controller against an emulated roof, drive and HAT. No test
+relies on physical hardware.
 
 ## Documentation
 
@@ -11,13 +12,16 @@ its hosted service and its health check.
 
 ## Wiring and polarity assumptions
 
-- Limit switches are **normally closed (NC)** by default: raw HIGH = circuit closed (not at the limit), raw LOW = limit
-  engaged. `UseNormallyClosedLimitSwitches = false` inverts this.
+- Limit switches are **normally closed (NC)** by default in code: raw HIGH = circuit closed (not at the limit), raw LOW
+  = limit engaged. `UseNormallyClosedLimitSwitches = false` inverts this. Production uses `false`: IN1/IN2 are on the
+  ME-8108 normally open pair, HIGH at the limit.
 - Inputs (raw electrical):
   - IN1: open limit
   - IN2: closed limit
-  - IN3: drive fault. Active HIGH by default (`FaultInputActiveHigh = true`); the polarity must be confirmed on the bench.
-  - IN4: drive at-speed. Enforced only when `AtSpeedConfirmationTimeout` is set.
+  - IN3: drive fault. Active HIGH by default in code (`FaultInputActiveHigh = true`). Production uses `false`: the
+    drive's fault relay (`P140 = 3`) is closed while healthy, so IN3 is LOW when faulted.
+  - IN4: drive running (`TB-14`, `P142 = 1`). Enforced only when `AtSpeedConfirmationTimeout` is set (production 3 s).
+- The service tests set polarity explicitly where it matters; the plant tests load the production `appsettings.json`.
 - Relays:
   - RLY1: open direction
   - RLY2: close direction
@@ -51,7 +55,9 @@ These stop reasons **latch** a safety fault:
 - `InputReadFailure` (`MaxConsecutiveInputReadFailures` consecutive failed input reads while moving)
 - `ContradictoryLimitInputs` (both limits active, while moving or idle)
 - `StartLimitReasserted` (the departure limit reasserted after its release was verified)
-- `DriveNotRunning` (no IN4 at-speed within `AtSpeedConfirmationTimeout`; only when it is set)
+- `DriveNotRunning` (no IN4 within `AtSpeedConfirmationTimeout` after a start, or IN4 low for 250 ms after it
+  confirmed while the destination limit is not reached; only when the window is set)
+- `DepartureLimitNotReleased` (the start limit did not release within `DepartureReleaseTimeout`; only when it is set)
 
 Rules for latched faults:
 
@@ -73,7 +79,9 @@ Rules for latched faults:
   `Stop` while idle does not change it either.
 
 A start that finds IN3 active or both limits active is refused with `InterlockActive`, and the same evaluation
-latches `DriveFault` or `ContradictoryLimitInputs`. The next start is refused with `FaultLatched`.
+latches `DriveFault` or `ContradictoryLimitInputs`. The next start is refused with `FaultLatched`. A start while IN4
+still reports the drive running (with `AtSpeedConfirmationTimeout` set) is refused with `InterlockActive` without
+latching; a reversal in that state stops the roof first.
 
 These stop reasons are not latched: `NormalStop`, `LimitSwitchReached`, `OperatorLeaseExpired`, `EmergencyStop`,
 `StopButtonPressed`, `SystemDisposal` and `HostShutdown`.
@@ -108,6 +116,8 @@ models exactly that register.
 | `Services/RoofControllerWatchdogTests` | Absolute watchdog cap, stale callbacks, supervision backstop, latch reset |
 | `Services/RoofControllerLeaseTests` | Optional operator lease, `RenewLease`, repeat-command renewal, `LeaseNotActive` |
 | `Services/RoofControllerAtSpeedTests` | IN4 confirmation window (`DriveNotRunning`), drive still at-speed after stop |
+| `Services/RoofControllerDriveRunTests` | IN4 start interlock, reversal refusal, 250 ms run loss, destination re-read, `DriveStopConfirmationTimeout` |
+| `Services/RoofControllerDepartureTimeoutTests` | `DepartureReleaseTimeout` (`DepartureLimitNotReleased`), disarm on release, supervision wake |
 | `Services/RoofControllerInputReadFailureTests` | Fresh read on start, failure threshold, staleness, `Initialize` read failure |
 | `Services/RoofControllerLimitDepartureTests` | Departure-limit release debounce, chatter, `StartLimitReasserted` |
 | `Services/RoofControllerLimitEdgeTests`, `LimitPolarityTests`, `PartialStatusTests`, `LedIndicatorTests` | Edge handling, NC/NO polarity, partial states, indicator LEDs |
@@ -121,6 +131,40 @@ models exactly that register.
 | `HostedServices/…`, `HealthChecks/…`, `Models/…` | Host shutdown path (bounded wait, abandoned blocking call), health rules, options validation |
 | `Security/DeploymentValidatorTests` | `--validate-deployment`: roof options (and whether the HAT device is mapped), other options sections and log levels, keys and deploy key, the listeners and endpoints Kestrel would use, certificate loading and expiry, `AllowedHosts` |
 | `Security/DeploymentValidationCommandTests` | The `--validate-deployment` command as `Program.Main` runs it, with real configuration sources and a temporary secrets directory |
+| `Simulation/…` | The emulator models on their own (`PlantRig`, raw register writes): SMVector drive, ME-8108 switch, SM-I-010 board and bus, the assembled plant |
+| `Plant/PlantProductionCycleTests` | Open and close on the limits, stop, reversals, watchdog and lease, with the production configuration |
+| `Plant/PlantDriveTests` | Drive trips and power loss, clear-fault pulse, external stops and run loss, stop methods and stop distance, acceleration |
+| `Plant/PlantLimitSwitchTests` | Contact action, bounce and transfer time, stuck switches, broken wires, a jammed roof |
+| `Plant/PlantHatTests` | HAT power loss and LED modes, dead and welded relays, register faults, I2C write and input read failures |
+| `Plant/PlantWiringFaultTests` | Each wiring mistake from closed, mid-travel and open; swapped motor leads; wrong polarity and output settings |
+| `Plant/ProductionConfigurationTests` | The deployed `appsettings.json` validates and matches the documented wiring |
+
+## Emulated plant
+
+`HVO.RoofControllerV4.Simulation` models the installation from the vendor documentation: the Lenze SMVector drive
+(terminals, `P1xx` settings, ramps, stop methods, trips), the two ME-8108 limit switches (NC pair in the drive's run
+circuit, NO pair to the HAT), the Sequent SM-I-010 HAT (relay and input registers, LED modes, power loss) and the
+documented wiring, with injectable faults (`WiringFault`, `LimitSwitchFault`, `RelayContactFault`, bus failures). It
+records `PlantViolation`s such as a hard-stop contact or both direction contacts closed.
+
+`PlantHarness` runs the production controller, through the real `FourRelayFourInputHat` library and the emulated I2C
+client, with the production `appsettings.json` on a `ManualTimeProvider`. It stands in for the two background loops
+(input polling and supervision) so the whole run is deterministic.
+
+The plant's defaults are **assumptions**, documented where they are defined (`RoofPlantOptions`,
+`SmVectorAssumptions`, `Me8108Options`): 2 m of travel at 0.1 m/s, hard stops 60 mm past each limit's operate point,
+the installed `P1xx` values, a 4 ms drive input response, and switch bounce and transfer times. Tests that depend on an
+assumption vary it. Software cannot prove the wiring, that contacts move, or the hardwired stop path; those remain
+commissioning checks ([docs/commissioning.md](../../docs/commissioning.md)).
+
+Known limitations the plant tests document:
+
+- A ramp stop with the 2 s deceleration (`P105`) runs into the hard stop; coast (`P111 = 0`), a short ramp or DC braking
+  stops clear of it.
+- Swapped motor leads, from a limit, drive the roof into the stop behind that limit before the stall trip. Only
+  `DepartureReleaseTimeout`, set from the measured release time, stops it first.
+- An open limit that never operates reaches the hard stop; only a travel-time or position check would catch it.
+- A welded direction relay is invisible to the register read-back; RLY4 still stops the roof.
 
 ## Adding new tests
 

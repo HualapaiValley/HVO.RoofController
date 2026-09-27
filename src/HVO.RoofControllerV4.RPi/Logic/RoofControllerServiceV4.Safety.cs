@@ -50,7 +50,8 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// Applies the safety rules to the cached inputs. While moving: contradictory limits, destination limit, departure
-    /// limit reassertion and drive fault stop motion. While idle: an active drive fault or contradictory limits latch.
+    /// limit reassertion and drive fault stop motion, and the drive run input (IN4) is tracked. While idle: an active drive
+    /// fault or contradictory limits latch.
     /// </summary>
     private void Evaluate_NoLock(DateTimeOffset now)
     {
@@ -83,10 +84,9 @@ public partial class RoofControllerServiceV4
             {
                 StopMotion_NoLock(RoofControllerStopReason.DriveFault, "Drive fault input (IN3) became active while moving.");
             }
-            else if (_rawIn4 == true && !_atSpeedConfirmed)
+            else
             {
-                _atSpeedConfirmed = true;
-                _logger.LogDebug("Drive at-speed (IN4) confirmed while {Direction}", direction);
+                TrackDriveRunning_NoLock(now, direction);
             }
         }
 
@@ -101,6 +101,40 @@ public partial class RoofControllerServiceV4
             {
                 Latch_NoLock(RoofControllerStopReason.ContradictoryLimitInputs, "Both limit switches report active (wiring or switch failure).");
             }
+        }
+    }
+
+    /// <summary>
+    /// Tracks the drive run input (IN4) while moving. HIGH confirms the start. With the interlock configured
+    /// (<see cref="RoofControllerOptionsV4.AtSpeedConfirmationTimeout"/>), LOW after confirmation starts the run-loss
+    /// window: the destination limit, which also removes the run input, normally stops motion first, and IN4 returning
+    /// HIGH cancels it. <see cref="CheckDeadlines_NoLock"/> stops motion when the window passes.
+    /// </summary>
+    private void TrackDriveRunning_NoLock(DateTimeOffset now, RoofMotionDirection direction)
+    {
+        if (_rawIn4 == true)
+        {
+            if (!_atSpeedConfirmed)
+            {
+                _atSpeedConfirmed = true;
+                _logger.LogDebug("Drive at-speed (IN4) confirmed while {Direction}", direction);
+            }
+
+            if (_runLostUtc is { } lostAt)
+            {
+                _runLostUtc = null;
+                _logger.LogInformation("Drive run input (IN4) returned after {Elapsed} ms while {Direction}", (now - lostAt).TotalMilliseconds, direction);
+            }
+        }
+        else if (_rawIn4 == false && _atSpeedConfirmed && _options.AtSpeedConfirmationTimeout is not null && _runLostUtc is null)
+        {
+            _runLostUtc = now;
+            _logger.LogWarning("Drive run input (IN4) dropped while {Direction} without the destination limit; stopping unless it returns within {Window} ms",
+                direction, RunLossConfirmationDelay.TotalMilliseconds);
+
+            // The loop may be sleeping for a full verification interval; the window must be enforced when it ends, before
+            // an external stop that is released (with the run input still held) restarts the drive.
+            WakeSupervision_NoLock();
         }
     }
 
@@ -122,7 +156,15 @@ public partial class RoofControllerServiceV4
         {
             if (departureLimit == false)
             {
-                _releaseObservedUtc ??= now;
+                if (_releaseObservedUtc is null)
+                {
+                    _releaseObservedUtc = now;
+
+                    // Verify the release when the debounce ends rather than at the next verification interval, so a
+                    // reassertion after that is a stop and not chatter.
+                    WakeSupervision_NoLock();
+                }
+
                 if (now - _releaseObservedUtc.Value >= _options.LimitSwitchDebounce)
                 {
                     _departureReleaseVerified = true;
@@ -148,7 +190,8 @@ public partial class RoofControllerServiceV4
         RoofControllerStopReason.InputReadFailure or
         RoofControllerStopReason.ContradictoryLimitInputs or
         RoofControllerStopReason.StartLimitReasserted or
-        RoofControllerStopReason.DriveNotRunning;
+        RoofControllerStopReason.DriveNotRunning or
+        RoofControllerStopReason.DepartureLimitNotReleased;
 
     /// <summary>
     /// Latches a safety fault. The first latched reason is kept, except that a relay verification failure always takes
@@ -262,8 +305,10 @@ public partial class RoofControllerServiceV4
         _leaseDeadlineUtc = null;
         _atSpeedDeadlineUtc = null;
         _atSpeedConfirmed = false;
+        _runLostUtc = null;
         _departureReleaseVerified = false;
         _releaseObservedUtc = null;
+        _departureDeadlineUtc = null;
     }
 
     private static RoofSafetyStopSource GetSafetyStopSource(RoofControllerStopReason reason, RoofMotionDirection direction) => reason switch
@@ -277,7 +322,9 @@ public partial class RoofControllerServiceV4
         RoofControllerStopReason.InputReadFailure => RoofSafetyStopSource.Inputs,
         RoofControllerStopReason.OperatorLeaseExpired => RoofSafetyStopSource.Lease,
         RoofControllerStopReason.DriveNotRunning => RoofSafetyStopSource.Drive,
-        RoofControllerStopReason.ContradictoryLimitInputs or RoofControllerStopReason.StartLimitReasserted => RoofSafetyStopSource.Limits,
+        RoofControllerStopReason.ContradictoryLimitInputs
+            or RoofControllerStopReason.StartLimitReasserted
+            or RoofControllerStopReason.DepartureLimitNotReleased => RoofSafetyStopSource.Limits,
         _ => RoofSafetyStopSource.Operator
     };
 
@@ -587,6 +634,9 @@ public partial class RoofControllerServiceV4
         }
 
         _consecutiveInputReadFailures++;
+
+        // The HAT may have reset (its LED modes return to following the inputs); re-apply them with the next LED update.
+        _lastIndicatorLedMask = null;
         _lastError = $"Safety input read failed ({_consecutiveInputReadFailures} consecutive): {error?.Message ?? "unknown error"}";
         _logger.LogWarning(error, "Safety input read failed ({Failures} consecutive)", _consecutiveInputReadFailures);
         return false;
@@ -740,20 +790,59 @@ public partial class RoofControllerServiceV4
             return;
         }
 
+        if (InputDeadlinePassed_NoLock(now))
+        {
+            // The cached inputs may predate the deadline (an edge the poll loop has not delivered yet, such as the
+            // destination limit). Re-read them first so a stop at the limit, or a recovered input, takes precedence.
+            if (_lastSuccessfulInputReadUtc is not { } lastRead || lastRead < now)
+            {
+                if (ReadInputs_NoLock())
+                {
+                    Evaluate_NoLock(now);
+                }
+
+                if (_commandedMotion == RoofMotionDirection.None)
+                {
+                    return;
+                }
+            }
+
+            if (_departureDeadlineUtc is { } departureDeadline && !_departureReleaseVerified && now >= departureDeadline)
+            {
+                var limitName = _commandedMotion == RoofMotionDirection.Opening ? "closed" : "open";
+                StopMotion_NoLock(RoofControllerStopReason.DepartureLimitNotReleased,
+                    $"The {limitName} limit did not release within {_options.DepartureReleaseTimeout?.TotalSeconds:0.#} s of the motion command; the roof may be jammed or moving the wrong way.");
+                return;
+            }
+
+            if (_runLostUtc is { } runLost && now - runLost >= RunLossConfirmationDelay)
+            {
+                StopMotion_NoLock(RoofControllerStopReason.DriveNotRunning,
+                    $"The drive stopped reporting running (IN4) for {(now - runLost).TotalMilliseconds:0} ms while {_commandedMotion.ToString().ToLowerInvariant()} without the destination limit.");
+                return;
+            }
+        }
+
         if (_leaseDeadlineUtc is { } leaseDeadline && now >= leaseDeadline)
         {
             StopMotion_NoLock(RoofControllerStopReason.OperatorLeaseExpired, "The operator lease expired before it was renewed.");
         }
     }
 
+    /// <summary>True when the departure-release deadline or the IN4 run-loss window has passed.</summary>
+    private bool InputDeadlinePassed_NoLock(DateTimeOffset now)
+        => (_departureDeadlineUtc is { } departureDeadline && !_departureReleaseVerified && now >= departureDeadline)
+           || (_runLostUtc is { } runLost && now - runLost >= RunLossConfirmationDelay);
+
     /// <summary>
-    /// When the at-speed interlock is configured, reports (once per stop) a drive that still signals at-speed after the
-    /// same window has elapsed since the stop. Diagnostic only: relays are already off, so only an independent hardware
-    /// stop can act on it.
+    /// Reports (once per stop) a drive that still signals running (IN4) once the stop window
+    /// (<see cref="RoofControllerOptionsV4.DriveStopConfirmationTimeout"/>, else
+    /// <see cref="RoofControllerOptionsV4.AtSpeedConfirmationTimeout"/>) has elapsed since the stop. Diagnostic only: relays
+    /// are already off, so only an independent hardware stop can act on it.
     /// </summary>
     private void CheckDriveStoppedAfterStop_NoLock(DateTimeOffset now)
     {
-        if (_options.AtSpeedConfirmationTimeout is not { } window
+        if ((_options.DriveStopConfirmationTimeout ?? _options.AtSpeedConfirmationTimeout) is not { } window
             || _lastMotionStopUtc is not { } stoppedAt
             || _driveRunningAfterStopReported
             || now - stoppedAt < window
@@ -763,9 +852,18 @@ public partial class RoofControllerServiceV4
         }
 
         _driveRunningAfterStopReported = true;
-        _lastError = $"Drive still reports at-speed (IN4) {(now - stoppedAt).TotalSeconds:0.#} s after the relays were released.";
-        _logger.LogCritical("Drive still reports at-speed (IN4) {Seconds:0.#}s after stop ({Reason}); relays read back off. Check the drive and use the independent hardware stop",
+        _lastError = $"Drive still reports running (IN4) {(now - stoppedAt).TotalSeconds:0.#} s after the relays were released.";
+        _logger.LogCritical("Drive still reports running (IN4) {Seconds:0.#}s after stop ({Reason}); relays read back off. Check the drive and use the independent hardware stop",
             (now - stoppedAt).TotalSeconds, _lastStopReason);
+    }
+
+    /// <summary>The delay the supervision loop would wait now. Lets tests drive the loop's schedule on a manual clock.</summary>
+    internal TimeSpan GetSupervisionDelay()
+    {
+        lock (_syncLock)
+        {
+            return ComputeSupervisionDelay_NoLock(Now);
+        }
     }
 
     private TimeSpan ComputeSupervisionDelay_NoLock(DateTimeOffset now)
@@ -792,9 +890,19 @@ public partial class RoofControllerServiceV4
             Consider(_atSpeedDeadlineUtc);
         }
 
-        if (!_departureReleaseVerified && _releaseObservedUtc is { } releaseObserved)
+        if (!_departureReleaseVerified)
         {
-            Consider(releaseObserved + _options.LimitSwitchDebounce);
+            if (_releaseObservedUtc is { } releaseObserved)
+            {
+                Consider(releaseObserved + _options.LimitSwitchDebounce);
+            }
+
+            Consider(_departureDeadlineUtc);
+        }
+
+        if (_runLostUtc is { } runLost)
+        {
+            Consider(runLost + RunLossConfirmationDelay);
         }
 
         return delay < MinimumSupervisionDelay ? MinimumSupervisionDelay : delay;
@@ -821,7 +929,20 @@ public partial class RoofControllerServiceV4
     /// <summary>Wakes the supervision loop so it recomputes its delay (for example after motion starts).</summary>
     private void WakeSupervision_NoLock()
     {
+        _supervisionWakeCount++;
         _supervisionWakeCts?.Cancel();
+    }
+
+    /// <summary>How many times the supervision loop has been woken early. Lets tests follow the loop's schedule.</summary>
+    internal long SupervisionWakeCount
+    {
+        get
+        {
+            lock (_syncLock)
+            {
+                return _supervisionWakeCount;
+            }
+        }
     }
 
     private async Task SupervisionLoopAsync(CancellationToken token)

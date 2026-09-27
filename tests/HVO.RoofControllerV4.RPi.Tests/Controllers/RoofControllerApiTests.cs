@@ -392,6 +392,57 @@ public sealed class RoofControllerApiTests
     }
 
     [TestMethod]
+    public async Task GetConfiguration_ReportsTheLocalOnlyDriveAndDepartureSettings()
+    {
+        var options = new RoofControllerOptionsV4
+        {
+            DriveStopConfirmationTimeout = TimeSpan.FromSeconds(6),
+            DepartureReleaseTimeout = TimeSpan.FromSeconds(8)
+        };
+        _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(options, 7));
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var payload = await ApiJson.ReadAsync<RoofConfigurationResponse>(await client.GetAsync($"{BasePath}/Configuration"));
+
+        Assert.AreEqual(6, payload.DriveStopConfirmationTimeoutSeconds);
+        Assert.AreEqual(8, payload.DepartureReleaseTimeoutSeconds);
+    }
+
+    [TestMethod]
+    public async Task GetConfiguration_ReportsUnsetLocalOnlySettingsAsNull()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var payload = await ApiJson.ReadAsync<RoofConfigurationResponse>(await client.GetAsync($"{BasePath}/Configuration"));
+
+        Assert.IsNull(payload.DriveStopConfirmationTimeoutSeconds);
+        Assert.IsNull(payload.DepartureReleaseTimeoutSeconds);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_KeepsTheLocalOnlyDriveAndDepartureSettings()
+    {
+        var current = new RoofControllerOptionsV4
+        {
+            DriveStopConfirmationTimeout = TimeSpan.FromSeconds(6),
+            DepartureReleaseTimeout = TimeSpan.FromSeconds(8)
+        };
+        _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(current, 7));
+        RoofControllerOptionsV4? captured = null;
+        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
+            .Callback<RoofControllerOptionsV4, long>((options, _) => captured = options)
+            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest());
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(TimeSpan.FromSeconds(6), captured.DriveStopConfirmationTimeout);
+        Assert.AreEqual(TimeSpan.FromSeconds(8), captured.DepartureReleaseTimeout);
+    }
+
+    [TestMethod]
     public async Task UpdateConfiguration_StaleVersion_Returns409Conflict()
     {
         using var client = _host.CreateApiClient(TestApiKeys.Admin);

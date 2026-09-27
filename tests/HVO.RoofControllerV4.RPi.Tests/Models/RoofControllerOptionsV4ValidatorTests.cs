@@ -149,4 +149,80 @@ public sealed class RoofControllerOptionsV4ValidatorTests
         result.Succeeded.Should().BeFalse();
         result.Failures.Should().Contain(f => f.Contains("PeriodicVerificationInterval must be shorter than SafetyWatchdogTimeout"));
     }
+
+    [TestMethod]
+    [DataRow(0.5, true)]
+    [DataRow(60d, true)]
+    [DataRow(0.49, false)]
+    [DataRow(60.1, false)]
+    public void Validate_DriveStopConfirmationTimeout_MustBeInRange(double seconds, bool valid)
+    {
+        var options = new RoofControllerOptionsV4 { DriveStopConfirmationTimeout = TimeSpan.FromSeconds(seconds) };
+
+        var result = new RoofControllerOptionsV4Validator().Validate(string.Empty, options);
+
+        result.Succeeded.Should().Be(valid);
+        if (!valid)
+        {
+            result.Failures.Should().ContainSingle(f => f.Contains("DriveStopConfirmationTimeout must be between 0.5 and 60 seconds"));
+        }
+    }
+
+    [TestMethod]
+    [DataRow(0.5, true)]
+    [DataRow(60d, true)]
+    [DataRow(0.49, false)]
+    [DataRow(60.1, false)]
+    public void Validate_DepartureReleaseTimeout_MustBeInRange(double seconds, bool valid)
+    {
+        var options = new RoofControllerOptionsV4
+        {
+            SafetyWatchdogTimeout = TimeSpan.FromSeconds(90),
+            DepartureReleaseTimeout = TimeSpan.FromSeconds(seconds)
+        };
+
+        var result = new RoofControllerOptionsV4Validator().Validate(string.Empty, options);
+
+        result.Succeeded.Should().Be(valid);
+        if (!valid)
+        {
+            result.Failures.Should().ContainSingle(f => f.Contains("DepartureReleaseTimeout must be between 0.5 and 60 seconds"));
+        }
+    }
+
+    [TestMethod]
+    public void Validate_ShouldFail_WhenDepartureReleaseTimeoutIsNotShorterThanWatchdog()
+    {
+        var options = new RoofControllerOptionsV4
+        {
+            SafetyWatchdogTimeout = TimeSpan.FromSeconds(30),
+            DepartureReleaseTimeout = TimeSpan.FromSeconds(30)
+        };
+
+        var result = new RoofControllerOptionsV4Validator().Validate(string.Empty, options);
+
+        result.Failures.Should().ContainSingle(f => f.Contains("DepartureReleaseTimeout must be shorter than SafetyWatchdogTimeout"));
+    }
+
+    [TestMethod]
+    public void Validate_ShouldFail_WhenDepartureReleaseTimeoutIsNotLongerThanTheDebounce()
+    {
+        var options = new RoofControllerOptionsV4
+        {
+            LimitSwitchDebounce = TimeSpan.FromMilliseconds(500),
+            DepartureReleaseTimeout = TimeSpan.FromMilliseconds(500)
+        };
+
+        var result = new RoofControllerOptionsV4Validator().Validate(string.Empty, options);
+
+        result.Failures.Should().ContainSingle(f => f.Contains("DepartureReleaseTimeout must be longer than LimitSwitchDebounce"));
+    }
+
+    [TestMethod]
+    public void Validate_ShouldSucceed_WhenTheNewTimeoutsAreUnset()
+    {
+        var options = new RoofControllerOptionsV4 { DriveStopConfirmationTimeout = null, DepartureReleaseTimeout = null };
+
+        new RoofControllerOptionsV4Validator().Validate(string.Empty, options).Succeeded.Should().BeTrue();
+    }
 }

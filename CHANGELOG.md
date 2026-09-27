@@ -35,7 +35,15 @@ the roof against this server; use the authenticated browser console for operator
   `ConfigurationVersionConflict`). Changes to relay mapping, limit or fault polarity, or
   `IgnorePhysicalLimitSwitches` also need `ConfirmSafetyCriticalChange: true`. New fields:
   `FaultInputActiveHigh`, `MaxConsecutiveInputReadFailures`, `OperatorLeaseTimeoutSeconds`,
-  `AtSpeedConfirmationTimeoutSeconds`.
+  `AtSpeedConfirmationTimeoutSeconds`. The response also reports the local-only
+  `DriveStopConfirmationTimeoutSeconds` and `DepartureReleaseTimeoutSeconds`.
+- **Production configuration matches the documented wiring (#29).** `appsettings.json` now
+  sets `UseNormallyClosedLimitSwitches = false` (IN1/IN2 on the ME-8108 normally open pair),
+  `FaultInputActiveHigh = false` (IN3 on the drive's `P140 = 3` fault relay, closed while
+  healthy) and `AtSpeedConfirmationTimeout = 00:00:03` (IN4 on `TB-14`, `P142 = 1`). The
+  previous values read the documented wiring inverted: the roof would not have moved, and the
+  drive fault would have latched at start-up. A deployment that overrides these settings keeps
+  its own values.
 - **HTTPS by default outside Development.** `RoofControllerSecurity:RequireHttps` defaults to
   true outside Development; plain-HTTP requests to protected endpoints get 403 except from
   loopback and for `/health/live` and `/health/ready`. Provide a certificate or opt out
@@ -73,6 +81,25 @@ the roof against this server; use the authenticated browser console for operator
   connection is down (`POST /console/stop`, console sign-in plus the page's antiforgery
   token), and the console stops renewing the operator lease as soon as its connection drops.
   Renewal does not resume on reconnect.
+- Drive-running interlock on IN4 (#29), with `AtSpeedConfirmationTimeout` set: a start is
+  refused with `InterlockActive` while IN4 still reports the drive running (a reversal stops the
+  roof and is refused until the drive has stopped), and IN4 low for 250 ms after it confirmed,
+  without the destination limit, stops the roof and latches `DriveNotRunning` (an external stop,
+  a trip the fault input missed, drive power loss). The inputs are re-read first, so a limit
+  edge not yet delivered still ends the move as `LimitSwitchReached`.
+- `DriveStopConfirmationTimeout` (0.5-60 s, local only; default: `AtSpeedConfirmationTimeout`):
+  how long IN4 may stay high after a stop before a Critical log entry. Set it longer than the
+  drive's deceleration when a ramp stop is used.
+- `DepartureReleaseTimeout` (0.5-60 s, local only, off by default): a start limit that has not
+  released in time stops the roof and latches the new stop reason `DepartureLimitNotReleased`
+  (15), catching a jammed roof or one driving the wrong way before the stop behind the limit.
+  It must be shorter than `SafetyWatchdogTimeout` and longer than `LimitSwitchDebounce`.
+- `HVO.RoofControllerV4.Simulation` and the emulated-plant tests (#29): the production
+  controller and configuration, through the real HAT library, drive an emulated Lenze SMVector
+  drive, two ME-8108 limit switches, the SM-I-010 HAT and the documented wiring, modelled from
+  the vendor documentation. The tests cover normal cycles, drive trips and power loss, external
+  stops, stop methods, switch and wire faults, relay and I2C faults, and each wiring mistake from
+  closed, mid-travel and open; none relies on physical hardware.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
 - [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
   telemetry-outage and RV-6 soak procedures) and [docs/ci-runners.md](docs/ci-runners.md).
@@ -130,10 +157,37 @@ the roof against this server; use the authenticated browser console for operator
   cross-compiles on the build platform.
 - Documentation describes the implemented safety behavior, API, ports and deployment path.
   The wiring package zip is rebuilt from `hardware-overview.md`.
+- Wiring documentation (#29): with `P120 = 2`, `TB-4` is the drive's +15 V reference, so the
+  IN1-IN3 opto commons return to `TB-2` (0 V), and RLY4 NO lands on `TB-4` itself. The earlier
+  drawing, with the commons on `TB-4`, never conducts (the drive reads as faulted) and, with
+  RLY4 on 0 V, holds the drive stopped. The diagrams, `hardware-overview.md` (sections 2, 3, 5,
+  7, 8, 10-12 and the bring-up checks) and the wiring package zip are updated.
+- The SM-I-010 LED modes (LED1-LED3 from the controller, LED4 showing IN4) are re-applied with
+  each indicator change, so a HAT that reset shows the logical states again instead of the raw
+  inputs.
+- The supervision loop wakes when a start limit's release is first seen and when IN4 drops, so
+  the release is verified and the run-loss window enforced on time rather than at the next
+  verification interval.
 - Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile
 - Repository documentation standardization
+
+### Known limitations
+
+Found with the emulated plant (#29); the plant's travel, speed and hard-stop clearance are
+assumptions, so the distances are indicative. Mitigations beyond these settings are tracked in
+#32.
+
+- A ramp stop (`P111` = 2) with `P105` = 2 s runs into the hard stop; coast (the factory
+  default) stops about 10 mm past the limit's operating point.
+- Swapped motor leads, starting from a limit, reach the stop behind it before the stall trip
+  unless `DepartureReleaseTimeout` is set between the release time with the installed `P104`
+  and the time a wrong-way move takes to reach that stop.
+- An open limit that never operates reaches the hard stop; only a travel-time or position check
+  would catch it.
+- A welded direction relay is invisible to the register read-back; RLY4 still stops the roof,
+  and a following reversal is refused by the drive and latches `DriveNotRunning`.
 
 ### Removed
 

@@ -52,4 +52,16 @@ public static class RoofControllerLimits
 
     /// <summary>Maximum at-speed (IN4) confirmation window, in seconds, when enabled.</summary>
     public const double MaxAtSpeedConfirmationSeconds = 30;
+
+    /// <summary>Minimum drive stop (IN4 low after stop) confirmation window, in seconds, when set.</summary>
+    public const double MinDriveStopConfirmationSeconds = 0.5;
+
+    /// <summary>Maximum drive stop (IN4 low after stop) confirmation window, in seconds, when set.</summary>
+    public const double MaxDriveStopConfirmationSeconds = 60;
+
+    /// <summary>Minimum departure-release timeout, in seconds, when enabled.</summary>
+    public const double MinDepartureReleaseSeconds = 0.5;
+
+    /// <summary>Maximum departure-release timeout, in seconds, when enabled.</summary>
+    public const double MaxDepartureReleaseSeconds = 60;
 }
