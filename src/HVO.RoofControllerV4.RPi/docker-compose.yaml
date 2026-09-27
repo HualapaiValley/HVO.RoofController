@@ -13,14 +13,18 @@
 #                  docker compose --profile pi-lan-http up -d
 #
 # Each profile first runs a one-shot deployment check (--validate-deployment) with the same environment and mounts,
-# and the controller starts only if it passes: roof options valid, a usable RoofOperator or RoofAdmin key, and, for
-# HTTPS, a loadable, unexpired certificate with its private key. The check reads configuration only (no devices).
+# and the new controller starts only if it passes: roof options valid, a usable RoofOperator or RoofAdmin key, and,
+# for HTTPS, a loadable, unexpired certificate with its private key. The check reads configuration only (no devices).
+# `up` stops and replaces a running controller before the check runs, so a failed check leaves NO controller
+# running. Run the check on its own first (docs/deployment.md):
+#   docker compose --profile pi build && docker compose --profile pi run --rm roof-controller-check
 
 x-roof-environment: &roof-environment
   ASPNETCORE_ENVIRONMENT: Production
   HVO_FORCE_RASPBERRY_PI: "true"
   RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
-  # Host names/IPs clients use to reach the controller (semicolon-separated); "*" logs a startup warning.
+  # Host names/IPs clients use to reach the controller (semicolon-separated). A list must include localhost (the
+  # health check calls it); "*" logs a startup warning.
   AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
   OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
   OTEL_RESOURCE_ATTRIBUTES: service.instance.id=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}

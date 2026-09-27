@@ -142,7 +142,7 @@ deploy.
 | `HTTPS_CERT_DIR` | (empty) | Certificate directory on the Pi. Required unless `ALLOW_INSECURE_HTTP=true`. |
 | `HTTPS_CERT_FILE` | `roof-controller.pfx` | PFX file name inside `HTTPS_CERT_DIR` |
 | `ALLOW_INSECURE_HTTP` | `false` | Plain HTTP on `HOST_PORT` with `RoofControllerSecurity__RequireHttps=false` |
-| `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts` |
+| `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts`. A list must include `localhost`: the health check and the script's in-container calls use it. |
 | `REMOTE_CA_CERT` | (empty) | PEM file on this machine that verifies the Pi's certificate, for the remote check |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
 | `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Do not publish ports here. |
@@ -216,7 +216,9 @@ them. For that one deploy:
 3. The old container still gets SIGTERM with the 30-second grace period.
 
 The old controller is kept as `<name>-previous`. An automatic rollback to it restores the unauthenticated controller
-on its old port; `--rollback` to it fails the remote check (it has no `POST` Stop), so check it by hand.
+on its old port; `--rollback` to it fails the remote check (it has no `POST` Stop), so check it by hand. Swapping
+back from it with `--rollback` runs the verified stop gate against that old controller, which always fails, so it
+needs `--force-unverified-stop` and the typed confirmation as well.
 
 Before that deploy, provision `/etc/hvo-roof/secrets`, including the operator key used by the script. Then update any
 API automation clients (they now need `X-Api-Key` and `POST` commands). Operators sign in to the console with a key
@@ -234,7 +236,10 @@ share the container name `roof-controller` (which also collides with a controlle
 
 ```bash
 cd src/HVO.RoofControllerV4.RPi
-HVO_ROOF_ALLOWED_HOSTS="roof-pi;roof-pi.local;localhost" docker compose --profile pi up -d --build
+export HVO_ROOF_ALLOWED_HOSTS="roof-pi;roof-pi.local;localhost"
+docker compose --profile pi build
+docker compose --profile pi run --rm roof-controller-check   # the deployment check on its own
+docker compose --profile pi up -d                             # only if the check passed
 ```
 
 Both profiles mirror the script: the secrets directory at `/run/secrets` (`HVO_ROOF_SECRETS_DIR`, default
@@ -242,8 +247,11 @@ Both profiles mirror the script: the secrets directory at `/run/secrets` (`HVO_R
 certificate directories must exist; compose does not create them.
 
 Each profile first runs the [deployment check](#the-deployment-check) as a one-shot service with the same environment
-and mounts (`roof-controller-check` or `roof-controller-lan-http-check`), and the controller starts only if it exits 0.
-Read its report with `docker compose --profile pi logs roof-controller-check`.
+and mounts (`roof-controller-check` or `roof-controller-lan-http-check`), and the new controller starts only if it
+exits 0. But `up` stops and replaces a running controller before the check runs, so a check that fails during `up`
+leaves **no** controller running. That is why the commands above run the check on its own first, with the same
+`HVO_ROOF_*` variables, and run `up` only if it passes. Read the report of the check that `up` ran with
+`docker compose --profile pi logs roof-controller-check`.
 
 Compose does **not** perform the verified stop, keep the previous container, check the published URL or roll back.
 Before `up` replaces a running controller, stop the roof yourself with `POST .../Stop` and check the response. After
@@ -254,6 +262,9 @@ it, check the published URL from another machine (see below). Prefer the script.
 | Layer | Value | Purpose |
 |-------|-------|---------|
 | App `HostOptions.ShutdownTimeout` | 20 s | Time the host gives hosted services to stop. The roof controller's shutdown (Stop, then verify all relays off) runs here. |
+| Controller shutdown call | 5 s + 1 s grace, per call | The host requests the verified stop at `ApplicationStopping` (its `StopAsync` shares that call) and again when the service loop ends. It waits 5 s for the result, then 1 s more before it abandons a call blocked in HAT I/O and logs Critical. Two calls at most: 12 s, inside the 20 s. |
+| Unverified shutdown retry | every 500 ms | Re-runs the all-off sequence until it verifies, the controller is disposed or 15 s pass. Disposal usually ends it, about 10 s after SIGTERM plus the web server's stop time. |
+| Controller disposal | 2 s | Waits for the controller lock and then for its background tasks. A lock held by blocked HAT I/O is given up (Critical: relay state unknown) rather than block the exit. |
 | Camera streams | end at `ApplicationStopping` | An open viewer never holds up shutdown |
 | Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the app's timeout. Docker sends SIGKILL after this. |
 
@@ -262,7 +273,8 @@ relays are off.
 
 ## After deploying: checks on the device
 
-Run these checks on the Pi, or through the Docker context:
+Run these from the deploying machine with the Pi's Docker context selected (`docker context use rpi-remote`). The key
+is read from this machine:
 
 ```bash
 # Container healthy and listening

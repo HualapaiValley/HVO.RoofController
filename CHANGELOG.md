@@ -89,8 +89,10 @@ the roof against this server; use the authenticated browser console for operator
 - Relay register read supervision: `relayRegisterReadsHealthy`, `lastSuccessfulRelayReadUtc`
   and `consecutiveRelayReadFailures` in Status. One failed or stale read fails readiness; two
   consecutive failures stop motion and latch `RelayVerificationFailed`.
-- An unverified shutdown stop is retried (all-off every 500 ms for up to 15 s), and the host's
-  shutdown wait is bounded even if a HAT call blocks (it logs Critical and moves on).
+- An unverified shutdown stop is retried (all-off every 500 ms until it verifies, the controller
+  is disposed or 15 s pass), and the host's shutdown wait is bounded even if a HAT call blocks
+  (it logs Critical and moves on). While that call is still blocked, later shutdown triggers do
+  not queue another one, and disposal gives up on the controller lock after 2 s.
 - CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
   `docker`/`curl`, and `docker compose config` for both profiles.
 

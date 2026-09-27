@@ -240,11 +240,15 @@ Do this after C1-C9 pass, or first with the limit contacts simulated by a switch
 request, the stream ends, and the container exits within the grace period.
 
 If the log shows `Shutdown could not verify the relay register all-off state`, the controller
-re-runs the all-off sequence every 500 ms for up to 15 s before the process exits. Record whether
-a retry verified it (`Shutdown stop retry N verified the relay register all-off`) or gave up, and
-check the relays with the meter. A Critical `Roof controller shutdown stop did not complete within`
-entry from the host means a HAT call was stuck and was abandoned; treat the relay state as
-unknown and use the independent stop (C1).
+re-runs the all-off sequence every 500 ms until it verifies, the controller is disposed or 15 s
+pass. Disposal usually comes first: the host waits up to 5 s for each of its two shutdown calls,
+so the retry ends about 10 s after the stop request plus the time the web server takes to stop
+(roughly 20 attempts). Record whether a retry verified it (`Shutdown stop retry N verified the
+relay register all-off`) or gave up, and check the relays with the meter. A Critical `Roof
+controller shutdown stop did not complete within` entry from the host means a HAT call was stuck
+and was abandoned. Later triggers then log `shutdown stop not attempted` and disposal logs
+`Disposal could not acquire the controller lock` instead of waiting behind it. Treat the relay
+state as unknown and use the independent stop (C1).
 
 ### C12. Deployment script stop gate, pre-flight, remote check and rollback
 
@@ -260,9 +264,10 @@ Run the script from the machine operators will deploy from, with HTTPS and `REMO
    is untouched. Do not use the forced override in this test.
 4. Pre-flight failures leave the running controller untouched. Try each on its own: rename the
    certificate file, write a wrong certificate password, remove every `RoofOperator` key.
-5. Deploy a change that passes the pre-flight but fails the remote check (for example
-   `ALLOWED_HOSTS` without `PI_HOST`). The script must roll back: the previous controller is
-   running and ready again under `roof-controller`, and the exit status is non-zero.
+5. Deploy a change that passes the pre-flight but fails the remote check: `ALLOWED_HOSTS=localhost`
+   lets the readiness check inside the container pass but refuses requests for `PI_HOST`. The
+   script must roll back: the previous controller is running and ready again under
+   `roof-controller`, and the exit status is non-zero.
 6. Run `--rollback` twice: the versions swap and swap back, each verified from this machine.
 7. Throughout steps 3-6, confirm the roof stayed de-energized (`relayRegisterMask = 0`, meter).
 
