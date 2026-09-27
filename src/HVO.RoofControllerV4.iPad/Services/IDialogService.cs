@@ -9,7 +9,8 @@ namespace HVO.RoofControllerV4.iPad.Services;
 public interface IDialogService
 {
     /// <summary>
-    /// Displays a connectivity failure prompt with Retry, Cancel, and Exit actions.
+    /// Displays a connectivity failure prompt with Retry and Keep offline actions. The app keeps running (and Stop
+    /// stays available) whichever is chosen.
     /// </summary>
     /// <param name="title">The dialog title.</param>
     /// <param name="message">The main message to display.</param>
@@ -19,9 +20,14 @@ public interface IDialogService
     Task<ConnectivityPromptResult> ShowConnectivityPromptAsync(string title, string message, string? detail = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Attempts to gracefully exit the application.
+    /// Asks the operator to confirm an action. Returns true only when <paramref name="accept"/> is chosen.
     /// </summary>
-    Task ExitApplicationAsync();
+    Task<bool> ConfirmAsync(string title, string message, string accept, string cancel);
+
+    /// <summary>
+    /// Shows an informational message.
+    /// </summary>
+    Task AlertAsync(string title, string message, string dismiss = "OK");
 }
 
 /// <summary>
@@ -30,6 +36,5 @@ public interface IDialogService
 public enum ConnectivityPromptResult
 {
     Retry,
-    Cancel,
-    Exit
+    KeepOffline
 }

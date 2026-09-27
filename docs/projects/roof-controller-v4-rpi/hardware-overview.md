@@ -4,8 +4,16 @@
 > **Assumed drive:** 0.33-10 HP SMVector, including the likely 1 HP model. Verify the printed terminal labels and exact model number before energizing the system.
 
 > **Diagrams:** Source Graphviz DOT files, SVG diagrams, and PNG renderings live alongside this document in [`diagrams/`](diagrams/).
+>
+> **Authoritative copy:** this file and `diagrams/` are the source of truth. `docs/RoofController_Wiring_Package.zip` is a convenience bundle built from them; do not edit it directly. Earlier bundles carried a separate `RoofController_Wiring.md` that had drifted from this file and lacked this compatibility warning; discard any copy extracted from them. Rebuild the bundle whenever this file or `diagrams/` changes, from this folder: `rm -f ../../RoofController_Wiring_Package.zip && zip -X -r ../../RoofController_Wiring_Package.zip hardware-overview.md diagrams`.
 
-> **Software compatibility - do not commission without resolving:** This document describes active-HIGH end-position monitoring (`IN1`/`IN2`) and active-HIGH VFD healthy (`IN3`). The current controller defaults instead treat limits as Normally Closed / active-LOW, and treat a raw HIGH `IN3` as an active fault. The wiring and controller configuration/code must be aligned and verified during the bring-up sequence before connecting the roof mechanism.
+> **Software compatibility - do not commission without resolving:** This document describes active-HIGH end-position monitoring (`IN1`/`IN2`) and active-HIGH VFD healthy (`IN3`). The controller's defaults differ. Configure it to match the wiring that is actually installed, then verify every input on the bench with the checklist in [`docs/commissioning.md`](../../commissioning.md) before connecting the roof mechanism:
+>
+> - **Limits (`IN1`/`IN2`):** `UseNormallyClosedLimitSwitches` defaults to `true` (normally closed, active-LOW). The monitoring contacts in sections 9.1 and 9.2 read HIGH when actuated, which needs `false`.
+> - **VFD fault (`IN3`):** `FaultInputActiveHigh` defaults to `true` (raw HIGH = fault). The fail-safe wiring in section 9.3 reads HIGH when healthy, which needs `false`. The default was kept so that a controller already wired for HIGH = fault does not silently invert its fault interpretation. Choose the value only after confirming the installed wiring with a real (or deliberately induced) VFD fault and with the fault-monitor wire disconnected, and keep the wiring, the setting and the commissioning record in step.
+> - **Drive running (`IN4`):** only the start-side check in section 10 exists, and only when `AtSpeedConfirmationTimeout` is set (off by default): `IN4` must go HIGH within that window after a start, otherwise the roof stops with `DriveNotRunning`. The stop-side check (`IN4` returns LOW within a timeout after stop) is not implemented; confirm it on the bench instead.
+> - **Clear Fault (`RLY3`):** the controller pulses RLY3 for 250 ms by default (API range 50-2000 ms); section 8.3 recommends about 100-300 ms. Confirm the pulse that actually resets the drive.
+> - **Relay state:** the controller verifies each relay change by reading the HAT relay register back. That proves the register, not the contacts; section 14 and the commissioning checklist cover the meter checks.
 
 ## 1. Purpose
 
@@ -323,6 +331,18 @@ Interlocks required in software:
 
 The drive documentation states that if Run Forward and Run Reverse are asserted together, the drive stops; software must still prevent this state.
 
+Controller status for these interlocks (bench verification in [`docs/commissioning.md`](../../commissioning.md)):
+
+| Interlock | Controller behavior |
+|---|---|
+| Never RLY1 and RLY2 together | Before asserting a direction the opposite relay must read back OFF in the HAT register; otherwise the start is aborted with a verified all-off (`RelayVerificationFailed`). |
+| Drop RLY1/RLY2 at the destination limit; block a start at that limit | Implemented for the configured limit polarity; a command toward a limit that is already active does not energize the relay. Leaving the start limit is a departure phase: a start limit that reasserts after it has released stops with `StartLimitReasserted`, and both limits active stops with `ContradictoryLimitInputs`. |
+| No motion while IN3 indicates a fault | Implemented with the polarity set by `FaultInputActiveHigh`; an active fault stops motion and latches until `ClearFault`. |
+| IN4 HIGH within a timeout after a start | Implemented only when `AtSpeedConfirmationTimeout` is set (`DriveNotRunning`). |
+| IN4 LOW within a timeout after stop | Not implemented. |
+
+These software interlocks do not replace the hardwired limit contacts in section 8 or an independent stop path.
+
 ## 11. VFD parameter configuration
 
 ### Required core settings
@@ -459,6 +479,8 @@ The hardwired relay/limit design remains authoritative even when Modbus is used 
    - RLY1/RLY2 drop out
    - RLY4 drops out
    - TB-1 stop permissive opens
+
+The controller-side checks (input polarity settings, relay register versus contacts, watchdog, operator lease, fault latch, input read failures, deployment stop) are in [`docs/commissioning.md`](../../commissioning.md).
 
 ## 15. Source documents
 

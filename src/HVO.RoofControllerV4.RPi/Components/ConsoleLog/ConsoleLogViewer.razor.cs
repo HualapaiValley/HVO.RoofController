@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using HVO.RoofControllerV4.RPi.Logging;
 using Microsoft.AspNetCore.Components;
@@ -8,14 +9,24 @@ using Microsoft.JSInterop;
 
 namespace HVO.RoofControllerV4.RPi.Components.ConsoleLog;
 
+/// <summary>
+/// Shows the in-memory console log. Log entries arrive on arbitrary threads, often in bursts, so refreshes are
+/// coalesced onto the renderer at most every <see cref="RefreshInterval"/>. Nothing here may log: a log call would
+/// raise another entry and feed back into this handler.
+/// </summary>
 public partial class ConsoleLogViewer : ComponentBase, IAsyncDisposable
 {
+    internal static readonly TimeSpan RefreshInterval = TimeSpan.FromMilliseconds(200);
+
     private readonly List<ConsoleLogEntry> _entries = new();
+    private readonly CancellationTokenSource _disposeCts = new();
     private ElementReference _viewport;
     private IJSObjectReference? _module;
     private bool _pendingScroll;
     private bool _isSubscribed;
     private bool _currentAutoScroll = true;
+    private bool _isDisposed;
+    private int _refreshScheduled;
 
     [Parameter]
     public bool AutoScroll { get; set; } = true;
@@ -73,18 +84,20 @@ public partial class ConsoleLogViewer : ComponentBase, IAsyncDisposable
     {
         await base.OnAfterRenderAsync(firstRender);
 
-        if ((firstRender || _pendingScroll) && _currentAutoScroll && Entries.Count > 0)
+        if (_isDisposed || !(firstRender || _pendingScroll) || !_currentAutoScroll || Entries.Count == 0)
         {
-            _pendingScroll = false;
-            try
-            {
-                var module = await GetModuleAsync();
-                await module.InvokeVoidAsync("scrollLogToBottom", _viewport);
-            }
-            catch (JSDisconnectedException)
-            {
-                // Client disconnected; safe to ignore.
-            }
+            return;
+        }
+
+        _pendingScroll = false;
+        try
+        {
+            var module = await GetModuleAsync();
+            await module.InvokeVoidAsync("scrollLogToBottom", _viewport);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or OperationCanceledException or ObjectDisposedException)
+        {
+            // Scrolling is cosmetic; the circuit may be going away.
         }
     }
 
@@ -135,24 +148,55 @@ public partial class ConsoleLogViewer : ComponentBase, IAsyncDisposable
         }
     }
 
-    private async void OnConsoleLogEntryAdded(object? sender, ConsoleLogEntry entry)
+    private void OnConsoleLogEntryAdded(object? sender, ConsoleLogEntry entry)
     {
-        var snapshot = ConsoleLogBuffer.GetSnapshot();
-
-        await InvokeAsync(() =>
+        if (_isDisposed || Interlocked.Exchange(ref _refreshScheduled, 1) == 1)
         {
-            _entries.Clear();
-            _entries.AddRange(snapshot);
+            return;
+        }
 
-            if (_currentAutoScroll)
+        _ = RefreshAfterDelayAsync();
+    }
+
+    private async Task RefreshAfterDelayAsync()
+    {
+        try
+        {
+            await Task.Delay(RefreshInterval, _disposeCts.Token).ConfigureAwait(false);
+            Volatile.Write(ref _refreshScheduled, 0);
+
+            if (_isDisposed)
             {
-                _pendingScroll = true;
+                return;
             }
 
-            NotifyEntryCountChanged();
+            var snapshot = ConsoleLogBuffer.GetSnapshot();
+            await InvokeAsync(() => ApplySnapshot(snapshot)).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Cancelled on dispose, or the renderer is gone. Logging here would re-enter this handler.
+            Volatile.Write(ref _refreshScheduled, 0);
+        }
+    }
 
-            StateHasChanged();
-        });
+    private void ApplySnapshot(IReadOnlyList<ConsoleLogEntry> snapshot)
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _entries.Clear();
+        _entries.AddRange(snapshot);
+
+        if (_currentAutoScroll)
+        {
+            _pendingScroll = true;
+        }
+
+        NotifyEntryCountChanged();
+        StateHasChanged();
     }
 
     private void NotifyEntryCountChanged()
@@ -176,27 +220,37 @@ public partial class ConsoleLogViewer : ComponentBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _isDisposed = true;
+
         if (_isSubscribed)
         {
             ConsoleLogBuffer.EntryAdded -= OnConsoleLogEntryAdded;
             _isSubscribed = false;
         }
 
-        if (_module is not null)
+        _disposeCts.Cancel();
+        _disposeCts.Dispose();
+
+        var module = _module;
+        _module = null;
+        if (module is not null)
         {
             try
             {
-                await _module.DisposeAsync();
+                await module.DisposeAsync();
             }
-            catch (JSDisconnectedException)
+            catch (Exception ex) when (ex is JSException or JSDisconnectedException or OperationCanceledException or ObjectDisposedException)
             {
-                // JS runtime already disposed; ignore.
-            }
-            catch
-            {
-                // Best-effort cleanup.
+                // The JS runtime is already gone.
             }
         }
+
+        GC.SuppressFinalize(this);
     }
 
     private static string GetLogLevelLabel(LogLevel level) => level switch

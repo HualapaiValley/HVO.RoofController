@@ -4,6 +4,11 @@ namespace HVO.RoofControllerV4.Common.Models;
 
 public sealed record class RoofConfigurationResponse
 {
+    /// <summary>
+    /// Configuration version. Send it back as <see cref="RoofConfigurationRequest.ExpectedVersion"/> when updating.
+    /// </summary>
+    public long Version { get; init; }
+
     public double SafetyWatchdogTimeoutSeconds { get; init; }
 
     public int OpenRelayId { get; init; }
@@ -27,6 +32,17 @@ public sealed record class RoofConfigurationResponse
     public double LimitSwitchDebounceMilliseconds { get; init; }
 
     public bool IgnorePhysicalLimitSwitches { get; init; }
+
+    public bool FaultInputActiveHigh { get; init; }
+
+    public int MaxConsecutiveInputReadFailures { get; init; }
+
+    public double? OperatorLeaseTimeoutSeconds { get; init; }
+
+    public double? AtSpeedConfirmationTimeoutSeconds { get; init; }
+
+    /// <summary>Local-only safeguard; reported for visibility, never changed through the API.</summary>
+    public bool AllowIgnoringLimitSwitchesOnPhysicalHardware { get; init; }
 
     public int RestartOnFailureWaitTimeSeconds { get; init; }
 }

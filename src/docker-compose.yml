@@ -1,3 +1,10 @@
+# Local simulation only. Builds the Pi image for the local machine and runs it with the
+# Development environment and no hardware devices, so the controller uses the simulated HAT.
+# Browse to http://localhost:5200. API keys still apply; see docs/security.md.
+#
+# Do not use this file to deploy to the observatory Pi. Production uses
+# src/HVO.RoofControllerV4.RPi/docker-compose.yaml through the deployment script, which stops
+# the roof safely before replacing the container; see docs/deployment.md.
 services:
   roofcontroller:
     build:

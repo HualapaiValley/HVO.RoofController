@@ -19,10 +19,50 @@ remote roof control.
 
 ### Key Safety Systems
 
-- Dead-man timer — roof movement stops automatically if the control signal is
-  not continuously refreshed
-- Limit switches — hardware stops at fully open and fully closed positions
-- Relay control — fail-safe relay configuration for motor direction and power
+Describe these exactly as implemented; do not call the watchdog a dead-man control.
+
+- Maximum-run watchdog (`SafetyWatchdogTimeout`, 5-600 s) — an absolute cap measured
+  from the start of a movement. Repeating Open or Close in the same direction does not
+  extend it. On expiry the roof stops and the fault latches.
+- Operator lease (optional, `OperatorLeaseTimeout`, 2-120 s; off when unset) — Open/Close
+  start a lease that the client renews with `POST .../Lease` while the roof moves. If
+  renewals stop, the roof stops with `OperatorLeaseExpired`. Renewal never starts motion.
+  Losing the client stops motion only when the lease is enabled.
+- Limit switches (IN1/IN2) — stop at fully open and fully closed; polarity is set by
+  `UseNormallyClosedLimitSwitches`. Starting at a limit is handled as a departure phase;
+  contradictory limits (both active) stop motion and refuse starts.
+- Fault latch — watchdog expiry, drive fault (IN3), relay verification failure, input
+  read failure, contradictory limits and a reasserted start limit latch the fault.
+  Open/Close are refused (`FaultLatched`) until a successful `ClearFault`. The latch
+  never blocks Stop, and Stop does not clear it.
+- Relay register read-back — every relay transition is verified by reading the HAT's
+  relay register back. This proves the register, not the physical contacts; never
+  describe it as contact verification. An unverified stop is reported as a failure
+  (`RelayStateUnverified`), never as success.
+- VFD fault input (IN3) — polarity is `FaultInputActiveHigh` (default `true`: raw HIGH =
+  fault). Commissioning must confirm it against the real wiring before use.
+- Drive-running interlock (IN4, optional) — with `AtSpeedConfirmationTimeout` set, IN4 must
+  assert within that window after a start, otherwise the roof stops with `DriveNotRunning`.
+- Input read failures — `MaxConsecutiveInputReadFailures` consecutive failed reads while
+  moving stop the roof with `InputReadFailure`.
+- `IgnorePhysicalLimitSwitches` is for the simulator. On physical hardware it is refused
+  unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration
+  (never through the API).
+- None of this replaces an independent hardware stop path (E-stop / VFD STOP input); see
+  `docs/commissioning.md`.
+
+### HTTP API
+
+- Routes are under `api/v4.0/RoofControl`. Commands (`Open`, `Close`, `Stop`,
+  `ClearFault`, `Lease`) are `POST`; `GET Status` and `GET`/`POST Configuration` complete
+  the surface. There are no GET command routes.
+- Every protected request needs an `X-Api-Key` header. Roles are `RoofViewer`,
+  `RoofOperator` and `RoofAdmin` (Admin includes Operator includes Viewer); Stop accepts
+  any authenticated role. Failures are RFC 7807 ProblemDetails with `code` and
+  `roofStatus` extensions.
+- `POST Configuration` requires `ExpectedVersion`, and safety-critical changes also need
+  `ConfirmSafetyCriticalChange`.
+- See `docs/security.md` for keys, roles and HTTPS.
 
 ### Technology Stack
 
@@ -48,7 +88,8 @@ src/
   HVO.WebSite.Themes/               # CSS theme RCL
   HVO.RoofController.sln            # Solution file
 tests/
-  HVO.RoofControllerV4.RPi.Tests/   # Unit and integration tests
+  HVO.RoofControllerV4.RPi.Tests/   # Unit and API tests (MSTest)
+docs/                               # Hardware, commissioning, security, deployment, CI runners
 ```
 
 ## Coding Standards
@@ -63,29 +104,43 @@ tests/
 
 ## Build and Test
 
+Run `dotnet` from `src/` so `src/global.json` selects the SDK:
+
 ```bash
 cd src
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
-dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+# Release treats warnings as errors; CI builds both configurations
+dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj -c Release
 ```
 
 The full solution includes the `net10.0-ios` project and requires macOS, the MAUI workload, and a supported Xcode version. On Linux, validate the portable graph through the RPi test project as shown above.
 
 ## Deployment
 
-The RPi server is deployed via Docker:
+The RPi server runs in Docker on the Pi (`linux-arm64`, container port 8080). Deploy only
+with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`, which requires a
+verified Stop before replacing the container and fails closed otherwise; see
+`docs/deployment.md`. The production compose file is
+`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`.
 
-```bash
-cd src
-docker compose up --build
-```
-
-Target runtime: `linux-arm64` (Raspberry Pi)
+`src/docker-compose.yml` is a local simulation compose (Development environment, no HAT
+devices, port 5200). Never use it on the observatory Pi. `dotnet run` uses port 5195.
 
 ## CI/CD
 
-- `ci.yml` — runs on ubuntu, builds the solution and executes all tests
-- `ios.yml` — runs on macos-15, builds the iPad MAUI application
+- `ci.yml` — ubuntu; restores, builds (Debug) and tests the RPi test project graph from
+  `src/`, checks that coverage is not empty, then builds Release with warnings as errors.
+  It does not build the solution (the iOS project cannot build on Linux).
+- `ios.yml` — `macos-26`, Xcode 26.6 via `DEVELOPER_DIR`, pinned workload set; builds the
+  iPad app for the simulator without signing.
+- `pi-image.yml` — builds the Pi image for `linux/arm64` (no push) and checks that the
+  Dockerfile SDK tag matches `src/global.json`.
+- `m5-ios-validation.yml` — self-hosted M5 runner; trusted triggers on `main` only. Read
+  `docs/ci-runners.md` before changing it.
+
+Pin every action to a full commit SHA with a `# vX.Y.Z` comment (the repository requires
+SHA pinning) and keep `permissions: contents: read` unless a job needs more.
 
 ## Issue and PR Workflow
 

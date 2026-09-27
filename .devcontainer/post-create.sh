@@ -81,9 +81,11 @@ ensure_docker_context() {
 ensure_docker_context "proxmox-home" "Remote engine on Home Proxmox" "ssh://roys@192.168.2.104"
 ensure_docker_context "rpi-home" "Remote engine on Home Raspberry Pi" "ssh://roys@192.168.2.21"
 
-# Restore NuGet packages
+# Restore NuGet packages. Run from src/ so src/global.json selects the SDK. The solution also
+# contains the iPad (MAUI) project, which cannot restore on Linux, so restore the test project
+# (it references the Pi app, the shared library and the theme library).
 echo "Restoring NuGet packages..."
-dotnet restore src/HVO.RoofController.sln --configfile src/NuGet.config || true
+(cd src && dotnet restore ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj --configfile NuGet.config)
 
 # Generate HTTPS developer certificate
 echo "Generating HTTPS developer certificate..."

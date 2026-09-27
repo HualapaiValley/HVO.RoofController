@@ -22,6 +22,9 @@ on:
       - 'Directory.Packages.props'
       - '.github/workflows/ios.yml'
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -29,40 +32,97 @@ concurrency:
 jobs:
   build-ios-simulator:
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      # Toolchain pins. The SDK comes from src/global.json. The workload set pins every
+      # workload manifest (iOS 26.5.10315, MAUI 10.0.20 in 10.0.303.1); it must belong to the
+      # SDK's feature band (10.0.300) and support the selected Xcode. Update all three together
+      # (and the same values in m5-ios-validation.yml).
+      WORKLOAD_SET_VERSION: 10.0.303.1
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      EXPECTED_XCODE_VERSION: '26.6'
+      IPAD_PROJECT: HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
+    defaults:
+      run:
+        # Run dotnet from src/ so src/global.json selects the SDK (QA-18).
+        working-directory: src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: src/global.json
 
-      - name: Select Xcode 26.6
-        run: sudo xcode-select --switch /Applications/Xcode_26.6.app
+      # DEVELOPER_DIR (job env) selects Xcode for every step without a global xcode-select.
+      - name: Verify Xcode
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::Xcode developer directory ${DEVELOPER_DIR} does not exist"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          version=$(xcodebuild -version)
+          echo "$version"
+          case "$(head -n 1 <<<"$version")" in
+            "Xcode ${EXPECTED_XCODE_VERSION}"|"Xcode ${EXPECTED_XCODE_VERSION}".*) ;;
+            *) echo "::error::Expected Xcode ${EXPECTED_XCODE_VERSION} at ${DEVELOPER_DIR}"; exit 1 ;;
+          esac
 
-      - name: Install .NET MAUI workload
-        run: dotnet workload install maui --ignore-failed-sources
+      - name: Verify SDK selected by global.json
+        run: |
+          pin=$(jq -r '.sdk.version' global.json)
+          actual=$(dotnet --version)
+          echo "src/global.json pins SDK ${pin} (rollForward: $(jq -r '.sdk.rollForward' global.json)); dotnet resolves ${actual}"
+          case "${actual}" in
+            "${pin%??}"[0-9][0-9]) ;;
+            *) echo "::error file=src/global.json::Resolved SDK ${actual} is not in the feature band of the pinned SDK ${pin}"; exit 1 ;;
+          esac
+          if [ "${actual##*.}" -lt "${pin##*.}" ]; then
+            echo "::error file=src/global.json::Resolved SDK ${actual} is older than the pinned SDK ${pin}"
+            exit 1
+          fi
+
+      # Installs only the workloads the iPad project needs, at the pinned workload set, from
+      # the repo's NuGet.config. Feed failures fail the job (no --ignore-failed-sources).
+      - name: Restore pinned workloads
+        run: dotnet workload restore "$IPAD_PROJECT" --configfile NuGet.config --version "$WORKLOAD_SET_VERSION"
+
+      - name: Show installed workloads
+        run: |
+          dotnet workload --version
+          dotnet workload list
 
       - name: Restore
-        run: dotnet restore src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj --configfile src/NuGet.config --nologo -v minimal
+        run: dotnet restore "$IPAD_PROJECT" --configfile NuGet.config -v minimal
 
       - name: Build iOS (Simulator, no codesign) - Debug
         run: >
-          dotnet build src/HVO.RoofControllerV4.iPad/HVO.RoofControllerV4.iPad.csproj
-          -c Debug --no-restore --nologo -v minimal
+          dotnet build "$IPAD_PROJECT"
+          -c Debug --no-restore -v minimal
+          -p:ContinuousIntegrationBuild=true
+          -p:RuntimeIdentifier=iossimulator-arm64
+          -p:Codesign=false
+
+      # Release enforces TreatWarningsAsErrors and reports XAML compiled-binding errors that a
+      # Debug build can let through, so both configurations must build.
+      - name: Build iOS (Simulator, no codesign) - Release
+        run: >
+          dotnet build "$IPAD_PROJECT"
+          -c Release --no-restore -v minimal
           -p:ContinuousIntegrationBuild=true
           -p:RuntimeIdentifier=iossimulator-arm64
           -p:Codesign=false
 
       - name: Upload iOS build outputs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ios-build-artifacts-${{ github.run_id }}
           path: src/HVO.RoofControllerV4.iPad/bin/Debug/**

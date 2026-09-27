@@ -5,7 +5,18 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Workflows pin actions by full commit SHA (the repository requires it); Dependabot updates
+  # the SHA and the "# vX.Y.Z" comment together.
   - package-ecosystem: "github-actions"
     directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Pi image base images (mcr.microsoft.com/dotnet/sdk and aspnet).
+  # The sdk tag must match src/global.json: a PR that bumps the SDK image must update
+  # src/global.json (and, if the feature band changes, the workload set in ios.yml and
+  # m5-ios-validation.yml) in the same PR. The "Pi image" workflow fails until they agree.
+  - package-ecosystem: "docker"
+    directory: "/src/HVO.RoofControllerV4.RPi"
     schedule:
       interval: "weekly"

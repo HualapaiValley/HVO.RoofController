@@ -1,164 +1,570 @@
-using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Threading;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Moq;
-using HVO.RoofControllerV4.RPi;
-using HVO.RoofControllerV4.RPi.Logic;
-using HVO.RoofControllerV4.Common.Models;
+using FluentAssertions;
 using HVO.Core.Results;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logic;
+using Microsoft.AspNetCore.Mvc;
+using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Controllers;
 
+/// <summary>
+/// End-to-end tests of the RoofControl API through the real pipeline: API-key authentication, role policies, POST-only
+/// commands, and ProblemDetails mapping (409 interlock / 503 not ready / 500 unexpected).
+/// </summary>
 [TestClass]
 [DoNotParallelize]
-public class RoofControllerApiTests
+public sealed class RoofControllerApiTests
 {
-    private WebApplicationFactory<Program> _factory = null!;
-    private HttpClient _client = null!;
-    private Mock<IRoofControllerServiceV4> _roofServiceMock = null!;
+    private const string BasePath = "/api/v4.0/RoofControl";
+
+    private RoofApiTestHost _host = null!;
+    private Mock<IRoofControllerServiceV4> _roof = null!;
 
     [TestInitialize]
-    public void Setup()
+    public void TestInitialize()
     {
-        _roofServiceMock = new Mock<IRoofControllerServiceV4>(MockBehavior.Strict);
-    _roofServiceMock.SetupGet(s => s.Status).Returns(RoofControllerStatus.Closed);
-    _roofServiceMock.SetupGet(s => s.IsInitialized).Returns(true);
-    _roofServiceMock.SetupGet(s => s.IsMoving).Returns(false);
-        _roofServiceMock.SetupGet(s => s.LastStopReason).Returns(RoofControllerStopReason.NormalStop);
-        _roofServiceMock.SetupGet(s => s.IsWatchdogActive).Returns(false);
-        _roofServiceMock.SetupGet(s => s.WatchdogSecondsRemaining).Returns((double?)null);
-    _roofServiceMock.SetupGet(s => s.IsAtSpeed).Returns(false);
-    _roofServiceMock.SetupGet(s => s.IsUsingPhysicalHardware).Returns(true);
-    _roofServiceMock.SetupGet(s => s.IsIgnoringPhysicalLimitSwitches).Returns(true);
-    _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow);
-    _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow);
-        _roofServiceMock.Setup(s => s.RefreshStatus(It.IsAny<bool>()));
-        _roofServiceMock.Setup(s => s.Initialize(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<bool>.Success(true));
-        _roofServiceMock.Setup(s => s.GetConfigurationSnapshot()).Returns(new RoofControllerOptionsV4());
-
-        // Default success setups (overridden per test where needed)
-        _roofServiceMock.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening));
-        _roofServiceMock.Setup(s => s.Close()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Closing));
-        _roofServiceMock.Setup(s => s.Stop(It.IsAny<RoofControllerStopReason>()))
-            .Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped));
-        _roofServiceMock.Setup(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<bool>.Success(true));
-
-        _factory = new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
-            {
-                builder.ConfigureServices(services =>
-                {
-                    // Remove hosted background service to prevent unintended Initialize loops
-                    var hostedToRemove = services
-                        .Where(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType != null && d.ImplementationType.Name == "RoofControllerServiceV4Host")
-                        .ToList();
-                    foreach (var d in hostedToRemove)
-                        services.Remove(d);
-
-                    // Remove existing roof service registration
-                    var existing = services.FirstOrDefault(d => d.ServiceType == typeof(IRoofControllerServiceV4));
-                    if (existing != null)
-                        services.Remove(existing);
-
-                    services.AddSingleton(_roofServiceMock.Object);
-                    services.PostConfigure<RoofControllerHostOptionsV4>(options => options.RestartOnFailureWaitTime = 42);
-                });
-            });
-
-        _client = _factory.CreateClient();
+        _host = new RoofApiTestHost();
+        _roof = _host.RoofService;
     }
 
     [TestCleanup]
-    public void Cleanup()
+    public void TestCleanup() => _host.Dispose();
+
+    // ---- Authentication -------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task Status_WithoutKey_Returns401WithApiKeyChallenge()
     {
-        _client?.Dispose();
-        _factory?.Dispose();
+        using var client = _host.CreateApiClient();
+
+        var response = await client.GetAsync($"{BasePath}/Status");
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+        response.Headers.WwwAuthenticate.Select(h => h.Scheme).Should().Contain(RoofControllerApiContract.ApiKeyScheme);
+        _roof.Verify(s => s.GetCurrentStatusSnapshot(), Times.Never);
     }
 
-    // Helper for strongly-typed JSON responses
-    private static async Task<(HttpResponseMessage Response, T? Payload)> GetJsonAsync<T>(HttpClient client, string url)
+    [TestMethod]
+    public async Task Status_WithUnknownKey_Returns401()
     {
-        var response = await client.GetAsync(url);
-        T? payload = default;
-        if (response.IsSuccessStatusCode)
+        using var client = _host.CreateApiClient("test-unknown-key-not-configured-anywhere");
+
+        var response = await client.GetAsync($"{BasePath}/Status");
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+        _roof.Verify(s => s.GetCurrentStatusSnapshot(), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task Status_Viewer_ReturnsSnapshotAfterHardwareRead()
+    {
+        _roof.Setup(s => s.GetCurrentStatusSnapshot()).Returns(RoofServiceMock.Snapshot(RoofControllerStatus.Open));
+        using var client = _host.CreateApiClient(TestApiKeys.Viewer);
+
+        var response = await client.GetAsync($"{BasePath}/Status");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var payload = await ApiJson.ReadAsync<RoofStatusResponse>(response);
+        Assert.AreEqual(RoofControllerStatus.Open, payload.Status);
+        Assert.AreEqual(RoofRelayRegisterState.Verified, payload.RelayRegisterState);
+        _roof.Verify(s => s.RefreshStatus(true), Times.Once);
+        _roof.Verify(s => s.GetCurrentStatusSnapshot(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Status_KeyConfiguredBySha256WithLowercaseRole_IsAccepted()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.HashedViewer);
+
+        var response = await client.GetAsync($"{BasePath}/Status");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    // ---- Authorization and verbs ----------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task Open_Viewer_Returns403AndNeverMoves()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Viewer);
+
+        var response = await client.PostAsync($"{BasePath}/Open", content: null);
+
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+        _roof.Verify(s => s.Open(), Times.Never);
+    }
+
+    [TestMethod]
+    [DataRow("Open")]
+    [DataRow("Close")]
+    [DataRow("Stop")]
+    [DataRow("ClearFault")]
+    [DataRow("Lease")]
+    public async Task Command_WithoutKey_Returns401AndNeverActs(string command)
+    {
+        using var client = _host.CreateApiClient();
+
+        var response = await client.PostAsync($"{BasePath}/{command}", content: null);
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+        VerifyNoCommandSent();
+    }
+
+    [TestMethod]
+    [DataRow("Open")]
+    [DataRow("Close")]
+    [DataRow("Stop")]
+    [DataRow("ClearFault")]
+    [DataRow("Lease")]
+    public async Task Command_AsGet_Returns405AndNeverActs(string command)
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.GetAsync($"{BasePath}/{command}");
+
+        Assert.AreEqual(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        VerifyNoCommandSent();
+    }
+
+    [TestMethod]
+    public async Task Open_Operator_ReturnsSnapshotAfterCommand()
+    {
+        _roof.Setup(s => s.GetCurrentStatusSnapshot())
+            .Returns(RoofServiceMock.Snapshot(RoofControllerStatus.Opening, RoofMotionDirection.Opening, relayMask: 0x01));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/Open", content: null);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var payload = await ApiJson.ReadAsync<RoofStatusResponse>(response);
+        Assert.AreEqual(RoofControllerStatus.Opening, payload.Status);
+        Assert.AreEqual(RoofMotionDirection.Opening, payload.CommandedMotion);
+        _roof.Verify(s => s.Open(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Close_Admin_IsAllowedByRoleHierarchy()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsync($"{BasePath}/Close", content: null);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        _roof.Verify(s => s.Close(), Times.Once);
+    }
+
+    // ---- Problem mapping ------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task Open_FaultLatched_Returns409WithCodeAndSnapshot()
+    {
+        var snapshot = RoofServiceMock.Snapshot(faultLatched: true);
+        _roof.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Failure(
+            new RoofControllerException(RoofControllerErrorCode.FaultLatched, "A fault is latched; clear it first.", snapshot)));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/Open", content: null);
+
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/problem+json");
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("FaultLatched", problem.GetProperty("code").GetString());
+        Assert.AreEqual("urn:hvo:roof-controller:FaultLatched", problem.GetProperty("type").GetString());
+        Assert.AreEqual("A fault is latched; clear it first.", problem.GetProperty("detail").GetString());
+        Assert.IsTrue(problem.GetProperty("roofStatus").GetProperty("isFaultLatched").GetBoolean());
+    }
+
+    [TestMethod]
+    public async Task Close_NotInitialized_Returns503WithRetryAfter()
+    {
+        _roof.Setup(s => s.Close()).Returns(Result<RoofControllerStatus>.Failure(
+            new RoofControllerException(RoofControllerErrorCode.NotInitialized, "The controller is not initialized.")));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/Close", content: null);
+
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.AreEqual(TimeSpan.FromSeconds(2), response.Headers.RetryAfter?.Delta);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("NotInitialized", problem.GetProperty("code").GetString());
+        Assert.AreEqual(JsonValueKind.Object, problem.GetProperty("roofStatus").ValueKind, "the current snapshot is attached");
+    }
+
+    [TestMethod]
+    public async Task Open_UnexpectedError_Returns500WithoutLeakingTheMessage()
+    {
+        _roof.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Failure(
+            new InvalidOperationException("internal-detail-that-must-not-leak")));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/Open", content: null);
+
+        Assert.AreEqual(HttpStatusCode.InternalServerError, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().NotContain("internal-detail-that-must-not-leak");
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("Unknown", problem.GetProperty("code").GetString());
+    }
+
+    // ---- Stop -----------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task Stop_Viewer_IsAllowed()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Viewer);
+
+        var response = await client.PostAsync($"{BasePath}/Stop", content: null);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        _roof.Verify(s => s.Stop(RoofControllerStopReason.NormalStop), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Stop_AnonymousWhenAllowed_IsAcceptedButOtherCommandsStillNeedAKey()
+    {
+        using var host = new RoofApiTestHost(settings: new Dictionary<string, string?>
         {
-            // Use the same enum string handling as the server (string enums)
-            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-            {
-                PropertyNameCaseInsensitive = true
-            };
-            if (!options.Converters.Any(c => c is JsonStringEnumConverter))
-            {
-                options.Converters.Add(new JsonStringEnumConverter());
-            }
-            payload = await response.Content.ReadFromJsonAsync<T>(options);
-        }
-        return (response, payload);
+            ["RoofControllerSecurity:AllowAnonymousStop"] = "true"
+        });
+        using var client = host.CreateApiClient();
+
+        var stop = await client.PostAsync($"{BasePath}/Stop", content: null);
+        var open = await client.PostAsync($"{BasePath}/Open", content: null);
+
+        Assert.AreEqual(HttpStatusCode.OK, stop.StatusCode);
+        Assert.AreEqual(HttpStatusCode.Unauthorized, open.StatusCode);
+        host.RoofService.Verify(s => s.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once);
+        host.RoofService.Verify(s => s.Open(), Times.Never);
     }
 
     [TestMethod]
-    public async Task GetStatus_ReturnsCurrentStatus()
+    public async Task Stop_RelayStateUnverified_Returns503()
     {
-        // Arrange
-        _roofServiceMock.SetupGet(s => s.Status).Returns(RoofControllerStatus.Open);
-        _roofServiceMock.SetupGet(s => s.IsWatchdogActive).Returns(true);
-        _roofServiceMock.SetupGet(s => s.WatchdogSecondsRemaining).Returns(42.5);
-    _roofServiceMock.SetupGet(s => s.IsAtSpeed).Returns(true);
-        _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow.AddMinutes(-1));
+        _roof.Setup(s => s.Stop(It.IsAny<RoofControllerStopReason>())).Returns(Result<RoofControllerStatus>.Failure(
+            new RoofControllerException(
+                RoofControllerErrorCode.RelayStateUnverified,
+                "Relay read-back did not confirm all relays off.",
+                RoofServiceMock.Snapshot(relayState: RoofRelayRegisterState.Unverified, relayMask: null))));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
 
-        // Act
-    var (response, payload) = await GetJsonAsync<RoofStatusResponse>(_client, "/api/v4.0/RoofControl/Status");
+        var response = await client.PostAsync($"{BasePath}/Stop", content: null);
 
-        // Assert
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("RelayStateUnverified", problem.GetProperty("code").GetString());
+        Assert.AreEqual("Unverified", problem.GetProperty("roofStatus").GetProperty("relayRegisterState").GetString());
+    }
+
+    // ---- ClearFault and Lease -------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task ClearFault_WithPulse_PassesPulseAndReturnsSnapshot()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/ClearFault?pulseMs=300", content: null);
+
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-    Assert.IsNotNull(payload);
-    Assert.AreEqual(RoofControllerStatus.Open, payload!.Status);
-    Assert.IsFalse(payload.IsMoving);
-    Assert.IsTrue(payload.IsWatchdogActive);
-    Assert.AreEqual(42.5, payload.WatchdogSecondsRemaining);
-    Assert.IsTrue(payload.IsUsingPhysicalHardware);
-    Assert.IsTrue(payload.IsIgnoringPhysicalLimitSwitches);
-        _roofServiceMock.VerifyGet(s => s.Status, Times.AtLeastOnce);
+        var payload = await ApiJson.ReadAsync<RoofStatusResponse>(response);
+        Assert.IsFalse(payload.IsFaultLatched);
+        _roof.Verify(s => s.ClearFault(300, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [TestMethod]
-    public async Task Open_Success_ReturnsUpdatedStatus()
+    public async Task ClearFault_WithoutPulse_UsesDefault()
     {
-        // Arrange
-    _roofServiceMock.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening));
-    _roofServiceMock.SetupGet(s => s.Status).Returns(RoofControllerStatus.Opening);
-    _roofServiceMock.SetupGet(s => s.IsMoving).Returns(true);
-    _roofServiceMock.SetupGet(s => s.IsWatchdogActive).Returns(true);
-    _roofServiceMock.SetupGet(s => s.WatchdogSecondsRemaining).Returns(59.9);
-    _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow.AddSeconds(-5));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
 
-        // Act
-    var (response, payload) = await GetJsonAsync<RoofStatusResponse>(_client, "/api/v4.0/RoofControl/Open");
+        var response = await client.PostAsync($"{BasePath}/ClearFault", content: null);
 
-        // Assert
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-    Assert.IsNotNull(payload);
-    Assert.AreEqual(RoofControllerStatus.Opening, payload!.Status);
-    // Opening should report IsMoving=true
-    Assert.IsTrue(payload.IsMoving);
-    Assert.IsTrue(payload.IsWatchdogActive);
-    Assert.AreEqual(59.9, payload.WatchdogSecondsRemaining);
-    Assert.IsTrue(payload.IsUsingPhysicalHardware);
-    Assert.IsTrue(payload.IsIgnoringPhysicalLimitSwitches);
-        _roofServiceMock.Verify(s => s.Open(), Times.Once);
+        _roof.Verify(
+            s => s.ClearFault(RoofControllerLimits.DefaultClearFaultPulseMilliseconds, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
+
+    [TestMethod]
+    [DataRow(10)]
+    [DataRow(5000)]
+    public async Task ClearFault_PulseOutOfRange_Returns400(int pulseMs)
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/ClearFault?pulseMs={pulseMs}", content: null);
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        _roof.Verify(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task ClearFault_OperationInProgress_Returns409()
+    {
+        _roof.Setup(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Result<bool>.Failure(
+            new RoofControllerException(RoofControllerErrorCode.OperationInProgress, "A clear-fault pulse is already running.")));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/ClearFault", content: null);
+
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("OperationInProgress", problem.GetProperty("code").GetString());
+    }
+
+    [TestMethod]
+    public async Task Lease_Operator_Returns200()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/Lease", content: null);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        _roof.Verify(s => s.RenewLease(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Lease_NotActive_Returns409()
+    {
+        _roof.Setup(s => s.RenewLease()).Returns(Result<RoofStatusResponse>.Failure(
+            new RoofControllerException(RoofControllerErrorCode.LeaseNotActive, "No leased motion is active.")));
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsync($"{BasePath}/Lease", content: null);
+
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("LeaseNotActive", problem.GetProperty("code").GetString());
+    }
+
+    // ---- Configuration --------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task GetConfiguration_Operator_Returns403()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.GetAsync($"{BasePath}/Configuration");
+
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task GetConfiguration_Admin_ReturnsSnapshotWithVersion()
+    {
+        var options = new RoofControllerOptionsV4 { SafetyWatchdogTimeout = TimeSpan.FromSeconds(120), LimitSwitchDebounce = TimeSpan.FromMilliseconds(40) };
+        _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(options, 7));
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.GetAsync($"{BasePath}/Configuration");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var payload = await ApiJson.ReadAsync<RoofConfigurationResponse>(response);
+        Assert.AreEqual(7, payload.Version);
+        Assert.AreEqual(120, payload.SafetyWatchdogTimeoutSeconds);
+        Assert.AreEqual(40, payload.LimitSwitchDebounceMilliseconds);
+        Assert.AreEqual(42, payload.RestartOnFailureWaitTimeSeconds);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_ValidRequest_AppliesWithExpectedVersion()
+    {
+        RoofControllerOptionsV4? captured = null;
+        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
+            .Callback<RoofControllerOptionsV4, long>((options, _) => captured = options)
+            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest());
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var payload = await ApiJson.ReadAsync<RoofConfigurationResponse>(response);
+        Assert.AreEqual(120, payload.SafetyWatchdogTimeoutSeconds);
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(TimeSpan.FromSeconds(120), captured.SafetyWatchdogTimeout);
+        Assert.AreEqual(TimeSpan.FromMilliseconds(75), captured.DigitalInputPollInterval);
+        Assert.AreEqual(TimeSpan.FromSeconds(5), captured.PeriodicVerificationInterval);
+        _roof.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_StaleVersion_Returns409Conflict()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest() with { ExpectedVersion = 6 });
+
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("ConfigurationVersionConflict", problem.GetProperty("code").GetString());
+        VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_UnconfirmedRelaySwap_Returns409Rejected()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync(
+            $"{BasePath}/Configuration",
+            ValidRequest() with { OpenRelayId = 2, CloseRelayId = 1 });
+
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("ConfigurationRejected", problem.GetProperty("code").GetString());
+        VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_ConfirmedRelaySwap_IsApplied()
+    {
+        RoofControllerOptionsV4? captured = null;
+        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
+            .Callback<RoofControllerOptionsV4, long>((options, _) => captured = options)
+            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync(
+            $"{BasePath}/Configuration",
+            ValidRequest() with { OpenRelayId = 2, CloseRelayId = 1, ConfirmSafetyCriticalChange = true });
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(2, captured.OpenRelayId);
+        Assert.AreEqual(1, captured.CloseRelayId);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_InvalidRequest_ReturnsValidationProblem()
+    {
+        var request = ValidRequest() with
+        {
+            SafetyWatchdogTimeoutSeconds = 0,
+            CloseRelayId = 1,
+            EnableDigitalInputPolling = false,
+            DigitalInputPollIntervalMilliseconds = -10,
+            EnablePeriodicVerificationWhileMoving = false,
+            PeriodicVerificationIntervalSeconds = 0,
+            LimitSwitchDebounceMilliseconds = -1,
+            MaxConsecutiveInputReadFailures = 0
+        };
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", request);
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await ApiJson.ReadAsync<ValidationProblemDetails>(response);
+        problem.Errors.Keys.Should().Contain(
+        [
+            nameof(RoofConfigurationRequest.SafetyWatchdogTimeoutSeconds),
+            nameof(RoofConfigurationRequest.DigitalInputPollIntervalMilliseconds),
+            nameof(RoofConfigurationRequest.EnablePeriodicVerificationWhileMoving),
+            nameof(RoofConfigurationRequest.OpenRelayId),
+            nameof(RoofConfigurationRequest.MaxConsecutiveInputReadFailures)
+        ]);
+        VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_MissingSafetyFields_ReturnsValidationProblem()
+    {
+        // A partial body must be rejected, never defaulted: omitted limit/fault settings could disable supervision.
+        var body = new { ExpectedVersion = 7, SafetyWatchdogTimeoutSeconds = 90, OpenRelayId = 1, CloseRelayId = 2, ClearFaultRelayId = 3, StopRelayId = 4 };
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", body);
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await ApiJson.ReadAsync<ValidationProblemDetails>(response);
+        problem.Errors.Keys.Should().Contain(
+        [
+            nameof(RoofConfigurationRequest.IgnorePhysicalLimitSwitches),
+            nameof(RoofConfigurationRequest.UseNormallyClosedLimitSwitches),
+            nameof(RoofConfigurationRequest.FaultInputActiveHigh)
+        ]);
+        VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_HugeWatchdog_Returns400()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync(
+            $"{BasePath}/Configuration",
+            ValidRequest() with { SafetyWatchdogTimeoutSeconds = 100_000 });
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await ApiJson.ReadAsync<ValidationProblemDetails>(response);
+        problem.Errors.Keys.Should().Contain(nameof(RoofConfigurationRequest.SafetyWatchdogTimeoutSeconds));
+        VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_Operator_Returns403()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest());
+
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+        VerifyConfigurationNotApplied();
+    }
+
+    // ---- System and health ----------------------------------------------------------------------------------------
+
+    [TestMethod]
+    [DataRow(TestApiKeys.Viewer, HttpStatusCode.Forbidden)]
+    [DataRow(TestApiKeys.Operator, HttpStatusCode.Forbidden)]
+    [DataRow(TestApiKeys.Admin, HttpStatusCode.OK)]
+    public async Task SystemInfo_RequiresAdmin(string key, HttpStatusCode expected)
+    {
+        using var client = _host.CreateApiClient(key);
+
+        var response = await client.GetAsync("/api/v1.0/System/info");
+
+        Assert.AreEqual(expected, response.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task HealthDetails_Anonymous_Returns401()
+    {
+        using var client = _host.CreateApiClient();
+
+        var response = await client.GetAsync("/health");
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task HealthDetails_Viewer_ReturnsJsonReportEvenWhenUnhealthy()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Viewer);
+
+        var response = await client.GetAsync("/health");
+
+        response.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
+        var report = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual(JsonValueKind.Array, report.GetProperty("checks").ValueKind);
+    }
+
+    [TestMethod]
+    [DataRow("/health/live")]
+    [DataRow("/health/ready")]
+    public async Task HealthProbes_AreAnonymous(string path)
+    {
+        using var client = _host.CreateApiClient();
+
+        var response = await client.GetAsync(path);
+
+        response.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
+    }
+
+    // ---- Telemetry and error envelope -----------------------------------------------------------------------------
 
     [TestMethod]
     public async Task Open_Success_EmitsRoofCommandTraceAndMetric()
@@ -177,8 +583,7 @@ public class RoofControllerApiTests
         using var meterListener = new MeterListener();
         meterListener.InstrumentPublished = (instrument, listener) =>
         {
-            if (instrument.Meter.Name == "HVO.RoofController.RPi"
-                && instrument.Name == "roof.controller.commands")
+            if (instrument.Meter.Name == "HVO.RoofController.RPi" && instrument.Name == "roof.controller.commands")
             {
                 listener.EnableMeasurementEvents(instrument);
             }
@@ -202,327 +607,63 @@ public class RoofControllerApiTests
             commandMeasurements.Enqueue((measurement, command, outcome));
         });
         meterListener.Start();
+        using var client = _host.CreateApiClient(TestApiKeys.Operator);
 
-        var response = await _client.GetAsync("/api/v4.0/RoofControl/Open");
+        var response = await client.PostAsync($"{BasePath}/Open", content: null);
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-        var activity = activities.SingleOrDefault(stoppedActivity =>
-            Equals(stoppedActivity.GetTagItem("roof.command"), "open"));
+        var activity = activities.SingleOrDefault(a => Equals(a.GetTagItem("roof.command"), "open"));
         Assert.IsNotNull(activity);
         Assert.AreEqual("roof.command", activity.OperationName);
-        Assert.AreEqual("open", activity.GetTagItem("roof.command"));
         Assert.AreEqual("success", activity.GetTagItem("roof.outcome"));
-        Assert.IsTrue(commandMeasurements.Any(measurement => measurement is (1, "open", "success")));
+        commandMeasurements.Should().Contain(m => m.Value == 1 && m.Command == "open" && m.Outcome == "success");
     }
 
     [TestMethod]
-    public async Task Open_InvalidOperation_ReturnsProblem500()
+    public async Task UnhandledException_InProduction_ReturnsGenericProblemWithTraceFields()
     {
-        // Arrange
-        _roofServiceMock.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Failure(new InvalidOperationException("Not initialized")));
+        using var host = new RoofApiTestHost(environment: "Production");
+        host.RoofService.Setup(s => s.GetCurrentStatusSnapshot()).Throws(new InvalidOperationException("internal-detail-that-must-not-leak"));
+        using var client = host.CreateApiClient(TestApiKeys.Viewer, https: true);
 
-        // Act
-        var response = await _client.GetAsync("/api/v4.0/RoofControl/Open");
-        var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
+        var response = await client.GetAsync($"{BasePath}/Status");
 
-        // Assert
         Assert.AreEqual(HttpStatusCode.InternalServerError, response.StatusCode);
-        Assert.IsNotNull(problem);
-        StringAssert.Contains(problem.Title, "Service Error");
-        _roofServiceMock.Verify(s => s.Open(), Times.Once);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().NotContain("internal-detail-that-must-not-leak");
+        var problem = await ApiJson.ReadElementAsync(response);
+        problem.GetProperty("instance").GetString().Should().EndWith($"{BasePath}/Status");
+        Assert.AreEqual(JsonValueKind.String, problem.GetProperty("traceId").ValueKind);
     }
 
-    [TestMethod]
-    public async Task Close_Success_ReturnsUpdatedStatus()
+    private static RoofConfigurationRequest ValidRequest() => new()
     {
-        // Arrange
-    _roofServiceMock.Setup(s => s.Close()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Closing));
-    _roofServiceMock.SetupGet(s => s.Status).Returns(RoofControllerStatus.Closing);
-    _roofServiceMock.SetupGet(s => s.IsMoving).Returns(true);
-    _roofServiceMock.SetupGet(s => s.IsWatchdogActive).Returns(true);
-    _roofServiceMock.SetupGet(s => s.WatchdogSecondsRemaining).Returns(30.0);
-        _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow.AddSeconds(-10));
-    _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow.AddSeconds(-10));
+        ExpectedVersion = 7,
+        SafetyWatchdogTimeoutSeconds = 120,
+        OpenRelayId = 1,
+        CloseRelayId = 2,
+        ClearFaultRelayId = 3,
+        StopRelayId = 4,
+        EnableDigitalInputPolling = true,
+        DigitalInputPollIntervalMilliseconds = 75,
+        EnablePeriodicVerificationWhileMoving = true,
+        PeriodicVerificationIntervalSeconds = 5,
+        UseNormallyClosedLimitSwitches = true,
+        LimitSwitchDebounceMilliseconds = 15,
+        IgnorePhysicalLimitSwitches = false,
+        FaultInputActiveHigh = true,
+        MaxConsecutiveInputReadFailures = 3
+    };
 
-        // Act
-    var (response, payload) = await GetJsonAsync<RoofStatusResponse>(_client, "/api/v4.0/RoofControl/Close");
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-    Assert.IsNotNull(payload);
-    Assert.AreEqual(RoofControllerStatus.Closing, payload!.Status);
-    // Closing should report IsMoving=true
-    Assert.IsTrue(payload.IsMoving);
-    Assert.IsTrue(payload.IsWatchdogActive);
-    Assert.AreEqual(30.0, payload.WatchdogSecondsRemaining);
-    Assert.IsTrue(payload.IsUsingPhysicalHardware);
-    Assert.IsTrue(payload.IsIgnoringPhysicalLimitSwitches);
-        _roofServiceMock.Verify(s => s.Close(), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task Close_Failure_ReturnsProblem500()
+    private void VerifyNoCommandSent()
     {
-        // Arrange
-        _roofServiceMock.Setup(s => s.Close())
-            .Returns(Result<RoofControllerStatus>.Failure(new InvalidOperationException("Cannot close while opening")));
-
-        // Act
-        var response = await _client.GetAsync("/api/v4.0/RoofControl/Close");
-        var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.InternalServerError, response.StatusCode);
-        Assert.IsNotNull(problem);
-        StringAssert.Contains(problem.Title, "Service Error");
-        // Accept either raw path or METHOD path format
-    var expectedPath = "/api/v4.0/RoofControl/Close";
-    Assert.IsNotNull(problem.Instance);
-    Assert.IsTrue(problem.Instance == expectedPath || problem.Instance!.EndsWith(expectedPath), $"Unexpected Instance: {problem.Instance}");
-        _roofServiceMock.Verify(s => s.Close(), Times.Once);
+        _roof.Verify(s => s.Open(), Times.Never);
+        _roof.Verify(s => s.Close(), Times.Never);
+        _roof.Verify(s => s.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never);
+        _roof.Verify(s => s.RenewLease(), Times.Never);
+        _roof.Verify(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [TestMethod]
-    public async Task Stop_Success_ReturnsUpdatedStatus()
-    {
-        // Arrange
-        _roofServiceMock.Setup(s => s.Stop(It.IsAny<RoofControllerStopReason>()))
-            .Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped));
-        _roofServiceMock.SetupGet(s => s.Status).Returns(RoofControllerStatus.Stopped);
-        _roofServiceMock.SetupGet(s => s.IsMoving).Returns(false);
-        _roofServiceMock.SetupGet(s => s.IsWatchdogActive).Returns(false);
-        _roofServiceMock.SetupGet(s => s.WatchdogSecondsRemaining).Returns((double?)null);
-        _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow.AddSeconds(-1));
-        _roofServiceMock.SetupGet(s => s.LastTransitionUtc).Returns(DateTimeOffset.UtcNow.AddSeconds(-1));
-
-        // Act
-    var (response, payload) = await GetJsonAsync<RoofStatusResponse>(_client, "/api/v4.0/RoofControl/Stop");
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-    Assert.IsNotNull(payload);
-    Assert.AreEqual(RoofControllerStatus.Stopped, payload!.Status);
-    Assert.IsFalse(payload.IsMoving);
-    Assert.IsFalse(payload.IsWatchdogActive);
-    Assert.IsNull(payload.WatchdogSecondsRemaining);
-    Assert.IsTrue(payload.IsUsingPhysicalHardware);
-    Assert.IsTrue(payload.IsIgnoringPhysicalLimitSwitches);
-        _roofServiceMock.Verify(s => s.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task Stop_Failure_ReturnsProblem500()
-    {
-        // Arrange
-        _roofServiceMock.Setup(s => s.Stop(It.IsAny<RoofControllerStopReason>()))
-            .Returns(Result<RoofControllerStatus>.Failure(new InvalidOperationException("Stop not allowed in current state")));
-
-        // Act
-        var response = await _client.GetAsync("/api/v4.0/RoofControl/Stop");
-        var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.InternalServerError, response.StatusCode);
-        Assert.IsNotNull(problem);
-        StringAssert.Contains(problem.Title, "Service Error");
-    var expectedPath = "/api/v4.0/RoofControl/Stop";
-    Assert.IsNotNull(problem.Instance);
-    Assert.IsTrue(problem.Instance == expectedPath || problem.Instance!.EndsWith(expectedPath), $"Unexpected Instance: {problem.Instance}");
-        _roofServiceMock.Verify(s => s.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once);
-    }
-
-    // Removed manual enum parsing; DTO-based deserialization now handles status cleanly
-
-    [TestMethod]
-    public async Task ClearFault_Success_ReturnsTrue()
-    {
-        // Arrange
-    _roofServiceMock.Setup(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Result<bool>.Success(true));
-
-        // Act
-        var response = await _client.PostAsync("/api/v4.0/RoofControl/ClearFault?pulseMs=300", null);
-        var payload = await response.Content.ReadFromJsonAsync<bool>();
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-        Assert.IsTrue(payload);
-    _roofServiceMock.Verify(s => s.ClearFault(300, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task ClearFault_InvalidOperation_ReturnsProblem500()
-    {
-        // Arrange
-        _roofServiceMock.Setup(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<bool>.Failure(new InvalidOperationException("Cannot clear fault while moving")));
-
-        // Act
-        var response = await _client.PostAsync("/api/v4.0/RoofControl/ClearFault", null);
-        var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.InternalServerError, response.StatusCode);
-        Assert.IsNotNull(problem);
-        StringAssert.Contains(problem.Title, "Service Error");
-    _roofServiceMock.Verify(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task GetConfiguration_ReturnsSnapshot()
-    {
-        // Arrange
-        var options = new RoofControllerOptionsV4
-        {
-            SafetyWatchdogTimeout = TimeSpan.FromSeconds(90),
-            OpenRelayId = 1,
-            CloseRelayId = 2,
-            ClearFaultRelayId = 3,
-            StopRelayId = 4,
-            EnableDigitalInputPolling = true,
-            DigitalInputPollInterval = TimeSpan.FromMilliseconds(50),
-            EnablePeriodicVerificationWhileMoving = true,
-            PeriodicVerificationInterval = TimeSpan.FromSeconds(2),
-            UseNormallyClosedLimitSwitches = true,
-            LimitSwitchDebounce = TimeSpan.FromMilliseconds(25),
-            IgnorePhysicalLimitSwitches = false
-        };
-        _roofServiceMock.Setup(s => s.GetConfigurationSnapshot()).Returns(options);
-
-        // Act
-        var (response, payload) = await GetJsonAsync<RoofConfigurationResponse>(_client, "/api/v4.0/RoofControl/Configuration");
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-        Assert.IsNotNull(payload);
-        Assert.AreEqual(90, payload!.SafetyWatchdogTimeoutSeconds);
-        Assert.AreEqual(1, payload.OpenRelayId);
-        Assert.AreEqual(2, payload.CloseRelayId);
-        Assert.AreEqual(3, payload.ClearFaultRelayId);
-        Assert.AreEqual(4, payload.StopRelayId);
-        Assert.AreEqual(50, payload.DigitalInputPollIntervalMilliseconds);
-        Assert.AreEqual(2, payload.PeriodicVerificationIntervalSeconds);
-        Assert.AreEqual(25, payload.LimitSwitchDebounceMilliseconds);
-        Assert.AreEqual(42, payload.RestartOnFailureWaitTimeSeconds);
-        _roofServiceMock.Verify(s => s.GetConfigurationSnapshot(), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task UpdateConfiguration_ValidRequest_ReturnsUpdatedSnapshot()
-    {
-        // Arrange
-        var request = new RoofConfigurationRequest
-        {
-            SafetyWatchdogTimeoutSeconds = 120,
-            OpenRelayId = 1,
-            CloseRelayId = 2,
-            ClearFaultRelayId = 3,
-            StopRelayId = 4,
-            EnableDigitalInputPolling = true,
-            DigitalInputPollIntervalMilliseconds = 75,
-            EnablePeriodicVerificationWhileMoving = true,
-            PeriodicVerificationIntervalSeconds = 5,
-            UseNormallyClosedLimitSwitches = false,
-            LimitSwitchDebounceMilliseconds = 15,
-            IgnorePhysicalLimitSwitches = true
-        };
-
-        RoofControllerOptionsV4? capturedOptions = null;
-        var updatedOptions = new RoofControllerOptionsV4
-        {
-            SafetyWatchdogTimeout = TimeSpan.FromSeconds(150),
-            OpenRelayId = 1,
-            CloseRelayId = 2,
-            ClearFaultRelayId = 3,
-            StopRelayId = 4,
-            EnableDigitalInputPolling = true,
-            DigitalInputPollInterval = TimeSpan.FromMilliseconds(75),
-            EnablePeriodicVerificationWhileMoving = false,
-            PeriodicVerificationInterval = TimeSpan.FromSeconds(6),
-            UseNormallyClosedLimitSwitches = true,
-            LimitSwitchDebounce = TimeSpan.FromMilliseconds(20),
-            IgnorePhysicalLimitSwitches = false
-        };
-
-        _roofServiceMock.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>()))
-            .Callback<RoofControllerOptionsV4>(options => capturedOptions = options)
-            .Returns(Result<RoofControllerOptionsV4>.Success(updatedOptions));
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/v4.0/RoofControl/Configuration", request);
-        var payload = await response.Content.ReadFromJsonAsync<RoofConfigurationResponse>();
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-        Assert.IsNotNull(payload);
-        Assert.AreEqual(150, payload!.SafetyWatchdogTimeoutSeconds);
-        Assert.IsNotNull(capturedOptions);
-        Assert.AreEqual(TimeSpan.FromSeconds(120), capturedOptions!.SafetyWatchdogTimeout);
-        Assert.AreEqual(TimeSpan.FromMilliseconds(75), capturedOptions.DigitalInputPollInterval);
-        Assert.AreEqual(TimeSpan.FromSeconds(5), capturedOptions.PeriodicVerificationInterval);
-        _roofServiceMock.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>()), Times.Once);
-    }
-
-    [TestMethod]
-    public async Task UpdateConfiguration_InvalidRequest_ReturnsValidationProblem()
-    {
-        // Arrange
-        var request = new RoofConfigurationRequest
-        {
-            SafetyWatchdogTimeoutSeconds = 0,
-            OpenRelayId = 1,
-            CloseRelayId = 1,
-            ClearFaultRelayId = 3,
-            StopRelayId = 4,
-            EnableDigitalInputPolling = false,
-            DigitalInputPollIntervalMilliseconds = -10,
-            EnablePeriodicVerificationWhileMoving = true,
-            PeriodicVerificationIntervalSeconds = 0,
-            UseNormallyClosedLimitSwitches = true,
-            LimitSwitchDebounceMilliseconds = -1,
-            IgnorePhysicalLimitSwitches = false
-        };
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/v4.0/RoofControl/Configuration", request);
-        var problem = await response.Content.ReadFromJsonAsync<ValidationProblemDetails>();
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.IsNotNull(problem);
-        Assert.IsTrue(problem!.Errors.ContainsKey(nameof(RoofConfigurationRequest.SafetyWatchdogTimeoutSeconds)));
-        Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.DigitalInputPollIntervalMilliseconds)));
-        Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.EnablePeriodicVerificationWhileMoving)));
-    Assert.IsTrue(problem.Errors.ContainsKey(nameof(RoofConfigurationRequest.OpenRelayId)));
-        _roofServiceMock.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>()), Times.Never);
-    }
-
-    [TestMethod]
-    public async Task Status_WhenUnhandledException_ShouldReturnProblemDetailsWithTraceFields()
-    {
-        // Arrange: simulate unhandled exception by forcing controller path via throwing from Status getter
-        _roofServiceMock.SetupGet(s => s.Status).Throws(new TimeoutException("Status retrieval timed out"));
-
-        // Act
-        var response = await _client.GetAsync("/api/v4.0/RoofControl/Status");
-        var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
-
-        // Assert
-        Assert.AreEqual(HttpStatusCode.InternalServerError, response.StatusCode);
-        Assert.IsNotNull(problem);
-        // From global exception handler mapping TimeoutException -> 408 (Request Timeout) but custom handler currently maps to InternalServerError; verify title from handler
-        // Handler currently maps TimeoutException to Request Timeout (per middleware) - adjust expectation accordingly if needed
-        // In this service's middleware mapping, TimeoutException => 408 Request Timeout
-        if (problem.Status == (int)HttpStatusCode.RequestTimeout)
-        {
-            StringAssert.Contains(problem.Title, "Request Timeout");
-        }
-        else
-        {
-            // Fallback if mapping changes
-            Assert.AreEqual((int)HttpStatusCode.InternalServerError, problem.Status);
-        }
-    var expectedStatusPath = "/api/v4.0/RoofControl/Status";
-    Assert.IsNotNull(problem.Instance);
-    Assert.IsTrue(problem.Instance == expectedStatusPath || problem.Instance!.EndsWith(expectedStatusPath), $"Unexpected Instance: {problem.Instance}");
-    }
+    private void VerifyConfigurationNotApplied()
+        => _roof.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()), Times.Never);
 }

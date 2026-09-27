@@ -1,0 +1,80 @@
+name: Pi image
+
+# Builds the Raspberry Pi container image (linux/arm64) from a clean builder so a Dockerfile,
+# base-image or SDK-pin problem shows up here rather than during a deployment. Nothing is
+# pushed or deployed.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/HVO.RoofControllerV4.RPi/**'
+      - 'src/HVO.RoofControllerV4.Common/**'
+      - 'src/HVO.WebSite.Themes/**'
+      - 'src/global.json'
+      - 'src/NuGet.config'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - '.dockerignore'
+      - '.github/workflows/pi-image.yml'
+  pull_request:
+    branches: [ main, feature/** ]
+    paths:
+      - 'src/HVO.RoofControllerV4.RPi/**'
+      - 'src/HVO.RoofControllerV4.Common/**'
+      - 'src/HVO.WebSite.Themes/**'
+      - 'src/global.json'
+      - 'src/NuGet.config'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - '.dockerignore'
+      - '.github/workflows/pi-image.yml'
+  schedule:
+    # Weekly, to catch base-image and apt repository drift between code changes.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check Dockerfile SDK tag matches src/global.json
+        run: |
+          pin=$(jq -r '.sdk.version' src/global.json)
+          tag=$(sed -n 's#^FROM .*mcr\.microsoft\.com/dotnet/sdk:\([^ @]*\).*#\1#p' src/HVO.RoofControllerV4.RPi/Dockerfile | head -n 1)
+          echo "src/global.json SDK: ${pin}; Dockerfile build image: sdk:${tag}"
+          if [ "$tag" != "$pin" ]; then
+            echo "::error file=src/HVO.RoofControllerV4.RPi/Dockerfile::Build image sdk:${tag} does not match src/global.json (${pin}); update both in the same change"
+            exit 1
+          fi
+
+      - name: Set up QEMU (arm64 emulation for the runtime stage)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build linux/arm64 image (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: src/HVO.RoofControllerV4.RPi/Dockerfile
+          platforms: linux/arm64
+          push: false
+          pull: true
+          no-cache: true
+          tags: hvo/roofcontrollerv4:ci-${{ github.sha }}

@@ -15,6 +15,9 @@ namespace HVO.RoofControllerV4.iPad;
 
 public static class MauiProgram
 {
+	private const string SettingsFileName = "roofcontroller.settings.json";
+	private const string StopHttpClientName = "RoofControllerStop";
+
 	public static MauiApp CreateMauiApp()
 	{
 		var builder = MauiApp.CreateBuilder();
@@ -35,7 +38,13 @@ public static class MauiProgram
 			});
 
 		AddConfiguration(builder);
-		ConfigureServices(builder.Services, builder.Configuration);
+
+		// A missing, unreadable or invalid settings file never stops the app: a bad file is moved aside and the
+		// built-in defaults apply. The dashboard reports what happened.
+		var settingsStore = new SettingsFileStore(Path.Combine(FileSystem.AppDataDirectory, SettingsFileName));
+		var settingsLoad = RoofControllerSettingsLoader.Load(settingsStore);
+
+		ConfigureServices(builder.Services, builder.Configuration, settingsStore, settingsLoad);
 
 #if DEBUG
 		builder.Logging.SetMinimumLevel(LogLevel.Trace);
@@ -45,7 +54,7 @@ public static class MauiProgram
 
 		builder.Logging.AddConsole();
 		builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
-		builder.Logging.AddFilter("System.Net.Http", LogLevel.Information);
+		builder.Logging.AddFilter("System.Net.Http", LogLevel.Warning);
 
 #if DEBUG
 		builder.Logging.AddDebug();
@@ -57,32 +66,53 @@ public static class MauiProgram
 	private static void AddConfiguration(MauiAppBuilder builder)
 	{
 		var assembly = Assembly.GetExecutingAssembly();
-	var resourceName = "HVO.RoofControllerV4.iPad.appsettings.json";
+		var resourceName = "HVO.RoofControllerV4.iPad.appsettings.json";
 		using var stream = assembly.GetManifestResourceStream(resourceName);
 		if (stream is not null)
 		{
 			((IConfigurationBuilder)builder.Configuration).AddJsonStream(stream);
 		}
-
-		var userConfigurationPath = Path.Combine(FileSystem.AppDataDirectory, "roofcontroller.settings.json");
-		if (File.Exists(userConfigurationPath))
-		{
-			((IConfigurationBuilder)builder.Configuration).AddJsonFile(userConfigurationPath, optional: true, reloadOnChange: false);
-		}
 	}
 
-	private static void ConfigureServices(IServiceCollection services, IConfiguration configuration)
+	private static void ConfigureServices(IServiceCollection services, IConfiguration configuration, SettingsFileStore settingsStore, SettingsLoadResult settingsLoad)
 	{
 		services
 			.AddOptions<RoofControllerApiOptions>()
-			.Bind(configuration.GetSection("RoofControllerApi"))
+			.Bind(configuration.GetSection(RoofControllerSettingsLoader.SectionName))
+			.Configure(options =>
+			{
+				if (settingsLoad.Options is { } saved)
+				{
+					options.CopyFrom(saved);
+				}
+			})
 			.ValidateDataAnnotations()
 			.ValidateOnStart();
 
-	services.AddHttpClient<IRoofControllerApiClient, RoofControllerApiClient>();
-	services.AddSingleton<IDialogService, DialogService>();
-	services.AddSingleton<IRoofControllerConfigurationService, RoofControllerConfigurationService>();
-	services.AddTransientPopup<HealthStatusPopup, HealthStatusPopupViewModel>();
+		services.AddSingleton(settingsStore);
+		services.AddSingleton(settingsLoad);
+		services.AddSingleton<IApiKeyStore, SecureStorageApiKeyStore>();
+		services.AddSingleton<RoofControllerConnection>();
+		services.AddSingleton(_ => new StatusOrderingGate());
+		services.AddSingleton(_ => new LeaseRenewalTracker());
+
+		services.AddHttpClient<IRoofControllerApiClient, RoofControllerApiClient>(client => client.Timeout = TimeSpan.FromSeconds(30));
+
+		// Stop uses its own HttpClient (its own connection pool) so it never queues behind polls or other commands.
+		services.AddHttpClient(StopHttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
+		services.AddSingleton(sp =>
+		{
+			var connection = sp.GetRequiredService<RoofControllerConnection>();
+			var stopClient = new RoofControllerApiClient(
+				sp.GetRequiredService<IHttpClientFactory>().CreateClient(StopHttpClientName),
+				connection,
+				sp.GetRequiredService<ILogger<RoofControllerApiClient>>());
+			return new StopCommandCoordinator(connection, stopClient.StopAsync);
+		});
+
+		services.AddSingleton<IDialogService, DialogService>();
+		services.AddSingleton<IRoofControllerConfigurationService, RoofControllerConfigurationService>();
+		services.AddTransientPopup<HealthStatusPopup, HealthStatusPopupViewModel>();
 
 		services.AddSingleton<RoofControllerViewModel>();
 		services.AddSingleton<MainPage>();

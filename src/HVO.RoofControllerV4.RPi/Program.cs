@@ -1,4 +1,5 @@
 using System;
+using System.Net.Http;
 using System.Text.Json.Serialization;
 using Asp.Versioning;
 using HVO.Enterprise.Telemetry;
@@ -20,6 +21,9 @@ using System.Runtime.Loader;
 using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Services;
+using HVO.RoofControllerV4.RPi.Controllers.Camera;
+using HVO.RoofControllerV4.RPi.Security;
+using Microsoft.AspNetCore.Authorization;
 
 namespace HVO.RoofControllerV4.RPi;
 
@@ -28,14 +32,17 @@ public class Program
     public static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+
+        // Docker secrets: a file named e.g. RoofControllerSecurity__ApiKeys__0__Key or BlueIris__Password under
+        // /run/secrets becomes that configuration key. Never commit keys or passwords to appsettings.
+        builder.Configuration.AddKeyPerFile("/run/secrets", optional: true);
+
         ApplyHardwareDetectionOverrides(builder.Configuration);
         ConfigureServices(builder.Services, builder.Configuration, builder.Environment);
 
         var app = builder.Build();
 
-        var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
-        lifetime.ApplicationStopping.Register(() => Console.WriteLine("IHostApplicationLifetime - ApplicationStopping"));
-
+        // The roof stop on shutdown is registered by RoofControllerServiceV4Host (ApplicationStopping -> ShutdownAsync).
         Configure(app);
 
         app.Run();
@@ -45,10 +52,18 @@ public class Program
     private static void ConfigureServices(IServiceCollection services, ConfigurationManager Configuration, IWebHostEnvironment Environment)
     {
         services.AddOptions();
+
+        // Give the hosted-service stop path (verified roof stop) and long-lived camera streams time to finish on
+        // SIGTERM; docker-compose stop_grace_period (30 s) must stay above this.
+        services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(20));
+
         services.Configure<RoofControllerOptionsV4>(Configuration.GetSection(nameof(RoofControllerOptionsV4)));
         services.AddSingleton<IValidateOptions<RoofControllerOptionsV4>, RoofControllerOptionsV4Validator>();
         services.Configure<RoofControllerHostOptionsV4>(Configuration.GetSection(nameof(RoofControllerHostOptionsV4)));
         ConfigureTelemetry(services, Configuration, Environment);
+
+        // API keys, console cookie, policies and authentication state for Blazor (docs/security.md)
+        services.AddRoofControllerSecurity(Configuration);
 
         // Add Razor Components for Blazor Server
         services.AddRazorComponents()
@@ -138,6 +153,23 @@ public class Program
         // Add HttpClient for API calls
         services.AddHttpClient();
 
+        // Blue Iris MJPEG proxy: credentials from configuration (BlueIris section, secrets via env/Docker secrets),
+        // finite connect timeout; header and idle timeouts are enforced per stream by CameraController.
+        services.Configure<BlueIrisOptions>(Configuration.GetSection(BlueIrisOptions.SectionName));
+        services.AddSingleton<CameraStreamLimiter>();
+        services.AddHttpClient<BlueIrisCameraClient>(client => client.Timeout = Timeout.InfiniteTimeSpan)
+            .ConfigurePrimaryHttpMessageHandler(serviceProvider =>
+            {
+                var connectTimeout = serviceProvider.GetRequiredService<IOptions<BlueIrisOptions>>().Value.ConnectTimeout;
+                return new SocketsHttpHandler
+                {
+                    ConnectTimeout = connectTimeout > TimeSpan.Zero ? connectTimeout : TimeSpan.FromSeconds(5),
+                    AllowAutoRedirect = false,
+                    PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+                };
+            })
+            .RedactLoggedHeaders(_ => true);
+
         // Add HttpContextAccessor for Blazor components
         services.AddHttpContextAccessor();
     }
@@ -205,43 +237,58 @@ public class Program
 
     private static void Configure(WebApplication app)
     {
+        var apiKeyViewer = new AuthorizeAttribute(RoofControllerSecurityDefaults.ViewerPolicy)
+        {
+            AuthenticationSchemes = RoofSecurityServiceCollectionExtensions.ApiKeyOrCookieSchemes
+        };
+
         // Add exception handling middleware
         app.UseExceptionHandler();
 
         // Add Problem Details middleware for consistent error responses
         app.UseStatusCodePages();
 
-        // Built-in OpenAPI endpoint - provides automatic API documentation
-        // Available at: /openapi/v4.json
-        app.MapOpenApi();
-
         if (app.Environment.IsDevelopment())
         {
-            // Built-in interactive API documentation - provides Scalar UI
-            // Available at: /scalar/v1 (interactive API explorer)
-            app.MapScalarApiReference();
             app.UseDeveloperExceptionPage();
         }
-
-        // In Development, disable HTTPS redirection to avoid cert prompts and warnings
-        if (!app.Environment.IsDevelopment())
+        else if (RoofSecurityStartup.IsHttpsConfigured(app.Configuration))
         {
-            app.UseHttpsRedirection();
+            // HSTS only when an HTTPS endpoint actually exists; otherwise browsers would be pinned to a dead port.
+            app.UseHsts();
         }
+
+        // No UseHttpsRedirection: API clients must not silently follow a redirect with their key. Plain-HTTP requests
+        // from other hosts get 403 https_required instead (loopback and /health/live|ready are exempt).
+        app.UseMiddleware<RequireHttpsMiddleware>();
 
         // Serve static web assets (including the generated .styles.css bundle)
         app.UseStaticFiles();
         app.UseRouting();
+
+        app.UseMiddleware<OriginCheckMiddleware>();
+        app.UseAuthentication();
+        app.UseMiddleware<BlazorHubAuthorizationMiddleware>();
+        app.UseAuthorization();
         app.UseAntiforgery();
 
-        app.UseAuthorization();
+        // OpenAPI document (/openapi/v4.json): open in Development, Admin API key elsewhere. Scalar UI is Development-only.
+        var openApi = app.MapOpenApi();
+        if (app.Environment.IsDevelopment())
+        {
+            app.MapScalarApiReference();
+        }
+        else
+        {
+            openApi.RequireAuthorization(new AuthorizeAttribute(RoofControllerSecurityDefaults.AdminPolicy)
+            {
+                AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme
+            });
+        }
 
-        // Add health check endpoints
-        // IMPORTANT: These are the RECOMMENDED ASP.NET Core health check endpoints
-        // Do NOT duplicate these with custom controllers - use these built-in endpoints:
-
-        // Detailed health endpoint with comprehensive information
-        // Use this for: monitoring dashboards, detailed health reporting, troubleshooting
+        // Health endpoints. Do NOT duplicate these with custom controllers.
+        // /health: detailed report for people (Viewer key or signed-in console). Keeps 503 for Unhealthy so HTTP-only
+        // monitors still see failures; clients must read the JSON body on 503 as well.
         app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>
@@ -257,35 +304,37 @@ public class Program
                         description = x.Value.Description,
                         data = x.Value.Data,
                         duration = x.Value.Duration.ToString(),
-                        exception = x.Value.Exception?.Message,
+                        // Type name only: exception messages can carry paths, bus errors or upstream URLs.
+                        exception = x.Value.Exception?.GetType().Name,
                         tags = x.Value.Tags
                     }),
                     totalDuration = report.TotalDuration.ToString()
                 };
                 await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(response));
             }
-        });
+        }).RequireAuthorization(apiKeyViewer);
 
-        // Readiness probe endpoint for load balancers and orchestration
-        // Use this for: Kubernetes readiness probes, load balancer health checks
-        // Only checks hardware-tagged components to determine if service is ready to serve traffic
+        // Readiness probe (anonymous, status text only): hardware-tagged checks. Used by the Docker HEALTHCHECK and deploy.
         app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
         {
             Predicate = check => check.Tags.Contains("hardware")
-        });
+        }).AllowAnonymous();
 
-        // Liveness probe endpoint for container orchestration
-        // Use this for: Kubernetes liveness probes, container restart decisions
-        // Always returns healthy if the application is running (no specific checks)
+        // Liveness probe (anonymous): healthy whenever the process answers.
         app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
         {
-            Predicate = _ => false // Always returns healthy for liveness
-        });
+            Predicate = _ => false
+        }).AllowAnonymous();
+
+        // POST /account/login and /account/logout for the web console (the /login page itself is a Razor component).
+        app.MapRoofAccountEndpoints();
 
         // Map Razor components for Blazor Server
         app.MapRazorComponents<Components.App>()
             .AddInteractiveServerRenderMode();
 
         app.MapControllers();
+
+        RoofSecurityStartup.ReportSecurityPosture(app.Services, app.Configuration, app.Environment);
     }
 }

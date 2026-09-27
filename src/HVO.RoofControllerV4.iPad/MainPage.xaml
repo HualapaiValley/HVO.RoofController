@@ -165,19 +165,20 @@
         </ResourceDictionary>
     </ContentPage.Resources>
 
-      <Grid>
-        <Grid Padding="32"
-            RowSpacing="24"
-            RowDefinitions="Auto,Auto,Auto,Auto">
 
-            <!-- Row 1: Header & status pills -->
+    <ScrollView>
+        <Grid Padding="32"
+              RowSpacing="24"
+              RowDefinitions="Auto,Auto,Auto,Auto">
+
+            <!-- Row 1: Header, status pills and warnings -->
             <VerticalStackLayout Grid.Row="0" Spacing="16">
                 <Label Text="Observatory Roof Controller"
                        FontSize="32"
                        FontAttributes="Bold"
                        TextColor="#F8F9FA" />
 
-                <Label Text="Monitor and operate the observatory roof in real time. Safety interlocks and the watchdog halt motion automatically when a fault is detected."
+                <Label Text="{Binding ControllerIdentityText}"
                        TextColor="#CED4DA"
                        FontSize="16"
                        LineHeight="1.35" />
@@ -221,7 +222,53 @@
                         </Border.StrokeShape>
                         <Label Text="{Binding LastStopReasonLabel, StringFormat='{}{0} Stop'}" Style="{StaticResource BadgeLabelStyle}" />
                     </Border>
+
+                    <Border IsVisible="{Binding IsSimulationMode}"
+                            BackgroundColor="#6F42C1"
+                            Padding="14,8"
+                            StrokeThickness="0"
+                            Margin="0,0,12,12">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="20" />
+                        </Border.StrokeShape>
+                        <Label Text="Simulation (no hardware)" Style="{StaticResource BadgeLabelStyle}" />
+                    </Border>
+
+                    <Border IsVisible="{Binding IsIgnoringLimitSwitches}"
+                            BackgroundColor="#DC3545"
+                            Padding="14,8"
+                            StrokeThickness="0"
+                            Margin="0,0,12,12">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="20" />
+                        </Border.StrokeShape>
+                        <Label Text="Limit switches ignored" Style="{StaticResource BadgeLabelStyle}" />
+                    </Border>
+
+                    <Border IsVisible="{Binding IsUsingHttp}"
+                            BackgroundColor="#F0AD4E"
+                            Padding="14,8"
+                            StrokeThickness="0"
+                            Margin="0,0,12,12">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="20" />
+                        </Border.StrokeShape>
+                        <Label Text="HTTP (unencrypted)" Style="{StaticResource BadgeLabelStyle}" TextColor="#212529" />
+                    </Border>
                 </FlexLayout>
+
+                <Border IsVisible="{Binding IsStatusStale}"
+                        BackgroundColor="#F0AD4E"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <VerticalStackLayout Spacing="6">
+                        <Label Text="Status not current" FontAttributes="Bold" FontSize="18" TextColor="#212529" />
+                        <Label Text="{Binding StaleStatusText}" TextColor="#212529" FontSize="15" />
+                    </VerticalStackLayout>
+                </Border>
 
                 <Border IsVisible="{Binding ShowServiceBanner}"
                         BackgroundColor="{Binding ServiceBannerColor}"
@@ -234,7 +281,65 @@
                     <VerticalStackLayout Spacing="6">
                         <Label Text="{Binding ServiceBannerTitle}" FontAttributes="Bold" FontSize="18" TextColor="White" />
                         <Label Text="{Binding ServiceBannerMessage}" TextColor="#F8F9FA" FontSize="15" />
-                </VerticalStackLayout>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border IsVisible="{Binding HasControllerIdentityWarning}"
+                        BackgroundColor="#F0AD4E"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                        <VerticalStackLayout Spacing="6">
+                            <Label Text="Controller restarted or replaced" FontAttributes="Bold" FontSize="18" TextColor="#212529" />
+                            <Label Text="{Binding ControllerIdentityWarning}" TextColor="#212529" FontSize="15" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1"
+                                Text="Dismiss"
+                                Command="{Binding DismissControllerIdentityWarningCommand}"
+                                BackgroundColor="Transparent"
+                                TextColor="#212529"
+                                BorderColor="#212529"
+                                BorderWidth="1"
+                                CornerRadius="12"
+                                VerticalOptions="Start" />
+                    </Grid>
+                </Border>
+
+                <Border IsVisible="{Binding HasSettingsNotice}"
+                        BackgroundColor="#2F343C"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                        <VerticalStackLayout Spacing="6">
+                            <Label Text="Settings" FontAttributes="Bold" FontSize="18" TextColor="White" />
+                            <Label Text="{Binding SettingsNotice}" TextColor="#F8F9FA" FontSize="15" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1"
+                                Text="Dismiss"
+                                Command="{Binding DismissSettingsNoticeCommand}"
+                                BackgroundColor="Transparent"
+                                TextColor="White"
+                                BorderColor="White"
+                                BorderWidth="1"
+                                CornerRadius="12"
+                                VerticalOptions="Start" />
+                    </Grid>
+                </Border>
+
+                <Border IsVisible="{Binding ShowMissingApiKeyWarning}"
+                        BackgroundColor="#F0AD4E"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <Label Text="{Binding ApiKeyStatusText, StringFormat='{}{0} Enter the key on the Configuration tab.'}" TextColor="#212529" FontSize="15" />
                 </Border>
 
                 <Border IsVisible="{Binding HasFault}"
@@ -245,7 +350,7 @@
                         <RoundRectangle CornerRadius="18" />
                     </Border.StrokeShape>
                     <VerticalStackLayout Spacing="12">
-                        <Label Text="Fault detected. Review the system and clear the fault when safe."
+                        <Label Text="{Binding FaultBannerText}"
                                TextColor="White"
                                FontSize="18"
                                FontAttributes="Bold"
@@ -260,245 +365,360 @@
                                 HorizontalOptions="Start" />
                     </VerticalStackLayout>
                 </Border>
-        </VerticalStackLayout>
 
-        <!-- Row 2: Controls -->
-    <Border Grid.Row="1"
-        BackgroundColor="#181C24"
-        StrokeThickness="0"
-        Padding="20">
-            <Border.StrokeShape>
-                <RoundRectangle CornerRadius="{StaticResource CardCorner}" />
-            </Border.StrokeShape>
-            <VerticalStackLayout Spacing="20">
-                <Label Text="Controls"
-                       FontSize="22"
-                       FontAttributes="Bold"
-                       TextColor="#F8F9FA" />
-        <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="16">
-                    <Button Grid.Column="0"
-                            Text="Open"
-                            Command="{Binding OpenCommand}"
-                            Style="{StaticResource OpenControlButtonStyle}"
-                            SemanticProperties.Description="Open the observatory roof"
-                            SemanticProperties.Hint="Initiates the roof opening sequence">
-                        <Button.Behaviors>
-                            <behaviors:TouchBehavior PressedScale="0.96"
-                                                     PressedOpacity="1"
-                                                     DefaultScale="1" />
-                        </Button.Behaviors>
-                    </Button>
-
-                    <Button Grid.Column="1"
-                            Text="Stop"
-                            Command="{Binding StopCommand}"
-                            Style="{StaticResource StopControlButtonStyle}"
-                            SemanticProperties.Description="Stop the roof movement"
-                            SemanticProperties.Hint="Halts any active roof movement">
-                        <Button.Behaviors>
-                            <behaviors:TouchBehavior PressedScale="0.96"
-                                                     PressedOpacity="1"
-                                                     DefaultScale="1" />
-                        </Button.Behaviors>
-                    </Button>
-
-                    <Button Grid.Column="2"
-                            Text="Close"
-                            Command="{Binding CloseCommand}"
-                            Style="{StaticResource CloseControlButtonStyle}"
-                            SemanticProperties.Description="Close the observatory roof"
-                            SemanticProperties.Hint="Starts closing the roof">
-                        <Button.Behaviors>
-                            <behaviors:TouchBehavior PressedScale="0.96"
-                                                     PressedOpacity="1"
-                                                     DefaultScale="1" />
-                        </Button.Behaviors>
-                    </Button>
-
-                    <Button Grid.Column="3"
-                            Text="Clear Fault"
-                            Command="{Binding ClearFaultCommand}"
-                            Style="{StaticResource FaultControlButtonStyle}"
-                            SemanticProperties.Description="Clear roof fault"
-                            SemanticProperties.Hint="Attempts to clear an active fault when safe">
-                        <Button.Behaviors>
-                            <behaviors:TouchBehavior PressedScale="0.96"
-                                                     PressedOpacity="1"
-                                                     DefaultScale="1" />
-                        </Button.Behaviors>
-                    </Button>
-                </Grid>
-            </VerticalStackLayout>
-        </Border>
-
-        <!-- Row 3: System Status -->
-    <Border Grid.Row="2"
-        BackgroundColor="#181C24"
-        StrokeThickness="0"
-        Padding="20">
-            <Border.StrokeShape>
-                <RoundRectangle CornerRadius="{StaticResource CardCorner}" />
-            </Border.StrokeShape>
-            <VerticalStackLayout Spacing="18">
-                <Label Text="System Status"
-                       FontSize="22"
-                       FontAttributes="Bold"
-                       TextColor="#F8F9FA" />
-
-                <Grid ColumnDefinitions="2*,3*,2*,3*" RowDefinitions="Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="20">
-                    <Grid.Resources>
-                        <Style TargetType="Label" x:Key="KeyLabelStyle">
-                            <Setter Property="FontSize" Value="16" />
-                            <Setter Property="TextColor" Value="#ADB5BD" />
-                        </Style>
-                        <Style TargetType="Label" x:Key="ValueLabelStyle">
-                            <Setter Property="FontSize" Value="18" />
-                            <Setter Property="TextColor" Value="#F8F9FA" />
-                            <Setter Property="LineBreakMode" Value="WordWrap" />
-                        </Style>
-                    </Grid.Resources>
-
-                    <Label Grid.Column="0"
-                           Text="Controller"
-                           Style="{StaticResource KeyLabelStyle}" />
-                    <Label Grid.Column="1"
-                           Text="{Binding StatusText}"
-                           Style="{StaticResource ValueLabelStyle}"
+                <Border IsVisible="{Binding IsIgnoringLimitSwitches}"
+                        BackgroundColor="#DC3545"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <Label Text="The controller is IGNORING the physical limit switches. The roof will not stop at its limits on its own; watch it while it moves and be ready to stop it."
+                           TextColor="White"
+                           FontSize="15"
                            FontAttributes="Bold" />
+                </Border>
 
-                    <Label Grid.Column="2"
-                           Text="Health"
-                           Style="{StaticResource KeyLabelStyle}" />
-                    <Label Grid.Column="3"
-                           Text="{Binding HealthStatus}"
-                           Style="{StaticResource ValueLabelStyle}" />
+                <Border IsVisible="{Binding IsRelayRegisterUnverified}"
+                        BackgroundColor="#DC3545"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <Label Text="Relay register not verified: the controller could not confirm that its relay register reads back as commanded. This check never confirms the relay contacts or the motor; check the roof directly."
+                           TextColor="White"
+                           FontSize="15" />
+                </Border>
 
-                    <Label Grid.Row="1" Grid.Column="0"
-                           Text="Movement"
-                           Style="{StaticResource KeyLabelStyle}" />
-                    <Label Grid.Row="1" Grid.Column="1"
-                           Text="{Binding MovementStatus}"
-                           Style="{StaticResource ValueLabelStyle}" />
+                <Border IsVisible="{Binding InputsUnhealthy}"
+                        BackgroundColor="#F0AD4E"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <Label Text="{Binding InputsUnhealthyText}"
+                           TextColor="#212529"
+                           FontSize="15" />
+                </Border>
 
-                    <Label Grid.Row="1" Grid.Column="2"
-                           Text="Last transition"
-                           Style="{StaticResource KeyLabelStyle}" />
-                    <Label Grid.Row="1" Grid.Column="3"
-                           Text="{Binding LastTransitionDisplay}"
-                           Style="{StaticResource ValueLabelStyle}" />
-
-                    <Label Grid.Row="2" Grid.Column="0"
-                           Text="Watchdog"
-                           Style="{StaticResource KeyLabelStyle}" />
-                    <VerticalStackLayout Grid.Row="2" Grid.Column="1" Spacing="6">
-                        <Label Text="{Binding WatchdogStatusText}"
-                               Style="{StaticResource ValueLabelStyle}"
-                               FontSize="16" />
-                        <ProgressBar Progress="{Binding WatchdogPercentage}"
-                                     HeightRequest="6"
-                                     BackgroundColor="#343A40"
-                                     ProgressColor="#FFC107"
-                                     IsVisible="{Binding IsWatchdogActive}" />
-                        <Label Text="{Binding WatchdogSecondaryText}"
-                               Style="{StaticResource ValueLabelStyle}"
-                               FontSize="14" />
-               <Label Text="{Binding RemoteRestartOnFailureWaitTimeDisplay}"
-                   Style="{StaticResource ValueLabelStyle}"
-                   FontSize="14"
-                   TextColor="#ADB5BD"
-                   IsVisible="{Binding HasRemoteRestartOnFailureWaitTime}" />
-                    </VerticalStackLayout>
-
-                    <Label Grid.Row="2" Grid.Column="2"
-                           Text="Fault"
-                           Style="{StaticResource KeyLabelStyle}" />
-              <Label Grid.Row="2" Grid.Column="3"
-                  Text="{Binding LastErrorMessage, TargetNullValue=—, FallbackValue=—}"
-                  Style="{StaticResource ValueLabelStyle}" />
-                </Grid>
-            </VerticalStackLayout>
-        </Border>
-
-        <!-- Row 4: Latest Activity -->
-    <Border Grid.Row="3"
-        BackgroundColor="#181C24"
-        StrokeThickness="0"
-        Padding="20">
-            <Border.StrokeShape>
-                <RoundRectangle CornerRadius="{StaticResource CardCorner}" />
-            </Border.StrokeShape>
-            <VerticalStackLayout x:Name="LatestActivityStack" Spacing="14">
-                <Label x:Name="LatestActivityTitle"
-                       Text="Latest Activity"
-                       FontSize="22"
-                       FontAttributes="Bold"
-                       TextColor="#F8F9FA" />
-
-                <Grid x:Name="LatestActivityGrid" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="20" RowSpacing="10">
-                    <Grid.Resources>
-                        <Style TargetType="Label" x:Key="ActivityKeyStyle">
-                            <Setter Property="FontSize" Value="16" />
-                            <Setter Property="TextColor" Value="#ADB5BD" />
-                        </Style>
-                        <Style TargetType="Label" x:Key="ActivityValueStyle">
-                            <Setter Property="FontSize" Value="18" />
-                            <Setter Property="TextColor" Value="#F8F9FA" />
-                            <Setter Property="LineBreakMode" Value="WordWrap" />
-                        </Style>
-                    </Grid.Resources>
-
-                    <Label Grid.Row="0"
-                           Text="Title"
-                           Style="{StaticResource ActivityKeyStyle}" />
-                    <Label Grid.Row="0" Grid.Column="1"
-                           Text="{Binding LatestNotification.Title, TargetNullValue=No recent activity, FallbackValue=No recent activity}"
-                           Style="{StaticResource ActivityValueStyle}" FontAttributes="Bold" />
-
-                    <Label Grid.Row="1"
-                           Text="Details"
-                           Style="{StaticResource ActivityKeyStyle}" />
-                    <StackLayout Grid.Row="1" Grid.Column="1" Spacing="4">
-                        <Label Text="{Binding LatestNotification.Message, TargetNullValue=Command results and status updates will appear here., FallbackValue=Command results and status updates will appear here.}"
-                               Style="{StaticResource ActivityValueStyle}" />
-                        <Label Text="{Binding LatestNotification.Timestamp, StringFormat='{}{0:HH:mm:ss}'}"
-                               TextColor="#868E96"
-                               FontSize="13"
-                               IsVisible="{Binding HasLatestNotification}" />
-                    </StackLayout>
-                </Grid>
-
-                <Label x:Name="LatestActivityMessage"
-                       Text="Only one roof motion runs at a time. Use Stop to interrupt manually; emergency stops trigger automatically for faults or watchdog timeouts."
-                       TextColor="#ADB5BD"
-                       FontSize="13"
-                       LineHeight="1.3" />
+                <Border IsVisible="{Binding IsShuttingDown}"
+                        BackgroundColor="#F0AD4E"
+                        Padding="18"
+                        StrokeThickness="0">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="18" />
+                    </Border.StrokeShape>
+                    <Label Text="The controller is shutting down. It refuses new commands; Stop is still sent."
+                           TextColor="#212529"
+                           FontSize="15" />
+                </Border>
             </VerticalStackLayout>
 
-            <VisualStateManager.VisualStateGroups>
-                <VisualStateGroup>
-                    <VisualState Name="Portrait">
-                        <VisualState.StateTriggers>
-                            <OrientationStateTrigger Orientation="Portrait" />
-                        </VisualState.StateTriggers>
-                        <VisualState.Setters>
-                            <Setter TargetName="LatestActivityTitle" Property="IsVisible" Value="True" />
-                            <Setter TargetName="LatestActivityGrid" Property="IsVisible" Value="True" />
-                        </VisualState.Setters>
-                    </VisualState>
-                    <VisualState Name="Landscape">
-                        <VisualState.StateTriggers>
-                            <OrientationStateTrigger Orientation="Landscape" />
-                        </VisualState.StateTriggers>
-                        <VisualState.Setters>
-                            <Setter TargetName="LatestActivityTitle" Property="IsVisible" Value="False" />
-                            <Setter TargetName="LatestActivityGrid" Property="IsVisible" Value="False" />
-                            <Setter TargetName="LatestActivityMessage" Property="Margin" Value="0" />
-                        </VisualState.Setters>
-                    </VisualState>
-                </VisualStateGroup>
-            </VisualStateManager.VisualStateGroups>
-        </Border>
+            <!-- Row 2: Controls -->
+            <Border Grid.Row="1"
+                    BackgroundColor="#181C24"
+                    StrokeThickness="0"
+                    Padding="20">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="{StaticResource CardCorner}" />
+                </Border.StrokeShape>
+                <VerticalStackLayout Spacing="20">
+                    <Label Text="Controls"
+                           FontSize="22"
+                           FontAttributes="Bold"
+                           TextColor="#F8F9FA" />
+                    <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="16">
+                        <Button Grid.Column="0"
+                                Text="Open"
+                                Command="{Binding OpenCommand}"
+                                Style="{StaticResource OpenControlButtonStyle}"
+                                SemanticProperties.Description="Open the observatory roof"
+                                SemanticProperties.Hint="Initiates the roof opening sequence">
+                            <Button.Behaviors>
+                                <behaviors:TouchBehavior PressedScale="0.96"
+                                                         PressedOpacity="1"
+                                                         DefaultScale="1" />
+                            </Button.Behaviors>
+                        </Button>
+
+                        <Button Grid.Column="1"
+                                Text="Stop"
+                                Command="{Binding StopCommand}"
+                                Style="{StaticResource StopControlButtonStyle}"
+                                SemanticProperties.Description="Stop the roof movement"
+                                SemanticProperties.Hint="Always available. Sends Stop to the controller immediately">
+                            <Button.Behaviors>
+                                <behaviors:TouchBehavior PressedScale="0.96"
+                                                         PressedOpacity="1"
+                                                         DefaultScale="1" />
+                            </Button.Behaviors>
+                        </Button>
+
+                        <Button Grid.Column="2"
+                                Text="Close"
+                                Command="{Binding CloseCommand}"
+                                Style="{StaticResource CloseControlButtonStyle}"
+                                SemanticProperties.Description="Close the observatory roof"
+                                SemanticProperties.Hint="Starts closing the roof">
+                            <Button.Behaviors>
+                                <behaviors:TouchBehavior PressedScale="0.96"
+                                                         PressedOpacity="1"
+                                                         DefaultScale="1" />
+                            </Button.Behaviors>
+                        </Button>
+
+                        <Button Grid.Column="3"
+                                Text="Clear Fault"
+                                Command="{Binding ClearFaultCommand}"
+                                Style="{StaticResource FaultControlButtonStyle}"
+                                SemanticProperties.Description="Clear roof fault"
+                                SemanticProperties.Hint="Attempts to clear an active fault when safe">
+                            <Button.Behaviors>
+                                <behaviors:TouchBehavior PressedScale="0.96"
+                                                         PressedOpacity="1"
+                                                         DefaultScale="1" />
+                            </Button.Behaviors>
+                        </Button>
+                    </Grid>
+
+                    <Border IsVisible="{Binding HasStopOutcome}"
+                            BackgroundColor="{Binding StopOutcomeColor}"
+                            Padding="18"
+                            StrokeThickness="0">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="18" />
+                        </Border.StrokeShape>
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                            <ActivityIndicator IsRunning="{Binding IsStopPending}"
+                                               IsVisible="{Binding IsStopPending}"
+                                               Color="White"
+                                               VerticalOptions="Start" />
+                            <VerticalStackLayout Grid.Column="1" Spacing="6">
+                                <Label Text="{Binding StopOutcomeTitle}"
+                                       FontAttributes="Bold"
+                                       FontSize="18"
+                                       TextColor="White" />
+                                <Label Text="{Binding StopOutcomeMessage}"
+                                       TextColor="White"
+                                       FontSize="15"
+                                       LineBreakMode="WordWrap" />
+                                <Label Text="{Binding StopOutcomeDetail}"
+                                       TextColor="#F1F3F5"
+                                       FontSize="13" />
+                            </VerticalStackLayout>
+                        </Grid>
+                    </Border>
+
+                    <Label Text="{Binding LeaseDisplay}"
+                           IsVisible="{Binding HasLeaseRemaining}"
+                           TextColor="#CED4DA"
+                           FontSize="14" />
+
+                    <Label Text="Stop is always available and is sent straight to the controller, with one retry inside about 3 seconds. If the result cannot be confirmed it is shown as unknown. The physical stop remains the backstop."
+                           TextColor="#ADB5BD"
+                           FontSize="13"
+                           LineHeight="1.3" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Row 3: System Status -->
+            <Border Grid.Row="2"
+                    BackgroundColor="#181C24"
+                    StrokeThickness="0"
+                    Padding="20">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="{StaticResource CardCorner}" />
+                </Border.StrokeShape>
+                <VerticalStackLayout Spacing="18">
+                    <Label Text="System Status"
+                           FontSize="22"
+                           FontAttributes="Bold"
+                           TextColor="#F8F9FA" />
+
+                    <Grid ColumnDefinitions="2*,3*,2*,3*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="20">
+                        <Grid.Resources>
+                            <Style TargetType="Label" x:Key="KeyLabelStyle">
+                                <Setter Property="FontSize" Value="16" />
+                                <Setter Property="TextColor" Value="#ADB5BD" />
+                            </Style>
+                            <Style TargetType="Label" x:Key="ValueLabelStyle">
+                                <Setter Property="FontSize" Value="18" />
+                                <Setter Property="TextColor" Value="#F8F9FA" />
+                                <Setter Property="LineBreakMode" Value="WordWrap" />
+                            </Style>
+                        </Grid.Resources>
+
+                        <Label Grid.Column="0"
+                               Text="Roof"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Column="1"
+                               Text="{Binding StatusText}"
+                               Style="{StaticResource ValueLabelStyle}"
+                               FontAttributes="Bold" />
+
+                        <Label Grid.Column="2"
+                               Text="Health"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Column="3"
+                               Text="{Binding HealthStatus}"
+                               Style="{StaticResource ValueLabelStyle}" />
+
+                        <Label Grid.Row="1" Grid.Column="0"
+                               Text="Movement"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Row="1" Grid.Column="1"
+                               Text="{Binding MovementStatus}"
+                               Style="{StaticResource ValueLabelStyle}" />
+
+                        <Label Grid.Row="1" Grid.Column="2"
+                               Text="Last transition"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Row="1" Grid.Column="3"
+                               Text="{Binding LastTransitionDisplay}"
+                               Style="{StaticResource ValueLabelStyle}" />
+
+                        <Label Grid.Row="2" Grid.Column="0"
+                               Text="Watchdog"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <VerticalStackLayout Grid.Row="2" Grid.Column="1" Spacing="6">
+                            <Label Text="{Binding WatchdogStatusText}"
+                                   Style="{StaticResource ValueLabelStyle}"
+                                   FontSize="16" />
+                            <ProgressBar Progress="{Binding WatchdogPercentage}"
+                                         HeightRequest="6"
+                                         BackgroundColor="#343A40"
+                                         ProgressColor="#FFC107"
+                                         IsVisible="{Binding IsWatchdogActive}" />
+                            <Label Text="{Binding WatchdogSecondaryText}"
+                                   Style="{StaticResource ValueLabelStyle}"
+                                   FontSize="14" />
+                            <Label Text="{Binding RemoteRestartOnFailureWaitTimeDisplay}"
+                                   Style="{StaticResource ValueLabelStyle}"
+                                   FontSize="14"
+                                   TextColor="#ADB5BD"
+                                   IsVisible="{Binding HasRemoteRestartOnFailureWaitTime}" />
+                        </VerticalStackLayout>
+
+                        <Label Grid.Row="2" Grid.Column="2"
+                               Text="Fault"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Row="2" Grid.Column="3"
+                               Text="{Binding FaultDisplay}"
+                               Style="{StaticResource ValueLabelStyle}" />
+
+                        <Label Grid.Row="3" Grid.Column="0"
+                               Text="Relay register"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Row="3" Grid.Column="1"
+                               Text="{Binding RelayRegisterText}"
+                               Style="{StaticResource ValueLabelStyle}" />
+
+                        <Label Grid.Row="3" Grid.Column="2"
+                               Text="Last stop"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Row="3" Grid.Column="3"
+                               Text="{Binding LastStopReasonText}"
+                               Style="{StaticResource ValueLabelStyle}" />
+
+                        <Label Grid.Row="4" Grid.Column="0"
+                               Text="Controller"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Row="4" Grid.Column="1"
+                               Text="{Binding ActiveControllerHost}"
+                               Style="{StaticResource ValueLabelStyle}" />
+
+                        <Label Grid.Row="4" Grid.Column="2"
+                               Text="Instance"
+                               Style="{StaticResource KeyLabelStyle}" />
+                        <Label Grid.Row="4" Grid.Column="3"
+                               Text="{Binding ControllerInstanceDisplay}"
+                               Style="{StaticResource ValueLabelStyle}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Row 4: Latest Activity -->
+            <Border Grid.Row="3"
+                    BackgroundColor="#181C24"
+                    StrokeThickness="0"
+                    Padding="20">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="{StaticResource CardCorner}" />
+                </Border.StrokeShape>
+                <VerticalStackLayout x:Name="LatestActivityStack" Spacing="14">
+                    <Label x:Name="LatestActivityTitle"
+                           Text="Latest Activity"
+                           FontSize="22"
+                           FontAttributes="Bold"
+                           TextColor="#F8F9FA" />
+
+                    <Grid x:Name="LatestActivityGrid" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="20" RowSpacing="10">
+                        <Grid.Resources>
+                            <Style TargetType="Label" x:Key="ActivityKeyStyle">
+                                <Setter Property="FontSize" Value="16" />
+                                <Setter Property="TextColor" Value="#ADB5BD" />
+                            </Style>
+                            <Style TargetType="Label" x:Key="ActivityValueStyle">
+                                <Setter Property="FontSize" Value="18" />
+                                <Setter Property="TextColor" Value="#F8F9FA" />
+                                <Setter Property="LineBreakMode" Value="WordWrap" />
+                            </Style>
+                        </Grid.Resources>
+
+                        <Label Grid.Row="0"
+                               Text="Title"
+                               Style="{StaticResource ActivityKeyStyle}" />
+                        <Label Grid.Row="0" Grid.Column="1"
+                               Text="{Binding LatestNotification.Title, TargetNullValue=No recent activity, FallbackValue=No recent activity}"
+                               Style="{StaticResource ActivityValueStyle}" FontAttributes="Bold" />
+
+                        <Label Grid.Row="1"
+                               Text="Details"
+                               Style="{StaticResource ActivityKeyStyle}" />
+                        <StackLayout Grid.Row="1" Grid.Column="1" Spacing="4">
+                            <Label Text="{Binding LatestNotification.Message, TargetNullValue=Command results and status updates will appear here., FallbackValue=Command results and status updates will appear here.}"
+                                   Style="{StaticResource ActivityValueStyle}" />
+                            <Label Text="{Binding LatestNotification.Timestamp, StringFormat='{}{0:HH:mm:ss}'}"
+                                   TextColor="#868E96"
+                                   FontSize="13"
+                                   IsVisible="{Binding HasLatestNotification}" />
+                        </StackLayout>
+                    </Grid>
+
+                    <Label x:Name="LatestActivityMessage"
+                           Text="Only one roof motion runs at a time. Open, Close and Clear Fault are sent once and never repeated automatically; if their result is unclear the app checks the status instead."
+                           TextColor="#ADB5BD"
+                           FontSize="13"
+                           LineHeight="1.3" />
+                </VerticalStackLayout>
+
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup>
+                        <VisualState Name="Portrait">
+                            <VisualState.StateTriggers>
+                                <OrientationStateTrigger Orientation="Portrait" />
+                            </VisualState.StateTriggers>
+                            <VisualState.Setters>
+                                <Setter TargetName="LatestActivityTitle" Property="IsVisible" Value="True" />
+                                <Setter TargetName="LatestActivityGrid" Property="IsVisible" Value="True" />
+                            </VisualState.Setters>
+                        </VisualState>
+                        <VisualState Name="Landscape">
+                            <VisualState.StateTriggers>
+                                <OrientationStateTrigger Orientation="Landscape" />
+                            </VisualState.StateTriggers>
+                            <VisualState.Setters>
+                                <Setter TargetName="LatestActivityTitle" Property="IsVisible" Value="False" />
+                                <Setter TargetName="LatestActivityGrid" Property="IsVisible" Value="False" />
+                                <Setter TargetName="LatestActivityMessage" Property="Margin" Value="0" />
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+            </Border>
         </Grid>
-    </Grid>
+    </ScrollView>
 
 </ContentPage>

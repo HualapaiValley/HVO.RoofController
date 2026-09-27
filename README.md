@@ -1,7 +1,8 @@
 # HVO.RoofController
 
-[![CI](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ci.yml/badge.svg)](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ci.yml)
-[![iOS](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ios.yml/badge.svg)](https://github.com/RoySalisbury/HVO.RoofController/actions/workflows/ios.yml)
+[![CI](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ci.yml/badge.svg)](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ci.yml)
+[![iOS](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ios.yml/badge.svg)](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/ios.yml)
+[![Pi image](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/pi-image.yml/badge.svg)](https://github.com/HualapaiValley/HVO.RoofController/actions/workflows/pi-image.yml)
 ![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 
@@ -10,11 +11,50 @@ and iPad (.NET MAUI) applications.
 
 ## Features
 
-- **Roof Automation** — full open/close control of the observatory roll-off roof
-- **Safety Systems** — dead-man timer, limit switches, and fail-safe relay control
+- **Roof Automation** — open/close/stop control of the observatory roll-off roof through a
+  VFD driven by a Sequent Microsystems 4-relay/4-input HAT
+- **Safety Systems** — see [Safety behavior](#safety-behavior); these are software
+  controls and do not replace an independent hardware stop path
 - **GPIO / I2C** — direct hardware interface on Raspberry Pi for motor and sensor management
+- **Authenticated API** — every protected request needs an `X-Api-Key`; commands are `POST`
+  only ([docs/security.md](docs/security.md))
 - **iPad Control** — .NET MAUI companion app for touch-based roof operation
-- **Docker Deployment** — containerized deployment to Raspberry Pi (linux-arm64)
+- **Docker Deployment** — containerized deployment to Raspberry Pi (linux-arm64) through a
+  fail-closed deployment script ([docs/deployment.md](docs/deployment.md))
+
+## Safety behavior
+
+- **Maximum-run watchdog** (`SafetyWatchdogTimeout`, 5–600 s): an absolute cap on each
+  movement, measured from its start. Repeating Open or Close in the same direction does
+  not extend it. Expiry stops the roof and latches a fault. This is not a dead-man control.
+- **Operator lease** (optional, `OperatorLeaseTimeout`, 2–120 s, off when unset): Open and
+  Close start a lease that the client renews (`POST .../Lease`) while the roof moves. If the
+  client stops renewing, for example because it lost Wi-Fi, the roof stops with
+  `OperatorLeaseExpired`. Without a lease, losing the client does not stop motion; the
+  watchdog and limit switches still do.
+- **Fault latch**: watchdog expiry, a VFD fault (IN3), a relay verification failure, repeated
+  input read failures, contradictory limit inputs and a reasserted start limit latch the
+  fault. Open and Close are refused until an explicit `ClearFault` succeeds with healthy
+  inputs. Stop is never blocked by the latch and does not clear it.
+- **Relay register read-back**: after every relay change the controller reads the HAT's
+  relay register back and reports `Verified` or `Unverified`. This proves what the HAT
+  register holds, not that the relay contacts opened; commissioning checks the contacts
+  with a meter. A stop that cannot be verified is reported as a failure.
+- **Limit switches** (IN1/IN2, polarity `UseNormallyClosedLimitSwitches`): the roof stops at
+  the destination limit; leaving a limit is handled as a departure phase, and both limits
+  active at once stops motion and refuses starts.
+- **VFD fault input** (IN3): `FaultInputActiveHigh` (default `true`, raw HIGH = fault) must
+  be confirmed against the real wiring during commissioning.
+- **Drive-running interlock** (IN4, optional): with `AtSpeedConfirmationTimeout` set, the
+  drive must report running within that window after a start, otherwise the roof stops
+  with `DriveNotRunning`.
+- **Input read failures**: `MaxConsecutiveInputReadFailures` (default 3) consecutive failed
+  reads while moving stop the roof with `InputReadFailure`.
+- `IgnorePhysicalLimitSwitches` is for simulation; on physical hardware it is refused
+  unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration.
+
+Before connecting the roof mechanism, complete the bench checklist in
+[docs/commissioning.md](docs/commissioning.md).
 
 ## Projects
 
@@ -24,43 +64,68 @@ and iPad (.NET MAUI) applications.
 | `HVO.RoofControllerV4.iPad` | .NET MAUI iPad client |
 | `HVO.RoofControllerV4.Common` | Shared models and options |
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
-| `HVO.RoofControllerV4.RPi.Tests` | Unit and integration tests |
+| `HVO.RoofControllerV4.RPi.Tests` | Unit and API tests (`tests/`) |
 
 ## Quick Start
 
 ```bash
-# Build the portable server graph
+# Run dotnet from src/ so src/global.json selects the SDK
 cd src
+
+# Build the portable server graph
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
 
 # Test the server
-dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+
+# Release build (warnings are errors)
+dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj -c Release
+
+# Run the server with the simulated HAT on http://localhost:5195
+dotnet run --project HVO.RoofControllerV4.RPi
 ```
 
 The full solution includes the `net10.0-ios` project and must be built on macOS with the MAUI workload and a supported Xcode version. GitHub Actions performs that iOS validation.
 
 ## Docker Deployment
 
-Deploy the RPi server via Docker:
+Deploy to the Pi only with the deployment script,
+`src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`. It builds the `linux/arm64`
+image, sends Stop to the running controller and aborts unless the response shows a
+verified all-off relay register and no commanded motion (an explicit, typed operator
+override exists for emergencies). It then stops the old container gracefully and waits for
+the new one to report ready. The production compose file is
+`src/HVO.RoofControllerV4.RPi/docker-compose.yaml` (container port 8080). See
+[docs/deployment.md](docs/deployment.md) for the full procedure, including the operator
+API key and TLS.
+
+For local simulation only (Development environment, no HAT devices, on
+`http://localhost:5200`):
 
 ```bash
 cd src
 docker compose up --build
 ```
 
-Target runtime: `linux-arm64` (Raspberry Pi)
+Never run `src/docker-compose.yml` on the observatory Pi.
 
 ## Dev Container
 
 This repository includes Dev Container configurations in `.devcontainer/` for
 a consistent development environment. Open in VS Code and use
-**Reopen in Container** to get started.
+**Reopen in Container** to get started. `devcontainer.rpi.json` gives the container the
+Pi's real I2C bus and GPIO and keeps the physical limit switches in force; use it only on
+a commissioned bench.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [Roof controller hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md) | Canonical SMVector, relay, limit-switch, monitoring, and safety wiring reference |
+| [Commissioning checklist](docs/commissioning.md) | Bench and HAT checks required before connecting the roof mechanism |
+| [Security](docs/security.md) | API keys, roles, HTTPS and console sign-in |
+| [Deployment](docs/deployment.md) | Pi deployment script, verified stop, rollback |
+| [CI runners](docs/ci-runners.md) | Self-hosted M5 runner rules and required GitHub settings |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines and development workflow |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
 | [copilot-instructions.md](.github/copilot-instructions.md) | Architecture and coding standards |

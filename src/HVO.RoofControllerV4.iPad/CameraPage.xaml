@@ -2,26 +2,19 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:viewModels="clr-namespace:HVO.RoofControllerV4.iPad.ViewModels"
-             xmlns:converters="clr-namespace:HVO.RoofControllerV4.iPad.Converters"
              x:Class="HVO.RoofControllerV4.iPad.CameraPage"
              x:DataType="viewModels:RoofControllerViewModel"
              BackgroundColor="#10131A">
 
-    <ContentPage.Resources>
-        <ResourceDictionary>
-            <converters:StringHasValueConverter x:Key="StringHasValueConverter" />
-            <converters:StringHasValueConverter x:Key="StringMissingConverter" Invert="True" />
-        </ResourceDictionary>
-    </ContentPage.Resources>
-
     <Grid Padding="32"
-          RowSpacing="24">
+          RowSpacing="24"
+          RowDefinitions="Auto,*">
         <VerticalStackLayout Spacing="16">
             <Label Text="Roof Camera"
                    FontSize="32"
                    FontAttributes="Bold"
                    TextColor="#F8F9FA" />
-            <Label Text="Live preview of the observatory roof camera. Configure the stream URL in the app settings to enable the feed."
+            <Label Text="Camera view of the observatory roof. The app can tell whether the stream loaded, but not whether it later froze: check the timestamp in the image, or the roof itself, before relying on it."
                    TextColor="#CED4DA"
                    FontSize="16"
                    LineHeight="1.35" />
@@ -30,44 +23,53 @@
         <Border Grid.Row="1"
                 BackgroundColor="#1B1F27"
                 StrokeThickness="0"
-                Padding="0"
-                Margin="0,16,0,0">
+                Padding="0">
             <Border.StrokeShape>
                 <RoundRectangle CornerRadius="24" />
             </Border.StrokeShape>
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
+            <Grid RowDefinitions="Auto,*">
                 <Grid Padding="20"
-                      ColumnDefinitions="*,Auto"
+                      ColumnDefinitions="*,Auto,Auto"
+                      ColumnSpacing="16"
                       BackgroundColor="#222630">
                     <Label Grid.Column="0"
                            Text="Roof Camera"
                            FontSize="20"
                            FontAttributes="Bold"
-                           TextColor="#F8F9FA" />
-                    <Label Grid.Column="1"
-                           Text="Preview"
+                           TextColor="#F8F9FA"
+                           VerticalOptions="Center" />
+                    <Label x:Name="CameraStatusLabel"
+                           Grid.Column="1"
+                           Text="Not loaded"
                            TextColor="#ADB5BD"
-                           FontSize="14" />
+                           FontSize="14"
+                           VerticalOptions="Center" />
+                    <Button Grid.Column="2"
+                            Text="Reload"
+                            Clicked="OnReloadClicked"
+                            BackgroundColor="#495057"
+                            TextColor="White"
+                            CornerRadius="12"
+                            Padding="16,8" />
                 </Grid>
                 <Grid Grid.Row="1" BackgroundColor="#13161F">
-                    <WebView Source="{Binding CameraStreamUrl}"
-                             IsVisible="{Binding CameraStreamUrl, Converter={StaticResource StringHasValueConverter}}"
+                    <WebView x:Name="CameraView"
+                             IsVisible="False"
+                             Navigating="OnCameraNavigating"
                              HorizontalOptions="Fill"
                              VerticalOptions="Fill" />
-                    <VerticalStackLayout IsVisible="{Binding CameraStreamUrl, Converter={StaticResource StringMissingConverter}}"
-                                        Spacing="8"
-                                        VerticalOptions="Center"
-                                        HorizontalOptions="Center"
-                                        Padding="20">
-                        <Label Text="Live camera preview unavailable"
+                    <VerticalStackLayout x:Name="CameraPlaceholder"
+                                         Spacing="8"
+                                         VerticalOptions="Center"
+                                         HorizontalOptions="Center"
+                                         Padding="20">
+                        <Label x:Name="CameraPlaceholderTitle"
+                               Text="Camera not loaded"
                                TextColor="#ADB5BD"
                                FontSize="17"
                                HorizontalTextAlignment="Center" />
-                        <Label Text="Configure the stream URL in appsettings.json to enable the video feed."
+                        <Label x:Name="CameraPlaceholderDetail"
+                               Text="Set the camera stream URL on the Configuration tab to enable the feed."
                                TextColor="#6C757D"
                                FontSize="14"
                                LineHeight="1.3"
