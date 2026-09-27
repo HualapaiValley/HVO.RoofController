@@ -96,6 +96,9 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private volatile bool _shuttingDown;
     private volatile bool _disposed;
 
+    // Set once when disposal timed out on the lock; runs the all-off stop when the blocked call returns.
+    private Task? _deferredDisposalTask;
+
     // Bounded all-off retry after an unverified shutdown stop (see ShutdownStopRetryInterval).
     private Task<bool>? _shutdownStopRetryTask;
     private CancellationTokenSource? _shutdownStopRetryCts;

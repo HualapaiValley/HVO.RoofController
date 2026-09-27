@@ -104,7 +104,9 @@ the roof against this server; use the authenticated browser console for operator
 - An unverified shutdown stop is retried (all-off every 500 ms until it verifies, the controller
   is disposed or 15 s pass), and the host's shutdown wait is bounded even if a HAT call blocks
   (it logs Critical and moves on). While that call is still blocked, later shutdown triggers do
-  not queue another one, and disposal gives up on the controller lock after 2 s.
+  not queue another one, and disposal stops waiting for the controller lock after 2 s (its
+  all-off stop runs if the stuck call returns; until then the controller is shutting down, not
+  disposed).
 - CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
   `docker`/`curl`, and `docker compose config` for both profiles.
 

@@ -276,6 +276,39 @@ public class RoofControllerLeaseTests
     }
 
     [TestMethod]
+    [DataRow(false, DisplayName = "Reversal")]
+    [DataRow(true, DisplayName = "Stop")]
+    public async Task Command_AfterTheLeaseAndTheAtSpeedDeadline_ShouldLatchTheMissedAtSpeed(bool stop)
+    {
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var time = new ManualTimeProvider();
+        using var svc = SimulatedRoofControllerService.Create(hat, time, opts =>
+        {
+            opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(10);
+            opts.AtSpeedConfirmationTimeout = TimeSpan.FromSeconds(2);
+            opts.OperatorLeaseTimeout = TimeSpan.FromSeconds(2);
+        });
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        svc.Close().IsSuccessful.Should().BeTrue();
+
+        time.Advance(TimeSpan.FromSeconds(3)); // IN4 never asserted and the lease was not renewed
+        if (stop)
+        {
+            svc.Stop().IsSuccessful.Should().BeTrue();
+        }
+        else
+        {
+            svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+        }
+
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.DriveNotRunning, "the missed at-speed confirmation outranks the lease expiry");
+        svc.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveNotRunning);
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
     public async Task Reversal_AfterOnlyTheLeaseExpired_ShouldStopAndStartTheOppositeMotion()
     {
         var (svc, hat, time) = await CreateAsync(Lease);

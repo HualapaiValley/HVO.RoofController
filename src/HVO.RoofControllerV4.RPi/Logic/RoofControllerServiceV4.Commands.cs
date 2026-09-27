@@ -906,19 +906,20 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// Publishes the disposed state first (so no new command is admitted), then stops and verifies all relays off.
-    /// Returns false when there is nothing to wait for: disposal already happened, or the controller lock could not be
-    /// acquired within <see cref="DisposeWaitTimeout"/>.
+    /// Returns false when there is nothing to wait for: disposal already happened or is deferred, or the controller lock
+    /// could not be acquired within <see cref="DisposeWaitTimeout"/>.
     /// </summary>
     /// <remarks>
     /// The lock is held across synchronous HAT I/O, which cannot be interrupted if an I2C transfer wedges. Disposal then
-    /// gives up on the lock rather than block the host's teardown: it marks the controller disposed (the supervision loop,
-    /// the shutdown retry and any queued command see it once the lock is released), completes the status channel, logs
-    /// Critical and returns.
+    /// stops waiting rather than block the host's teardown: it marks the controller shutting down (no new command is
+    /// admitted), logs Critical and hands the disposal to <see cref="DeferredDisposalTask"/>, which takes the lock when
+    /// the blocked call returns and runs the same all-off stop. The call that was blocked (a reversal, say) may energize
+    /// relays when it resumes, so the controller is not marked disposed until that stop has run.
     /// </remarks>
     private bool BeginDispose(out Task[] pending)
     {
         pending = [];
-        if (_disposed)
+        if (_disposed || Volatile.Read(ref _deferredDisposalTask) is not null)
         {
             return false;
         }
@@ -930,40 +931,18 @@ public partial class RoofControllerServiceV4
             if (!lockTaken)
             {
                 _shuttingDown = true;
-                _disposed = true;
-                _statusChannel.Writer.TryComplete();
-                _logger.LogCritical("Disposal could not acquire the controller lock within {Timeout}: a call is still blocked in HAT I/O. The all-off stop was not attempted and relay state is unknown; use the independent hardware stop.",
-                    DisposeWaitTimeout);
+                var deferred = new Task(RunDeferredDisposal);
+                if (Interlocked.CompareExchange(ref _deferredDisposalTask, deferred, null) is null)
+                {
+                    _logger.LogCritical("Disposal could not acquire the controller lock within {Timeout}: a call is still blocked in HAT I/O. The all-off stop will run when the call returns; until then relay state is unknown, so use the independent hardware stop.",
+                        DisposeWaitTimeout);
+                    deferred.Start(TaskScheduler.Default);
+                }
+
                 return false;
             }
 
-            if (_disposed)
-            {
-                return false;
-            }
-
-            _shuttingDown = true;
-            _disposed = true;
-            _clearFaultCts?.Cancel();
-            _shutdownStopRetryCts?.Cancel();
-
-            var verified = _commandedMotion != RoofMotionDirection.None
-                ? StopMotion_NoLock(RoofControllerStopReason.SystemDisposal, null)
-                : StopIdle_NoLock(RoofControllerStopReason.SystemDisposal);
-            if (!verified)
-            {
-                _logger.LogCritical("Disposal could not verify the relay register all-off state (register {Mask}). Use the independent hardware stop.",
-                    FormatMask(_relayRegisterMask));
-            }
-
-            StopSupervision_NoLock();
-            UnsubscribeInputs_NoLock();
-            FinishMutation_NoLock();
-            _statusChannel.Writer.TryComplete();
-
-            // Disposal made its own all-off attempt above; the cancelled shutdown retry ends at its next wake.
-            pending = new[] { _supervisionTask, _shutdownStopRetryTask, _statusDispatcherTask }.OfType<Task>().ToArray();
-            return true;
+            return !_disposed && DisposeCore_NoLock(out pending);
         }
         finally
         {
@@ -972,6 +951,50 @@ public partial class RoofControllerServiceV4
                 Monitor.Exit(_syncLock);
             }
         }
+    }
+
+    /// <summary>The disposal that <see cref="BeginDispose"/> deferred because the lock was held, or null.</summary>
+    internal Task? DeferredDisposalTask => Volatile.Read(ref _deferredDisposalTask);
+
+    private void RunDeferredDisposal()
+    {
+        lock (_syncLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            DisposeCore_NoLock(out _);
+            _logger.LogWarning("Deferred disposal ran after the blocked HAT call returned; relay register {Mask} is {State}.",
+                FormatMask(_relayRegisterMask), _relayRegisterState);
+        }
+    }
+
+    private bool DisposeCore_NoLock(out Task[] pending)
+    {
+        _shuttingDown = true;
+        _disposed = true;
+        _clearFaultCts?.Cancel();
+        _shutdownStopRetryCts?.Cancel();
+
+        var verified = _commandedMotion != RoofMotionDirection.None
+            ? StopMotion_NoLock(RoofControllerStopReason.SystemDisposal, null)
+            : StopIdle_NoLock(RoofControllerStopReason.SystemDisposal);
+        if (!verified)
+        {
+            _logger.LogCritical("Disposal could not verify the relay register all-off state (register {Mask}). Use the independent hardware stop.",
+                FormatMask(_relayRegisterMask));
+        }
+
+        StopSupervision_NoLock();
+        UnsubscribeInputs_NoLock();
+        FinishMutation_NoLock();
+        _statusChannel.Writer.TryComplete();
+
+        // Disposal made its own all-off attempt above; the cancelled shutdown retry ends at its next wake.
+        pending = new[] { _supervisionTask, _shutdownStopRetryTask, _statusDispatcherTask }.OfType<Task>().ToArray();
+        return true;
     }
 
     #endregion

@@ -51,7 +51,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   expired lease.
 - Shutdown — the host requests a verified stop. An unverified one is retried (all-off
   every 500 ms until verified, disposal or 15 s); the host's wait is bounded even if HAT
-  I/O blocks, and disposal gives up on a lock held by blocked HAT I/O after 2 s.
+  I/O blocks, and disposal stops waiting for a lock held by blocked HAT I/O after 2 s,
+  deferring its all-off stop until that call returns.
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused
   unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration
   (never through the API).

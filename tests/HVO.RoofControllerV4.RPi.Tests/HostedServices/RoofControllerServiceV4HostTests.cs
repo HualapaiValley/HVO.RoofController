@@ -138,13 +138,14 @@ public sealed class RoofControllerServiceV4HostTests
     [TestMethod]
     public void ShutdownTimeouts_ShouldFitInsideTheHostShutdownTimeout()
     {
-        // Program.cs sets HostOptions.ShutdownTimeout to 20 s (there is no shared constant). An unverified first call
-        // is followed by a second, sequential one from the end of ExecuteAsync (base.StopAsync), and each may run for the
-        // full wait plus the abandon grace. Both must fit inside the host's budget.
+        // Program.cs sets HostOptions.ShutdownTimeout to 20 s (there is no shared constant). Each trigger calls again
+        // after an unverified result, so up to three sequential calls can run (ApplicationStopping, StopAsync's
+        // "host stop" and the end of ExecuteAsync), each for the full wait plus the abandon grace. All three must fit
+        // inside the host's budget.
         var hostShutdownTimeout = TimeSpan.FromSeconds(20);
         var perCall = RoofControllerServiceV4Host.ShutdownTimeout + RoofControllerServiceV4Host.ShutdownAbandonGrace;
 
-        TimeSpan.FromTicks(perCall.Ticks * 2).Should().BeLessThan(hostShutdownTimeout);
+        TimeSpan.FromTicks(perCall.Ticks * 3).Should().BeLessThan(hostShutdownTimeout);
     }
 
     [TestMethod]

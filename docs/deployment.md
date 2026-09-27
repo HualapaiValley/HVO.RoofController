@@ -310,9 +310,9 @@ it, check the published URL from another machine (see below). Prefer the script.
 | Layer | Value | Purpose |
 |-------|-------|---------|
 | App `HostOptions.ShutdownTimeout` | 20 s | Time the host gives hosted services to stop. The roof controller's shutdown (Stop, then verify all relays off) runs here. |
-| Controller shutdown call | 5 s + 1 s grace, per call | The host requests the verified stop at `ApplicationStopping` (its `StopAsync` shares that call) and again when the service loop ends. It waits 5 s for the result, then 1 s more before it abandons a call blocked in HAT I/O and logs Critical. Two calls at most: 12 s, inside the 20 s. |
-| Unverified shutdown retry | every 500 ms | Re-runs the all-off sequence until it verifies, the controller is disposed or 15 s pass. Disposal usually ends it, about 10 s after SIGTERM plus the web server's stop time. |
-| Controller disposal | 2 s | Waits for the controller lock and then for its background tasks. A lock held by blocked HAT I/O is given up (Critical: relay state unknown) rather than block the exit. |
+| Controller shutdown call | 5 s + 1 s grace, per call | The host requests the verified stop at `ApplicationStopping`, from its `StopAsync` (which shares the first call while it runs) and when the service loop ends. It waits 5 s for each result, then 1 s more before it abandons a call blocked in HAT I/O and logs Critical. After an unverified result the next trigger calls again, so up to three calls run one after another: 18 s, inside the 20 s. |
+| Unverified shutdown retry | every 500 ms | Re-runs the all-off sequence until it verifies, the controller is disposed or 15 s pass. Each unverified shutdown call waits up to 5 s on it. Disposal usually ends it, about 10 s after SIGTERM plus the web server's stop time; when all three calls run, the 15 s limit ends it first. |
+| Controller disposal | 2 s | Waits for the controller lock and then for its background tasks. If blocked HAT I/O holds the lock, disposal stops waiting (Critical: relay state unknown) rather than block the exit, and runs its all-off stop if the call returns before the process ends. |
 | Camera streams | end at `ApplicationStopping` | An open viewer never holds up shutdown |
 | Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the app's timeout. Docker sends SIGKILL after this. |
 

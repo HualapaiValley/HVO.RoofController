@@ -731,16 +731,18 @@ public partial class RoofControllerServiceV4
             return;
         }
 
-        if (_leaseDeadlineUtc is { } leaseDeadline && now >= leaseDeadline)
-        {
-            StopMotion_NoLock(RoofControllerStopReason.OperatorLeaseExpired, "The operator lease expired before it was renewed.");
-            return;
-        }
-
+        // The at-speed deadline latches and the lease does not, so it is checked first: when both have passed (a lease at
+        // least as long as the at-speed window), the missed at-speed confirmation must not be recorded as a lease expiry.
         if (_atSpeedDeadlineUtc is { } atSpeedDeadline && !_atSpeedConfirmed && now >= atSpeedDeadline)
         {
             StopMotion_NoLock(RoofControllerStopReason.DriveNotRunning,
                 $"The drive did not report at-speed (IN4) within {_options.AtSpeedConfirmationTimeout?.TotalSeconds:0.#} s of the motion command.");
+            return;
+        }
+
+        if (_leaseDeadlineUtc is { } leaseDeadline && now >= leaseDeadline)
+        {
+            StopMotion_NoLock(RoofControllerStopReason.OperatorLeaseExpired, "The operator lease expired before it was renewed.");
         }
     }
 
