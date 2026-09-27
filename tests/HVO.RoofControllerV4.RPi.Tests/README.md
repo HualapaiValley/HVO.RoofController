@@ -46,7 +46,8 @@ These stop reasons **latch** a safety fault:
 
 - `SafetyWatchdogTimeout`
 - `DriveFault` (IN3 active while moving, or IN3 active while idle, including at start-up)
-- `RelayVerificationFailed` (a relay transition or supervision check did not read back the expected register value)
+- `RelayVerificationFailed` (a relay transition or supervision check did not read back the expected register value, or
+  two consecutive periodic relay register reads failed)
 - `InputReadFailure` (`MaxConsecutiveInputReadFailures` consecutive failed input reads while moving)
 - `ContradictoryLimitInputs` (both limits active, while moving or idle)
 - `StartLimitReasserted` (the departure limit reasserted after its release was verified)
@@ -114,8 +115,11 @@ models exactly that register.
 | `Services/RoofControllerClearFaultTests` | Pulse bounds, serialization, Stop preemption, release/assert failures, reset conditions |
 | `Services/RoofControllerConfigurationTests` | Versioned and transactional updates, local-only consent, validation |
 | `Services/RoofControllerStatusDispatchTests` | Ordered delivery, `StatusVersion`, drop-oldest queue, handler isolation |
+| `Services/RoofControllerRelayReadFailureTests` | Failed and stale periodic relay register reads: unhealthy after one, stop and latch after two, idle all-off |
 | `Services/RoofControllerDisposalTests`, `HatConcurrencyTests` | Shutdown and disposal, two controllers on one HAT |
-| `HostedServices/…`, `HealthChecks/…`, `Models/…` | Host shutdown path, health rules, options validation |
+| `Services/RoofControllerShutdownRetryTests` | Unverified shutdown stop: background all-off retry, give-up, disposal cancels it |
+| `HostedServices/…`, `HealthChecks/…`, `Models/…` | Host shutdown path (bounded wait, abandoned blocking call), health rules, options validation |
+| `Security/DeploymentValidatorTests` | `--validate-deployment`: roof options, keys and deploy key, HTTPS listener, certificate loading and expiry |
 
 ## Adding new tests
 
@@ -132,3 +136,9 @@ cd src
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build
 ```
+
+The deploy script has its own tests, `tests/deploy/deploy-script-tests.sh` (bash, `python3` and `jq`). They run the
+script against fake `docker` and `curl` commands (`tests/deploy/fakes`) that keep containers in a temporary state
+file: pre-flight parity with the controller's options, HTTPS-only publishing, the verified-stop gate, the remote
+check, rollback, `--rollback` and that the key never appears in an argument list. Run
+`tests/deploy/deploy-script-tests.sh [test_name ...]` from the repository root.

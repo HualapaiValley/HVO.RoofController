@@ -33,8 +33,10 @@ A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai V
 5. Browse to `http://localhost:5195` and sign in to the Blazor console, or call the API
    under `/api/v4.0/RoofControl` with an `X-Api-Key` header.
 
-Deploy to the Pi with `deploy-roofcontroller-rpi.sh` only; see
-[docs/deployment.md](../../docs/deployment.md).
+Deploy to the Pi with `deploy-roofcontroller-rpi.sh` (or a `docker-compose.yaml` profile); see
+[docs/deployment.md](../../docs/deployment.md). Both first run the image with
+`--validate-deployment`, which checks the configuration, keys and HTTPS certificate without
+starting the host or touching the HAT.
 
 ## API testing with REST Client
 - Install the VS Code REST Client extension (`humao.rest-client`).
@@ -46,7 +48,7 @@ Deploy to the Pi with `deploy-roofcontroller-rpi.sh` only; see
 - [Wiring diagrams](../../docs/projects/roof-controller-v4-rpi/diagrams/) – source Graphviz DOT files, SVG diagrams, and PNG renderings for the hardware overview
 - [Commissioning checklist](../../docs/commissioning.md) – bench and HAT checks before connecting the roof
 - [Security](../../docs/security.md) – API keys, roles, HTTPS, console sign-in
-- [Deployment](../../docs/deployment.md) – deployment script and verified stop
+- [Deployment](../../docs/deployment.md) – deployment script, compose profiles, deployment check, verified stop and rollback
 
 ## Configuration Notes
 - Operational settings live in `appsettings*.json` under `RoofControllerOptionsV4` and `RoofControllerHostOptionsV4`.
@@ -56,6 +58,8 @@ Deploy to the Pi with `deploy-roofcontroller-rpi.sh` only; see
   - `FaultInputActiveHigh` (default `true`): IN3 polarity. Confirm against the real VFD wiring during commissioning; do not change it without re-running that check.
   - `AtSpeedConfirmationTimeout` (0.5–30 s, unset = off): IN4 must assert within this window after a start, otherwise the roof stops with `DriveNotRunning`.
   - `MaxConsecutiveInputReadFailures` (1–10, default 3): consecutive failed input reads while moving before the roof stops with `InputReadFailure`.
+  - Relay register reads are supervised as well (not configurable): one failed or stale read sets `relayRegisterReadsHealthy = false` and fails `/health/ready`; two consecutive failures stop motion and latch `RelayVerificationFailed` (when idle, the all-off sequence is re-run first).
+- On shutdown the roof is stopped and the relay register verified. If it cannot be verified, the all-off sequence is retried every 500 ms for up to 15 s; the host bounds its wait (`ShutdownTimeout`) and logs Critical if a HAT call is stuck.
   - `UseNormallyClosedLimitSwitches`: IN1/IN2 polarity.
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware the controller refuses it unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is `true` in local configuration; that setting cannot be changed through the API. `appsettings.Development.json` is for simulation, and `.devcontainer/devcontainer.rpi.json` forces `IgnorePhysicalLimitSwitches=false`.
 - `POST /api/v4.0/RoofControl/Configuration` needs the `RoofAdmin` role and the `ExpectedVersion` returned by `GET Configuration`; safety-critical changes also need `ConfirmSafetyCriticalChange: true`.

@@ -129,7 +129,7 @@ Recommended keys:
 | Holder | Role |
 |--------|------|
 | Console operator | `RoofOperator` |
-| Deploy script | `RoofOperator` (used for the pre-deploy Stop) |
+| Deploy script | `RoofOperator` (the pre-deploy Stop and the post-deploy Status and Stop checks; the deployment check confirms it is configured) |
 | Monitoring | `RoofViewer` |
 | Maintainer | `RoofAdmin` (configuration and OpenAPI) |
 
@@ -239,6 +239,11 @@ neither. When both are empty, no `Authorization` header is sent. An empty `BaseU
 | `AllowedHosts` | `*` | Set it to the controller's host names (for example `roof-pi;roof-pi.local;localhost`) to refuse DNS-rebinding requests. Production logs a warning while it is `*`. |
 
 HSTS is sent only when an HTTPS endpoint is configured.
+
+Because `/health/ready` is exempt, readiness passes even when every remote API request would get 403. The deployment
+check (`--validate-deployment`, run first by the deploy script and by both compose profiles) therefore fails when
+`RequireHttps` is in effect without an HTTPS listener, or with a certificate that cannot be loaded. See
+[deployment.md](deployment.md#the-deployment-check).
 
 Unhandled exceptions return a generic 500 ProblemDetails with a trace id. Exception messages and stack traces are
 never returned to clients outside Development.

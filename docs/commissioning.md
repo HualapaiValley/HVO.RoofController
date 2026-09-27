@@ -157,17 +157,23 @@ moving (default 3, range 1-10). Detection time is roughly this number times
 
 1. Bench only, motor decoupled. Interrupt the HAT's I2C lines through a breakout or switch made for
    the purpose while a move is commanded. Never hot-unplug the HAT stack.
-2. The controller must report `inputsHealthy = false`, stop with `InputReadFailure`, latch the
-   fault and report `/health/ready` as unhealthy.
+2. The controller must report `inputsHealthy = false` and `relayRegisterReadsHealthy = false`,
+   stop with `InputReadFailure` or `RelayVerificationFailed` (two consecutive failed relay
+   register reads; it takes precedence once latched), latch the fault and report
+   `/health/ready` as unhealthy.
 3. While the bus is down the relays cannot be commanded either, so expect
    `relayRegisterState = Unverified` and a failed stop, not a success. Confirm the drive is
    stopped by the hardwired limits or the independent stop (C1), not by software.
 4. Restore the bus. Open must stay refused until ClearFault succeeds with healthy inputs.
 5. Repeat with a single short interruption (fewer failures than the threshold). Motion should
    continue; record whether any stop occurred.
+6. Repeat with the roof idle. After the first failed relay register read,
+   `relayRegisterReadsHealthy = false`, `consecutiveRelayReadFailures = 1` and `/health/ready` is
+   unhealthy, while `relayRegisterState` still shows the last verified result. After the second,
+   the controller re-runs the all-off sequence and latches `RelayVerificationFailed`.
 
-**Pass:** steps 2-4 behave as described; the chosen threshold and measured detection time are
-recorded.
+**Pass:** steps 2-4 and 6 behave as described; the chosen threshold and measured detection times
+are recorded.
 
 ### C8. Maximum-run watchdog cap
 
@@ -233,20 +239,34 @@ Do this after C1-C9 pass, or first with the limit contacts simulated by a switch
 **Pass:** the roof stops (relays verified off, meter confirms) within about 5 s of the stop
 request, the stream ends, and the container exits within the grace period.
 
-### C12. Deployment script stop gate and a failed new container
+If the log shows `Shutdown could not verify the relay register all-off state`, the controller
+re-runs the all-off sequence every 500 ms for up to 15 s before the process exits. Record whether
+a retry verified it (`Shutdown stop retry N verified the relay register all-off`) or gave up, and
+check the relays with the meter. A Critical `Roof controller shutdown stop did not complete within`
+entry from the host means a HAT call was stuck and was abandoned; treat the relay state as
+unknown and use the independent stop (C1).
 
-1. Deploy with the roof idle: the script's Stop returns a verified all-off and the deployment
-   proceeds.
+### C12. Deployment script stop gate, pre-flight, remote check and rollback
+
+Run the script from the machine operators will deploy from, with HTTPS and `REMOTE_CA_CERT` set.
+
+1. Deploy with the roof idle: the pre-flight passes, the script's Stop returns a verified
+   all-off, and the deployment ends with `Deployment complete and verified at https://...`. The
+   old controller is listed as `roof-controller-previous` (stopped).
 2. Deploy while a move is commanded (bench): the script stops the roof first and proceeds only
    after the verified result.
-3. Deploy with a wrong operator key: the script aborts before stopping or replacing the
-   container. Do not use the forced override in this test.
-4. Deploy an image that cannot become ready (for example one started with an invalid
-   configuration value). The script must report the failure loudly. Then restore service by
-   redeploying the previous image as described in [deployment.md](deployment.md), and confirm
-   the roof stayed de-energized throughout (`relayRegisterMask = 0`, meter).
+3. Deploy with an operator key that is not in the secrets directory: the pre-flight fails
+   (`The deploy script's API key is not one of the configured keys`) and the running controller
+   is untouched. Do not use the forced override in this test.
+4. Pre-flight failures leave the running controller untouched. Try each on its own: rename the
+   certificate file, write a wrong certificate password, remove every `RoofOperator` key.
+5. Deploy a change that passes the pre-flight but fails the remote check (for example
+   `ALLOWED_HOSTS` without `PI_HOST`). The script must roll back: the previous controller is
+   running and ready again under `roof-controller`, and the exit status is non-zero.
+6. Run `--rollback` twice: the versions swap and swap back, each verified from this machine.
+7. Throughout steps 3-6, confirm the roof stayed de-energized (`relayRegisterMask = 0`, meter).
 
-**Pass:** steps 1-4 behave as described; the recovery time for step 4 is recorded.
+**Pass:** steps 1-7 behave as described; the rollback time for step 5 is recorded.
 
 ### C13. RV-5: telemetry collector outage does not delay Stop
 
@@ -284,7 +304,9 @@ Sample every minute and keep the samples:
 - Container log size (the file at `docker inspect --format '{{.LogPath}}'`) and free space on the
   SD card or SSD.
 - `/health/ready`, `relayRegisterState`, `inputsHealthy`, age of `lastSuccessfulInputReadUtc`,
-  `consecutiveInputReadFailures`, `statusVersion` (must only increase).
+  `consecutiveInputReadFailures`, `relayRegisterReadsHealthy`, age of
+  `lastSuccessfulRelayReadUtc`, `consecutiveRelayReadFailures`, `statusVersion` (must only
+  increase).
 - The safety-stop and limit-event counters from the metrics.
 
 **Pass (all required):**
@@ -335,7 +357,7 @@ Update this table as checks are completed. Keep private details (keys, hosts, ad
 | C9 Operator lease expiry | Open | | | | |
 | C10 Start-at-limit departure | Open | | | | |
 | C11 Container stop with camera stream | Open | | | | |
-| C12 Deployment stop gate / failed container | Open | | | | |
+| C12 Deployment stop gate / pre-flight / rollback | Open | | | | |
 | C13 RV-5 telemetry outage | Open | | | | |
 | C14 RV-6 soak | Open | | | | |
 | C15 Stop from the reconnect dialog | Open | | | | |

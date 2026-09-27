@@ -43,6 +43,14 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   assert within that window after a start, otherwise the roof stops with `DriveNotRunning`.
 - Input read failures — `MaxConsecutiveInputReadFailures` consecutive failed reads while
   moving stop the roof with `InputReadFailure`.
+- Relay register reads — supervision re-reads the register. One failed or stale read
+  marks relay reads unhealthy (readiness fails; the last verified state is kept); two
+  consecutive failures stop motion and latch `RelayVerificationFailed`.
+- Repeated commands — a repeated same-direction Open/Close and `RenewLease` enforce the
+  watchdog, lease and at-speed deadlines before renewing; a repeat never revives an
+  expired lease.
+- Shutdown — the host requests a verified stop. An unverified one is retried (all-off
+  every 500 ms for up to 15 s); the host's wait is bounded even if HAT I/O blocks.
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused
   unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration
   (never through the API).
@@ -114,11 +122,16 @@ The full solution builds on Linux. Use the RPi test project for focused safety c
 
 ## Deployment
 
-The RPi server runs in Docker on the Pi (`linux-arm64`, container port 8080). Deploy only
-with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`, which requires a
-verified Stop before replacing the container and fails closed otherwise; see
-`docs/deployment.md`. The production compose file is
-`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`.
+The RPi server runs in Docker on the Pi (`linux-arm64`). With HTTPS only port 8443 is
+published and plain HTTP (8080) listens on loopback inside the container; plain HTTP on the
+LAN is an explicit opt-out (`ALLOW_INSECURE_HTTP=true`, compose profile `pi-lan-http`).
+Deploy with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`: it runs the image's
+`--validate-deployment` check first, requires a verified Stop before replacing the
+container, verifies the new one from the deploying machine and rolls back to
+`roof-controller-previous` on failure; see `docs/deployment.md`. The production compose file
+is `src/HVO.RoofControllerV4.RPi/docker-compose.yaml` (profiles `pi` and `pi-lan-http`).
+Keep the script, its tests (`tests/deploy/deploy-script-tests.sh`) and the compose file in
+step.
 
 `src/docker-compose.yml` is a local simulation compose (Development environment, no HAT
 devices, port 5200). Never use it on the observatory Pi. `dotnet run` uses port 5195.
@@ -127,7 +140,9 @@ devices, port 5200). Never use it on the observatory Pi. `dotnet run` uses port 
 
 - `ci.yml` — ubuntu; from `src/`, checks the dev container SDK against `global.json`,
   restores and builds `HVO.RoofController.sln` (Debug), runs the RPi tests, checks that
-  coverage is not empty, then builds the solution in Release with warnings as errors.
+  coverage is not empty, then builds the solution in Release with warnings as errors. A
+  second job (`deploy-script`) runs `bash -n` and ShellCheck on the deploy script, its tests
+  against fake `docker`/`curl`, and `docker compose config` for both profiles.
 - `pi-image.yml` — builds the Pi image for `linux/arm64` (no push) and checks that the
   Dockerfile SDK tag matches `src/global.json`.
 

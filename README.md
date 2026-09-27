@@ -93,14 +93,21 @@ The solution builds on Linux without Apple tooling.
 
 ## Docker Deployment
 
-Deploy to the Pi only with the deployment script,
+Deploy to the Pi with the deployment script,
 `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`. It builds the `linux/arm64`
-image, sends Stop to the running controller and aborts unless the response shows a
-verified all-off relay register and no commanded motion (an explicit, typed operator
-override exists for emergencies). It then stops the old container gracefully and waits for
-the new one to report ready. The production compose file is
-`src/HVO.RoofControllerV4.RPi/docker-compose.yaml` (container port 8080). See
-[docs/deployment.md](docs/deployment.md) for the full procedure, including the operator
+image and first runs the image's deployment check (`--validate-deployment`) on the Pi with
+the final container's configuration: roof options, a usable operator key, the HTTPS
+listener and certificate. It then sends Stop to the running controller and aborts unless the
+response shows a verified all-off relay register and no commanded motion (an explicit, typed
+operator override exists for emergencies). The old container is stopped gracefully and kept
+as `roof-controller-previous`. The new one must become ready and answer an authenticated
+Status and a verified Stop at its published HTTPS URL from the deploying machine; otherwise
+the script rolls back to the previous controller. `--rollback` swaps them on demand.
+
+The production compose file, `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, has an
+HTTPS profile (`pi`, port 8443) and an explicit plain-HTTP profile for an isolated LAN
+(`pi-lan-http`, port 8080); both run the deployment check before the controller starts.
+See [docs/deployment.md](docs/deployment.md) for the full procedure, including the operator
 API key and TLS.
 
 For local simulation only (Development environment, no HAT devices, on
@@ -128,7 +135,7 @@ a commissioned bench.
 | [Roof controller hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md) | Canonical SMVector, relay, limit-switch, monitoring, and safety wiring reference |
 | [Commissioning checklist](docs/commissioning.md) | Bench and HAT checks required before connecting the roof mechanism |
 | [Security](docs/security.md) | API keys, roles, HTTPS and console sign-in |
-| [Deployment](docs/deployment.md) | Pi deployment script, verified stop, rollback |
+| [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
 | [CI runners](docs/ci-runners.md) | Active CI workflows and runner security settings |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines and development workflow |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
