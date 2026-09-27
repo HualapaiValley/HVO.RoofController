@@ -79,12 +79,13 @@ the roof against this server; use the authenticated browser console for operator
 - Root `.dockerignore` for the repository-root build context.
 - Deployment check: `dotnet HVO.RoofControllerV4.RPi.dll --validate-deployment` validates the
   configuration without starting the host or touching the HAT: the roof options (including the
-  limit-switch override on the roof hardware), the other options sections, the API keys and the
-  deploying key's role, the listeners Kestrel would actually use, each HTTPS listener's
-  certificate (loaded as Kestrel loads it, with the Server Authentication usage) and that
-  `AllowedHosts` includes `localhost`. The deploy script runs it with the final container's
-  configuration before stopping anything; both compose profiles run it before the controller
-  starts.
+  limit-switch override when `/dev/i2c-1` is mapped), the other options sections and log levels,
+  the API keys and the deploying key's role, the listeners Kestrel would actually use (including
+  the `http://localhost:8080` listener the health check needs, and endpoints Kestrel would refuse),
+  every configured certificate (loaded as Kestrel loads it, with the Server Authentication usage)
+  and that `AllowedHosts` includes `localhost`. The deploy script runs it with the final
+  container's configuration before stopping anything; both compose profiles run it before the
+  controller starts.
 - The deploy script verifies the new controller from the deploying machine (authenticated
   Status and a verified Stop at the published URL, `REMOTE_CA_CERT` for a private CA), keeps
   the old container as `roof-controller-previous` and rolls back to it when the new one fails.

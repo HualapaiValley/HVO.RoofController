@@ -7,13 +7,14 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.RegularExpressions;
 using HVO.Enterprise.Telemetry.Configuration;
-using HVO.Iot.Devices.Abstractions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Middleware;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace HVO.RoofControllerV4.RPi.Security;
 
@@ -33,17 +34,20 @@ public sealed record DeploymentValidationResult(
 /// <summary>
 /// Checks the configuration a container will start with, before the running controller is replaced
 /// (<c>dotnet HVO.RoofControllerV4.RPi.dll --validate-deployment</c>, run by <c>deploy-roofcontroller-rpi.sh</c>
-/// with the final container's environment, secrets and certificate mounts). It reads configuration only: it does not
-/// build the host, open a listener or touch the HAT, so it is safe while another controller owns the hardware.
+/// with the final container's environment, devices, secrets and certificate mounts). It reads configuration and only
+/// checks that the HAT's I2C device exists: it does not build the host, open a listener or touch the HAT, so it is safe
+/// while another controller owns the hardware.
 /// </summary>
 /// <remarks>
 /// Fails when the roof options do not validate, or ignore the limit switches on the roof hardware without consent;
-/// when another options section cannot be bound or the telemetry options do not validate; when no usable API key is
-/// configured, a configured key entry is rejected, no key can operate the roof (RoofOperator or RoofAdmin), or the
-/// deploy script's key is missing or cannot stop the roof; when HTTPS is required but Kestrel would not listen on
-/// HTTPS; when an HTTPS listener has no certificate, or its certificate cannot be loaded, has no private key, is not
-/// for server authentication, or is outside its validity period; or when AllowedHosts would refuse localhost.
-/// Reachability from the network is checked by the deploy script after the switch.
+/// when another options section cannot be bound, the telemetry options do not validate or a log level is not one;
+/// when no usable API key is configured, a configured key entry is rejected, no key can operate the roof (RoofOperator
+/// or RoofAdmin), or the deploy script's key is missing or cannot stop the roof; when a Kestrel endpoint has no Url or
+/// is http with HTTPS-only settings; when no listener serves http://localhost:8080 (the health check and the deploy
+/// script's calls); when HTTPS is required but Kestrel would not listen on HTTPS; when an HTTPS listener has no
+/// certificate, or a configured certificate cannot be loaded, has no private key, is not for server authentication,
+/// or is outside its validity period; or when AllowedHosts would refuse localhost. Reachability from the network is
+/// checked by the deploy script after the switch.
 /// </remarks>
 public static partial class DeploymentValidator
 {
@@ -56,6 +60,12 @@ public static partial class DeploymentValidator
     /// </summary>
     public const string DeployKeySha256Key = "DeploymentCheck:DeployKeySha256";
 
+    /// <summary>
+    /// The HAT's I2C bus device. The HAT library opens it whenever it exists, whatever the hardware-detection settings
+    /// say, so the controller drives the roof hardware exactly when this device is mapped into the container.
+    /// </summary>
+    internal const string HatBusDevicePath = "/dev/i2c-1";
+
     /// <summary>A certificate expiring sooner than this produces a warning.</summary>
     internal static readonly TimeSpan CertificateExpiryWarning = TimeSpan.FromDays(30);
 
@@ -67,6 +77,10 @@ public static partial class DeploymentValidator
 
     /// <summary>Validates <paramref name="configuration"/> as the controller would load it in <paramref name="environment"/>.</summary>
     public static DeploymentValidationResult Validate(IConfiguration configuration, IHostEnvironment environment, TimeProvider timeProvider)
+        => Validate(configuration, environment, timeProvider, File.Exists(HatBusDevicePath));
+
+    /// <summary>Validates as <see cref="Validate(IConfiguration, IHostEnvironment, TimeProvider)"/> does, with the HAT's presence given.</summary>
+    internal static DeploymentValidationResult Validate(IConfiguration configuration, IHostEnvironment environment, TimeProvider timeProvider, bool hatBusPresent)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(environment);
@@ -76,8 +90,9 @@ public static partial class DeploymentValidator
         var warnings = new List<string>();
         var notes = new List<string>();
 
-        ValidateRoofOptions(configuration, environment, problems);
+        ValidateRoofOptions(configuration, hatBusPresent, problems);
         ValidateOtherOptions(configuration, problems, warnings);
+        ValidateLogLevels(configuration, problems);
         var security = ValidateApiKeys(configuration, problems, notes);
         ValidateTransport(configuration, environment, security, timeProvider.GetUtcNow(), problems, warnings, notes);
 
@@ -136,7 +151,7 @@ public static partial class DeploymentValidator
         return result.IsValid ? 0 : 1;
     }
 
-    private static void ValidateRoofOptions(IConfiguration configuration, IHostEnvironment environment, List<string> problems)
+    private static void ValidateRoofOptions(IConfiguration configuration, bool hatBusPresent, List<string> problems)
     {
         var options = Bind<RoofControllerOptionsV4>(configuration, nameof(RoofControllerOptionsV4), problems);
         if (options is null)
@@ -150,41 +165,39 @@ public static partial class DeploymentValidator
             problems.AddRange(result.Failures.Select(failure => $"{nameof(RoofControllerOptionsV4)}: {failure}"));
         }
 
-        // The controller checks this at initialization, against the HAT it actually found.
+        // The controller checks this at initialization, against the HAT it actually found: the real one whenever its
+        // I2C device exists (see HatBusDevicePath), whatever HVO_FORCE_RASPBERRY_PI or USE_REAL_GPIO say.
         if (options.IgnorePhysicalLimitSwitches
             && !options.AllowIgnoringLimitSwitchesOnPhysicalHardware
-            && ExpectsPhysicalHardware(configuration, environment))
+            && hatBusPresent)
         {
             problems.Add(
                 $"{nameof(RoofControllerOptionsV4)}: IgnorePhysicalLimitSwitches is true without AllowIgnoringLimitSwitchesOnPhysicalHardware, " +
-                "so on the roof hardware the controller would refuse to initialize and accept no roof commands. Set " +
-                "IgnorePhysicalLimitSwitches to false (or, for supervised testing only, AllowIgnoringLimitSwitchesOnPhysicalHardware to true).");
+                $"and the HAT's I2C device ({HatBusDevicePath}) is mapped, so the controller would drive the roof hardware, refuse to " +
+                "initialize and accept no roof commands. Set IgnorePhysicalLimitSwitches to false (or, for supervised testing only, " +
+                "AllowIgnoringLimitSwitchesOnPhysicalHardware to true).");
         }
     }
 
     /// <summary>
-    /// True when the controller will drive the real HAT, following the hardware detection's overrides:
-    /// HVO_FORCE_RASPBERRY_PI decides when it is a boolean, USE_REAL_GPIO=true means hardware, and otherwise a
-    /// Production deployment is taken to run on the Pi. Program copies HardwareDetection:ForceRaspberryPi and
-    /// HardwareDetection:UseRealGpio into those variables when they are unset.
+    /// The log levels the logging configuration reads (<c>Logging:LogLevel:*</c> and <c>Logging:&lt;provider&gt;:LogLevel:*</c>).
+    /// A value that is not a <see cref="LogLevel"/> fails the controller at startup. The report names the setting only.
     /// </summary>
-    private static bool ExpectsPhysicalHardware(IConfiguration configuration, IHostEnvironment environment)
+    private static void ValidateLogLevels(IConfiguration configuration, List<string> problems)
     {
-        if (bool.TryParse(Setting("HVO_FORCE_RASPBERRY_PI", "HardwareDetection:ForceRaspberryPi"), out var forced))
+        foreach (var section in configuration.GetSection("Logging").GetChildren())
         {
-            return forced;
+            var levels = string.Equals(section.Key, "LogLevel", StringComparison.OrdinalIgnoreCase) ? section : section.GetSection("LogLevel");
+            foreach (var level in levels.GetChildren())
+            {
+                if (!string.IsNullOrEmpty(level.Value) && !Enum.TryParse<LogLevel>(level.Value, ignoreCase: true, out _))
+                {
+                    problems.Add(
+                        $"{level.Path} is not a log level, so the controller would fail at startup. Use one of " +
+                        $"{string.Join(", ", Enum.GetNames<LogLevel>())}.");
+                }
+            }
         }
-
-        if (bool.TryParse(Setting(IGpioControllerClient.UseRealHardwareEnvironmentVariable, "HardwareDetection:UseRealGpio"), out var realGpio)
-            && realGpio)
-        {
-            return true;
-        }
-
-        return environment.IsProduction();
-
-        string? Setting(string variable, string fallbackKey)
-            => string.IsNullOrWhiteSpace(configuration[variable]) ? configuration[fallbackKey] : configuration[variable];
     }
 
     /// <summary>
@@ -320,6 +333,16 @@ public static partial class DeploymentValidator
         var httpsRequired = security is not null && RequireHttpsMiddleware.IsHttpsRequired(security, environment);
         notes.Add($"Listeners: {listeners}; HTTPS required: {(httpsRequired ? "yes" : "no")}.");
 
+        ValidateEndpoints(configuration, problems);
+        if (!listeners.Addresses.Any(ServesLocalHttp8080))
+        {
+            problems.Add(
+                $"No listener serves http://localhost:8080 (Kestrel would listen on {listeners}), so the container health check and " +
+                "the deploy script's status and stop calls would fail and the deployment would be rolled back. Keep an http " +
+                "listener on port 8080 for localhost, a loopback address or all addresses, for example " +
+                "ASPNETCORE_URLS=http://localhost:8080;https://+:8443 or a Kestrel:Endpoints entry with Url http://localhost:8080.");
+        }
+
         if (httpsRequired && !listeners.HasHttps)
         {
             problems.Add(
@@ -336,12 +359,7 @@ public static partial class DeploymentValidator
                 "isolated LAN (docs/deployment.md).");
         }
 
-        if (!listeners.HasHttps)
-        {
-            return;
-        }
-
-        var withoutCertificate = ListenersWithoutCertificate(configuration, listeners);
+        var withoutCertificate = listeners.HasHttps ? ListenersWithoutCertificate(configuration, listeners) : [];
         if (withoutCertificate.Count > 0)
         {
             problems.Add(
@@ -350,6 +368,7 @@ public static partial class DeploymentValidator
                 "Kestrel__Certificates__Default__Password for a protected PFX) to a certificate mounted into the container.");
         }
 
+        // Kestrel loads every configured certificate at startup, even when no listener uses it.
         foreach (var source in CertificateSources(configuration))
         {
             ValidateCertificate(source, environment.ContentRootPath, now, problems, warnings, notes);
@@ -379,7 +398,10 @@ public static partial class DeploymentValidator
             .ToList();
     }
 
-    /// <summary>The Kestrel default certificate plus the certificates of https endpoints, as configured paths.</summary>
+    /// <summary>
+    /// The Kestrel default certificate plus the certificates of https endpoints, as configured paths. An http endpoint's
+    /// certificate is reported by <see cref="ValidateEndpoints"/> instead.
+    /// </summary>
     private static IEnumerable<CertificateSource> CertificateSources(IConfiguration configuration)
     {
         var defaultCertificate = configuration.GetSection(DefaultCertificateSection);
@@ -391,11 +413,94 @@ public static partial class DeploymentValidator
         foreach (var endpoint in configuration.GetSection("Kestrel:Endpoints").GetChildren())
         {
             var certificate = endpoint.GetSection("Certificate");
-            if (IsConfigured(certificate))
+            if (IsConfigured(certificate) && RoofSecurityStartup.IsHttpsAddress(endpoint["Url"]))
             {
                 yield return new CertificateSource($"Kestrel:Endpoints:{endpoint.Key}:Certificate", certificate);
             }
         }
+    }
+
+    /// <summary>
+    /// Kestrel reads every <c>Kestrel:Endpoints</c> entry at startup, whichever listener source wins, and refuses to start
+    /// when one has no Url or is an http endpoint with HTTPS-only settings.
+    /// </summary>
+    private static void ValidateEndpoints(IConfiguration configuration, List<string> problems)
+    {
+        foreach (var endpoint in configuration.GetSection("Kestrel:Endpoints").GetChildren())
+        {
+            var name = $"Kestrel:Endpoints:{endpoint.Key}";
+            var url = endpoint["Url"];
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                problems.Add($"{name} has no Url, so Kestrel would refuse to start. Set {name}:Url or remove the endpoint's settings.");
+                continue;
+            }
+
+            if (RoofSecurityStartup.IsHttpsAddress(url))
+            {
+                continue;
+            }
+
+            var httpsOnly = new List<string>();
+            if (IsConfigured(endpoint.GetSection("Certificate")))
+            {
+                httpsOnly.Add("Certificate");
+            }
+
+            if (Enum.TryParse<ClientCertificateMode>(endpoint["ClientCertificateMode"], ignoreCase: true, out _))
+            {
+                httpsOnly.Add("ClientCertificateMode");
+            }
+
+            if (endpoint.GetSection("SslProtocols").GetChildren().Any())
+            {
+                httpsOnly.Add("SslProtocols");
+            }
+
+            if (endpoint.GetSection("Sni").GetChildren().Any())
+            {
+                httpsOnly.Add("Sni");
+            }
+
+            if (httpsOnly.Count > 0)
+            {
+                problems.Add(
+                    $"{name} is an http endpoint with HTTPS-only settings ({string.Join(", ", httpsOnly)}), so Kestrel would refuse to " +
+                    "start. Use an https Url or remove those settings.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// True for an http listener on port 8080 that http://localhost:8080 reaches: localhost, a loopback address, or all
+    /// addresses (*, +, 0.0.0.0, [::]).
+    /// </summary>
+    internal static bool ServesLocalHttp8080(string address)
+    {
+        const string scheme = "http://";
+        var trimmed = address.Trim();
+        if (!trimmed.StartsWith(scheme, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var authority = trimmed[scheme.Length..];
+        var slash = authority.IndexOf('/', StringComparison.Ordinal);
+        if (slash >= 0)
+        {
+            authority = authority[..slash];
+        }
+
+        // host:port, or [IPv6]:port. Without a port the listener is on 80.
+        var colon = authority.StartsWith('[') ? authority.IndexOf("]:", StringComparison.Ordinal) + 1 : authority.LastIndexOf(':');
+        if (colon <= 0
+            || !int.TryParse(authority[(colon + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var port)
+            || port != 8080)
+        {
+            return false;
+        }
+
+        return authority[..colon].ToLowerInvariant() is "localhost" or "127.0.0.1" or "[::1]" or "*" or "+" or "0.0.0.0" or "[::]";
     }
 
     private static bool IsConfigured(IConfigurationSection certificate)

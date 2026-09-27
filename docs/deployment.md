@@ -108,18 +108,27 @@ docker run --rm <same --env, --device and --mount options as the controller> hvo
 It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fails on:
 
 - `RoofControllerOptionsV4` values that the controller would refuse at startup, including
-  `IgnorePhysicalLimitSwitches` without `AllowIgnoringLimitSwitchesOnPhysicalHardware` when the controller would run
-  on the roof hardware: `HVO_FORCE_RASPBERRY_PI=true`, or `USE_REAL_GPIO=true`, or Production unless
-  `HVO_FORCE_RASPBERRY_PI=false`
+  `IgnorePhysicalLimitSwitches` without `AllowIgnoringLimitSwitchesOnPhysicalHardware` when `/dev/i2c-1` is mapped
+  into the container: the HAT library then drives the roof hardware whatever `HVO_FORCE_RASPBERRY_PI` or
+  `USE_REAL_GPIO` say. The check only looks for the device; it never opens it.
 - a value that cannot be converted in `RoofControllerOptionsV4`, `RoofControllerSecurity`,
   `RoofControllerHostOptionsV4`, `ConsoleLogBuffer`, `BlueIris` or `Telemetry` (the report names the setting, not the
   value), and `Telemetry` options that the controller would refuse
+- a `Logging` level (`Logging:LogLevel:*` or `Logging:<provider>:LogLevel:*`) that is not a log level name, such as
+  `Info`: the controller would not start
 - API key entries that would be ignored, no usable key, or no `RoofOperator`/`RoofAdmin` key
 - with `DeploymentCheck__DeployKeySha256` set (the deploy script sets it): no configured key has that SHA-256, or
   that key has neither the `RoofOperator` nor the `RoofAdmin` role
 - `RoofControllerSecurity:RequireHttps` in effect when Kestrel would not listen on HTTPS
+- no listener on `http://localhost:8080` (for example `Kestrel:Endpoints` that replace the image's
+  `ASPNETCORE_URLS`): the container health check and the deploy script's calls use it, so the deployment would be
+  rolled back
+- a `Kestrel:Endpoints` entry without a `Url`, or an `http` endpoint with HTTPS-only settings (`Certificate`,
+  `ClientCertificateMode`, `SslProtocols`, `Sni`): Kestrel would not start
 - an HTTPS listener without a certificate, or a certificate that cannot be loaded, has no private key, has an
-  Extended Key Usage without Server Authentication, is not yet valid or has expired
+  Extended Key Usage without Server Authentication, is not yet valid or has expired. `Kestrel:Certificates:Default`
+  and any other configured certificate are checked even when every listener is plain HTTP, because Kestrel loads
+  them at startup.
 - an `AllowedHosts` list without `localhost`: the container health check would get 400. Entries must match exactly,
   with no spaces or ports.
 - a configuration that cannot be loaded at all, such as a malformed settings file

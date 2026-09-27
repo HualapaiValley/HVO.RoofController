@@ -32,7 +32,8 @@ public sealed class DeploymentValidationCommandTests
     [TestMethod]
     public void KeysFromTheSecretsDirectory_Pass()
     {
-        WriteAppSettings("""{ "AllowedHosts": "roof-pi;localhost", "RoofControllerSecurity": { "RequireHttps": false } }""");
+        // "urls" stands in for the image's ASPNETCORE_URLS, which the test process does not set.
+        WriteAppSettings("""{ "urls": "http://+:8080", "AllowedHosts": "roof-pi;localhost", "RoofControllerSecurity": { "RequireHttps": false } }""");
         WriteOperatorKeySecrets();
 
         var (exitCode, report) = RunValidation();
@@ -47,7 +48,7 @@ public sealed class DeploymentValidationCommandTests
     {
         // Left in, the command-line provider would read "--validate-deployment" as a key with "--contentRoot" as its value,
         // so the content root (and its appsettings.json turning RequireHttps off) would be lost and the check would fail.
-        WriteAppSettings("""{ "AllowedHosts": "localhost", "RoofControllerSecurity": { "RequireHttps": false } }""");
+        WriteAppSettings("""{ "urls": "http://+:8080", "AllowedHosts": "localhost", "RoofControllerSecurity": { "RequireHttps": false } }""");
         WriteOperatorKeySecrets();
 
         var (exitCode, report) = RunValidation(DeploymentValidator.CommandLineSwitch, "--contentRoot", _contentRoot, "--environment", "Production");

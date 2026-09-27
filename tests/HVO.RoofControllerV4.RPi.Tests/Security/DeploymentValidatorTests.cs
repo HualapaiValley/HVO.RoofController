@@ -381,7 +381,7 @@ public sealed class DeploymentValidatorTests
     {
         var certificate = WritePfx("endpoint.pfx", Now.AddDays(-1), Now.AddDays(365));
         var configuration = OperatorKeys();
-        configuration["urls"] = "http://+:8080";
+        configuration["Kestrel:Endpoints:Http:Url"] = "http://localhost:8080";
         configuration["Kestrel:Endpoints:Https:Url"] = "https://+:8443";
         configuration["Kestrel:Endpoints:Https:Certificate:Path"] = certificate;
         configuration["Kestrel:Endpoints:Https:Certificate:Password"] = CertificatePassword;
@@ -677,11 +677,11 @@ public sealed class DeploymentValidatorTests
 
     [TestMethod]
     [DataRow("Production", null, null)]
-    [DataRow("Development", "HVO_FORCE_RASPBERRY_PI", "true")]
-    [DataRow("Development", "HardwareDetection:ForceRaspberryPi", "true")]
-    [DataRow("Development", "USE_REAL_GPIO", "true")]
-    public void IgnoredLimitSwitches_OnTheRoofHardware_Fail(string environment, string? key, string? value)
+    [DataRow("Production", "HVO_FORCE_RASPBERRY_PI", "false")]
+    [DataRow("Development", "USE_REAL_GPIO", "false")]
+    public void IgnoredLimitSwitches_WithTheHatDeviceMapped_Fail(string environment, string? key, string? value)
     {
+        // The HAT library opens the I2C device whenever it exists, whatever the hardware-detection settings say.
         var configuration = OperatorKeys();
         configuration["RoofControllerSecurity:RequireHttps"] = "false";
         configuration["RoofControllerOptionsV4:IgnorePhysicalLimitSwitches"] = "true";
@@ -690,17 +690,19 @@ public sealed class DeploymentValidatorTests
             configuration[key] = value;
         }
 
-        var result = Validate(configuration, environment);
+        var result = Validate(configuration, environment, hatBusPresent: true);
 
         result.Problems.Should().ContainSingle(problem =>
-            problem.StartsWith("RoofControllerOptionsV4: IgnorePhysicalLimitSwitches is true without AllowIgnoringLimitSwitchesOnPhysicalHardware"));
+            problem.StartsWith("RoofControllerOptionsV4: IgnorePhysicalLimitSwitches is true without AllowIgnoringLimitSwitchesOnPhysicalHardware")
+            && problem.Contains(DeploymentValidator.HatBusDevicePath));
     }
 
     [TestMethod]
-    [DataRow("Production", "RoofControllerOptionsV4:AllowIgnoringLimitSwitchesOnPhysicalHardware", "true")]
-    [DataRow("Development", null, null)]
-    [DataRow("Production", "HVO_FORCE_RASPBERRY_PI", "false")]
-    public void IgnoredLimitSwitches_WithConsentOrOffTheRoofHardware_Pass(string environment, string? key, string? value)
+    [DataRow(true, "RoofControllerOptionsV4:AllowIgnoringLimitSwitchesOnPhysicalHardware", "true")]
+    [DataRow(false, null, null)]
+    [DataRow(false, "HVO_FORCE_RASPBERRY_PI", "true")]
+    [DataRow(false, "USE_REAL_GPIO", "true")]
+    public void IgnoredLimitSwitches_WithConsentOrWithoutTheHatDevice_Pass(bool hatBusPresent, string? key, string? value)
     {
         var configuration = OperatorKeys();
         configuration["RoofControllerSecurity:RequireHttps"] = "false";
@@ -710,13 +712,102 @@ public sealed class DeploymentValidatorTests
             configuration[key] = value;
         }
 
-        var result = Validate(configuration, environment);
+        var result = Validate(configuration, hatBusPresent: hatBusPresent);
 
         result.Problems.Should().BeEmpty();
     }
 
-    private DeploymentValidationResult Validate(Dictionary<string, string?> configuration, string environment = "Production")
-        => DeploymentValidator.Validate(Build(configuration), new StubHostEnvironment(environment, _directory), new FixedTimeProvider(Now));
+    [TestMethod]
+    public void DefaultCertificate_IsCheckedWithOnlyHttpListeners()
+    {
+        // Kestrel loads Kestrel:Certificates:Default at startup even when no listener is https.
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["Kestrel:Certificates:Default:Path"] = Path.Combine(_directory, "left-over.pfx");
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle(problem => problem.StartsWith("Kestrel:Certificates:Default") && problem.Contains("does not exist"));
+    }
+
+    [TestMethod]
+    public void KestrelEndpoint_WithoutAUrl_Fails()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["Kestrel:Endpoints:Https:Certificate:Password"] = CertificatePassword;
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle(problem => problem.StartsWith("Kestrel:Endpoints:Https has no Url"));
+        result.Problems.Should().NotContain(problem => problem.Contains(CertificatePassword));
+    }
+
+    [TestMethod]
+    public void HttpKestrelEndpoint_WithHttpsOnlySettings_Fails()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["Kestrel:Endpoints:Http:Url"] = "http://localhost:8080";
+        configuration["Kestrel:Endpoints:Http:Certificate:Path"] = Path.Combine(_directory, "unused.pfx");
+        configuration["Kestrel:Endpoints:Http:SslProtocols:0"] = "Tls12";
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle().Which.Should()
+            .StartWith("Kestrel:Endpoints:Http is an http endpoint with HTTPS-only settings (Certificate, SslProtocols)");
+    }
+
+    [TestMethod]
+    public void KestrelEndpoints_WithoutALocalhost8080Listener_Fail()
+    {
+        // Kestrel:Endpoints win over the image's ASPNETCORE_URLS=http://+:8080, so nothing serves the health check.
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["Kestrel:Endpoints:Lan:Url"] = "http://+:9090";
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle(problem =>
+            problem.StartsWith("No listener serves http://localhost:8080") && problem.Contains("http://+:9090 (from Kestrel:Endpoints; ignored: ASPNETCORE_URLS)"));
+    }
+
+    [TestMethod]
+    [DataRow("http://localhost:8080", true)]
+    [DataRow("HTTP://LOCALHOST:8080/", true)]
+    [DataRow("http://+:8080", true)]
+    [DataRow("http://*:8080", true)]
+    [DataRow("http://0.0.0.0:8080", true)]
+    [DataRow("http://[::]:8080", true)]
+    [DataRow("http://127.0.0.1:8080", true)]
+    [DataRow("http://[::1]:8080", true)]
+    [DataRow("https://localhost:8080", false)]
+    [DataRow("http://localhost:5000", false)]
+    [DataRow("http://localhost", false)]
+    [DataRow("http://10.0.0.5:8080", false)]
+    [DataRow("http://[::1]8080", false)]
+    public void ServesLocalHttp8080_MatchesTheHealthCheckAddress(string address, bool expected)
+        => DeploymentValidator.ServesLocalHttp8080(address).Should().Be(expected);
+
+    [TestMethod]
+    public void InvalidLogLevels_Fail_AndNameTheSettingOnly()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["Logging:LogLevel:Default"] = "Info";
+        configuration["Logging:LogLevel:Microsoft.AspNetCore"] = "warning";
+        configuration["Logging:Console:LogLevel:Default"] = "Loud";
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().HaveCount(2);
+        result.Problems.Should().Contain(problem => problem.StartsWith("Logging:LogLevel:Default is not a log level"));
+        result.Problems.Should().Contain(problem => problem.StartsWith("Logging:Console:LogLevel:Default is not a log level"));
+        result.Problems.Should().NotContain(problem => problem.Contains("Info,") || problem.Contains("Loud"));
+    }
+
+    private DeploymentValidationResult Validate(Dictionary<string, string?> configuration, string environment = "Production", bool hatBusPresent = false)
+        => DeploymentValidator.Validate(Build(configuration), new StubHostEnvironment(environment, _directory), new FixedTimeProvider(Now), hatBusPresent);
 
     private (int ExitCode, string Report) Run(Dictionary<string, string?> configuration)
     {
@@ -732,6 +823,8 @@ public sealed class DeploymentValidatorTests
 
     private static Dictionary<string, string?> OperatorKeys() => new()
     {
+        // The image's ASPNETCORE_URLS, as Kestrel reads it.
+        ["urls"] = "http://+:8080",
         ["AllowedHosts"] = "roof-pi;localhost",
         ["RoofControllerSecurity:ApiKeys:0:Name"] = "operator",
         ["RoofControllerSecurity:ApiKeys:0:Role"] = "RoofOperator",
