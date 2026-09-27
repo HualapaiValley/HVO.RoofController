@@ -101,7 +101,8 @@ the roof against this server; use the authenticated browser console for operator
   that is still running before starting it again. An older `roof-controller-previous` is removed
   only after the stop succeeds. `--rollback` undoes a failed or interrupted swap and refuses to
   run while `roof-controller-swap` exists. Needs Docker CLI 20.10 or later, and `setsid` or
-  `perl`; the Docker context must connect without prompting.
+  `perl`; the Docker context must connect without prompting, which is checked before anything
+  changes.
 - Relay register read supervision: `relayRegisterReadsHealthy`, `lastSuccessfulRelayReadUtc`
   and `consecutiveRelayReadFailures` in Status. One failed or stale read fails readiness; two
   consecutive failures stop motion and latch `RelayVerificationFailed`.

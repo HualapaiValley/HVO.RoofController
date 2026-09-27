@@ -518,14 +518,22 @@ retire_switch_container() {
 put_names_back() {
   local original_name="" target_name=""
   if [[ -n "${ORIGINAL_ID}" ]]; then
-    if ! lookup_container "id=${ORIGINAL_ID}" || [[ "${CSTATE}" == "missing" ]]; then
+    if ! lookup_container "id=${ORIGINAL_ID}"; then
+      RESTORE_OUTCOME="Docker could not report the state of the original controller (container ${ORIGINAL_ID:0:12}), so it was NOT restored; it may be running or stopped. Check the containers."
+      return 1
+    fi
+    if [[ "${CSTATE}" == "missing" ]]; then
       RESTORE_OUTCOME="The original controller (container ${ORIGINAL_ID:0:12}) could not be found. The roof controller is NOT running; check the containers."
       return 1
     fi
     original_name=${CNAME}
   fi
   if [[ -n "${ROLLBACK_TARGET_ID}" ]]; then
-    if ! lookup_container "id=${ROLLBACK_TARGET_ID}" || [[ "${CSTATE}" == "missing" ]]; then
+    if ! lookup_container "id=${ROLLBACK_TARGET_ID}"; then
+      RESTORE_OUTCOME="Docker could not report the state of the version being rolled back to (container ${ROLLBACK_TARGET_ID:0:12}); the swap was NOT undone. Check the containers."
+      return 1
+    fi
+    if [[ "${CSTATE}" == "missing" ]]; then
       RESTORE_OUTCOME="The version being rolled back to (container ${ROLLBACK_TARGET_ID:0:12}) could not be found; the swap was NOT undone. Check the containers."
       return 1
     fi
@@ -667,8 +675,11 @@ trap 'exit 143' TERM
 
 # ---------------------------------------------------------------------------------------------------------------------
 
-if ! dockerc info >/dev/null 2>&1; then
-  fail "Docker context '${DOCKER_CONTEXT}' is not available. Configure it first (e.g. docker context use ${DOCKER_CONTEXT})."
+# Checked as the switch runs docker: in its own session, with no terminal to prompt on. A context that asks for a
+# password or a host key confirmation would otherwise pass here and fail at the old controller's stop.
+if ! context_errors=$("${OWN_SESSION[@]}" docker --context "${DOCKER_CONTEXT}" info </dev/null 2>&1 >/dev/null); then
+  [[ -z "${context_errors}" ]] || log_err "${context_errors}"
+  fail "Docker context '${DOCKER_CONTEXT}' is not available without a terminal. Configure it first (e.g. docker context use ${DOCKER_CONTEXT}); it must connect without prompting (for an ssh:// context: an SSH key or ssh-agent, and a known host key). Nothing was changed."
 fi
 
 resolve_operator_key

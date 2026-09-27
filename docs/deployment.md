@@ -114,15 +114,17 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - a value that cannot be converted in `RoofControllerOptionsV4`, `RoofControllerSecurity`,
   `RoofControllerHostOptionsV4`, `ConsoleLogBuffer`, `BlueIris` or `Telemetry` (the report names the setting, not the
   value), and `Telemetry` options that the controller would refuse
-- a `Logging` level (`Logging:LogLevel:*` or `Logging:<provider>:LogLevel:*`) that is not a log level name, such as
-  `Info`: the controller would not start
+- a `Logging` level (`Logging:LogLevel:*` or `Logging:<provider>:LogLevel:*`, nested categories included) that is not
+  a log level name, such as `Info`: the controller would not start
 - API key entries that would be ignored, no usable key, or no `RoofOperator`/`RoofAdmin` key
 - with `DeploymentCheck__DeployKeySha256` set (the deploy script sets it): no configured key has that SHA-256, or
   that key has neither the `RoofOperator` nor the `RoofAdmin` role
 - `RoofControllerSecurity:RequireHttps` in effect when Kestrel would not listen on HTTPS
 - no listener on `http://localhost:8080` (for example `Kestrel:Endpoints` that replace the image's
   `ASPNETCORE_URLS`): the container health check and the deploy script's calls use it, so the deployment would be
-  rolled back
+  rolled back. An http listener on port 8080 serves it when its host is `localhost`, `127.0.0.1`, `[::1]`, an
+  any-address (`0.0.0.0`, `[::]`) or a name (`*`, `+` or a host name), which Kestrel binds to all addresses; any
+  other IP address does not.
 - a `Kestrel:Endpoints` entry without a `Url`, or an `http` endpoint with HTTPS-only settings (`Certificate`,
   `ClientCertificateMode`, `SslProtocols`, `Sni`): Kestrel would not start
 - an HTTPS listener without a certificate, or a certificate that cannot be loaded, has no private key, has an
@@ -187,7 +189,8 @@ The machine that runs the script needs Docker CLI 20.10 or later (the script rea
 `docker ps --format '{{.State}}'`), and `jq` or `python3` to parse the Stop response. Without either, the stop is
 treated as unverified. It also needs `setsid` (standard on Linux) or `perl` (macOS): from the old controller's stop on,
 docker runs in its own session, detached from the terminal. So the Docker context must connect without prompting; an
-SSH context needs a key or `ssh-agent`, not a password prompt.
+SSH context needs a key or `ssh-agent` and a known host key, not a prompt. The script checks this before it changes
+anything.
 
 ### What the script does, in order
 
@@ -195,7 +198,8 @@ SSH context needs a key or `ssh-agent`, not a password prompt.
    - the settings above and `EXTRA_DOCKER_ARGS` are valid, and `REMOTE_CA_CERT` is readable. This is checked before
      the script contacts Docker.
    - either an HTTPS certificate directory is set or insecure HTTP was chosen explicitly
-   - the Docker context is available
+   - the Docker context is available and connects without prompting (checked in its own session, as the switch runs
+     docker)
    - an operator key is available
    - Docker reports the state of `<name>` and `<name>-previous`. If the query fails or matches more than one
      container, the script stops and nothing is changed.

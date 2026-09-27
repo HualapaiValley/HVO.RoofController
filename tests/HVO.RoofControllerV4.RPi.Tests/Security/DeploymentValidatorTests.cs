@@ -781,6 +781,12 @@ public sealed class DeploymentValidatorTests
     [DataRow("http://[::]:8080", true)]
     [DataRow("http://127.0.0.1:8080", true)]
     [DataRow("http://[::1]:8080", true)]
+    [DataRow("http://[0:0:0:0:0:0:0:1]:8080", true)]
+    [DataRow("http://roof-pi:8080", true)]
+    [DataRow("http://roof-pi.local:8080/", true)]
+    [DataRow("http://127.0.0.2:8080", false)]
+    [DataRow("http://192.0.2.1:8080", false)]
+    [DataRow("http://[fe80::1]:8080", false)]
     [DataRow("https://localhost:8080", false)]
     [DataRow("http://localhost:5000", false)]
     [DataRow("http://localhost", false)]
@@ -797,13 +803,16 @@ public sealed class DeploymentValidatorTests
         configuration["Logging:LogLevel:Default"] = "Info";
         configuration["Logging:LogLevel:Microsoft.AspNetCore"] = "warning";
         configuration["Logging:Console:LogLevel:Default"] = "Loud";
+        configuration["Logging:LogLevel:Microsoft:AspNetCore"] = "Quiet";
+        configuration["Logging:LogLevel:Microsoft:Hosting"] = "Information";
 
         var result = Validate(configuration);
 
-        result.Problems.Should().HaveCount(2);
+        result.Problems.Should().HaveCount(3);
         result.Problems.Should().Contain(problem => problem.StartsWith("Logging:LogLevel:Default is not a log level"));
         result.Problems.Should().Contain(problem => problem.StartsWith("Logging:Console:LogLevel:Default is not a log level"));
-        result.Problems.Should().NotContain(problem => problem.Contains("Info,") || problem.Contains("Loud"));
+        result.Problems.Should().Contain(problem => problem.StartsWith("Logging:LogLevel:Microsoft:AspNetCore is not a log level"));
+        result.Problems.Should().NotContain(problem => problem.Contains("Info,") || problem.Contains("Loud") || problem.Contains("Quiet"));
     }
 
     private DeploymentValidationResult Validate(Dictionary<string, string?> configuration, string environment = "Production", bool hatBusPresent = false)

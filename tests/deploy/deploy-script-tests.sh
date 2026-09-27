@@ -420,6 +420,20 @@ test_failed_docker_stop_does_not_remove_old_controller() {
   [[ -z "$(docker_calls rm)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "a container was removed, renamed or replaced"
 }
 
+test_restore_that_cannot_read_docker_does_not_claim_the_controller_is_gone() {
+  seed_container roof-controller old true 8443:8443
+  # The stop fails (a lost connection), and so does every lookup by ID the restore makes.
+  deploy "${HTTPS_ENV[@]}" FAKE_STOP_FAIL=true FAKE_FAIL="--filter id="
+
+  assert_status 1
+  assert_output_contains "Could not stop roof-controller; it was not replaced"
+  assert_output_contains "Docker could not report the state of the original controller"
+  assert_output_contains "it may be running or stopped"
+  assert_output_not_contains "could not be found"
+  assert_container roof-controller old true unless-stopped
+  [[ -z "$(docker_calls start)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "a container was started, renamed or replaced"
+}
+
 test_running_previous_container_aborts_before_stop() {
   seed_container roof-controller old true 8080:8080
   seed_container roof-controller-previous older true
@@ -660,6 +674,19 @@ test_docker_state_query_failure_fails_closed() {
   assert_output_contains "Nothing was changed"
   [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls buildx)$(docker_calls run)" ]] \
     || fail_test "the script went on after the state query failed"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_context_that_prompts_fails_before_anything_changes() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_CONTEXT_PROMPTS=true
+
+  assert_status 1
+  assert_output_contains "is not available without a terminal"
+  assert_output_contains "it must connect without prompting"
+  assert_output_contains "the context prompts for a password"
+  [[ "$(wc -l < "${FAKE_STATE_DIR}/calls.log")" -eq 1 && -n "$(docker_calls info)" ]] \
+    || fail_test "docker was called after the context check: $(tail -n +2 "${FAKE_STATE_DIR}/calls.log" | head -n 1)"
   assert_container roof-controller old true unless-stopped
 }
 

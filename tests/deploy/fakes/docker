@@ -23,6 +23,9 @@ Other switches:
                                    (pid in script.pid), then runs normally; with FAKE_SIGNAL_KILLS_OUTPUT=true it first
                                    kills the process reading the script's output (pid in output.pid). Each further
                                    <text> is armed once the one before it has fired.
+  FAKE_CONTEXT_PROMPTS=true        the context asks for a password (an ssh:// context without a key): a call in its own
+                                   session, with no terminal to prompt on, fails; any other call succeeds, as if the
+                                   password had been typed
   FAKE_SIGNAL_GROUP=true           the signal goes to the script's process group, as a Ctrl-C at the terminal does: a
                                    call in that group is cut short, as Docker CLI 27+ is on SIGINT even when the signal
                                    is ignored. The daemon still finishes a `stop` FAKE_ASYNC_STOP_SECONDS later; any
@@ -382,6 +385,8 @@ def main():
         argv = argv[2:]
     if not argv:
         die("no command")
+    if os.environ.get("FAKE_CONTEXT_PROMPTS") == "true" and os.getsid(0) == os.getpid():
+        die("fake failure (the context prompts for a password and there is no terminal)")
 
     command_line = " ".join(argv)
     interrupted = signal_if_requested(command_line)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.RegularExpressions;
@@ -188,12 +189,13 @@ public static partial class DeploymentValidator
         foreach (var section in configuration.GetSection("Logging").GetChildren())
         {
             var levels = string.Equals(section.Key, "LogLevel", StringComparison.OrdinalIgnoreCase) ? section : section.GetSection("LogLevel");
-            foreach (var level in levels.GetChildren())
+            // Every key under LogLevel is a category, nested ones included (Logging:LogLevel:Microsoft:AspNetCore).
+            foreach (var (category, value) in levels.AsEnumerable(makePathsRelative: true))
             {
-                if (!string.IsNullOrEmpty(level.Value) && !Enum.TryParse<LogLevel>(level.Value, ignoreCase: true, out _))
+                if (!string.IsNullOrEmpty(value) && !Enum.TryParse<LogLevel>(value, ignoreCase: true, out _))
                 {
                     problems.Add(
-                        $"{level.Path} is not a log level, so the controller would fail at startup. Use one of " +
+                        $"{levels.Path}:{category} is not a log level, so the controller would fail at startup. Use one of " +
                         $"{string.Join(", ", Enum.GetNames<LogLevel>())}.");
                 }
             }
@@ -472,8 +474,9 @@ public static partial class DeploymentValidator
     }
 
     /// <summary>
-    /// True for an http listener on port 8080 that http://localhost:8080 reaches: localhost, a loopback address, or all
-    /// addresses (*, +, 0.0.0.0, [::]).
+    /// True for an http listener on port 8080 that http://localhost:8080 reaches. The host is read as Kestrel reads it:
+    /// localhost binds both loopback addresses, an IP address binds only that address (so it must be 127.0.0.1, ::1 or
+    /// an any-address), and any other host name (including * and +) binds all addresses.
     /// </summary>
     internal static bool ServesLocalHttp8080(string address)
     {
@@ -500,7 +503,18 @@ public static partial class DeploymentValidator
             return false;
         }
 
-        return authority[..colon].ToLowerInvariant() is "localhost" or "127.0.0.1" or "[::1]" or "*" or "+" or "0.0.0.0" or "[::]";
+        var host = authority[..colon];
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!IPAddress.TryParse(host.StartsWith('[') && host.EndsWith(']') ? host[1..^1] : host, out var ip))
+        {
+            return true;
+        }
+
+        return ip.Equals(IPAddress.Loopback) || ip.Equals(IPAddress.IPv6Loopback) || ip.Equals(IPAddress.Any) || ip.Equals(IPAddress.IPv6Any);
     }
 
     private static bool IsConfigured(IConfigurationSection certificate)
