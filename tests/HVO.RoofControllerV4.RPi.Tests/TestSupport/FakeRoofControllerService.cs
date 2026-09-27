@@ -21,15 +21,17 @@ internal sealed class FakeRoofControllerService : IRoofControllerServiceV4
     private volatile bool _initialized;
     private RoofControllerOptionsV4 _options = new();
 
-    /// <summary>A healthy, initialized, idle snapshot on physical hardware with fresh inputs and a verified register.</summary>
+    /// <summary>A healthy, initialized, idle snapshot on physical hardware with fresh input and relay reads and a verified register.</summary>
     public static RoofStatusResponse HealthySnapshot() => new(
         RoofControllerStatus.Closed, false, RoofControllerStopReason.None, DateTimeOffset.UtcNow, false, null, false, true, false)
     {
         IsInitialized = true,
         InputsHealthy = true,
+        RelayRegisterReadsHealthy = true,
         RelayRegisterState = RoofRelayRegisterState.Verified,
         RelayRegisterMask = 0,
         LastSuccessfulInputReadUtc = DateTimeOffset.UtcNow,
+        LastSuccessfulRelayReadUtc = DateTimeOffset.UtcNow,
         StatusVersion = 1
     };
 

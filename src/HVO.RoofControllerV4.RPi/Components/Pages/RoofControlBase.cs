@@ -167,6 +167,9 @@ public class RoofControlBase : ComponentBase, IDisposable
     /// <summary>Only reported by controllers that publish input health; older snapshots leave the timestamp unset.</summary>
     public bool AreInputsUnhealthy => Snapshot.SnapshotUtc != default && !Snapshot.InputsHealthy;
 
+    /// <summary>Relay register reads are failing or stale; the displayed relay state may be out of date.</summary>
+    public bool AreRelayReadsUnhealthy => Snapshot.SnapshotUtc != default && !Snapshot.RelayRegisterReadsHealthy;
+
     public bool IsClearFaultInProgress => _clearFaultInFlight || Snapshot.IsClearFaultInProgress;
     public bool IsCommandInFlight => _commandInFlight;
     public RoofMotionDirection CommandedMotion => RoofConsoleRules.GetCommandedMotion(Snapshot);
@@ -866,7 +869,7 @@ public class RoofControlBase : ComponentBase, IDisposable
             return "bg-danger";
         }
 
-        return IsRelayRegisterUnverified || AreInputsUnhealthy || !IsInitialized ? "bg-warning text-dark" : "bg-success";
+        return IsRelayRegisterUnverified || AreInputsUnhealthy || AreRelayReadsUnhealthy || !IsInitialized ? "bg-warning text-dark" : "bg-success";
     }
 
     public string GetHealthCheckStatus()
@@ -881,7 +884,7 @@ public class RoofControlBase : ComponentBase, IDisposable
             return "Fault";
         }
 
-        if (IsRelayRegisterUnverified || AreInputsUnhealthy)
+        if (IsRelayRegisterUnverified || AreInputsUnhealthy || AreRelayReadsUnhealthy)
         {
             return "Attention";
         }
@@ -1155,6 +1158,7 @@ public class RoofControlBase : ComponentBase, IDisposable
         if (HasFault) parts.Add(IsFaultLatched ? "Fault latched" : "Fault");
         if (IsRelayRegisterUnverified) parts.Add("Relay unverified");
         if (AreInputsUnhealthy) parts.Add("Inputs unhealthy");
+        if (AreRelayReadsUnhealthy) parts.Add("Relay reads failing");
         if (IsIgnoringLimitSwitches) parts.Add("Limits ignored");
         if (!IsUsingPhysicalHardware) parts.Add("Simulation");
         return string.Join(" • ", parts);
@@ -1167,7 +1171,7 @@ public class RoofControlBase : ComponentBase, IDisposable
             return FooterStatusLevel.Error;
         }
 
-        if (IsRelayRegisterUnverified || AreInputsUnhealthy || IsMoving)
+        if (IsRelayRegisterUnverified || AreInputsUnhealthy || AreRelayReadsUnhealthy || IsMoving)
         {
             return FooterStatusLevel.Warning;
         }

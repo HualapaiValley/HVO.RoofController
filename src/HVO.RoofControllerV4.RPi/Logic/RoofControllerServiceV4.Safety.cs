@@ -348,23 +348,34 @@ public partial class RoofControllerServiceV4
         return false;
     }
 
+    /// <summary>Reads the relay register (bits 0-3). Updates relay-read freshness tracking; never throws.</summary>
     private int? TryReadRelayMask_NoLock()
     {
+        Exception? error = null;
         try
         {
             var result = _hat.GetRelaysMask();
             if (result.IsSuccessful)
             {
+                _lastSuccessfulRelayReadUtc = Now;
+                if (_consecutiveRelayReadFailures > 0)
+                {
+                    _logger.LogInformation("Relay register reads recovered after {Failures} consecutive failures", _consecutiveRelayReadFailures);
+                }
+
+                _consecutiveRelayReadFailures = 0;
                 return result.Value & 0x0F;
             }
 
-            _logger.LogWarning(result.Error, "Relay register read-back failed");
+            error = result.Error;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Relay register read-back threw");
+            error = ex;
         }
 
+        _consecutiveRelayReadFailures++;
+        _logger.LogWarning(error, "Relay register read-back failed ({Failures} consecutive)", _consecutiveRelayReadFailures);
         return null;
     }
 
@@ -640,7 +651,7 @@ public partial class RoofControllerServiceV4
 
         if (mask is null)
         {
-            _logger.LogWarning("Supervision could not read the relay register; the previous verified state is retained");
+            HandleRelayReadFailure_NoLock();
             return;
         }
 
@@ -668,6 +679,39 @@ public partial class RoofControllerServiceV4
             AllRelaysOff_NoLock();
             Latch_NoLock(RoofControllerStopReason.RelayVerificationFailed, message);
         }
+    }
+
+    /// <summary>
+    /// A periodic relay register read failed. Below <see cref="MaxConsecutiveRelayReadFailures"/> the last verified
+    /// state is kept and the failure reported. At the threshold, commanded motion stops and latches
+    /// <see cref="RoofControllerStopReason.RelayVerificationFailed"/>; when idle, the all-off sequence runs again and
+    /// latches only if it cannot verify. Status and readiness report unhealthy relay reads until a read succeeds.
+    /// </summary>
+    private void HandleRelayReadFailure_NoLock()
+    {
+        var failures = _consecutiveRelayReadFailures;
+        if (failures < MaxConsecutiveRelayReadFailures)
+        {
+            _lastError = $"Relay register read failed ({failures} consecutive); the last verified state is retained.";
+            _logger.LogWarning("Supervision could not read the relay register ({Failures} consecutive); the last verified state is retained", failures);
+            return;
+        }
+
+        var message = $"The relay register could not be read {failures} consecutive times; the relay state cannot be supervised.";
+        if (_commandedMotion != RoofMotionDirection.None)
+        {
+            StopMotion_NoLock(RoofControllerStopReason.RelayVerificationFailed, message);
+            return;
+        }
+
+        _logger.LogCritical("{Message} Driving all relays off", message);
+        if (AllRelaysOff_NoLock())
+        {
+            _logger.LogWarning("Relay register all-off verified after {Failures} failed supervision reads", failures);
+            return;
+        }
+
+        Latch_NoLock(RoofControllerStopReason.RelayVerificationFailed, message);
     }
 
     private void CheckDeadlines_NoLock(DateTimeOffset now)

@@ -179,7 +179,8 @@ internal static class RoofServiceMock
             RelayRegisterMask = relayMask,
             IsFaultLatched = faultLatched,
             IsInitialized = true,
-            InputsHealthy = true
+            InputsHealthy = true,
+            RelayRegisterReadsHealthy = true
         };
 
     public static Mock<IRoofControllerServiceV4> Create()

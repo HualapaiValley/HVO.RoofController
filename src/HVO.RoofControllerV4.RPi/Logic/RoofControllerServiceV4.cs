@@ -38,8 +38,16 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     /// <summary>Shortest delay between supervision cycles, so a passed deadline cannot spin the loop.</summary>
     internal static readonly TimeSpan MinimumSupervisionDelay = TimeSpan.FromMilliseconds(10);
 
-    /// <summary>Minimum age after which the cached safety inputs are considered stale.</summary>
-    internal static readonly TimeSpan MinimumInputStaleness = TimeSpan.FromSeconds(5);
+    /// <summary>Minimum age after which the cached safety inputs, or the last relay register read, are considered stale.</summary>
+    internal static readonly TimeSpan MinimumReadStaleness = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Consecutive failed relay register reads after which supervision stops motion (latching
+    /// <see cref="RoofControllerStopReason.RelayVerificationFailed"/>) or, when idle, re-runs the all-off sequence.
+    /// Fixed rather than configurable: the register read-back is the only evidence of the relay state, so a single
+    /// failure is tolerated and a second one is not.
+    /// </summary>
+    internal const int MaxConsecutiveRelayReadFailures = 2;
 
     /// <summary>How long dispose waits for the supervision loop and the status dispatcher to finish.</summary>
     internal static readonly TimeSpan DisposeWaitTimeout = TimeSpan.FromSeconds(2);
@@ -89,6 +97,8 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     // Relay register state (read-back of the HAT register, not contact state).
     private RoofRelayRegisterState _relayRegisterState = RoofRelayRegisterState.Unknown;
     private int? _relayRegisterMask;
+    private DateTimeOffset? _lastSuccessfulRelayReadUtc;
+    private int _consecutiveRelayReadFailures;
 
     // Raw electrical input levels from the last successful read or edge event (null until known).
     private bool? _rawIn1;
@@ -317,7 +327,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     private bool LimitsContradictory_NoLock => OpenLimitActive_NoLock == true && ClosedLimitActive_NoLock == true;
 
-    private TimeSpan InputStalenessLimit_NoLock
+    private TimeSpan ReadStalenessLimit_NoLock
     {
         get
         {
@@ -328,14 +338,19 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             }
 
             var limit = TimeSpan.FromTicks(cadence.Ticks * 3);
-            return limit > MinimumInputStaleness ? limit : MinimumInputStaleness;
+            return limit > MinimumReadStaleness ? limit : MinimumReadStaleness;
         }
     }
 
     private bool InputsHealthy_NoLock(DateTimeOffset now)
         => _lastSuccessfulInputReadUtc is { } lastRead
            && _consecutiveInputReadFailures == 0
-           && now - lastRead <= InputStalenessLimit_NoLock;
+           && now - lastRead <= ReadStalenessLimit_NoLock;
+
+    private bool RelayRegisterReadsHealthy_NoLock(DateTimeOffset now)
+        => _lastSuccessfulRelayReadUtc is { } lastRead
+           && _consecutiveRelayReadFailures == 0
+           && now - lastRead <= ReadStalenessLimit_NoLock;
 
     private bool IsWatchdogActive_NoLock => _commandedMotion != RoofMotionDirection.None && _watchdogDeadlineUtc is not null;
 
@@ -457,6 +472,9 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             CommandedMotion = _commandedMotion,
             RelayRegisterState = _relayRegisterState,
             RelayRegisterMask = _relayRegisterMask,
+            RelayRegisterReadsHealthy = RelayRegisterReadsHealthy_NoLock(now),
+            LastSuccessfulRelayReadUtc = forKey ? null : _lastSuccessfulRelayReadUtc,
+            ConsecutiveRelayReadFailures = _consecutiveRelayReadFailures,
             IsFaultLatched = _faultLatched,
             LatchedFaultReason = _faultLatched ? _latchedFaultReason : null,
             IsDriveFaultActive = DriveFaultActive_NoLock,

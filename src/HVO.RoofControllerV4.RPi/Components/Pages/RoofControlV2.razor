@@ -33,6 +33,10 @@
             {
                 <span class="badge rc2-badge bg-warning text-dark"><i class="bi bi-activity"></i>Inputs unhealthy</span>
             }
+            @if (AreRelayReadsUnhealthy)
+            {
+                <span class="badge rc2-badge bg-warning text-dark"><i class="bi bi-cpu"></i>Relay reads failing</span>
+            }
             @if (LeaseSecondsRemaining is not null)
             {
                 <span class="badge rc2-badge bg-info text-dark" title="Operator lease remaining"><i class="bi bi-stopwatch"></i>@GetLeaseLabel()</span>
@@ -105,6 +109,17 @@
                 <div>
                     <strong>Safety inputs unhealthy.</strong>
                     <span class="rc2-banner-detail">Limit and fault inputs are not being read reliably@(Snapshot.ConsecutiveInputReadFailures > 0 ? $" ({Snapshot.ConsecutiveInputReadFailures} consecutive failures)" : string.Empty). Motion may be refused.</span>
+                </div>
+            </div>
+        }
+
+        @if (AreRelayReadsUnhealthy && !IsRelayRegisterUnverified)
+        {
+            <div class="rc2-banner rc2-banner-warn" role="alert">
+                <i class="bi bi-cpu"></i>
+                <div>
+                    <strong>Relay register reads failing.</strong>
+                    <span class="rc2-banner-detail">The controller cannot currently read the relay register@(Snapshot.ConsecutiveRelayReadFailures > 0 ? $" ({Snapshot.ConsecutiveRelayReadFailures} consecutive failures)" : string.Empty). Motion stops if the reads keep failing.</span>
                 </div>
             </div>
         }

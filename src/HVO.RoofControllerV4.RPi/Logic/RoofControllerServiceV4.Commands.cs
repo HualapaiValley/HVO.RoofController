@@ -159,6 +159,15 @@ public partial class RoofControllerServiceV4
             // an absolute cap measured from motion start.
             if (_commandedMotion == direction)
             {
+                // A deadline can pass before the next supervision cycle sees it. Enforce it first, so a repeat never
+                // revives an expired lease or outlives a missed watchdog or at-speed deadline.
+                CheckDeadlines_NoLock(now);
+                if (_commandedMotion == RoofMotionDirection.None)
+                {
+                    FinishMutation_NoLock();
+                    return RejectAfterDeadlineStop_NoLock<RoofControllerStatus>();
+                }
+
                 if (_options.OperatorLeaseTimeout is { } leaseTimeout && _leaseDeadlineUtc is not null)
                 {
                     _leaseDeadlineUtc = now + leaseTimeout;
@@ -299,23 +308,44 @@ public partial class RoofControllerServiceV4
             }
 
             var now = Now;
-            if (_commandedMotion == RoofMotionDirection.None || _leaseDeadlineUtc is not { } deadline || _options.OperatorLeaseTimeout is not { } leaseTimeout)
+            if (_commandedMotion == RoofMotionDirection.None || _leaseDeadlineUtc is null || _options.OperatorLeaseTimeout is not { } leaseTimeout)
             {
                 return Reject_NoLock<RoofStatusResponse>(RoofControllerErrorCode.LeaseNotActive, "No leased motion is active.");
             }
 
-            if (now >= deadline)
+            // Never revive an expired lease, or renew past a missed watchdog or at-speed deadline; stop now instead of
+            // waiting for the next supervision cycle.
+            CheckDeadlines_NoLock(now);
+            if (_commandedMotion == RoofMotionDirection.None)
             {
-                // Never revive an expired lease; stop now instead of waiting for the next supervision cycle.
-                StopMotion_NoLock(RoofControllerStopReason.OperatorLeaseExpired, "The operator lease expired before it was renewed.");
                 FinishMutation_NoLock();
-                return Reject_NoLock<RoofStatusResponse>(RoofControllerErrorCode.LeaseNotActive, "The operator lease had already expired; motion stopped.");
+                return RejectAfterDeadlineStop_NoLock<RoofStatusResponse>();
             }
 
             _leaseDeadlineUtc = now + leaseTimeout;
             FinishMutation_NoLock();
             return Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(now, forKey: false));
         }
+    }
+
+    /// <summary>
+    /// Rejection for a lease renewal or repeated Open/Close that found a passed deadline and stopped motion instead.
+    /// </summary>
+    private Result<T> RejectAfterDeadlineStop_NoLock<T>()
+    {
+        if (_relayRegisterState == RoofRelayRegisterState.Unverified)
+        {
+            return Reject_NoLock<T>(RoofControllerErrorCode.RelayStateUnverified,
+                $"Motion had passed a deadline ({_lastStopReason}) and the stop could not verify the relay register. Use the independent hardware stop.");
+        }
+
+        if (_faultLatched)
+        {
+            return Reject_NoLock<T>(RoofControllerErrorCode.FaultLatched,
+                $"Motion had passed a safety deadline ({_lastStopReason}); motion stopped and the fault is latched.");
+        }
+
+        return Reject_NoLock<T>(RoofControllerErrorCode.LeaseNotActive, "The operator lease had already expired; motion stopped.");
     }
 
     #endregion

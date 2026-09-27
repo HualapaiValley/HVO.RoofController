@@ -121,6 +121,7 @@ internal sealed class RoofConsoleHarness : IAsyncDisposable
             },
             RelayRegisterState = RoofRelayRegisterState.Verified,
             InputsHealthy = true,
+            RelayRegisterReadsHealthy = true,
             IsInitialized = true,
             ControllerName = "Test Roof"
         };

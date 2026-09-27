@@ -11,7 +11,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Services;
 
 /// <summary>
 /// Optional operator lease (dead-man): motion stops unless the operator renews it (RenewLease or a repeat of the same
-/// Open/Close command). The lease is enforced by supervision; the watchdog stays the absolute cap.
+/// Open/Close command). The lease is enforced by supervision; the watchdog stays the absolute cap. A renewal that
+/// arrives after a deadline passed, but before the next supervision cycle, stops motion instead of renewing it.
 /// </summary>
 [TestClass]
 public class RoofControllerLeaseTests
@@ -131,6 +132,121 @@ public class RoofControllerLeaseTests
 
         svc.IsMoving.Should().BeFalse("an expired lease is never revived");
         svc.LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task RepeatOfTheSameCommand_AfterExpiry_ShouldStopAndReturnLeaseNotActive(bool opening)
+    {
+        var (svc, hat, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        (opening ? svc.Open() : svc.Close()).IsSuccessful.Should().BeTrue();
+
+        time.Advance(Lease); // expired, but no supervision cycle has run yet
+        svc.IsMoving.Should().BeTrue();
+
+        var repeat = opening ? svc.Open() : svc.Close();
+
+        repeat.ErrorCode().Should().Be(RoofControllerErrorCode.LeaseNotActive);
+        svc.IsMoving.Should().BeFalse("a repeated command never revives an expired lease");
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        svc.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeFalse();
+        hat.RelayMask.Should().Be(0x00);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        svc.RunSupervisionCycle();
+        svc.IsMoving.Should().BeFalse("the next supervision cycle does not restart motion");
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task RepeatOfTheSameCommand_JustBeforeExpiry_ShouldRenewTheLease()
+    {
+        var (svc, _, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+
+        time.Advance(Lease - TimeSpan.FromMilliseconds(1));
+        svc.Open().IsSuccessful.Should().BeTrue();
+
+        svc.IsMoving.Should().BeTrue();
+        svc.GetCurrentStatusSnapshot().LeaseSecondsRemaining.Should().Be(3);
+    }
+
+    [TestMethod]
+    public async Task RepeatOfTheSameCommand_AfterAMissedWatchdog_ShouldStopAndLatch()
+    {
+        var (svc, hat, time) = await CreateAsync(lease: null);
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+
+        time.SuppressTimerCallbacks = true; // the watchdog callback is lost
+        time.Advance(TimeSpan.FromSeconds(10));
+        svc.IsMoving.Should().BeTrue();
+
+        svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        svc.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task RepeatOfTheSameCommand_AfterTheAtSpeedDeadline_ShouldStopAndLatch()
+    {
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var time = new ManualTimeProvider();
+        using var svc = SimulatedRoofControllerService.Create(hat, time, opts =>
+        {
+            opts.SafetyWatchdogTimeout = TimeSpan.FromSeconds(10);
+            opts.AtSpeedConfirmationTimeout = TimeSpan.FromSeconds(2);
+        });
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        svc.Close().IsSuccessful.Should().BeTrue();
+
+        time.Advance(TimeSpan.FromSeconds(2)); // IN4 never asserted
+        svc.Close().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.DriveNotRunning);
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task RepeatOfTheSameCommand_AfterExpiry_WhenTheStopCannotVerify_ShouldReturnRelayStateUnverified()
+    {
+        var (svc, hat, time) = await CreateAsync(Lease);
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+
+        time.Advance(Lease);
+        hat.Registers.StuckRelayBits = 0x01;
+
+        svc.Open().ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        svc.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.RelayVerificationFailed);
+    }
+
+    [TestMethod]
+    public async Task RenewLease_AfterAMissedWatchdog_ShouldStopAndLatch()
+    {
+        var (svc, hat, time) = await CreateAsync(TimeSpan.FromSeconds(8));
+        using var _ = svc;
+        svc.Open().IsSuccessful.Should().BeTrue();
+        time.SuppressTimerCallbacks = true; // the watchdog callback is lost
+
+        time.Advance(TimeSpan.FromSeconds(6));
+        svc.RenewLease().IsSuccessful.Should().BeTrue();
+        time.Advance(TimeSpan.FromSeconds(4)); // 10 s: the watchdog cap has passed, the renewed lease has not
+
+        svc.RenewLease().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);
+        svc.IsMoving.Should().BeFalse();
+        svc.LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
         hat.RelayMask.Should().Be(0x00);
     }
 
