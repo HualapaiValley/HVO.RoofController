@@ -14,13 +14,13 @@ public sealed class RoofApiKeyStoreTests
     [TestMethod]
     public void TryValidate_ConfiguredKey_ReturnsIdentityWithCanonicalRoleAndOpaqueKeyId()
     {
-        using var store = KeyStoreFactory.Create(KeyStoreFactory.Monitor(KeyStoreFactory.Key(" ipad-dome ", "roofoperator", OperatorKey)));
+        using var store = KeyStoreFactory.Create(KeyStoreFactory.Monitor(KeyStoreFactory.Key(" console-operator ", "roofoperator", OperatorKey)));
 
         var valid = store.TryValidate(OperatorKey, out var identity);
 
         Assert.IsTrue(valid);
         Assert.IsNotNull(identity);
-        Assert.AreEqual("ipad-dome", identity.Name);
+        Assert.AreEqual("console-operator", identity.Name);
         Assert.AreEqual(RoofControllerApiContract.OperatorRole, identity.Role);
         identity.KeyId.Should().MatchRegex("^[0-9a-f]{32}$");
         identity.KeyId.Should().NotContain(OperatorKey);
@@ -35,7 +35,7 @@ public sealed class RoofApiKeyStoreTests
     [DataRow("TEST-OPERATOR-KEY-FOR-STORE-TESTS-000001")]
     public void TryValidate_WrongOrMissingKey_Fails(string? presented)
     {
-        using var store = KeyStoreFactory.Create(KeyStoreFactory.Monitor(KeyStoreFactory.Key("ipad", "RoofOperator", OperatorKey)));
+        using var store = KeyStoreFactory.Create(KeyStoreFactory.Monitor(KeyStoreFactory.Key("console-operator", "RoofOperator", OperatorKey)));
 
         Assert.IsFalse(store.TryValidate(presented, out var identity));
         Assert.IsNull(identity);
@@ -44,7 +44,7 @@ public sealed class RoofApiKeyStoreTests
     [TestMethod]
     public void TryValidate_OverlongKey_FailsWithoutHashing()
     {
-        using var store = KeyStoreFactory.Create(KeyStoreFactory.Monitor(KeyStoreFactory.Key("ipad", "RoofOperator", OperatorKey)));
+        using var store = KeyStoreFactory.Create(KeyStoreFactory.Monitor(KeyStoreFactory.Key("console-operator", "RoofOperator", OperatorKey)));
 
         Assert.IsFalse(store.TryValidate(new string('k', RoofApiKeyStore.MaximumPresentedKeyLength + 1), out _));
     }
@@ -120,7 +120,7 @@ public sealed class RoofApiKeyStoreTests
     [TestMethod]
     public void TryFindByKeyId_FindsOnlyCurrentKeys()
     {
-        var monitor = KeyStoreFactory.Monitor(KeyStoreFactory.Key("ipad", "RoofOperator", OperatorKey));
+        var monitor = KeyStoreFactory.Monitor(KeyStoreFactory.Key("console-operator", "RoofOperator", OperatorKey));
         using var store = KeyStoreFactory.Create(monitor);
         store.TryValidate(OperatorKey, out var identity);
 

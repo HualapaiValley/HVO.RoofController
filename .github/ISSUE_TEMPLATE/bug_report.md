@@ -28,8 +28,8 @@ What actually happened.
 
 - **Firmware Version**: [e.g., 1.0.0]
 - **Deployment**: [Docker / Native]
-- **Hardware**: [e.g., Raspberry Pi 4 Model B, iPad Pro 12.9"]
-- **OS Version**: [e.g., Raspberry Pi OS Bookworm, iPadOS 18]
+- **Hardware / Browser**: [e.g., Raspberry Pi 5, Safari on a tablet]
+- **OS Version**: [e.g., Raspberry Pi OS Bookworm, tablet OS version]
 - **.NET Version**: [e.g., 10.0.x]
 
 ## Screenshots / Logs

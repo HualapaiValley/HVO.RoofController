@@ -20,3 +20,40 @@ body[data-theme="hvo-dark"]::before {
     z-index: -1;
     pointer-events: none;
 }
+
+/* Stop in the reconnect dialog (App.razor, js/console-stop.js) */
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop .btn {
+    min-width: 10rem;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result:empty {
+    display: none;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="ok"] {
+    color: var(--hvo-success-strong);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="warn"] {
+    color: var(--hvo-warning-strong);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="failed"] {
+    color: var(--hvo-danger-strong);
+}

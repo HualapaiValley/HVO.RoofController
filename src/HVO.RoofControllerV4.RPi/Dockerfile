@@ -3,22 +3,22 @@
 # Build context: the repository root (see /.dockerignore).
 #
 # Image pins:
-# - The SDK tag must satisfy src/global.json (10.0.302, rollForward: patch). The floating
-#   sdk:10.0 tag moved to the 10.0.4xx band, which global.json rejects. When the SDK pin
+# - The SDK tag must satisfy src/global.json (10.0.401, rollForward: patch). A floating
+#   sdk:10.0 tag can move to a newer feature band, which global.json rejects. When the SDK pin
 #   changes, update src/global.json and this tag in the same change; the "Pi image" workflow
 #   checks that they agree and builds linux/arm64.
 # - The runtime tag pins an ASP.NET Core patch release. The app is framework-dependent, so
 #   it runs on the newest 10.0 patch installed in the image; keep this on the latest patch
 #   for security fixes (Dependabot proposes updates).
 # - Version tags are mutable. If immutable image provenance is required, append a reviewed
-#   digest (sdk:10.0.302@sha256:...) and update it deliberately.
+#   digest (sdk:10.0.401@sha256:...) and update it deliberately.
 
 # -------------------------
 # Build the application
 # -------------------------
 # The build stage runs on the builder's native platform and cross-compiles for the target,
 # so an arm64 image built on an x64 machine does not run the SDK under emulation.
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.302 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
 ARG TARGETARCH
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1

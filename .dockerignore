@@ -32,7 +32,6 @@
 # Projects and folders the Pi image does not build
 tests
 docs
-src/HVO.RoofControllerV4.iPad
 src/HVO.RoofController.sln
 
 # Local secrets, certificates and environment files: never send them to a builder

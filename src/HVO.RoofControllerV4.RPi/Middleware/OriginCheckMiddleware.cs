@@ -12,8 +12,8 @@ namespace HVO.RoofControllerV4.RPi.Middleware;
 
 /// <summary>
 /// Cross-site request defence for the browser console. For <c>/_blazor*</c> (including the WebSocket upgrade, which
-/// SameSite cookies and antiforgery tokens do not cover) and for <c>POST /account/*</c>: when an <c>Origin</c> header is
-/// present it must equal the request's own scheme://host[:port] or one of
+/// SameSite cookies and antiforgery tokens do not cover) and for <c>POST /account/*</c> and <c>POST /console/*</c>: when
+/// an <c>Origin</c> header is present it must equal the request's own scheme://host[:port] or one of
 /// <see cref="RoofControllerSecurityOptions.AllowedOrigins"/>; otherwise the request is refused with 403.
 /// Requests without an <c>Origin</c> header (non-browser clients) pass through to normal authentication.
 /// </summary>
@@ -24,6 +24,7 @@ public sealed class OriginCheckMiddleware
 
     private static readonly PathString BlazorPath = new("/_blazor");
     private static readonly PathString AccountPath = new("/account");
+    private static readonly PathString ConsolePath = new("/console");
 
     private readonly RequestDelegate _next;
     private readonly IOptionsMonitor<RoofControllerSecurityOptions> _options;
@@ -78,12 +79,14 @@ public sealed class OriginCheckMiddleware
         }).ConfigureAwait(false);
     }
 
-    /// <summary>True for the Blazor hub and for POSTs to the account endpoints.</summary>
+    /// <summary>True for the Blazor hub and for POSTs to the account and console endpoints.</summary>
     public static bool AppliesTo(HttpRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         return request.Path.StartsWithSegments(BlazorPath, StringComparison.OrdinalIgnoreCase)
-            || (HttpMethods.IsPost(request.Method) && request.Path.StartsWithSegments(AccountPath, StringComparison.OrdinalIgnoreCase));
+            || (HttpMethods.IsPost(request.Method)
+                && (request.Path.StartsWithSegments(AccountPath, StringComparison.OrdinalIgnoreCase)
+                    || request.Path.StartsWithSegments(ConsolePath, StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>

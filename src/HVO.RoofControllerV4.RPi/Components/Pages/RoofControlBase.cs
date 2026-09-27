@@ -46,6 +46,7 @@ public class RoofControlBase : ComponentBase, IDisposable
     [Inject] protected HealthCheckService HealthCheckService { get; set; } = default!;
     [Inject] protected IAuthorizationService AuthorizationService { get; set; } = default!;
     [Inject] protected IServiceProvider ServiceProvider { get; set; } = default!;
+    [Inject] protected ConsoleCircuitMonitor CircuitMonitor { get; set; } = default!;
 
     [CascadingParameter] protected Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
@@ -65,6 +66,7 @@ public class RoofControlBase : ComponentBase, IDisposable
     private int _healthFetchSequence;
     private bool _leaseOwned;
     private bool _leaseRenewalInFlight;
+    private bool _leaseDroppedOnDisconnect;
     private DateTimeOffset? _leaseRenewalDueUtc;
     private Timer? _leaseTimer;
 
@@ -258,6 +260,7 @@ public class RoofControlBase : ComponentBase, IDisposable
     protected override void OnInitialized()
     {
         RoofController.StatusChanged += OnServiceStatusChanged;
+        CircuitMonitor.ConnectionChanged += OnCircuitConnectionChanged;
         RefreshSnapshotFromService();
 
         if (IsServiceDisposed)
@@ -291,6 +294,7 @@ public class RoofControlBase : ComponentBase, IDisposable
 
         _isDisposed = true;
         RoofController.StatusChanged -= OnServiceStatusChanged;
+        CircuitMonitor.ConnectionChanged -= OnCircuitConnectionChanged;
         _leaseTimer?.Dispose();
         _leaseTimer = null;
         FooterStatusService?.Reset();
@@ -471,7 +475,9 @@ public class RoofControlBase : ComponentBase, IDisposable
 
             if (result.IsSuccessful)
             {
-                _leaseOwned = true;
+                // A command that completes after the connection dropped does not take the lease: nobody is watching.
+                _leaseOwned = CircuitMonitor.IsConnected;
+                _leaseDroppedOnDisconnect |= !_leaseOwned;
                 AddNotification("Command", direction == RoofMotionDirection.Opening ? "Opening roof" : "Closing roof", NotificationType.Info);
             }
             else
@@ -661,11 +667,12 @@ public class RoofControlBase : ComponentBase, IDisposable
 
     /// <summary>
     /// Keeps the operator lease alive for motion this console started, renewing at a third of the remaining time.
-    /// Motion started elsewhere is not renewed here, so closing this page lets the lease lapse and stop the roof.
+    /// Motion started elsewhere is not renewed here, and renewal stops for good when the browser connection drops, so
+    /// closing this page or losing the network lets the lease lapse and stop the roof.
     /// </summary>
     private void UpdateLeaseTimer()
     {
-        if (_isDisposed || !_leaseOwned || !Snapshot.IsMoving
+        if (_isDisposed || !_leaseOwned || !CircuitMonitor.IsConnected || !Snapshot.IsMoving
             || RoofConsoleRules.GetLeaseRenewalDelay(Snapshot.LeaseSecondsRemaining) is not { } delay)
         {
             CancelLeaseRenewal();
@@ -722,6 +729,14 @@ public class RoofControlBase : ComponentBase, IDisposable
             return;
         }
 
+        if (!CircuitMonitor.IsConnected)
+        {
+            // The timer fired before the disconnect was handled. Renewing now would keep the roof moving for a browser
+            // that may be gone.
+            DropLeaseForDisconnect();
+            return;
+        }
+
         _leaseRenewalInFlight = true;
         try
         {
@@ -770,6 +785,66 @@ public class RoofControlBase : ComponentBase, IDisposable
                 StateHasChanged();
             }
         }
+    }
+
+    private void OnCircuitConnectionChanged(bool connected)
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _ = HandleCircuitConnectionChangedAsync(connected);
+    }
+
+    private async Task HandleCircuitConnectionChangedAsync(bool connected)
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                if (_isDisposed)
+                {
+                    return;
+                }
+
+                if (!connected)
+                {
+                    DropLeaseForDisconnect();
+                    return;
+                }
+
+                // Renewal does not resume on reconnect: the operator may have lost sight of the roof meanwhile.
+                if (_leaseDroppedOnDisconnect)
+                {
+                    _leaseDroppedOnDisconnect = false;
+                    AddNotification(
+                        "Lease",
+                        "The connection dropped, so this console stopped renewing the operator lease. If the roof is still moving, it stops when the lease runs out.",
+                        NotificationType.Warning);
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to handle a console connection change");
+        }
+    }
+
+    private void DropLeaseForDisconnect()
+    {
+        if (_leaseOwned)
+        {
+            Logger.LogWarning("Console connection lost while this console held the operator lease; renewal stopped so the lease can expire");
+            _leaseDroppedOnDisconnect = true;
+        }
+
+        _leaseOwned = false;
+        CancelLeaseRenewal();
     }
 
     #endregion

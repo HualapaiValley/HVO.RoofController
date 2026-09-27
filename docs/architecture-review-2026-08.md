@@ -1,5 +1,9 @@
 # Architecture Review - August 2026
 
+> Historical snapshot: this review describes the repository before the native iPad client
+> was retired. Its iOS build instructions and client findings are retained for context,
+> not as current build or deployment guidance. See README.md and issue #26.
+
 ## Scope
 
 This review covers the Raspberry Pi control service, iPad client, hardware abstractions, concurrency and shutdown behavior, HTTP API, error handling, health checks, logging, deployment, and dependency/tooling health.

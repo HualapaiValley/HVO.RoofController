@@ -57,7 +57,7 @@ Deploy to the Pi with `deploy-roofcontroller-rpi.sh` only; see
   - `AtSpeedConfirmationTimeout` (0.5–30 s, unset = off): IN4 must assert within this window after a start, otherwise the roof stops with `DriveNotRunning`.
   - `MaxConsecutiveInputReadFailures` (1–10, default 3): consecutive failed input reads while moving before the roof stops with `InputReadFailure`.
   - `UseNormallyClosedLimitSwitches`: IN1/IN2 polarity.
-- `IgnorePhysicalLimitSwitches` is for the simulator. On physical hardware the controller refuses it unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is `true` in local configuration; that setting cannot be changed through the API. `appsettings.Development.json` is for simulation, and `.devcontainer/devcontainer.rpi.json` forces `IgnorePhysicalLimitSwitches=false`.
+- `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware the controller refuses it unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is `true` in local configuration; that setting cannot be changed through the API. `appsettings.Development.json` is for simulation, and `.devcontainer/devcontainer.rpi.json` forces `IgnorePhysicalLimitSwitches=false`.
 - `POST /api/v4.0/RoofControl/Configuration` needs the `RoofAdmin` role and the `ExpectedVersion` returned by `GET Configuration`; safety-critical changes also need `ConfirmSafetyCriticalChange: true`.
 - The latched fault is cleared only by `POST /api/v4.0/RoofControl/ClearFault` (optional `pulseMs`, 50–2000, default 250) with healthy inputs; Stop does not clear it.
 - `HardwareDetection` section in `appsettings*.json` can provide default values for `ForceRaspberryPi`, `ContainerRpiHint`, or `UseRealGpio`; these populate the matching environment variables when not already set.

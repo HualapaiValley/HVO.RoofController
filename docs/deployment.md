@@ -17,10 +17,10 @@ file per setting from there. The file name is the setting name with `__` in plac
 
 ```
 /etc/hvo-roof/secrets/                                      (mode 700)
-  RoofControllerSecurity__ApiKeys__0__Name                  e.g. ipad-dome
+  RoofControllerSecurity__ApiKeys__0__Name                  e.g. console-operator
   RoofControllerSecurity__ApiKeys__0__Role                  RoofOperator
   RoofControllerSecurity__ApiKeys__0__Key                   <random, >= 24 chars>
-  RoofControllerSecurity__ApiKeys__1__...                   more keys (viewer, admin, deploy, console)
+  RoofControllerSecurity__ApiKeys__1__...                   more keys (viewer, admin, deploy)
   BlueIris__UserName                                        dedicated view-only Blue Iris user
   BlueIris__Password
   Kestrel__Certificates__Default__Password                  PFX password (when using HTTPS)
@@ -59,7 +59,7 @@ printf '%s' "$PFX_PASSWORD" | sudo tee /etc/hvo-roof/secrets/Kestrel__Certificat
 shred -u roof.key
 ```
 
-Install `roof.crt`, or your CA certificate, as trusted on the iPad and on the browsers that use the console. Keep a
+Install `roof.crt`, or your CA certificate, as trusted on browsers that use the console. Keep a
 copy of the certificate for that purpose.
 
 HSTS is sent only when an HTTPS endpoint is configured.
@@ -149,8 +149,9 @@ them. For that one deploy:
 2. Run the script with `--force-unverified-stop` and type `STOP-UNVERIFIED` when asked.
 3. The old container still gets SIGTERM with the 30-second grace period.
 
-Before that deploy, provision `/etc/hvo-roof/secrets`, including the operator key used by the script. Then update the
-iPad and any other clients, because they now need keys and `POST` commands.
+Before that deploy, provision `/etc/hvo-roof/secrets`, including the operator key used by the script. Then update any
+API automation clients (they now need `X-Api-Key` and `POST` commands). Operators sign in to the console with a key
+from the secrets directory.
 
 ## Deploying with compose
 

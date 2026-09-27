@@ -6,7 +6,7 @@ and instructions for contributing to this project.
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) matching `src/global.json`
-  (10.0.302 or a later 10.0.3xx patch)
+  (10.0.401 or a later 10.0.4xx patch)
 - [Docker](https://www.docker.com/) with Buildx (for building the Pi image)
 - A code editor (VS Code with Dev Containers recommended)
 
@@ -19,12 +19,12 @@ and instructions for contributing to this project.
    cd HVO.RoofController
    ```
 
-2. Build the portable server graph. Run `dotnet` from `src/` so `src/global.json` selects
+2. Build the solution. Run `dotnet` from `src/` so `src/global.json` selects
    the SDK:
 
    ```bash
    cd src
-   dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+   dotnet build HVO.RoofController.sln
    ```
 
 3. Run tests, and build Release (warnings are errors in Release; CI checks both):
@@ -41,7 +41,7 @@ and instructions for contributing to this project.
      --settings coverage.runsettings --collect:"XPlat Code Coverage"
    ```
 
-   The full solution includes the `net10.0-ios` project and requires macOS, the MAUI workload, and a supported Xcode version.
+   The solution builds on Linux without Apple tooling.
 
 4. Run the server locally with the simulated HAT (`http://localhost:5195`):
 
@@ -89,9 +89,8 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - Pin actions to a full commit SHA with a `# vX.Y.Z` comment; the repository rejects
   tag references.
 - Keep `permissions: contents: read` at the top of each workflow.
-- Do not add `pull_request` or `pull_request_target` triggers, or any trigger for code
-  other than `main`, to a workflow that runs on the self-hosted M5 runner. See
-  [docs/ci-runners.md](docs/ci-runners.md).
+- Keep CI on hosted runners; do not attach a self-hosted runner to a public-repository
+  pull-request workflow. See [docs/ci-runners.md](docs/ci-runners.md).
 
 ## Coding Standards
 

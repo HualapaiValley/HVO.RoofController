@@ -363,6 +363,91 @@ public class RoofControlV2Tests
         adminCut.WaitForAssertion(() => adminCut.FindAll(".rc2-console-toggle").Should().ContainSingle());
     }
 
+    [TestMethod]
+    public async Task Lease_IsRenewed_WhileTheConnectionIsUp()
+    {
+        await using var harness = new RoofConsoleHarness(Status(RoofControllerStatus.PartiallyOpen, 1)).SignInAsOperator();
+        var renewals = SetupLeasedOpen(harness);
+        var cut = harness.Render();
+
+        await cut.Find(OpenButton).ClickAsync(new MouseEventArgs());
+
+        cut.WaitForAssertion(() => Volatile.Read(ref renewals.Count).Should().BeGreaterThan(1), TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task Lease_StopsRenewing_WhenTheConnectionDrops_AndDoesNotResumeOnReconnect()
+    {
+        await using var harness = new RoofConsoleHarness(Status(RoofControllerStatus.PartiallyOpen, 1)).SignInAsOperator();
+        var renewals = SetupLeasedOpen(harness);
+        var cut = harness.Render();
+        await cut.Find(OpenButton).ClickAsync(new MouseEventArgs());
+        cut.WaitForAssertion(() => Volatile.Read(ref renewals.Count).Should().BeGreaterThan(0), TimeSpan.FromSeconds(5));
+
+        harness.Circuit.SetConnected(false);
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        var afterDrop = Volatile.Read(ref renewals.Count);
+        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        Volatile.Read(ref renewals.Count).Should().Be(afterDrop, "renewal stops when the connection drops");
+
+        harness.Circuit.SetConnected(true);
+        cut.WaitForAssertion(() => harness.Footer.Snapshot.LeftNotifications.Should()
+            .Contain(n => n.Title == "Lease" && n.Message.Contains("connection dropped")));
+        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        Volatile.Read(ref renewals.Count).Should().Be(afterDrop, "renewal does not resume on reconnect");
+    }
+
+    [TestMethod]
+    public async Task Lease_IsNotTaken_ByACommandThatCompletesAfterTheConnectionDropped()
+    {
+        await using var harness = new RoofConsoleHarness(Status(RoofControllerStatus.PartiallyOpen, 1)).SignInAsOperator();
+        var renewals = SetupLeasedOpen(harness);
+        using var openGate = new ManualResetEventSlim(false);
+        harness.Roof.Setup(r => r.Open()).Returns(() =>
+        {
+            openGate.Wait(TimeSpan.FromSeconds(10));
+            harness.Current = LeasedOpening();
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening);
+        });
+        var cut = harness.Render();
+
+        var openTask = cut.Find(OpenButton).ClickAsync(new MouseEventArgs());
+        cut.WaitForAssertion(() => cut.Find(OpenButton).GetAttribute("title").Should().Be("A command is in progress"));
+        harness.Circuit.SetConnected(false);
+        openGate.Set();
+        await openTask;
+        await Task.Delay(TimeSpan.FromMilliseconds(1200));
+
+        Volatile.Read(ref renewals.Count).Should().Be(0);
+        harness.Circuit.SetConnected(true);
+        cut.WaitForAssertion(() => harness.Footer.Snapshot.LeftNotifications.Should()
+            .Contain(n => n.Title == "Lease" && n.Message.Contains("connection dropped")));
+    }
+
+    /// <summary>Open succeeds and leaves the roof opening with a 1.5 s lease (renewed every 500 ms); counts renewals.</summary>
+    private static RenewalCounter SetupLeasedOpen(RoofConsoleHarness harness)
+    {
+        var renewals = new RenewalCounter();
+        harness.Roof.Setup(r => r.Open()).Returns(() =>
+        {
+            harness.Current = LeasedOpening();
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening);
+        });
+        harness.Roof.Setup(r => r.RenewLease()).Returns(() =>
+        {
+            Interlocked.Increment(ref renewals.Count);
+            return Result<RoofStatusResponse>.Success(harness.Current);
+        });
+        return renewals;
+    }
+
+    private static RoofStatusResponse LeasedOpening() => Status(RoofControllerStatus.Opening, 2) with { LeaseSecondsRemaining = 1.5 };
+
+    private sealed class RenewalCounter
+    {
+        public int Count;
+    }
+
     private static void SetupHealth(RoofConsoleHarness harness, HealthReport report)
         => harness.Health
             .Setup(h => h.CheckHealthAsync(It.IsAny<Func<HealthCheckRegistration, bool>?>(), It.IsAny<CancellationToken>()))

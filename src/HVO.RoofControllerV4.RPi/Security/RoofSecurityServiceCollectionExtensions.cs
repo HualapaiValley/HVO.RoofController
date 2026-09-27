@@ -41,9 +41,7 @@ public static class RoofSecurityServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<RoofApiKeyStore>();
-        services.AddSingleton<CameraStreamTicketService>();
         services.AddSingleton<IAuthorizationHandler, RoofStopAuthorizationHandler>();
-        services.AddSingleton<IAuthorizationHandler, CameraStreamAuthorizationHandler>();
 
         services.AddAuthentication(options =>
             {
@@ -87,9 +85,7 @@ public static class RoofSecurityServiceCollectionExtensions
                 .RequireAuthenticatedUser()
                 .RequireRole(RoofControllerApiContract.AdminRole))
             .AddPolicy(RoofControllerSecurityDefaults.StopPolicy, policy => policy
-                .AddRequirements(new RoofStopRequirement()))
-            .AddPolicy(CameraStreamRequirement.PolicyName, policy => policy
-                .AddRequirements(new CameraStreamRequirement()));
+                .AddRequirements(new RoofStopRequirement()));
 
         services.AddCascadingAuthenticationState();
         services.AddScoped<AuthenticationStateProvider, RoofConsoleAuthenticationStateProvider>();

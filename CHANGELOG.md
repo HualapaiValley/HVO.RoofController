@@ -13,9 +13,12 @@ still open; do not treat this release as validated on the roof until they pass.
 
 ### BREAKING
 
-Upgrade the controller, the iPad app and any scripts together. Older clients cannot operate
-the roof against this server.
+Upgrade the controller and API automation scripts together. Older clients cannot operate
+the roof against this server; use the authenticated browser console for operator access.
 
+- **iPad app retired.** The native iPad app is retired; operators must use the authenticated
+  web console. Tablet and phone use of the console still needs the browser checks tracked in
+  #20 and #26.
 - **API keys required.** Every protected endpoint needs an `X-Api-Key` header with a key
   from `RoofControllerSecurity:ApiKeys` (roles `RoofViewer`, `RoofOperator`, `RoofAdmin`).
   Keys come from environment variables or Docker secrets, never committed settings. With no
@@ -38,15 +41,13 @@ the roof against this server.
   loopback and for `/health/live` and `/health/ready`. Provide a certificate or opt out
   explicitly (the controller logs a warning). `/health` now needs a Viewer key; `/health/live`
   and `/health/ready` stay anonymous.
-- **iPad settings.** After upgrading, enter an API key in the iPad app's settings. It is
-  stored in the iOS Keychain, not the settings file. Use an `https://` controller address.
 - **Limit override on hardware.** `IgnorePhysicalLimitSwitches` is refused on physical
   hardware unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local
   configuration (it cannot be set through the API).
 - **Camera.** Blue Iris credentials come from `BlueIris:UserName` and `BlueIris:Password`
   (environment variables or Docker secrets); the hard-coded credential was removed and must be
   rotated because it remains in the git history. `GET api/v1.0/Camera/{id}/mjpeg` needs a
-  Viewer key, the console sign-in, or a ticket from `POST api/v1.0/Camera/{id}/ticket`.
+  Viewer key or the console sign-in.
 - **Deployment.** `deploy-roofcontroller-rpi.sh` needs the operator key
   (`ROOF_OPERATOR_API_KEY` or `~/.config/hvo-roof/operator.key`) and aborts unless the Stop it
   sends is verified. See [docs/deployment.md](docs/deployment.md).
@@ -64,7 +65,10 @@ the roof against this server.
 - Status fields: `statusVersion`, `commandedMotion`, fault latch, input health, lease and
   controller identity.
 - The roof stops with reason `HostShutdown` when the container or host shuts down.
-- Short-lived camera stream tickets (`POST api/v1.0/Camera/{id}/ticket`).
+- Web console: the reconnect dialog has a Stop button that works while the console's
+  connection is down (`POST /console/stop`, console sign-in plus the page's antiforgery
+  token), and the console stops renewing the operator lease as soon as its connection drops.
+  Renewal does not resume on reconnect.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
 - [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
   telemetry-outage and RV-6 soak procedures) and [docs/ci-runners.md](docs/ci-runners.md).
@@ -75,11 +79,11 @@ the roof against this server.
 - The safety watchdog is an absolute cap on each movement; repeating a command no longer
   extends it.
 - CI: all actions pinned to commit SHAs, read-only token permissions, `dotnet` run from `src/`
-  so `src/global.json` applies, a Release build with warnings as errors, a coverage filter
-  that matches the project assemblies, and a pinned iOS workload set and Xcode.
-- The self-hosted M5 workflow accepts only trusted triggers on `main`, starts from a clean
-  workspace without stored credentials, checks runner-account ownership, selects Xcode per job
-  and fails closed when the app's signing state is unexpected.
+  so `src/global.json` applies, the whole solution built in Debug and in Release with warnings
+  as errors, a coverage filter that matches the project assemblies, and a check that the dev
+  container SDK satisfies `src/global.json`.
+- Updated the pinned SDK image, the dev container image and `src/global.json` together to
+  10.0.401 (Dependabot #25).
 - The Pi Dockerfile pins the SDK to `src/global.json` and the runtime to a patch version, and
   cross-compiles on the build platform.
 - Documentation describes the implemented safety behavior, API, ports and deployment path.
@@ -88,6 +92,12 @@ the roof against this server.
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile
 - Repository documentation standardization
+
+### Removed
+
+- The native iPad/MAUI app and its iOS and self-hosted M5 build workflows. The authenticated
+  web console is the supported operator client. Server API and physical safety commissioning
+  remain in #24.
 
 ## [1.0.0] - 2025-03-01
 
