@@ -15,11 +15,20 @@ Other switches:
   FAKE_RUN_FAIL=created            `run -d` creates the container (state created, ID in the --cidfile), then fails
   FAKE_RUN_FAIL=foreign            another client's running container (kind foreign) takes the name; `run -d` fails
   FAKE_STOP_FAIL=true              `stop` fails
+  FAKE_STOP_CUT_OFF=true           the first `stop` loses its connection: the client fails and the daemon finishes the
+                                   stop by itself FAKE_ASYNC_STOP_SECONDS (default 1) later
   FAKE_FAIL="<text>[@N];..."       a call whose argv (space-joined, without --context) contains <text> fails; with @N
                                    only the N-th such call
-  FAKE_SIGNAL_ON=<text>            the first call containing <text> sends FAKE_SIGNAL (default TERM) to the script
+  FAKE_SIGNAL_ON=<text>[;<text>]   the first call containing <text> sends FAKE_SIGNAL (default TERM) to the script
                                    (pid in script.pid), then runs normally; with FAKE_SIGNAL_KILLS_OUTPUT=true it first
-                                   kills the process reading the script's output (pid in output.pid)
+                                   kills the process reading the script's output (pid in output.pid). Each further
+                                   <text> is armed once the one before it has fired.
+  FAKE_SIGNAL_GROUP=true           the signal goes to the script's process group, as a Ctrl-C at the terminal does: a
+                                   call in that group is cut short, as Docker CLI 27+ is on SIGINT even when the signal
+                                   is ignored. The daemon still finishes a `stop` FAKE_ASYNC_STOP_SECONDS later; any
+                                   other request is dropped. A call in its own session is not reached.
+A container whose stop the daemon is still finishing stays running until then; `start` does nothing to it and `stop`
+waits for it.
 Containers created by `run -d` have kind "new". Authenticated calls must send FAKE_EXPECTED_KEY on stdin (-H @-),
 otherwise they get 401. Output errors (closed or broken stdout/stderr) are ignored, as they would not change Docker.
 """
@@ -70,6 +79,9 @@ def load():
         if not c.get("id"):
             c["id"] = secrets.token_hex(32)
             changed = True
+        if c.get("stopping_until") is not None and c["stopping_until"] <= time.time():
+            finish_stop(c)
+            changed = True
     if changed:
         save(state)
     return state
@@ -78,6 +90,20 @@ def load():
 def save(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
+
+
+def finish_stop(c):
+    c.pop("stopping_until", None)
+    c["running"] = False
+    c.pop("state", None)
+
+
+def stop_in_background(state, ref):
+    """The daemon goes on stopping the container after its client has gone."""
+    _, c = container(state, ref)
+    if c["running"] and c.get("stopping_until") is None:
+        c["stopping_until"] = time.time() + float(os.environ.get("FAKE_ASYNC_STOP_SECONDS", "1"))
+        save(state)
 
 
 def behaviour(kind, name, default):
@@ -149,12 +175,19 @@ def read_pid(name, wait_seconds=0.0):
 
 
 def signal_if_requested(command_line):
-    trigger = os.environ.get("FAKE_SIGNAL_ON", "")
-    marker = os.path.join(STATE_DIR, "signal.sent")
-    if not trigger or trigger not in command_line or os.path.exists(marker):
-        return
-    open(marker, "w").close()
-    if os.environ.get("FAKE_SIGNAL_KILLS_OUTPUT") == "true":
+    """Sends the next requested signal; True when it also cuts this call short (FAKE_SIGNAL_GROUP)."""
+    triggers = [t for t in os.environ.get("FAKE_SIGNAL_ON", "").split(";") if t]
+    counter = os.path.join(STATE_DIR, "signals.sent")
+    try:
+        with open(counter) as f:
+            sent = int(f.read().strip() or "0")
+    except FileNotFoundError:
+        sent = 0
+    if sent >= len(triggers) or triggers[sent] not in command_line:
+        return False
+    with open(counter, "w") as f:
+        f.write(str(sent + 1))
+    if os.environ.get("FAKE_SIGNAL_KILLS_OUTPUT") == "true" and sent == 0:
         reader = read_pid("output.pid", wait_seconds=5.0)
         if reader is not None:
             try:
@@ -163,8 +196,25 @@ def signal_if_requested(command_line):
                 pass
             time.sleep(0.2)
     script = read_pid("script.pid")
-    if script is not None:
-        os.kill(script, getattr(signal, "SIG" + os.environ.get("FAKE_SIGNAL", "TERM")))
+    if script is None:
+        return False
+    os.kill(script, getattr(signal, "SIG" + os.environ.get("FAKE_SIGNAL", "TERM")))
+    if os.environ.get("FAKE_SIGNAL_GROUP") != "true":
+        return False
+    try:
+        return os.getpgid(script) == os.getpgrp()
+    except ProcessLookupError:
+        return False
+
+
+def cut_off_stop_requested():
+    if os.environ.get("FAKE_STOP_CUT_OFF") != "true":
+        return False
+    marker = os.path.join(STATE_DIR, "stop-cut-off")
+    if os.path.exists(marker):
+        return False
+    open(marker, "w").close()
+    return True
 
 
 def exec_curl(state, ref, curl_args, stdin_text):
@@ -334,12 +384,17 @@ def main():
         die("no command")
 
     command_line = " ".join(argv)
-    signal_if_requested(command_line)
+    interrupted = signal_if_requested(command_line)
     fail_if_requested(command_line)
 
     state = load()
     command, args = argv[0], argv[1:]
     image = os.environ["IMAGE_TAG"]
+
+    if interrupted:
+        if command == "stop":
+            stop_in_background(state, args[-1])
+        sys.exit(130)
 
     if command in ("info", "buildx"):
         return
@@ -365,8 +420,15 @@ def main():
         _, c = container(state, ref)
         if os.environ.get("FAKE_STOP_FAIL") == "true":
             die(f"cannot stop container: {ref}")
-        c["running"] = False
-        c.pop("state", None)
+        if cut_off_stop_requested():
+            stop_in_background(state, ref)
+            err("error during connect: connection reset by peer")
+            sys.exit(1)
+        if c.get("stopping_until") is not None:
+            time.sleep(max(0.0, c["stopping_until"] - time.time()))
+            state = load()
+            _, c = container(state, ref)
+        finish_stop(c)
         save(state)
         out(ref)
         return
@@ -374,6 +436,10 @@ def main():
     if command == "start":
         ref = args[-1]
         _, c = container(state, ref)
+        if c.get("stopping_until") is not None:
+            # Docker starts nothing for a container that is still running.
+            out(ref)
+            return
         c["running"] = True
         c.pop("state", None)
         save(state)

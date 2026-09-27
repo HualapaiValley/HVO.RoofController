@@ -92,13 +92,16 @@ the roof against this server; use the authenticated browser console for operator
   `--rollback` swaps them on demand.
 - The deploy script checks its settings before contacting Docker (whole decimal numbers, the
   poll interval, `EXTRA_DOCKER_ARGS`, which may not set the name, detach, removal, restart
-  policy, cidfile or ports, and the HTTPS choice, now also for `--rollback`). It stops with
-  nothing changed when Docker cannot report the containers' state, or when
-  `roof-controller-previous` is running, restarting or paused. Once the old controller's stop
-  begins, any failure, signal or lost terminal restores it; only the container the run created
-  is removed. An older `roof-controller-previous` is removed only after the stop succeeds.
-  `--rollback` undoes a failed or interrupted swap and refuses to run while
-  `roof-controller-swap` exists. Needs Docker CLI 20.10 or later.
+  policy, cidfile, ports, stop timeout or stop signal, and the HTTPS choice, now also for
+  `--rollback`). It stops with nothing changed when Docker cannot report the containers' state,
+  or when `roof-controller-previous` is running, restarting or paused. Once the old controller's
+  stop begins, any failure, signal or lost terminal restores it; only the container the run
+  created is removed. From that stop on, docker runs in its own session, so an interrupt waits
+  for the call in progress instead of cutting it short, and the restore stops an old controller
+  that is still running before starting it again. An older `roof-controller-previous` is removed
+  only after the stop succeeds. `--rollback` undoes a failed or interrupted swap and refuses to
+  run while `roof-controller-swap` exists. Needs Docker CLI 20.10 or later, and `setsid` or
+  `perl`; the Docker context must connect without prompting.
 - Relay register read supervision: `relayRegisterReadsHealthy`, `lastSuccessfulRelayReadUtc`
   and `consecutiveRelayReadFailures` in Status. One failed or stale read fails readiness; two
   consecutive failures stop motion and latch `RelayVerificationFailed`.

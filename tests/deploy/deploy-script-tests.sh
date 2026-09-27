@@ -145,6 +145,24 @@ assert_container() {
   fi
 }
 
+# Lets the fake daemon finish any stop it was still completing after its client was cut off, as time would.
+settle_containers() {
+  python3 - "${FAKE_STATE_DIR}/state.json" <<'PY'
+import json, sys, time
+path = sys.argv[1]
+with open(path) as f:
+    state = json.load(f)
+until = max([c.get("stopping_until") or 0 for c in state["containers"].values()] + [0])
+time.sleep(max(0.0, until - time.time()))
+for c in state["containers"].values():
+    if c.pop("stopping_until", None) is not None:
+        c["running"] = False
+        c.pop("state", None)
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PY
+}
+
 # kind_count <kind>: how many containers of that kind exist.
 kind_count() {
   jq --arg kind "$1" '[.containers[] | select(.kind == $kind)] | length' "${FAKE_STATE_DIR}/state.json"
@@ -585,12 +603,13 @@ test_rollback_path_cannot_fall_through_into_build() {
   assert_container roof-controller-previous old false
 }
 
-test_extra_docker_args_cannot_override_name_restart_or_ports() {
+test_extra_docker_args_cannot_override_name_restart_ports_or_stop() {
   seed_container roof-controller old true 8443:8443
   local value
   for value in "--name other" "--name=other" "-d" "--detach" "--detach=true" "--rm" "--restart always" \
       "--restart=always" "--cidfile /tmp/cid" "-p 80:8080" "-p8080:8080" "--publish 80:8080" "--publish=80:8080" \
-      "-P" "--publish-all" "-itd" "-tp 80:8080"; do
+      "-P" "--publish-all" "-itd" "-tp 80:8080" "--stop-timeout 1" "--stop-timeout=1" "--stop-signal SIGKILL" \
+      "--stop-signal=KILL"; do
     : > "${FAKE_STATE_DIR}/calls.log"
     deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
     assert_status 1
@@ -758,7 +777,10 @@ test_hangup_while_verifying_removes_new_controller() {
 test_interrupt_during_docker_stop_restarts_old_controller() {
   seed_container roof-controller old true 8443:8443
   seed_container roof-controller-previous older false
-  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="stop -t" FAKE_SIGNAL=INT
+  # A Ctrl-C at the terminal reaches the whole process group. A docker stop cut short by it would leave the daemon
+  # finishing the stop while the restore "started" the container that was still running.
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="stop -t" FAKE_SIGNAL=INT FAKE_SIGNAL_GROUP=true
+  settle_containers
 
   assert_status_is 130
   assert_output_contains "the script stopped unexpectedly (exit 130) while switching controllers"
@@ -766,6 +788,35 @@ test_interrupt_during_docker_stop_restarts_old_controller() {
   assert_container roof-controller old true unless-stopped
   assert_container roof-controller-previous older false
   [[ -z "$(controller_run_args)$(docker_calls rm)" ]] || fail_test "the deploy went on after the interrupt"
+}
+
+test_second_interrupt_does_not_cut_the_restore_short() {
+  seed_container roof-controller old true 8443:8443
+  local old_id
+  old_id=$(container_field roof-controller id)
+  # Ctrl-C while the new controller is verified, and again while the restore starts the old controller.
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="/health/ready;start ${old_id}" FAKE_SIGNAL=INT FAKE_SIGNAL_GROUP=true
+  settle_containers
+
+  assert_status_is 130
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+  [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller was not removed"
+}
+
+test_restore_waits_for_a_stop_the_daemon_is_still_finishing() {
+  seed_container roof-controller old true 8443:8443
+  # The connection to the Pi drops during docker stop: the client fails, the daemon completes the stop a moment later.
+  deploy "${HTTPS_ENV[@]}" FAKE_STOP_CUT_OFF=true
+  settle_containers
+
+  assert_status 1
+  assert_output_contains "Could not stop roof-controller; it was not replaced"
+  assert_output_contains "The original controller is still running; stopping it fully"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  [[ -z "$(controller_run_args)" ]] || fail_test "the new controller was started"
 }
 
 test_interrupt_after_rename_restores_old_controller() {

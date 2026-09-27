@@ -18,6 +18,8 @@ set -euo pipefail
 #    ALLOW_INSECURE_HTTP=true). Otherwise it is stopped and removed, and <name>-previous is restored as <name> and
 #    started again if it was running. A failure or an interrupt (Ctrl-C, SIGTERM, a lost terminal) anywhere after the
 #    old controller's stop began restores it the same way. Only the container this run created is ever removed.
+#    From that stop on, docker runs in its own session (setsid, or perl on macOS), so an interrupt cannot cut a docker
+#    call short: the restore begins once the call in progress returns.
 #
 # Usage: PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh [--dry-run] [--force-unverified-stop] [--rollback]
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
@@ -56,8 +58,8 @@ SWAP_CONTAINER_NAME="${CONTAINER_NAME}-swap"
 HOST_PORT=${HOST_PORT:-8080}
 HTTPS_HOST_PORT=${HTTPS_HOST_PORT:-8443}
 # Extra `docker run` options for the controller, split on whitespace (no quoting). Also applied to the pre-flight
-# container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports) are refused:
-# use CONTAINER_NAME, HOST_PORT and HTTPS_HOST_PORT.
+# container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports, graceful
+# stop) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT and STOP_TIMEOUT_SECONDS.
 EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
 HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
 IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-false}
@@ -111,8 +113,17 @@ RESTORE_OUTCOME=""
 FAILURE=""
 WORK_DIR=""
 
+# From the first change of the switch on (and during the restore), docker runs in its own session, outside the
+# terminal's process group, so a Ctrl-C or a hangup at the terminal cannot reach it; bash runs its trap once the call
+# returns. Docker CLI 27 and later gives up its request on SIGINT even while this script ignores the signal, and the
+# daemon still finishes a stop by itself: an interrupted `docker stop` would leave the old controller stopping just
+# as the restore tries to start it, and a second Ctrl-C would cut the restore's own calls short.
 dockerc() {
-  docker --context "${DOCKER_CONTEXT}" "$@"
+  if [[ -n "${RESTORE_MODE}" || "${RESTORING}" == "true" ]]; then
+    "${OWN_SESSION[@]}" docker --context "${DOCKER_CONTEXT}" "$@"
+  else
+    docker --context "${DOCKER_CONTEXT}" "$@"
+  fi
 }
 
 # Output that must never stop the script: during a restore the terminal or the pipe may be gone (EIO/EPIPE).
@@ -151,7 +162,8 @@ esac
 
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
-# break the restore, the restart policy or the pre-flight container. Short options may be combined (-itd, -p8443:8443).
+# break the restore, the restart policy or the pre-flight container, and --stop-timeout or --stop-signal could cut the
+# controller's shutdown stop short. Short options may be combined (-itd, -p8443:8443).
 extra_args=()
 if [[ -n "${EXTRA_DOCKER_ARGS}" ]]; then
   read -r -d '' -a extra_args <<<"${EXTRA_DOCKER_ARGS}" || true
@@ -160,19 +172,42 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
   case "${arg}" in
     --name|--name=*|--detach|--detach=*|--rm|--rm=*|--restart|--restart=*|--cidfile|--cidfile=*|--publish|--publish=*|--publish-all|--publish-all=*)
       reserved=true ;;
+    --stop-timeout|--stop-timeout=*|--stop-signal|--stop-signal=*)
+      reserved=true ;;
     *)
       reserved=false
       if [[ "${arg}" =~ ^-[ditPq]*[dPp] ]]; then reserved=true; fi
       ;;
   esac
   if [[ "${reserved}" == "true" ]]; then
-    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile and the published ports itself (use CONTAINER_NAME, HOST_PORT and HTTPS_HOST_PORT)."
+    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout and --stop-signal itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT and STOP_TIMEOUT_SECONDS)."
   fi
 done
 
 # Applies to --rollback too: its checks send the key to the published URL.
 if [[ -z "${HTTPS_CERT_DIR}" && "${ALLOW_INSECURE_HTTP}" != "true" ]]; then
   fail "Set HTTPS_CERT_DIR (directory on the Pi with ${HTTPS_CERT_FILE}) or ALLOW_INSECURE_HTTP=true (for --rollback, as for the version being restored). Without HTTPS, API keys cross the network in clear text and LAN clients get 403 https_required unless RequireHttps is disabled. See docs/deployment.md."
+fi
+
+# What dockerc runs docker under during the switch. macOS has no setsid(1); perl's POSIX::setsid does the same there.
+if command -v setsid >/dev/null 2>&1; then
+  OWN_SESSION=(setsid -w)
+elif command -v perl >/dev/null 2>&1; then
+  # As setsid -w does: a process group leader cannot start a session, so it waits (ignoring signals) for a child that
+  # does and passes on its exit status.
+  # shellcheck disable=SC2016 # perl code
+  OWN_SESSION=(perl -MPOSIX -e '
+    if (getpgrp() == $$) {
+      my %old = map { $_ => $SIG{$_} } qw(HUP INT QUIT TERM);
+      $SIG{$_} = "IGNORE" for keys %old;
+      defined(my $pid = fork) or die "fork: $!\n";
+      if ($pid) { waitpid($pid, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8) }
+      $SIG{$_} = $old{$_} // "DEFAULT" for keys %old;
+    }
+    POSIX::setsid() > 0 or die "setsid: $!\n";
+    exec { $ARGV[0] } @ARGV or die "$ARGV[0]: $!\n"' --)
+else
+  fail "setsid or perl is required: the switch runs docker in its own session so that an interrupt cannot cut it short."
 fi
 
 if [[ -n "${REMOTE_CA_CERT}" && ! -r "${REMOTE_CA_CERT}" ]]; then
@@ -546,6 +581,14 @@ restart_original() {
       ;;
   esac
 
+  # Still running means its stop never began, or the daemon is still finishing one whose client was cut off (a lost
+  # connection to the Pi). Starting it would then do nothing and it would exit moments later, so stop it fully first;
+  # the roof was verified stopped before the switch began.
+  if lookup_container "id=${ORIGINAL_ID}" && [[ "${CSTATE}" == "running" ]]; then
+    log_err "[rollback] The original controller is still running; stopping it fully (SIGTERM first) before starting it again"
+    dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${ORIGINAL_ID}" >/dev/null \
+      || log_err "[rollback] WARNING: could not stop the original controller; starting it anyway"
+  fi
   log_err "[rollback] Starting the original controller as ${CONTAINER_NAME}"
   if ! dockerc start "${ORIGINAL_ID}" >/dev/null; then
     RESTORE_OUTCOME="The previous controller could not be restarted. The roof controller is NOT running."
@@ -563,12 +606,14 @@ restart_original() {
   RESTORE_OUTCOME="The previous controller was restarted but did not become ready. The roof cannot be controlled remotely until this is fixed."
 }
 
-# Undoes an unfinished switch (RESTORE_MODE) and reports the outcome; the caller exits non-zero. Further signals are
-# ignored and failed writes do not matter, so a second Ctrl-C or a lost terminal cannot cut the restore short.
+# Undoes an unfinished switch (RESTORE_MODE) and reports the outcome on the script's own stdout and stderr; the caller
+# exits non-zero. Further signals are ignored, docker runs in its own session (dockerc) and failed writes do not
+# matter, so a second Ctrl-C or a lost terminal cannot cut the restore short.
 restore_original() {
   local reason=$1 mode=${RESTORE_MODE} what=Deployment
   set +e
   trap '' HUP INT TERM PIPE
+  exec 1>&8 2>&9
   RESTORING=true
   [[ "${ROLLBACK}" != "true" ]] || what=Rollback
   log_err "[rollback] ${reason}"
@@ -591,9 +636,11 @@ abort_switch() {
 
 on_exit() {
   local status=$?
-  # This runs on every exit, including a signal or a lost terminal: no errexit and no further interruptions.
+  # This runs on every exit, including a signal or a lost terminal: no errexit, no further interruptions, and the
+  # script's own output back in place of the interrupted call's redirections.
   set +e
   trap '' HUP INT TERM PIPE
+  exec 1>&8 2>&9
   if [[ -n "${RESTORE_MODE}" ]]; then
     if [[ "${RESTORING}" == "true" ]]; then
       log_err "[deploy] ERROR: the restore did not finish; check the containers (docker ps -a --filter name=${CONTAINER_NAME})."
@@ -607,6 +654,10 @@ on_exit() {
   fi
   exit "${status}"
 }
+# The script's stdout and stderr, kept on fds 8 and 9. A signal's trap runs inside the call it interrupted, with that
+# call's redirections still in place: a Ctrl-C during the readiness probe (dockerc exec ... >/dev/null 2>&1) would
+# otherwise send the whole restore report to /dev/null.
+exec 8>&1 9>&2
 trap on_exit EXIT
 # Signals end the script through the EXIT trap (which restores during the switch) with the usual 128+N status.
 trap 'exit 129' HUP

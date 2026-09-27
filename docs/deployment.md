@@ -173,7 +173,7 @@ deploy.
 | `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts`. A list must include `localhost`: the health check and the script's in-container calls use it. |
 | `REMOTE_CA_CERT` | (empty) | PEM file on this machine that verifies the Pi's certificate, for the remote check |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
-| `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them. |
+| `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them, and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout` |
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
@@ -185,7 +185,9 @@ from 1 to 65535. They are read as decimal, so `010` means 10. `POLL_INTERVAL_SEC
 
 The machine that runs the script needs Docker CLI 20.10 or later (the script reads container state with
 `docker ps --format '{{.State}}'`), and `jq` or `python3` to parse the Stop response. Without either, the stop is
-treated as unverified.
+treated as unverified. It also needs `setsid` (standard on Linux) or `perl` (macOS): from the old controller's stop on,
+docker runs in its own session, detached from the terminal. So the Docker context must connect without prompting; an
+SSH context needs a key or `ssh-agent`, not a password prompt.
 
 ### What the script does, in order
 
@@ -236,8 +238,13 @@ treated as unverified.
 
    It removes only the container it created, found by the ID Docker wrote to the run's `--cidfile`. If another
    container has taken `<name>` meanwhile, the script leaves it alone and keeps the old controller, stopped, as
-   `<name>-previous`. Further signals are ignored and failed writes to the terminal are skipped until the restore
-   ends. The last line is `[deploy] ERROR: Deployment failed (<reason>). <outcome>`; the outcome starts with
+   `<name>-previous`.
+
+   From the stop on, docker runs in its own session (`setsid`, or `perl` on macOS), so an interrupt never cuts a
+   docker call short: the restore starts once the call in progress returns. If the old controller is still running
+   by then (its stop never finished, for example because the connection to the Pi dropped while the daemon was still
+   stopping it), the restore stops it fully before starting it again. During the restore, further signals are ignored
+   and failed writes to the terminal are skipped. The last line is `[deploy] ERROR: Deployment failed (<reason>). <outcome>`; the outcome starts with
    `Rolled back:` when the old controller is back. The script exits 1, or 129, 130 or 143 after SIGHUP, SIGINT or
    SIGTERM. With no previous controller (a first deploy), the outcome says the roof controller is not running.
 
@@ -254,9 +261,10 @@ the restored controller and runs the checks from step 7 against it. Nothing is b
 Set `HTTPS_CERT_DIR` or `ALLOW_INSECURE_HTTP=true` as for the version being restored, since that decides the URL of
 the remote check. Without either, `--rollback` stops before contacting Docker.
 
-If the swap or the start fails, or the script is interrupted, the swap is undone. The original controller is back as
-`<name>` and restarted if it was running, `<name>-previous` is unchanged, and the outcome starts with `Undone:`. If
-the checks after the start fail, the restored controller is left running and the script exits non-zero.
+If the swap or the start fails, or the script is interrupted before the start, the swap is undone. The original
+controller is back as `<name>` and restarted if it was running, `<name>-previous` is unchanged, and the outcome starts
+with `Undone:`. Once the start has succeeded, the restored controller is left running, even when the checks after it
+fail or the script is interrupted, and the script exits non-zero.
 
 A rollback that could not be undone leaves `<name>-swap` behind. Later rollbacks refuse to run until it is gone, and
 change nothing. Find out which version it is (`docker ps -a --filter name=<name>`), then either rename it to whichever
