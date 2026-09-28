@@ -20,6 +20,8 @@ Other switches:
   FAKE_RUN_FAIL=true               `run -d` fails before creating the container
   FAKE_RUN_FAIL=created            `run -d` creates the container (state created, ID in the --cidfile), then fails
   FAKE_RUN_FAIL=foreign            another client's running container (kind foreign) takes the name; `run -d` fails
+  FAKE_NEW_EXITS=true              `run -d` succeeds, but the container it creates exits at once (the controller
+                                   passed the pre-flight, then failed on its normal start)
   FAKE_STOP_FAIL=true              `stop` fails
   FAKE_STOP_CUT_OFF=true           the first `stop` loses its connection: the client fails and the daemon finishes the
                                    stop by itself FAKE_ASYNC_STOP_SECONDS (default 1) later
@@ -413,6 +415,8 @@ def run(state, args, image):
     }
     if run_fail == "created":
         state["containers"][name].update(running=False, state="created")
+    elif os.environ.get("FAKE_NEW_EXITS") == "true":
+        state["containers"][name]["running"] = False
     save(state)
     if cidfile is not None:
         with open(cidfile, "w") as f:

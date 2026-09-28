@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Container scenarios on real Docker against the HAT emulator: what the in-process scenario suite cannot reach.
 #
-#   lifecycle  The deployed container stopped (docker stop, as the script and Compose stop it) and killed (the process
-#              dies with the relays held) while the roof travels, then started again (C11 steps 2-3 in a container).
+#   lifecycle  The deployed container stopped (docker stop, as the script and Compose stop it) with a camera stream
+#              open, and killed (the process dies with the relays held), while the roof travels, then started again
+#              (C11 steps 2-3 in a container). Then docker stop while relay writes fail: once until a shutdown retry
+#              verifies the relays off, and once for good (C11 step 4).
 #   c12        commissioning.md C12 with deploy-roofcontroller-rpi.sh: an idle deploy, a deploy while the roof moves,
-#              pre-flight failures, a remote-check failure that rolls back, --rollback twice, and the relays off
-#              throughout.
+#              pre-flight failures, a remote-check failure that rolls back, --rollback twice, a Stop that cannot be
+#              verified, a new controller that never becomes ready, and the relays off throughout.
 #   migration  A controller moved from the Compose `pi` profile to the deploy script and back to the Compose version,
 #              following "Moving between Compose and the deploy script" in docs/deployment.md, and the refusals that
-#              keep the two from managing the same controller.
+#              keep the two from managing the same controller. The script's --verify-remote checks each Compose
+#              controller from this machine without Docker, and rejects a key the controller does not know.
 #
 # Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It runs only against the local Docker daemon
 # (the default context, with DOCKER_HOST unset or a unix socket), not on a Raspberry Pi, and touches no hardware: the
@@ -119,6 +122,7 @@ cleanup() {
   local status=$?
   set +e
   stop_background_deploy
+  stop_camera_stream
   if (( owns_resources != 1 )); then
     # Refused before it created anything: what exists belongs to someone else.
     write_results
@@ -202,6 +206,42 @@ wait_for() {
   done
 }
 
+camera_is() {
+  curl -fsS --max-time 10 "${emulator_api}/status" | jq -e ".camera | $1" >/dev/null
+}
+
+# Camera 2 through the controller's proxy, read in the background in a process group of its own; camera.ended gets the
+# time the stream ended.
+camera_stream_pid=""
+start_camera_stream() {
+  : > "${work}/camera.mjpg"
+  rm -f "${work}/camera.ended"
+  set -m
+  (
+    printf 'X-Api-Key: %s\n' "${operator_key}" \
+      | curl -fsS -N --max-time 300 --cacert "${work}/ca.pem" -H @- -o "${work}/camera.mjpg" \
+          "${roof}/api/v1.0/Camera/2/mjpeg" 2>"${work}/camera.err" || true
+    now > "${work}/camera.ended"
+  ) &
+  camera_stream_pid=$!
+  set +m
+}
+
+camera_streaming() {
+  [[ -s "${work}/camera.mjpg" ]] && camera_is '.openStreams >= 1'
+}
+
+camera_stream_ended() {
+  [[ -s "${work}/camera.ended" ]]
+}
+
+stop_camera_stream() {
+  [[ -n "${camera_stream_pid}" ]] || return 0
+  kill -- "-${camera_stream_pid}" 2>/dev/null || kill "${camera_stream_pid}" 2>/dev/null || true
+  wait "${camera_stream_pid}" 2>/dev/null || true
+  camera_stream_pid=""
+}
+
 no_violations() {
   local violations
   violations=$(curl -fsS --max-time 10 "${emulator_api}/violations")
@@ -217,7 +257,7 @@ assert_relays_off() {
   no_violations
 }
 
-# The relay register sampled every 0.1 s while a check runs (C12 step 7).
+# The relay register sampled every 0.1 s while a check runs (C12 step 9).
 relay_monitor_pid=""
 start_relay_monitor() {
   : > "${work}/relays.log"
@@ -256,11 +296,12 @@ container_running() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == true ]]
 }
 
-# container_log_has <name> <text>. The log is read whole first: grep -q would end a pipe early, and pipefail would then
-# report docker's SIGPIPE as a failure.
+# container_log_has <name> <text> [since]: the log, or the part since a `now` value (the container keeps the log of
+# every run), has the text. The log is read whole first: grep -q would end a pipe early, and pipefail would then report
+# docker's SIGPIPE as a failure.
 container_log_has() {
   local log
-  log=$(docker logs "$1" 2>&1)
+  log=$(docker logs ${3:+--since "$3"} "$1" 2>&1)
   grep -qF -- "$2" <<<"${log}"
 }
 
@@ -378,6 +419,9 @@ setup() {
   secrets_dir "${work}/secrets" RoofOperator "${pfx_password}"
   secrets_dir "${work}/secrets-wrong-password" RoofOperator "not-the-${pfx_password}"
   secrets_dir "${work}/secrets-viewer-only" RoofViewer "${pfx_password}"
+  # The camera proxy reads the emulator's camera, as it reads Blue Iris on the Pi (C11).
+  printf '%s' "http://${emulator_name}:5290" > "${work}/secrets/BlueIris__BaseUrl"
+  chmod 600 "${work}/secrets/BlueIris__BaseUrl"
 
   if [[ "${SCN_NO_BUILD:-0}" != 1 ]]; then
     say "Building the HAT emulator image"
@@ -475,11 +519,14 @@ scenario_lifecycle() {
   ensure_deployed
   close_roof
 
+  # CommissioningCheck("C11", "1")
   # CommissioningCheck("C11", "2")
   # CommissioningCheck("C11", "3")
-  current_check="Lifecycle: docker stop during travel (C11 2-3)"
+  current_check="Lifecycle: docker stop during travel, a camera stream open (C11 2-3)"
+  start_camera_stream
+  wait_for "a camera stream through the proxy" 30 camera_streaming
   start_travel Open
-  local start stop_seconds exit_code
+  local start stop_seconds exit_code stream_seconds
   start=$(now)
   docker stop -t 30 "${controller}" >/dev/null
   stop_seconds=$(seconds_since "${start}")
@@ -488,8 +535,15 @@ scenario_lifecycle() {
   (( exit_code == 0 )) || fail "the controller exited ${exit_code} after docker stop (expected 0)"
   plant_is '.relayRegister == 0' || fail "the relays are still energized after the container stopped: $(plant)"
   assert_relays_off
-  container_log_has "${controller}" 'stopped: HostShutdown' || fail "the controller's log has no HostShutdown stop"
-  pass "the controller stopped the roof (relays off, HostShutdown) and exited ${exit_code} in ${stop_seconds} s"
+  container_log_has "${controller}" 'stopped: HostShutdown' "${start}" || fail "the controller's log has no HostShutdown stop"
+  wait_for "the camera stream to end" 5 camera_stream_ended
+  stream_seconds=$(awk -v s="${start}" -v e="$(cat "${work}/camera.ended")" 'BEGIN { printf "%.1f", e - s }')
+  stop_camera_stream
+  # Held open, the stream would keep the web server stopping until the host's 20 s shutdown timeout.
+  awk -v t="${stream_seconds}" 'BEGIN { exit !(t < 5) }' || fail "the camera stream ended ${stream_seconds} s after docker stop"
+  awk -v t="${stop_seconds}" 'BEGIN { exit !(t < 5) }' || fail "docker stop took ${stop_seconds} s with a camera stream open"
+  wait_for "the emulated camera's stream closed" 5 camera_is '.openStreams == 0'
+  pass "the controller stopped the roof (relays off, HostShutdown) and exited ${exit_code} in ${stop_seconds} s; the camera stream ended ${stream_seconds} s after docker stop"
 
   current_check="Lifecycle: restart after a stop"
   docker start "${controller}" >/dev/null
@@ -514,6 +568,56 @@ scenario_lifecycle() {
   wait_for "the controller ready" 120 controller_ready
   assert_relays_off
   pass "the relays were held (register ${held}) after the kill; the restarted controller turned them off ${off_seconds} s after docker start"
+
+  # CommissioningCheck("C11", "4")
+  current_check="Lifecycle: a shutdown stop that a retry verifies (C11 4)"
+  close_roof
+  start_travel Open
+  emulator_post bus '{"failWrites": true}'
+  start=$(now)
+  docker stop -t 30 "${controller}" >/dev/null &
+  local docker_stop=$!
+  wait_for "the controller to report its shutdown stop unverified" 10 \
+    container_log_has "${controller}" 'Shutdown could not verify the relay register all-off state' "${start}"
+  emulator_post bus '{"failWrites": false}'
+  wait "${docker_stop}" || fail "docker stop failed"
+  stop_seconds=$(seconds_since "${start}")
+  exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${controller}")
+  (( exit_code == 0 )) || fail "the controller exited ${exit_code} after docker stop (expected 0)"
+  container_log_has "${controller}" 'verified the relay register all-off' "${start}" \
+    || fail "the controller's log has no shutdown retry that verified the relays off"
+  container_log_has "${controller}" 'Roof controller shutdown stop completed' "${start}" \
+    || fail "the controller's log does not show its shutdown stop completed"
+  plant_is '.relayRegister == 0' || fail "the relays are still energized after the container stopped: $(plant)"
+  assert_relays_off
+  pass "the relay writes failed at the stop, a retry verified the relays off once they worked again, and the controller exited 0 in ${stop_seconds} s"
+
+  current_check="Lifecycle: a shutdown stop that cannot be verified (C11 4)"
+  docker start "${controller}" >/dev/null
+  wait_for "the controller ready" 120 controller_ready
+  wait_for "the controller initialized" 60 roof_is '.isInitialized and .isMoving == false'
+  close_roof
+  start_travel Open
+  emulator_post bus '{"failWrites": true}'
+  start=$(now)
+  docker stop -t 30 "${controller}" >/dev/null
+  stop_seconds=$(seconds_since "${start}")
+  exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${controller}")
+  (( exit_code != 137 )) || fail "the container was killed after the grace period (exit 137)"
+  container_log_has "${controller}" 'Shutdown could not verify the relay register all-off state' "${start}" \
+    || fail "the controller's log does not report its shutdown stop unverified"
+  container_log_has "${controller}" 'Roof controller shutdown stop FAILED' "${start}" \
+    || fail "the controller's log does not report its shutdown stop failed"
+  held=$(plant | jq '.relayRegister')
+  (( held != 0 )) || fail "the relays are off although no relay write reached the HAT"
+  emulator_post bus '{"failWrites": false}'
+  start=$(now)
+  docker start "${controller}" >/dev/null
+  wait_for "the restarted controller to turn the relays off" 60 plant_is '.relayRegister == 0'
+  off_seconds=$(seconds_since "${start}")
+  wait_for "the controller ready" 120 controller_ready
+  assert_relays_off
+  pass "the controller logged the failed stop and exited ${exit_code} in ${stop_seconds} s with the relays held (register ${held}); once the writes worked, the restarted controller turned them off ${off_seconds} s after docker start"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -655,9 +759,59 @@ scenario_c12() {
   pass "exit ${DEPLOY_STATUS}; the previous controller is running and ready again under ${controller}; rollback time ${rollback_seconds} s (from the failed check to the end), whole run ${DEPLOY_SECONDS} s; relays 0 in ${RELAY_SAMPLES} samples"
 
   # CommissioningCheck("C12", "7")
-  current_check="C12 step 7: the roof de-energized throughout steps 3-6"
+  current_check="C12 step 7: a Stop that cannot be verified aborts the deploy"
+  # Relay-register reads fail, so the Stop's all-off cannot be read back. The writes still work, and the roof is idle.
+  start_relay_monitor
+  emulator_post bus '{"failReads": true}'
+  deploy
+  emulator_post bus '{"failReads": false}'
+  (( DEPLOY_STATUS != 0 )) || fail "the deploy succeeded although the roof stop could not be verified"
+  expect_deploy_log "[deploy] Requesting a verified roof stop from ${controller}"
+  expect_deploy_log "The roof stop could not be verified."
+  ! deploy_log_has "Roof stop verified" || fail "the script reported the roof stop verified"
+  ! deploy_log_has "Stopping ${controller} gracefully" || fail "the script stopped ${controller}"
+  [[ "$(container_id "${controller}")" == "${current_id}" ]] || fail "${controller} was replaced"
+  container_running "${controller}" || fail "${controller} is not running"
+  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
+  [[ -z "${leftovers}" ]] || fail "containers of the aborted deploy remain: ${leftovers}"
+  relays_stayed_off
+  local stop_answer
+  stop_answer=$(grep -m 1 -o -e 'Stop returned HTTP [0-9]*' -e 'Stop result: relayRegisterState=[A-Za-z]*' "${DEPLOY_LOG}" || true)
+  # The unverified Stop latched RelayVerificationFailed. With the reads back, supervision verifies the all-off again,
+  # and ClearFault (its pulse energizes RLY3, so after the monitor) releases the latch.
+  wait_for "the relay register verified again" 30 roof_is '.relayRegisterState == "Verified" and .relayRegisterMask == 0'
+  roof_is '.isFaultLatched and .latchedFaultReason == "RelayVerificationFailed"' \
+    || fail "the unverified Stop did not latch RelayVerificationFailed: $(roof_get Status)"
+  roof_post ClearFault >/dev/null
+  wait_for "the fault cleared" 30 roof_is '.isFaultLatched == false'
+  wait_for "the controller ready" 60 controller_ready
+  assert_relays_off
+  pass "the Stop was not verified (${stop_answer:-no answer}), the deploy aborted in ${DEPLOY_SECONDS} s before stopping ${controller}, and the running controller latched RelayVerificationFailed until ClearFault; relays 0 in ${RELAY_SAMPLES} samples"
+
+  # CommissioningCheck("C12", "8")
+  current_check="C12 step 8: a new controller that never becomes ready rolls back"
+  # A HAT endpoint that does not resolve passes the pre-flight, which checks the settings, not the HAT. The new
+  # controller keeps retrying its HAT and never becomes ready.
+  start_relay_monitor
+  deploy HAT_EMULATOR_ENDPOINT=hvo-deploy-scenarios-nohat:5291 READY_TIMEOUT_SECONDS=45
+  (( DEPLOY_STATUS != 0 )) || fail "the deploy succeeded although the new controller cannot reach the HAT"
+  expect_deploy_log "[deploy] Roof stop verified (relay register all off)."
+  expect_deploy_log "${controller} did not become ready within 45s"
+  expect_deploy_log "Rolled back: the previous controller is running and ready."
+  [[ "$(container_id "${controller}")" == "${current_id}" ]] || fail "the old controller is not back as ${controller}"
+  container_running "${controller}" || fail "the old controller is not running"
+  wait_for "the old controller ready" 120 controller_ready
+  roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
+  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
+  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  relays_stayed_off
+  assert_relays_off
+  pass "the new controller was not ready within 45 s; exit ${DEPLOY_STATUS} after ${DEPLOY_SECONDS} s with the previous controller running and ready again; relays 0 in ${RELAY_SAMPLES} samples"
+
+  # CommissioningCheck("C12", "9")
+  current_check="C12 step 9: the roof de-energized throughout steps 3-8"
   no_violations
-  pass "every relay-register sample in steps 3-6 was 0, and the emulator recorded no violations"
+  pass "every relay-register sample in steps 3-8 was 0 (in step 7, until the monitor stopped before ClearFault), and the emulator recorded no violations"
 }
 
 # The deploy runs in a process group of its own (job control on for the fork), so a failed run can stop all of it.
@@ -726,6 +880,21 @@ scenario_migration() {
   assert_relays_off
   pass "the pi profile runs ${controller} on the emulator (project ${compose_project})"
 
+  # The remote check of a Compose deployment. The Docker context does not exist, so any Docker call would fail.
+  current_check="Migration: --verify-remote checks the Compose controller"
+  deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
+  (( DEPLOY_STATUS == 0 )) || fail "--verify-remote failed on the Compose controller (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[verify] Authenticated Status at ${roof}: HTTP 200, hatMode Emulated"
+  expect_deploy_log "[deploy] Stop result: relayRegisterState=Verified relayRegisterMask=0 commandedMotion=None"
+  expect_deploy_log "[done] Verified at ${roof} from this machine"
+  local verify_seconds=${DEPLOY_SECONDS}
+  deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context ROOF_OPERATOR_API_KEY=not-a-configured-key -- --verify-remote
+  (( DEPLOY_STATUS != 0 )) || fail "--verify-remote passed with a key the controller does not know"
+  expect_deploy_log "GET Status at ${roof} returned HTTP 401 to this machine"
+  expect_untouched "${compose_id}"
+  assert_relays_off
+  pass "Status (hatMode Emulated) and a verified Stop at ${roof} in ${verify_seconds} s, with no Docker context; an unknown key got 401"
+
   current_check="Migration: the script refuses a Compose controller"
   local args
   for args in "" --rollback; do
@@ -738,10 +907,8 @@ scenario_migration() {
   pass "deploy and --rollback refused before changing anything; the Compose controller runs on"
 
   current_check="Migration: Compose to the deploy script"
-  local stop
-  stop=$(roof_post Stop)
-  jq -e '.relayRegisterState == "Verified" and .relayRegisterMask == 0 and .commandedMotion == "None"' <<<"${stop}" >/dev/null \
-    || fail "the Stop before the move was not verified: ${stop}"
+  deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
+  (( DEPLOY_STATUS == 0 )) || fail "the Stop before the move was not verified (--verify-remote exit ${DEPLOY_STATUS})"
   docker tag "${image}" "${image}-compose"
   compose down >/dev/null 2>&1
   [[ -z "$(container_id "${controller}")" ]] || fail "docker compose down left ${controller}"
@@ -755,7 +922,7 @@ scenario_migration() {
     || fail "the script's controller carries a Compose label"
   [[ "$(container_image "${controller}")" != "${compose_image}" ]] || fail "the script's controller runs the Compose version"
   assert_relays_off
-  pass "verified Stop, the Compose version tagged ${image}-compose, compose down, then the script deployed in ${DEPLOY_SECONDS} s"
+  pass "a verified Stop (--verify-remote), the Compose version tagged ${image}-compose, compose down, then the script deployed in ${DEPLOY_SECONDS} s"
 
   current_check="Migration: Compose refuses while the script's controller exists"
   if compose up -d --no-build roof-controller >/dev/null 2>"${work}/compose.err"; then
@@ -769,9 +936,8 @@ scenario_migration() {
   pass "docker compose up failed on the container name and left the script's controller running"
 
   current_check="Migration: back to the Compose version"
-  stop=$(roof_post Stop)
-  jq -e '.relayRegisterState == "Verified" and .relayRegisterMask == 0 and .commandedMotion == "None"' <<<"${stop}" >/dev/null \
-    || fail "the Stop before the move was not verified: ${stop}"
+  deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
+  (( DEPLOY_STATUS == 0 )) || fail "the Stop before the move was not verified (--verify-remote exit ${DEPLOY_STATUS})"
   docker stop -t 30 "${controller}" >/dev/null
   docker rm "${controller}" >/dev/null
   docker rm "${previous}" >/dev/null 2>&1 || true
@@ -782,8 +948,10 @@ scenario_migration() {
     || fail "docker compose up failed: $(cat "${work}/compose.err")"
   wait_for "the Compose controller initialized" 60 roof_is '.isInitialized and .hatMode == "Emulated"'
   [[ "$(container_image "${controller}")" == "${compose_image}" ]] || fail "Compose does not run the Compose version again"
+  deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
+  (( DEPLOY_STATUS == 0 )) || fail "--verify-remote failed on the Compose version (exit ${DEPLOY_STATUS})"
   assert_relays_off
-  pass "verified Stop, docker stop and rm, the Compose version tagged back, then the check and compose up: the Compose version runs again"
+  pass "a verified Stop (--verify-remote), docker stop and rm, the Compose version tagged back, then the check, compose up and --verify-remote: the Compose version runs again"
 
   compose down >/dev/null 2>&1
   docker rmi "${image}-compose" >/dev/null 2>&1 || true

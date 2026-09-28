@@ -308,9 +308,10 @@ The lease applies only when `OperatorLeaseTimeout` is set (2-120 s); production 
 
 | Step | Checked | Scenario |
 |---|---|---|
-| 1 | A camera stream is open through the proxy while a move is commanded | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle` |
+| 1 | A camera stream is open through the proxy while a move is commanded | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
 | 2 | The host is stopped as `docker stop -t 30` stops it: in process, and as a real container | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
-| 3 | The roof stops with `HostShutdown` and verified relays, and the stream ends. The container exits within the grace period, and is not killed at its end (status 137). | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
+| 3 | The roof stops with `HostShutdown` and verified relays, and the stream ends within 5 s. The container exits within the grace period, and is not killed at its end (status 137). | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
+| 4 | Relay writes fail when the host stops the moving roof, so the shutdown cannot verify the relays off. If the writes work again while the host waits, a retry verifies the relays off and the shutdown completes. If they never do, the host logs the stop `FAILED` and the container still exits within the grace period, with the relays held; the restarted controller turns them off. | `deploy-scenarios.sh lifecycle` |
 | — | A crash during travel leaves the relays held. The restarted controller turns them off; if the crash outlasts the travel, the open limit's contact stops the drive first. A killed container stays down until it is started again. | `LifecycleScenarios.ACrash_DuringTravel_LeavesTheRelaysHeld_AndTheRestartedControllerTurnsThemOff`, `LifecycleScenarios.ACrash_ThatOutlastsTheTravel_LeavesTheOpenLimitToStopTheDrive_AndTheRestartedControllerReportsOpen`, `deploy-scenarios.sh lifecycle` |
 
 **Installation assumptions**
@@ -349,11 +350,22 @@ register every 0.1 s.
 | 4 | A renamed certificate file, a wrong certificate password and no `RoofOperator` key each fail the pre-flight, and the running controller is untouched | `deploy-scenarios.sh c12` |
 | 5 | `ALLOWED_HOSTS=localhost` passes the pre-flight but fails the remote check. The script rolls back: the previous controller is running and ready under `roof-controller`, and the exit status is non-zero. The rollback time is in the results. | `deploy-scenarios.sh c12` |
 | 6 | `--rollback` twice: the versions swap and swap back, and each is verified from the deploying machine | `deploy-scenarios.sh c12` |
-| 7 | Throughout steps 3-6, every relay-register sample is 0 and the emulator records no violation | `deploy-scenarios.sh c12` |
-| — | The move from the Compose `pi` profile to the deploy script and back ([deployment](deployment.md#moving-between-compose-and-the-deploy-script)). The script refuses a Compose container, and Compose refuses while the script's container exists. | `deploy-scenarios.sh migration` |
+| 7 | Relay-register reads fail, so the Stop cannot be verified. The deploy aborts before it stops or replaces the controller, and the controller latches `RelayVerificationFailed` until `ClearFault`. | `deploy-scenarios.sh c12` |
+| 8 | A new controller that cannot reach the HAT passes the pre-flight but never becomes ready. After `READY_TIMEOUT_SECONDS` the script rolls back, and the previous controller is running and ready again. | `deploy-scenarios.sh c12` |
+| 9 | Throughout steps 3-8, every relay-register sample is 0 and the emulator records no violation. In step 7 the samples end before `ClearFault`, whose pulse energizes RLY3. | `deploy-scenarios.sh c12` |
+| — | The move from the Compose `pi` profile to the deploy script and back ([deployment](deployment.md#moving-between-compose-and-the-deploy-script)). The script refuses a Compose container, and Compose refuses while the script's container exists. `--verify-remote` checks each Compose controller from the deploying machine, with no Docker context: an authenticated Status and a verified Stop at the published URL. It rejects a key the controller does not know. | `deploy-scenarios.sh migration` |
 
 **Installation assumptions**
 
+- **A verified all-off from the HAT means every relay contact is open** (C2). The deploy gate never treats `Status`,
+  `isMoving` or a failed request as permission to replace the controller. Its independent check is the relay register
+  that the HAT reads back after the Stop: HTTP 200 with `relayRegisterState = Verified`, `relayRegisterMask = 0` and
+  `commandedMotion = None`. Anything else aborts the deploy (step 7), unless an operator overrides it with
+  `--force-unverified-stop` and types the confirmation at the terminal. Without a terminal, or with any other answer,
+  it still aborts (`tests/deploy/deploy-script-tests.sh`). The register cannot see the contacts, so the gate relies on
+  C2's assumption that the contacts follow their coils. If a direction contact has welded, the register still verifies;
+  the STOP permit (RLY4) still stops the drive, and the next move latches `DriveNotRunning` (C2). No deploy setting
+  depends on it; the setting behind the contacts is C2's `AtSpeedConfirmationTimeout`.
 - **The deploying machine reaches the Pi over HTTPS and trusts its certificate** through `REMOTE_CA_CERT`. The settings
   that depend on it are `PI_HOST`, `REMOTE_CA_CERT` and `ALLOWED_HOSTS`. If the check from that machine fails, the
   script rolls back to the previous controller (step 5).
