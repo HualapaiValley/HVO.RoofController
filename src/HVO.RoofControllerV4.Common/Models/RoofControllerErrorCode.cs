@@ -40,5 +40,35 @@ public enum RoofControllerErrorCode
     ConfigurationRejected = 10,
 
     /// <summary>The request was malformed or out of range. HTTP 400.</summary>
-    InvalidRequest = 11
+    InvalidRequest = 11,
+
+    /// <summary>The name, password or PIN is wrong, or the person cannot sign in that way. HTTP 401.</summary>
+    SignInFailed = 12,
+
+    /// <summary>
+    /// Too many failed sign-ins for this name, or PIN attempts at this kiosk: sign-in is refused until the time in the
+    /// <c>Retry-After</c> header. Stop is never locked out. HTTP 429.
+    /// </summary>
+    SignInLockedOut = 13,
+
+    /// <summary>Too many sign-ins are being checked at once; retry shortly. HTTP 429.</summary>
+    SignInBusy = 14,
+
+    /// <summary>A PIN sign-in was sent with an API key that is not a kiosk key. HTTP 403.</summary>
+    KioskKeyRequired = 15,
+
+    /// <summary>No user, API key or session has that name or identifier. HTTP 404.</summary>
+    IdentityNotFound = 16,
+
+    /// <summary>A user or API key with that name already exists. HTTP 409.</summary>
+    IdentityNameConflict = 17,
+
+    /// <summary>The API key comes from the controller's configuration and cannot be changed through the API. HTTP 409.</summary>
+    IdentityReadOnly = 18,
+
+    /// <summary>The change would leave no admin credential (admin API key, or admin with a password). HTTP 409.</summary>
+    LastAdministrator = 19,
+
+    /// <summary>The identity store could not be read or written, so sign-in and management are unavailable. HTTP 503.</summary>
+    IdentityStoreUnavailable = 20
 }
