@@ -64,6 +64,18 @@ internal sealed class OtlpCollectorStub : IAsyncDisposable
     /// <summary>Connections the black hole accepted and never answered.</summary>
     public int Connections => Volatile.Read(ref _connections);
 
+    /// <summary>Connections the black hole holds now: the exporter has not yet given up on them.</summary>
+    public int Held
+    {
+        get
+        {
+            lock (_held)
+            {
+                return _held.Count;
+            }
+        }
+    }
+
     /// <summary>Exports the reachable collector accepted.</summary>
     public int Exports => Volatile.Read(ref _exports);
 
@@ -135,7 +147,35 @@ internal sealed class OtlpCollectorStub : IAsyncDisposable
             {
                 _held.Add(client);
             }
+
+            _ = DrainAsync(client);
         }
+    }
+
+    /// <summary>
+    /// Reads and discards the export without answering, and lets the connection go once the exporter gives up on it, as
+    /// an address that times out keeps no connection open: a long outage (the soak) holds no more sockets over time.
+    /// </summary>
+    private async Task DrainAsync(TcpClient client)
+    {
+        var buffer = new byte[16 * 1024];
+        try
+        {
+            var stream = client.GetStream();
+            while (await stream.ReadAsync(buffer, _stopping.Token) > 0)
+            {
+            }
+        }
+        catch (Exception exception) when (exception is System.IO.IOException or ObjectDisposedException or SocketException or OperationCanceledException or InvalidOperationException)
+        {
+        }
+
+        lock (_held)
+        {
+            _held.Remove(client);
+        }
+
+        client.Dispose();
     }
 }
 

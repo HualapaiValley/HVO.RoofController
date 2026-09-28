@@ -35,6 +35,9 @@ internal static class Scenario
     /// </summary>
     public const string Category = "Scenario";
 
+    /// <summary>The soak (C14) is also a scenario: 90 s in the scenario job, and hours in the nightly soak.</summary>
+    public const string SoakCategory = "Soak";
+
     public const string RoofApi = "/api/v4.0/RoofControl";
 
     /// <summary>

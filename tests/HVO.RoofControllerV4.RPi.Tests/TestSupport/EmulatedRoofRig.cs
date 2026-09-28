@@ -65,6 +65,12 @@ internal sealed record EmulatedRoofRigOptions
     /// controller's camera proxy at it, without credentials. Otherwise the proxy is not configured (503).
     /// </summary>
     public bool Camera { get; init; }
+
+    /// <summary>
+    /// Keep only this many of the latest log entries in <see cref="EmulatedRoofRig.Logs"/> (and every Warning or above),
+    /// for a run long enough that recording every entry would grow the heap it measures (the soak). Null keeps all.
+    /// </summary>
+    public int? LogCapacity { get; init; }
 }
 
 /// <summary>
@@ -96,7 +102,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         Server = server;
         _camera = camera;
         _settings = settings;
-        Logs = new RecordingLoggerProvider();
+        Logs = new RecordingLoggerProvider(options.LogCapacity);
         App = CreateApp(Logs);
     }
 
@@ -206,7 +212,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         LastStopDuration = stopping.Elapsed;
         whileStopped?.Invoke(Session);
         Server.Outage = false;
-        Logs = new RecordingLoggerProvider();
+        Logs = new RecordingLoggerProvider(Options.LogCapacity);
         App = CreateApp(Logs);
         await StartControllerAsync(waitForInitialization: true, status: null);
     }
