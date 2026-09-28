@@ -47,6 +47,12 @@ public sealed record SmVectorSettings
     /// </summary>
     public static readonly TimeSpan PowerUpStartLockout = TimeSpan.FromSeconds(2);
 
+    /// <summary>P175 = 999.9: a continuous DC brake after a stop, and a 15 s brake before a start (SV01J p.27, p.34).</summary>
+    public static readonly TimeSpan ContinuousDcBrake = TimeSpan.FromMilliseconds(999_900);
+
+    /// <summary>The brake before a start with P110 = 2 when P175 = 999.9.</summary>
+    public static readonly TimeSpan ContinuousStartDcBrake = TimeSpan.FromSeconds(15);
+
     /// <summary>P103 maximum frequency, Hz. Factory default 60.</summary>
     public double MaxFrequencyHz { get; init; } = 60;
 
@@ -65,14 +71,33 @@ public sealed record SmVectorSettings
     /// <summary>P111 stop method. The wiring doc says "select and test"; the factory default is coast.</summary>
     public SmVectorStopMethod StopMethod { get; init; } = SmVectorStopMethod.Coast;
 
-    /// <summary>P175 DC brake time, used by <see cref="SmVectorStopMethod.CoastWithDcBrake"/> and <see cref="SmVectorStopMethod.RampWithDcBrake"/>.</summary>
+    /// <summary>
+    /// P175 DC brake time, 0-999.9 s (SV01J p.34): after a stop with <see cref="SmVectorStopMethod.CoastWithDcBrake"/> or
+    /// <see cref="SmVectorStopMethod.RampWithDcBrake"/>, and before a start with P110 = 2. <see cref="ContinuousDcBrake"/>
+    /// (999.9 s) brakes after a stop until a run or a fault, and for 15 s before a start.
+    /// </summary>
     public TimeSpan DcBrakeTime { get; init; } = TimeSpan.Zero;
 
-    /// <summary>P110 start method. Only 0 (normal, with the power-up lockout) and 2 are modelled; both have the lockout.</summary>
+    /// <summary>
+    /// P110 start method. Only 0 (normal) and 2 (DC brake for P175 before the motor starts, SV01J p.27) are modelled;
+    /// both have the power-up start lockout.
+    /// </summary>
     public int StartMethod { get; init; }
 
-    /// <summary>P100 != 0: TB-1 is an active STOP input. The wiring doc sets P100 = 1.</summary>
-    public bool StopInputEnabled { get; init; } = true;
+    /// <summary>
+    /// P100 start control source, 0-6 (SV01J p.25, p.30). The wiring doc sets 1 (terminal strip); the factory default is 0
+    /// (local keypad). TB-1 is an active STOP input for any value but 0, and the run inputs (P121-P124 = 10-14) are valid
+    /// only in terminal strip mode (1, 4, 5 or 6). With 4 or 5 a TB-13 input set to 8 (Control Select) would switch to
+    /// a keypad; none is. The model has no keypad or network, so with 0, 2 or 3 the drive never starts.
+    /// </summary>
+    public int StartControlSource { get; init; } = 1;
+
+    /// <summary>
+    /// P112 rotation: true is 1 (forward and reverse), which the wiring doc sets; false is the factory default 0
+    /// (forward only), with which Run Reverse (P122 = 14) does not function (SV01J p.27, p.30). Assumption: the drive
+    /// ignores Run Reverse; a drive that ran forward instead behaves like swapped motor leads, which the plant covers.
+    /// </summary>
+    public bool ReverseEnabled { get; init; } = true;
 
     /// <summary>P140 relay output (TB-16/TB-17). The wiring doc sets 3 (Fault).</summary>
     public SmVectorOutputFunction RelayOutput { get; init; } = SmVectorOutputFunction.Fault;
@@ -82,6 +107,19 @@ public sealed record SmVectorSettings
 
     /// <summary>P144 output inversion: 0 none, 1 inverts P140, 2 inverts P142, 3 both (SV01J p.32). The wiring doc sets 0.</summary>
     public int OutputInversion { get; init; }
+
+    /// <summary>TB-1 is an active STOP input (P100 != 0).</summary>
+    internal bool StopInputActive => StartControlSource != 0;
+
+    /// <summary>The run inputs are valid: terminal strip start control (P100 = 1, 4, 5 or 6).</summary>
+    internal bool TerminalRunInputsActive => StartControlSource is 1 or 4 or 5 or 6;
+
+    /// <summary>The DC brake after a stop with P111 = 1 or 3; <see cref="Timeout.InfiniteTimeSpan"/> when continuous.</summary>
+    internal TimeSpan StopDcBrakeTime => DcBrakeTime == ContinuousDcBrake ? Timeout.InfiniteTimeSpan : DcBrakeTime;
+
+    /// <summary>The DC brake before a start: P175 with P110 = 2 (15 s for 999.9), otherwise none.</summary>
+    internal TimeSpan StartDcBrakeTime
+        => StartMethod != 2 ? TimeSpan.Zero : DcBrakeTime == ContinuousDcBrake ? ContinuousStartDcBrake : DcBrakeTime;
 
     internal double AccelerationRateHzPerSecond => Rate(AccelerationTime);
 
@@ -103,9 +141,19 @@ public sealed record SmVectorSettings
             throw new ArgumentOutOfRangeException(nameof(AccelerationTime), "P104 and P105 are 0-3600 s.");
         }
 
+        if (DcBrakeTime < TimeSpan.Zero || DcBrakeTime > ContinuousDcBrake)
+        {
+            throw new ArgumentOutOfRangeException(nameof(DcBrakeTime), "P175 is 0-999.9 s.");
+        }
+
         if (StartMethod is not (0 or 2))
         {
             throw new ArgumentOutOfRangeException(nameof(StartMethod), "Only P110 = 0 or 2 (no automatic restart) is modelled.");
+        }
+
+        if (StartControlSource is < 0 or > 6)
+        {
+            throw new ArgumentOutOfRangeException(nameof(StartControlSource), "P100 is 0-6.");
         }
 
         if (OutputInversion is < 0 or > 3)
@@ -133,6 +181,14 @@ public sealed record SmVectorAssumptions
     /// running". Default true.
     /// </summary>
     public bool RunOutputDuringDeceleration { get; init; } = true;
+
+    /// <summary>
+    /// TB-14 (P142 = Run) stays energized while the DC brake is applied: after a stop (P111 = 1 or 3) and before a start
+    /// (P110 = 2). The manual defines Run only as "energizes when the drive is running". Default true: after a stop with
+    /// a DC brake the controller still sees IN4 high, which its start interlock and drive-stop check must handle. With
+    /// false, a brake before a start longer than the controller's at-speed window stops the roof.
+    /// </summary>
+    public bool RunOutputDuringDcBrake { get; init; } = true;
 
     /// <summary>Clear Fault (P123 = 20, "close to reset fault") must be held at least this long to reset.</summary>
     public TimeSpan MinimumClearFaultPulse { get; init; } = TimeSpan.FromMilliseconds(20);

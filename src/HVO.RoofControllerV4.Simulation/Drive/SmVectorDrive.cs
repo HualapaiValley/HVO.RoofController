@@ -33,6 +33,9 @@ public enum SmVectorMode
     /// <summary>DC brake after a stop (P111 = 1 or 3, P175 &gt; 0).</summary>
     DcBraking,
 
+    /// <summary>DC brake before the motor starts (P110 = 2, P175 &gt; 0), with a run input applied.</summary>
+    StartDcBraking,
+
     /// <summary>Tripped. The output is off and the motor coasts until the fault is reset.</summary>
     Faulted
 }
@@ -43,8 +46,8 @@ public readonly record struct SmVectorInputs(bool Tb1StopPermit, bool Tb13ARunFo
 /// <summary>
 /// Lenze AC Tech SMVector model, reduced to the terminal-strip behaviour the roof controller uses: TB-1 STOP, Run
 /// Forward and Run Reverse (P121 = 13, P122 = 14), Clear Fault (P123 = 20), the relay output (P140) and the TB-14
-/// output (P142) with P144 inversion, the ramps (P104, P105), the stop method (P111), the power-up start lockout (P110),
-/// and a stall trip. Not thread-safe; <see cref="RoofPlant"/> serializes access.
+/// output (P142) with P144 inversion, the start control source (P100), rotation (P112), the ramps (P104, P105), the
+/// stop method (P111) and DC brake time (P175), the start method with its power-up lockout (P110), and a stall trip. Not thread-safe; <see cref="RoofPlant"/> serializes access.
 /// </summary>
 public sealed class SmVectorDrive
 {
@@ -59,6 +62,7 @@ public sealed class SmVectorDrive
     private bool _clearFaultConsumed;
     private TimeSpan _stallTime;
     private TimeSpan _dcBrakeRemaining;
+    private TimeSpan _startBrakeRemaining;
 
     public SmVectorDrive(SmVectorSettings settings, SmVectorAssumptions assumptions, bool powered, TimeSpan uptime)
     {
@@ -107,9 +111,13 @@ public sealed class SmVectorDrive
     /// <summary>The motor is being driven: the output is on and not in DC brake.</summary>
     public bool IsDriving => Mode is SmVectorMode.Running or SmVectorMode.Decelerating;
 
+    /// <summary>The DC brake is applied, after a stop or before a start.</summary>
+    public bool IsDcBraking => Mode is SmVectorMode.DcBraking or SmVectorMode.StartDcBraking;
+
     /// <summary>True when nothing will change unless an input, power or time-dependent trip changes.</summary>
     internal bool IsSettled
-        => Mode is SmVectorMode.Unpowered or SmVectorMode.Stopped or SmVectorMode.Faulted
+        => (Mode is SmVectorMode.Unpowered or SmVectorMode.Stopped or SmVectorMode.Faulted
+            || (Mode == SmVectorMode.DcBraking && _dcBrakeRemaining == Timeout.InfiniteTimeSpan))
            && _stopPermit.IsSettled && _runForward.IsSettled && _runReverse.IsSettled && _clearFault.IsSettled
            && _stallTime == TimeSpan.Zero
            && !(Trip != SmVectorTrip.None && _clearFault.Value && !_clearFaultConsumed);
@@ -130,6 +138,7 @@ public sealed class SmVectorDrive
         OutputFrequencyHz = 0;
         OutputDirection = 0;
         _dcBrakeRemaining = TimeSpan.Zero;
+        _startBrakeRemaining = TimeSpan.Zero;
         _stallTime = TimeSpan.Zero;
         _clearFaultHeld = TimeSpan.Zero;
         _clearFaultConsumed = false;
@@ -184,8 +193,13 @@ public sealed class SmVectorDrive
 
         StepClearFault(dt, clearFault);
 
-        var stopActive = Settings.StopInputEnabled && !stopPermit;
-        var requested = runForward == runReverse ? 0 : runForward ? 1 : -1;
+        // Both run inputs stop the drive (SV01J p.30); with P112 = 0 Run Reverse alone does nothing, and outside terminal
+        // strip control (P100) neither input is valid.
+        var stopActive = Settings.StopInputActive && !stopPermit;
+        var requested = !Settings.TerminalRunInputsActive || runForward == runReverse ? 0
+            : runForward ? 1
+            : Settings.ReverseEnabled ? -1
+            : 0;
 
         if (stopActive && !Assumptions.RestartWhenStopReleasedWithRunHeld)
         {
@@ -211,7 +225,7 @@ public sealed class SmVectorDrive
 
         if (start)
         {
-            Run(dt, requested);
+            StartStep(dt, requested);
         }
         else
         {
@@ -244,6 +258,34 @@ public sealed class SmVectorDrive
             _runArmed = Assumptions.RestartAfterResetWithRunHeld;
             SetMode(SmVectorMode.Stopped, "fault reset by Clear Fault");
         }
+    }
+
+    /// <summary>
+    /// A start with the output off first applies the DC brake before start (P110 = 2), then runs. A start while the
+    /// output is on (running or ramping down) runs at once.
+    /// </summary>
+    private void StartStep(TimeSpan dt, int requested)
+    {
+        if (Mode is SmVectorMode.Stopped or SmVectorMode.DcBraking && Settings.StartDcBrakeTime > TimeSpan.Zero)
+        {
+            _dcBrakeRemaining = TimeSpan.Zero;
+            _startBrakeRemaining = Settings.StartDcBrakeTime;
+            SetMode(SmVectorMode.StartDcBraking, "DC brake before start");
+            return;
+        }
+
+        if (Mode == SmVectorMode.StartDcBraking)
+        {
+            _startBrakeRemaining -= dt;
+            if (_startBrakeRemaining > TimeSpan.Zero)
+            {
+                return;
+            }
+
+            _startBrakeRemaining = TimeSpan.Zero;
+        }
+
+        Run(dt, requested);
     }
 
     private void Run(TimeSpan dt, int requested)
@@ -290,6 +332,12 @@ public sealed class SmVectorDrive
                 Decelerate(dt);
                 break;
             case SmVectorMode.DcBraking:
+                if (_dcBrakeRemaining == Timeout.InfiniteTimeSpan)
+                {
+                    // P175 = 999.9: until a run or a fault.
+                    break;
+                }
+
                 _dcBrakeRemaining -= dt;
                 if (_dcBrakeRemaining <= TimeSpan.Zero)
                 {
@@ -297,6 +345,11 @@ public sealed class SmVectorDrive
                     SetMode(SmVectorMode.Stopped, "DC brake finished");
                 }
 
+                break;
+            case SmVectorMode.StartDcBraking:
+                // The motor never started, so the stop method does not apply.
+                _startBrakeRemaining = TimeSpan.Zero;
+                SetMode(SmVectorMode.Stopped, reason + " during the DC brake before start");
                 break;
         }
     }
@@ -313,9 +366,9 @@ public sealed class SmVectorDrive
 
     private void BeginDcBrakeOrStop(bool dcBrake, string reason)
     {
-        if (dcBrake && Settings.DcBrakeTime > TimeSpan.Zero)
+        if (dcBrake && Settings.StopDcBrakeTime != TimeSpan.Zero)
         {
-            _dcBrakeRemaining = Settings.DcBrakeTime;
+            _dcBrakeRemaining = Settings.StopDcBrakeTime;
             SetMode(SmVectorMode.DcBraking, reason + ", DC brake");
         }
         else
@@ -344,6 +397,7 @@ public sealed class SmVectorDrive
     {
         OutputOff();
         _dcBrakeRemaining = TimeSpan.Zero;
+        _startBrakeRemaining = TimeSpan.Zero;
         _stallTime = TimeSpan.Zero;
         _runArmed = false;
         Trip = trip;
@@ -367,7 +421,8 @@ public sealed class SmVectorDrive
         var active = function switch
         {
             SmVectorOutputFunction.Run => Mode == SmVectorMode.Running
-                || (Mode == SmVectorMode.Decelerating && Assumptions.RunOutputDuringDeceleration),
+                || (Mode == SmVectorMode.Decelerating && Assumptions.RunOutputDuringDeceleration)
+                || (IsDcBraking && Assumptions.RunOutputDuringDcBrake),
             SmVectorOutputFunction.Fault => Trip == SmVectorTrip.None,
             SmVectorOutputFunction.InverseFault => Trip != SmVectorTrip.None,
             SmVectorOutputFunction.AtSpeed => Mode == SmVectorMode.Running

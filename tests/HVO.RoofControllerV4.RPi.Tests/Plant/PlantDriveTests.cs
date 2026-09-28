@@ -6,6 +6,7 @@ using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
 using HVO.RoofControllerV4.Simulation.Drive;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Plant;
@@ -224,7 +225,8 @@ public class PlantDriveTests
 
         h.Open();
         h.RunUntilStopped(Travel).Should().BeTrue();
-        h.Close();
+        h.RunUntil(() => !h.Controller.IsAtSpeed, TimeSpan.FromSeconds(1)).Should().BeTrue("the run output may stay on during the DC brake");
+        h.Close().IsSuccessful.Should().BeTrue();
         h.RunUntilStopped(Travel).Should().BeTrue();
 
         h.Status.Should().Be(RoofControllerStatus.Closed);
@@ -268,6 +270,174 @@ public class PlantDriveTests
 
         h.RunUntilStopped(Travel).Should().BeTrue();
         h.Status.Should().Be(RoofControllerStatus.Closed);
+        h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task StopDcBrake_TheNextMoveWaitsForIN4_WhenTheRunOutputStaysOnDuringTheBrake(bool runOutputDuringDcBrake)
+    {
+        var plant = new RoofPlantOptions
+        {
+            Drive = new SmVectorSettings { StopMethod = SmVectorStopMethod.CoastWithDcBrake, DcBrakeTime = TimeSpan.FromMilliseconds(500) },
+            DriveAssumptions = new SmVectorAssumptions { RunOutputDuringDcBrake = runOutputDuringDcBrake }
+        };
+        using var h = await PlantHarness.StartAsync(plant);
+        h.Open();
+        h.RunUntilStopped(Travel).Should().BeTrue();
+        h.RunFor(TimeSpan.FromMilliseconds(100));
+        h.Plant.Drive.Mode.Should().Be(SmVectorMode.DcBraking);
+
+        var close = h.Close();
+
+        if (runOutputDuringDcBrake)
+        {
+            close.ErrorCode().Should().Be(RoofControllerErrorCode.InterlockActive, "IN4 still reports running during the brake");
+            h.RunUntil(() => !h.Controller.IsAtSpeed, TimeSpan.FromSeconds(1)).Should().BeTrue();
+            h.Close().IsSuccessful.Should().BeTrue();
+        }
+        else
+        {
+            close.IsSuccessful.Should().BeTrue();
+        }
+
+        h.RunUntilStopped(Travel).Should().BeTrue();
+        h.Status.Should().Be(RoofControllerStatus.Closed);
+        h.Snapshot.LatchedFaultReason.Should().BeNull();
+        h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task ContinuousStopDcBrake_WithTheRunOutputOnDuringTheBrake_ReportsTheDriveStillRunning_AndRefusesMotion(bool runOutputDuringDcBrake)
+    {
+        // P175 = 999.9 with P111 = 1 brakes until the next run (SV01J p.34). If TB-14 stays on during the brake, IN4 never
+        // drops after a stop: the drive-stop check reports it and the start interlock refuses every move.
+        var plant = new RoofPlantOptions
+        {
+            Drive = new SmVectorSettings { StopMethod = SmVectorStopMethod.CoastWithDcBrake, DcBrakeTime = SmVectorSettings.ContinuousDcBrake },
+            DriveAssumptions = new SmVectorAssumptions { RunOutputDuringDcBrake = runOutputDuringDcBrake }
+        };
+        using var h = await PlantHarness.StartAsync(plant);
+        h.Open();
+        h.RunFor(TimeSpan.FromSeconds(3));
+        h.Stop().IsSuccessful.Should().BeTrue();
+
+        h.RunFor((h.Options.DriveStopConfirmationTimeout ?? h.Options.AtSpeedConfirmationTimeout!.Value) + TimeSpan.FromSeconds(1));
+
+        h.Plant.Drive.Mode.Should().Be(SmVectorMode.DcBraking);
+        h.Plant.Velocity.Should().Be(0);
+        h.Log.Contains(LogLevel.Critical, "Drive still reports running (IN4)").Should().Be(runOutputDuringDcBrake);
+        var close = h.Close();
+        if (runOutputDuringDcBrake)
+        {
+            close.ErrorCode().Should().Be(RoofControllerErrorCode.InterlockActive);
+        }
+        else
+        {
+            close.IsSuccessful.Should().BeTrue("a run ends the continuous brake");
+            h.RunUntilStopped(Travel).Should().BeTrue();
+            h.Status.Should().Be(RoofControllerStatus.Closed);
+        }
+
+        h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(2)]
+    [DataRow(3)]
+    public async Task StartControlSourceNotTheTerminalStrip_TheDriveNeverStarts_AndDriveNotRunningLatches(int p100)
+    {
+        // The wiring doc sets P100 = 1. The factory default 0 (local keypad) ignores the run inputs, as do 2 and 3 (SV01J p.25).
+        using var h = await PlantHarness.StartAsync(new RoofPlantOptions { Drive = new SmVectorSettings { StartControlSource = p100 } });
+        var commanded = h.Elapsed;
+
+        h.Open().IsSuccessful.Should().BeTrue();
+        h.RunUntilStopped(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        h.Snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveNotRunning);
+        (h.CoilOffAt(1, commanded) - commanded).TotalSeconds.Should().BeApproximately(3, 0.1, "AtSpeedConfirmationTimeout is 3 s");
+        h.Plant.Position.Should().Be(-0.01);
+        h.RelayRegister.Should().Be(0);
+        h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task ForwardOnlyRotation_CloseLatchesDriveNotRunning_AndOpenStillWorks()
+    {
+        // P112 = 0 (the factory default): Run Reverse (TB-13B, the close direction) does not function (SV01J p.27, p.30).
+        var plant = new RoofPlantOptions { InitialPosition = 1.0, Drive = new SmVectorSettings { ReverseEnabled = false } };
+        using var h = await PlantHarness.StartAsync(plant);
+
+        h.Close().IsSuccessful.Should().BeTrue();
+        h.RunUntilStopped(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        h.Snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveNotRunning);
+        h.Plant.Position.Should().Be(1.0);
+
+        (await h.ClearFaultAsync()).IsSuccessful.Should().BeTrue();
+        h.Open().IsSuccessful.Should().BeTrue();
+        h.RunUntilStopped(Travel).Should().BeTrue();
+        h.Status.Should().Be(RoofControllerStatus.Open);
+        h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task StartMethod2_WithAShortBrake_CompletesACycle(bool runOutputDuringDcBrake)
+    {
+        var plant = new RoofPlantOptions
+        {
+            Drive = new SmVectorSettings { StartMethod = 2, DcBrakeTime = TimeSpan.FromMilliseconds(500) },
+            DriveAssumptions = new SmVectorAssumptions { RunOutputDuringDcBrake = runOutputDuringDcBrake }
+        };
+        using var h = await PlantHarness.StartAsync(plant);
+
+        h.Open().IsSuccessful.Should().BeTrue();
+        h.RunUntilStopped(Travel).Should().BeTrue();
+        h.Status.Should().Be(RoofControllerStatus.Open);
+        h.Close().IsSuccessful.Should().BeTrue();
+        h.RunUntilStopped(Travel).Should().BeTrue();
+
+        h.Status.Should().Be(RoofControllerStatus.Closed);
+        h.Snapshot.LatchedFaultReason.Should().BeNull();
+        h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task StartMethod2_WithABrakeLongerThanTheAtSpeedWindow_OpensOnlyIfTheRunOutputIsOnDuringTheBrake(bool runOutputDuringDcBrake)
+    {
+        // With P110 = 2 the motor starts P175 after the run edge. IN4 confirms the start at once if TB-14 is on during the
+        // brake; otherwise it rises only after the brake, past the 3 s at-speed window.
+        var plant = new RoofPlantOptions
+        {
+            Drive = new SmVectorSettings { StartMethod = 2, DcBrakeTime = TimeSpan.FromSeconds(4) },
+            DriveAssumptions = new SmVectorAssumptions { RunOutputDuringDcBrake = runOutputDuringDcBrake }
+        };
+        using var h = await PlantHarness.StartAsync(plant);
+        var commanded = h.Elapsed;
+
+        h.Open().IsSuccessful.Should().BeTrue();
+        h.RunUntilStopped(Travel).Should().BeTrue();
+
+        if (runOutputDuringDcBrake)
+        {
+            h.Status.Should().Be(RoofControllerStatus.Open);
+            h.Snapshot.LatchedFaultReason.Should().BeNull();
+            (h.EventAt("IN2 LOW", commanded) - commanded).Should().BeGreaterThan(TimeSpan.FromSeconds(4), "the limit releases after the brake");
+        }
+        else
+        {
+            h.Snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveNotRunning);
+            h.Plant.Position.Should().Be(-0.01);
+        }
+
         h.Violations.Should().BeEmpty();
     }
 

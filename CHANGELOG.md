@@ -89,7 +89,7 @@ the roof against this server; use the authenticated browser console for operator
   edge not yet delivered still ends the move as `LimitSwitchReached`.
 - `DriveStopConfirmationTimeout` (0.5-60 s, local only; default: `AtSpeedConfirmationTimeout`):
   how long IN4 may stay high after a stop before a Critical log entry. Set it longer than the
-  drive's deceleration when a ramp stop is used.
+  drive's deceleration when a ramp stop is used, plus `P175` with a DC brake.
 - `DepartureReleaseTimeout` (0.5-60 s, local only, off by default): a start limit that has not
   released, and stayed released for `LimitSwitchDebounce`, in time stops the roof and latches
   the new stop reason `DepartureLimitNotReleased` (15), catching a jammed roof or one driving
@@ -100,8 +100,10 @@ the roof against this server; use the authenticated browser console for operator
   drive, two ME-8108 limit switches, the SM-I-010 HAT and the documented wiring, modelled from
   the vendor documentation. Each I2C transaction takes the HAT library's bus time (the transfer
   at an assumed 100 kHz, then its 15 ms pause), so the relays close in their real order and
-  spacing. The tests cover normal cycles, drive trips and power loss, external
-  stops, stop methods, switch and wire faults, relay and I2C faults, and each wiring mistake from
+  spacing. The drive model follows `P100`, `P112`, `P110` = 2 and `P175` (including 999.9),
+  with the Run output during a DC brake as a named assumption; the ME-8108 bounce follows
+  elapsed time. The tests cover normal cycles, drive trips and power loss, external
+  stops, stop methods and DC brakes, the factory `P100` and `P112`, switch and wire faults, relay and I2C faults, and each wiring mistake from
   closed, mid-travel and open; none relies on physical hardware.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
 - [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
@@ -195,6 +197,9 @@ assumptions, so the distances are indicative. Mitigations beyond these settings 
 - With the coast stop, a reversal while moving proceeds as soon as IN4 drops (about 25 ms after
   RLY1 releases), and the drive starts the other way while the roof is still coasting to rest.
   A ramp stop keeps IN4 high while it decelerates, and the reversal is refused.
+- If the Run output stays on during a DC brake (`P111` = 1 or 3; SV01J does not say), the next
+  move is refused until `P175` has passed, and with `P175` = 999.9 every move after a stop is
+  refused. Keep `P175` short, or use coast.
 
 ### Removed
 

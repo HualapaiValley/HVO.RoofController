@@ -61,7 +61,7 @@ public sealed record RoofPlantOptions
     /// <summary>How long the drive has had mains power when the plant starts. Past the 2 s start lockout by default.</summary>
     public TimeSpan InitialDriveUptime { get; init; } = TimeSpan.FromMinutes(1);
 
-    /// <summary>Fixed simulation step.</summary>
+    /// <summary>Fixed simulation step, at most 10 ms, and at most 1 ms while either limit switch bounces.</summary>
     public TimeSpan StepSize { get; init; } = TimeSpan.FromMilliseconds(1);
 
     /// <summary>
@@ -82,6 +82,11 @@ public sealed record RoofPlantOptions
         if (StepSize <= TimeSpan.Zero || StepSize > TimeSpan.FromMilliseconds(10))
         {
             throw new ArgumentOutOfRangeException(nameof(StepSize), "The step must be positive and at most 10 ms.");
+        }
+
+        if (StepSize > TimeSpan.FromMilliseconds(1) && (OpenLimit.Bounces || ClosedLimit.Bounces))
+        {
+            throw new ArgumentOutOfRangeException(nameof(StepSize), "The ME-8108 bounce changes every millisecond: use a step of at most 1 ms, or no bounce time.");
         }
 
         if (MaxHistory < 100)

@@ -118,6 +118,48 @@ public class Me8108LimitSwitchTests
     }
 
     [TestMethod]
+    public void Bounce_FollowsTheTimeSinceTheTouch_NotTheStepCount()
+    {
+        var limit = new Me8108LimitSwitch("test", new Me8108Options(), 0);
+        var half = TimeSpan.FromMilliseconds(0.5);
+        var trace = new List<(bool Nc, bool No)>();
+        for (var i = 0; i < 17; i++)
+        {
+            limit.Step(half, 20);
+            trace.Add(Contacts(limit));
+        }
+
+        // The crossing step, then the 5 ms transfer; the NO contact touches in the eleventh step.
+        trace.GetRange(0, 10).Should().AllBeEquivalentTo((false, false));
+        trace.GetRange(10, 7).Should().Equal(
+            (false, true),       // the touch
+            (false, true),       // 0.5 ms since the touch
+            (false, false),      // 1.0 ms
+            (false, false),      // 1.5 ms
+            (false, true),       // 2.0 ms
+            (false, true),       // 2.5 ms
+            (false, true));      // 3.0 ms: settled
+        limit.IsSettled.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Bounce_CountsTheTransferOvershoot_WithALongerStep()
+    {
+        // With 2 ms steps the 5 ms transfer ends 1 ms into the third step: the contact is 1 ms past the touch (open).
+        var limit = new Me8108LimitSwitch("test", new Me8108Options(), 0);
+        var twoMs = TimeSpan.FromMilliseconds(2);
+        var trace = new List<(bool Nc, bool No)>();
+        for (var i = 0; i < 5; i++)
+        {
+            limit.Step(twoMs, 20);
+            trace.Add(Contacts(limit));
+        }
+
+        trace.Should().Equal((false, false), (false, false), (false, false), (false, false), (false, true));
+        limit.IsSettled.Should().BeTrue("3 ms have passed since the touch");
+    }
+
+    [TestMethod]
     public void NotSettled_DuringTheTransferAndBounce()
     {
         var limit = new Me8108LimitSwitch("test", new Me8108Options(), 0);

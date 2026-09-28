@@ -355,10 +355,10 @@ These software interlocks do not replace the hardwired limit contacts in section
 
 | Parameter | Setting | Purpose |
 |---|---:|---|
-| `P100` | `1` | Start control source = Terminal Strip |
-| `P110` | `0` recommended | Disable automatic restart |
+| `P100` | `1` | Start control source = Terminal Strip (the factory default `0` ignores the run inputs and TB-1) |
+| `P110` | `0` recommended | Disable automatic restart (`2` applies the `P175` DC brake before each start) |
 | `P111` | Select and test | Stop method: 0 coast, 1 coast + DC brake, 2 ramp, 3 ramp + DC brake |
-| `P112` | `1` | Enable Forward and Reverse |
+| `P112` | `1` | Enable Forward and Reverse (the factory default `0` ignores Run Reverse) |
 | `P120` | `2` | Active-high digital inputs |
 | Physical `ALsw` | `+` / High | Must match P120 |
 | `P121` | `13` | TB-13A = Run Forward |
@@ -385,6 +385,8 @@ The emulated plant (`src/HVO.RoofControllerV4.Simulation`) shows what these sett
 
 - **`P111` stop method.** Coast (`0`, factory default) stops about 10 mm past the operating point. A ramp stop (`2`) with `P105` = 2 s keeps driving through the deceleration and reaches the hard stop; `P105` = 0.3 s stops about 15 mm past, and coast with a 0.5 s DC brake (`1`) about 3 mm past. These figures come from the emulated plant's assumed mechanics (2 m of travel at 0.1 m/s, hard stops 60 mm past the operating point) and are pinned by `PlantDocumentedFiguresTests`; keep coast unless the installed ramp is known to stop well inside the ME-8108 overtravel.
 - **`P104` acceleration.** The start limit releases later with a longer ramp: about 1.0 s after the command at 2 s, about 2.8 s at the 20 s factory default (the command's relay writes take about 90 ms of I2C time before the drive starts). `DepartureReleaseTimeout`, when used, must sit between the release time with the installed `P104` (plus `LimitSwitchDebounce`) and the time a wrong-way move takes to reach the hard stop behind the limit (about 1.5 s at 2 s; `PlantDocumentedFiguresTests`).
+- **`P175` DC brake time** (with `P111` = 1 or 3, or `P110` = 2). SV01J defines the Run output only as "energizes when the drive is running"; whether it stays on during a DC brake is an assumption (`SmVectorAssumptions.RunOutputDuringDcBrake`, on by default). If it does, IN4 stays HIGH for `P175` after each stop: the next move is refused (`InterlockActive`) until the brake ends, and `DriveStopConfirmationTimeout` must be longer than `P175` (plus `P105` with `P111` = 3). Do not use `P175` = 999.9 with `P111` = 1 or 3: the brake then lasts until the next run, IN4 never drops, every move is refused and the drive-stop check logs Critical. With `P110` = 2 the motor starts `P175` after the run command (15 s for 999.9); if the Run output is off during that brake, a `P175` longer than `AtSpeedConfirmationTimeout` latches `DriveNotRunning`. Pinned by `PlantDriveTests`.
+- **`P100` and `P112` at their factory defaults** (`0`). `P100` = 0 ignores both run inputs and `P112` = 0 ignores Run Reverse (the close direction); the controller latches `DriveNotRunning` when IN4 does not rise within `AtSpeedConfirmationTimeout` (`PlantDriveTests`).
 
 ## 12. Suggested Cat6 allocation
 

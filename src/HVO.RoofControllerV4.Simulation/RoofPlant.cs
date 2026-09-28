@@ -360,7 +360,7 @@ public sealed class RoofPlant
         }
         else
         {
-            var decel = (Drive.Mode == SmVectorMode.DcBraking ? mechanics.DcBrakeDeceleration : mechanics.CoastDeceleration) * seconds;
+            var decel = (Drive.IsDcBraking ? mechanics.DcBrakeDeceleration : mechanics.CoastDeceleration) * seconds;
             Velocity = Math.Abs(Velocity) <= decel ? 0 : Velocity - Math.Sign(Velocity) * decel;
         }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using FluentAssertions;
 using HVO.RoofControllerV4.Simulation.Drive;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -37,7 +38,7 @@ public class SmVectorDriveTests
     private static SmVectorDrive AtSpeed(SmVectorSettings? settings = null, SmVectorAssumptions? assumptions = null)
     {
         var drive = Create(settings, assumptions);
-        Step(drive, Forward, 2100);
+        Step(drive, Forward, 2100 + (int)drive.Settings.StartDcBrakeTime.TotalMilliseconds);
         drive.OutputFrequencyHz.Should().Be(60);
         return drive;
     }
@@ -125,21 +126,56 @@ public class SmVectorDriveTests
     }
 
     [TestMethod]
-    public void CoastWithDcBrake_BrakesForP175_ThenStops()
+    [DataRow(true)]
+    [DataRow(false)]
+    public void CoastWithDcBrake_BrakesForP175_ThenStops(bool runOutputDuringDcBrake)
     {
-        var drive = AtSpeed(new SmVectorSettings { StopMethod = SmVectorStopMethod.CoastWithDcBrake, DcBrakeTime = TimeSpan.FromMilliseconds(500) });
+        var drive = AtSpeed(
+            new SmVectorSettings { StopMethod = SmVectorStopMethod.CoastWithDcBrake, DcBrakeTime = TimeSpan.FromMilliseconds(500) },
+            new SmVectorAssumptions { RunOutputDuringDcBrake = runOutputDuringDcBrake });
 
         Step(drive, Idle, 4);
         drive.Mode.Should().Be(SmVectorMode.DcBraking);
         drive.IsDriving.Should().BeFalse("the DC brake does not drive the motor");
+        drive.IsDcBraking.Should().BeTrue();
         drive.OutputFrequencyHz.Should().Be(0);
-        drive.Tb14Sinking.Should().BeFalse();
+        drive.Tb14Sinking.Should().Be(runOutputDuringDcBrake, "P142 = Run follows the assumption during the brake");
 
         Step(drive, Idle, 499);
         drive.Mode.Should().Be(SmVectorMode.DcBraking);
 
         Step(drive, Idle, 1);
         drive.Mode.Should().Be(SmVectorMode.Stopped);
+        drive.Tb14Sinking.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void CoastWithContinuousDcBrake_BrakesUntilARun()
+    {
+        var drive = AtSpeed(new SmVectorSettings { StopMethod = SmVectorStopMethod.CoastWithDcBrake, DcBrakeTime = SmVectorSettings.ContinuousDcBrake });
+
+        Step(drive, Idle, 4);
+        drive.Mode.Should().Be(SmVectorMode.DcBraking);
+        drive.IsSettled.Should().BeTrue("nothing changes until an input does");
+        drive.AdvanceIdle(TimeSpan.FromHours(1));
+        Step(drive, Idle, 1000);
+        drive.Mode.Should().Be(SmVectorMode.DcBraking, "P175 = 999.9 brakes until a run or a fault (SV01J p.34)");
+        drive.Tb14Sinking.Should().BeTrue();
+
+        Step(drive, Forward, 4);
+        drive.Mode.Should().Be(SmVectorMode.Running);
+    }
+
+    [TestMethod]
+    public void ContinuousDcBrake_EndsOnAFault()
+    {
+        var drive = AtSpeed(new SmVectorSettings { StopMethod = SmVectorStopMethod.CoastWithDcBrake, DcBrakeTime = SmVectorSettings.ContinuousDcBrake });
+        Step(drive, Idle, 10);
+
+        drive.InjectTrip();
+
+        drive.Mode.Should().Be(SmVectorMode.Faulted);
+        drive.Tb14Sinking.Should().BeFalse();
     }
 
     [TestMethod]
@@ -214,13 +250,56 @@ public class SmVectorDriveTests
     }
 
     [TestMethod]
-    public void StopInputDisabled_RunsWithoutThePermit()
+    [DataRow(0)]
+    [DataRow(2)]
+    [DataRow(3)]
+    public void StartControlSource_OtherThanTheTerminalStrip_IgnoresTheRunInputs(int p100)
     {
-        var drive = Create(new SmVectorSettings { StopInputEnabled = false });
+        // P100 = 0 also disables TB-1 as a STOP input (SV01J p.25), but nothing can start the modelled drive.
+        var drive = Create(new SmVectorSettings { StartControlSource = p100 });
 
-        Step(drive, ForwardWithoutPermit, 10);
+        Step(drive, Forward, 100);
+        Step(drive, ForwardWithoutPermit, 100);
+        Step(drive, Reverse, 100);
 
+        drive.Mode.Should().Be(SmVectorMode.Stopped);
+        drive.Tb14Sinking.Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(4)]
+    [DataRow(5)]
+    [DataRow(6)]
+    public void StartControlSource_WithTheTerminalStrip_RunsAndHonoursTheStopPermit(int p100)
+    {
+        var drive = Create(new SmVectorSettings { StartControlSource = p100 });
+
+        Step(drive, ForwardWithoutPermit, 100);
+        drive.Mode.Should().Be(SmVectorMode.Stopped, "TB-1 is an active STOP input for P100 != 0");
+
+        Step(drive, Idle, 10);
+        Step(drive, Reverse, 10);
         drive.Mode.Should().Be(SmVectorMode.Running);
+        drive.OutputDirection.Should().Be(-1);
+    }
+
+    [TestMethod]
+    public void ForwardOnlyRotation_IgnoresRunReverse_AndStillStopsOnBothInputs()
+    {
+        // P112 = 0: "If any input is set to 10, 12 or 14, P112 must be set to 1 for Reverse action to function" (SV01J p.30).
+        var settings = new SmVectorSettings { ReverseEnabled = false };
+        var idle = Create(settings);
+        Step(idle, Reverse, 100);
+        idle.Mode.Should().Be(SmVectorMode.Stopped);
+
+        var running = AtSpeed(settings);
+        Step(running, Reverse, 4);
+        running.Mode.Should().Be(SmVectorMode.Stopped, "a change from forward to reverse removes the only valid run input");
+
+        var both = AtSpeed(settings);
+        Step(both, new SmVectorInputs(true, true, true, false), 4);
+        both.Mode.Should().Be(SmVectorMode.Stopped);
     }
 
     [TestMethod]
@@ -298,6 +377,104 @@ public class SmVectorDriveTests
         Step(drive, Forward, 4);
 
         drive.Trip.Should().Be(SmVectorTrip.StartTooSoonAfterPowerUp);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void StartMethod2_BrakesForP175_BeforeTheMotorStarts(bool runOutputDuringDcBrake)
+    {
+        var drive = Create(
+            new SmVectorSettings { StartMethod = 2, DcBrakeTime = TimeSpan.FromMilliseconds(500) },
+            new SmVectorAssumptions { RunOutputDuringDcBrake = runOutputDuringDcBrake });
+
+        Step(drive, Forward, 4);
+        drive.Mode.Should().Be(SmVectorMode.StartDcBraking);
+        drive.IsDriving.Should().BeFalse();
+        drive.IsDcBraking.Should().BeTrue();
+        drive.OutputFrequencyHz.Should().Be(0);
+        drive.Tb14Sinking.Should().Be(runOutputDuringDcBrake);
+
+        Step(drive, Forward, 499);
+        drive.Mode.Should().Be(SmVectorMode.StartDcBraking);
+
+        Step(drive, Forward, 1);
+        drive.Mode.Should().Be(SmVectorMode.Running);
+        drive.OutputDirection.Should().Be(1);
+        drive.Tb14Sinking.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void StartMethod2_WithP175Continuous_BrakesFor15Seconds()
+    {
+        // "If P110 = 2, 4...6 and P175 = 999.9, brake voltage will be applied for 15s" (SV01J p.34).
+        var drive = Create(new SmVectorSettings { StartMethod = 2, DcBrakeTime = SmVectorSettings.ContinuousDcBrake });
+
+        Step(drive, Forward, 4 + 14_999);
+        drive.Mode.Should().Be(SmVectorMode.StartDcBraking);
+
+        Step(drive, Forward, 1);
+        drive.Mode.Should().Be(SmVectorMode.Running);
+    }
+
+    [TestMethod]
+    public void StartMethod2_WithoutABrakeTime_StartsAtOnce()
+    {
+        var drive = Create(new SmVectorSettings { StartMethod = 2 });
+
+        Step(drive, Forward, 4);
+
+        drive.Mode.Should().Be(SmVectorMode.Running);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void StartMethod2_RunRemovedDuringTheBrake_StopsWithoutTheStopMethod(bool removeByStop)
+    {
+        var drive = Create(new SmVectorSettings
+        {
+            StartMethod = 2,
+            StopMethod = SmVectorStopMethod.CoastWithDcBrake,
+            DcBrakeTime = TimeSpan.FromMilliseconds(500)
+        });
+        var changes = new System.Collections.Generic.List<string>();
+        drive.Changed += changes.Add;
+        Step(drive, Forward, 100);
+
+        Step(drive, removeByStop ? ForwardWithoutPermit : Idle, 4);
+
+        drive.Mode.Should().Be(SmVectorMode.Stopped, "the motor never started, so there is nothing to brake after");
+        changes.Last().Should().EndWith("during the DC brake before start");
+    }
+
+    [TestMethod]
+    public void StartMethod2_ADirectionChangeWhileRunning_DoesNotBrake()
+    {
+        var drive = AtSpeed(new SmVectorSettings { StartMethod = 2, DcBrakeTime = TimeSpan.FromMilliseconds(500) });
+
+        Step(drive, Reverse, 4);
+
+        drive.Mode.Should().Be(SmVectorMode.Running, "the output is already on; it ramps through 0 Hz");
+    }
+
+    [TestMethod]
+    public void StartMethod2_ARunDuringTheStopBrake_BrakesAgainBeforeStarting()
+    {
+        var drive = AtSpeed(new SmVectorSettings
+        {
+            StartMethod = 2,
+            StopMethod = SmVectorStopMethod.CoastWithDcBrake,
+            DcBrakeTime = TimeSpan.FromMilliseconds(500)
+        });
+        Step(drive, Idle, 100);
+        drive.Mode.Should().Be(SmVectorMode.DcBraking);
+
+        Step(drive, Forward, 4);
+        drive.Mode.Should().Be(SmVectorMode.StartDcBraking);
+
+        Step(drive, Forward, 500);
+        drive.Mode.Should().Be(SmVectorMode.Running);
     }
 
     [TestMethod]
@@ -529,6 +706,10 @@ public class SmVectorDriveTests
             new SmVectorSettings { AccelerationTime = TimeSpan.FromSeconds(-1) },
             new SmVectorSettings { DecelerationTime = TimeSpan.FromSeconds(3601) },
             new SmVectorSettings { StartMethod = 1 },
+            new SmVectorSettings { DcBrakeTime = TimeSpan.FromSeconds(-1) },
+            new SmVectorSettings { DcBrakeTime = TimeSpan.FromSeconds(1000) },
+            new SmVectorSettings { StartControlSource = -1 },
+            new SmVectorSettings { StartControlSource = 7 },
             new SmVectorSettings { OutputInversion = 4 }
         };
 
@@ -539,6 +720,8 @@ public class SmVectorDriveTests
         }
 
         new SmVectorSettings().Invoking(s => s.Validate()).Should().NotThrow();
+        new SmVectorSettings { DcBrakeTime = SmVectorSettings.ContinuousDcBrake, StartControlSource = 6 }
+            .Invoking(s => s.Validate()).Should().NotThrow();
     }
 
     [TestMethod]
@@ -546,7 +729,10 @@ public class SmVectorDriveTests
     {
         var settings = new SmVectorSettings();
 
-        settings.StopInputEnabled.Should().BeTrue("P100 = 1");
+        settings.StartControlSource.Should().Be(1, "P100 = 1");
+        settings.ReverseEnabled.Should().BeTrue("P112 = 1");
+        settings.StartMethod.Should().Be(0, "P110 = 0");
+        settings.DcBrakeTime.Should().Be(TimeSpan.Zero, "P175 factory default");
         settings.RelayOutput.Should().Be(SmVectorOutputFunction.Fault, "P140 = 3");
         settings.Tb14Output.Should().Be(SmVectorOutputFunction.Run, "P142 = 1");
         settings.OutputInversion.Should().Be(0, "P144 = 0");

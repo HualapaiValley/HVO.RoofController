@@ -491,6 +491,12 @@ public class RoofPlantTests
         {
             new RoofPlantOptions { StepSize = TimeSpan.Zero },
             new RoofPlantOptions { StepSize = TimeSpan.FromMilliseconds(11) },
+            new RoofPlantOptions { StepSize = TimeSpan.FromMilliseconds(2) },
+            new RoofPlantOptions
+            {
+                StepSize = TimeSpan.FromMilliseconds(2),
+                OpenLimit = new Me8108Options { BounceTime = TimeSpan.Zero }
+            },
             new RoofPlantOptions { MaxHistory = 99 },
             new RoofPlantOptions { InitialPosition = -0.06 },
             new RoofPlantOptions { InitialPosition = 2.06 },
@@ -504,5 +510,13 @@ public class RoofPlantTests
             options.Invoking(o => o.Validate()).Should().Throw<ArgumentOutOfRangeException>();
             FluentActions.Invoking(() => new RoofPlant(options, new ManualTimeProvider())).Should().Throw<ArgumentOutOfRangeException>();
         }
+
+        // A step over 1 ms is valid once neither switch bounces.
+        var noBounce = new Me8108Options { BounceTime = TimeSpan.Zero };
+        var slowAction = new Me8108Options { ContactAction = Me8108ContactAction.SlowAction };
+        new RoofPlantOptions { StepSize = TimeSpan.FromMilliseconds(10), OpenLimit = noBounce, ClosedLimit = noBounce }
+            .Invoking(o => o.Validate()).Should().NotThrow();
+        new RoofPlantOptions { StepSize = TimeSpan.FromMilliseconds(10), OpenLimit = slowAction, ClosedLimit = noBounce }
+            .Invoking(o => o.Validate()).Should().NotThrow();
     }
 }

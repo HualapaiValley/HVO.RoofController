@@ -83,11 +83,18 @@ public sealed record Me8108Options
     /// <summary>Snap action: time from the NC contact opening to the NO contact closing (break before make).</summary>
     public TimeSpan TransferTime { get; init; } = TimeSpan.FromMilliseconds(5);
 
-    /// <summary>Snap action: after the closing contact first touches, it alternates every millisecond for this long.</summary>
+    /// <summary>
+    /// Snap action: after the closing contact first touches it bounces for this long, open in each odd whole millisecond
+    /// since the touch. The pattern follows elapsed time, so the plant step must be 1 ms or less to show it
+    /// (<see cref="RoofPlantOptions.Validate"/>).
+    /// </summary>
     public TimeSpan BounceTime { get; init; } = TimeSpan.FromMilliseconds(3);
 
     /// <summary>Slow action: lever travel between the NC contact opening and the NO contact closing.</summary>
     public double SlowActionGapDegrees { get; init; } = 5;
+
+    /// <summary>The closing contact bounces: snap action with a bounce time.</summary>
+    internal bool Bounces => ContactAction == Me8108ContactAction.Snap && BounceTime > TimeSpan.Zero;
 
     /// <summary>Roof travel, metres, that turns the lever by <paramref name="degrees"/>.</summary>
     public double TravelForDegrees(double degrees) => degrees * Math.PI / 180 * LeverArmMeters;
@@ -125,9 +132,9 @@ public sealed class Me8108LimitSwitch
     private bool _mechanicalNoClosed;
     private bool _transferring;
     private TimeSpan _transferRemaining;
-    private TimeSpan _bounceRemaining;
+    private bool _bouncing;
+    private TimeSpan _bounceElapsed;
     private bool _bounceTargetIsNo;
-    private int _bounceTick;
 
     public Me8108LimitSwitch(string name, Me8108Options options, double initialAngleDegrees)
     {
@@ -174,7 +181,7 @@ public sealed class Me8108LimitSwitch
             : Fault.HasFlag(LimitSwitchFault.StuckReleased) ? false
             : _mechanicalNoClosed;
 
-    internal bool IsSettled => !_transferring && _bounceRemaining == TimeSpan.Zero;
+    internal bool IsSettled => !_transferring && !_bouncing;
 
     internal event Action<string>? Changed;
 
@@ -220,22 +227,23 @@ public sealed class Me8108LimitSwitch
     {
         SetContacts(nc: false, no: false);
         _bounceTargetIsNo = towardNo;
-        _bounceRemaining = TimeSpan.Zero;
+        _bouncing = false;
         _transferRemaining = _options.TransferTime;
         _transferring = true;
         if (_transferRemaining <= TimeSpan.Zero)
         {
-            FinishTransfer();
+            FinishTransfer(TimeSpan.Zero);
         }
     }
 
-    private void FinishTransfer()
+    /// <summary>The closing contact first touched <paramref name="sinceTouch"/> ago (within this step).</summary>
+    private void FinishTransfer(TimeSpan sinceTouch)
     {
         _transferring = false;
         _transferRemaining = TimeSpan.Zero;
-        _bounceRemaining = _options.BounceTime;
-        _bounceTick = 0;
-        CloseTarget(true);
+        _bouncing = true;
+        _bounceElapsed = sinceTouch;
+        StepBounce(TimeSpan.Zero);
     }
 
     private void StepSnapTransfer(TimeSpan dt)
@@ -245,23 +253,27 @@ public sealed class Me8108LimitSwitch
             _transferRemaining -= dt;
             if (_transferRemaining <= TimeSpan.Zero)
             {
-                FinishTransfer();
+                FinishTransfer(-_transferRemaining);
             }
 
             return;
         }
 
-        if (_bounceRemaining > TimeSpan.Zero)
+        if (_bouncing)
         {
-            _bounceRemaining -= dt;
-            _bounceTick++;
-            // Deterministic bounce: the closing contact alternates each step and ends closed.
-            CloseTarget(_bounceRemaining <= TimeSpan.Zero || _bounceTick % 2 == 0);
-            if (_bounceRemaining < TimeSpan.Zero)
-            {
-                _bounceRemaining = TimeSpan.Zero;
-            }
+            StepBounce(dt);
         }
+    }
+
+    /// <summary>
+    /// Deterministic bounce from the time since the first touch: open in odd whole milliseconds, closed from
+    /// <see cref="Me8108Options.BounceTime"/> on.
+    /// </summary>
+    private void StepBounce(TimeSpan dt)
+    {
+        _bounceElapsed += dt;
+        _bouncing = _bounceElapsed < _options.BounceTime;
+        CloseTarget(!_bouncing || (long)_bounceElapsed.TotalMilliseconds % 2 == 0);
     }
 
     private void CloseTarget(bool closed)

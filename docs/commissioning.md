@@ -158,11 +158,15 @@ Production uses `AtSpeedConfirmationTimeout = 3 s` with `P142 = 1` (Run). With i
 - IN4 still HIGH `DriveStopConfirmationTimeout` after a stop (default: the same window) is logged
   as Critical once per stop.
 
-The emulated plant covers the first three (`PlantProductionCycleTests`, `PlantDriveTests`, the
-`RunMonitorWireBroken` and dead-relay cases); the Critical log after a stop is covered by
-`RoofControllerDriveRunTests` and `RoofControllerAtSpeedTests`. With `P142 = 6` (At Speed) the window must exceed
+The emulated plant covers all four (`PlantProductionCycleTests`, `PlantDriveTests`, the
+`RunMonitorWireBroken` and dead-relay cases; the Critical log after a stop with a continuous DC
+brake that keeps the Run output on), as do `RoofControllerDriveRunTests` and
+`RoofControllerAtSpeedTests`. With `P142 = 6` (At Speed) the window must exceed
 `P104`: at 20 s acceleration a 3 s window latches `DriveNotRunning`. With a ramp stop (`P111` = 2
-or 3), set `DriveStopConfirmationTimeout` longer than `P105`.
+or 3), set `DriveStopConfirmationTimeout` longer than `P105`. With a DC brake (`P111` = 1 or 3) the
+Run output may stay on while braking (an assumption the plant tests both ways): set it longer than
+`P175` (plus `P105` with `P111` = 3), expect the next move to be refused until the brake ends, and never use
+`P175` = 999.9 (continuous), which keeps IN4 HIGH until the next run and refuses every move.
 
 1. With the motor decoupled, command Open and Close 10 times each (cold and warm drive) and
    confirm `isAtSpeed = true` well inside the 3 s window.

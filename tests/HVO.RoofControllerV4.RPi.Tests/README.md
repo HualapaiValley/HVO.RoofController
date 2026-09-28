@@ -134,7 +134,7 @@ models exactly that register.
 | `Security/DeploymentValidationCommandTests` | The `--validate-deployment` command as `Program.Main` runs it, with real configuration sources and a temporary secrets directory |
 | `Simulation/…` | The emulator models on their own (`PlantRig`, raw register writes): SMVector drive, ME-8108 switch, SM-I-010 board and bus, the assembled plant |
 | `Plant/PlantProductionCycleTests` | Open and close on the limits, stop, reversals, watchdog and lease, with the production configuration |
-| `Plant/PlantDriveTests` | Drive trips and power loss, clear-fault pulse, external stops and run loss, stop methods and stop distance, acceleration |
+| `Plant/PlantDriveTests` | Drive trips and power loss, clear-fault pulse, external stops and run loss, stop methods and stop distance, acceleration, DC brakes after a stop and before a start (`P175`, `P110` = 2), `P100` and `P112` at their factory defaults |
 | `Plant/PlantLimitSwitchTests` | Contact action, bounce and transfer time, stuck switches, broken wires, a jammed roof |
 | `Plant/PlantHatTests` | HAT power loss and LED modes, dead and welded relays, register faults, failed relay writes while energizing (abort with every relay off), input read failures below and at the limit |
 | `Plant/PlantDocumentedFiguresTests` | The stop distances, start-limit release times and wrong-way timing the documents quote |
@@ -158,7 +158,8 @@ from the plant's `History` (`PlantHarness.EventAt`, `CoilOnAt`, `CoilOffAt`) rel
 
 The plant's defaults are **assumptions**, documented where they are defined (`RoofPlantOptions`,
 `SmVectorAssumptions`, `Me8108Options`): 2 m of travel at 0.1 m/s, hard stops 60 mm past each limit's operate point,
-the installed `P1xx` values, a 4 ms drive input response, and switch bounce and transfer times. Tests that depend on an
+the installed `P1xx` values, a 4 ms drive input response, the Run output during a DC brake, and switch bounce and
+transfer times (the bounce needs a plant step of 1 ms or less). Tests that depend on an
 assumption vary it. Software cannot prove the wiring, that contacts move, or the hardwired stop path; those remain
 commissioning checks ([docs/commissioning.md](../../docs/commissioning.md)).
 
@@ -167,9 +168,11 @@ Known limitations the plant tests document:
 - A ramp stop with the 2 s deceleration (`P105`) runs into the hard stop; coast (`P111 = 0`), a short ramp or DC braking
   stops clear of it.
 - Swapped motor leads, from a limit, drive the roof into the stop behind that limit before the stall trip. Only
-  `DepartureReleaseTimeout`, set from the measured release time, stops it first.
+  `DepartureReleaseTimeout`, set from the release time with the installed `P104`, stops it first.
 - An open limit that never operates reaches the hard stop; only a travel-time or position check would catch it.
 - A welded direction relay is invisible to the register read-back; RLY4 still stops the roof.
+- If the Run output stays on during a DC brake, the next move is refused until `P175` has passed; with `P175` = 999.9
+  every move after a stop is refused.
 
 ## Adding new tests
 

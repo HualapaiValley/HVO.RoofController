@@ -114,7 +114,9 @@ public record class RoofControllerOptionsV4
     /// <item>after IN4 has confirmed, motion stops and latches <see cref="RoofControllerStopReason.DriveNotRunning"/> when
     /// IN4 drops and stays low without the destination limit (for example an external stop opened TB-1).</item>
     /// </list>
-    /// Null (default) disables the interlock. Set it from the measured start time (commissioning C6).
+    /// Null (default) disables the interlock. Production sets 3 s: with P142 = 1 (Run) IN4 rises about 0.1 s after the
+    /// command in the emulated plant. With P142 = 6 (At Speed) it must exceed P104, and with P110 = 2 it must exceed P175
+    /// unless the run output stays on during the DC brake (commissioning C6).
     /// </summary>
     public TimeSpan? AtSpeedConfirmationTimeout { get; set; }
 
@@ -122,7 +124,8 @@ public record class RoofControllerOptionsV4
     /// Optional window for the drive to stop reporting running (IN4) after the relays are released. A drive that still
     /// reports running after it is logged as Critical once per stop; the relays are already off, so only the independent
     /// hardware stop can act on it. With a ramped stop (SMVector P111 = 2 or 3) the run output stays on while the drive
-    /// decelerates, so set this longer than the P105 deceleration time. Null (default) uses
+    /// decelerates, so set this longer than the P105 deceleration time, plus P175 with a DC brake (P111 = 1 or 3), since
+    /// the run output may stay on while braking. Null (default) uses
     /// <see cref="AtSpeedConfirmationTimeout"/>; with both null the check is off. Local configuration only: the remote
     /// configuration API reports it but never changes it.
     /// </summary>
