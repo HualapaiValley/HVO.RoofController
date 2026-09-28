@@ -77,7 +77,8 @@ internal sealed record EmulatedRoofRigOptions
     /// <summary>
     /// Write the controller's log to the console, as the production host does. The test framework keeps a test's console
     /// output in memory for its result, so a run that measures its own heap (the soak) turns this off: over two hours the
-    /// output grew the managed heap by about 3 MB. <see cref="EmulatedRoofRig.Logs"/> records the entries either way.
+    /// output grew the managed heap by about 3 MB. <see cref="EmulatedRoofRig.Logs"/> records the entries either way, and
+    /// a rig that fails to start with this off writes them to the console.
     /// </summary>
     public bool ConsoleLog { get; init; } = true;
 }
@@ -212,6 +213,12 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         }
         catch
         {
+            if (!options.ConsoleLog)
+            {
+                // The host wrote no console log, so the test's output would have nothing of what it logged.
+                Console.WriteLine(string.Join(Environment.NewLine, rig.Logs.Describe()));
+            }
+
             await rig.DisposeAsync();
             throw;
         }

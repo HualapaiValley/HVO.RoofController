@@ -546,14 +546,7 @@ public sealed class C14SoakScenarios
         }
 
         File.WriteAllText(Path.Combine(directory, "soak-samples.csv"), csv.ToString());
-
-        var serious = rig.Logs.Serious;
-        var latest = rig.Logs.Entries;
-        File.WriteAllLines(Path.Combine(directory, "soak-log.txt"), new[] { $"Every Warning or above ({serious.Count}):" }
-            .Concat(serious.Select(FormatLogEntry))
-            .Append(string.Empty)
-            .Append($"The latest {latest.Count} of {rig.Logs.Count} entries:")
-            .Concat(latest.Select(FormatLogEntry)));
+        File.WriteAllLines(Path.Combine(directory, "soak-log.txt"), rig.Logs.Describe());
         foreach (var file in new[] { "soak-summary.md", "soak-summary.json", "soak-samples.csv", "soak-log.txt" })
         {
             TestContext.AddResultFile(Path.Combine(directory, file));
@@ -561,9 +554,6 @@ public sealed class C14SoakScenarios
 
         return directory;
     }
-
-    private static string FormatLogEntry((string Category, LogLevel Level, string Message) entry)
-        => $"{entry.Level} {entry.Category}: {entry.Message}";
 
     private static TimeSpan SoakDuration()
     {
