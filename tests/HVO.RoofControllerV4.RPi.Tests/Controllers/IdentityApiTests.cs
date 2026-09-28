@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
+using WallClock = HVO.RoofControllerV4.RPi.Tests.Security.ManualTimeProvider;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Controllers;
 
@@ -43,9 +44,14 @@ public sealed class IdentityApiTests
         return settings;
     }
 
-    private static RoofApiTestHost CreateHost(string? storePath = null, RecordingLoggerProvider? logs = null)
+    private static RoofApiTestHost CreateHost(
+        string? storePath = null,
+        RecordingLoggerProvider? logs = null,
+        TimeProvider? time = null,
+        string environment = "Development")
         => new(
             settings: Settings(storePath),
+            environment: environment,
             configureServices: services =>
             {
                 // A cheap hash so the tests run quickly; production uses the ASP.NET Core default.
@@ -53,6 +59,11 @@ public sealed class IdentityApiTests
                 if (logs is not null)
                 {
                     services.AddSingleton<ILoggerProvider>(logs);
+                }
+
+                if (time is not null)
+                {
+                    services.AddSingleton(time);
                 }
             });
 
@@ -123,6 +134,98 @@ public sealed class IdentityApiTests
         (await victor.GetAsync($"{Roof}/Status")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await victor.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
         (await victor.PostAsync($"{Roof}/Open", content: null)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [TestMethod]
+    [DataRow(RoofControllerApiContract.ViewerRole)]
+    [DataRow(RoofControllerApiContract.OperatorRole)]
+    [DataRow(RoofControllerApiContract.AdminRole)]
+    public async Task EachRolesSession_IsAllowedAndRefused_AsTheRoleSays(string role)
+    {
+        // Production, so the OpenAPI document needs the Admin role as it does on the Pi.
+        using var host = CreateHost(environment: "Production");
+        await AddUserAsync(host, "pat", role);
+        using var pat = Bearer(host, (await SignInAsync(host, "pat")).Token);
+        var isOperator = role != RoofControllerApiContract.ViewerRole;
+        var isAdmin = role == RoofControllerApiContract.AdminRole;
+
+        var calls = new (string Call, Func<Task<HttpResponseMessage>> Send, bool Allowed)[]
+        {
+            ("GET Status", () => pat.GetAsync($"{Roof}/Status"), true),
+            ("POST Stop", () => pat.PostAsync($"{Roof}/Stop", content: null), true),
+            ("GET /health", () => pat.GetAsync("/health"), true),
+            ("GET Auth/Me", () => pat.GetAsync($"{Auth}/Me"), true),
+            ("POST Open", () => pat.PostAsync($"{Roof}/Open", content: null), isOperator),
+            ("POST Close", () => pat.PostAsync($"{Roof}/Close", content: null), isOperator),
+            ("POST ClearFault", () => pat.PostAsync($"{Roof}/ClearFault", content: null), isOperator),
+            ("GET Configuration", () => pat.GetAsync($"{Roof}/Configuration"), isAdmin),
+            ("GET System/info", () => pat.GetAsync("/api/v1.0/System/info"), isAdmin),
+            ("GET Identity/Users", () => pat.GetAsync($"{Identity}/Users"), isAdmin),
+            ("GET Identity/Sessions", () => pat.GetAsync($"{Identity}/Sessions"), isAdmin),
+            ("GET /openapi/v4.json", () => pat.GetAsync("/openapi/v4.json"), isAdmin)
+        };
+
+        foreach (var (call, send, allowed) in calls)
+        {
+            using var response = await send();
+            if (allowed)
+            {
+                response.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized, $"{role} may {call}");
+                response.StatusCode.Should().NotBe(HttpStatusCode.Forbidden, $"{role} may {call}");
+                ((int)response.StatusCode).Should().BeLessThan(500, $"{role} {call}: {await response.Content.ReadAsStringAsync()}");
+            }
+            else
+            {
+                response.StatusCode.Should().Be(HttpStatusCode.Forbidden, $"{role} may not {call}");
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task AnExpiredWebSession_IsRefused_ButTheUisOwnKeyStillStops_NamingThePerson()
+    {
+        var clock = new WallClock(DateTimeOffset.UtcNow);
+        using var logs = new RecordingLoggerProvider();
+        using var host = CreateHost(logs: logs, time: clock);
+        await AddUserAsync(host, "wendy", RoofControllerApiContract.OperatorRole);
+        using var wendy = Bearer(host, (await SignInAsync(host, "wendy")).Token);
+        (await wendy.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        clock.Now += TimeSpan.FromHours(12) + TimeSpan.FromSeconds(1);
+
+        var expired = await wendy.PostAsync($"{Roof}/Stop", content: null);
+        expired.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        expired.Headers.WwwAuthenticate.ToString().Should().Contain("error=\"invalid_token\"");
+
+        // The web UI holds its own key for Stop, and says whom it acts for.
+        using var ui = host.CreateApiClient(TestApiKeys.Viewer);
+        ui.DefaultRequestHeaders.Add(RoofIdentityContract.OnBehalfOfHeaderName, "wendy");
+        (await ui.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        logs.Entries.Select(entry => entry.Message)
+            .Should().Contain(m => m.Contains("Roof command stop requested by test-viewer for wendy", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task AnIdlePinSession_Ends_AndTheLockedKioskStillStops()
+    {
+        var clock = new WallClock(DateTimeOffset.UtcNow);
+        using var host = CreateHost(time: clock);
+        await AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole, password: null, pin: TestSecrets.Pin);
+        using var kiosk = host.CreateApiClient(KioskKey);
+        var session = await ApiJson.ReadAsync<RoofSessionResponse>(
+            await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin }));
+        using var olive = Bearer(host, session.Token);
+
+        clock.Now += TimeSpan.FromMinutes(9);
+        (await olive.PostAsync($"{Roof}/Open", content: null)).StatusCode.Should().Be(HttpStatusCode.OK, "activity keeps a PIN session open");
+        clock.Now += TimeSpan.FromMinutes(9);
+        (await olive.GetAsync($"{Roof}/Status")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        clock.Now += TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(1);
+
+        (await olive.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await kiosk.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await kiosk.PostAsync($"{Roof}/Open", content: null)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     [TestMethod]
