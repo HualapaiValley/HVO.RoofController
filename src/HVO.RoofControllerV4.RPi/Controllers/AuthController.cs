@@ -77,12 +77,13 @@ public sealed class AuthController : ControllerBase
 
     /// <summary>
     /// Signs in with a name and PIN at a kiosk (the kiosk's key in <c>X-Api-Key</c>). Only operators and admins have a
-    /// PIN. Failures lock out the kiosk, not the name; Stop with the kiosk key keeps working.
+    /// PIN. A failure counts for both the kiosk and the name's PIN (at every kiosk); the name's password still works when
+    /// its PIN is locked out, and Stop with the kiosk key keeps working.
     /// </summary>
     /// <response code="200">The new PIN session; it ends after a few idle minutes (<c>IdleTimeoutSeconds</c>).</response>
     /// <response code="401">No valid API key, or the name or PIN is not correct (<c>SignInFailed</c>).</response>
     /// <response code="403">The API key is not a kiosk key (<c>KioskKeyRequired</c>).</response>
-    /// <response code="429">This kiosk is locked out after repeated failures, or too many sign-ins at once.</response>
+    /// <response code="429">This kiosk, or this name's PIN, is locked out after repeated failures (<c>SignInLockedOut</c>), or too many sign-ins at once (<c>SignInBusy</c>); see <c>Retry-After</c>.</response>
     /// <response code="503">The identity store is unavailable.</response>
     [HttpPost("Pin", Name = nameof(SignInWithPin))]
     [EnableRateLimiting(RoofSignInRateLimiting.PolicyName)]

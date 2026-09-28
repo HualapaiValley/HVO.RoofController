@@ -16,6 +16,9 @@ namespace HVO.RoofControllerV4.RPi.Security;
 /// </summary>
 public sealed class RoofStopAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
+    // The scheme whose answer was used (one handler serves one request).
+    private string? _answeredBy;
+
     public RoofStopAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
         : base(options, logger, encoder)
     {
@@ -28,10 +31,12 @@ public sealed class RoofStopAuthenticationHandler : AuthenticationHandler<Authen
             var session = await Context.AuthenticateAsync(RoofControllerSecurityDefaults.SessionScheme).ConfigureAwait(false);
             if (session.Succeeded || !HasApiKey)
             {
+                _answeredBy = RoofControllerSecurityDefaults.SessionScheme;
                 return session;
             }
         }
 
+        _answeredBy = RoofControllerSecurityDefaults.ApiKeyScheme;
         return await Context.AuthenticateAsync(RoofControllerSecurityDefaults.ApiKeyScheme).ConfigureAwait(false);
     }
 
@@ -43,7 +48,7 @@ public sealed class RoofStopAuthenticationHandler : AuthenticationHandler<Authen
 
     private bool HasApiKey => Request.Headers.ContainsKey(RoofControllerApiContract.ApiKeyHeaderName);
 
-    private string AnsweringScheme => RoofSessionAuthenticationHandler.HasBearerToken(Request) && !HasApiKey
+    private string AnsweringScheme => _answeredBy ?? (RoofSessionAuthenticationHandler.HasBearerToken(Request) && !HasApiKey
         ? RoofControllerSecurityDefaults.SessionScheme
-        : RoofControllerSecurityDefaults.ApiKeyScheme;
+        : RoofControllerSecurityDefaults.ApiKeyScheme);
 }

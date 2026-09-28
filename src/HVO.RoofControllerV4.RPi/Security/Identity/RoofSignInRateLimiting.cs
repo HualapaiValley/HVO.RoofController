@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.RateLimiting;
 using HVO.RoofControllerV4.Common.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -20,9 +21,8 @@ namespace HVO.RoofControllerV4.RPi.Security.Identity;
 /// per-name and per-kiosk lockout: it bounds how fast one caller can guess across many names. It runs after
 /// authentication, so a request without a valid key or session is refused before it counts. A caller is the kiosk key
 /// (<c>Auth/Pin</c>), the signed-in person (<c>Auth/Password</c>) or, for an anonymous <c>Auth/Session</c>, the remote
-/// address, with an IPv6 address counted by its /64 network (one host usually holds a whole /64). A refusal is 429
-/// <c>SignInBusy</c> with <c>Retry-After</c>, sent before any secret is checked. Stop never signs in, so it is never
-/// limited.
+/// address (<see cref="AddressOf"/>). A refusal is 429 <c>SignInBusy</c> with <c>Retry-After</c>, sent before any secret
+/// is checked. Stop never signs in, so it is never limited.
 /// </summary>
 public static class RoofSignInRateLimiting
 {
@@ -59,13 +59,15 @@ public static class RoofSignInRateLimiting
 
     /// <summary>
     /// Who a sign-in attempt is counted against: <c>key:&lt;id&gt;</c> for an API key, <c>person:&lt;name&gt;</c> for a
-    /// session, otherwise <c>address:&lt;address&gt;</c> (an IPv6 address by its /64, <c>unknown</c> without one).
+    /// session, otherwise <c>address:&lt;address&gt;</c> (<see cref="AddressOf"/>). An anonymous endpoint
+    /// (<c>Auth/Session</c>) is always counted by address: a console cookie sent with it must not buy its own budget.
     /// </summary>
     internal static string PartitionFor(HttpContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         var user = context.User;
-        if (user.Identity?.IsAuthenticated == true)
+        var anonymous = context.GetEndpoint()?.Metadata.GetMetadata<IAllowAnonymous>() is not null;
+        if (!anonymous && user.Identity?.IsAuthenticated == true)
         {
             if (user.FindFirst(RoofPrincipalFactory.KeyIdClaimType)?.Value is { Length: > 0 } keyId)
             {
@@ -78,11 +80,16 @@ public static class RoofSignInRateLimiting
             }
         }
 
-        return "address:" + AddressOf(context.Connection.RemoteIpAddress);
+        return "address:" + AddressOf(context.Connection.RemoteIpAddress, context.Connection.LocalIpAddress);
     }
 
-    /// <summary>An IPv4 address as it is (also when mapped into IPv6); an IPv6 address as its /64 network.</summary>
-    internal static string AddressOf(IPAddress? address)
+    /// <summary>
+    /// An IPv4 address as it is (also when mapped into IPv6). A public IPv6 address from another network is counted by
+    /// its /64, since one host there usually holds a whole /64 and can pick a new address for every attempt. On a LAN
+    /// every host shares one /64, so a loopback, link-local or unique local address, or one in the same /64 as
+    /// <paramref name="local"/> (the address the request came in on), is counted as itself.
+    /// </summary>
+    internal static string AddressOf(IPAddress? address, IPAddress? local = null)
     {
         if (address is null)
         {
@@ -94,14 +101,24 @@ public static class RoofSignInRateLimiting
             address = address.MapToIPv4();
         }
 
-        if (address.AddressFamily != AddressFamily.InterNetworkV6)
+        if (address.AddressFamily != AddressFamily.InterNetworkV6
+            || IPAddress.IsLoopback(address)
+            || address.IsIPv6LinkLocal
+            || address.IsIPv6SiteLocal
+            || address.IsIPv6UniqueLocal
+            || (local is { AddressFamily: AddressFamily.InterNetworkV6 } && Network64(local) == Network64(address)))
         {
             return address.ToString();
         }
 
+        return Network64(address) + "/64";
+    }
+
+    private static string Network64(IPAddress address)
+    {
         var bytes = address.GetAddressBytes();
         Array.Clear(bytes, 8, 8);
-        return new IPAddress(bytes).ToString() + "/64";
+        return new IPAddress(bytes).ToString();
     }
 
     private static async ValueTask OnRejectedAsync(OnRejectedContext context, CancellationToken cancellationToken)

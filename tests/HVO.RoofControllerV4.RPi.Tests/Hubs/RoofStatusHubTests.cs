@@ -336,7 +336,8 @@ public sealed class RoofStatusHubTests
         (await secure.NextAsync()).Status.Should().NotBeNull();
     }
 
-    private static async Task<string> ConsoleSignInAsync(RoofApiTestHost host, string accessKey)
+    /// <summary>Signs in to the console with <paramref name="accessKey"/>; returns the console cookie as <c>name=value</c>.</summary>
+    internal static async Task<string> ConsoleSignInAsync(RoofApiTestHost host, string accessKey)
     {
         var antiforgery = host.Services.GetRequiredService<IAntiforgery>();
         var tokens = antiforgery.GetAndStoreTokens(new DefaultHttpContext { RequestServices = host.Services });

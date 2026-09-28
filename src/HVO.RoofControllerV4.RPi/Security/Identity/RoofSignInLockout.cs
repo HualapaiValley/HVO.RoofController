@@ -294,6 +294,9 @@ public sealed class RoofSignInLockout
         }
         else if (!known)
         {
+            // A person or kiosk that was removed joins the unknown names; the cap holds unless every one of them has an
+            // attempt in progress.
+            MakeRoomForUnknown();
             entry.Recency = _unknown.AddLast(key);
         }
     }

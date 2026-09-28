@@ -164,6 +164,37 @@ public sealed class RoofSignInServiceTests
     }
 
     [TestMethod]
+    public async Task APinRefusedBecauseTheNameIsLockedOut_ReleasesTheKiosksReservation()
+    {
+        using var rig = new IdentityRig();
+        await rig.AddUserAsync("olive", Operator, password: null, pin: TestSecrets.Pin);
+        await rig.AddUserAsync("adam", RoofControllerApiContract.AdminRole, pin: TestSecrets.OtherPin);
+        for (var i = 0; i < rig.Options.LockoutThreshold; i++)
+        {
+            await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "adam", TestSecrets.Pin, Remote, CancellationToken.None);
+            if (i < rig.Options.LockoutThreshold - 1)
+            {
+                (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "olive", TestSecrets.Pin, Remote, CancellationToken.None)).Succeeded.Should().BeTrue();
+            }
+        }
+
+        rig.Lockout.IsLockedOut(RoofSignInLockout.ForPin("adam"), out _).Should().BeTrue();
+        for (var i = 0; i < 50; i++)
+        {
+            (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "adam", TestSecrets.OtherPin, Remote, CancellationToken.None))
+                .Error.Should().Be(RoofControllerErrorCode.SignInLockedOut);
+        }
+
+        // The kiosk has one failure (adam's last guess). A reservation left behind by any of the 50 refusals would count
+        // towards its threshold and refuse these.
+        for (var i = 0; i < rig.Options.LockoutThreshold - 2; i++)
+        {
+            (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "zed" + i, TestSecrets.Pin, Remote, CancellationToken.None))
+                .Error.Should().Be(RoofControllerErrorCode.SignInFailed);
+        }
+    }
+
+    [TestMethod]
     public async Task AFailedSignIn_CountsAPersonAsKnown_AndAnyOtherNameAsUnknown()
     {
         using var rig = new IdentityRig();

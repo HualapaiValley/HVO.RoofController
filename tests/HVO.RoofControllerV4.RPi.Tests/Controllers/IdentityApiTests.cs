@@ -370,6 +370,43 @@ public sealed class IdentityApiTests
         (await viewer.GetAsync($"{Roof}/Status")).StatusCode.Should().Be(HttpStatusCode.OK, "only sign-in is limited");
     }
 
+    [TestMethod]
+    public async Task APasswordChange_IsCountedByThePerson_AndACookieNeverGivesAnAnonymousSignInItsOwnBudget()
+    {
+        using var host = CreateHost(extraSettings: new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:SignInAttemptsPerMinute"] = "3"
+        });
+        await AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole);
+        var cookie = await RoofStatusHubTests.ConsoleSignInAsync(host, TestApiKeys.Viewer);
+        using var anonymous = host.CreateApiClient();
+        var signIn = await anonymous.PostAsJsonAsync($"{Auth}/Session", new RoofSignInRequest { Name = "olive", Password = TestSecrets.Password });
+        signIn.StatusCode.Should().Be(HttpStatusCode.OK);
+        for (var i = 0; i < 2; i++)
+        {
+            (await anonymous.PostAsJsonAsync($"{Auth}/Session", new RoofSignInRequest { Name = "guess-" + i, Password = TestSecrets.OtherPassword }))
+                .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        using var withCookie = new HttpRequestMessage(HttpMethod.Post, $"{Auth}/Session")
+        {
+            Content = JsonContent.Create(new RoofSignInRequest { Name = "guess", Password = TestSecrets.OtherPassword })
+        };
+        withCookie.Headers.Add("Cookie", cookie);
+        (await ProblemAsync(await anonymous.SendAsync(withCookie)))
+            .Code.Should().Be("SignInBusy", "an anonymous sign-in is counted by its address, whatever cookie comes with it");
+
+        using var olive = Bearer(host, (await ApiJson.ReadAsync<RoofSessionResponse>(signIn)).Token);
+        var change = new RoofPasswordChangeRequest { CurrentPassword = TestSecrets.OtherPassword, NewPassword = TestSecrets.OtherPassword + "-new" };
+        for (var i = 0; i < 3; i++)
+        {
+            (await olive.PostAsJsonAsync($"{Auth}/Password", change))
+                .StatusCode.Should().Be(HttpStatusCode.Unauthorized, "a signed-in person is counted by name, not by the address that is used up");
+        }
+
+        (await ProblemAsync(await olive.PostAsJsonAsync($"{Auth}/Password", change))).Code.Should().Be("SignInBusy");
+    }
+
     // ---- Signing in at a kiosk with a PIN -------------------------------------------------------------------------
 
     [TestMethod]

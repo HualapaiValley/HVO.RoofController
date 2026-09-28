@@ -305,6 +305,24 @@ public sealed class RoofSignInLockoutTests
     }
 
     [TestMethod]
+    public void APersonWhoIsRemoved_JoinsTheUnknownNames_WithoutGoingOverTheCap()
+    {
+        var (lockout, _, _) = Create();
+        var bob = RoofSignInLockout.ForName("bob");
+        lockout.RecordFailure(bob, known: true);
+        for (var i = 0; i < RoofSignInLockout.MaximumUnknownEntries; i++)
+        {
+            lockout.RecordFailure(RoofSignInLockout.ForName("guess" + i), known: false);
+        }
+
+        lockout.RecordFailure(bob, known: false);
+
+        lockout.UnknownCount.Should().Be(RoofSignInLockout.MaximumUnknownEntries);
+        lockout.Count.Should().Be(RoofSignInLockout.MaximumUnknownEntries, "the name tried least recently made room");
+        lockout.RecordFailure(bob, known: false).Should().Be(TimeSpan.FromMinutes(5), "bob keeps his count");
+    }
+
+    [TestMethod]
     public void AnUnknownNameThatSucceedsOrIsNeverCounted_IsNotKept()
     {
         var (lockout, _, _) = Create();

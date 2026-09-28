@@ -220,9 +220,10 @@ password. After `LockoutThreshold` failures in a row (default 5), sign-in is ref
 - for that name at every kiosk, after wrong PINs for it;
 - at that kiosk, after wrong PINs, whichever names were tried.
 
-A PIN failure counts both for the name and for the kiosk. A success clears the count for the person who signed in and
-for the kiosk, but never another person's, so signing in with your own PIN between guesses does not reset the guesses
-at someone else's.
+A PIN failure counts both for the name and for the kiosk. A password success clears that name's password count; a PIN
+success clears that name's PIN count and the kiosk's count. Neither clears another person's, so signing in with your own
+PIN between guesses does not reset the guesses at someone else's. Anyone at a kiosk can therefore lock a person's PIN at
+every kiosk by guessing it, for up to `MaximumLockoutDuration`; that person can still sign in with their password.
 
 The first lockout lasts `LockoutDuration` (default 5 minutes). Each further one doubles, up to
 `MaximumLockoutDuration` (default 4 hours). A success, or `FailureMemory` (default 24 hours) without a failure, starts
@@ -234,12 +235,15 @@ threshold. Once the failures plus the attempts still being checked reach it, fur
 and the kiosks. A name that is not a person is counted and locked out the same way, so a refusal does not tell the two
 apart, but only the 16,384 such names tried most recently are remembered. A flood of made-up names can only push out
 other made-up names: it never wipes a person's or a kiosk's count and never refuses them. (During such a flood a made-up
-name's count can be forgotten, which could show that it is not a person.)
+name's count can be forgotten, which could show that it is not a person. Each address has its own rate limit, below,
+so a caller with many IPv6 networks can fill those slots within seconds, where one IPv4 address needs hours.)
 
 Each caller may try `SignInAttemptsPerMinute` sign-ins (default 30; 0 turns the limit off) across `Auth/Session`,
 `Auth/Pin` and `Auth/Password`. A kiosk counts by its key, a signed-in person changing their password by their name,
-and an anonymous `Auth/Session` by its remote address (an IPv6 address by its /64 network). The limit is applied after
-the key or session is checked, so a request without a valid one is refused (401) without counting. Beyond the limit the
+and an anonymous `Auth/Session` by its remote address, whatever cookie comes with it. A public IPv6 address from
+another network counts by its /64 network, since one host there can pick a new address for every attempt; a loopback,
+link-local or unique local IPv6 address, or one in the controller's own /64, counts by itself, since every host on the
+LAN shares that /64. The limit is applied after the key or session is checked, so a request without a valid one is refused (401) without counting. Beyond the limit the
 caller gets 429 `SignInBusy` with `Retry-After` before any secret is checked, and a `SECURITY` warning is logged at most
 every 30 seconds. A client that signs people in for them, such as a web UI, is one address for all of them, so one
 visitor there could use up the limit for the others; the web UI will limit sign-ins per visitor itself.
@@ -265,9 +269,11 @@ A PIN session cannot use these routes, even an admin's: it gets 403 `CredentialN
 where others can see it, so it must not be able to create people or keys that work from anywhere and outlive the
 session. Use an admin API key, or sign in with a password.
 
-Everything else an admin may do, an admin's PIN session may do too: run the roof, clear faults, read and change the
-roof configuration, and read the `System` routes. That is deliberate. Whoever uses the kiosk is standing at the roof,
-and the kiosk is where the settings that may only be changed on site are made.
+Everything else an admin may do, an admin's PIN session may do too, by design: run the roof, clear faults, read and
+change the roof configuration (including ignoring the limit switches where local configuration allows it, and turning
+off the operator lease or the IN4 interlock, each with `ConfirmSafetyCriticalChange`), and read the `System` routes and the OpenAPI document. Only a
+kiosk's key can open a PIN session, but the bearer token it returns is not tied to the kiosk: whoever holds it can use
+it from anywhere until it idles out (`PinSessionIdleTimeout`, default 10 minutes) or is ended. A kiosk must keep it as safe as its own key.
 
 A change that would leave no admin credential is refused with 409 `LastAdministrator`. An admin credential is an admin
 API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed

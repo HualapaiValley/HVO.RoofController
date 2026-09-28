@@ -267,9 +267,17 @@ public sealed class RoofSignInService
         var lockedFor = TimeSpan.Zero;
         foreach (var lockKey in lockKeys)
         {
-            if (_lockout.EndAttempt(lockKey.Key, outcome) is { } started && started > lockedFor)
+            try
             {
-                lockedFor = started;
+                if (_lockout.EndAttempt(lockKey.Key, outcome) is { } started && started > lockedFor)
+                {
+                    lockedFor = started;
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Every key was reserved, so this is a bug; the other keys are still ended, so none keeps its reservation.
+                _logger.LogError(ex, "Ending a sign-in attempt failed for {Key}", lockKey.Key);
             }
         }
 
