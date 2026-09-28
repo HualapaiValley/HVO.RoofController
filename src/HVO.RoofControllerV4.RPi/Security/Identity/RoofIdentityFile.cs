@@ -42,7 +42,9 @@ internal sealed class RoofIdentityFile
     /// Loads the file, or returns an empty document when it does not exist yet. Throws
     /// <see cref="RoofIdentityStoreException"/> when the directory is missing or the file is unreadable, torn or invalid.
     /// </summary>
-    public RoofIdentityDocument Load()
+    public RoofIdentityDocument Load() => Load(removeLeftovers: true);
+
+    private RoofIdentityDocument Load(bool removeLeftovers)
     {
         if (!System.IO.Directory.Exists(Directory))
         {
@@ -51,7 +53,11 @@ internal sealed class RoofIdentityFile
                 "readable by nobody else (docs/security.md).");
         }
 
-        RemoveLeftoverTemporaryFiles();
+        if (removeLeftovers)
+        {
+            RemoveLeftoverTemporaryFiles();
+        }
+
         if (!File.Exists(Path))
         {
             return new RoofIdentityDocument();
@@ -138,14 +144,15 @@ internal sealed class RoofIdentityFile
 
     /// <summary>
     /// For the deployment check: loads the file, and writes and removes a probe file next to it. Returns the problems
-    /// found (empty when the store would work).
+    /// found (empty when the store would work). Leftover temporary files are kept: the check runs while the old
+    /// controller is still running, and one of them may be that controller's save in progress.
     /// </summary>
     public IReadOnlyList<string> CheckUsable()
     {
         var problems = new List<string>();
         try
         {
-            Load();
+            Load(removeLeftovers: false);
         }
         catch (RoofIdentityStoreException ex)
         {
@@ -164,7 +171,8 @@ internal sealed class RoofIdentityFile
         {
             problems.Add(
                 $"The identity store directory '{Directory}' is not writable by the controller ({ex.GetType().Name}), so " +
-                "people, sessions and managed keys could not be saved. Make the controller's user (UID 1654) its owner.");
+                "people, sessions and managed keys could not be saved. Give the user the controller runs as (root in the " +
+                "controller's image) write access to it.");
         }
         finally
         {

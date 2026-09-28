@@ -12,6 +12,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Middleware;
+using HVO.RoofControllerV4.RPi.Security.Identity;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -49,8 +50,9 @@ public sealed record DeploymentValidationResult(
 /// certificate, or a configured certificate cannot be loaded, has no private key, is not for server authentication,
 /// or is outside its validity period; when AllowedHosts would refuse localhost; or when HAT emulator mode
 /// (<c>HatEmulator:Enabled</c>) has invalid settings, or is on outside Development without
-/// <c>HatEmulator:AllowOutsideDevelopment</c>. Emulator mode that is allowed is a warning. Reachability from the network
-/// is checked by the deploy script after the switch.
+/// <c>HatEmulator:AllowOutsideDevelopment</c>; or when the identity settings are invalid, or the identity store file
+/// cannot be read or its directory written. Emulator mode that is allowed, and no identity store outside Development,
+/// are warnings. Reachability from the network is checked by the deploy script after the switch.
 /// </remarks>
 public static partial class DeploymentValidator
 {
@@ -98,6 +100,7 @@ public static partial class DeploymentValidator
         ValidateOtherOptions(configuration, problems, warnings);
         ValidateLogLevels(configuration, problems);
         var security = ValidateApiKeys(configuration, problems, notes);
+        ValidateIdentityStore(configuration, environment, problems, warnings, notes);
         ValidateTransport(configuration, environment, security, timeProvider.GetUtcNow(), problems, warnings, notes);
 
         if (security?.AllowAnonymousStop == true)
@@ -342,6 +345,54 @@ public static partial class DeploymentValidator
 
         ValidateDeployKey(configuration[DeployKeySha256Key], keys, problems, notes);
         return security;
+    }
+
+    /// <summary>
+    /// The identity store (people, sessions and managed API keys). Invalid settings would stop the controller at startup.
+    /// A file that cannot be read, or a directory that cannot be written, would leave the controller running with
+    /// sign-in and identity management refused, so both fail the check. Without a store path everything is kept in
+    /// memory and lost at the next restart: a warning outside Development.
+    /// </summary>
+    private static void ValidateIdentityStore(
+        IConfiguration configuration,
+        IHostEnvironment environment,
+        List<string> problems,
+        List<string> warnings,
+        List<string> notes)
+    {
+        var options = Bind<RoofIdentityOptions>(configuration, RoofIdentityOptions.SectionName, problems);
+        if (options is null)
+        {
+            return;
+        }
+
+        problems.AddRange(options.Validate());
+        if (string.IsNullOrWhiteSpace(options.StorePath))
+        {
+            if (!environment.IsDevelopment())
+            {
+                warnings.Add(
+                    $"No identity store is configured ({RoofIdentityOptions.SectionName}:StorePath): people, sessions and managed " +
+                    "API keys would be kept in memory and lost when the controller restarts. Mount a directory for it " +
+                    "(docs/deployment.md).");
+            }
+
+            return;
+        }
+
+        var file = new RoofIdentityFile(options.StorePath);
+        var storeProblems = file.CheckUsable();
+        problems.AddRange(storeProblems.Select(problem => $"Identity store: {problem}"));
+        if (storeProblems.Count == 0)
+        {
+            notes.Add($"Identity store: {file.Path}.");
+            if (file.IsReadableByOthers())
+            {
+                warnings.Add(
+                    $"The identity store {file.Path} can be read or written by other users; the controller saves it readable " +
+                    "by itself only at the next change. Run chmod 600 on it.");
+            }
+        }
     }
 
     private static bool CanOperate(string role) => role is RoofControllerApiContract.OperatorRole or RoofControllerApiContract.AdminRole;
