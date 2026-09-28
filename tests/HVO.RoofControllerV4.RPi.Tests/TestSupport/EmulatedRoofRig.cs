@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 
 namespace HVO.RoofControllerV4.RPi.Tests.TestSupport;
 
@@ -72,6 +73,14 @@ internal sealed record EmulatedRoofRigOptions
     /// for a run long enough that recording every entry would grow the heap it measures (the soak). Null keeps all.
     /// </summary>
     public int? LogCapacity { get; init; }
+
+    /// <summary>
+    /// Write the controller's log to the console, as the production host does. The test framework keeps a test's console
+    /// output in memory for its result, so a run that measures its own heap (the soak) turns this off: over two hours the
+    /// output grew the managed heap by about 3 MB. <see cref="EmulatedRoofRig.Logs"/> records the entries either way, and
+    /// a rig that fails to start with this off writes them to the console.
+    /// </summary>
+    public bool ConsoleLog { get; init; } = true;
 }
 
 /// <summary>
@@ -204,6 +213,12 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         }
         catch
         {
+            if (!options.ConsoleLog)
+            {
+                // The host wrote no console log, so the test's output would have nothing of what it logged.
+                Console.WriteLine(string.Join(Environment.NewLine, rig.Logs.Describe()));
+            }
+
             await rig.DisposeAsync();
             throw;
         }
@@ -234,7 +249,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 
     private EmulatedRoofApp CreateApp(RecordingLoggerProvider logs)
     {
-        var app = new EmulatedRoofApp(_settings, Options.Environment, logs);
+        var app = new EmulatedRoofApp(_settings, Options.Environment, logs, Options.ConsoleLog);
         if (Options.Kestrel)
         {
             app.UseKestrel(0);
@@ -336,8 +351,11 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
     }
 }
 
-/// <summary>The production host with the settings given and the test API keys; nothing is replaced.</summary>
-internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, string environment, RecordingLoggerProvider logs) : WebApplicationFactory<Program>
+/// <summary>
+/// The production host with the settings given and the test API keys. Nothing is replaced; without
+/// <paramref name="consoleLog"/> the host's console log provider is removed.
+/// </summary>
+internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, string environment, RecordingLoggerProvider logs, bool consoleLog = true) : WebApplicationFactory<Program>
 {
     public HttpClient CreateApiClient(string? apiKey = null)
     {
@@ -375,6 +393,18 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
             builder.UseSetting("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint);
         }
 
-        builder.ConfigureLogging(logging => logging.AddProvider(logs));
+        builder.ConfigureLogging(logging =>
+        {
+            if (!consoleLog)
+            {
+                // Only the console provider the host's defaults add; the controller's own providers stay.
+                foreach (var console in logging.Services.Where(d => d.ImplementationType == typeof(ConsoleLoggerProvider)).ToList())
+                {
+                    logging.Services.Remove(console);
+                }
+            }
+
+            logging.AddProvider(logs);
+        });
     }
 }

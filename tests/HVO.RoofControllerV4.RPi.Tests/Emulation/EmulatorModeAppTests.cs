@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -8,7 +9,9 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
@@ -19,6 +22,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
+using Microsoft.Extensions.Options;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 
@@ -189,6 +194,52 @@ public sealed class EmulatorModeAppTests
         roof.GetProperty("description").GetString().Should().Be($"Roof controller is running against the HAT emulator ({rig.Endpoint}), not the physical HAT");
         roof.GetProperty("data").GetProperty("HardwareMode").GetString().Should().Be("Emulated");
         roof.GetProperty("data").GetProperty("HatEmulatorEndpoint").GetString().Should().Be(rig.Endpoint);
+    }
+
+    [TestMethod]
+    public async Task WithTheConsoleLogOff_OnlyTheConsoleProviderIsRemoved_AndTheRigStillRecordsTheLog()
+    {
+        await using (var rig = await EmulatedRoofRig.StartAsync())
+        {
+            rig.App.Services.GetServices<ILoggerProvider>().Should().ContainSingle(p => p is ConsoleLoggerProvider, "the rig runs the production host's logging by default");
+        }
+
+        await using var quiet = await EmulatedRoofRig.StartAsync(new EmulatedRoofRigOptions { ConsoleLog = false });
+
+        var providers = quiet.App.Services.GetServices<ILoggerProvider>().ToArray();
+        providers.Should().NotContain(p => p is ConsoleLoggerProvider, "the test framework would keep the console output in memory");
+        providers.Should().ContainSingle(p => p is ConsoleLogLoggerProvider, "the controller's own console log (the web page's) stays");
+        providers.Should().Contain(quiet.Logs);
+        quiet.Logs.Entries.Should().Contain(e => e.Category == RoofSecurityStartup.LoggerCategory && e.Message.Contains("API key(s) configured", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task ARigThatFailsToStart_WithTheConsoleLogOff_WritesWhatTheHostLoggedToTheConsole()
+    {
+        // The validator refuses a watchdog below 5 s, so the host does not start. The class runs alone ([DoNotParallelize]),
+        // so no other test writes to the console while it is replaced.
+        var options = new EmulatedRoofRigOptions
+        {
+            ConsoleLog = false,
+            Settings = new Dictionary<string, string?> { ["RoofControllerOptionsV4:SafetyWatchdogTimeout"] = "00:00:01" },
+        };
+        var console = Console.Out;
+        using var output = new StringWriter();
+        Console.SetOut(output);
+        try
+        {
+            await FluentActions.Awaiting(() => EmulatedRoofRig.StartAsync(options)).Should().ThrowAsync<OptionsValidationException>();
+        }
+        finally
+        {
+            Console.SetOut(console);
+        }
+
+        var written = output.ToString();
+        written.Should().Contain("Every Warning or above", "the host's console log was off, so the rig writes what it recorded");
+        written.Should().Contain(
+            $"Error Microsoft.Extensions.Hosting.Internal.Host: Hosting failed to start{Environment.NewLine}{typeof(OptionsValidationException).FullName}: SafetyWatchdogTimeout",
+            "each entry is followed by its exception");
     }
 
     [TestMethod]
