@@ -277,6 +277,20 @@ public class RoofPlantTests
     }
 
     [TestMethod]
+    [DataRow(0)]
+    [DataRow(5)]
+    public void ARelayFault_OnARelayTheHatDoesNotHave_IsRefused_AndNotRecorded(int relay)
+    {
+        var rig = MidTravel();
+        var events = rig.Plant.History.Count;
+
+        rig.Plant.Invoking(p => p.SetRelayFault(relay, RelayContactFault.Welded)).Should().Throw<ArgumentOutOfRangeException>()
+            .WithMessage("Relays are numbered 1-4.*");
+
+        rig.Plant.History.Should().HaveCount(events);
+    }
+
+    [TestMethod]
     [DataRow(WiringFault.MonitorOnNcContacts, 0x05)]
     [DataRow(WiringFault.SwappedLimitInputs, 0x05)]
     [DataRow(WiringFault.InputCommonsOnTb4, 0x00)]
@@ -525,7 +539,10 @@ public class RoofPlantTests
             new RoofPlantOptions { MaxHistory = 99 },
             new RoofPlantOptions { InitialPosition = -0.06 },
             new RoofPlantOptions { InitialPosition = 2.06 },
+            new RoofPlantOptions { InitialPosition = double.NaN },
             new RoofPlantOptions { Mechanics = new RoofMechanicsOptions { TravelMeters = 0 } },
+            new RoofPlantOptions { Mechanics = new RoofMechanicsOptions { TravelMeters = double.NaN } },
+            new RoofPlantOptions { Mechanics = new RoofMechanicsOptions { SpeedAtBaseFrequency = double.PositiveInfinity } },
             new RoofPlantOptions { Drive = new SmVectorSettings { OutputInversion = 5 } },
             new RoofPlantOptions { OpenLimit = new Me8108Options { LeverArmMeters = -1 } }
         };

@@ -718,6 +718,105 @@ public sealed class DeploymentValidatorTests
     }
 
     [TestMethod]
+    [DataRow("Production")]
+    [DataRow("Staging")]
+    public void HatEmulatorMode_OutsideDevelopment_WithoutConsent_Fails(string environment)
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["HatEmulator:Enabled"] = "true";
+        configuration["HatEmulator:Host"] = "hat-emulator";
+
+        var result = Validate(configuration, environment);
+
+        result.Problems.Should().ContainSingle().Which.Should()
+            .StartWith($"HatEmulator:Enabled is true in the {environment} environment without HatEmulator:AllowOutsideDevelopment")
+            .And.Contain("ALLOW_EMULATED_HAT=true");
+        result.Warnings.Should().NotContain(warning => warning.StartsWith("HAT emulator mode"));
+    }
+
+    [TestMethod]
+    [DataRow("Production", "true")]
+    [DataRow("Development", null)]
+    public void HatEmulatorMode_Allowed_PassesWithAWarningNamingTheEndpoint(string environment, string? allow)
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["HatEmulator:Enabled"] = "true";
+        configuration["HatEmulator:Host"] = "hat-emulator";
+        configuration["HatEmulator:Port"] = "5391";
+        configuration["HatEmulator:AllowOutsideDevelopment"] = allow;
+
+        var result = Validate(configuration, environment);
+
+        result.Problems.Should().BeEmpty();
+        result.Warnings.Should().ContainSingle(warning => warning.StartsWith("HAT emulator mode"))
+            .Which.Should().Contain("hat-emulator:5391").And.Contain("not the physical HAT");
+    }
+
+    [TestMethod]
+    public void HatEmulatorMode_WithTheHatDeviceMapped_WarnsThatTheDeviceIsNotUsed()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["HatEmulator:Enabled"] = "true";
+        configuration["HatEmulator:AllowOutsideDevelopment"] = "true";
+
+        var result = Validate(configuration, hatBusPresent: true);
+
+        result.Problems.Should().BeEmpty();
+        result.Warnings.Should().Contain(warning => warning.Contains(DeploymentValidator.HatBusDevicePath) && warning.Contains("does not use it"));
+    }
+
+    [TestMethod]
+    [DataRow("HatEmulator:Port", "0", "HatEmulator:Port must be between 1 and 65535.")]
+    [DataRow("HatEmulator:Host", " ", "HatEmulator:Host")]
+    [DataRow("HatEmulator:RequestTimeout", "00:00:00.010", "HatEmulator:RequestTimeout")]
+    [DataRow("HatEmulator:Port", "not-a-port", "HatEmulator could not be read: the value of HatEmulator:Port is not a valid System.Int32.")]
+    public void HatEmulatorMode_WithInvalidSettings_Fails(string key, string value, string expected)
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["HatEmulator:Enabled"] = "true";
+        configuration["HatEmulator:AllowOutsideDevelopment"] = "true";
+        configuration[key] = value;
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle().Which.Should().StartWith(expected);
+        result.Problems.Should().NotContain(problem => problem.Contains("not-a-port"));
+    }
+
+    [TestMethod]
+    public void HatEmulatorMode_Disabled_IgnoresTheOtherEmulatorSettings()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["HatEmulator:Enabled"] = "false";
+        configuration["HatEmulator:Port"] = "0";
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().BeEmpty();
+        result.Warnings.Should().NotContain(warning => warning.Contains("emulator"));
+    }
+
+    [TestMethod]
+    public void HatEmulatorMode_WithIgnoredLimitSwitches_Fails_BecauseTheControllerTreatsTheEmulatorAsHardware()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["HatEmulator:Enabled"] = "true";
+        configuration["RoofControllerOptionsV4:IgnorePhysicalLimitSwitches"] = "true";
+
+        var result = Validate(configuration, "Development", hatBusPresent: false);
+
+        result.Problems.Should().ContainSingle(problem =>
+            problem.StartsWith("RoofControllerOptionsV4: IgnorePhysicalLimitSwitches is true without AllowIgnoringLimitSwitchesOnPhysicalHardware")
+            && problem.Contains("HAT emulator mode is on"));
+    }
+
+    [TestMethod]
     public void DefaultCertificate_IsCheckedWithOnlyHttpListeners()
     {
         // Kestrel loads Kestrel:Certificates:Default at startup even when no listener is https.

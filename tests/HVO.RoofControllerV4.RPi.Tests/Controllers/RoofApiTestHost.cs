@@ -53,6 +53,7 @@ internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
         RoofService = roofService ?? RoofServiceMock.Create();
         _settings = includeDefaultKeys ? DefaultKeySettings() : new Dictionary<string, string?>();
         _settings["BlueIris:BaseUrl"] = string.Empty;
+        _settings["HatEmulator:Enabled"] = "false";
         if (settings is not null)
         {
             foreach (var (key, value) in settings)

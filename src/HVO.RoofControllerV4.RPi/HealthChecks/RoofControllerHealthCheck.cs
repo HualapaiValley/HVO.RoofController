@@ -2,6 +2,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 
 namespace HVO.RoofControllerV4.RPi.HealthChecks
 {
@@ -11,20 +12,26 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
     /// <remarks>
     /// Unhealthy: disposed, shutting down, not initialized, safety inputs unhealthy (stale or failing reads), relay register
     /// unverified, relay register reads failing or stale, a latched safety fault, or <see cref="RoofControllerStatus.Error"/>.
-    /// Degraded: status Unknown, simulation (no physical hardware), physical limit switches ignored, or input polling
-    /// disabled (edge detection relies on periodic verification only).
+    /// Degraded: status Unknown, physical limit switches ignored, the HAT emulator in place of the physical HAT, simulation
+    /// (no physical hardware), or input polling disabled (edge detection relies on periodic verification only).
     /// </remarks>
     public class RoofControllerHealthCheck : IHealthCheck
     {
         private readonly IRoofControllerServiceV4 _roofController;
         private readonly ILogger<RoofControllerHealthCheck> _logger;
         private readonly RoofControllerOptionsV4 _startupOptions;
+        private readonly RoofHatConnection? _hatConnection;
 
-        public RoofControllerHealthCheck(IRoofControllerServiceV4 roofController, ILogger<RoofControllerHealthCheck> logger, IOptions<RoofControllerOptionsV4> options)
+        public RoofControllerHealthCheck(
+            IRoofControllerServiceV4 roofController,
+            ILogger<RoofControllerHealthCheck> logger,
+            IOptions<RoofControllerOptionsV4> options,
+            RoofHatConnection? hatConnection = null)
         {
             _roofController = roofController;
             _logger = logger;
             _startupOptions = options.Value;
+            _hatConnection = hatConnection;
         }
 
         public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
@@ -50,7 +57,8 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                     ["Ready"] = snapshot.IsInitialized && !disposed && !snapshot.IsShuttingDown,
                     ["CheckTime"] = DateTime.UtcNow,
                     ["IgnorePhysicalLimitSwitches"] = snapshot.IsIgnoringPhysicalLimitSwitches,
-                    ["HardwareMode"] = snapshot.IsUsingPhysicalHardware ? "Physical" : "Simulation",
+                    ["HardwareMode"] = HardwareMode(snapshot),
+                    ["HatEmulatorEndpoint"] = _hatConnection?.EmulatorEndpoint ?? string.Empty,
                     ["StatusVersion"] = snapshot.StatusVersion,
                     ["InputsHealthy"] = snapshot.InputsHealthy,
                     ["LastSuccessfulInputReadUtc"] = snapshot.LastSuccessfulInputReadUtc?.UtcDateTime.ToString("O") ?? string.Empty,
@@ -116,6 +124,16 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                     return Degraded("Roof controller is ignoring physical limit switches", data);
                 }
 
+                if (snapshot.HatMode == RoofHatMode.Emulated)
+                {
+                    var endpoint = _hatConnection?.EmulatorEndpoint;
+                    return Degraded(
+                        endpoint is null
+                            ? "Roof controller is running against the HAT emulator, not the physical HAT"
+                            : $"Roof controller is running against the HAT emulator ({endpoint}), not the physical HAT",
+                        data);
+                }
+
                 if (!snapshot.IsUsingPhysicalHardware)
                 {
                     return Degraded("Roof controller is running in simulation mode", data);
@@ -135,6 +153,13 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                 return Task.FromResult(HealthCheckResult.Unhealthy("Error checking roof controller health", ex));
             }
         }
+
+        // Physical, Emulated or Simulation. A snapshot without the HAT mode (Unknown) falls back to the hardware flag.
+        private static string HardwareMode(RoofStatusResponse snapshot) => snapshot.HatMode switch
+        {
+            RoofHatMode.Unknown => snapshot.IsUsingPhysicalHardware ? nameof(RoofHatMode.Physical) : nameof(RoofHatMode.Simulation),
+            var mode => mode.ToString()
+        };
 
         private RoofControllerOptionsV4 GetLiveConfiguration()
         {

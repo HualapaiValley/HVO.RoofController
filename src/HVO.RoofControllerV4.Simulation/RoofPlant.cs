@@ -275,8 +275,8 @@ public sealed class RoofPlant
         lock (SyncRoot)
         {
             Sync();
-            Record(PlantEventKind.Injected, $"RLY{relay} fault {fault}");
             Hat.SetRelayFault(relay, fault);
+            Record(PlantEventKind.Injected, $"RLY{relay} fault {fault}");
         }
     }
 

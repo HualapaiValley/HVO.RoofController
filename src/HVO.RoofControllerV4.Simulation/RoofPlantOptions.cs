@@ -34,11 +34,13 @@ public sealed record RoofMechanicsOptions
 
     public void Validate()
     {
-        if (TravelMeters <= 0 || SpeedAtBaseFrequency <= 0 || CoastDeceleration <= 0 || DcBrakeDeceleration <= 0 || HardStopBeyondOperatePoint <= 0)
+        if (!Positive(TravelMeters) || !Positive(SpeedAtBaseFrequency) || !Positive(CoastDeceleration) || !Positive(DcBrakeDeceleration) || !Positive(HardStopBeyondOperatePoint))
         {
             throw new ArgumentOutOfRangeException(nameof(TravelMeters), "Roof mechanics values must be positive.");
         }
     }
+
+    private static bool Positive(double value) => double.IsFinite(value) && value > 0;
 }
 
 /// <summary>Everything that configures a <see cref="RoofPlant"/>.</summary>
@@ -97,7 +99,7 @@ public sealed record RoofPlantOptions
             throw new ArgumentOutOfRangeException(nameof(MaxHistory));
         }
 
-        if (InitialPosition <= -Mechanics.HardStopBeyondOperatePoint || InitialPosition >= Mechanics.TravelMeters + Mechanics.HardStopBeyondOperatePoint)
+        if (!(InitialPosition > -Mechanics.HardStopBeyondOperatePoint && InitialPosition < Mechanics.TravelMeters + Mechanics.HardStopBeyondOperatePoint))
         {
             throw new ArgumentOutOfRangeException(nameof(InitialPosition), "The roof must start between the hard stops.");
         }

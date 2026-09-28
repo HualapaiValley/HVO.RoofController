@@ -26,6 +26,9 @@ set -euo pipefail
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
 #               rollback that could not be undone) exists.
+# HAT emulator mode: HAT_EMULATOR_ENDPOINT=<host>:<port> deploys a controller that uses the HAT emulator
+#   (HVO.RoofControllerV4.Emulator) in place of the physical HAT; the HAT's I2C device is not mapped and the roof does
+#   not move. It is refused unless ALLOW_EMULATED_HAT=true, and the report says which HAT the controller uses.
 
 usage() {
   sed -n '/^# Project-local/,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -68,6 +71,11 @@ OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}
 OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://192.168.1.238:4318}
 OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
 OTEL_METRIC_EXPORT_INTERVAL=${OTEL_METRIC_EXPORT_INTERVAL:-10000}
+
+# HAT emulator mode (docs/emulator.md): <host>:<port> of a HAT emulator the container can reach. Test rigs only: the
+# controller then drives an emulated roof, not the observatory's. Requires ALLOW_EMULATED_HAT=true.
+HAT_EMULATOR_ENDPOINT=${HAT_EMULATOR_ENDPOINT:-}
+ALLOW_EMULATED_HAT=${ALLOW_EMULATED_HAT:-false}
 
 # Directory ON THE PI holding one file per secret setting (API keys, Blue Iris password, certificate password),
 # mounted read-only at /run/secrets. See docs/security.md for the file names.
@@ -160,10 +168,30 @@ case "${POLL_INTERVAL_SECONDS}" in
   ''|.|*[!0-9.]*|*.*.*) fail "POLL_INTERVAL_SECONDS must be a number of seconds such as 3 or 0.5, got '${POLL_INTERVAL_SECONDS}'." ;;
 esac
 
+# Emulator mode needs the explicit flag: a controller on the HAT emulator does not operate the roof.
+HAT_EMULATOR_HOST="" HAT_EMULATOR_PORT=""
+if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
+  endpoint_pattern='^([A-Za-z0-9][A-Za-z0-9.-]*):([0-9]{1,5})$'
+  if [[ ! "${HAT_EMULATOR_ENDPOINT}" =~ ${endpoint_pattern} ]] \
+      || (( 10#${BASH_REMATCH[2]} < 1 || 10#${BASH_REMATCH[2]} > 65535 )); then
+    fail "HAT_EMULATOR_ENDPOINT must be <host>:<port> with a host name or IPv4 address and a port from 1 to 65535 (e.g. hat-emulator:5291), got '${HAT_EMULATOR_ENDPOINT}'."
+  fi
+  HAT_EMULATOR_HOST=${BASH_REMATCH[1]}
+  HAT_EMULATOR_PORT=$((10#${BASH_REMATCH[2]}))
+  HAT_EMULATOR_ENDPOINT="${HAT_EMULATOR_HOST}:${HAT_EMULATOR_PORT}"
+  if [[ "${ALLOW_EMULATED_HAT}" != "true" ]]; then
+    fail "HAT_EMULATOR_ENDPOINT is set: the controller would use the HAT emulator at ${HAT_EMULATOR_ENDPOINT}, not the physical HAT, and would not operate the roof. For a test rig, set ALLOW_EMULATED_HAT=true as well. Nothing was changed."
+  fi
+  HAT_SUMMARY="HAT EMULATOR at ${HAT_EMULATOR_ENDPOINT} (ALLOW_EMULATED_HAT=true): the physical HAT is not mapped and the roof does not move"
+else
+  HAT_SUMMARY="physical HAT (/dev/i2c-1)"
+fi
+
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
 # break the restore, the restart policy or the pre-flight container, and --stop-timeout or --stop-signal could cut the
-# controller's shutdown stop short. Short options may be combined (-itd, -p8443:8443).
+# controller's shutdown stop short. Short options may be combined (-itd, -p8443:8443). HatEmulator settings (in any case,
+# as .NET reads them) would switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report.
 extra_args=()
 if [[ -n "${EXTRA_DOCKER_ARGS}" ]]; then
   read -r -d '' -a extra_args <<<"${EXTRA_DOCKER_ARGS}" || true
@@ -182,6 +210,10 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
   if [[ "${reserved}" == "true" ]]; then
     fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout and --stop-signal itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT and STOP_TIMEOUT_SECONDS)."
   fi
+  case "$(printf '%s' "${arg}" | tr '[:upper:]' '[:lower:]')" in
+    *hatemulator__*|*hatemulator:*)
+      fail "EXTRA_DOCKER_ARGS must not contain '${arg}': HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it." ;;
+  esac
 done
 
 # Applies to --rollback too: its checks send the key to the published URL.
@@ -685,6 +717,9 @@ fi
 resolve_operator_key
 read_container_states
 echo "[deploy] Existing container ${CONTAINER_NAME}: ${STATE}; ${PREVIOUS_CONTAINER_NAME}: ${PREVIOUS_STATE}"
+if [[ -n "${HAT_EMULATOR_ENDPOINT}" && "${ROLLBACK}" != "true" ]]; then
+  log_err "[deploy] WARNING: HAT emulator mode: the new controller will use the HAT emulator at ${HAT_EMULATOR_ENDPOINT} (ALLOW_EMULATED_HAT=true), not the physical HAT. It does not operate the roof."
+fi
 
 if [[ "${DRY_RUN}" == "true" ]]; then
   if [[ "${STATE}" == "running" ]]; then
@@ -708,6 +743,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] Would request a verified Stop, swap ${CONTAINER_NAME} with ${PREVIOUS_CONTAINER_NAME} and verify it at ${REMOTE_BASE_URL}."
   else
     echo "[dry-run] Would build ${IMAGE_TAG}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
+    echo "[dry-run] HAT: ${HAT_SUMMARY}"
   fi
   echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
   exit 0
@@ -808,10 +844,26 @@ container_args=(
   --env "OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL}"
   --env "OTEL_METRIC_EXPORT_INTERVAL=${OTEL_METRIC_EXPORT_INTERVAL}"
   --device /dev/gpiomem:/dev/gpiomem
-  --device /dev/i2c-1:/dev/i2c-1
   --mount type=bind,src=/sys/class/thermal/thermal_zone0/temp,dst=/sys/class/thermal/thermal_zone0/temp,readonly
   --mount "type=bind,src=${SECRETS_DIR},dst=/run/secrets,readonly"
 )
+
+if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
+  # The HAT emulator answers the HAT's registers. The HAT's I2C device is not mapped, so this controller cannot reach
+  # the physical HAT whatever its settings say.
+  container_args+=(
+    --env "HatEmulator__Enabled=true"
+    --env "HatEmulator__Host=${HAT_EMULATOR_HOST}"
+    --env "HatEmulator__Port=${HAT_EMULATOR_PORT}"
+    --env "HatEmulator__AllowOutsideDevelopment=true"
+  )
+else
+  # Explicitly off: an --env overrides the same variable from an --env-file in EXTRA_DOCKER_ARGS.
+  container_args+=(
+    --device /dev/i2c-1:/dev/i2c-1
+    --env "HatEmulator__Enabled=false"
+  )
+fi
 
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
   # Remote clients use HTTPS only; plain HTTP listens on loopback inside the container (health check, Stop calls).
@@ -899,4 +951,4 @@ RESTORE_MODE=""
 
 echo "[deploy] Container status"
 show_containers
-echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it."
+echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. HAT: ${HAT_SUMMARY}. The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it."

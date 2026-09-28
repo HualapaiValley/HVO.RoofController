@@ -2,6 +2,7 @@ using System;
 using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -20,8 +21,9 @@ internal sealed class SimulatedRoofControllerService : RoofControllerServiceV4
         FourRelayFourInputHat hat,
         TimeProvider? timeProvider = null,
         ILogger<RoofControllerServiceV4>? logger = null,
-        bool backgroundSupervision = false)
-        : base(logger ?? NullLogger<RoofControllerServiceV4>.Instance, Options.Create(options), hat, null, timeProvider)
+        bool backgroundSupervision = false,
+        RoofHatConnection? hatConnection = null)
+        : base(logger ?? NullLogger<RoofControllerServiceV4>.Instance, Options.Create(options), hat, null, timeProvider, hatConnection)
     {
         EnableBackgroundSupervision = backgroundSupervision;
     }
@@ -32,8 +34,9 @@ internal sealed class SimulatedRoofControllerService : RoofControllerServiceV4
         TimeProvider? timeProvider = null,
         Action<RoofControllerOptionsV4>? configure = null,
         ILogger<RoofControllerServiceV4>? logger = null,
-        bool backgroundSupervision = false)
-        => new(RoofControllerTestFactory.CreateDefaultOptions(configure), hat, timeProvider, logger, backgroundSupervision);
+        bool backgroundSupervision = false,
+        RoofHatConnection? hatConnection = null)
+        => new(RoofControllerTestFactory.CreateDefaultOptions(configure), hat, timeProvider, logger, backgroundSupervision, hatConnection);
 
     public void SimForwardLimitRaw(bool high) => OnForwardLimitSwitchChanged(high);
 

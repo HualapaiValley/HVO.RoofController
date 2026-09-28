@@ -30,6 +30,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.RPi\HVO.RoofControllerV4.RPi.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Simulation\HVO.RoofControllerV4.Simulation.csproj" />
+    <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Emulator\HVO.RoofControllerV4.Emulator.csproj" />
     <PackageReference Include="HVO.Iot.Devices" />
   </ItemGroup>
 

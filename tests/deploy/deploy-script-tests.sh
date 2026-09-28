@@ -646,6 +646,90 @@ test_extra_docker_args_are_passed_without_glob_expansion() {
   done
 }
 
+test_physical_deploy_maps_the_hat_and_turns_the_emulator_off() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}"
+
+  assert_status 0
+  assert_output_contains "HAT: physical HAT (/dev/i2c-1)."
+  assert_output_not_contains "HAT emulator mode"
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e '(.[index("/dev/i2c-1:/dev/i2c-1") - 1] == "--device") and (.[index("HatEmulator__Enabled=false") - 1] == "--env")
+           and (map(select(startswith("HatEmulator__"))) == ["HatEmulator__Enabled=false"])' <<<"${args}" >/dev/null \
+      || fail_test "expected the HAT's I2C device and HatEmulator__Enabled=false: ${args}"
+  done
+}
+
+test_emulator_endpoint_without_the_flag_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local allow
+  for allow in "" "ALLOW_EMULATED_HAT=false" "ALLOW_EMULATED_HAT=yes"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ${allow:+"${allow}"}
+    assert_status 1
+    assert_output_contains "the controller would use the HAT emulator at hat-emulator:5291, not the physical HAT"
+    assert_output_contains "set ALLOW_EMULATED_HAT=true as well. Nothing was changed."
+    assert_no_docker_calls "${allow:-no flag}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_emulator_mode_with_the_flag_unmaps_the_hat_and_records_the_flag() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:05291 ALLOW_EMULATED_HAT=true
+
+  assert_status 0
+  assert_output_contains "[deploy] WARNING: HAT emulator mode: the new controller will use the HAT emulator at hat-emulator:5291 (ALLOW_EMULATED_HAT=true)"
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443. HAT: HAT EMULATOR at hat-emulator:5291 (ALLOW_EMULATED_HAT=true): the physical HAT is not mapped and the roof does not move."
+  assert_container roof-controller new true unless-stopped
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e '(index("/dev/i2c-1:/dev/i2c-1") | not)
+           and (map(select(startswith("HatEmulator__"))) == ["HatEmulator__Enabled=true", "HatEmulator__Host=hat-emulator",
+                "HatEmulator__Port=5291", "HatEmulator__AllowOutsideDevelopment=true"])
+           and (.[index("HatEmulator__Enabled=true") - 1] == "--env")' <<<"${args}" >/dev/null \
+      || fail_test "unexpected emulator-mode arguments: ${args}"
+  done
+}
+
+test_malformed_emulator_endpoint_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local value
+  for value in "hat-emulator" "hat-emulator:" ":5291" "hat-emulator:0" "hat-emulator:70000" "hat-emulator:123456" \
+      "hat emulator:5291" "hat-emulator:52x1" "http://hat-emulator:5291" "-hat:5291" "[::1]:5291" "hat;rm:5291"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "HAT_EMULATOR_ENDPOINT=${value}" ALLOW_EMULATED_HAT=true
+    assert_status 1
+    assert_output_contains "HAT_EMULATOR_ENDPOINT must be <host>:<port>"
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_extra_docker_args_cannot_set_emulator_settings() {
+  seed_container roof-controller old true 8443:8443
+  local value
+  for value in "--env HatEmulator__Enabled=true" "-e hatemulator__allowoutsidedevelopment=true" \
+      "--env=HatEmulator:Enabled=true" "-eHATEMULATOR__PORT=1"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
+    assert_status 1
+    assert_output_contains "HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT"
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_dry_run_reports_the_hat() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=192.0.2.10:5291 ALLOW_EMULATED_HAT=true -- --dry-run
+
+  assert_status 0
+  assert_output_contains "[dry-run] HAT: HAT EMULATOR at 192.0.2.10:5291 (ALLOW_EMULATED_HAT=true)"
+  [[ -z "$(docker_calls run)$(docker_calls stop)$(docker_calls buildx)" ]] || fail_test "dry run changed something"
+}
+
 test_rollback_requires_certificate_or_explicit_insecure_opt_in() {
   seed_container roof-controller current true 8080:8080
   seed_container roof-controller-previous old false 8080:8080
