@@ -9,7 +9,7 @@ relies on physical hardware.
 - [`docs/projects/roof-controller-v4-rpi/hardware-overview.md`](../../docs/projects/roof-controller-v4-rpi/hardware-overview.md) – wiring map and relay/limit switch context for the test assumptions.
 - [`src/HVO.RoofControllerV4.RPi/README.md`](../../src/HVO.RoofControllerV4.RPi/README.md) – configuration options and their limits, as the validator and controller tests enforce them.
 - [`src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.http`](../../src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.http) – the REST requests the controller API tests cover.
-- [`docs/commissioning.md`](../../docs/commissioning.md) – the checks each emulated-plant test stands in for.
+- [`docs/commissioning.md`](../../docs/commissioning.md) – the commissioning checks each scenario covers, and the installation assumptions behind them.
 
 ## Wiring and polarity assumptions
 
@@ -148,6 +148,10 @@ models exactly that register.
 | `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, a start before the emulator, the sign-in page banner and the Degraded health |
 | `Components/EmulatedHatDisplayTests` | The emulated-HAT banner in the main layout and on its own, the console's HAT badge and the footer |
 | `Emulation/DevelopmentConfigurationTests` | `appsettings.Development.json`: the HAT emulator, with the limit switches in force and the production wiring |
+| `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API ([Commissioning scenarios](#commissioning-scenarios)) |
+| `Scenarios/CameraProxyScenarios` | The camera proxy against the emulated camera: frames relayed, a refusing camera, a frozen one, a camera server restart |
+| `Scenarios/ScenarioCoverageTests` | `docs/commissioning.md` and the scenarios agree: every check has a scenario that CI runs, and every step and assumption is listed |
+| `Browser/*BrowserTests` | The console in Chromium on a phone and a tablet, each upright and sideways ([Browser tests](#browser-tests)) |
 
 ## Emulated plant
 
@@ -195,6 +199,33 @@ them through the compose `emulator` profile: the emulated roof opens and closes 
 API with no plant violations. It needs Docker with compose v2, `curl` and `jq`, and takes a few minutes; CI runs it in
 the "Emulator image" workflow. `SMOKE_NO_BUILD=1` reuses images already built.
 
+## Commissioning scenarios
+
+`Scenarios/` holds the commissioning checks of [docs/commissioning.md](../../docs/commissioning.md) as automated
+scenarios. `EmulatedRoofRig` starts the whole controller host with the production `appsettings.json` against an
+in-process HAT emulator and plant. A scenario drives it through the API as an operator does, then checks the plant:
+contacts, drive output, roof position and invariant violations. The roof is 25 cm long by default (about 3.5 s from
+limit to limit) and runs in real time, so the controller's windows keep their production values.
+
+Each scenario names its check and step with `[CommissioningCheck("C3", "2")]`. `ScenarioCoverageTests` fails when the
+document and the scenarios disagree, or when a check has no scenario. The scenario classes are
+`[TestCategory("Scenario")]` and `[DoNotParallelize]`. They take a few minutes together, so the unit test job leaves
+them out and the "Scenarios" workflow runs them. The C14 soak is also `[TestCategory("Soak")]`: it runs for 90 s in the
+scenario job, and for `HVO_SOAK_DURATION` (two hours nightly), with its results in `HVO_SOAK_RESULTS_DIR`.
+
+## Browser tests
+
+`Browser/` runs the console in a headless Chromium through Playwright, with the phone and tablet device descriptors
+(iPhone 13 and iPad (gen 7), each upright and sideways), against an `EmulatedRoofRig` served on a loopback port.
+`ConsoleBrowser` signs in, measures where Stop is without scrolling, and cuts and restores the console's connection
+through Playwright's WebSocket route. After a failed test it attaches a screenshot, the Playwright trace and the browser
+log to the test's results. The tests are `[TestCategory("Browser")]` and `[DoNotParallelize]`, and C9 step 4 and C15
+are among them. They need Chromium, installed once after a build:
+
+```
+pwsh tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install chromium
+```
+
 ## Adding new tests
 
 1. Build the service with `SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), …)` and set the inputs
@@ -208,8 +239,15 @@ the "Emulator image" workflow. `SMOKE_NO_BUILD=1` reuses images already built.
 ```
 cd src
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
-dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak"
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Scenario"
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Browser"
+HVO_SOAK_DURATION=00:30:00 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Soak"
 ```
+
+The first command is the unit test job in CI. The second runs the commissioning scenarios, the short soak included.
+The third runs the browser tests (Chromium must be installed for the configuration built, here `bin/Release`). The
+fourth runs the soak alone, for as long as `HVO_SOAK_DURATION` says.
 
 The deploy script has its own tests, `tests/deploy/deploy-script-tests.sh` (bash 3.2 or later, `python3`, `jq`,
 `sha256sum` or `shasum`, and `setsid` or `perl` for the script itself). They run the script against fake `docker` and

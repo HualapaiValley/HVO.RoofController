@@ -7,14 +7,14 @@
 >
 > **Authoritative copy:** this file and `diagrams/` are the source of truth. `docs/RoofController_Wiring_Package.zip` is a convenience bundle built from them; do not edit it directly. Earlier bundles carried a separate `RoofController_Wiring.md` that had drifted from this file and lacked this compatibility warning; discard any copy extracted from them. Rebuild the bundle whenever this file or `diagrams/` changes, from this folder: `rm -f ../../RoofController_Wiring_Package.zip && zip -X -r ../../RoofController_Wiring_Package.zip hardware-overview.md diagrams`.
 
-> **Software compatibility:** The production `appsettings.json` matches this wiring. Keep the wiring, the settings and the commissioning record in step; a change to one needs the others. The emulated-plant tests (`tests/HVO.RoofControllerV4.RPi.Tests/Plant/`) run the controller against a model of this wiring and show that each wrong setting or wiring variant below refuses to move or stops and latches.
+> **Software compatibility:** The production `appsettings.json` matches this wiring. Keep the wiring, the settings and the installation assumptions in [`docs/commissioning.md`](../../commissioning.md) in step; a change to one needs the others. The emulated-plant tests (`tests/HVO.RoofControllerV4.RPi.Tests/Plant/`) run the controller against a model of this wiring and show that each wrong setting or wiring variant below refuses to move or stops and latches.
 >
 > - **Limits (`IN1`/`IN2`):** the monitoring contacts in sections 9.1 and 9.2 read HIGH when actuated, so `UseNormallyClosedLimitSwitches` is `false`. With `true`, the closed roof reads as open and the controller cannot move it.
 > - **VFD fault (`IN3`):** the fail-safe wiring in section 9.3 reads HIGH when healthy, so `FaultInputActiveHigh` is `false`. With `true`, a healthy drive latches `DriveFault` at startup. The code default stays `true` so that a controller configured without a setting does not silently invert its fault interpretation.
 > - **Drive running (`IN4`):** `AtSpeedConfirmationTimeout` is 3 s. A start is refused (`InterlockActive`) while `IN4` still reports running, `IN4` must go HIGH within 3 s of a start, and `IN4` dropping for 250 ms while moving without the destination limit stops the roof; the last two latch `DriveNotRunning`. After a stop, `IN4` still HIGH once `DriveStopConfirmationTimeout` (default: the same 3 s) has passed is logged as Critical; set it longer than `P105` if a ramp stop is used. See section 10.
 > - **Input commons (`IN1`-`IN3`):** they return to `TB-2` (0 V), not `TB-4` (section 2, item 5). Commons on `TB-4` never conduct, which the controller sees as a drive fault.
-> - **Clear Fault (`RLY3`):** the controller pulses RLY3 for 250 ms by default (API range 50-2000 ms); section 8.3 recommends about 100-300 ms. The minimum pulse the drive needs is not documented; confirm that the configured pulse resets it.
-> - **Relay state:** the controller verifies each relay change by reading the HAT relay register back. That proves the register, not the contacts; section 14 and the commissioning checklist cover the meter checks.
+> - **Clear Fault (`RLY3`):** the controller pulses RLY3 for 250 ms by default (API range 50-2000 ms); section 8.3 recommends about 100-300 ms. The minimum pulse the drive needs is not documented; the emulated drive assumes 20 ms (commissioning C5).
+> - **Relay state:** the controller verifies each relay change by reading the HAT relay register back. That proves the register, not the contacts; commissioning C2 shows what a welded or dead contact does.
 
 ## 1. Purpose
 
@@ -335,7 +335,7 @@ The drive documentation states that if Run Forward and Run Reverse are asserted 
 
 The controller uses a stricter form of this table: RLY4 is ON only while a direction relay is ON, so "Ready / idle" and every stop are all relays OFF, and the drive always receives STOP between moves.
 
-Controller status for these interlocks (bench verification in [`docs/commissioning.md`](../../commissioning.md)):
+Controller status for these interlocks (the scenarios in [`docs/commissioning.md`](../../commissioning.md)):
 
 | Interlock | Controller behavior |
 |---|---|
@@ -495,7 +495,7 @@ The hardwired relay/limit design remains authoritative even when Modbus is used 
    - RLY4 drops out
    - TB-1 stop permissive opens
 
-The controller-side checks (input polarity settings, relay register versus contacts, watchdog, operator lease, fault latch, input read failures, deployment stop) are in [`docs/commissioning.md`](../../commissioning.md).
+The controller-side checks (input polarity settings, relay register versus contacts, watchdog, operator lease, fault latch, input read failures, deployment stop) are automated scenarios against the emulated plant in [`docs/commissioning.md`](../../commissioning.md).
 
 ## 15. Source documents
 

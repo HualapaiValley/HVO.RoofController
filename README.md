@@ -17,9 +17,9 @@ authenticated web console and HTTP API.
 - **GPIO / I2C** — direct hardware interface on Raspberry Pi for motor and sensor management
 - **Authenticated API** — every protected request needs an `X-Api-Key`; commands are `POST`
   only ([docs/security.md](docs/security.md))
-- **Web Console** — browser-based roof control for desktop, tablet and phone;
-  mobile usability and physical Stop behavior still require validation (issues #20 and #26;
-  physical commissioning in #24)
+- **Web Console** — browser-based roof control for desktop, tablet and phone; browser tests
+  run it in Chromium with phone and tablet emulation, upright and sideways, against the
+  emulated roof, including Stop from the reconnect dialog (commissioning C15)
 - **Docker Deployment** — containerized deployment to Raspberry Pi (linux-arm64) through a
   fail-closed deployment script ([docs/deployment.md](docs/deployment.md))
 
@@ -78,8 +78,9 @@ The wiring these settings assume, and the settings' limits (stopping distance, `
 [hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md). Tests run
 the controller against an emulated roof, drive, limit switches and HAT built from the
 vendor documentation (`HVO.RoofControllerV4.Simulation`), including wrong-wiring and
-wrong-setting variants. Before connecting the roof mechanism, complete the bench checklist in
-[docs/commissioning.md](docs/commissioning.md).
+wrong-setting variants. The commissioning checks in
+[docs/commissioning.md](docs/commissioning.md) run as scenarios against that emulated roof in
+CI, and each check lists the installation assumptions the emulator cannot prove.
 
 ## Projects
 
@@ -152,15 +153,15 @@ Never run `src/docker-compose.yml` on the observatory Pi.
 This repository includes Dev Container configurations in `.devcontainer/` for
 a consistent development environment. Open in VS Code and use
 **Reopen in Container** to get started. `devcontainer.rpi.json` gives the container the
-Pi's real I2C bus and GPIO and keeps the physical limit switches in force; use it only on
-a commissioned bench.
+Pi's real I2C bus and GPIO and keeps the physical limit switches in force; use it only
+with the roof mechanism isolated.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [Roof controller hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md) | Canonical SMVector, relay, limit-switch, monitoring, and safety wiring reference |
-| [Commissioning checklist](docs/commissioning.md) | Bench and HAT checks required before connecting the roof mechanism |
+| [Commissioning](docs/commissioning.md) | Checks C1-C15 as automated scenarios against the emulated plant, and the installation assumptions each depends on |
 | [Security](docs/security.md) | API keys, roles, HTTPS and console sign-in |
 | [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
 | [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |

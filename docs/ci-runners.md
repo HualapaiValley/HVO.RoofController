@@ -1,13 +1,14 @@
 # CI Runners and Workflow Security
 
-This repository is public. CI uses GitHub-hosted runners for the server tests, the Pi
-image build and the HAT emulator image. The former iOS/M5 workflows were removed with the native application.
+This repository is public. CI uses GitHub-hosted runners for the server tests, the emulated
+commissioning scenarios, the Pi image build and the HAT emulator image. The former iOS/M5 workflows were removed with the native application.
 
 ## Workflows
 
 | Workflow | Runner | Triggers | Purpose |
 |---|---|---|---|
-| `ci.yml` | GitHub-hosted `ubuntu-latest` | push to `main`, pull requests, nightly | Build and test the server graph (Debug with coverage, then Release with warnings as errors) |
+| `ci.yml` | GitHub-hosted `ubuntu-latest` | push to `main`, pull requests, nightly | Build and test the server graph (Debug with coverage, then Release with warnings as errors); the scenario, browser and soak categories run in `scenarios.yml` |
+| `scenarios.yml` | GitHub-hosted `ubuntu-latest` | push to `main`, pull requests, nightly, manual | The commissioning checks as emulated scenarios: the `Scenario` tests (a 90 s C14 soak included), the console in Chromium with phone and tablet emulation, and the container lifecycle, C12 deploy and rollback, and Compose migration (`tests/emulator/deploy-scenarios.sh`). Nightly and on demand, the C14 soak runs for two hours and publishes its invariant results to the run summary and an artifact |
 | `pi-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the Pi image inputs, weekly, manual | Build the `linux/arm64` Pi image from a clean builder; nothing is pushed or deployed |
 | `emulator-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the emulator or controller image inputs, weekly, manual | Build the HAT emulator image for `linux/amd64` and `linux/arm64`, and open and close the emulated roof through the containerized controller (`tests/emulator/compose-smoke-test.sh`); no hardware, nothing pushed or deployed |
 

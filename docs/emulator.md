@@ -55,7 +55,7 @@ falls back to it when it runs with emulator mode off and no I2C bus, for example
 is not a Pi. It then reports `HatMode` `Simulation` and Degraded health.
 
 `.devcontainer/devcontainer.rpi.json` gives its container the Pi's real I2C bus. It sets `HatEmulator__Enabled=false`
-so that it uses the physical HAT, with the limit switches in force. Use it only on a commissioned bench.
+so that it uses the physical HAT, with the limit switches in force. Use it only with the roof mechanism isolated.
 
 For a containerized run, `src/docker-compose.yml` builds both images and runs the controller in Development against
 the emulator, on `http://localhost:5200`:
@@ -256,6 +256,7 @@ No test relies on physical hardware.
 | `RoofHatConnectionTests` | Emulator mode selection, the refusal outside Development, the startup warning and the telemetry attributes |
 | `EmulatorApiTests` | The emulator host: the control API changes the plant and the link, and the register port serves the HAT |
 | `EmulatedCameraTests` | The camera: its JPEG encoder against an independent decoder, the frames it draws of the plant, the MJPEG stream, each mode, a disconnect, the status and the refused requests |
+| `Browser/*BrowserTests` | The console in Chromium on a phone and a tablet, each upright and sideways, against the whole controller and the emulated plant: sign-in, Stop in view without scrolling and stopping the roof, stale and unhealthy status, the camera stalling and going offline, the lease during a lost connection (C9) and the reconnect dialog's Stop (C15) |
 | `CameraProxyScenarios` | The controller's camera proxy reading the emulated camera over a socket: the frames relayed, 502 for a camera that refuses, the stream aborted after the idle timeout for a frozen one, and the stream ended by a camera server restart |
 | `EmulatorModeAppTests` | The whole controller in emulator mode: open and close through the API; a link outage while moving stops the roof and latches a fault until ClearFault; a controller started before the emulator initializes with a latched fault until ClearFault; the sign-in page banner and the Degraded health |
 | `EmulatedHatDisplayTests` | The banner in the main layout (the console) and on its own, the console's HAT badge and the footer |

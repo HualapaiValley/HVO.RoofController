@@ -72,8 +72,7 @@ For example, `roof.controller.travel.duration` becomes `hvo_roof_controller_trav
 
 ## Motion timing
 
-These histograms measure the installation. Their values set the timing options, instead of values estimated at a
-bench.
+These histograms measure the installation. Their values set the timing options, instead of estimates.
 
 All four are measured on the controller's monotonic clock, from the points its supervision windows start at:
 
