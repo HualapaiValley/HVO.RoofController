@@ -241,7 +241,8 @@ neither. When both are empty, no `Authorization` header is sent. An empty `BaseU
 HSTS is sent only when an HTTPS endpoint is configured.
 
 Because `/health/ready` is exempt, readiness passes even when every remote API request would get 403. The deployment
-check (`--validate-deployment`, run first by the deploy script and by both compose profiles) therefore fails when
+check (`--validate-deployment`, run first by the deploy script and by both Pi compose profiles, `pi` and
+`pi-lan-http`; the test-rig `emulator` profile does not run it) therefore fails when
 `RequireHttps` is in effect without an HTTPS listener, or with a certificate that cannot be loaded. See
 [deployment.md](deployment.md#the-deployment-check).
 

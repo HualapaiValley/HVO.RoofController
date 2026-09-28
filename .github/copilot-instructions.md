@@ -97,7 +97,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 src/
   HVO.RoofControllerV4.RPi/         # Raspberry Pi server
   HVO.RoofControllerV4.Common/      # Shared models
-  HVO.RoofControllerV4.Simulation/  # Emulated drive, limit switches, HAT and wiring (tests only)
+  HVO.RoofControllerV4.Simulation/  # Emulated drive, limit switches, HAT and wiring (tests and the emulator)
+  HVO.RoofControllerV4.Emulator/    # HAT emulator: the emulated plant's HAT registers over TCP, control API
   HVO.WebSite.Themes/               # CSS theme RCL
   HVO.RoofController.sln            # Solution file
 tests/
@@ -141,12 +142,17 @@ Deploy with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`: it runs
 container, verifies the new one from the deploying machine and restores
 `roof-controller-previous` on any failure, signal or lost terminal after the stop begins
 (removing only the container it created); see `docs/deployment.md`. The production compose file
-is `src/HVO.RoofControllerV4.RPi/docker-compose.yaml` (profiles `pi` and `pi-lan-http`).
+is `src/HVO.RoofControllerV4.RPi/docker-compose.yaml` (Pi profiles `pi` and `pi-lan-http`,
+which run the deployment check first, and the test-rig profile `emulator`, which runs the
+production settings against the HAT emulator container with no devices, on loopback).
 Keep the script, its tests (`tests/deploy/deploy-script-tests.sh`) and the compose file in
-step.
+step. HAT emulator mode (`HatEmulator:*`) is described in `docs/emulator.md`; the deploy
+script sets it only through `HAT_EMULATOR_ENDPOINT` with `ALLOW_EMULATED_HAT=true`.
 
-`src/docker-compose.yml` is a local simulation compose (Development environment, no HAT
-devices, port 5200). Never use it on the observatory Pi. `dotnet run` uses port 5195.
+`src/docker-compose.yml` is the local development compose: the controller in the
+Development environment against the HAT emulator container, no HAT devices, port 5200.
+Never use it on the observatory Pi. `dotnet run` uses port 5195 and expects the emulator on
+port 5291 (`dotnet run --project src/HVO.RoofControllerV4.Emulator`).
 
 ## CI/CD
 
@@ -154,9 +160,14 @@ devices, port 5200). Never use it on the observatory Pi. `dotnet run` uses port 
   restores and builds `HVO.RoofController.sln` (Debug), runs the RPi tests, checks that
   coverage is not empty, then builds the solution in Release with warnings as errors. A
   second job (`deploy-script`) runs `bash -n` and ShellCheck on the deploy script, its tests
-  against fake `docker`/`curl`, and `docker compose config` for both profiles.
+  against fake `docker`/`curl`, and `docker compose config` for the Pi compose file's
+  profiles (and that `pi` with `pi-lan-http` is rejected) and for `src/docker-compose.yml`.
 - `pi-image.yml` — builds the Pi image for `linux/arm64` (no push) and checks that the
   Dockerfile SDK tag matches `src/global.json`.
+- `emulator-image.yml` — builds the HAT emulator image for `linux/amd64` and `linux/arm64`
+  (no push), checks its SDK tag against `src/global.json` and its runtime tag against the Pi
+  image, and runs `tests/emulator/compose-smoke-test.sh` (the compose `emulator` profile
+  opens and closes the emulated roof).
 
 Pin every action to a full commit SHA with a `# vX.Y.Z` comment (the repository requires
 SHA pinning) and keep `permissions: contents: read` unless a job needs more.

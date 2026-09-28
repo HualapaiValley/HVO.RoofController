@@ -343,9 +343,10 @@ unreachable collector configured.
 
 Run on the Pi with the production image and configuration. Two variants, in this order:
 
-- **Simulated:** the container without the HAT devices mapped (simulated HAT), with a script that
-  cycles Open, Stop, Close, Stop through the API, plus status polling at client rates and a camera
-  stream opened and closed periodically.
+- **Simulated:** the compose `emulator` profile (the production configuration with only the HAT
+  emulated; see [HAT emulator](emulator.md)), with a script that cycles Open, Stop, Close, Stop through
+  the API, plus status polling at client rates and a camera stream opened and closed periodically.
+  Each cycle reaches the emulated limits.
 - **Bench:** the real HAT and VFD with the **motor decoupled**. Limit inputs are driven by a relay
   board or switch box that the cycling script controls. Never the roof mechanism.
 

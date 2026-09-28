@@ -503,7 +503,7 @@ test_rollback_swaps_current_and_previous_and_back() {
   deploy "${HTTPS_ENV[@]}" -- --rollback
 
   assert_status 0
-  assert_output_contains "Rolled back. roof-controller is verified at https://pi.test:8443"
+  assert_output_contains "Rolled back. roof-controller is verified at https://pi.test:8443. HAT: hatMode Physical. The replaced version"
   assert_container roof-controller old true unless-stopped
   assert_container roof-controller-previous current false no
   [[ -z "$(docker_calls buildx)$(docker_calls run)" ]] || fail_test "--rollback built or ran an image"
@@ -652,12 +652,15 @@ test_physical_deploy_maps_the_hat_and_turns_the_emulator_off() {
 
   assert_status 0
   assert_output_contains "HAT: physical HAT (/dev/i2c-1)."
+  assert_output_contains "authenticated Status inside the container: HTTP 200, hatMode Physical"
   assert_output_not_contains "HAT emulator mode"
   local args
   for args in "$(preflight_args)" "$(controller_run_args)"; do
     jq -e '(.[index("/dev/i2c-1:/dev/i2c-1") - 1] == "--device") and (.[index("HatEmulator__Enabled=false") - 1] == "--env")
-           and (map(select(startswith("HatEmulator__"))) == ["HatEmulator__Enabled=false"])' <<<"${args}" >/dev/null \
-      || fail_test "expected the HAT's I2C device and HatEmulator__Enabled=false: ${args}"
+           and (.[index("HatEmulator__AllowOutsideDevelopment=false") - 1] == "--env")
+           and (map(select(startswith("HatEmulator__")))
+                == ["HatEmulator__Enabled=false", "HatEmulator__AllowOutsideDevelopment=false"])' <<<"${args}" >/dev/null \
+      || fail_test "expected the HAT's I2C device and the emulator off and refused: ${args}"
   done
 }
 
@@ -681,6 +684,7 @@ test_emulator_mode_with_the_flag_unmaps_the_hat_and_records_the_flag() {
 
   assert_status 0
   assert_output_contains "[deploy] WARNING: HAT emulator mode: the new controller will use the HAT emulator at hat-emulator:5291 (ALLOW_EMULATED_HAT=true)"
+  assert_output_contains "authenticated Status inside the container: HTTP 200, hatMode Emulated"
   assert_output_contains "Deployment complete and verified at https://pi.test:8443. HAT: HAT EMULATOR at hat-emulator:5291 (ALLOW_EMULATED_HAT=true): the physical HAT is not mapped and the roof does not move."
   assert_container roof-controller new true unless-stopped
   local args
@@ -728,6 +732,160 @@ test_dry_run_reports_the_hat() {
   assert_status 0
   assert_output_contains "[dry-run] HAT: HAT EMULATOR at 192.0.2.10:5291 (ALLOW_EMULATED_HAT=true)"
   [[ -z "$(docker_calls run)$(docker_calls stop)$(docker_calls buildx)" ]] || fail_test "dry run changed something"
+}
+
+test_physical_deploy_whose_controller_reports_another_hat_rolls_back() {
+  seed_container roof-controller old true 8443:8443
+  local mode
+  # Emulated: a HatEmulator setting in the secrets directory (read last) overrode the --env pins.
+  for mode in Emulated Simulation absent; do
+    : > "${FAKE_STATE_DIR}/remote.log"
+    deploy "${HTTPS_ENV[@]}" "FAKE_NEW_HAT_MODE=${mode}"
+    assert_status 1
+    assert_output_contains "reports hatMode ${mode/absent/null}, but this deployment is for hatMode Physical (physical HAT (/dev/i2c-1)); check for HatEmulator settings in the secrets directory"
+    assert_output_contains "Rolled back: the previous controller is running and ready."
+    assert_container roof-controller old true unless-stopped
+    assert_container roof-controller-previous missing false
+    [[ ! -s "${FAKE_STATE_DIR}/remote.log" ]] || fail_test "${mode}: the remote check ran after the HAT check failed"
+  done
+}
+
+test_emulator_deploy_whose_controller_reports_the_physical_hat_rolls_back() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true FAKE_NEW_HAT_MODE=Physical
+
+  assert_status 1
+  assert_output_contains "reports hatMode Physical, but this deployment is for hatMode Emulated (HAT EMULATOR at hat-emulator:5291"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+}
+
+test_env_file_with_emulator_settings_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local setting form
+  # .NET reads keys in any case, with ':' or '__', and with the ASPNETCORE_ prefix; a key without '=' takes its value
+  # from this machine's environment.
+  for setting in "HatEmulator__Enabled=true" "hatemulator__allowoutsidedevelopment=true" "HATEMULATOR:HOST=x" \
+      "ASPNETCORE_HatEmulator__Enabled=true" "  HatEmulator__Port=1" "HatEmulator__Enabled"; do
+    printf '# settings\n\nTZ=UTC\n%s\n' "${setting}" > "${WORK}/extra.env"
+    for form in "--env-file ${WORK}/extra.env" "--env-file=${WORK}/extra.env"; do
+      : > "${FAKE_STATE_DIR}/calls.log"
+      deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${form}"
+      assert_status 1
+      assert_output_contains "EXTRA_DOCKER_ARGS must not contain '--env-file ${WORK}/extra.env: "
+      assert_output_contains "HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT"
+      assert_no_docker_calls "${form}: ${setting}"
+    done
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_unreadable_env_file_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  mkdir "${WORK}/env-dir"
+  local file
+  for file in "${WORK}/missing.env" "${WORK}/env-dir"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--env-file ${file}"
+    assert_status 1
+    assert_output_contains "EXTRA_DOCKER_ARGS names --env-file '${file}', which cannot be read on this machine. Nothing was changed."
+    assert_no_docker_calls "${file}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_env_file_without_emulator_settings_is_passed_on() {
+  seed_container roof-controller old true 8443:8443
+  printf '# HatEmulator settings belong to the deployment script\n\nTZ=UTC\nLogging__LogLevel__Default=Information' \
+    > "${WORK}/extra.env"
+  deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--env-file ${WORK}/extra.env"
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e --arg file "${WORK}/extra.env" '.[index($file) - 1] == "--env-file"' <<<"${args}" >/dev/null \
+      || fail_test "the --env-file was not passed on: ${args}"
+  done
+}
+
+test_emulator_mode_refuses_extra_args_that_reach_the_hat() {
+  seed_container roof-controller old true 8443:8443
+  local case value expected
+  for case in \
+      "--device /dev/i2c-1|must not map an I2C device ('--device /dev/i2c-1')" \
+      "--device=/dev/I2C-1:/dev/i2c-1|must not map an I2C device ('--device /dev/I2C-1:/dev/i2c-1')" \
+      "--privileged|must not contain '--privileged' in HAT emulator mode: it maps every host device" \
+      "--privileged=true|must not contain '--privileged=true' in HAT emulator mode" \
+      "-v /dev:/dev|must not mount the host's /dev ('--volume /dev:/dev')" \
+      "-v/dev/i2c-1:/dev/i2c-1|must not mount the host's /dev/i2c-1 ('--volume /dev/i2c-1:/dev/i2c-1')" \
+      "-itv /:/host|must not mount the host's / ('--volume /:/host')" \
+      "--volume=/dev:/dev:ro|must not mount the host's /dev ('--volume /dev:/dev:ro')" \
+      "--mount type=bind,src=/dev,dst=/dev|must not mount the host's /dev ('--mount type=bind,src=/dev,dst=/dev')" \
+      "--mount=type=bind,source=/dev/i2c-1,target=/dev/i2c-1|must not mount the host's /dev/i2c-1"; do
+    value=${case%%|*}
+    expected=${case#*|}
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
+    assert_status 1
+    assert_output_contains "EXTRA_DOCKER_ARGS ${expected}"
+    assert_output_contains "HAT emulator mode"
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_physical_deploy_allows_extra_devices_and_mounts() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--device /dev/i2c-0 -v /dev/serial:/dev/serial --mount type=bind,src=/srv,dst=/srv"
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  jq -e '(.[index("/dev/i2c-0") - 1] == "--device") and (.[index("/dev/serial:/dev/serial") - 1] == "-v")
+         and (.[index("type=bind,src=/srv,dst=/srv") - 1] == "--mount")' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "EXTRA_DOCKER_ARGS not passed on: $(controller_run_args)"
+}
+
+test_rollback_to_an_emulated_version_needs_the_flag() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=Emulated -- --rollback
+
+  # The HAT is known only once the restored version runs; like any failed check after the start, it is left running.
+  assert_status 1
+  assert_output_contains "roof-controller uses the HAT emulator (hatMode Emulated), not the physical HAT, and does not operate the roof; set ALLOW_EMULATED_HAT=true to roll back to it on a test rig. It is left running. Run --rollback again to swap back."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous current false no
+
+  # Swapping back to the physical version needs no flag.
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=Emulated -- --rollback
+  assert_status 0
+  assert_output_contains "HAT: hatMode Physical."
+  assert_container roof-controller current true unless-stopped
+
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=Emulated ALLOW_EMULATED_HAT=true -- --rollback
+  assert_status 0
+  assert_output_contains "[done] Rolled back. roof-controller is verified at https://pi.test:8443. HAT: hatMode Emulated (ALLOW_EMULATED_HAT=true): the roof does not move. The replaced version"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_rollback_to_a_version_reporting_another_hat_is_refused() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=Simulation ALLOW_EMULATED_HAT=true -- --rollback
+
+  assert_status 1
+  assert_output_contains "roof-controller reports hatMode Simulation, not the physical HAT. It is left running."
+}
+
+test_rollback_to_a_version_without_hat_mode_is_physical() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=absent -- --rollback
+
+  assert_status 0
+  assert_output_contains "HAT: hatMode Physical (no hatMode: a version from before emulator mode)."
+  assert_container roof-controller old true unless-stopped
 }
 
 test_rollback_requires_certificate_or_explicit_insecure_opt_in() {

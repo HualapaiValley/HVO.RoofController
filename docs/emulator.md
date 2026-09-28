@@ -29,10 +29,23 @@ dotnet run --project HVO.RoofControllerV4.Emulator     # register port 127.0.0.1
 dotnet run --project HVO.RoofControllerV4.RPi          # the controller on http://localhost:5195
 ```
 
-If the controller starts first, it logs `HAT emulator unavailable` and keeps retrying. It initializes once the emulator
-is up.
+If the controller starts first, its first initialization cannot verify the relay register. It latches
+`RelayVerificationFailed` and retries every `RestartOnFailureWaitTime` (10 s). Once the emulator is up, the controller
+initializes, but the fault stays latched: the console shows Error and every move is refused until Clear Fault (the
+console button or `POST /api/v4.0/RoofControl/ClearFault`). While the emulator is down, the HAT library also logs each
+failed input poll with a stack trace, as it does for a failed I2C bus.
 
-**The in-memory register simulation is kept for unit tests only.** This is the HAT library's
+The ways of running the emulator share default host ports: 5290 for the control API in all three, and 5195 for the
+controller with both `dotnet run` and the compose `emulator` profile. Run one at a time, or move the ports:
+
+| How | Variables |
+|-----|-----------|
+| `dotnet run` | `--urls` for the control API and the controller, `Emulator__RegisterPort` and `HatEmulator__Port` for the register port |
+| `src/docker-compose.yml` | `HVO_EMULATOR_CONTROL_PORT` (5290) and `HVO_DEV_ROOF_PORT` (5200) |
+| The `emulator` profile | `HVO_EMULATOR_CONTROL_PORT` (5290) and `HVO_EMULATED_ROOF_PORT` (5195) |
+
+**The in-memory register simulation is kept for unit tests, and as the fallback with emulator mode off and no I2C
+bus.** This is the HAT library's
 `FourRelayFourInputHatMemoryClient`: registers only, with no roof, drive or limit switches behind them. Before the
 emulator, Development used it with the limit switches ignored, so an Open never reached a limit. The controller still
 falls back to it when it runs with emulator mode off and no I2C bus, for example Production settings on a machine that
@@ -55,11 +68,11 @@ A controller in emulator mode cannot be mistaken for the roof:
 
 | Where | What |
 |-------|------|
-| Every console page | An `EMULATED HAT` banner naming the emulator endpoint: "The observatory roof does not move." |
+| Every page (the console's layout and the sign-in layout) | An `EMULATED HAT` banner naming the emulator endpoint: "The observatory roof does not move." |
 | Console status badge and footer | `Emulated HAT` |
 | `/health` | `Degraded`, "Roof controller is running against the HAT emulator (*host:port*), not the physical HAT". The data has `HardwareMode` `Emulated` and `HatEmulatorEndpoint`. |
 | `GET .../RoofControl/Status` | `hatMode: "Emulated"` |
-| Startup log | Warnings from `HVO.RoofControllerV4.RPi.HatEmulation` and `RoofControllerServiceV4` naming the endpoint |
+| Startup log | Warnings from `HVO.RoofControllerV4.RPi.HatEmulation` and `RoofControllerServiceV4` naming the endpoint. The HAT library's own `Mode: Physical I²C` line is expected: the library takes its hardware path, and only the register accesses go to the emulator. |
 | Telemetry | Resource attributes `hvo.roof.hat.mode=emulated` and `hvo.roof.hat.emulator.endpoint` |
 
 `/health/ready` still answers 200 while Degraded, so container health checks and the deploy script work against a
@@ -83,7 +96,7 @@ The controller's `HatEmulator` section:
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `Enabled` | `false` (`true` in `appsettings.Development.json`) | Use the emulator instead of the Pi's I2C bus |
-| `Host` | `127.0.0.1` | The emulator's host name or address |
+| `Host` | `127.0.0.1` | The emulator's host name or IP address, without a scheme or a port. The controller refuses to start, and `--validate-deployment` fails, on a value such as `http://hat-emulator` or `hat-emulator:5291`. |
 | `Port` | `5291` | The emulator's register port |
 | `ConnectTimeout` | `00:00:01` | How long a connection attempt may take (50 ms to 30 s) |
 | `RequestTimeout` | `00:00:01` | How long a register access may take (50 ms to 30 s) |
@@ -93,6 +106,11 @@ A lost connection, a timeout or a malformed reply reaches the controller as an I
 transfer. The controller fails safe the same way: relay read-back failures stop motion and latch
 `RelayVerificationFailed`, and input read failures stop motion after `MaxConsecutiveInputReadFailures`. The client
 reconnects on the next access.
+
+Each access completes within `RequestTimeout`, or within `ConnectTimeout` plus `RequestTimeout` when it opens the
+connection: the Hello shares the request timeout. A busy thread pool does not stretch either one. There is no backoff:
+while the emulator is away, each access makes one connection attempt, and each new kind of failure is logged once, as a
+warning. When the controller stops, an access in flight fails at once instead of waiting for its timeout.
 
 The emulator's `Emulator` section (environment variables `Emulator__TimeScale` and so on):
 
@@ -107,10 +125,15 @@ The emulator's `Emulator` section (environment variables `Emulator__TimeScale` a
 The control API listens on `http://127.0.0.1:5290` unless `--urls` or `ASPNETCORE_URLS` says otherwise. Invalid
 settings stop the emulator before it listens.
 
+The register port serves one access at a time, in the order they arrive. A connection that sends no Hello within 5 s
+is closed. A request whose connection closed while it waited for its turn is not run: an I2C transfer cannot land
+after its caller has given up on it.
+
 ## Control API
 
-Everything is under `/api/emulator`, in JSON, with enum values as names. The API changes the emulated plant and link
-only. **It has no authentication:** keep it on loopback (the default, and how both compose files publish it) or on a
+Everything is under `/api/emulator`, in JSON. Enum values are names, such as `"Open"` or `"StuckReleased"`; numbers are
+refused. The fields in the examples are required unless the table says otherwise. The API changes the emulated plant
+and link only. **It has no authentication:** keep it on loopback (the default, and how both compose files publish it) or on a
 private test network.
 
 | Request | Body | Effect |
@@ -118,9 +141,9 @@ private test network.
 | `GET /status` | | The plant (position, velocity, relays, inputs, drive, limits, faults) and the link |
 | `GET /history?limit=200` | | The latest plant events (1 to 5000), with plant time since the last reset |
 | `GET /violations` | | Invariant violations the plant recorded, such as the roof at a hard stop or both directions energized; empty in a correct run |
-| `POST /reset` | `{"positionMeters": 1.0, "wiring": "None"}` | A fresh plant (both fields optional) |
+| `POST /reset` | `{"positionMeters": 1.0, "wiring": "None"}` | A fresh plant. Both fields are optional, and so is the body. |
 | `POST /time-scale` | `{"scale": 4}` | Change the time scale; time stays continuous |
-| `POST /drive/trip` | `{"trip": "External"}` | Trip the drive: `External`, `MotorOverload` or `StartTooSoonAfterPowerUp`. The drive's Clear Fault input (RLY3) resets it. |
+| `POST /drive/trip` | `{"trip": "External"}` | Trip the drive: `External` (the default), `MotorOverload` or `StartTooSoonAfterPowerUp`. The drive's Clear Fault input (RLY3) resets it. |
 | `POST /drive/power` | `{"powered": false}` | Drive power loss and return |
 | `POST /hat/power` | `{"powered": false}` | HAT power loss: register accesses fail with I/O errors |
 | `POST /external-stop` | `{"open": true}` | Open the external STOP circuit |
@@ -128,12 +151,12 @@ private test network.
 | `POST /limit-fault` | `{"limit": "Open", "fault": "StuckReleased"}` | Limit switch faults: `StuckActuated`, `StuckReleased`, `BrokenNcWire`, `BrokenMonitorWire` (combinable, comma-separated), or `None` |
 | `POST /relay-fault` | `{"relay": 1, "fault": "Welded"}` | Relay contact faults: `Welded`, `Dead` or `None` |
 | `POST /wiring` | `{"wiring": "SwappedLimitInputs"}` | Wiring variants, comma-separated. Examples: `SwappedDirectionRelays`, `SwappedMotorLeads`, `StopPermitBypassed`, `NoHardwiredEndStops`, `FaultMonitorWireBroken`, `RunMonitorWireBroken` |
-| `POST /bus` | `{"failReads": true, "failNextWrites": 2}` | I2C transaction failures, answered as I/O errors (the link stays up) |
-| `POST /link` | `{"outage": true}`, `{"responseDelayMilliseconds": 200}`, `{"disconnect": true}` | Link faults: no answers at all, a delay (0 to 60000 ms) or dropped connections |
+| `POST /bus` | `{"failReads": true, "failNextWrites": 2}` | I2C transaction failures, answered as I/O errors (the link stays up). Each field is optional; one left out is unchanged. |
+| `POST /link` | `{"outage": true}`, `{"responseDelayMilliseconds": 200}`, `{"disconnect": true}` | Link faults, each field optional. An outage closes the open connections and each new one as soon as it is accepted, as a stopped emulator would, so the controller sees connection errors. A response delay (0 to 60000 ms) models a stalled emulator: use it to exercise the controller's timeouts. `disconnect` drops the open connections once. |
 
-Each `POST` answers with the new `/status`, or with 400 when a value is invalid (a problem detail names the reason
-when the value parses but is out of range). For example,
-to jam the roof mid-travel and watch the controller stop it:
+Each `POST` answers with the new `/status`, or with 400 and no change. A body that does not parse (malformed JSON, an
+unknown name, or a number where a name belongs) gets a plain 400. A missing required field or an out-of-range value
+gets a problem detail that names it. For example, to jam the roof mid-travel and watch the controller stop it:
 
 ```bash
 curl -s -X POST http://127.0.0.1:5290/api/emulator/jam -H 'Content-Type: application/json' -d '{"jammed": true}'
@@ -175,10 +198,11 @@ No test relies on physical hardware.
 | `HatEmulatorServerTests` | The emulator's TCP server: the Hello handshake, accesses, refusals and the link controls |
 | `HatEmulatorParityTests` | Register accesses through the socket answer exactly as the in-process emulated client does |
 | `HatEmulatorSessionTests` | The emulator session: the documented installation at start, the scaled clock, reset |
-| `SocketI2cRegisterClientTests` | The controller's socket client: the Hello check, timeouts, disconnects and reconnects |
+| `SocketI2cRegisterClientTests` | The controller's socket client: the Hello check, the time bounds of each access (connect, Hello, request), disconnects, reconnects, disposal during an access, and the `Host` rules |
 | `RoofHatConnectionTests` | Emulator mode selection, the refusal outside Development, the startup warning and the telemetry attributes |
 | `EmulatorApiTests` | The emulator host: the control API changes the plant and the link, and the register port serves the HAT |
-| `EmulatorModeAppTests` | The whole controller in emulator mode: open and close through the API; a link outage while moving stops the roof and latches a fault until ClearFault; the banner and the Degraded health |
+| `EmulatorModeAppTests` | The whole controller in emulator mode: open and close through the API; a link outage while moving stops the roof and latches a fault until ClearFault; a controller started before the emulator initializes with a latched fault until ClearFault; the sign-in page banner and the Degraded health |
+| `EmulatedHatDisplayTests` | The banner in the main layout (the console) and on its own, the console's HAT badge and the footer |
 | `DevelopmentConfigurationTests` | Development uses the emulator, with the limit switches in force and the production wiring |
 | `tests/emulator/compose-smoke-test.sh` | The two images together through the compose `emulator` profile |
 | `tests/deploy/deploy-script-tests.sh` | The deploy script's refusal without `ALLOW_EMULATED_HAT` and its record of the flag |

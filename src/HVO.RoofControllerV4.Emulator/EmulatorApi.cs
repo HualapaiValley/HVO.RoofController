@@ -12,23 +12,26 @@ public enum LimitSide
     Closed
 }
 
+// The fields below that are nullable without a default are required: a missing one is refused with 400, never read
+// as false or the enum's first value.
+
 public sealed record ResetRequest(double? PositionMeters = null, WiringFault? Wiring = null);
 
-public sealed record TimeScaleRequest(double Scale);
+public sealed record TimeScaleRequest(double? Scale);
 
 public sealed record DriveTripRequest(SmVectorTrip Trip = SmVectorTrip.External);
 
-public sealed record PowerRequest(bool Powered);
+public sealed record PowerRequest(bool? Powered);
 
-public sealed record ExternalStopRequest(bool Open);
+public sealed record ExternalStopRequest(bool? Open);
 
-public sealed record JamRequest(bool Jammed);
+public sealed record JamRequest(bool? Jammed);
 
-public sealed record LimitFaultRequest(LimitSide Limit, LimitSwitchFault Fault);
+public sealed record LimitFaultRequest(LimitSide? Limit, LimitSwitchFault? Fault);
 
-public sealed record RelayFaultRequest(int Relay, RelayContactFault Fault);
+public sealed record RelayFaultRequest(int? Relay, RelayContactFault? Fault);
 
-public sealed record WiringRequest(WiringFault Wiring);
+public sealed record WiringRequest(WiringFault? Wiring);
 
 /// <summary>Bus failures of the emulated I2C transactions (each answered with an I/O error; the connection stays up). Null leaves a setting unchanged.</summary>
 public sealed record BusFaultRequest(
@@ -72,10 +75,11 @@ internal static class EmulatorApi
         });
         api.MapGet("/violations", (HatEmulatorSession session) => session.Plant.Violations);
 
-        api.MapPost("/reset", (ResetRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Reset(request.PositionMeters, request.Wiring)));
+        // Both reset fields are optional, and so is the body.
+        api.MapPost("/reset", (ResetRequest? request, HatEmulatorSession session, HatEmulatorServer server)
+            => Apply(session, server, () => session.Reset(request?.PositionMeters, request?.Wiring)));
         api.MapPost("/time-scale", (TimeScaleRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Clock.Scale = request.Scale));
+            => Apply(session, server, () => session.Clock.Scale = Required(request.Scale, "scale")));
         api.MapPost("/drive/trip", (DriveTripRequest request, HatEmulatorSession session, HatEmulatorServer server)
             => Apply(session, server, () =>
             {
@@ -87,19 +91,19 @@ internal static class EmulatorApi
                 session.Plant.TripDrive(request.Trip);
             }));
         api.MapPost("/drive/power", (PowerRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetDrivePower(request.Powered)));
+            => Apply(session, server, () => session.Plant.SetDrivePower(Required(request.Powered, "powered"))));
         api.MapPost("/hat/power", (PowerRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetHatPower(request.Powered)));
+            => Apply(session, server, () => session.Plant.SetHatPower(Required(request.Powered, "powered"))));
         api.MapPost("/external-stop", (ExternalStopRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.ExternalStopOpen = request.Open));
+            => Apply(session, server, () => session.Plant.ExternalStopOpen = Required(request.Open, "open")));
         api.MapPost("/jam", (JamRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.Jammed = request.Jammed));
+            => Apply(session, server, () => session.Plant.Jammed = Required(request.Jammed, "jammed")));
         api.MapPost("/limit-fault", (LimitFaultRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetLimitFault(request.Limit == LimitSide.Open, request.Fault)));
+            => Apply(session, server, () => session.Plant.SetLimitFault(IsOpenLimit(Required(request.Limit, "limit")), Required(request.Fault, "fault"))));
         api.MapPost("/relay-fault", (RelayFaultRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetRelayFault(request.Relay, request.Fault)));
+            => Apply(session, server, () => session.Plant.SetRelayFault(Required(request.Relay, "relay"), Required(request.Fault, "fault"))));
         api.MapPost("/wiring", (WiringRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.Wiring = request.Wiring));
+            => Apply(session, server, () => session.Plant.Wiring = Required(request.Wiring, "wiring")));
         api.MapPost("/bus", (BusFaultRequest request, HatEmulatorSession session, HatEmulatorServer server)
             => Apply(session, server, () => ApplyBusFaults(session.Client, request)));
         api.MapPost("/link", (LinkRequest request, HatEmulatorSession session, HatEmulatorServer server)
@@ -135,6 +139,18 @@ internal static class EmulatorApi
             server.OpenConnections,
             server.AcceptedConnections,
             server.Requests));
+
+    /// <summary>A field the request must give.</summary>
+    private static T Required<T>(T? value, string name)
+        where T : struct
+        => value ?? throw new ArgumentException($"The request must give \"{name}\".");
+
+    private static bool IsOpenLimit(LimitSide limit) => limit switch
+    {
+        LimitSide.Open => true,
+        LimitSide.Closed => false,
+        _ => throw new ArgumentOutOfRangeException(nameof(limit), "The limit must be Open or Closed.")
+    };
 
     private static IResult Apply(HatEmulatorSession session, HatEmulatorServer server, Action action)
     {

@@ -100,7 +100,8 @@ if [ "${SMOKE_NO_BUILD:-0}" = 1 ]; then
 fi
 
 echo "[smoke] Starting the emulator profile as project ${project} (controller ${roof}, emulator control ${emulator_api})"
-compose up -d "${build_flag[@]}" --wait --wait-timeout 300
+# The guarded expansion: bash before 4.4 treats an empty array as unbound under set -u.
+compose up -d ${build_flag[@]+"${build_flag[@]}"} --wait --wait-timeout 300
 
 wait_for "the controller is initialized with the roof closed" 60 roof_initialized_closed
 

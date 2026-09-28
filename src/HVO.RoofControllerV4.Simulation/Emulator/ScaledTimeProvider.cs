@@ -6,7 +6,7 @@ namespace HVO.RoofControllerV4.Simulation.Emulator;
 /// </summary>
 /// <remarks>
 /// Only <see cref="GetTimestamp"/> and <see cref="GetUtcNow"/> are scaled; the plant reads nothing else. Timers
-/// created from this provider run on the inner clock's time.
+/// created from this provider are the inner clock's timers, so they run on its time, unscaled.
 /// </remarks>
 public sealed class ScaledTimeProvider : TimeProvider
 {
@@ -59,6 +59,9 @@ public sealed class ScaledTimeProvider : TimeProvider
             return _timestampOrigin + (long)ScaledTicks(_inner.GetTimestamp());
         }
     }
+
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        => _inner.CreateTimer(callback, state, dueTime, period);
 
     public override DateTimeOffset GetUtcNow()
     {

@@ -15,14 +15,20 @@ namespace HVO.RoofControllerV4.RPi.Services.HatEmulation;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One access at a time. The connection opens on the first access (within <see cref="HatEmulatorOptions.ConnectTimeout"/>,
-/// then the Hello check of the protocol version and the HAT address). Each access must complete within
-/// <see cref="HatEmulatorOptions.RequestTimeout"/>.
+/// One access at a time. The connection opens on the first access: the connect (within
+/// <see cref="HatEmulatorOptions.ConnectTimeout"/>), then the Hello check of the protocol version and the HAT address. Each
+/// access completes within <see cref="HatEmulatorOptions.RequestTimeout"/>; an access that opens the connection shares that
+/// timeout with the Hello, so it completes within <c>ConnectTimeout + RequestTimeout</c>. The timeouts are the blocked
+/// caller's own waits, so a busy thread pool cannot stretch them.
 /// </para>
 /// <para>
 /// A timeout, a socket error, a malformed or out-of-sequence response, or the emulator closing the connection closes the
-/// connection and fails the access; the next access reconnects. An I/O error the emulator reports (an injected bus failure,
-/// a powered-down HAT) fails the access and keeps the connection. Only connection changes are logged, never each access.
+/// connection and fails the access; the next access reconnects, with no backoff (while the emulator is away each access
+/// makes one connection attempt). An I/O error the emulator reports (an injected bus failure, a powered-down HAT) fails the
+/// access and keeps the connection. Only connection changes are logged, never each access.
+/// </para>
+/// <para>
+/// <see cref="Dispose"/> does not wait for an access in flight: it closes the connection, which fails that access at once.
 /// </para>
 /// </remarks>
 public sealed class SocketI2cRegisterClient : II2cRegisterClient
@@ -31,11 +37,12 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
     private readonly HatEmulatorOptions _options;
     private readonly ILogger _logger;
     private Socket? _socket;
+    private Socket? _connecting;
     private uint _sequence;
     private bool _everConnected;
     private string? _lastFailure;
     private long _connects;
-    private bool _disposed;
+    private int _disposed;
 
     /// <param name="options">The emulator endpoint and timeouts.</param>
     /// <param name="busId">The I2C bus the HAT is on; the emulator must report the same.</param>
@@ -64,10 +71,7 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
     public string Endpoint => _options.Endpoint;
 
     /// <summary>True while a connection is open.</summary>
-    public bool IsConnected
-    {
-        get { lock (_gate) { return _socket is not null; } }
-    }
+    public bool IsConnected => Volatile.Read(ref _socket) is not null;
 
     /// <summary>The connections opened so far (each passed the Hello check).</summary>
     public long ConnectCount => Interlocked.Read(ref _connects);
@@ -121,23 +125,22 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
 
     public void Dispose()
     {
-        lock (_gate)
+        // Without the gate, so an access in flight fails now rather than holding up the shutdown until it times out.
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            _socket?.Dispose();
-            _socket = null;
+            return;
         }
+
+        Interlocked.Exchange(ref _connecting, null)?.Dispose();
+        Interlocked.Exchange(ref _socket, null)?.Dispose();
     }
 
-    /// <summary>The same check as the in-process client and the library: an access never runs past register 0xFF.</summary>
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    /// <summary>The same check as the in-process emulated client: an access never runs past register 0xFF.</summary>
     private void CheckRange(byte register, int length)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         if (register + length > HatEmulatorProtocol.MaxBlockLength)
         {
             throw new ArgumentOutOfRangeException(nameof(length), "The access runs past register 0xFF.");
@@ -148,14 +151,14 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
     {
         lock (_gate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            var socket = EnsureConnected();
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            var (socket, deadline) = EnsureConnected();
             var sequence = unchecked(++_sequence);
             var request = new HatEmulatorFrame(kind, sequence, register, (ushort)count, payload);
             HatEmulatorFrame response;
             try
             {
-                response = Send(socket, request, Deadline(_options.RequestTimeout));
+                response = Send(socket, request, deadline);
                 if (response.Kind == HatEmulatorFrameKind.Ok && kind == HatEmulatorFrameKind.Read && response.Payload.Length != count)
                 {
                     throw new HatEmulatorProtocolException($"A Read of {count} registers returned {response.Payload.Length} bytes.");
@@ -221,7 +224,7 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
         }
         catch (ObjectDisposedException ex)
         {
-            throw new IOException("HAT emulator connection closed.", ex);
+            throw Closed(ex);
         }
     }
 
@@ -241,33 +244,30 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
         }
     }
 
-    private Socket EnsureConnected()
+    /// <summary>The open connection, or a new one that passed the Hello check, and the deadline of the access.</summary>
+    private (Socket Socket, long Deadline) EnsureConnected()
     {
-        if (_socket is { } open)
+        if (Volatile.Read(ref _socket) is { } open)
         {
-            return open;
+            return (open, Deadline(_options.RequestTimeout));
         }
 
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        long deadline;
         try
         {
-            using (var timeout = new CancellationTokenSource(_options.ConnectTimeout))
+            // Published so that Dispose can abort the attempt; checked after, in case Dispose ran first.
+            Interlocked.Exchange(ref _connecting, socket);
+            if (IsDisposed)
             {
-                try
-                {
-                    socket.ConnectAsync(_options.Host, _options.Port, timeout.Token).AsTask().GetAwaiter().GetResult();
-                }
-                catch (OperationCanceledException ex)
-                {
-                    throw new IOException($"Connecting to the HAT emulator at {Endpoint} timed out after {_options.ConnectTimeout.TotalMilliseconds:0} ms.", ex);
-                }
-                catch (SocketException ex)
-                {
-                    throw new IOException($"Connecting to the HAT emulator at {Endpoint} failed: {ex.SocketErrorCode}.", ex);
-                }
+                throw Closed(null);
             }
 
-            var reply = Send(socket, HatEmulatorProtocol.CreateHello(unchecked(++_sequence)), Deadline(_options.RequestTimeout));
+            Connect(socket);
+
+            // The Hello and the access share one request timeout.
+            deadline = Deadline(_options.RequestTimeout);
+            var reply = Send(socket, HatEmulatorProtocol.CreateHello(unchecked(++_sequence)), deadline);
             var (busId, address) = HatEmulatorProtocol.ReadHelloReply(reply);
             if (busId != ConnectionSettings.BusId || address != ConnectionSettings.DeviceAddress)
             {
@@ -275,38 +275,84 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
                     $"The HAT emulator at {Endpoint} emulates bus {busId} address 0x{address:X2}; the controller expects bus {ConnectionSettings.BusId} address 0x{ConnectionSettings.DeviceAddress:X2}.");
             }
         }
-        catch (IOException ex)
+        catch (Exception ex)
         {
+            Interlocked.CompareExchange(ref _connecting, null, socket);
             socket.Dispose();
-            if (!string.Equals(_lastFailure, ex.Message, StringComparison.Ordinal))
+
+            // Every failure reaches the HAT library as a failed transfer, even one this client does not expect.
+            var failure = ex as IOException
+                ?? (IsDisposed ? Closed(ex) : new IOException($"Connecting to the HAT emulator at {Endpoint} failed: {ex.Message}", ex));
+            if (!IsDisposed && !string.Equals(_lastFailure, failure.Message, StringComparison.Ordinal))
             {
                 // Once per distinct failure: the controller retries with every poll while the emulator is away.
-                _lastFailure = ex.Message;
-                _logger.LogWarning("HAT emulator unavailable: {Reason}", ex.Message);
+                _lastFailure = failure.Message;
+                _logger.LogWarning("HAT emulator unavailable: {Reason}", failure.Message);
             }
 
-            throw;
+            if (ReferenceEquals(failure, ex))
+            {
+                throw;
+            }
+
+            throw failure;
         }
 
-        _socket = socket;
+        Interlocked.CompareExchange(ref _connecting, null, socket);
+        Interlocked.Exchange(ref _socket, socket);
+        if (IsDisposed)
+        {
+            // Dispose ran during the Hello and may have missed this socket.
+            Interlocked.Exchange(ref _socket, null)?.Dispose();
+            throw Closed(null);
+        }
+
         _lastFailure = null;
         Interlocked.Increment(ref _connects);
         _logger.LogInformation(
             _everConnected ? "Reconnected to the HAT emulator at {Endpoint}" : "Connected to the HAT emulator at {Endpoint}",
             Endpoint);
         _everConnected = true;
-        return socket;
+        return (socket, deadline);
+    }
+
+    /// <summary>
+    /// Connects within <see cref="HatEmulatorOptions.ConnectTimeout"/>. The caller's own wait bounds the attempt, not a
+    /// timer on the thread pool; a timed-out attempt is abandoned by closing its socket.
+    /// </summary>
+    private void Connect(Socket socket)
+    {
+        var connect = socket.ConnectAsync(_options.Host, _options.Port);
+        bool completed;
+        try
+        {
+            completed = connect.Wait(_options.ConnectTimeout);
+        }
+        catch (AggregateException ex) when (ex.InnerException is SocketException socketError)
+        {
+            throw new IOException($"Connecting to the HAT emulator at {Endpoint} failed: {socketError.SocketErrorCode}.", socketError);
+        }
+        catch (AggregateException ex) when (ex.InnerException is { } inner)
+        {
+            throw new IOException($"Connecting to the HAT emulator at {Endpoint} failed: {inner.Message}", inner);
+        }
+
+        if (!completed)
+        {
+            socket.Dispose();
+            _ = connect.ContinueWith(static attempt => _ = attempt.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            throw new IOException($"Connecting to the HAT emulator at {Endpoint} timed out after {_options.ConnectTimeout.TotalMilliseconds:0} ms.");
+        }
     }
 
     private void Drop(string reason)
     {
-        if (_socket is null)
+        if (Interlocked.Exchange(ref _socket, null) is not { } socket)
         {
             return;
         }
 
-        _socket.Dispose();
-        _socket = null;
+        socket.Dispose();
         _lastFailure = reason;
         _logger.LogWarning("HAT emulator connection to {Endpoint} dropped: {Reason}", Endpoint, reason);
     }
@@ -326,4 +372,6 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
     }
 
     private static IOException TimedOut(Exception? inner) => new("The HAT emulator did not answer within the request timeout.", inner);
+
+    private static IOException Closed(Exception? inner) => new("HAT emulator connection closed.", inner);
 }

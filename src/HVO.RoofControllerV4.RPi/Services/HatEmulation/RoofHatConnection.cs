@@ -73,8 +73,9 @@ public sealed class RoofHatConnection
             simulationFactory: () => new FourRelayFourInputHatMemoryClient(busId, address));
     }
 
-    /// <summary>The HAT mode a status snapshot reports.</summary>
-    public RoofHatMode ModeFor(bool hardwareBacked) => IsEmulated ? RoofHatMode.Emulated : hardwareBacked ? RoofHatMode.Physical : RoofHatMode.Simulation;
+    /// <summary>The HAT mode a status snapshot reports: emulated whatever the client, otherwise as the HAT library's client is backed.</summary>
+    public static RoofHatMode ModeFor(bool emulated, bool hardwareBacked)
+        => emulated ? RoofHatMode.Emulated : hardwareBacked ? RoofHatMode.Physical : RoofHatMode.Simulation;
 }
 
 /// <summary>The startup report of the HAT mode.</summary>

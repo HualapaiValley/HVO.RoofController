@@ -1,10 +1,12 @@
 using System;
+using System.Device.I2c;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using HVO.Iot.Devices.Abstractions;
 using HVO.RoofControllerV4.Common.Emulation;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
@@ -261,6 +263,78 @@ public sealed class HatEmulatorServerTests
     }
 
     [TestMethod]
+    public async Task AConnectionThatSendsNoHello_IsClosedAfterTheHelloTimeout_AndOneThatDid_StaysOpen()
+    {
+        await using var rig = ServerRig.Start();
+        rig.Server.HelloTimeout.Should().Be(TimeSpan.FromSeconds(5));
+        rig.Server.HelloTimeout = TimeSpan.FromMilliseconds(200);
+        using var greeted = await RawLink.ConnectAsync(rig.Server);
+        await greeted.HelloAsync();
+        using var silent = await RawLink.ConnectAsync(rig.Server);
+
+        (await silent.ReceiveOrClosedAsync()).Should().BeNull("a connection that sends no Hello is closed");
+        await WaitUntilAsync(() => rig.Server.OpenConnections == 1);
+        (await greeted.RequestAsync(Read(2, 0, 1))).Kind.Should().Be(HatEmulatorFrameKind.Ok, "the Hello timeout ends with the Hello");
+
+        FluentActions.Invoking(() => rig.Server.HelloTimeout = TimeSpan.Zero).Should().Throw<ArgumentOutOfRangeException>();
+        FluentActions.Invoking(() => rig.Server.HelloTimeout = TimeSpan.FromDays(30)).Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [TestMethod]
+    public async Task ARequestWhoseConnectionClosedWhileItWaitedItsTurn_IsNotRun()
+    {
+        var plant = new RoofPlant(new RoofPlantOptions(), new ManualTimeProvider());
+        using var target = new GatedTarget(new EmulatedHatRegisterClient(plant, timing: EmulatedBusTiming.Instant));
+        await using var server = new HatEmulatorServer(() => target, new IPEndPoint(IPAddress.Loopback, 0));
+        server.Start();
+        using var first = await RawLink.ConnectAsync(server);
+        await first.HelloAsync();
+        var second = await RawLink.ConnectAsync(server);
+        await second.HelloAsync();
+
+        // The first connection's read holds the access gate; the second sends a write, then gives up and closes.
+        await first.SendAsync(Read(2, SmI010Board.RelayValueRegister, 1));
+        (await target.Held.Task.WaitAsync(ReceiveTimeout)).Should().BeTrue();
+        await second.SendAsync(Write(2, SmI010Board.RelayValueRegister, 0x08));
+        second.Dispose();
+        target.Release();
+
+        (await first.ReceiveAsync())!.Value.Kind.Should().Be(HatEmulatorFrameKind.Ok);
+        await WaitUntilAsync(() => server.OpenConnections == 1);
+        server.Requests.Should().Be(1, "the closed connection's write was not run");
+        plant.Hat.RelayRegister.Should().Be(0, "a write the client gave up on must not land later");
+        (await first.RequestAsync(Write(3, SmI010Board.RelayValueRegister, 0x01))).Kind.Should().Be(HatEmulatorFrameKind.Ok);
+        plant.Hat.RelayRegister.Should().Be(0x01);
+    }
+
+    [TestMethod]
+    public async Task ConnectionsDroppedAsTheyAreAccepted_AndDisposal_LeaveNoConnectionsOrErrors()
+    {
+        var rig = ServerRig.Start();
+        using var stop = new CancellationTokenSource();
+        var dropper = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                rig.Server.DisconnectAll();
+                await Task.Yield();
+            }
+        });
+
+        for (var i = 0; i < 50; i++)
+        {
+            using var link = await RawLink.ConnectAsync(rig.Server);
+        }
+
+        await WaitUntilAsync(() => rig.Server.AcceptedConnections == 50);
+        await stop.CancelAsync();
+        await dropper;
+        await rig.DisposeAsync().AsTask().WaitAsync(ReceiveTimeout);
+
+        rig.Server.OpenConnections.Should().Be(0);
+    }
+
+    [TestMethod]
     public void Constructor_RefusesNullArguments()
     {
         FluentActions.Invoking(() => new HatEmulatorServer(null!, new IPEndPoint(IPAddress.Loopback, 0))).Should().Throw<ArgumentNullException>();
@@ -312,6 +386,50 @@ public sealed class HatEmulatorServerTests
         {
             await Server.DisposeAsync();
             Target.Dispose();
+        }
+    }
+
+    /// <summary>A target whose next read waits until <see cref="Release"/>, to hold the server's access gate.</summary>
+    private sealed class GatedTarget(EmulatedHatRegisterClient inner) : II2cRegisterClient
+    {
+        private readonly ManualResetEventSlim _released = new();
+        private int _held;
+
+        public TaskCompletionSource<bool> Held { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public I2cConnectionSettings ConnectionSettings => inner.ConnectionSettings;
+
+        public object SyncRoot => inner.SyncRoot;
+
+        public void Release() => _released.Set();
+
+        public byte ReadByte(byte register) => inner.ReadByte(register);
+
+        public ushort ReadUInt16(byte register) => inner.ReadUInt16(register);
+
+        public uint ReadUInt32(byte register) => inner.ReadUInt32(register);
+
+        public void ReadBlock(byte register, Span<byte> destination)
+        {
+            if (Interlocked.Exchange(ref _held, 1) == 0)
+            {
+                Held.TrySetResult(true);
+                _released.Wait(ReceiveTimeout).Should().BeTrue("the test releases the held read");
+            }
+
+            inner.ReadBlock(register, destination);
+        }
+
+        public void WriteByte(byte register, byte value) => inner.WriteByte(register, value);
+
+        public void WriteUInt16(byte register, ushort value) => inner.WriteUInt16(register, value);
+
+        public void WriteBlock(byte register, ReadOnlySpan<byte> data) => inner.WriteBlock(register, data);
+
+        public void Dispose()
+        {
+            inner.Dispose();
+            _released.Dispose();
         }
     }
 

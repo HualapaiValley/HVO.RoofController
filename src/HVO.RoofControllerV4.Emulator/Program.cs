@@ -35,7 +35,8 @@ public class Program
     internal static void ConfigureServices(IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<EmulatorHostOptions>(configuration.GetSection(EmulatorHostOptions.SectionName));
-        services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+        // Enum values by name only: a number would reach the plant as a value it may not model.
+        services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false)));
         services.AddProblemDetails();
 
         services.AddSingleton(sp => new HatEmulatorSession(sp.GetRequiredService<IOptions<EmulatorHostOptions>>().Value.SessionOptions()));

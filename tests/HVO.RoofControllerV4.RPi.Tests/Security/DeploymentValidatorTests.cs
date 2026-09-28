@@ -771,6 +771,8 @@ public sealed class DeploymentValidatorTests
     [TestMethod]
     [DataRow("HatEmulator:Port", "0", "HatEmulator:Port must be between 1 and 65535.")]
     [DataRow("HatEmulator:Host", " ", "HatEmulator:Host")]
+    [DataRow("HatEmulator:Host", "hat-emulator:5291", "HatEmulator:Host must be a host name or an IP address, without a scheme or a port")]
+    [DataRow("HatEmulator:Host", "http://hat-emulator", "HatEmulator:Host must be a host name or an IP address, without a scheme or a port")]
     [DataRow("HatEmulator:RequestTimeout", "00:00:00.010", "HatEmulator:RequestTimeout")]
     [DataRow("HatEmulator:Port", "not-a-port", "HatEmulator could not be read: the value of HatEmulator:Port is not a valid System.Int32.")]
     public void HatEmulatorMode_WithInvalidSettings_Fails(string key, string value, string expected)

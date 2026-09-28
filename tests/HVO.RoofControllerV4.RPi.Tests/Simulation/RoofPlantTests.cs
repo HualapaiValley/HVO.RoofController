@@ -544,7 +544,8 @@ public class RoofPlantTests
             new RoofPlantOptions { Mechanics = new RoofMechanicsOptions { TravelMeters = double.NaN } },
             new RoofPlantOptions { Mechanics = new RoofMechanicsOptions { SpeedAtBaseFrequency = double.PositiveInfinity } },
             new RoofPlantOptions { Drive = new SmVectorSettings { OutputInversion = 5 } },
-            new RoofPlantOptions { OpenLimit = new Me8108Options { LeverArmMeters = -1 } }
+            new RoofPlantOptions { OpenLimit = new Me8108Options { LeverArmMeters = -1 } },
+            new RoofPlantOptions { Wiring = (WiringFault)(1 << 10) }
         };
 
         foreach (var options in invalid)
@@ -560,5 +561,30 @@ public class RoofPlantTests
             .Invoking(o => o.Validate()).Should().NotThrow();
         new RoofPlantOptions { StepSize = TimeSpan.FromMilliseconds(10), OpenLimit = slowAction, ClosedLimit = noBounce }
             .Invoking(o => o.Validate()).Should().NotThrow();
+    }
+
+    [TestMethod]
+    public void InjectedFaults_TheModelDoesNotHave_AreRefused_AndLeaveThePlantAlone()
+    {
+        var plant = MidTravel().Plant;
+        var events = plant.History.Count;
+
+        plant.Invoking(p => p.Wiring = (WiringFault)(1 << 10)).Should().Throw<ArgumentOutOfRangeException>();
+        plant.Invoking(p => p.SetLimitFault(true, (LimitSwitchFault)16)).Should().Throw<ArgumentOutOfRangeException>();
+        plant.Invoking(p => p.SetLimitFault(false, LimitSwitchFault.StuckActuated | (LimitSwitchFault)64)).Should().Throw<ArgumentOutOfRangeException>();
+        plant.Invoking(p => p.SetRelayFault(1, (RelayContactFault)3)).Should().Throw<ArgumentOutOfRangeException>();
+        plant.Invoking(p => p.TripDrive((SmVectorTrip)9)).Should().Throw<ArgumentOutOfRangeException>();
+
+        plant.Wiring.Should().Be(WiringFault.None);
+        plant.OpenLimit.Fault.Should().Be(LimitSwitchFault.None);
+        plant.ClosedLimit.Fault.Should().Be(LimitSwitchFault.None);
+        plant.Drive.Trip.Should().Be(SmVectorTrip.None);
+        plant.History.Count.Should().Be(events, "a refused injection records nothing");
+
+        // Combinations of defined flags are faults the model has.
+        plant.Wiring = WiringFault.SwappedLimitInputs | WiringFault.RunMonitorWireBroken;
+        plant.SetLimitFault(true, LimitSwitchFault.BrokenNcWire | LimitSwitchFault.BrokenMonitorWire);
+        plant.Wiring.Should().Be(WiringFault.SwappedLimitInputs | WiringFault.RunMonitorWireBroken);
+        plant.OpenLimit.Fault.Should().Be(LimitSwitchFault.BrokenNcWire | LimitSwitchFault.BrokenMonitorWire);
     }
 }

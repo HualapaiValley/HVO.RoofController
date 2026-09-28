@@ -121,9 +121,13 @@ the roof against this server; use the authenticated browser console for operator
   telemetry attributes `hvo.roof.hat.mode` and `hvo.roof.hat.emulator.endpoint`. The deployment
   check fails on refused emulator settings and warns on allowed ones.
 - Deploy script (#30): `HAT_EMULATOR_ENDPOINT` with `ALLOW_EMULATED_HAT=true` deploys a
-  test-rig controller against the HAT emulator, without `/dev/i2c-1`; either alone, or a
-  `HatEmulator` setting in `EXTRA_DOCKER_ARGS`, is refused. The dry-run and the final report
-  name the HAT the controller uses.
+  test-rig controller against the HAT emulator, without `/dev/i2c-1`. The endpoint without the
+  flag is refused, and so is a `HatEmulator` setting in `EXTRA_DOCKER_ARGS`, given directly or
+  in an `--env-file` (which must be readable). In emulator mode an I2C `--device`,
+  `--privileged` and a mount of the host's `/` or `/dev` are refused too. The verification
+  checks the `hatMode` the new controller reports against the one deployed and rolls back on a
+  mismatch; `--rollback` accepts a version that uses the emulator only with
+  `ALLOW_EMULATED_HAT=true`. The dry-run and the final report name the HAT the controller uses.
 - Emulator container (#30): `src/HVO.RoofControllerV4.Emulator/Dockerfile` (non-root,
   `linux/amd64` and `linux/arm64`), the compose `emulator` profile (production settings
   against the emulator container, no devices, loopback only), and
@@ -206,8 +210,11 @@ the roof against this server; use the authenticated browser console for operator
   emulator mode off and no I2C bus. `devcontainer.rpi.json` sets `HatEmulator__Enabled=false`
   to use the physical HAT, and `src/docker-compose.yml` runs the controller in Development
   against the emulator container (admin key from `HVO_DEV_ROOF_API_KEY`).
-- The deploy script sets `HatEmulator__Enabled=false` for a physical-HAT deployment, so a
-  setting from an env file cannot switch it to the emulator unrecorded.
+- The deploy script sets `HatEmulator__Enabled=false` and
+  `HatEmulator__AllowOutsideDevelopment=false` for a physical-HAT deployment. A setting in the
+  secrets directory is read later and could override them, so the verified `hatMode` is what
+  makes the HAT certain: a physical deployment whose controller reports anything else is rolled
+  back.
 - Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile

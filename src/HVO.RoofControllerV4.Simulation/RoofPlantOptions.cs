@@ -99,6 +99,8 @@ public sealed record RoofPlantOptions
             throw new ArgumentOutOfRangeException(nameof(MaxHistory));
         }
 
+        FaultArguments.CheckFlags(Wiring, nameof(Wiring));
+
         if (!(InitialPosition > -Mechanics.HardStopBeyondOperatePoint && InitialPosition < Mechanics.TravelMeters + Mechanics.HardStopBeyondOperatePoint))
         {
             throw new ArgumentOutOfRangeException(nameof(InitialPosition), "The roof must start between the hard stops.");

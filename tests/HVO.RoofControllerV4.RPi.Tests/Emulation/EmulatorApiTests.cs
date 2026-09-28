@@ -127,6 +127,11 @@ public sealed class EmulatorApiTests
         defaults.Plant.Generation.Should().Be(2);
         defaults.Plant.PositionMeters.Should().Be(new RoofPlantOptions().InitialPosition);
         defaults.Plant.Wiring.Should().Be(WiringFault.None);
+
+        // The body is optional too.
+        using var empty = await client.PostAsync($"{Api}/reset", content: null);
+        empty.StatusCode.Should().Be(HttpStatusCode.OK, await empty.Content.ReadAsStringAsync());
+        (await empty.Content.ReadFromJsonAsync<EmulatorStatusResponse>(Json))!.Plant.Generation.Should().Be(3);
     }
 
     [TestMethod]
@@ -341,15 +346,49 @@ public sealed class EmulatorApiTests
     [DataRow("/drive/trip", """{"trip":"Bogus"}""")]
     [DataRow("/reset", """{"wiring":"NoSuchFault"}""")]
     [DataRow("/time-scale", """{"scale":"fast"}""")]
+    // Enums by name only: a number could name a value the plant does not model.
+    [DataRow("/drive/trip", """{"trip":2}""")]
+    [DataRow("/limit-fault", """{"limit":5,"fault":"StuckActuated"}""")]
+    [DataRow("/limit-fault", """{"limit":"Open","fault":64}""")]
+    [DataRow("/relay-fault", """{"relay":1,"fault":1}""")]
+    [DataRow("/wiring", """{"wiring":1024}""")]
+    [DataRow("/reset", """{"wiring":2}""")]
     public async Task ARequestThatDoesNotParse_IsABadRequest(string path, string body)
     {
         await using var host = new EmulatorHost();
         using var client = host.CreateClient();
+        var before = host.Session.GetStatus();
 
         using var response = await client.PostAsync(Api + path, new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        host.Session.Generation.Should().Be(0);
+        host.Session.GetStatus().Should().BeEquivalentTo(before, o => o.Excluding(status => status.Elapsed), "a refused request changes nothing");
+    }
+
+    [TestMethod]
+    [DataRow("/time-scale", "{}", "scale")]
+    [DataRow("/drive/power", "{}", "powered")]
+    [DataRow("/hat/power", """{"power":false}""", "powered")]
+    [DataRow("/external-stop", "{}", "open")]
+    [DataRow("/jam", "{}", "jammed")]
+    [DataRow("/limit-fault", """{"fault":"StuckActuated"}""", "limit")]
+    [DataRow("/limit-fault", """{"limit":"Open"}""", "fault")]
+    [DataRow("/relay-fault", """{"fault":"Welded"}""", "relay")]
+    [DataRow("/relay-fault", """{"relay":2}""", "fault")]
+    [DataRow("/wiring", "{}", "wiring")]
+    public async Task ARequestWithoutARequiredField_IsRefused_AndChangesNothing(string path, string body, string field)
+    {
+        await using var host = new EmulatorHost();
+        using var client = host.CreateClient();
+        var before = host.Session.GetStatus();
+
+        using var response = await client.PostAsync(Api + path, new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        problem.GetProperty("title").GetString().Should().Be("Invalid emulator request");
+        problem.GetProperty("detail").GetString().Should().Be($"The request must give \"{field}\".");
+        host.Session.GetStatus().Should().BeEquivalentTo(before, o => o.Excluding(status => status.Elapsed), "a missing field is never read as false or a default");
     }
 
     [TestMethod]

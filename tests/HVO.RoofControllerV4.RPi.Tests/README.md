@@ -144,8 +144,9 @@ models exactly that register.
 | `Plant/ProductionConfigurationTests` | The deployed `appsettings.json` validates and matches the documented wiring |
 | `Emulation/HatEmulatorProtocolTests`, `HatEmulatorServerTests`, `HatEmulatorParityTests` | The emulator's wire format; its TCP server (Hello, accesses, refusals, outage, delay, disconnect); register accesses over TCP answer exactly as the in-process emulated client |
 | `Emulation/HatEmulatorSessionTests`, `EmulatorApiTests` | The emulator session (start state, scaled clock, reset) and host: the control API and the register port |
-| `Emulation/SocketI2cRegisterClientTests`, `RoofHatConnectionTests` | The controller's socket register client (Hello check, timeouts, reconnects) and emulator mode selection, refusal, warning and telemetry |
-| `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, the banner and the Degraded health |
+| `Emulation/SocketI2cRegisterClientTests`, `RoofHatConnectionTests` | The controller's socket register client (Hello check, time bounds, reconnects, disposal, `Host` rules) and emulator mode selection, refusal, warning and telemetry |
+| `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, a start before the emulator, the sign-in page banner and the Degraded health |
+| `Components/EmulatedHatDisplayTests` | The emulated-HAT banner in the main layout and on its own, the console's HAT badge and the footer |
 | `Emulation/DevelopmentConfigurationTests` | `appsettings.Development.json`: the HAT emulator, with the limit switches in force and the production wiring |
 
 ## Emulated plant

@@ -112,10 +112,10 @@ public sealed class RoofHatConnectionTests
     [TestMethod]
     public void ModeFor_IsEmulated_WhateverTheClient_AndOtherwiseFollowsTheHardwareFlag()
     {
-        HatConnections.Emulated().ModeFor(hardwareBacked: true).Should().Be(RoofHatMode.Emulated);
-        HatConnections.Emulated().ModeFor(hardwareBacked: false).Should().Be(RoofHatMode.Emulated);
-        HatConnections.Hardware().ModeFor(hardwareBacked: true).Should().Be(RoofHatMode.Physical);
-        HatConnections.Hardware().ModeFor(hardwareBacked: false).Should().Be(RoofHatMode.Simulation);
+        RoofHatConnection.ModeFor(emulated: true, hardwareBacked: true).Should().Be(RoofHatMode.Emulated);
+        RoofHatConnection.ModeFor(emulated: true, hardwareBacked: false).Should().Be(RoofHatMode.Emulated);
+        RoofHatConnection.ModeFor(emulated: false, hardwareBacked: true).Should().Be(RoofHatMode.Physical);
+        RoofHatConnection.ModeFor(emulated: false, hardwareBacked: false).Should().Be(RoofHatMode.Simulation);
     }
 
     [TestMethod]

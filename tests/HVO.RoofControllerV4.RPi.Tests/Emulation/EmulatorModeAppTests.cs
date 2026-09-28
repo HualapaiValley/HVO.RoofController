@@ -131,6 +131,51 @@ public sealed class EmulatorModeAppTests
     }
 
     [TestMethod]
+    public async Task AControllerStartedBeforeTheEmulator_InitializesWithALatchedFault_UntilCleared()
+    {
+        // The link is down from the start, as when the controller starts first. The host retries every second.
+        await using var rig = await EmulatorModeRig.StartAsync(
+            new() { ["RoofControllerOptionsV4:RestartOnFailureWaitTime"] = "1" },
+            startWithTheLinkDown: true);
+        using var client = rig.App.CreateApiClient(TestApiKeys.Operator);
+
+        var failed = await rig.WaitForControllerAsync(s => s.IsFaultLatched, MotionTimeout, "the first initialization to fail");
+        failed.IsInitialized.Should().BeFalse();
+        failed.LatchedFaultReason.Should().Be(RoofControllerStopReason.RelayVerificationFailed, "initialization could not verify the relays off");
+
+        rig.Server.Outage = false;
+
+        var initialized = await rig.WaitForControllerAsync(s => s.IsInitialized, MotionTimeout, "the controller to initialize once the emulator answers");
+        initialized.IsFaultLatched.Should().BeTrue("the failed attempt's fault stays latched until the operator clears it");
+        initialized.LatchedFaultReason.Should().Be(RoofControllerStopReason.RelayVerificationFailed);
+        initialized.Status.Should().Be(RoofControllerStatus.Error);
+        initialized.RelayRegisterState.Should().Be(RoofRelayRegisterState.Verified);
+        rig.Logs.Entries.Should().Contain(e => e.Message == $"Connected to the HAT emulator at {rig.Endpoint}");
+        using (var refused = await client.PostAsync($"{RoofApi}/Open", content: null))
+        {
+            refused.StatusCode.Should().Be(HttpStatusCode.Conflict, "motion is refused while the fault is latched");
+        }
+
+        rig.Plant.RelayRegister.Should().Be(0);
+
+        using (var clear = await client.PostAsync($"{RoofApi}/ClearFault", content: null))
+        {
+            clear.StatusCode.Should().Be(HttpStatusCode.OK, await clear.Content.ReadAsStringAsync());
+            var cleared = await ApiJson.ReadAsync<RoofStatusResponse>(clear);
+            cleared.IsFaultLatched.Should().BeFalse();
+            cleared.Status.Should().Be(RoofControllerStatus.Closed);
+        }
+
+        using (var open = await client.PostAsync($"{RoofApi}/Open", content: null))
+        {
+            open.StatusCode.Should().Be(HttpStatusCode.OK, await open.Content.ReadAsStringAsync());
+        }
+
+        await rig.WaitForControllerAsync(s => s.Status == RoofControllerStatus.Open && !s.IsMoving, MotionTimeout, "the roof to open after the clear");
+        rig.Session.Plant.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
     public async Task Health_IsDegraded_AndNamesTheEmulator()
     {
         await using var rig = await EmulatorModeRig.StartAsync();
@@ -149,8 +194,9 @@ public sealed class EmulatorModeAppTests
     }
 
     [TestMethod]
-    public async Task EveryPage_CarriesTheEmulatedHatBanner()
+    public async Task TheSignInPage_CarriesTheEmulatedHatBanner()
     {
+        // The sign-in page has its own layout; EmulatedHatDisplayTests covers the main layout, which serves the console.
         await using var rig = await EmulatorModeRig.StartAsync();
         using var client = rig.App.CreateApiClient();
 
@@ -163,7 +209,7 @@ public sealed class EmulatorModeAppTests
     }
 
     [TestMethod]
-    public async Task ThePhysicalHat_HasNoBanner()
+    public async Task ThePhysicalHat_HasNoBannerOnTheSignInPage()
     {
         await using var host = new RoofApiTestHost();
         using var client = host.CreateApiClient();
@@ -247,9 +293,11 @@ public sealed class EmulatorModeAppTests
 
         /// <summary>
         /// Starts the emulator (40 cm of travel at twice real time, so a full run takes about 2 s), then the controller
-        /// with the documented wiring (normally open limits, not ignored), and waits for it to initialize.
+        /// with the documented wiring (normally open limits, not ignored), and waits for it to initialize. With
+        /// <paramref name="startWithTheLinkDown"/>, the link is in an outage when the controller starts, and the rig
+        /// does not wait.
         /// </summary>
-        public static async Task<EmulatorModeRig> StartAsync(Dictionary<string, string?>? settings = null)
+        public static async Task<EmulatorModeRig> StartAsync(Dictionary<string, string?>? settings = null, bool startWithTheLinkDown = false)
         {
             var plant = new RoofPlantOptions();
             var session = new HatEmulatorSession(new HatEmulatorSessionOptions
@@ -257,7 +305,7 @@ public sealed class EmulatorModeAppTests
                 Plant = plant with { Mechanics = plant.Mechanics with { TravelMeters = 0.4 } },
                 TimeScale = 2
             });
-            var server = new HatEmulatorServer(session.CurrentClient, new IPEndPoint(IPAddress.Loopback, 0));
+            var server = new HatEmulatorServer(session.CurrentClient, new IPEndPoint(IPAddress.Loopback, 0)) { Outage = startWithTheLinkDown };
             server.Start();
 
             var values = new Dictionary<string, string?>
@@ -278,6 +326,11 @@ public sealed class EmulatorModeAppTests
             try
             {
                 rig.App.CreateApiClient().Dispose();
+                if (startWithTheLinkDown)
+                {
+                    return rig;
+                }
+
                 await rig.WaitForControllerAsync(s => s.IsInitialized && s.Status == RoofControllerStatus.Closed, TimeSpan.FromSeconds(20), "the controller to initialize");
                 return rig;
             }

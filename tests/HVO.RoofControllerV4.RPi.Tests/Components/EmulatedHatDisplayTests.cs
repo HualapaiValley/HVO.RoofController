@@ -1,9 +1,12 @@
 using System.Threading.Tasks;
 using Bunit;
+using Bunit.TestDoubles;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Components.Layout;
+using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using static HVO.RoofControllerV4.RPi.Tests.Components.RoofConsoleHarness;
 
@@ -42,6 +45,31 @@ public sealed class EmulatedHatDisplayTests
     }
 
     [TestMethod]
+    public async Task TheMainLayout_InEmulatorMode_CarriesTheBanner_AboveThePage()
+    {
+        await using var context = LayoutContext(HatConnections.Emulated("hat-emulator", 5391));
+
+        var cut = RenderMainLayout(context);
+
+        // The console and every page other than sign-in and access denied use this layout.
+        cut.Find($"header > {Banner}").TextContent.Should().Contain("EMULATED HAT");
+        cut.Find($"header > {Banner} code").TextContent.Should().Be("hat-emulator:5391");
+        cut.Find("main [data-testid=page]").TextContent.Should().Be("The page");
+    }
+
+    [TestMethod]
+    public async Task TheMainLayout_WithThePhysicalHat_HasNoBanner()
+    {
+        await using var context = LayoutContext(HatConnections.Hardware());
+
+        var cut = RenderMainLayout(context);
+
+        cut.FindAll(Banner).Should().BeEmpty();
+        cut.Markup.Should().NotContain("EMULATED HAT");
+        cut.Find("main [data-testid=page]").TextContent.Should().Be("The page");
+    }
+
+    [TestMethod]
     [DataRow(RoofHatMode.Emulated, true, "Emulated HAT", "bg-warning")]
     [DataRow(RoofHatMode.Physical, true, "Physical I²C", "bg-primary")]
     [DataRow(RoofHatMode.Simulation, false, "Simulation", "bg-warning")]
@@ -68,4 +96,19 @@ public sealed class EmulatedHatDisplayTests
 
         cut.WaitForAssertion(() => harness.Footer.Snapshot.Center!.Text.Should().Contain("Emulated HAT").And.NotContain("Simulation"));
     }
+
+    /// <summary>The layout's services, signed out, with the footer (an interactive component with its own services) stubbed.</summary>
+    private static BunitContext LayoutContext(RoofHatConnection connection)
+    {
+        var context = new BunitContext();
+        context.Services.AddSingleton(connection);
+        context.AddAuthorization();
+        context.ComponentFactories.AddStub<MainLayoutFooter>();
+        return context;
+    }
+
+    private static IRenderedComponent<MainLayout> RenderMainLayout(BunitContext context)
+        => context.Render<MainLayout>(parameters => parameters.Add(
+            layout => layout.Body,
+            (RenderFragment)(builder => builder.AddMarkupContent(0, "<p data-testid=\"page\">The page</p>"))));
 }

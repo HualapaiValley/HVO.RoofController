@@ -16,8 +16,14 @@ namespace HVO.RoofControllerV4.Simulation.Emulator;
 /// the connection stays up; a malformed request is answered with ProtocolError and the connection closes.
 /// </summary>
 /// <remarks>
+/// A request whose connection has closed by the time its turn comes (the client timed out and gave up, or the link was
+/// dropped) is not run: an I2C transfer cannot complete after the caller has given up on it, so a late access must not
+/// land after the client's next ones.
+/// </remarks>
+/// <remarks>
 /// The controls <see cref="Outage"/>, <see cref="ResponseDelay"/> and <see cref="DisconnectAll"/> break the link the way
-/// a stopped emulator, a stalled one or a network drop would, for tests of the controller's behaviour.
+/// a stopped emulator, a stalled one or a network drop would, for tests of the controller's behaviour. A connection that
+/// sends no Hello within <see cref="HelloTimeout"/> is closed.
 /// </remarks>
 public sealed class HatEmulatorServer : IAsyncDisposable
 {
@@ -33,6 +39,7 @@ public sealed class HatEmulatorServer : IAsyncDisposable
     private long _accepted;
     private long _requests;
     private long _responseDelayTicks;
+    private long _helloTimeoutTicks = TimeSpan.FromSeconds(5).Ticks;
     private volatile bool _outage;
     private int _disposed;
 
@@ -79,6 +86,18 @@ public sealed class HatEmulatorServer : IAsyncDisposable
         }
     }
 
+    /// <summary>How long a new connection may take to send its Hello before it is closed. Five seconds by default.</summary>
+    public TimeSpan HelloTimeout
+    {
+        get => TimeSpan.FromTicks(Interlocked.Read(ref _helloTimeoutTicks));
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(value, TimeSpan.FromMilliseconds(int.MaxValue));
+            Interlocked.Exchange(ref _helloTimeoutTicks, value.Ticks);
+        }
+    }
+
     /// <summary>Connections accepted so far (including those closed at once during an outage).</summary>
     public long AcceptedConnections => Interlocked.Read(ref _accepted);
 
@@ -120,17 +139,29 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             return;
         }
 
-        await _stopping.CancelAsync().ConfigureAwait(false);
-        _listener.Stop();
-        DisconnectAll();
-        if (_acceptLoop is not null)
+        try
         {
-            await _acceptLoop.ConfigureAwait(false);
-        }
+            await _stopping.CancelAsync().ConfigureAwait(false);
+            _listener.Stop();
+            DisconnectAll();
+            if (_acceptLoop is not null)
+            {
+                await _acceptLoop.ConfigureAwait(false);
+            }
 
-        await Task.WhenAll(_handlers.Values).ConfigureAwait(false);
-        _stopping.Dispose();
-        _accessGate.Dispose();
+            // The accept loop has ended, so no handler is added after this snapshot.
+            await Task.WhenAll(_handlers.Values).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // A handler that failed must not stop the shutdown.
+            _logger.LogWarning(ex, "HAT emulator: a connection handler failed");
+        }
+        finally
+        {
+            _stopping.Dispose();
+            _accessGate.Dispose();
+        }
     }
 
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
@@ -160,23 +191,44 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             }
 
             client.NoDelay = true;
+            var remote = RemoteOf(client);
             var id = Interlocked.Increment(ref _nextConnectionId);
             _connections[id] = client;
-            _handlers[id] = HandleAsync(id, client, cancellationToken);
+
+            // Registered before the removal can run: a handler that ends at once still leaves _handlers.
+            var handler = HandleAsync(id, client, remote, cancellationToken);
+            _handlers[id] = handler;
+            _ = handler.ContinueWith(
+                _ => _handlers.TryRemove(id, out var _),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
     }
 
-    private async Task HandleAsync(long id, TcpClient client, CancellationToken cancellationToken)
+    private async Task HandleAsync(long id, TcpClient client, EndPoint? remote, CancellationToken cancellationToken)
     {
         // Leave the accept loop's thread at once: the loop starts the next accept without waiting for this connection.
+        // DisconnectAll, an outage or the shutdown may close the connection at any point from here.
         await Task.Yield();
-        var remote = client.Client.RemoteEndPoint;
         try
         {
             var stream = client.GetStream();
-            if (!await HelloAsync(stream, cancellationToken).ConfigureAwait(false))
+            using (var hello = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                return;
+                hello.CancelAfter(HelloTimeout);
+                try
+                {
+                    if (!await HelloAsync(stream, hello.Token).ConfigureAwait(false))
+                    {
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning("HAT emulator: closed a connection from {Remote} that sent no Hello within {Timeout}", remote, HelloTimeout);
+                    return;
+                }
             }
 
             _logger.LogInformation("HAT emulator: controller connected from {Remote}", remote);
@@ -194,7 +246,11 @@ public sealed class HatEmulatorServer : IAsyncDisposable
                     break;
                 }
 
-                var response = await ExecuteAsync(frame, cancellationToken).ConfigureAwait(false);
+                if (await ExecuteAsync(frame, client, cancellationToken).ConfigureAwait(false) is not { } response)
+                {
+                    break;
+                }
+
                 if (ResponseDelay is { } delay && delay > TimeSpan.Zero)
                 {
                     await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
@@ -217,16 +273,42 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             _logger.LogWarning("HAT emulator: malformed frame from {Remote}: {Reason}", remote, ex.Message);
             await TryRefuseAsync(client, ex.Message).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or OperationCanceledException)
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
         {
-            // The connection closed or the server is stopping.
+            // The connection closed or the server is stopping (GetStream throws InvalidOperationException once closed).
         }
         finally
         {
             _connections.TryRemove(id, out _);
             client.Dispose();
-            _handlers.TryRemove(id, out _);
             _logger.LogInformation("HAT emulator: connection from {Remote} closed", remote);
+        }
+    }
+
+    private static EndPoint? RemoteOf(TcpClient client)
+    {
+        try
+        {
+            return client.Client.RemoteEndPoint;
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>True when the client has closed or reset the connection, or the server has dropped it.</summary>
+    private static bool HasClosed(TcpClient client)
+    {
+        try
+        {
+            // Readable with nothing to read: the peer's FIN or RST. The client sends one request at a time, so a pending
+            // request never counts as data here.
+            return client.Client is not { } socket || (socket.Poll(0, SelectMode.SelectRead) && socket.Available == 0);
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+            return true;
         }
     }
 
@@ -251,11 +333,17 @@ public sealed class HatEmulatorServer : IAsyncDisposable
         return true;
     }
 
-    private async Task<HatEmulatorFrame> ExecuteAsync(HatEmulatorFrame request, CancellationToken cancellationToken)
+    /// <summary>Runs the access, or returns null without running it when the connection has closed while it waited its turn.</summary>
+    private async Task<HatEmulatorFrame?> ExecuteAsync(HatEmulatorFrame request, TcpClient client, CancellationToken cancellationToken)
     {
         await _accessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (HasClosed(client))
+            {
+                return null;
+            }
+
             Interlocked.Increment(ref _requests);
             var target = _target();
             if (request.Kind == HatEmulatorFrameKind.Read)

@@ -217,9 +217,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         _clockOriginTimestamp = _timeProvider.GetTimestamp();
         _options = (roofControllerOptions.Value ?? new RoofControllerOptionsV4()) with { };
         _hatTransactionLock = HatTransactionLocks.GetValue(fourRelayFourInputHat, static _ => new object());
-        _hatMode = hatConnection?.IsEmulated == true ? RoofHatMode.Emulated
-            : _hat.IsHardwareBacked ? RoofHatMode.Physical
-            : RoofHatMode.Simulation;
+        _hatMode = RoofHatConnection.ModeFor(hatConnection?.IsEmulated == true, _hat.IsHardwareBacked);
 
         var configuredName = hostOptions?.Value?.ControllerName;
         _controllerName = string.IsNullOrWhiteSpace(configuredName) ? new RoofControllerHostOptionsV4().ControllerName : configuredName;

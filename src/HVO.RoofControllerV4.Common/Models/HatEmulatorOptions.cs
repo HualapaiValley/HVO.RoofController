@@ -22,7 +22,7 @@ public sealed class HatEmulatorOptions
     /// <summary>Use the emulator instead of the Pi's I2C bus.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>The emulator's host name or address.</summary>
+    /// <summary>The emulator's host name or IP address (no scheme or port).</summary>
     public string Host { get; set; } = "127.0.0.1";
 
     /// <summary>The emulator's register port.</summary>
@@ -52,6 +52,11 @@ public sealed class HatEmulatorOptions
         if (string.IsNullOrWhiteSpace(Host))
         {
             problems.Add($"{SectionName}:Host must not be empty.");
+        }
+        else if (Uri.CheckHostName(Host) is not (UriHostNameType.Dns or UriHostNameType.IPv4 or UriHostNameType.IPv6))
+        {
+            // A URL or a host:port would pass as a name and fail only at run time, as HostNotFound on every access.
+            problems.Add($"{SectionName}:Host must be a host name or an IP address, without a scheme or a port (the port is {SectionName}:Port).");
         }
 
         if (Port is < MinPort or > MaxPort)

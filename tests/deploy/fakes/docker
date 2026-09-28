@@ -9,6 +9,9 @@ Container behaviour is chosen per container "kind" (old, current, new, ...) with
   FAKE_<KIND>_READY=false          /health/ready fails
   FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
   FAKE_<KIND>_STOP=unverified      the in-container POST Stop is not verified (error: the exec fails)
+  FAKE_<KIND>_HAT_MODE=<mode>      hatMode of the in-container Status and Stop (absent: no hatMode, as before emulator
+                                   mode). By default Emulated when the container was run with HatEmulator__Enabled=true
+                                   (the last one given), otherwise Physical.
 Other switches:
   FAKE_PREFLIGHT_EXIT=<code>       exit code of `run --rm ... --validate-deployment`
   FAKE_RUN_FAIL=true               `run -d` fails before creating the container
@@ -111,6 +114,14 @@ def stop_in_background(state, ref):
 
 def behaviour(kind, name, default):
     return os.environ.get(f"FAKE_{kind.upper()}_{name}", default)
+
+
+def with_hat_mode(c, body):
+    mode = behaviour(c["kind"], "HAT_MODE", "")
+    if not mode:
+        enabled = [o for o in c.get("options", []) if o.startswith("HatEmulator__Enabled=")]
+        mode = "Emulated" if enabled and enabled[-1] == "HatEmulator__Enabled=true" else "Physical"
+    return body if mode == "absent" else dict(body, hatMode=mode)
 
 
 def docker_state(c):
@@ -242,12 +253,12 @@ def exec_curl(state, ref, curl_args, stdin_text):
 
     if url.endswith("/Status") and method == "GET":
         code = behaviour(kind, "STATUS_CODE", "200")
-        out(json.dumps(VERIFIED) + "\n" + code, end="")
+        out(json.dumps(with_hat_mode(c, VERIFIED)) + "\n" + code, end="")
     elif url.endswith("/Stop") and method == "POST":
         stop = behaviour(kind, "STOP", "verified")
         if stop == "error":
             die("exec failed")
-        out(json.dumps(VERIFIED if stop == "verified" else UNVERIFIED) + "\n200", end="")
+        out(json.dumps(with_hat_mode(c, VERIFIED if stop == "verified" else UNVERIFIED)) + "\n200", end="")
     else:
         out("{}\n404", end="")
 

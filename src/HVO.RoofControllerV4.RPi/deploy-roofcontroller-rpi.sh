@@ -15,7 +15,8 @@ set -euo pipefail
 #    <name>-previous is removed only once that stop has succeeded.
 # 3. The new controller must become ready, answer an authenticated Status inside the container, and answer an
 #    authenticated Status and a verified Stop from this machine at the published URL (HTTPS unless
-#    ALLOW_INSECURE_HTTP=true). Otherwise it is stopped and removed, and <name>-previous is restored as <name> and
+#    ALLOW_INSECURE_HTTP=true), and report the HAT this run deploys (hatMode Physical, or Emulated in HAT emulator
+#    mode). Otherwise it is stopped and removed, and <name>-previous is restored as <name> and
 #    started again if it was running. A failure or an interrupt (Ctrl-C, SIGTERM, a lost terminal) anywhere after the
 #    old controller's stop began restores it the same way. Only the container this run created is ever removed.
 #    From that stop on, docker runs in its own session (setsid, or perl on macOS), so an interrupt cannot cut a docker
@@ -28,7 +29,8 @@ set -euo pipefail
 #               rollback that could not be undone) exists.
 # HAT emulator mode: HAT_EMULATOR_ENDPOINT=<host>:<port> deploys a controller that uses the HAT emulator
 #   (HVO.RoofControllerV4.Emulator) in place of the physical HAT; the HAT's I2C device is not mapped and the roof does
-#   not move. It is refused unless ALLOW_EMULATED_HAT=true, and the report says which HAT the controller uses.
+#   not move. It is refused unless ALLOW_EMULATED_HAT=true, and the report says which HAT the controller uses. A
+#   rollback checks the restored version's HAT too: the emulator is accepted only with ALLOW_EMULATED_HAT=true.
 
 usage() {
   sed -n '/^# Project-local/,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -119,6 +121,8 @@ NEW_CIDFILE=""
 ROLLBACK_TARGET_ID=""
 RESTORE_OUTCOME=""
 FAILURE=""
+# The hatMode verify_controller found (check_hat_mode).
+VERIFIED_HAT_MODE=""
 WORK_DIR=""
 
 # From the first change of the switch on (and during the restore), docker runs in its own session, outside the
@@ -191,12 +195,80 @@ fi
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
 # break the restore, the restart policy or the pre-flight container, and --stop-timeout or --stop-signal could cut the
 # controller's shutdown stop short. Short options may be combined (-itd, -p8443:8443). HatEmulator settings (in any case,
-# as .NET reads them) would switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report.
+# as .NET reads them), given directly or in an --env-file, would switch the HAT without HAT_EMULATOR_ENDPOINT and
+# ALLOW_EMULATED_HAT, and the report. In emulator mode the HAT's bus stays unmapped: no I2C device, no --privileged
+# (which maps every device) and no mount of the host's /dev.
+EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it."
+
+refuse_emulator_setting() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    *hatemulator__*|*hatemulator:*)
+      fail "EXTRA_DOCKER_ARGS must not contain '${2:-$1}': ${EMULATOR_MODE_SETTING}" ;;
+  esac
+}
+
+# check_extra_option <option> <value>: the value of an EXTRA_DOCKER_ARGS option, given after it or after '='.
+check_extra_option() {
+  local option=$1 value=$2 line source field fields=()
+  case "${option}" in
+    --env-file)
+      # The docker CLI reads the file on this machine, so it can be checked here.
+      [[ -f "${value}" && -r "${value}" ]] \
+        || fail "EXTRA_DOCKER_ARGS names --env-file '${value}', which cannot be read on this machine. Nothing was changed."
+      while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ "${line}" =~ ^[[:space:]]*(#|$) ]] && continue
+        refuse_emulator_setting "${line%%=*}" "--env-file ${value}: ${line%%=*}"
+      done < "${value}"
+      ;;
+    --device)
+      if [[ -n "${HAT_EMULATOR_ENDPOINT}" && "$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')" == *i2c* ]]; then
+        fail "EXTRA_DOCKER_ARGS must not map an I2C device ('--device ${value}') in HAT emulator mode: the controller must not reach the physical HAT."
+      fi
+      ;;
+    --volume|--mount)
+      source=${value%%:*}
+      if [[ "${option}" == "--mount" ]]; then
+        source=""
+        IFS=',' read -r -a fields <<<"${value}"
+        for field in ${fields[@]+"${fields[@]}"}; do
+          case "${field}" in source=*|src=*) source=${field#*=} ;; esac
+        done
+      fi
+      if [[ -n "${HAT_EMULATOR_ENDPOINT}" && ( "${source}" == "/" || "${source}" == /dev || "${source}" == /dev/* ) ]]; then
+        fail "EXTRA_DOCKER_ARGS must not mount the host's ${source} ('${option} ${value}') in HAT emulator mode: the controller must not reach the physical HAT."
+      fi
+      ;;
+  esac
+}
+
 extra_args=()
 if [[ -n "${EXTRA_DOCKER_ARGS}" ]]; then
   read -r -d '' -a extra_args <<<"${EXTRA_DOCKER_ARGS}" || true
 fi
+pending_option=""
 for arg in ${extra_args[@]+"${extra_args[@]}"}; do
+  if [[ -n "${pending_option}" ]]; then
+    check_extra_option "${pending_option}" "${arg}"
+    pending_option=""
+  else
+    case "${arg}" in
+      --env-file|--device|--volume|--mount) pending_option=${arg} ;;
+      --env-file=*|--device=*|--volume=*|--mount=*) check_extra_option "${arg%%=*}" "${arg#*=}" ;;
+      --privileged|--privileged=true)
+        [[ -z "${HAT_EMULATOR_ENDPOINT}" ]] \
+          || fail "EXTRA_DOCKER_ARGS must not contain '${arg}' in HAT emulator mode: it maps every host device, the HAT's I2C bus included." ;;
+      *)
+        # -v and boolean short options combined with it (-itv), with the volume next or attached (-v/dev:/dev).
+        if [[ "${arg}" =~ ^-[ditPq]*v(.*)$ ]]; then
+          if [[ -n "${BASH_REMATCH[1]}" ]]; then
+            check_extra_option --volume "${BASH_REMATCH[1]#=}"
+          else
+            pending_option=--volume
+          fi
+        fi
+        ;;
+    esac
+  fi
   case "${arg}" in
     --name|--name=*|--detach|--detach=*|--rm|--rm=*|--restart|--restart=*|--cidfile|--cidfile=*|--publish|--publish=*|--publish-all|--publish-all=*)
       reserved=true ;;
@@ -210,10 +282,7 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
   if [[ "${reserved}" == "true" ]]; then
     fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout and --stop-signal itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT and STOP_TIMEOUT_SECONDS)."
   fi
-  case "$(printf '%s' "${arg}" | tr '[:upper:]' '[:lower:]')" in
-    *hatemulator__*|*hatemulator:*)
-      fail "EXTRA_DOCKER_ARGS must not contain '${arg}': HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it." ;;
-  esac
+  refuse_emulator_setting "${arg}"
 done
 
 # Applies to --rollback too: its checks send the key to the published URL.
@@ -360,15 +429,15 @@ remote_api() {
         -w '\n%{http_code}' "${REMOTE_BASE_URL}/${API_PATH}/${path}"
 }
 
-# Prints "<relayRegisterState>\t<relayRegisterMask>\t<commandedMotion>" from a status JSON on stdin.
+# Prints "<relayRegisterState>\t<relayRegisterMask>\t<commandedMotion>\t<hatMode>" from a status JSON on stdin.
 parse_status() {
   if command -v jq >/dev/null 2>&1; then
-    jq -r '[(.relayRegisterState // "null"), (.relayRegisterMask // "null" | tostring), (.commandedMotion // "null")] | @tsv'
+    jq -r '[(.relayRegisterState // "null"), (.relayRegisterMask // "null" | tostring), (.commandedMotion // "null"), (.hatMode // "null")] | @tsv'
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json,sys
 d=json.load(sys.stdin)
 v=lambda k: "null" if d.get(k) is None else str(d.get(k))
-print(v("relayRegisterState"), v("relayRegisterMask"), v("commandedMotion"), sep="\t")'
+print(v("relayRegisterState"), v("relayRegisterMask"), v("commandedMotion"), v("hatMode"), sep="\t")'
   else
     return 1
   fi
@@ -376,7 +445,7 @@ print(v("relayRegisterState"), v("relayRegisterMask"), v("commandedMotion"), sep
 
 # Returns 0 only for HTTP 200 + Verified + mask 0 + commanded motion None.
 check_verified_stop() {
-  local response=$1 http_status body parsed state mask motion
+  local response=$1 http_status body parsed state mask motion hat_mode
   http_status=$(tail -n 1 <<<"${response}")
   body=$(sed '$d' <<<"${response}")
 
@@ -390,7 +459,7 @@ check_verified_stop() {
     return 1
   fi
 
-  IFS=$'\t' read -r state mask motion <<<"${parsed}"
+  IFS=$'\t' read -r state mask motion hat_mode <<<"${parsed}"
   echo "[deploy] Stop result: relayRegisterState=${state} relayRegisterMask=${mask} commandedMotion=${motion}"
   [[ "${state}" == "Verified" && "${mask}" == "0" && "${motion}" == "None" ]]
 }
@@ -445,8 +514,44 @@ wait_ready() {
   return 1
 }
 
-# Readiness, an authenticated Status inside the container, then an authenticated Status and a verified Stop from this
-# machine. Sets FAILURE and returns 1 on the first check that fails.
+# The HAT a Status body on $2 reports, against the one this run deploys: Physical, or Emulated in HAT emulator mode.
+# The --env settings are not enough on their own: a HatEmulator file in the secrets directory (read last) would
+# override them. A rollback restores whatever the previous version used: the emulator only with ALLOW_EMULATED_HAT=true,
+# and a missing hatMode (a version from before emulator mode) as the physical HAT. Sets VERIFIED_HAT_MODE, or FAILURE
+# and returns 1.
+check_hat_mode() {
+  local name=$1 parsed state mask motion hat_mode expected
+  if ! parsed=$(parse_status <<<"$2"); then
+    FAILURE="cannot parse the Status from ${name} to check its HAT (install jq or python3)"
+    return 1
+  fi
+  IFS=$'\t' read -r state mask motion hat_mode <<<"${parsed}"
+  if [[ "${ROLLBACK}" == "true" ]]; then
+    case "${hat_mode}" in
+      Physical) VERIFIED_HAT_MODE=Physical; return 0 ;;
+      null) VERIFIED_HAT_MODE="Physical (no hatMode: a version from before emulator mode)"; return 0 ;;
+      Emulated)
+        if [[ "${ALLOW_EMULATED_HAT}" == "true" ]]; then
+          VERIFIED_HAT_MODE="Emulated (ALLOW_EMULATED_HAT=true): the roof does not move"
+          return 0
+        fi
+        FAILURE="${name} uses the HAT emulator (hatMode Emulated), not the physical HAT, and does not operate the roof; set ALLOW_EMULATED_HAT=true to roll back to it on a test rig" ;;
+      *) FAILURE="${name} reports hatMode ${hat_mode}, not the physical HAT" ;;
+    esac
+    return 1
+  fi
+
+  expected=Physical
+  [[ -z "${HAT_EMULATOR_ENDPOINT}" ]] || expected=Emulated
+  if [[ "${hat_mode}" != "${expected}" ]]; then
+    FAILURE="${name} reports hatMode ${hat_mode}, but this deployment is for hatMode ${expected} (${HAT_SUMMARY}); check for HatEmulator settings in the secrets directory"
+    return 1
+  fi
+  VERIFIED_HAT_MODE=${hat_mode}
+}
+
+# Readiness, an authenticated Status inside the container and its HAT, then an authenticated Status and a verified Stop
+# from this machine. Sets FAILURE and returns 1 on the first check that fails.
 verify_controller() {
   local name=$1 response http_status
   echo "[verify] Waiting up to ${READY_TIMEOUT_SECONDS}s for ${name} to report /health/ready"
@@ -464,7 +569,8 @@ verify_controller() {
     FAILURE="the authenticated Status call inside ${name} returned HTTP ${http_status:-<none>} (is this script's key configured?)"
     return 1
   fi
-  echo "[verify] Ready; authenticated Status inside the container: HTTP 200"
+  check_hat_mode "${name}" "$(sed '$d' <<<"${response}")" || return 1
+  echo "[verify] Ready; authenticated Status inside the container: HTTP 200, hatMode ${VERIFIED_HAT_MODE}"
 
   if [[ "${SKIP_REMOTE_CHECK}" == "true" ]]; then
     log_err "[verify] WARNING: SKIP_REMOTE_CHECK=true: ${REMOTE_BASE_URL} was not checked from this machine. Check it from a client before relying on remote control."
@@ -728,8 +834,8 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] GET Status inside ${CONTAINER_NAME} -> HTTP ${http_status}"
     if [[ "${http_status}" == "200" ]]; then
       parsed=$(sed '$d' <<<"${response}" | parse_status) || fail "Cannot parse Status (install jq or python3)."
-      IFS=$'\t' read -r state mask motion <<<"${parsed}"
-      echo "[dry-run] relayRegisterState=${state} relayRegisterMask=${mask} commandedMotion=${motion}"
+      IFS=$'\t' read -r state mask motion hat_mode <<<"${parsed}"
+      echo "[dry-run] relayRegisterState=${state} relayRegisterMask=${mask} commandedMotion=${motion} hatMode=${hat_mode}"
     fi
     if [[ "${SKIP_REMOTE_CHECK}" != "true" ]]; then
       if response=$(remote_api GET Status); then
@@ -809,7 +915,7 @@ if [[ "${ROLLBACK}" == "true" ]]; then
     fail "The rolled-back controller did not pass verification: ${FAILURE}. It is left running. Run --rollback again to swap back."
   fi
   show_containers
-  echo "[done] Rolled back. ${CONTAINER_NAME} is verified at ${REMOTE_BASE_URL}; the replaced version is kept as ${PREVIOUS_CONTAINER_NAME}."
+  echo "[done] Rolled back. ${CONTAINER_NAME} is verified at ${REMOTE_BASE_URL}. HAT: hatMode ${VERIFIED_HAT_MODE}. The replaced version is kept as ${PREVIOUS_CONTAINER_NAME}."
   exit 0
 fi
 
@@ -858,10 +964,12 @@ if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
     --env "HatEmulator__AllowOutsideDevelopment=true"
   )
 else
-  # Explicitly off: an --env overrides the same variable from an --env-file in EXTRA_DOCKER_ARGS.
+  # Explicitly off, and not allowed outside Development. The verification then checks the hatMode the controller
+  # reports, since a setting in the secrets directory would override these.
   container_args+=(
     --device /dev/i2c-1:/dev/i2c-1
     --env "HatEmulator__Enabled=false"
+    --env "HatEmulator__AllowOutsideDevelopment=false"
   )
 fi
 

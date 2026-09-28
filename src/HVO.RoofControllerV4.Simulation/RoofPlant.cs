@@ -117,6 +117,7 @@ public sealed class RoofPlant
         get { lock (SyncRoot) { return _wiring; } }
         set
         {
+            FaultArguments.CheckFlags(value, nameof(Wiring));
             lock (SyncRoot)
             {
                 Sync();
@@ -247,6 +248,7 @@ public sealed class RoofPlant
     /// <summary>Trips the drive.</summary>
     public void TripDrive(SmVectorTrip trip = SmVectorTrip.External)
     {
+        FaultArguments.CheckDefined(trip, nameof(trip));
         lock (SyncRoot)
         {
             Sync();
@@ -257,6 +259,7 @@ public sealed class RoofPlant
 
     public void SetLimitFault(bool openLimit, LimitSwitchFault fault)
     {
+        FaultArguments.CheckFlags(fault, nameof(fault));
         lock (SyncRoot)
         {
             Sync();
@@ -272,6 +275,7 @@ public sealed class RoofPlant
 
     public void SetRelayFault(int relay, RelayContactFault fault)
     {
+        FaultArguments.CheckDefined(fault, nameof(fault));
         lock (SyncRoot)
         {
             Sync();

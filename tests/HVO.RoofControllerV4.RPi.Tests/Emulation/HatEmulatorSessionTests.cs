@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using FluentAssertions;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
@@ -199,6 +200,21 @@ public sealed class ScaledTimeProviderTests
         var clock = new ScaledTimeProvider(new ManualTimeProvider(), 3);
         FluentActions.Invoking(() => clock.Scale = scale).Should().Throw<ArgumentOutOfRangeException>();
         clock.Scale.Should().Be(3, "a refused change leaves the scale alone");
+    }
+
+    [TestMethod]
+    public void Timers_AreTheInnerClocks_AndRunOnItsTime_Unscaled()
+    {
+        var inner = new ManualTimeProvider();
+        var clock = new ScaledTimeProvider(inner, 4);
+        var fired = 0;
+
+        using var timer = clock.CreateTimer(_ => fired++, null, TimeSpan.FromSeconds(10), Timeout.InfiniteTimeSpan);
+        inner.ActiveTimerCount.Should().Be(1, "the timer is created on the inner clock");
+        inner.Advance(TimeSpan.FromSeconds(9));
+        fired.Should().Be(0, "10 s of the inner clock have not passed, although 36 s of scaled time have");
+        inner.Advance(TimeSpan.FromSeconds(1));
+        fired.Should().Be(1);
     }
 
     [TestMethod]
