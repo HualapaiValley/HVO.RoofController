@@ -38,6 +38,12 @@ internal static class Scenario
     /// <summary>The soak (C14) is also a scenario: 90 s in the scenario job, and hours in the nightly soak.</summary>
     public const string SoakCategory = "Soak";
 
+    /// <summary>
+    /// The console's browser tests: the whole host against the emulated plant, driven from a headless Chromium. They
+    /// need the Playwright browser installed, so they have their own CI job and are not scenarios.
+    /// </summary>
+    public const string BrowserCategory = "Browser";
+
     public const string RoofApi = "/api/v4.0/RoofControl";
 
     /// <summary>
