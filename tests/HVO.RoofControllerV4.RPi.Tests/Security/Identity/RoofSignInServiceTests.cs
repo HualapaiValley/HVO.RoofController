@@ -138,6 +138,47 @@ public sealed class RoofSignInServiceTests
     }
 
     [TestMethod]
+    public async Task SigningInWithYourOwnPin_BetweenGuesses_NeverResetsTheGuessesAtAnothersPin()
+    {
+        using var rig = new IdentityRig();
+        await rig.AddUserAsync("olive", Operator, password: null, pin: TestSecrets.Pin);
+        await rig.AddUserAsync("adam", RoofControllerApiContract.AdminRole, pin: TestSecrets.OtherPin);
+
+        for (var i = 0; i < rig.Options.LockoutThreshold - 1; i++)
+        {
+            (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "adam", TestSecrets.Pin, Remote, CancellationToken.None))
+                .Error.Should().Be(RoofControllerErrorCode.SignInFailed);
+            (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "olive", TestSecrets.Pin, Remote, CancellationToken.None))
+                .Succeeded.Should().BeTrue("olive's own PIN is right, and clears the kiosk's count");
+        }
+
+        (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "adam", TestSecrets.Pin, Remote, CancellationToken.None))
+            .Error.Should().Be(RoofControllerErrorCode.SignInLockedOut, "adam's PIN has had its guesses, whatever happened in between");
+        (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "adam", TestSecrets.OtherPin, Remote, CancellationToken.None))
+            .Error.Should().Be(RoofControllerErrorCode.SignInLockedOut);
+        (await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "olive", TestSecrets.Pin, Remote, CancellationToken.None))
+            .Succeeded.Should().BeTrue("the kiosk itself is not locked out");
+        (await rig.SignIn.SignInWithPasswordAsync("adam", TestSecrets.Password, Remote, CancellationToken.None))
+            .Succeeded.Should().BeTrue("a PIN lockout does not lock the password");
+        rig.Lockout.IsLockedOut(RoofSignInLockout.ForPin("adam"), out _).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task AFailedSignIn_CountsAPersonAsKnown_AndAnyOtherNameAsUnknown()
+    {
+        using var rig = new IdentityRig();
+        await rig.AddUserAsync("olive", Operator);
+
+        await rig.SignIn.SignInWithPasswordAsync("olive", TestSecrets.OtherPassword, Remote, CancellationToken.None);
+        rig.Lockout.UnknownCount.Should().Be(0);
+
+        await rig.SignIn.SignInWithPasswordAsync("nobody", TestSecrets.OtherPassword, Remote, CancellationToken.None);
+        await rig.SignIn.SignInWithPinAsync(rig.Kiosk, "nobody-else", TestSecrets.OtherPin, Remote, CancellationToken.None);
+        rig.Lockout.UnknownCount.Should().Be(2, "a made-up name, by password or by PIN, is capped; the kiosk is not");
+        rig.Lockout.Count.Should().Be(4);
+    }
+
+    [TestMethod]
     public async Task AnOldHash_IsUpgradedAtSignIn_WithoutEndingSessions()
     {
         using var rig = new IdentityRig();

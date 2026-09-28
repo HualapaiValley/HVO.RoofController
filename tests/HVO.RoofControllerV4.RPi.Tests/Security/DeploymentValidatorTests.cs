@@ -177,6 +177,7 @@ public sealed class DeploymentValidatorTests
     [DataRow("bad-threshold", "LockoutThreshold must be at least 1")]
     [DataRow("bad-duration", "the value of RoofControllerSecurity:Identity:SessionLifetime is not a valid System.TimeSpan")]
     [DataRow("root-path", "must name a file in a directory")]
+    [DataRow("directory-path", "is a directory")]
     [DataRow("bad-rate-limit", "SignInAttemptsPerMinute must be between 0 (off) and 10000")]
     public void AnUnusableIdentityStore_OrBadIdentitySettings_Fail(string setup, string expected)
     {
@@ -200,6 +201,9 @@ public sealed class DeploymentValidatorTests
                 break;
             case "root-path":
                 configuration["RoofControllerSecurity:Identity:StorePath"] = "/";
+                break;
+            case "directory-path":
+                Directory.CreateDirectory(path);
                 break;
             case "bad-rate-limit":
                 configuration["RoofControllerSecurity:Identity:SignInAttemptsPerMinute"] = "-1";

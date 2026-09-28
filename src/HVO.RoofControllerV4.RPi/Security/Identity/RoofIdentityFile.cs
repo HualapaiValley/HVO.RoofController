@@ -65,6 +65,13 @@ internal sealed class RoofIdentityFile
                 "readable by nobody else (docs/security.md).");
         }
 
+        if (System.IO.Directory.Exists(Path))
+        {
+            throw new RoofIdentityStoreException(
+                $"The identity store path '{Path}' is a directory. It must name the file inside it, for example " +
+                $"{System.IO.Path.Combine(Path, "identity.json")}.");
+        }
+
         if (removeLeftovers)
         {
             RemoveLeftoverTemporaryFiles();
@@ -108,8 +115,11 @@ internal sealed class RoofIdentityFile
         return document;
     }
 
-    /// <summary>Writes <paramref name="document"/> atomically. Throws <see cref="RoofIdentityStoreException"/> on failure.</summary>
-    public void Save(RoofIdentityDocument document)
+    /// <summary>
+    /// Writes <paramref name="document"/> atomically. Throws <see cref="RoofIdentityStoreException"/> on failure. Returns
+    /// false when the file was saved but the rename could not be flushed to disk (always, on systems other than Linux).
+    /// </summary>
+    public bool Save(RoofIdentityDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         var temporary = $"{Path}.{Guid.NewGuid():N}{TemporarySuffix}";
@@ -134,7 +144,7 @@ internal sealed class RoofIdentityFile
             }
 
             File.Move(temporary, Path, overwrite: true);
-            RoofDirectorySync.TryFlush(Directory);
+            return RoofDirectorySync.TryFlush(Directory);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -49,12 +49,12 @@ internal static class RoofDirectorySync
 
     // DllImport rather than LibraryImport: the generated LibraryImport stubs need unsafe code, which this project
     // otherwise has no use for. The runtime maps "libc" to the system C library on Linux.
-    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    [DllImport("libc", EntryPoint = "open")]
     private static extern int Open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
 
-    [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
+    [DllImport("libc", EntryPoint = "fsync")]
     private static extern int Fsync(int descriptor);
 
-    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    [DllImport("libc", EntryPoint = "close")]
     private static extern int Close(int descriptor);
 }

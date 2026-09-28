@@ -345,11 +345,14 @@ public class Program
 
         app.UseMiddleware<OriginCheckMiddleware>();
 
-        // Sign-in attempts per remote address (Auth/Session, Auth/Pin, Auth/Password), before any secret is checked.
-        app.UseRateLimiter();
         app.UseAuthentication();
         app.UseMiddleware<BlazorHubAuthorizationMiddleware>();
         app.UseAuthorization();
+
+        // Sign-in attempts per caller (Auth/Session, Auth/Pin, Auth/Password), before any secret is checked. After
+        // authorization, so a request without a valid key or session never counts, and a kiosk key or a signed-in
+        // person is counted as itself rather than by address.
+        app.UseRateLimiter();
         app.UseAntiforgery();
 
         // OpenAPI document (/openapi/v4.json): open in Development, Admin API key elsewhere. Scalar UI is Development-only.

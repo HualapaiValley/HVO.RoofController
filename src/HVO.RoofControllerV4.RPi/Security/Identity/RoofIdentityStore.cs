@@ -68,6 +68,7 @@ public sealed class RoofIdentityStore
 
     private RoofIdentityDocument _document;
     private volatile Snapshot _snapshot;
+    private bool _reportedUnflushedSave;
 
     public RoofIdentityStore(
         IOptionsMonitor<RoofIdentityOptions> options,
@@ -534,7 +535,15 @@ public sealed class RoofIdentityStore
 
             PruneSessions(working, now);
             working.Revision++;
-            _file?.Save(working);
+            if (_file?.Save(working) == false && OperatingSystem.IsLinux() && !_reportedUnflushedSave)
+            {
+                _reportedUnflushedSave = true;
+                _logger.LogWarning(
+                    "The identity store {Path} was saved, but its directory could not be flushed to disk, so a power cut in " +
+                    "the next few seconds could bring back the previous version. Reported once.",
+                    _file.Path);
+            }
+
             _document = working;
             _snapshot = Build(working);
             foreach (var id in _lastActivity.Keys)

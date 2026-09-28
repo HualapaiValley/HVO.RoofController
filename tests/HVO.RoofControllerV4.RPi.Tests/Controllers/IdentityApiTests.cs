@@ -324,7 +324,7 @@ public sealed class IdentityApiTests
     }
 
     [TestMethod]
-    public async Task TooManySignInsFromOneAddress_Give429SignInBusy_BeforeAnySecretIsChecked_AndStopStillWorks()
+    public async Task TooManySignIns_Give429SignInBusy_PerCaller_BeforeAnySecretIsChecked_AndStopStillWorks()
     {
         using var logs = new RecordingLoggerProvider();
         using var host = CreateHost(logs: logs, extraSettings: new Dictionary<string, string?>
@@ -340,17 +340,31 @@ public sealed class IdentityApiTests
         }
 
         var limited = await anonymous.PostAsJsonAsync($"{Auth}/Session", new RoofSignInRequest { Name = "olive", Password = TestSecrets.Password });
-        using var kiosk = host.CreateApiClient(KioskKey);
-        var pin = await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin });
 
         var problem = await ProblemAsync(limited);
         problem.Status.Should().Be(429);
         problem.Code.Should().Be("SignInBusy");
         problem.Detail.Should().Contain("Stop still works");
         limited.Headers.RetryAfter!.Delta.Should().BeGreaterThan(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromMinutes(1));
-        (await ProblemAsync(pin)).Code.Should().Be("SignInBusy", "the limit is per address, whatever the name or kiosk");
         logs.Entries.Select(entry => entry.Message)
-            .Should().NotContain(m => m.Contains("sign-in for olive", StringComparison.Ordinal), "no secret was checked");
+            .Should().NotContain(m => m.Contains("AUDIT sign-in: olive", StringComparison.Ordinal), "no secret was checked");
+        for (var i = 0; i < 5; i++)
+        {
+            (await anonymous.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin }))
+                .StatusCode.Should().Be(HttpStatusCode.Unauthorized, "a request without a valid key is refused before it counts");
+        }
+
+        using var kiosk = host.CreateApiClient(KioskKey);
+        (await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin }))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "a kiosk is counted by its key, not by the address it shares");
+        for (var i = 0; i < 2; i++)
+        {
+            (await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "guess", Pin = TestSecrets.OtherPin }))
+                .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        (await ProblemAsync(await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin })))
+            .Code.Should().Be("SignInBusy", "the kiosk's own three attempts are used up");
         (await kiosk.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
         using var viewer = host.CreateApiClient(TestApiKeys.Viewer);
         (await viewer.GetAsync($"{Roof}/Status")).StatusCode.Should().Be(HttpStatusCode.OK, "only sign-in is limited");

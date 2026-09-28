@@ -509,6 +509,18 @@ public sealed class RoofIdentityStoreTests
     }
 
     [TestMethod]
+    public void APathThatIsADirectory_MakesTheStoreUnavailable_InsteadOfFailingAtTheFirstChange()
+    {
+        using var directory = new TemporaryDirectory();
+
+        using var rig = new IdentityRig(directory.Path);
+
+        rig.Store.IsAvailable.Should().BeFalse();
+        rig.Store.UnavailableReason.Should().Contain("is a directory").And.Contain("identity.json");
+        rig.Keys.TryValidate(TestSecrets.AdminKey, out _).Should().BeTrue("configured keys keep working");
+    }
+
+    [TestMethod]
     public void AMissingDirectory_MakesTheStoreUnavailable()
     {
         using var directory = new TemporaryDirectory();

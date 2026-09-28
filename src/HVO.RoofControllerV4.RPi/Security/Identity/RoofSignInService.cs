@@ -24,7 +24,8 @@ public sealed record RoofSignInResult(
 /// <summary>
 /// Signs people in by name and password or, at a kiosk, by name and PIN, and lets a signed-in person change their own
 /// password. Every answer to a wrong name, password or PIN is the same, and an unknown name takes as long to refuse as
-/// a wrong password. Repeated failures lock the name (or, for PINs, the kiosk) out (<see cref="RoofSignInLockout"/>).
+/// a wrong password. Repeated failures lock the name out (<see cref="RoofSignInLockout"/>); wrong PINs are counted both
+/// for the name and for the kiosk, so one person signing in at a kiosk never clears the guesses made at another's PIN.
 /// </summary>
 public sealed class RoofSignInService
 {
@@ -52,7 +53,7 @@ public sealed class RoofSignInService
         => SignInAsync(
             name,
             password,
-            RoofSignInLockout.ForName(name),
+            known => [new(RoofSignInLockout.ForName(name), known)],
             user => user.PasswordHash,
             RoofCredentialKind.Session,
             kiosk: null,
@@ -71,7 +72,7 @@ public sealed class RoofSignInService
         return SignInAsync(
             name,
             pin,
-            RoofSignInLockout.ForDevice(kiosk.KeyId),
+            known => [new(RoofSignInLockout.ForDevice(kiosk.KeyId), Known: true), new(RoofSignInLockout.ForPin(name), known)],
             user => user.Role == RoofControllerApiContract.ViewerRole ? null : user.PinHash,
             RoofCredentialKind.Pin,
             kiosk,
@@ -95,14 +96,14 @@ public sealed class RoofSignInService
             return Unavailable();
         }
 
-        var lockKey = RoofSignInLockout.ForName(name);
-        var admission = _lockout.TryBeginAttempt(lockKey, out var retryAfter);
+        _identity.TryGetUser(name, out var user);
+        LockKey[] lockKeys = [new(RoofSignInLockout.ForName(name), user is not null)];
+        var admission = BeginAttempts(lockKeys, out var retryAfter);
         if (admission != RoofSignInAdmission.Admitted)
         {
             return Refused(admission, "password change", name, remote, retryAfter);
         }
 
-        _identity.TryGetUser(name, out var user);
         var oldHash = user?.PasswordHash;
         var stamp = user?.Stamp;
         var outcome = RoofSignInOutcome.NotChecked;
@@ -115,7 +116,7 @@ public sealed class RoofSignInService
         }
         finally
         {
-            lockedFor = _lockout.EndAttempt(lockKey, outcome) ?? TimeSpan.Zero;
+            lockedFor = EndAttempts(lockKeys, outcome);
         }
 
         switch (check)
@@ -157,7 +158,7 @@ public sealed class RoofSignInService
     private async Task<RoofSignInResult> SignInAsync(
         string name,
         string secret,
-        string lockKey,
+        Func<bool, LockKey[]> selectLockKeys,
         Func<StoredUser, string?> selectHash,
         RoofCredentialKind kind,
         RoofApiKeyIdentity? kiosk,
@@ -170,14 +171,17 @@ public sealed class RoofSignInService
         }
 
         var what = kind == RoofCredentialKind.Pin ? $"PIN sign-in at {kiosk!.Name}" : "sign-in";
-        var admission = _lockout.TryBeginAttempt(lockKey, out var retryAfter);
+
+        // The lockout always remembers people; it only caps how many names that are not people it remembers.
+        _identity.TryGetUser(name, out var user);
+        var lockKeys = selectLockKeys(user is not null);
+        var admission = BeginAttempts(lockKeys, out var retryAfter);
         if (admission != RoofSignInAdmission.Admitted)
         {
             return Refused(admission, what, name, remote, retryAfter);
         }
 
         // An unknown name, or a person without this kind of secret, is checked against a dummy hash (same time, same answer).
-        _identity.TryGetUser(name, out var user);
         var hash = user is null ? null : selectHash(user);
         var stamp = user?.Stamp;
         var outcome = RoofSignInOutcome.NotChecked;
@@ -190,7 +194,7 @@ public sealed class RoofSignInService
         }
         finally
         {
-            lockedFor = _lockout.EndAttempt(lockKey, outcome) ?? TimeSpan.Zero;
+            lockedFor = EndAttempts(lockKeys, outcome);
         }
 
         switch (check)
@@ -234,6 +238,42 @@ public sealed class RoofSignInService
             _logger.LogError("{What} for {Name} could not be saved: {Reason}", what, user!.Name, ex.Message);
             return Unavailable();
         }
+    }
+
+    /// <summary>Reserves an attempt on every key or on none: a refusal releases the ones already reserved.</summary>
+    private RoofSignInAdmission BeginAttempts(LockKey[] lockKeys, out TimeSpan retryAfter)
+    {
+        for (var i = 0; i < lockKeys.Length; i++)
+        {
+            var admission = _lockout.TryBeginAttempt(lockKeys[i].Key, lockKeys[i].Known, out retryAfter);
+            if (admission != RoofSignInAdmission.Admitted)
+            {
+                for (var reserved = 0; reserved < i; reserved++)
+                {
+                    _lockout.EndAttempt(lockKeys[reserved].Key, RoofSignInOutcome.NotChecked);
+                }
+
+                return admission;
+            }
+        }
+
+        retryAfter = TimeSpan.Zero;
+        return RoofSignInAdmission.Admitted;
+    }
+
+    /// <summary>Ends the attempts <see cref="BeginAttempts"/> reserved; returns the longest lockout they started, or zero.</summary>
+    private TimeSpan EndAttempts(LockKey[] lockKeys, RoofSignInOutcome outcome)
+    {
+        var lockedFor = TimeSpan.Zero;
+        foreach (var lockKey in lockKeys)
+        {
+            if (_lockout.EndAttempt(lockKey.Key, outcome) is { } started && started > lockedFor)
+            {
+                lockedFor = started;
+            }
+        }
+
+        return lockedFor;
     }
 
     private static RoofSignInOutcome Outcome(RoofSecretCheck check) => check switch
@@ -303,4 +343,8 @@ public sealed class RoofSignInService
             RoofControllerErrorCode.IdentityStoreUnavailable,
             "The identity store is unavailable, so sign-in is refused; see the controller log. API keys still work.",
             TimeSpan.FromSeconds(30));
+
+    /// <param name="Key">The name or kiosk the lockout counts (<see cref="RoofSignInLockout"/>).</param>
+    /// <param name="Known">True for a person in the identity store or a kiosk key.</param>
+    private readonly record struct LockKey(string Key, bool Known);
 }

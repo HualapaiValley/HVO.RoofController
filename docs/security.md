@@ -217,7 +217,12 @@ password. After `LockoutThreshold` failures in a row (default 5), sign-in is ref
 `Retry-After`:
 
 - for that name, after wrong passwords;
+- for that name at every kiosk, after wrong PINs for it;
 - at that kiosk, after wrong PINs, whichever names were tried.
+
+A PIN failure counts both for the name and for the kiosk. A success clears the count for the person who signed in and
+for the kiosk, but never another person's, so signing in with your own PIN between guesses does not reset the guesses
+at someone else's.
 
 The first lockout lasts `LockoutDuration` (default 5 minutes). Each further one doubles, up to
 `MaximumLockoutDuration` (default 4 hours). A success, or `FailureMemory` (default 24 hours) without a failure, starts
@@ -225,15 +230,19 @@ again from nothing.
 
 Each attempt is counted before its secret is checked, so attempts sent in parallel get no more guesses than the
 threshold. Once the failures plus the attempts still being checked reach it, further attempts for that name or kiosk get
-429 `SignInBusy` with `Retry-After: 2` until those end. The lockout remembers at most 16,384 names and kiosks, and
-forgets one only when its failures are older than `FailureMemory` and it is not locked out. While it is full, a name or
-kiosk it does not hold gets 429 `SignInBusy` with `Retry-After: 60`, so a flood of made-up names cannot wipe a real
-name's count.
+429 `SignInBusy` with `Retry-After: 2` until those end. The lockout always remembers the people in the identity store
+and the kiosks. A name that is not a person is counted and locked out the same way, so a refusal does not tell the two
+apart, but only the 16,384 such names tried most recently are remembered. A flood of made-up names can only push out
+other made-up names: it never wipes a person's or a kiosk's count and never refuses them. (During such a flood a made-up
+name's count can be forgotten, which could show that it is not a person.)
 
-Each remote address may try `SignInAttemptsPerMinute` sign-ins (default 30; 0 turns the limit off) across
-`Auth/Session`, `Auth/Pin` and `Auth/Password`. Beyond that it gets 429 `SignInBusy` with `Retry-After` before any
-secret is checked, and a `SECURITY` warning is logged at most every 30 seconds. A client that signs people in for them,
-such as a web UI, counts as one address for all of them.
+Each caller may try `SignInAttemptsPerMinute` sign-ins (default 30; 0 turns the limit off) across `Auth/Session`,
+`Auth/Pin` and `Auth/Password`. A kiosk counts by its key, a signed-in person changing their password by their name,
+and an anonymous `Auth/Session` by its remote address (an IPv6 address by its /64 network). The limit is applied after
+the key or session is checked, so a request without a valid one is refused (401) without counting. Beyond the limit the
+caller gets 429 `SignInBusy` with `Retry-After` before any secret is checked, and a `SECURITY` warning is logged at most
+every 30 seconds. A client that signs people in for them, such as a web UI, is one address for all of them, so one
+visitor there could use up the limit for the others; the web UI will limit sign-ins per visitor itself.
 
 Hashing is limited to a few at a time, so sign-in cannot starve the roof. A sign-in that cannot get a turn also gets
 429 `SignInBusy`. The settings are under `RoofControllerSecurity:Identity`, and the controller refuses to start with
@@ -255,6 +264,10 @@ Admins manage everything under `/api/v4.0/Identity`:
 A PIN session cannot use these routes, even an admin's: it gets 403 `CredentialNotAllowed`. A PIN is short and typed
 where others can see it, so it must not be able to create people or keys that work from anywhere and outlive the
 session. Use an admin API key, or sign in with a password.
+
+Everything else an admin may do, an admin's PIN session may do too: run the roof, clear faults, read and change the
+roof configuration, and read the `System` routes. That is deliberate. Whoever uses the kiosk is standing at the roof,
+and the kiosk is where the settings that may only be changed on site are made.
 
 A change that would leave no admin credential is refused with 409 `LastAdministrator`. An admin credential is an admin
 API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed
