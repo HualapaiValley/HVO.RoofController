@@ -132,6 +132,20 @@ moved. The emulated HAT reports both.
 - **The monitoring contacts are normally open.** The setting that depends on it is `UseNormallyClosedLimitSwitches`,
   as above. A broken wire therefore reads "not at the limit", which the controller cannot tell from a roof between its
   limits. The fail-safe result is that the limit's run-circuit contact stops the drive (step 4).
+- **Electrical noise from the drive and the motor does not hold an input in the wrong state for longer than the
+  debounce.** This assumes the Cat6 control and monitoring cables (hardware overview, section 7.4) are routed apart
+  from the motor leads.
+  The setting that depends on it is `LimitSwitchDebounce` (25 ms). The emulated plant cannot show noise, but every
+  result it could have is a stop:
+  - Chatter on the start limit inside the debounce is ignored (`RoofControllerLimitDepartureTests`), and so is an IN4
+    dropout shorter than 250 ms (C6).
+  - A glitch on the destination limit stops the move early. A glitch on both limits during a move latches
+    `ContradictoryLimitInputs` (step 3, `RoofControllerRelayBehaviorTests`), and a glitch on IN3 latches `DriveFault`
+    (C4).
+  - Noise that hides a limit does not keep the drive running, because the limit's run-circuit contact stops it (C1
+    step 4).
+  - The ME-8108 contact bounce is assumed to be 3 ms, since the datasheet gives none, and it settles inside the
+    debounce (`PlantLimitSwitchTests`).
 
 ### C4. VFD fault input polarity (IN3)
 

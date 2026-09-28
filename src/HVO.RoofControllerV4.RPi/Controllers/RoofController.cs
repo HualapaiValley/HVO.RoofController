@@ -157,9 +157,10 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         }
 
         /// <summary>
-        /// Replaces the remotely editable configuration (Admin). Every safety field is required, ExpectedVersion must
-        /// match the current version, and changes to relay mapping, limit/fault polarity or IgnorePhysicalLimitSwitches
-        /// also need ConfirmSafetyCriticalChange=true. Refused while the roof is moving.
+        /// Replaces the remotely editable configuration (Admin). Every field but ConfirmSafetyCriticalChange must be sent,
+        /// ExpectedVersion must match the current version, and changes to relay mapping, limit/fault polarity or
+        /// IgnorePhysicalLimitSwitches, or turning off the operator lease or the IN4 interlock, also need
+        /// ConfirmSafetyCriticalChange=true. Refused while the roof is moving.
         /// </summary>
         /// <response code="200">Configuration applied; the new configuration and version.</response>
         /// <response code="400">Missing or invalid values.</response>
@@ -207,7 +208,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 return RoofProblem(
                     new RoofControllerException(
                         RoofControllerErrorCode.ConfigurationRejected,
-                        "This change affects relay mapping, limit-switch or fault polarity, or ignoring limit switches. " +
+                        "This change affects relay mapping, limit-switch or fault polarity, or ignoring limit switches, " +
+                        "or turns off the operator lease or the IN4 interlock. " +
                         "Resend with ConfirmSafetyCriticalChange=true after checking the wiring."),
                     "update_configuration");
             }

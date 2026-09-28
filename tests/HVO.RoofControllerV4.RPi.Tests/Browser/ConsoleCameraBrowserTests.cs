@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -72,4 +73,61 @@ public sealed class ConsoleCameraBrowserTests
         await Expect(browser.CameraOverlay).ToHaveCountAsync(0);
         await Expect(browser.Page.GetByText("The camera view failed")).ToHaveCountAsync(0);
     }
+
+    /// <summary>
+    /// The player's own module in the browser, with fetch held so the test decides when each response arrives. A
+    /// restart cancels the attempt still waiting for its response; that response then arrives anyway, as it does when
+    /// the cancel lands after the headers. The cancelled attempt must close it and leave the new attempt alone.
+    /// </summary>
+    [TestMethod]
+    [DataRow(503, DisplayName = "An error response")]
+    [DataRow(200, DisplayName = "A stream")]
+    public async Task AResponseToACancelledAttempt_IsClosed_AndLeavesTheNewAttemptAlone(int status)
+    {
+        var browser = _browser = await ConsoleBrowser.StartAsync(TestContext, Scenario.Production(), ConsoleDevices.Phone);
+        await browser.Page.GotoAsync("/health/ready");
+
+        var result = (await browser.Page.EvaluateAsync<JsonElement>(StaleResponseScript, status))
+            .Deserialize<StaleResponseResult>(JsonSerializerOptions.Web)!;
+
+        result.Requests.Should().Be(2, "the restart started a second attempt");
+        result.FirstCancelled.Should().BeTrue("the first attempt was cancelled");
+        result.StaleBodyClosed.Should().BeTrue("nothing else will ever read or close the cancelled attempt's stream");
+        result.SecondCancelled.Should().BeFalse("the stale response must not cancel the attempt that replaced it");
+        result.States.Should().Equal(["connecting"], "the stale response must not report the stream as waiting or failed");
+    }
+
+    private const string StaleResponseScript = """
+        async status => {
+          const { createPlayer } = await import('/Components/CameraStream.razor.js');
+          const url = '/camera-under-test';
+          const requests = [];
+          const realFetch = window.fetch;
+          window.fetch = (input, init) => String(input).startsWith(url)
+            ? new Promise(resolve => requests.push({ init, resolve }))
+            : realFetch(input, init);
+          const states = [];
+          const dotNetRef = { invokeMethodAsync: (method, state) => { states.push(state); return Promise.resolve(); } };
+          const player = createPlayer(null, null, null, null, dotNetRef, url);
+          try {
+            player.restart();
+            let staleBodyClosed = false;
+            const body = new ReadableStream({ cancel() { staleBodyClosed = true; } });
+            requests[0].resolve(new Response(body, { status }));
+            await new Promise(resolve => setTimeout(resolve, 200));
+            return {
+              requests: requests.length,
+              firstCancelled: requests[0].init.signal.aborted,
+              secondCancelled: requests[1]?.init.signal.aborted ?? true,
+              staleBodyClosed,
+              states
+            };
+          } finally {
+            player.dispose();
+            window.fetch = realFetch;
+          }
+        }
+        """;
+
+    private sealed record StaleResponseResult(int Requests, bool FirstCancelled, bool SecondCancelled, bool StaleBodyClosed, string[] States);
 }

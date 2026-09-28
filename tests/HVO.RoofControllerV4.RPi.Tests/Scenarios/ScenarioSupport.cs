@@ -134,7 +134,7 @@ internal static class Scenario
 
     /// <summary>
     /// Changes the running configuration as an administrator does: reads it, changes what <paramref name="change"/>
-    /// changes and posts the whole configuration back with its version (a missing lease or at-speed window disables it).
+    /// changes and posts the whole configuration back with its version (a null lease or at-speed window turns it off).
     /// </summary>
     public static async Task<RoofConfigurationResponse> ConfigureAsync(this EmulatedRoofRig rig, Func<RoofConfigurationRequest, RoofConfigurationRequest> change)
     {

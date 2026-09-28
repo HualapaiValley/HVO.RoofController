@@ -205,6 +205,12 @@ class CameraPlayer {
         signal: controller.signal
       });
 
+      if (this.disposed || controller.signal.aborted) {
+        // Cancelled while the response was on its way: close it, and leave the attempt that replaced it alone.
+        response.body?.cancel().catch(() => { /* already closed */ });
+        return;
+      }
+
       if (!response.ok || !response.body) {
         this.fail(response.status === 401 || response.status === 403 ? 'unauthorized' : 'offline', `HTTP ${response.status}`);
         return;
