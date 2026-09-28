@@ -23,10 +23,15 @@ set -euo pipefail
 #    call short: the restore begins once the call in progress returns.
 #
 # Usage: PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh [--dry-run] [--force-unverified-stop] [--rollback]
+#        PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh --verify-remote
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
 #               rollback that could not be undone) exists.
+#   --verify-remote  runs only the checks from this machine of step 3, against whatever controller answers at the
+#               published URL: an authenticated Status that reports the HAT this run expects, then a verified Stop (it
+#               stops the roof). It makes no Docker call and changes no container, so it also checks a controller that
+#               Docker Compose runs, before `docker compose up` replaces it and after.
 # HAT emulator mode: HAT_EMULATOR_ENDPOINT=<host>:<port> deploys a controller that uses the HAT emulator
 #   (HVO.RoofControllerV4.Emulator) in place of the physical HAT; the HAT's I2C device is not mapped and the roof does
 #   not move. It is refused unless ALLOW_EMULATED_HAT=true, and the report says which HAT the controller uses. A
@@ -34,7 +39,8 @@ set -euo pipefail
 #   accepted only with ALLOW_EMULATED_HAT=true. The container then maps no host device or Pi file (no /dev/gpiomem, no
 #   thermal sensor), so a test rig need not be a Pi, and BUILD_PLATFORM=linux/amd64 builds the image for a PC.
 # Compose: the script replaces only controllers it created. A <name> or <name>-previous that Docker Compose created is
-#   refused before anything changes; docs/deployment.md describes moving between Compose and the script.
+#   refused before anything changes; docs/deployment.md describes moving between Compose and the script. Check a
+#   Compose controller from this machine with --verify-remote.
 
 usage() {
   sed -n '/^# Project-local/,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -43,15 +49,21 @@ usage() {
 DRY_RUN=false
 FORCE_UNVERIFIED_STOP=false
 ROLLBACK=false
+VERIFY_REMOTE=false
 for arg in "$@"; do
   case "${arg}" in
     --dry-run) DRY_RUN=true ;;
     --force-unverified-stop) FORCE_UNVERIFIED_STOP=true ;;
     --rollback) ROLLBACK=true ;;
+    --verify-remote) VERIFY_REMOTE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: ${arg}" >&2; usage >&2; exit 2 ;;
   esac
 done
+if [[ "${VERIFY_REMOTE}" == "true" && ( "${DRY_RUN}" == "true" || "${FORCE_UNVERIFIED_STOP}" == "true" || "${ROLLBACK}" == "true" ) ]]; then
+  echo "--verify-remote cannot be combined with --dry-run, --force-unverified-stop or --rollback" >&2
+  exit 2
+fi
 
 if [[ -z "${PI_HOST:-}" ]]; then
   echo "PI_HOST environment variable is required" >&2
@@ -481,15 +493,18 @@ remote_api() {
         -w '\n%{http_code}' "${REMOTE_BASE_URL}/${API_PATH}/${path}"
 }
 
-# Prints "<relayRegisterState>\t<relayRegisterMask>\t<commandedMotion>\t<hatMode>" from a status JSON on stdin.
+# Prints "<relayRegisterState>\t<relayRegisterMask>\t<commandedMotion>\t<hatMode>\t<isUsingPhysicalHardware>" from a
+# status JSON on stdin, with "null" for a missing field.
 parse_status() {
   if command -v jq >/dev/null 2>&1; then
-    jq -r '[(.relayRegisterState // "null"), (.relayRegisterMask // "null" | tostring), (.commandedMotion // "null"), (.hatMode // "null")] | @tsv'
+    jq -r '[(.relayRegisterState // "null"), (.relayRegisterMask // "null" | tostring), (.commandedMotion // "null"), (.hatMode // "null"),
+           (.isUsingPhysicalHardware | if . == null then "null" else tostring end)] | @tsv'
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json,sys
 d=json.load(sys.stdin)
 v=lambda k: "null" if d.get(k) is None else str(d.get(k))
-print(v("relayRegisterState"), v("relayRegisterMask"), v("commandedMotion"), v("hatMode"), sep="\t")'
+b=lambda k: "null" if d.get(k) is None else json.dumps(d.get(k))
+print(v("relayRegisterState"), v("relayRegisterMask"), v("commandedMotion"), v("hatMode"), b("isUsingPhysicalHardware"), sep="\t")'
   else
     return 1
   fi
@@ -511,7 +526,7 @@ check_verified_stop() {
     return 1
   fi
 
-  IFS=$'\t' read -r state mask motion hat_mode <<<"${parsed}"
+  IFS=$'\t' read -r state mask motion hat_mode _ <<<"${parsed}"
   echo "[deploy] Stop result: relayRegisterState=${state} relayRegisterMask=${mask} commandedMotion=${motion}"
   [[ "${state}" == "Verified" && "${mask}" == "0" && "${motion}" == "None" ]]
 }
@@ -550,13 +565,29 @@ stop_roof_before_replacing() {
   fi
 }
 
+# Prints a container's raw state and restart count, as "running 0"; returns 1 when Docker cannot be asked.
+container_restarts() {
+  dockerc inspect --format '{{.State.Status}} {{.RestartCount}}' "$1" 2>/dev/null
+}
+
+# Returns 0 once the container reports ready, 2 as soon as it has exited (it will not become ready), 1 at the deadline.
+# With --restart unless-stopped, Docker restarts a controller that exits instead of leaving it stopped, so a wait for a
+# restart, or a restart count above its first reading, means it exited. The count is compared with that first reading,
+# not with 0: a docker start of a container that is still running (a rollback whose stop failed) does not reset it. A
+# controller that exits and is restarted before the first reading is caught at its next restart.
 wait_ready() {
-  local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) state
+  local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) state raw restarts first_restarts=""
   while (( SECONDS < deadline )); do
-    # A container that has stopped will not become ready. If Docker cannot be asked, keep polling until the deadline.
+    # If Docker cannot be asked, keep polling until the deadline.
     state=$(container_state "${name}") || state=unknown
     if [[ "${state}" == "stopped" || "${state}" == "missing" ]]; then
-      return 1
+      return 2
+    fi
+    if read -r raw restarts < <(container_restarts "${name}") && [[ "${restarts}" =~ ^[0-9]+$ ]]; then
+      first_restarts=${first_restarts:-${restarts}}
+      if [[ "${raw}" == "restarting" ]] || (( restarts > first_restarts )); then
+        return 2
+      fi
     fi
     if dockerc exec "${name}" curl -fsS --max-time 5 http://localhost:8080/health/ready >/dev/null 2>&1; then
       return 0
@@ -569,15 +600,22 @@ wait_ready() {
 # The HAT a Status body on $2 reports, against the one this run deploys: Physical, or Emulated in HAT emulator mode.
 # The --env settings are not enough on their own: a HatEmulator file in the secrets directory (read last) would
 # override them. A rollback restores whatever the previous version used: the emulator only with ALLOW_EMULATED_HAT=true,
-# and a missing hatMode (a version from before emulator mode) as the physical HAT. Sets VERIFIED_HAT_MODE, or FAILURE
+# and a missing hatMode (a version from before emulator mode) as the physical HAT. --verify-remote checks a controller
+# this run did not deploy, so it too takes a missing hatMode as the physical HAT when that is the one expected. A version
+# from before emulator mode fell back to the register simulation without an I2C bus, so, as the health check does, a
+# missing hatMode counts as the physical HAT only with isUsingPhysicalHardware true. Sets VERIFIED_HAT_MODE, or FAILURE
 # and returns 1.
 check_hat_mode() {
-  local name=$1 parsed state mask motion hat_mode expected
+  local name=$1 parsed state mask motion hat_mode physical expected
   if ! parsed=$(parse_status <<<"$2"); then
     FAILURE="cannot parse the Status from ${name} to check its HAT (install jq or python3)"
     return 1
   fi
-  IFS=$'\t' read -r state mask motion hat_mode <<<"${parsed}"
+  IFS=$'\t' read -r state mask motion hat_mode physical <<<"${parsed}"
+  if [[ "${hat_mode}" == "null" && "${physical}" != "true" ]]; then
+    FAILURE="${name} reports no hatMode and isUsingPhysicalHardware ${physical}: a version from before emulator mode on the register simulation, not the physical HAT"
+    return 1
+  fi
   if [[ "${ROLLBACK}" == "true" ]]; then
     case "${hat_mode}" in
       Physical) VERIFIED_HAT_MODE=Physical; return 0 ;;
@@ -595,6 +633,10 @@ check_hat_mode() {
 
   expected=Physical
   [[ -z "${HAT_EMULATOR_ENDPOINT}" ]] || expected=Emulated
+  if [[ "${VERIFY_REMOTE}" == "true" && "${expected}" == "Physical" && "${hat_mode}" == "null" ]]; then
+    VERIFIED_HAT_MODE="Physical (no hatMode: a version from before emulator mode)"
+    return 0
+  fi
   if [[ "${hat_mode}" != "${expected}" ]]; then
     FAILURE="${name} reports hatMode ${hat_mode}, but this deployment is for hatMode ${expected} (${HAT_SUMMARY}); check for HatEmulator settings in the secrets directory"
     return 1
@@ -605,9 +647,13 @@ check_hat_mode() {
 # Readiness, an authenticated Status inside the container and its HAT, then an authenticated Status and a verified Stop
 # from this machine. Sets FAILURE and returns 1 on the first check that fails.
 verify_controller() {
-  local name=$1 response http_status
+  local name=$1 response http_status ready=0
   echo "[verify] Waiting up to ${READY_TIMEOUT_SECONDS}s for ${name} to report /health/ready"
-  if ! wait_ready "${name}"; then
+  wait_ready "${name}" || ready=$?
+  if (( ready == 2 )); then
+    FAILURE="${name} exited before it became ready (it stopped, or Docker restarted it)"
+    return 1
+  elif (( ready != 0 )); then
     FAILURE="${name} did not become ready within ${READY_TIMEOUT_SECONDS}s"
     return 1
   fi
@@ -629,6 +675,14 @@ verify_controller() {
     return 0
   fi
 
+  verify_remote false
+}
+
+# An authenticated Status, then a verified Stop, from this machine at the published URL. With check_hat=true the
+# Status must also report the HAT this run expects (--verify-remote: nothing checked it inside the container). Sets
+# FAILURE and returns 1 on the first check that fails.
+verify_remote() {
+  local check_hat=$1 response http_status
   if ! response=$(remote_api GET Status); then
     FAILURE="GET Status at ${REMOTE_BASE_URL} failed from this machine (network, port or TLS; set REMOTE_CA_CERT for a certificate this machine does not trust)"
     return 1
@@ -637,6 +691,10 @@ verify_controller() {
   if [[ "${http_status}" != "200" ]]; then
     FAILURE="GET Status at ${REMOTE_BASE_URL} returned HTTP ${http_status:-<none>} to this machine: $(sed '$d' <<<"${response}")"
     return 1
+  fi
+  if [[ "${check_hat}" == "true" ]]; then
+    check_hat_mode "the controller at ${REMOTE_BASE_URL}" "$(sed '$d' <<<"${response}")" || return 1
+    echo "[verify] Authenticated Status at ${REMOTE_BASE_URL}: HTTP 200, hatMode ${VERIFIED_HAT_MODE}"
   fi
 
   if ! response=$(remote_api POST Stop) || ! check_verified_stop "${response}"; then
@@ -865,6 +923,18 @@ trap 'exit 143' TERM
 
 # ---------------------------------------------------------------------------------------------------------------------
 
+# --verify-remote: the checks of step 3 from this machine, and nothing else. It never calls Docker, so it works for a
+# controller that Docker Compose runs, and for one this machine has no Docker context for.
+if [[ "${VERIFY_REMOTE}" == "true" ]]; then
+  [[ "${SKIP_REMOTE_CHECK}" != "true" ]] \
+    || fail "--verify-remote is the check that SKIP_REMOTE_CHECK=true skips; unset SKIP_REMOTE_CHECK."
+  resolve_operator_key
+  echo "[verify] Checking ${REMOTE_BASE_URL} from this machine (no Docker calls). Expected HAT: ${HAT_SUMMARY}"
+  verify_remote true || fail "${FAILURE}."
+  echo "[done] Verified at ${REMOTE_BASE_URL} from this machine: authenticated Status (hatMode ${VERIFIED_HAT_MODE}) and a verified Stop."
+  exit 0
+fi
+
 # Checked as the switch runs docker: in its own session, with no terminal to prompt on. A context that asks for a
 # password or a host key confirmation would otherwise pass here and fail at the old controller's stop.
 if ! context_errors=$("${OWN_SESSION[@]}" docker --context "${DOCKER_CONTEXT}" info </dev/null 2>&1 >/dev/null); then
@@ -886,7 +956,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] GET Status inside ${CONTAINER_NAME} -> HTTP ${http_status}"
     if [[ "${http_status}" == "200" ]]; then
       parsed=$(sed '$d' <<<"${response}" | parse_status) || fail "Cannot parse Status (install jq or python3)."
-      IFS=$'\t' read -r state mask motion hat_mode <<<"${parsed}"
+      IFS=$'\t' read -r state mask motion hat_mode _ <<<"${parsed}"
       echo "[dry-run] relayRegisterState=${state} relayRegisterMask=${mask} commandedMotion=${motion} hatMode=${hat_mode}"
     fi
     if [[ "${SKIP_REMOTE_CHECK}" != "true" ]]; then
@@ -907,9 +977,10 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   exit 0
 fi
 
-# The dry-run block above and the rollback block below always exit. A top-level command that bash abandons (an
+# The --verify-remote and dry-run blocks above and the rollback block below always exit. A top-level command that bash abandons (an
 # expansion error does that without tripping set -e) must never fall through into a swap, a build or a deploy.
 [[ "${DRY_RUN}" != "true" ]] || fail "internal error: the --dry-run path did not finish; nothing was changed."
+[[ "${VERIFY_REMOTE}" != "true" ]] || fail "internal error: the --verify-remote path did not finish; nothing was changed."
 
 refuse_running_previous
 

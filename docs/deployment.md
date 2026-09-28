@@ -167,6 +167,7 @@ deploy.
 | `--dry-run` | Checks the Docker context, the key and the HTTPS choice. If the controller is running, it reads `GET Status` over loopback and from this machine at the final URL, and prints the relay state. It then prints the plan. Nothing is built or changed. |
 | `--force-unverified-stop` | Lets the deploy continue when the Stop cannot be verified, but only after you type `STOP-UNVERIFIED` at the terminal. See the steps below. |
 | `--rollback` | Swaps the running controller with `<name>-previous` instead of deploying. See [Rolling back](#rolling-back). |
+| `--verify-remote` | Deploys nothing and makes no Docker call. It runs only the remote check of step 7 against the controller that answers at the published URL: an authenticated `GET Status` that must report the expected `hatMode`, then a `POST Stop` that must be verified. The Stop stops the roof. This is the remote check for a [Compose deployment](#deploying-with-compose). It cannot be combined with the other flags or with `SKIP_REMOTE_CHECK=true`. |
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -233,7 +234,9 @@ anything.
 
    Anything else aborts the deploy, including 401, 503, an unreachable container or a response that cannot be parsed.
    `--force-unverified-stop` overrides the abort only after the typed confirmation. Before typing it, confirm that
-   you can see the roof and that it is not moving, or that the drive is isolated.
+   you can see the roof and that it is not moving, or that the drive is isolated. The script reads the confirmation
+   from the terminal (`/dev/tty`), not from standard input. Without a terminal, or with any other answer, the deploy
+   aborts and the old controller keeps running.
 5. **Stops the old container gracefully** with `docker stop -t 30` (SIGTERM). The app's shutdown path stops the roof
    again and ends camera streams. The old container is renamed `<name>-previous` with restart policy `no`, so it can
    be restored but never starts by itself. An older, stopped `<name>-previous` is removed only after this stop has
@@ -243,7 +246,10 @@ anything.
    `HTTPS_HOST_PORT` is published; plain HTTP listens on loopback inside the container, for the health check and the
    script's `docker exec` calls.
 7. **Verifies the new controller:**
-   - `/health/ready` within `READY_TIMEOUT_SECONDS` (from inside the container)
+   - `/health/ready` within `READY_TIMEOUT_SECONDS` (from inside the container). A new controller that exits before
+     it is ready fails this check at once, without waiting for the timeout, whether its container stopped or Docker
+     restarted it (`--restart unless-stopped` restarts a controller that exits). One that Docker restarted before the
+     first check is caught when it exits again.
    - an authenticated `GET Status` inside the container returns 200 and reports the HAT this run deploys: `hatMode`
      `Physical`, or `Emulated` in [HAT emulator mode](#hat-emulator-mode-test-rigs). The secrets directory is read
      after the script's `--env` settings, so a `HatEmulator` file there could switch the HAT; this check catches it.
@@ -344,7 +350,9 @@ The restored version's HAT is checked twice. Before anything is stopped, the scr
 `<name>-previous` was deployed with: a version deployed for the HAT emulator is refused, with nothing changed, unless
 `ALLOW_EMULATED_HAT=true` (a test rig). With the flag, a warning names the emulator, and so does a readiness failure.
 Once the restored version runs, the checks include the `hatMode` it reports. `Physical` is accepted, and so is a Status
-without `hatMode` (a version from before HAT emulator mode). `Emulated` is accepted only with `ALLOW_EMULATED_HAT=true`;
+without `hatMode` (a version from before HAT emulator mode) that reports `isUsingPhysicalHardware` `true`. With `false`,
+such a version ran on the register simulation, as it did without an I2C bus, and the check fails. `Emulated` is
+accepted only with `ALLOW_EMULATED_HAT=true`;
 a version that reports it without being deployed for the emulator takes it from elsewhere, such as the secrets
 directory. Without the flag that check fails, the restored version is left running as above, and `--rollback` again
 swaps back. The final line names the `hatMode`.
@@ -390,6 +398,13 @@ docker compose --profile pi run --rm roof-controller-check   # the deployment ch
 docker compose --profile pi up -d                             # only if the check passed
 ```
 
+Before `up` replaces a running controller, and again after `up`, check the controller from the deploying machine (see
+[below](#checking-a-compose-controller-from-another-machine)):
+
+```bash
+PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./deploy-roofcontroller-rpi.sh --verify-remote
+```
+
 Both Pi profiles mirror the script: the secrets directory at `/run/secrets` (`HVO_ROOF_SECRETS_DIR`, default
 `/etc/hvo-roof/secrets`), `stop_grace_period: 30s`, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets and
 certificate directories must exist; compose does not create them.
@@ -402,8 +417,38 @@ leaves **no** controller running. That is why the commands above run the check o
 `docker compose --profile pi logs roof-controller-check`.
 
 Compose does **not** perform the verified stop, keep the previous container, check the published URL or roll back.
-Before `up` replaces a running controller, stop the roof yourself with `POST .../Stop` and check the response. After
-it, check the published URL from another machine (see below). Prefer the script.
+Prefer the script. With Compose, the script's `--verify-remote` does the stop and the URL check, as described below.
+Nothing keeps the previous version or rolls back.
+
+### Checking a Compose controller from another machine
+
+The Compose health check only proves that the controller answers on loopback inside its container. That says nothing
+about whether clients can reach it with a key. `--verify-remote` checks this from the deploying machine, as the script's
+own deploy does in step 7. It makes no Docker call, so it needs no Docker context for the Pi, and it changes no
+container:
+
+1. An authenticated `GET Status` at the published URL must return 200 with `hatMode` `Physical` (`Emulated` with
+   `HAT_EMULATOR_ENDPOINT` and `ALLOW_EMULATED_HAT=true`). The Pi profiles pin the HAT emulator off, so any other
+   value points to a `HatEmulator` setting in the secrets directory. A controller from before emulator mode reports
+   no `hatMode`. It passes when `Physical` is expected and it reports `isUsingPhysicalHardware` `true`; with `false`
+   it ran on the register simulation, and the check fails before the Stop.
+2. A `POST Stop` must return 200 with `relayRegisterState` `Verified`, `relayRegisterMask` `0` and `commandedMotion`
+   `None`. This stops the roof.
+
+It exits 0 only if both checks pass. It reads the key as a deploy does (`ROOF_OPERATOR_API_KEY` or `OPERATOR_KEY_FILE`),
+sends it on standard input and never prints it. The URL is built from the deploy settings:
+
+| Profile | Settings | URL checked |
+|---------|----------|-------------|
+| `pi` | `PI_HOST`, `HTTPS_CERT_DIR` (any value selects HTTPS; it is not read here), and `REMOTE_CA_CERT` if this machine does not trust the certificate | `https://$PI_HOST:8443` |
+| `pi-lan-http` | `PI_HOST`, `ALLOW_INSECURE_HTTP=true` | `http://$PI_HOST:8080` |
+
+Run it before `up` replaces a running controller: the verified Stop is the stop the script would request, and a
+failure means the roof is not known to be stopped. Run it again after `up`: until it passes, do not rely on remote
+control. A 401 means the controller does not know the key (check the secrets directory), and a 400 that `PI_HOST` is
+not in `HVO_ROOF_ALLOWED_HOSTS`. A connection or TLS failure points to the port, the network or the certificate (set
+`REMOTE_CA_CERT`). The check does not prove the key's role: any key may send a Stop, so a viewer key passes too. Only
+a deploy's pre-flight refuses a key that cannot operate the roof; `--rollback` and `--verify-remote` run no pre-flight.
 
 A third profile, `emulator`, runs the production settings against the [HAT emulator](emulator.md) on any machine,
 with no devices, on `http://127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). It builds both images, maps no devices,
@@ -434,8 +479,9 @@ Compose ran; keep it under a tag of its own to return to it.
 
 **From Compose to the script:**
 
-1. Stop the roof and check that the stop is verified: `POST .../Stop` returns 200 with `relayRegisterState` `Verified`,
-   `relayRegisterMask` `0` and `commandedMotion` `None`.
+1. Stop the roof and check that the stop is verified: run `./deploy-roofcontroller-rpi.sh --verify-remote` with the
+   Compose profile's settings ([above](#checking-a-compose-controller-from-another-machine)), or check by hand that
+   `POST .../Stop` returns 200 with `relayRegisterState` `Verified`, `relayRegisterMask` `0` and `commandedMotion` `None`.
 2. Keep the Compose version: `docker tag hvov9/roof-controller:v4 hvov9/roof-controller:v4-compose`.
 3. `docker compose --profile pi down`. The controller stops the roof again on SIGTERM, as in step 5 of the script.
 4. Run the script. It finds no `<name>` and deploys as a first deploy (`[deploy] No existing container.`), so there is
@@ -451,10 +497,50 @@ Compose ran; keep it under a tag of its own to return to it.
    Otherwise `docker compose --profile pi build` builds the current source.
 4. `docker compose --profile pi run --rm roof-controller-check`, then, only if it passed,
    `docker compose --profile pi up -d --no-build`.
-5. Check the published URL from another machine ([After deploying](#after-deploying-checks-on-the-device)).
+5. Check the published URL from another machine with `--verify-remote`
+   ([above](#checking-a-compose-controller-from-another-machine)) and the checks in
+   [After deploying](#after-deploying-checks-on-the-device).
 
 `tests/emulator/deploy-scenarios.sh migration` runs both moves against the HAT emulator, with the refusals on each
 side (see [Container scenarios](emulator.md#container-scenarios)).
+
+## Health and readiness
+
+One health check, `roof_controller`, backs three endpoints:
+
+| Endpoint | Access | Answers |
+|----------|--------|---------|
+| `/health/live` | anonymous | 200 whenever the process answers. No check runs. |
+| `/health/ready` | anonymous, status text only | 200 for Healthy or Degraded, 503 for Unhealthy. The Docker `HEALTHCHECK` and the deploy script's readiness wait use it, from inside the container. |
+| `/health` | Viewer key or signed-in console | The same result with its description and data (`HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 for Unhealthy. |
+
+The check reports the first of these that applies:
+
+- **Unhealthy:** the service is disposed, shutting down or not initialized; the relay register state is unverified; a
+  safety fault is latched; the safety inputs are not healthy; relay register reads are failing or stale; the
+  controller is in its error state.
+- **Degraded:** the status is unknown; the physical limit switches are ignored; the HAT is the emulator; there is no
+  I²C bus (the register simulation); digital input polling is off.
+- **Healthy:** none of the above.
+
+What each deployment should report:
+
+| Deployment | `/health` | `/health/ready` | What proves the rest |
+|------------|-----------|-----------------|----------------------|
+| Pi, deploy script | Healthy | 200 | Step 7: an in-container Status reporting `hatMode` `Physical`, then an authenticated Status and a verified Stop from the deploying machine |
+| Pi, Compose `pi` or `pi-lan-http` | Healthy | 200 | The deployment check before start, then `--verify-remote` from another machine ([Checking a Compose controller](#checking-a-compose-controller-from-another-machine)), which also requires `hatMode` `Physical` (or, from a version before emulator mode, no `hatMode` and `isUsingPhysicalHardware` `true`) |
+| Test rig with the HAT emulator (script with `HAT_EMULATOR_ENDPOINT`, or the compose `emulator` profile) | Degraded, naming the emulator | 200 | `hatMode` `Emulated` and the `EMULATED HAT` banner ([HAT emulator mode](#hat-emulator-mode-test-rigs)) |
+| No I²C bus and emulator mode off (a development machine) | Degraded, "simulation mode" | 200 | `hatMode` `Simulation`. Not a deployment: the deploy script and `--verify-remote` refuse it. |
+
+Readiness does not prove that the controller is usable remotely. `/health/ready` needs no key and is exempt from
+`RequireHttps`, and the deploy script polls it inside the container. The port, the certificate, `AllowedHosts` and a
+key the controller accepts are proven only by the authenticated remote check: step 7 of the script, or
+`--verify-remote` for Compose. That the key can operate the roof is checked only by a deploy's pre-flight, not by
+`--rollback` or `--verify-remote`.
+
+Readiness also passes while Degraded. On a Pi with the physical HAT, Degraded means limit switches ignored (allowed
+only with `AllowIgnoringLimitSwitchesOnPhysicalHardware`), input polling off, or a status not yet known. After a deploy,
+read `/health` with a Viewer key and expect Healthy.
 
 ## Shutdown timing
 
@@ -494,3 +580,5 @@ docker ps -a --filter name=roof-controller-previous
 ```
 
 The deploy script already made the authenticated remote Status and Stop calls unless `SKIP_REMOTE_CHECK=true` was set.
+For a Compose controller, or once the port is reachable after a deploy with `SKIP_REMOTE_CHECK=true`, make them with
+`--verify-remote` ([Checking a Compose controller](#checking-a-compose-controller-from-another-machine)).

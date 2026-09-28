@@ -421,7 +421,9 @@ public sealed class DeploymentValidatorTests
 
         result.Notes.Should().Contain("Deploy key: dashboard (RoofViewer).");
         result.Problems.Should().ContainSingle(problem =>
-            problem.Contains("deploy script's API key (dashboard) has the RoofViewer role") && problem.Contains("403"));
+            problem.Contains("deploy script's API key (dashboard) has the RoofViewer role")
+            && problem.Contains("Point the script at a RoofOperator or RoofAdmin key")
+            && !problem.Contains("403"));
     }
 
     [TestMethod]

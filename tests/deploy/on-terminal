@@ -8,6 +8,9 @@ The command becomes a session leader with the terminal as its controlling termin
 Killing the reader closes the terminal, as closing the window or losing the SSH connection does: the kernel hangs the
 terminal up, sends SIGHUP to the command, and its later writes to the terminal fail with EIO. Exits with the command's
 status (128 + N when a signal ended it).
+
+With ON_TERMINAL_PROMPT and ON_TERMINAL_ANSWER set, the reader types the answer (and Enter) once the prompt text has
+appeared on the terminal, as an operator at the keyboard would. The command reads it from /dev/tty.
 """
 import os
 import sys
@@ -22,6 +25,9 @@ def main():
         os.close(slave)
         with open(pid_file, "w") as f:
             f.write(str(os.getpid()))
+        prompt = os.environ.get("ON_TERMINAL_PROMPT", "").encode()
+        answer = os.environ.get("ON_TERMINAL_ANSWER")
+        seen = b""
         with open(log_file, "wb") as log:
             while True:
                 try:
@@ -32,6 +38,11 @@ def main():
                     break
                 log.write(data)
                 log.flush()
+                if prompt and answer is not None:
+                    seen += data
+                    if prompt in seen:
+                        os.write(master, answer.encode() + b"\n")
+                        answer = None
         os._exit(0)
     os.close(master)
 

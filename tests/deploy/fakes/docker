@@ -6,8 +6,10 @@ Keeps containers in $FAKE_STATE_DIR/state.json (keyed by name, each with a 64-he
 docker state is "running" or "exited" from its "running" flag, or its optional "state" (paused, restarting, created);
 stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex>|id=<prefix> and Go-style --format
 ({{.Label "<key>"}} reads the container's optional "labels", as a Compose-created container has).
-`inspect` supports only --format '{{range .Config.Env}}{{println .}}{{end}}': the --env/-e values the container was run
-with (its "options").
+`inspect` supports two --format templates: '{{range .Config.Env}}{{println .}}{{end}}', the --env/-e values the
+container was run with (its "options"), and '{{.State.Status}} {{.RestartCount}}', its docker state and optional
+"restart_count". Starting a stopped container resets the count to 0, as docker start does; starting a running or
+restarting one changes nothing, and starting a paused one fails.
 Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
   FAKE_<KIND>_READY=false          /health/ready fails
   FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
@@ -15,11 +17,19 @@ Container behaviour is chosen per container "kind" (old, current, new, ...) with
   FAKE_<KIND>_HAT_MODE=<mode>      hatMode of the in-container Status and Stop (absent: no hatMode, as before emulator
                                    mode). By default Emulated when the container was run with HatEmulator__Enabled=true
                                    (the last one given), otherwise Physical.
+  FAKE_<KIND>_PHYSICAL=true|false  isUsingPhysicalHardware of the same responses (default false for hatMode Simulation,
+                                   otherwise true)
 Other switches:
   FAKE_PREFLIGHT_EXIT=<code>       exit code of `run --rm ... --validate-deployment`
   FAKE_RUN_FAIL=true               `run -d` fails before creating the container
   FAKE_RUN_FAIL=created            `run -d` creates the container (state created, ID in the --cidfile), then fails
   FAKE_RUN_FAIL=foreign            another client's running container (kind foreign) takes the name; `run -d` fails
+  FAKE_NEW_EXITS=restarted|restarting|exited
+                                   `run -d` succeeds, but the controller it starts exits at once (it passed the
+                                   pre-flight, then failed on its normal start). With --restart unless-stopped Docker
+                                   restarts it: restarted is running again, and each inspect finds it restarted once
+                                   more (a crash loop); restarting is waiting to restart; exited is stopped, as when
+                                   Docker cannot start it again (a device has gone).
   FAKE_STOP_FAIL=true              `stop` fails
   FAKE_STOP_CUT_OFF=true           the first `stop` loses its connection: the client fails and the daemon finishes the
                                    stop by itself FAKE_ASYNC_STOP_SECONDS (default 1) later
@@ -124,6 +134,8 @@ def with_hat_mode(c, body):
     if not mode:
         enabled = [o for o in c.get("options", []) if o.startswith("HatEmulator__Enabled=")]
         mode = "Emulated" if enabled and enabled[-1] == "HatEmulator__Enabled=true" else "Physical"
+    physical = behaviour(c["kind"], "PHYSICAL", "false" if mode == "Simulation" else "true")
+    body = dict(body, isUsingPhysicalHardware=physical == "true")
     return body if mode == "absent" else dict(body, hatMode=mode)
 
 
@@ -145,12 +157,18 @@ def inspect(state, args):
         else:
             refs.append(args[i])
             i += 1
-    if fmt != "{{range .Config.Env}}{{println .}}{{end}}":
+    if fmt not in ("{{range .Config.Env}}{{println .}}{{end}}", "{{.State.Status}} {{.RestartCount}}"):
         die(f"fake docker: unsupported inspect format: {fmt}")
     for ref in refs:
         _, c = container(state, ref)
-        # println ends each value with a newline, and docker adds one after the template.
-        out("".join(f"{e}\n" for e in env_of(c)))
+        if fmt.startswith("{{.State"):
+            if c.get("crash_loop"):
+                c["restart_count"] = c.get("restart_count", 0) + 1
+                save(state)
+            out(f"{docker_state(c)} {c.get('restart_count', 0)}")
+        else:
+            # println ends each value with a newline, and docker adds one after the template.
+            out("".join(f"{e}\n" for e in env_of(c)))
 
 
 def docker_state(c):
@@ -413,6 +431,12 @@ def run(state, args, image):
     }
     if run_fail == "created":
         state["containers"][name].update(running=False, state="created")
+    elif os.environ.get("FAKE_NEW_EXITS") == "restarted":
+        state["containers"][name]["crash_loop"] = True
+    elif os.environ.get("FAKE_NEW_EXITS") == "restarting":
+        state["containers"][name]["state"] = "restarting"
+    elif os.environ.get("FAKE_NEW_EXITS") == "exited":
+        state["containers"][name]["running"] = False
     save(state)
     if cidfile is not None:
         with open(cidfile, "w") as f:
@@ -487,12 +511,15 @@ def main():
     if command == "start":
         ref = args[-1]
         _, c = container(state, ref)
-        if c.get("stopping_until") is not None:
-            # Docker starts nothing for a container that is still running.
+        if c["running"]:
+            if c.get("state") == "paused":
+                die("Error response from daemon: cannot start a paused container, try unpause instead")
+            # Docker starts nothing, and resets nothing, for a container that is running, restarting or still stopping.
             out(ref)
             return
         c["running"] = True
         c.pop("state", None)
+        c["restart_count"] = 0
         save(state)
         out(ref)
         return

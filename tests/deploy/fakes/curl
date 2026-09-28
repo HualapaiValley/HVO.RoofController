@@ -5,7 +5,8 @@ Appends argv (as JSON) to $FAKE_STATE_DIR/remote.log. The request reaches the ru
 URL's port (from state.json); HTTPS must hit container port 8443 and HTTP container port 8080, otherwise the call fails
 as curl would. The key (FAKE_EXPECTED_KEY) must arrive on stdin (-H @-), otherwise the call gets 401.
 FAKE_REMOTE_STATUS_CODE overrides the Status response code, FAKE_REMOTE_STOP=unverified the Stop result, and
-FAKE_REQUIRE_CACERT=true fails HTTPS without --cacert.
+FAKE_REQUIRE_CACERT=true fails HTTPS without --cacert. The Status and the Stop report the container's hatMode as the fake
+docker does (FAKE_<KIND>_HAT_MODE, otherwise from its HatEmulator__Enabled setting, and FAKE_<KIND>_PHYSICAL).
 """
 import json
 import os
@@ -22,6 +23,16 @@ def fail(code, message):
     sys.exit(code)
 
 
+def with_hat_mode(c, body):
+    mode = os.environ.get(f"FAKE_{c['kind'].upper()}_HAT_MODE", "")
+    if not mode:
+        enabled = [o for o in c.get("options", []) if o.startswith("HatEmulator__Enabled=")]
+        mode = "Emulated" if enabled and enabled[-1] == "HatEmulator__Enabled=true" else "Physical"
+    physical = os.environ.get(f"FAKE_{c['kind'].upper()}_PHYSICAL", "false" if mode == "Simulation" else "true")
+    body = dict(body, isUsingPhysicalHardware=physical == "true")
+    return body if mode == "absent" else dict(body, hatMode=mode)
+
+
 def main():
     args = sys.argv[1:]
     with open(os.path.join(STATE_DIR, "remote.log"), "a") as log:
@@ -34,12 +45,12 @@ def main():
     with open(os.path.join(STATE_DIR, "state.json")) as f:
         containers = json.load(f)["containers"]
 
-    target = None
+    target = container = None
     for c in containers.values():
         for mapping in c.get("publish", []) if c["running"] else []:
             host_port, container_port = mapping.split(":")
             if int(host_port) == url.port:
-                target = int(container_port)
+                target, container = int(container_port), c
     if target is None:
         fail(7, f"Failed to connect to {url.hostname} port {url.port}: Connection refused")
     if url.scheme == "https" and target != 8443:
@@ -54,10 +65,10 @@ def main():
         return
 
     if url.path.endswith("/Status") and method == "GET":
-        print(json.dumps(VERIFIED) + "\n" + os.environ.get("FAKE_REMOTE_STATUS_CODE", "200"), end="")
+        print(json.dumps(with_hat_mode(container, VERIFIED)) + "\n" + os.environ.get("FAKE_REMOTE_STATUS_CODE", "200"), end="")
     elif url.path.endswith("/Stop") and method == "POST":
         body = UNVERIFIED if os.environ.get("FAKE_REMOTE_STOP") == "unverified" else VERIFIED
-        print(json.dumps(body) + "\n200", end="")
+        print(json.dumps(with_hat_mode(container, body)) + "\n200", end="")
     else:
         print("{}\n404", end="")
 

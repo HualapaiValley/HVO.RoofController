@@ -135,8 +135,10 @@ the roof against this server; use the authenticated browser console for operator
   checks the `hatMode` the new controller reports against the one deployed and rolls back on a
   mismatch. `--rollback` accepts a version that uses the emulator only with
   `ALLOW_EMULATED_HAT=true`: one deployed for the emulator is refused before anything is stopped,
-  and the restored version's `hatMode` is checked once it runs. The dry-run and the final report
-  name the HAT the controller uses.
+  and the restored version's `hatMode` is checked once it runs. A version from before emulator
+  mode reports none and passes only with `isUsingPhysicalHardware` true: without an I2C bus it
+  ran on the register simulation, whose verified Stop says nothing about the roof. The dry-run
+  and the final report name the HAT the controller uses.
 - Emulator container (#30): `src/HVO.RoofControllerV4.Emulator/Dockerfile` (non-root,
   `linux/amd64` and `linux/arm64`), the compose `emulator` profile (production settings
   against the emulator container, no devices, loopback only, on its own network), and
@@ -166,7 +168,12 @@ the roof against this server; use the authenticated browser console for operator
   HAT emulator, `docker stop` and `docker kill` during travel (C11), commissioning C12 with the
   deploy script (an idle deploy, a deploy while moving, pre-flight failures, a failed remote
   check that rolls back, `--rollback` twice, with the relays sampled throughout), and the move
-  from Compose to the deploy script and back.
+  from Compose to the deploy script and back. They also run (#17) `docker stop` with a camera
+  stream open, which must end within 5 s; `docker stop` while relay writes fail, both until a
+  shutdown retry verifies the relays off and for good; a Stop that cannot be verified, which
+  aborts the deploy before the controller is stopped; and a new controller that never becomes
+  ready, which is rolled back. The move between Compose and the script checks each Compose
+  controller with the deploy script's `--verify-remote` (#18).
 - CI workflow `scenarios.yml` (#31): the scenarios, the browser tests and the container
   scenarios on pull requests to `main` and `feature/**` and on pushes to `main`, and the
   two-hour soak nightly and on demand, with the soak's invariant results in the run summary
@@ -223,10 +230,24 @@ the roof against this server; use the authenticated browser console for operator
   not queue another one, and disposal stops waiting for the controller lock after 2 s (its
   all-off stop runs if the stuck call returns; until then the controller is shutting down, not
   disposed).
+- Deploy script `--verify-remote` (#18), the authenticated remote check for a Compose
+  deployment. It checks the published URL from the deploying machine and nothing else: an
+  authenticated `GET Status` must report the expected `hatMode`, then `POST Stop` must be
+  verified. It makes no Docker call and changes no container. Run it before
+  `docker compose up` replaces a controller and after, as the script's own deploy does in its
+  step 7. A controller from before emulator mode reports no `hatMode` and passes as the
+  physical HAT when it reports `isUsingPhysicalHardware` true. Any key may send a Stop, so it
+  does not prove that the key can operate the roof; only a deploy's pre-flight checks that.
+- Health and readiness semantics per deployment in [docs/deployment.md](docs/deployment.md#health-and-readiness)
+  (#18): what `/health/live`, `/health/ready` and `/health` answer, which conditions make the
+  controller Degraded or Unhealthy, what each deployment should report, and why readiness does
+  not prove remote access.
 - CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
-  `docker`/`curl`, and `docker compose config` for the Pi compose file's profiles (rejecting
-  `pi` with `pi-lan-http`, and checking that the Pi profiles pin the HAT emulator off and the
-  `emulator` profile maps no devices and has its own network) and for `src/docker-compose.yml`.
+  `docker`/`curl` (including `--force-unverified-stop` without a terminal, without the flag,
+  with a wrong answer and with the typed confirmation, #17), and `docker compose config` for
+  the Pi compose file's profiles (rejecting `pi` with `pi-lan-http`, and checking that the Pi
+  profiles pin the HAT emulator off and the `emulator` profile maps no devices and has its own
+  network) and for `src/docker-compose.yml`.
 - API security tests (#18; tests only, no behaviour change): every mapped endpoint must refuse
   an anonymous caller unless allow-listed; a viewer is refused Close, ClearFault and Lease;
   `System/metrics` needs an admin; malformed, empty and `text/plain` configuration bodies are
@@ -280,6 +301,10 @@ the roof against this server; use the authenticated browser console for operator
   [docs/deployment.md](docs/deployment.md) describes moving between Compose and the script.
   `BUILD_PLATFORM` (default `linux/arm64`) builds `linux/amd64` for a test rig on the HAT
   emulator, and in emulator mode the container maps no host device or Pi file.
+- The deploy script fails the new controller's readiness check at once when the controller
+  exits before it is ready, whether its container stopped or Docker restarted it ("exited
+  before it became ready"), instead of waiting out `READY_TIMEOUT_SECONDS`, and then rolls
+  back (#17).
 - The console on short screens, such as a phone held sideways, puts the roof state beside the
   buttons, keeps the Controls heading for screen readers only and, wider than 576 px, puts the
   footer on one row, so Stop is in view without scrolling (#20). The browser tests found Stop
