@@ -258,7 +258,7 @@ public sealed class RoofStatusBroadcasterTests
         await WaitUntilAsync(() => Volatile.Read(ref viewerClosed) == 1, "the viewer connection to be closed");
         broadcaster.Value.ConnectionCount.Should().Be(1);
         Volatile.Read(ref operatorClosed).Should().Be(0, "the operator's key did not change");
-        _logger.Contains(LogLevel.Information, "key 'viewer' that opened it was removed, rotated or re-roled").Should().BeTrue();
+        _logger.Contains(LogLevel.Information, "key or session 'viewer' that opened it was removed, rotated, re-roled or ended").Should().BeTrue();
         _logger.Entries.Should().NotContain(e => e.Message.Contains(TestApiKeys.Viewer, StringComparison.Ordinal), "key values are never logged");
     }
 
@@ -337,7 +337,7 @@ public sealed class RoofStatusBroadcasterTests
     public async Task ARefusedConnection_DoesNotReadTheController_AndRefusalsAreLoggedAtMostOnceAnInterval()
     {
         var time = new TestSupport.ManualTimeProvider();
-        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, _keyStore, time, _logger, NoHeartbeat, maxConnections: 1);
+        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), time, _logger, NoHeartbeat, maxConnections: 1);
         await using var stopping = new AsyncBroadcaster(broadcaster);
         broadcaster.TryRegister("a", Viewer(), () => { }).Should().BeTrue();
         var reads = _controller.SnapshotCallCount;
