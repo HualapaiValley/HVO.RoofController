@@ -196,13 +196,27 @@ public sealed class HatEmulatorServer : IAsyncDisposable
                 continue;
             }
 
-            client.NoDelay = true;
             var remote = RemoteOf(client);
+            NetworkStream stream;
+            try
+            {
+                // Before the connection is registered, while nothing else can dispose the client: GetStream racing a
+                // Dispose (DisconnectAll) can throw ArgumentNullException.
+                client.NoDelay = true;
+                stream = client.GetStream();
+            }
+            catch (Exception ex) when (ex is SocketException or IOException or InvalidOperationException)
+            {
+                // Reset by the peer before it could be served.
+                client.Dispose();
+                continue;
+            }
+
             var id = Interlocked.Increment(ref _nextConnectionId);
             _connections[id] = client;
 
             // Registered before the removal can run: a handler that ends at once still leaves _handlers.
-            var handler = HandleAsync(id, client, remote, cancellationToken);
+            var handler = HandleAsync(id, client, stream, remote, cancellationToken);
             _handlers[id] = handler;
             _ = handler.ContinueWith(
                 ended =>
@@ -220,14 +234,13 @@ public sealed class HatEmulatorServer : IAsyncDisposable
         }
     }
 
-    private async Task HandleAsync(long id, TcpClient client, EndPoint? remote, CancellationToken cancellationToken)
+    private async Task HandleAsync(long id, TcpClient client, NetworkStream stream, EndPoint? remote, CancellationToken cancellationToken)
     {
         // Leave the accept loop's thread at once: the loop starts the next accept without waiting for this connection.
         // DisconnectAll, an outage or the shutdown may close the connection at any point from here.
         await Task.Yield();
         try
         {
-            var stream = client.GetStream();
             using (var hello = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
                 hello.CancelAfter(HelloTimeout);
@@ -285,11 +298,11 @@ public sealed class HatEmulatorServer : IAsyncDisposable
         catch (HatEmulatorProtocolException ex)
         {
             _logger.LogWarning("HAT emulator: malformed frame from {Remote}: {Reason}", remote, ex.Message);
-            await TryRefuseAsync(client, ex.Message).ConfigureAwait(false);
+            await TryRefuseAsync(stream, ex.Message).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
         {
-            // The connection closed or the server is stopping (GetStream throws InvalidOperationException once closed).
+            // The connection closed or the server is stopping.
         }
         finally
         {
@@ -395,12 +408,12 @@ public sealed class HatEmulatorServer : IAsyncDisposable
         await HatEmulatorProtocol.WriteFrameAsync(stream, refusal, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task TryRefuseAsync(TcpClient client, string problem)
+    private static async Task TryRefuseAsync(NetworkStream stream, string problem)
     {
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-            await RefuseAsync(client.GetStream(), 0, problem, timeout.Token).ConfigureAwait(false);
+            await RefuseAsync(stream, 0, problem, timeout.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
         {

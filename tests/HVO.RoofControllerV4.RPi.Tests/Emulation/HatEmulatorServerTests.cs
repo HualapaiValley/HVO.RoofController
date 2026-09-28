@@ -335,7 +335,8 @@ public sealed class HatEmulatorServerTests
         await rig.DisposeAsync().AsTask().WaitAsync(ReceiveTimeout);
 
         rig.Server.OpenConnections.Should().Be(0);
-        rig.Log.MessagesAt(LogLevel.Warning).Should().BeEmpty("a dropped connection ends its handler without an error");
+        rig.Log.Entries.Where(e => e.Level >= LogLevel.Warning).Select(e => $"{e.Message}: {e.Exception}")
+            .Should().BeEmpty("a dropped connection ends its handler without an error");
     }
 
     [TestMethod]
