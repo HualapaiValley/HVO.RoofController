@@ -87,7 +87,8 @@ wrong-setting variants. Before connecting the roof mechanism, complete the bench
 |---------|-------------|
 | `HVO.RoofControllerV4.RPi` | ASP.NET Core web app for Raspberry Pi (GPIO/I2C roof control) |
 | `HVO.RoofControllerV4.Common` | Shared models and options |
-| `HVO.RoofControllerV4.Simulation` | Emulated roof plant: SMVector drive, ME-8108 limit switches, SM-I-010 HAT and the wiring, for tests |
+| `HVO.RoofControllerV4.Simulation` | Emulated roof plant: SMVector drive, ME-8108 limit switches, SM-I-010 HAT and the wiring |
+| `HVO.RoofControllerV4.Emulator` | HAT emulator: serves the emulated plant's HAT registers over TCP, with a fault-injection API ([docs/emulator.md](docs/emulator.md)) |
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
 | `HVO.RoofControllerV4.RPi.Tests` | Unit, API, simulation and emulated-plant tests (`tests/`) |
 
@@ -106,11 +107,14 @@ dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tes
 # Release build (warnings are errors)
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj -c Release
 
-# Run the server with the simulated HAT on http://localhost:5195
+# Run the server against the HAT emulator on http://localhost:5195: start the emulator first,
+# then the server in a second terminal (Development uses the emulator, limit switches in force)
+dotnet run --project HVO.RoofControllerV4.Emulator
 dotnet run --project HVO.RoofControllerV4.RPi
 ```
 
-The solution builds on Linux without Apple tooling.
+The solution builds on Linux without Apple tooling. Nothing in development or the tests
+needs the HAT, the drive or the roof; see [docs/emulator.md](docs/emulator.md).
 
 ## Docker Deployment
 
@@ -128,16 +132,17 @@ script restores the previous controller. `--rollback` swaps them on demand.
 
 The production compose file, `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, has an
 HTTPS profile (`pi`, port 8443) and an explicit plain-HTTP profile for an isolated LAN
-(`pi-lan-http`, port 8080); both run the deployment check before the controller starts.
-See [docs/deployment.md](docs/deployment.md) for the full procedure, including the operator
-API key and TLS.
+(`pi-lan-http`, port 8080); both run the deployment check before the controller starts. Its
+`emulator` profile runs the production settings against the HAT emulator container on any
+machine, for testing. See [docs/deployment.md](docs/deployment.md) for the full procedure,
+including the operator API key and TLS.
 
-For local simulation only (Development environment, no HAT devices, on
-`http://localhost:5200`):
+For local development only (Development environment, against the HAT emulator container, no
+devices, on `http://localhost:5200`):
 
 ```bash
 cd src
-docker compose up --build
+HVO_DEV_ROOF_API_KEY=$(openssl rand -hex 24) docker compose up --build
 ```
 
 Never run `src/docker-compose.yml` on the observatory Pi.
@@ -158,6 +163,7 @@ a commissioned bench.
 | [Commissioning checklist](docs/commissioning.md) | Bench and HAT checks required before connecting the roof mechanism |
 | [Security](docs/security.md) | API keys, roles, HTTPS and console sign-in |
 | [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
+| [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |
 | [CI runners](docs/ci-runners.md) | Active CI workflows and runner security settings |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines and development workflow |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |

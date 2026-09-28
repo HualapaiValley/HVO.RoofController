@@ -110,9 +110,13 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - `RoofControllerOptionsV4` values that the controller would refuse at startup, including
   `IgnorePhysicalLimitSwitches` without `AllowIgnoringLimitSwitchesOnPhysicalHardware` when `/dev/i2c-1` is mapped
   into the container: the HAT library then drives the roof hardware whatever `HVO_FORCE_RASPBERRY_PI` or
-  `USE_REAL_GPIO` say. The check only looks for the device; it never opens it.
+  `USE_REAL_GPIO` say. The check only looks for the device; it never opens it. HAT emulator mode counts as hardware
+  here too.
+- HAT emulator mode (`HatEmulator:Enabled`) outside Development without `HatEmulator:AllowOutsideDevelopment`, or with
+  invalid `HatEmulator` settings: the controller would refuse to start. See
+  [HAT emulator mode (test rigs)](#hat-emulator-mode-test-rigs).
 - a value that cannot be converted in `RoofControllerOptionsV4`, `RoofControllerSecurity`,
-  `RoofControllerHostOptionsV4`, `ConsoleLogBuffer`, `BlueIris` or `Telemetry` (the report names the setting, not the
+  `RoofControllerHostOptionsV4`, `ConsoleLogBuffer`, `BlueIris`, `Telemetry` or `HatEmulator` (the report names the setting, not the
   value), and `Telemetry` options that the controller would refuse
 - a `Logging` level (`Logging:LogLevel:*` or `Logging:<provider>:LogLevel:*`, nested categories included) that is not
   a log level name, such as `Info`: the controller would not start
@@ -136,8 +140,8 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - a configuration that cannot be loaded at all, such as a malformed settings file
 
 It warns on plain HTTP outside Development, a certificate that expires within 30 days, a certificate given only by
-store subject, `AllowAnonymousStop`, a misconfigured camera proxy (the roof still works), and `AllowedHosts=*` in
-Production. It never prints key values, passwords or other setting values.
+store subject, `AllowAnonymousStop`, a misconfigured camera proxy (the roof still works), `AllowedHosts=*` in
+Production, allowed HAT emulator mode (the roof will not move), and `/dev/i2c-1` mapped in emulator mode. It never prints key values, passwords or other setting values.
 
 The deploy script runs it as its pre-flight, and each compose profile runs it as a one-shot service that the controller
 depends on.
@@ -180,6 +184,8 @@ deploy.
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
 | `ROOF_OPERATOR_API_KEY` / `OPERATOR_KEY_FILE` | / `~/.config/hvo-roof/operator.key` | Key for the Stop and Status checks |
+| `HAT_EMULATOR_ENDPOINT` | (empty) | Test rigs only: `<host>:<port>` of a HAT emulator the container can reach. The controller uses it in place of the physical HAT. See [HAT emulator mode (test rigs)](#hat-emulator-mode-test-rigs). |
+| `ALLOW_EMULATED_HAT` | `false` | Must be `true` for `HAT_EMULATOR_ENDPOINT` to be accepted |
 
 `STOP_TIMEOUT_SECONDS` and `READY_TIMEOUT_SECONDS` must be whole numbers from 1 to 86400, and the ports whole numbers
 from 1 to 65535. They are read as decimal, so `010` means 10. `POLL_INTERVAL_SECONDS` may have a fraction, such as
@@ -208,8 +214,8 @@ anything.
 2. **Builds** the arm64 image and loads it on the Pi.
 3. **Runs the pre-flight check** on the Pi: the new image with `--validate-deployment` and exactly the environment,
    devices and mounts the controller will get (see [The deployment check](#the-deployment-check)), plus the SHA-256 of
-   the script's key. Docker also fails here on a missing `/dev/gpiomem`, `/dev/i2c-1`, thermal file, secrets directory
-   or certificate directory. Any failure stops the deploy while the old controller is still running and untouched.
+   the script's key. Docker also fails here on a missing `/dev/gpiomem`, `/dev/i2c-1` (not mapped in HAT emulator
+   mode), thermal file, secrets directory or certificate directory. Any failure stops the deploy while the old controller is still running and untouched.
 4. **Requests a verified stop** if the old container is running. The script sends `POST /api/v4.0/RoofControl/Stop`
    from inside the container over loopback: `docker exec ... curl`, with the key passed on stdin so it never shows in
    a process list. The stop counts as verified only when the response is HTTP 200 and the body has:
@@ -251,6 +257,33 @@ anything.
    and failed writes to the terminal are skipped. The last line is `[deploy] ERROR: Deployment failed (<reason>). <outcome>`; the outcome starts with
    `Rolled back:` when the old controller is back. The script exits 1, or 129, 130 or 143 after SIGHUP, SIGINT or
    SIGTERM. With no previous controller (a first deploy), the outcome says the roof controller is not running.
+
+### HAT emulator mode (test rigs)
+
+A test Pi can run the production image and settings with only the HAT emulated: the
+[HAT emulator](emulator.md) answers the HAT's registers, and an emulated roof, drive and limit switches stand behind
+it. **Never use this on the observatory Pi:** the controller then does not operate the roof.
+
+```bash
+PI_HOST=test-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/test-pi.crt \
+  HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true \
+  EXTRA_DOCKER_ARGS="--network hvo-emulator" ./deploy-roofcontroller-rpi.sh
+```
+
+- `HAT_EMULATOR_ENDPOINT` without `ALLOW_EMULATED_HAT=true` is refused before anything changes. So is a
+  `HatEmulator` setting in `EXTRA_DOCKER_ARGS`: emulator mode is chosen only through these two variables, so that the
+  deployment records it.
+- The container gets `HatEmulator__Enabled=true`, the host and port, and `HatEmulator__AllowOutsideDevelopment=true`.
+  `/dev/i2c-1` is **not** mapped, so the controller cannot reach a physical HAT whatever its settings say.
+- Without `HAT_EMULATOR_ENDPOINT`, the script maps `/dev/i2c-1` and sets `HatEmulator__Enabled=false`, which overrides
+  an `--env-file` in `EXTRA_DOCKER_ARGS`.
+- The emulator must be reachable from the controller's container, for example on a Docker network given in
+  `EXTRA_DOCKER_ARGS`. The script does not start it.
+- The script prints a warning before it changes anything, and the dry-run and the final report name the HAT the
+  controller uses.
+
+A controller in emulator mode shows an `EMULATED HAT` banner on every page and reports Degraded health. For a rig
+without a Pi, use the compose `emulator` profile below.
 
 ### Rolling back
 
@@ -295,8 +328,8 @@ from the secrets directory.
 
 ## Deploying with compose
 
-`src/HVO.RoofControllerV4.RPi/docker-compose.yaml` has two profiles. Choose one; enabling both is rejected because they
-share the container name `roof-controller` (which also collides with a controller started by the script).
+`src/HVO.RoofControllerV4.RPi/docker-compose.yaml` has two Pi profiles. Choose one; enabling both is rejected because
+they share the container name `roof-controller` (which also collides with a controller started by the script).
 
 | Profile | Transport | Needs |
 |---------|-----------|-------|
@@ -325,6 +358,17 @@ leaves **no** controller running. That is why the commands above run the check o
 Compose does **not** perform the verified stop, keep the previous container, check the published URL or roll back.
 Before `up` replaces a running controller, stop the roof yourself with `POST .../Stop` and check the response. After
 it, check the published URL from another machine (see below). Prefer the script.
+
+A third profile, `emulator`, runs the production settings against the [HAT emulator](emulator.md) on any machine,
+with no devices, on `http://127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). It builds both images, maps no devices and
+publishes on loopback only, so it can run next to a Pi profile. It is for testing, not for the observatory:
+
+```bash
+cd src/HVO.RoofControllerV4.RPi
+HVO_EMULATED_ROOF_API_KEY=$(openssl rand -hex 24) docker compose --profile emulator up -d --build
+```
+
+`tests/emulator/compose-smoke-test.sh` opens and closes the emulated roof through it.
 
 ## Shutdown timing
 

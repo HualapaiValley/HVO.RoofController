@@ -1,7 +1,7 @@
 # CI Runners and Workflow Security
 
-This repository is public. CI uses GitHub-hosted runners for the server tests and Pi
-image build. The former iOS/M5 workflows were removed with the native application.
+This repository is public. CI uses GitHub-hosted runners for the server tests, the Pi
+image build and the HAT emulator image. The former iOS/M5 workflows were removed with the native application.
 
 ## Workflows
 
@@ -9,6 +9,7 @@ image build. The former iOS/M5 workflows were removed with the native applicatio
 |---|---|---|---|
 | `ci.yml` | GitHub-hosted `ubuntu-latest` | push to `main`, pull requests, nightly | Build and test the server graph (Debug with coverage, then Release with warnings as errors) |
 | `pi-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the Pi image inputs, weekly, manual | Build the `linux/arm64` Pi image from a clean builder; nothing is pushed or deployed |
+| `emulator-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the emulator or controller image inputs, weekly, manual | Build the HAT emulator image for `linux/amd64` and `linux/arm64`, and open and close the emulated roof through the containerized controller (`tests/emulator/compose-smoke-test.sh`); no hardware, nothing pushed or deployed |
 
 All workflows:
 

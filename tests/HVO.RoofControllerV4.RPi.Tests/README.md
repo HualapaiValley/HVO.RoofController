@@ -105,7 +105,9 @@ models exactly that register.
   input read failures (persistent or next-N), stuck relay bits, ignored set commands, and a relay write observer. It
   also records `MaskHistory` and `EverBothDirectionBits`.
 - **Serialized classes.** `[DoNotParallelize]` is used for classes that assert the process-wide telemetry gauges or
-  share one HAT.
+  share one HAT, and for `Emulation/EmulatorModeAppTests`. Each of its tests starts a whole controller host, whose
+  startup and HAT polling hold thread-pool threads, and the in-process emulator needs those threads to answer. Run in
+  parallel, the hosts starve the emulator into timeouts, which the controller correctly treats as I/O errors.
 
 ## Test files
 
@@ -130,7 +132,7 @@ models exactly that register.
 | `Services/RoofControllerDisposalTests`, `HatConcurrencyTests` | Shutdown and disposal, two controllers on one HAT |
 | `Services/RoofControllerShutdownRetryTests` | Unverified shutdown stop: background all-off retry, give-up, disposal cancels it |
 | `HostedServices/…`, `HealthChecks/…`, `Models/…` | Host shutdown path (bounded wait, abandoned blocking call), health rules, options validation |
-| `Security/DeploymentValidatorTests` | `--validate-deployment`: roof options (and whether the HAT device is mapped), other options sections and log levels, keys and deploy key, the listeners and endpoints Kestrel would use, certificate loading and expiry, `AllowedHosts` |
+| `Security/DeploymentValidatorTests` | `--validate-deployment`: roof options (and whether the HAT device is mapped), HAT emulator mode, other options sections and log levels, keys and deploy key, the listeners and endpoints Kestrel would use, certificate loading and expiry, `AllowedHosts` |
 | `Security/DeploymentValidationCommandTests` | The `--validate-deployment` command as `Program.Main` runs it, with real configuration sources and a temporary secrets directory |
 | `Simulation/…` | The emulator models on their own (`PlantRig`, raw register writes): SMVector drive, ME-8108 switch, SM-I-010 board and bus, the assembled plant |
 | `Plant/PlantProductionCycleTests` | Open and close on the limits, stop, reversals, watchdog and lease, with the production configuration |
@@ -140,6 +142,11 @@ models exactly that register.
 | `Plant/PlantDocumentedFiguresTests` | The stop distances, start-limit release times, coast-stop reversal and wrong-way timing the documents quote |
 | `Plant/PlantWiringFaultTests` | Each wiring mistake from closed, mid-travel and open; swapped motor leads; wrong polarity and output settings |
 | `Plant/ProductionConfigurationTests` | The deployed `appsettings.json` validates and matches the documented wiring |
+| `Emulation/HatEmulatorProtocolTests`, `HatEmulatorServerTests`, `HatEmulatorParityTests` | The emulator's wire format; its TCP server (Hello, accesses, refusals, outage, delay, disconnect); register accesses over TCP answer exactly as the in-process emulated client |
+| `Emulation/HatEmulatorSessionTests`, `EmulatorApiTests` | The emulator session (start state, scaled clock, reset) and host: the control API and the register port |
+| `Emulation/SocketI2cRegisterClientTests`, `RoofHatConnectionTests` | The controller's socket register client (Hello check, timeouts, reconnects) and emulator mode selection, refusal, warning and telemetry |
+| `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, the banner and the Degraded health |
+| `Emulation/DevelopmentConfigurationTests` | `appsettings.Development.json`: the HAT emulator, with the limit switches in force and the production wiring |
 
 ## Emulated plant
 
@@ -177,6 +184,15 @@ Known limitations the plant tests document:
 - A welded direction relay is invisible to the register read-back; RLY4 still stops the roof.
 - If the Run output stays on during a DC brake, the next move is refused until `P175` has passed; with `P175` = 999.9
   every move after a stop is refused.
+
+## HAT emulator
+
+`HVO.RoofControllerV4.Emulator` serves the same plant's HAT registers over TCP, so the deployed controller can run
+against it with `HatEmulator:Enabled` ([docs/emulator.md](../../docs/emulator.md)). `Emulation/` tests the link and
+the controller in that mode. `tests/emulator/compose-smoke-test.sh` builds the emulator and controller images and runs
+them through the compose `emulator` profile: the emulated roof opens and closes through the containerized controller's
+API with no plant violations. It needs Docker with compose v2, `curl` and `jq`, and takes a few minutes; CI runs it in
+the "Emulator image" workflow. `SMOKE_NO_BUILD=1` reuses images already built.
 
 ## Adding new tests
 

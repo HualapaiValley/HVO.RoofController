@@ -12,8 +12,11 @@ A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai V
 - Authenticated REST API with versioned routing (`/api/v4.0/RoofControl`): `X-Api-Key`
   header, role-based access, `POST` for every command
 - Structured logging and health checks for observability and rapid diagnostics
-- Configurable hardware abstractions; the limit-switch bypass is for simulation and is
-  refused on physical hardware unless explicitly allowed in local configuration
+- Configurable hardware abstractions; the limit-switch bypass is for the in-memory register
+  simulation and is refused on physical hardware and against the HAT emulator unless
+  explicitly allowed in local configuration
+- HAT emulator mode (`HatEmulator:Enabled`): the whole controller runs against an emulated
+  roof, drive, limit switches and HAT, with no hardware ([docs/emulator.md](../../docs/emulator.md))
 
 ## Getting Started
 1. Install the .NET 10 SDK pinned by `src/global.json`, and run `dotnet` from `src/` so the
@@ -25,9 +28,11 @@ A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai V
    ```
 3. Provide at least one API key (see [docs/security.md](../../docs/security.md)); without
    keys every protected endpoint returns 401.
-4. Run the site (HTTP on port 5195 with the `Debug` launch profile; `Debug-Secure` adds
+4. Start the HAT emulator, which Development uses in place of the HAT, then run the site in a
+   second terminal (HTTP on port 5195 with the `Debug` launch profile; `Debug-Secure` adds
    `https://localhost:7296`; the container listens on 8080):
    ```bash
+   dotnet run --project HVO.RoofControllerV4.Emulator
    dotnet run --project HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj
    ```
 5. Browse to `http://localhost:5195` and sign in to the Blazor console, or call the API
@@ -49,6 +54,7 @@ starting the host or touching the HAT.
 - [Commissioning checklist](../../docs/commissioning.md) – bench and HAT checks before connecting the roof
 - [Security](../../docs/security.md) – API keys, roles, HTTPS, console sign-in
 - [Deployment](../../docs/deployment.md) – deployment script, compose profiles, deployment check, verified stop and rollback
+- [HAT emulator](../../docs/emulator.md) – running without hardware: the emulator, `HatEmulator` settings, fault injection, containers
 
 ## Configuration Notes
 - Operational settings live in `appsettings*.json` under `RoofControllerOptionsV4` and `RoofControllerHostOptionsV4`.
@@ -63,7 +69,8 @@ starting the host or touching the HAT.
   - Relay register reads are supervised as well (not configurable): one failed or stale read sets `relayRegisterReadsHealthy = false` and fails `/health/ready`; two consecutive failures stop motion and latch `RelayVerificationFailed` (when idle, the all-off sequence is re-run first).
   - `UseNormallyClosedLimitSwitches` (production `false`): IN1/IN2 polarity. IN1/IN2 are on the ME-8108 normally open pair (3-4), HIGH at the limit.
 - On shutdown the roof is stopped and the relay register verified. If it cannot be verified, the all-off sequence is retried every 500 ms until it verifies, the controller is disposed or 15 s pass (disposal usually ends it after about 10 s). The host bounds each wait (5 s plus 1 s grace, up to three calls) and logs Critical if a HAT call is stuck; disposal then stops waiting for the controller lock after 2 s rather than block, and runs its all-off stop if the stuck call returns.
-- `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware the controller refuses it unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is `true` in local configuration; that setting cannot be changed through the API. `appsettings.Development.json` is for simulation, and `.devcontainer/devcontainer.rpi.json` forces `IgnorePhysicalLimitSwitches=false`.
+- `IgnorePhysicalLimitSwitches` is for the in-memory register simulation, which has no limit switches. On physical hardware, and against the HAT emulator, the controller refuses it unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is `true` in local configuration; that setting cannot be changed through the API. `appsettings.Development.json` runs against the HAT emulator with the limit switches in force and the production wiring, and `.devcontainer/devcontainer.rpi.json` uses the physical HAT (`HatEmulator__Enabled=false`) and forces `IgnorePhysicalLimitSwitches=false`.
+- `HatEmulator` (`Enabled`, `Host`, `Port`, `ConnectTimeout`, `RequestTimeout`, `AllowOutsideDevelopment`): see [docs/emulator.md](../../docs/emulator.md). Outside Development, emulator mode is refused unless `AllowOutsideDevelopment` is `true`; a controller in emulator mode shows an `EMULATED HAT` banner and reports Degraded health.
 - `POST /api/v4.0/RoofControl/Configuration` needs the `RoofAdmin` role and the `ExpectedVersion` returned by `GET Configuration`; safety-critical changes also need `ConfirmSafetyCriticalChange: true`.
 - The latched fault is cleared only by `POST /api/v4.0/RoofControl/ClearFault` (optional `pulseMs`, 50–2000, default 250) with healthy inputs; Stop does not clear it.
 - `HardwareDetection` section in `appsettings*.json` can provide default values for `ForceRaspberryPi`, `ContainerRpiHint`, or `UseRealGpio`; these populate the matching environment variables when not already set.

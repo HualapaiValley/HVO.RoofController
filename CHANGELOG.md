@@ -108,6 +108,28 @@ the roof against this server; use the authenticated browser console for operator
   cycles, drive trips and power loss, external stops, stop methods and DC brakes, the
   factory `P100` and `P112`, switch and wire faults, relay and I2C faults, and each wiring
   mistake from closed, mid-travel and open; none relies on physical hardware.
+- HAT emulator (#30): `HVO.RoofControllerV4.Emulator` serves the emulated plant's HAT registers
+  over TCP (register port 5291) and has a fault-injection API on loopback port 5290 (drive trips
+  and power, HAT power, external stop, jam, limit switch, relay, wiring, I2C and link faults,
+  plant history and violations, time scale 0.1-100). See [docs/emulator.md](docs/emulator.md).
+- HAT emulator mode (#30): with `HatEmulator:Enabled`, the controller sends its HAT register
+  accesses to the emulator instead of the I2C bus, with nothing else changed. A lost link, a
+  timeout or a malformed reply is an I/O error, which the controller fails safe on as for a
+  failed I2C transfer. Emulator mode is refused outside Development unless
+  `HatEmulator:AllowOutsideDevelopment` is set. It shows as an `EMULATED HAT` banner on every
+  console page, `hatMode: "Emulated"` in Status, Degraded health, startup warnings and the
+  telemetry attributes `hvo.roof.hat.mode` and `hvo.roof.hat.emulator.endpoint`. The deployment
+  check fails on refused emulator settings and warns on allowed ones.
+- Deploy script (#30): `HAT_EMULATOR_ENDPOINT` with `ALLOW_EMULATED_HAT=true` deploys a
+  test-rig controller against the HAT emulator, without `/dev/i2c-1`; either alone, or a
+  `HatEmulator` setting in `EXTRA_DOCKER_ARGS`, is refused. The dry-run and the final report
+  name the HAT the controller uses.
+- Emulator container (#30): `src/HVO.RoofControllerV4.Emulator/Dockerfile` (non-root,
+  `linux/amd64` and `linux/arm64`), the compose `emulator` profile (production settings
+  against the emulator container, no devices, loopback only), and
+  `tests/emulator/compose-smoke-test.sh`, which opens and closes the emulated roof through the
+  containerized controller. CI workflow `emulator-image.yml` builds the image for both
+  platforms and runs the smoke test.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
 - [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
   telemetry-outage and RV-6 soak procedures) and [docs/ci-runners.md](docs/ci-runners.md).
@@ -177,6 +199,15 @@ the roof against this server; use the authenticated browser console for operator
 - The supervision loop wakes when a start limit's release is first seen and when IN4 drops, so
   the release is verified and the run-loss window enforced on time rather than at the next
   verification interval.
+- Development runs against the HAT emulator (#30): `appsettings.Development.json` enables
+  emulator mode with the limit switches in force and the production wiring, instead of the
+  in-memory register simulation with the limit switches ignored. Start the emulator before
+  the controller. The in-memory simulation remains for unit tests and as the fallback with
+  emulator mode off and no I2C bus. `devcontainer.rpi.json` sets `HatEmulator__Enabled=false`
+  to use the physical HAT, and `src/docker-compose.yml` runs the controller in Development
+  against the emulator container (admin key from `HVO_DEV_ROOF_API_KEY`).
+- The deploy script sets `HatEmulator__Enabled=false` for a physical-HAT deployment, so a
+  setting from an env file cannot switch it to the emulator unrecorded.
 - Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile

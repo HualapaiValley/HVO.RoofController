@@ -74,7 +74,8 @@
     }
   },
   // This container gets the real I2C bus and GPIO, so the roof motor can move. Development
-  // settings are for local simulation: keep the physical limit switches in force here. Environment
+  // settings use the HAT emulator; here the controller uses the physical HAT instead
+  // (HatEmulator__Enabled=false), with the physical limit switches in force. Environment
   // variables override appsettings.Development.json and launchSettings.json. The controller also
   // refuses IgnorePhysicalLimitSwitches on physical hardware unless
   // AllowIgnoringLimitSwitchesOnPhysicalHardware is set in local configuration.
@@ -82,6 +83,7 @@
   "containerEnv": {
     "ASPNETCORE_ENVIRONMENT": "Development",
     "DOTNET_ENVIRONMENT": "Development",
+    "HatEmulator__Enabled": "false",
     "RoofControllerOptionsV4__IgnorePhysicalLimitSwitches": "false",
     "RoofControllerOptionsV4__AllowIgnoringLimitSwitchesOnPhysicalHardware": "false"
   },
