@@ -34,9 +34,9 @@ namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
 /// <para>
 /// The run is <see cref="DefaultDuration"/> in the scenario job, and <c>HVO_SOAK_DURATION</c> (a time span such as
 /// <c>02:00:00</c>) in the nightly soak. The results (<c>soak-summary.md</c>, <c>soak-summary.json</c>,
-/// <c>soak-samples.csv</c>) go to <c>HVO_SOAK_RESULTS_DIR</c>, or the test results, and are written before the checks
-/// fail the test. The resources are the test process's, which runs the emulator and the controller: a leak in either
-/// fails the soak.
+/// <c>soak-samples.csv</c>, and <c>soak-log.txt</c> with every Warning or above and the latest log entries) go to
+/// <c>HVO_SOAK_RESULTS_DIR</c>, or the test results, and are written before the checks fail the test. The resources are
+/// the test process's, which runs the emulator and the controller: a leak in either fails the soak.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -89,10 +89,11 @@ public sealed class C14SoakScenarios
         await using var collector = OtlpCollectorStub.Start(CollectorBehavior.BlackHole);
         await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production(
             // A short history, so the emulator's event log reaches its size limit during the warm-up; the rig keeps the
-            // latest log entries. Neither then grows the heap the soak measures.
+            // latest log entries, and the host writes no console log, which the test framework would keep in memory
+            // for the result. None then grows the heap the soak measures; soak-log.txt has the entries the rig kept.
             plant: p => p with { MaxHistory = 1_000 },
             settings: new Dictionary<string, string?>(collector.Settings()),
-            travelMeters: TravelMeters) with { Kestrel = true, Camera = true, LogCapacity = LogCapacity });
+            travelMeters: TravelMeters) with { Kestrel = true, Camera = true, LogCapacity = LogCapacity, ConsoleLog = false });
         using var operatorClient = rig.CreateApiClient(TestApiKeys.Operator);
         using var viewer = rig.CreateApiClient(TestApiKeys.Viewer);
         using var anonymous = rig.CreateApiClient();
@@ -545,13 +546,24 @@ public sealed class C14SoakScenarios
         }
 
         File.WriteAllText(Path.Combine(directory, "soak-samples.csv"), csv.ToString());
-        foreach (var file in new[] { "soak-summary.md", "soak-summary.json", "soak-samples.csv" })
+
+        var serious = rig.Logs.Serious;
+        var latest = rig.Logs.Entries;
+        File.WriteAllLines(Path.Combine(directory, "soak-log.txt"), new[] { $"Every Warning or above ({serious.Count}):" }
+            .Concat(serious.Select(FormatLogEntry))
+            .Append(string.Empty)
+            .Append($"The latest {latest.Count} of {rig.Logs.Count} entries:")
+            .Concat(latest.Select(FormatLogEntry)));
+        foreach (var file in new[] { "soak-summary.md", "soak-summary.json", "soak-samples.csv", "soak-log.txt" })
         {
             TestContext.AddResultFile(Path.Combine(directory, file));
         }
 
         return directory;
     }
+
+    private static string FormatLogEntry((string Category, LogLevel Level, string Message) entry)
+        => $"{entry.Level} {entry.Category}: {entry.Message}";
 
     private static TimeSpan SoakDuration()
     {

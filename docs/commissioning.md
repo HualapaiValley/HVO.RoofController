@@ -379,7 +379,9 @@ client's rate, opens and closes a camera stream through the proxy, and exports t
 cycle takes about 10 s where the installation moves about twice a night, so an hour of soak is about a year of moves.
 The scenario job runs it for 90 s, which records resources but does not assess them: that needs at least 5 minutes after
 the warm-up. Only the nightly soak checks that resources stay flat. It runs for two hours and publishes
-`soak-summary.md` (the invariant table and the motion timings), `soak-summary.json` and `soak-samples.csv`.
+`soak-summary.md` (the invariant table and the motion timings), `soak-summary.json`, `soak-samples.csv` and
+`soak-log.txt` (every Warning or above, and the latest 1,000 log entries). The soak's host writes no console log: the
+test framework keeps a test's console output in memory, which grows the heap the soak measures.
 
 | Step | Checked | Scenario |
 |---|---|---|

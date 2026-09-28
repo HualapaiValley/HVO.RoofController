@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
@@ -19,6 +20,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 
@@ -189,6 +191,23 @@ public sealed class EmulatorModeAppTests
         roof.GetProperty("description").GetString().Should().Be($"Roof controller is running against the HAT emulator ({rig.Endpoint}), not the physical HAT");
         roof.GetProperty("data").GetProperty("HardwareMode").GetString().Should().Be("Emulated");
         roof.GetProperty("data").GetProperty("HatEmulatorEndpoint").GetString().Should().Be(rig.Endpoint);
+    }
+
+    [TestMethod]
+    public async Task WithTheConsoleLogOff_OnlyTheConsoleProviderIsRemoved_AndTheRigStillRecordsTheLog()
+    {
+        await using (var rig = await EmulatedRoofRig.StartAsync())
+        {
+            rig.App.Services.GetServices<ILoggerProvider>().Should().ContainSingle(p => p is ConsoleLoggerProvider, "the rig runs the production host's logging by default");
+        }
+
+        await using var quiet = await EmulatedRoofRig.StartAsync(new EmulatedRoofRigOptions { ConsoleLog = false });
+
+        var providers = quiet.App.Services.GetServices<ILoggerProvider>().ToArray();
+        providers.Should().NotContain(p => p is ConsoleLoggerProvider, "the test framework would keep the console output in memory");
+        providers.Should().ContainSingle(p => p is ConsoleLogLoggerProvider, "the controller's own console log (the web page's) stays");
+        providers.Should().Contain(quiet.Logs);
+        quiet.Logs.Entries.Should().Contain(e => e.Category == "HVO.RoofControllerV4.RPi.Security" && e.Message.Contains("API key(s) configured", StringComparison.Ordinal));
     }
 
     [TestMethod]
