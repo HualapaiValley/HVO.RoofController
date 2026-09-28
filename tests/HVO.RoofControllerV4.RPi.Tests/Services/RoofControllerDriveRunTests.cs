@@ -400,6 +400,28 @@ public class RoofControllerDriveRunTests
     }
 
     [TestMethod]
+    public async Task SupervisionDelay_WhileIdle_RunsAnOverdueDriveStopCheckAtOnce_WhileTheDriveStillRuns()
+    {
+        var stopWindow = TimeSpan.FromSeconds(2.5);
+        using var rig = await CreateAsync(Window, stopWindow);
+        rig.Service.Open().IsSuccessful.Should().BeTrue();
+        rig.SetRunning(true);
+        rig.Service.Stop().IsSuccessful.Should().BeTrue();
+
+        // The cycle woke just before the deadline (a timer rounds its delay down), and its reads took it past.
+        rig.Time.Advance(stopWindow - Ms);
+        rig.Service.RunSupervisionCycle();
+        rig.Time.Advance(TimeSpan.FromMilliseconds(100));
+
+        rig.Logger.Contains(LogLevel.Critical, "Drive still reports running").Should().BeFalse();
+        rig.Service.GetSupervisionDelay().Should().Be(RoofControllerServiceV4.MinimumSupervisionDelay,
+            "the overdue check runs at once, not an idle interval later");
+        rig.Service.RunSupervisionCycle();
+        rig.Logger.Contains(LogLevel.Critical, "Drive still reports running").Should().BeTrue();
+        rig.Service.GetSupervisionDelay().Should().Be(RoofControllerServiceV4.IdleSupervisionInterval, "the stop is reported once");
+    }
+
+    [TestMethod]
     public async Task SupervisionDelay_WhileIdle_IsTheIdleInterval_AfterTheDriveStopCheckPassed()
     {
         using var rig = await CreateAsync(Window);

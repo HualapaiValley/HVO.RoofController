@@ -935,8 +935,11 @@ public partial class RoofControllerServiceV4
     {
         if (_commandedMotion == RoofMotionDirection.None)
         {
-            // Wake at the drive-stop check rather than up to one idle interval after it.
-            if (DriveStopCheckDeadline_NoLock() is { } stopCheck && stopCheck > now && stopCheck - now < IdleSupervisionInterval)
+            // Wake at the drive-stop check rather than up to one idle interval after it. A check that is overdue while IN4
+            // still reports running runs at once: the cycle at the deadline can take its time before its reads, and a
+            // timer can wake a fraction of a millisecond early. A passed check with IN4 stopped never reports, so it
+            // keeps the idle interval.
+            if (DriveStopCheckDeadline_NoLock() is { } stopCheck && (stopCheck > now || _rawIn4 == true) && stopCheck - now < IdleSupervisionInterval)
             {
                 return stopCheck - now < MinimumSupervisionDelay ? MinimumSupervisionDelay : stopCheck - now;
             }
