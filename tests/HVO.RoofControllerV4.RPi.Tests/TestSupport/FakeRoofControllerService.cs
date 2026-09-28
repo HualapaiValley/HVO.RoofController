@@ -18,6 +18,7 @@ internal sealed class FakeRoofControllerService : IRoofControllerServiceV4
     private int _initializationCallCount;
     private int _shutdownCallCount;
     private int _stopCallCount;
+    private int _snapshotCallCount;
     private volatile bool _initialized;
     private RoofControllerOptionsV4 _options = new();
 
@@ -79,7 +80,19 @@ internal sealed class FakeRoofControllerService : IRoofControllerServiceV4
     public void EnqueueInitialization(Result<bool> result) => _initializationResults.Enqueue(result);
 
     public RoofStatusResponse GetCurrentStatusSnapshot()
-        => SnapshotException is { } ex ? throw ex : Snapshot;
+    {
+        Interlocked.Increment(ref _snapshotCallCount);
+        return SnapshotException is { } ex ? throw ex : Snapshot;
+    }
+
+    /// <summary>How many times <see cref="GetCurrentStatusSnapshot"/> was called.</summary>
+    public int SnapshotCallCount => Volatile.Read(ref _snapshotCallCount);
+
+    /// <summary>True while anything is subscribed to <see cref="StatusChanged"/>.</summary>
+    public bool HasStatusChangedHandlers => StatusChanged is not null;
+
+    /// <summary>Raises <see cref="StatusChanged"/> with <paramref name="status"/> on the calling thread.</summary>
+    public void RaiseStatusChanged(RoofStatusResponse status) => StatusChanged?.Invoke(this, new RoofStatusChangedEventArgs(status));
 
     public RoofControllerOptionsV4 GetConfigurationSnapshot() => _options;
 

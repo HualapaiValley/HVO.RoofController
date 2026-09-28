@@ -17,6 +17,8 @@ authenticated web console and HTTP API.
 - **GPIO / I2C** — direct hardware interface on Raspberry Pi for motor and sensor management
 - **Authenticated API** — every protected request needs an `X-Api-Key`; commands are `POST`
   only ([docs/security.md](docs/security.md))
+- **Live status hub** — UI clients receive every status change, and a heartbeat each second,
+  from the SignalR hub at `/hubs/roof` ([Status hub](docs/security.md#status-hub))
 - **Web Console** — browser-based roof control for desktop, tablet and phone; browser tests
   run it in Chromium with phone and tablet emulation, upright and sideways, against the
   emulated roof, including Stop from the reconnect dialog (commissioning C15)

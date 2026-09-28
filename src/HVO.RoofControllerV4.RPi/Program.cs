@@ -15,6 +15,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.HostedServices;
 using HVO.RoofControllerV4.RPi.Middleware;
 using HVO.RoofControllerV4.RPi.HealthChecks;
+using HVO.RoofControllerV4.RPi.Hubs;
 using HVO.Iot.Devices.Abstractions;
 using HVO.Iot.Devices.Implementation;
 
@@ -142,6 +143,19 @@ public class Program
         // Register RoofController based on configuration
         services.AddSingleton<IRoofControllerServiceV4, RoofControllerServiceV4>();
         services.AddScoped<FooterStatusService>();
+
+        // Live status hub (/hubs/roof) for the separate clients: JSON with string enums, as the REST API writes them.
+        services.AddSignalR()
+            .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()))
+            .AddHubOptions<RoofStatusHub>(options =>
+            {
+                options.SupportedProtocols = [RoofStatusHubContract.Protocol];
+                // Clients send nothing but the handshake and pings.
+                options.MaximumReceiveMessageSize = 4 * 1024;
+            });
+        services.AddSingleton<IRoofStatusSender, HubRoofStatusSender>();
+        services.AddSingleton<RoofStatusBroadcaster>();
+        services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<RoofStatusBroadcaster>());
 
         services.Configure<ConsoleLogBufferOptions>(Configuration.GetSection("ConsoleLogBuffer"));
         services.AddSingleton<ConsoleLogBuffer>();
@@ -399,6 +413,13 @@ public class Program
             .AddInteractiveServerRenderMode();
 
         app.MapControllers();
+
+        // Live status for API clients: the Viewer policy on the API key scheme only (never the console cookie).
+        app.MapHub<RoofStatusHub>(RoofStatusHubContract.Path)
+            .RequireAuthorization(new AuthorizeAttribute(RoofControllerSecurityDefaults.ViewerPolicy)
+            {
+                AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme
+            });
 
         RoofSecurityStartup.ReportSecurityPosture(app.Services, app.Configuration, app.Environment);
         HatEmulatorStartup.ReportHatMode(app.Services);
