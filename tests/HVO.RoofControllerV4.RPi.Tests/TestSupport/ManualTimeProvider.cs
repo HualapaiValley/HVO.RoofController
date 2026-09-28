@@ -96,7 +96,12 @@ internal sealed class ManualTimeProvider : TimeProvider
 
                 if (next is null)
                 {
-                    _now = target;
+                    // A callback may have moved time past the target (AdvanceWithoutTimers); time never goes back.
+                    if (target > _now)
+                    {
+                        _now = target;
+                    }
+
                     return;
                 }
 
@@ -109,6 +114,24 @@ internal sealed class ManualTimeProvider : TimeProvider
             }
 
             next.Fire();
+        }
+    }
+
+    /// <summary>
+    /// Moves time forward without firing timers, as a thread blocked in a call (an I2C transaction) sees it: a timer that
+    /// becomes due waits, as its callback would wait for the blocked thread's lock, and fires at the next
+    /// <see cref="Advance"/>.
+    /// </summary>
+    public void AdvanceWithoutTimers(TimeSpan delta)
+    {
+        if (delta < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(delta));
+        }
+
+        lock (_lock)
+        {
+            _now += delta;
         }
     }
 

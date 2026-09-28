@@ -375,6 +375,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 MaxConsecutiveInputReadFailures = options.MaxConsecutiveInputReadFailures,
                 OperatorLeaseTimeoutSeconds = options.OperatorLeaseTimeout?.TotalSeconds,
                 AtSpeedConfirmationTimeoutSeconds = options.AtSpeedConfirmationTimeout?.TotalSeconds,
+                DriveStopConfirmationTimeoutSeconds = options.DriveStopConfirmationTimeout?.TotalSeconds,
+                DepartureReleaseTimeoutSeconds = options.DepartureReleaseTimeout?.TotalSeconds,
                 AllowIgnoringLimitSwitchesOnPhysicalHardware = options.AllowIgnoringLimitSwitchesOnPhysicalHardware,
                 RestartOnFailureWaitTimeSeconds = host.RestartOnFailureWaitTime
             };

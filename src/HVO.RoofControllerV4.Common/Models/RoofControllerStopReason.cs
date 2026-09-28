@@ -72,13 +72,20 @@ namespace HVO.RoofControllerV4.Common.Models
         OperatorLeaseExpired = 12,
 
         /// <summary>
-        /// The drive did not report at-speed (IN4) within the configured confirmation window.
+        /// The drive did not report running (IN4) within the configured confirmation window, or stopped reporting it
+        /// while moving without the destination limit.
         /// </summary>
         DriveNotRunning = 13,
 
         /// <summary>
         /// The host application is shutting down.
         /// </summary>
-        HostShutdown = 14
+        HostShutdown = 14,
+
+        /// <summary>
+        /// Motion started on a limit and that limit did not release, and stay released for the limit-switch debounce,
+        /// within the configured departure-release timeout.
+        /// </summary>
+        DepartureLimitNotReleased = 15
     }
 }

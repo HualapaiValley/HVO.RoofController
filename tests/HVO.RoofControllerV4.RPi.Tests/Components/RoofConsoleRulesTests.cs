@@ -85,6 +85,31 @@ public class RoofConsoleRulesTests
     }
 
     [TestMethod]
+    [DataRow(RoofControllerStopReason.DriveNotRunning, "Drive not reporting running (IN4)")]
+    [DataRow(RoofControllerStopReason.DepartureLimitNotReleased, "Starting limit did not release")]
+    public void DetectSafetyAlert_ReportsTheDriveAndDepartureStops(RoofControllerStopReason reason, string description)
+    {
+        RoofConsoleRules.IsSafetyStopReason(reason).Should().BeTrue();
+        RoofConsoleRules.DescribeStopReason(reason).Should().Be(description);
+        var moving = Status(RoofControllerStatus.Opening, 1);
+
+        var alert = RoofConsoleRules.DetectSafetyAlert(moving, Latched(reason, 2));
+
+        alert.Should().NotBeNull();
+        alert!.Title.Should().Be("Fault latched");
+        alert.Message.Should().Contain(description);
+    }
+
+    [TestMethod]
+    public void EveryStopReason_HasADescription()
+    {
+        foreach (var reason in Enum.GetValues<RoofControllerStopReason>())
+        {
+            RoofConsoleRules.DescribeStopReason(reason).Should().NotBe(reason.ToString(), $"{reason} needs operator wording");
+        }
+    }
+
+    [TestMethod]
     public void ClassifyStop_Acknowledged_WhenRelayVerified()
     {
         var (outcome, message) = RoofConsoleRules.ClassifyStop(true, null, Status(RoofControllerStatus.Stopped, 1));

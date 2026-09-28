@@ -6,9 +6,14 @@
 > (C14) from the [architecture review](architecture-review-2026-08.md#required-validation-for-follow-up-prs)
 > are also open.
 
-This checklist covers what unit tests cannot prove: the real HAT, the VFD, the wiring and the
-deployed container. The unit tests run against a simulated HAT (`TestSupport/FakeRoofHat`), so a
-green CI run says nothing about relay contacts, input polarity or drive timing.
+This checklist covers what the automated tests cannot prove: the real HAT, the VFD, the wiring and
+the deployed container. The service tests run against a scripted HAT (`TestSupport/FakeRoofHat`).
+The emulated-plant tests (`tests/HVO.RoofControllerV4.RPi.Tests/Plant`) run the production
+controller and configuration against an emulated SMVector drive, ME-8108 limit switches, SM-I-010
+HAT and the documented wiring, including each wiring mistake: they show the logic is right and that a
+wrong wiring assumption fails safe, not that the installation matches the documented wiring. Where a
+check below is covered by a plant test, it says so. Issue #31 replaces the remaining steps with
+emulated scenarios and documented installation assumptions.
 
 ## Ground rules
 
@@ -31,9 +36,11 @@ green CI run says nothing about relay contacts, input polarity or drive timing.
   sections 8 and 9, and its bring-up sequence (section 14) completed with a meter.
 - Controller deployed with the deployment script ([deployment.md](deployment.md)); an operator
   key and an admin key provisioned ([security.md](security.md)).
-- Local configuration (`RoofControllerOptionsV4`) set for the installed wiring:
-  `UseNormallyClosedLimitSwitches` (C3), `FaultInputActiveHigh` (C4),
+- Local configuration (`RoofControllerOptionsV4`) set for the installed wiring. The production
+  `appsettings.json` matches the documented wiring: `UseNormallyClosedLimitSwitches = false` (C3),
+  `FaultInputActiveHigh = false` (C4), `AtSpeedConfirmationTimeout = 3 s` (C6),
   `IgnorePhysicalLimitSwitches = false`, `AllowIgnoringLimitSwitchesOnPhysicalHardware = false`.
+  `ProductionConfigurationTests` fails if these drift.
 - A multimeter, jumper leads or a switch box to simulate limit contacts, and a way to read status:
 
   ```bash
@@ -84,8 +91,11 @@ register is a hardware fault the controller cannot detect; replace the part.
 
 ### C3. Limit input polarity (IN1/IN2)
 
-1. Set `UseNormallyClosedLimitSwitches` for the installed monitoring contacts (the hardware
-   overview's section 9 wiring reads HIGH when actuated, which needs `false`).
+1. `UseNormallyClosedLimitSwitches = false` (production): the hardware overview's section 9 wiring
+   puts IN1/IN2 on the ME-8108 normally open pair, HIGH when actuated. The IN1-IN3 commons return
+   to `TB-2` (0 V); `TB-4` is the +15 V reference. In the emulated plant, `true` on this wiring
+   reads both limits inverted and the roof never moves, and commons on `TB-4` read the drive as
+   faulted from every position (`PlantWiringFaultTests`).
 2. Actuate each limit by hand. `isOpenLimitActive` (IN1) and `isClosedLimitActive` (IN2) must be
    `true` only while the matching switch is actuated.
 3. Actuate both. The controller must stop any motion with `ContradictoryLimitInputs`, latch the
@@ -98,9 +108,11 @@ register is a hardware fault the controller cannot detect; replace the part.
 
 ### C4. VFD fault input polarity (IN3), with a real VFD fault
 
-`FaultInputActiveHigh` defaults to `true` (raw HIGH = fault). The fail-safe wiring in the
-hardware overview, section 9.3 (`P140 = 3`), reads HIGH when healthy and needs `false`. Do not
-change the setting without doing this check, and keep wiring, setting and this record in step.
+`FaultInputActiveHigh` defaults to `true` in code (raw HIGH = fault). The fail-safe wiring in the
+hardware overview, section 9.3 (`P140 = 3`), reads HIGH when healthy, so production uses `false`.
+In the emulated plant, `true` on this wiring latches `DriveFault` at start-up, and a trip, drive
+power loss or a broken IN3 wire each latch `DriveFault` (`PlantDriveTests`,
+`PlantWiringFaultTests`). Keep wiring, setting and this record in step.
 
 1. Confirm how IN3 is actually wired on this installation and set `FaultInputActiveHigh`.
 2. Healthy, powered drive: `isDriveFaultActive = false`, Open is accepted (motor decoupled).
@@ -135,19 +147,37 @@ hardware overview, section 8.3, recommends about 100-300 ms.
 
 ### C6. Drive-running input (IN4) and `AtSpeedConfirmationTimeout`
 
-1. With the motor decoupled, command Open and Close 10 times each (cold and warm drive) and
-   measure the time from the command to `isAtSpeed = true`. The timing depends on `P142`
-   (`1` = Run, `6` = At Speed).
-2. Set `AtSpeedConfirmationTimeout` to the longest observed time plus a margin (for example twice
-   the maximum), within 0.5-30 s and shorter than `SafetyWatchdogTimeout`.
-3. Disconnect the IN4 wire and command a move. The controller must stop with `DriveNotRunning`
-   within the timeout.
-4. After Stop, measure how long IN4 takes to return LOW. The controller does not check this; if
-   IN4 stays HIGH after the relays are verified off, the drive is still running: use the
-   independent stop and investigate.
+Production uses `AtSpeedConfirmationTimeout = 3 s` with `P142 = 1` (Run). With it set:
 
-**Pass:** step 3 stops within the configured timeout; the timings from steps 1 and 4 are recorded.
-If the interlock is left disabled, record why.
+- a start is refused with `InterlockActive` while IN4 still reports the drive running (after a
+  ramp stop a reversal is refused until IN4 drops; with the coast stop IN4 drops within
+  milliseconds, so a reversal proceeds while the roof is still coasting);
+- IN4 must go HIGH within the window after a start, otherwise the roof stops with
+  `DriveNotRunning`;
+- IN4 LOW for 250 ms after it confirmed, without the destination limit, stops the roof with
+  `DriveNotRunning` (an external stop, a drive trip the fault input missed, a broken wire);
+- IN4 still HIGH `DriveStopConfirmationTimeout` after a stop (default: the same window) is logged
+  as Critical once per stop.
+
+The emulated plant covers all four (`PlantProductionCycleTests`, `PlantDriveTests`, the
+`RunMonitorWireBroken` and dead-relay cases; the Critical log after a stop with a continuous DC
+brake that keeps the Run output on), as do `RoofControllerDriveRunTests` and
+`RoofControllerAtSpeedTests`. With `P142 = 6` (At Speed) the window must exceed
+`P104`: at 20 s acceleration a 3 s window latches `DriveNotRunning`. With a ramp stop (`P111` = 2
+or 3), set `DriveStopConfirmationTimeout` longer than `P105`. With a DC brake (`P111` = 1 or 3) the
+Run output may stay on while braking (an assumption the plant tests both ways): set it longer than
+`P175` (plus `P105` with `P111` = 3), expect the next move to be refused until the brake ends, and never use
+`P175` = 999.9 (continuous), which keeps IN4 HIGH until the next run and refuses every move.
+
+1. With the motor decoupled, command Open and Close 10 times each (cold and warm drive) and
+   confirm `isAtSpeed = true` well inside the 3 s window.
+2. Disconnect the IN4 wire and command a move. The controller must stop with `DriveNotRunning`
+   within the timeout.
+3. After Stop, IN4 must return LOW before `DriveStopConfirmationTimeout`; a Critical log entry
+   means the drive is still running: use the independent stop and investigate.
+
+**Pass:** step 2 stops within the configured timeout; steps 1 and 3 are recorded. If the
+interlock is left disabled, record why.
 
 ### C7. `MaxConsecutiveInputReadFailures` with I2C fault injection
 
@@ -223,8 +253,23 @@ Do this after C1-C9 pass, or first with the limit contacts simulated by a switch
 2. Roof at the open limit: command Close, same checks in reverse.
 3. Simulated only: after the start limit has released, re-actuate it by hand. The controller must
    stop with `StartLimitReasserted` and latch.
-4. Simulated only: hold the start limit actuated after the command. Record how the move ends
-   (the watchdog is the backstop).
+4. Simulated only: hold the start limit actuated after the command. With `DepartureReleaseTimeout`
+   set, the move stops with `DepartureLimitNotReleased` at the timeout and latches; without it, the
+   watchdog is the backstop. Record how the move ends.
+
+`DepartureReleaseTimeout` is off in production. When it is turned on, it must be longer than the
+start limit's release time with the installed acceleration (`P104`) plus `LimitSwitchDebounce`,
+since the release must hold for the debounce inside the window, and shorter than the time a
+wrong-way move (swapped motor leads) takes to reach the stop behind the limit. The emulated plant,
+with its assumed mechanics (2 m of travel at 0.1 m/s, hard stops 60 mm past the operating point),
+releases about 1.0 s after the command at `P104` = 2 s and about 2.8 s at 20 s, and a wrong-way
+move reaches the stop at about 1.5 s (`PlantDocumentedFiguresTests`, with the HAT library's I2C
+timing). Without the timeout, swapped motor
+leads from a limit reach the hard stop before the stall trip.
+
+The stop method (`P111`) sets how far the roof runs past a limit. In the emulated plant coast stops
+about 10 mm past the operating point (`PlantDocumentedFiguresTests`), while a ramp stop with
+`P105` = 2 s reaches the hard stop (`PlantDriveTests`); see the hardware overview, section 11.
 
 **Pass:** steps 1-3 behave as described in both directions; step 4 is recorded.
 

@@ -11,14 +11,13 @@ digraph G {
     color="#999999";
     TB11 [label="TB-11\n+12 V / 50 mA max", fillcolor="#FFEBEE"];
     TB1 [label="TB-1\nSTOP input"];
-    TB4 [label="TB-4\nDigital COM"];
+    TB4 [label="TB-4\n+15 V reference\n(active-high inputs, P120 = 2)"];
     TB13A [label="TB-13A\nRun Forward"];
     TB13B [label="TB-13B\nRun Reverse"];
     TB13C [label="TB-13C\nClear Fault"];
   }
 
   DB12 [label="DB-12V-A\n1 in → 5 out\nInput from TB-11", fillcolor="#FFCDD2"];
-  DB0 [label="DB-0V\n1 in → 4 out\nInput from TB-4", fillcolor="#E0E0E0"];
 
   subgraph cluster_sm {
     label="SM-I-010 relay terminals";
@@ -44,7 +43,6 @@ digraph G {
   }
 
   TB11 -> DB12 [color="#D32F2F", fontcolor="#D32F2F", label="+12 V"];
-  TB4 -> DB0 [color="#111111", fontcolor="#111111", label="0 V / COM"];
 
   DB12 -> R1C [color="#D32F2F", label="OUT1"];
   R1NO -> FWDJOIN [color="#1976D2", label="FWD command"];
@@ -60,9 +58,9 @@ digraph G {
   R3NO -> TB13C [color="#F57C00", label="pulse 100–300 ms"];
 
   TB1 -> R4C [color="#6D4C41", label="STOP permissive"];
-  R4NO -> DB0 [color="#111111", label="to OUT4 / TB-4"];
+  R4NO -> TB4 [color="#6D4C41", label="direct to TB-4"];
 
   note [shape=note, fillcolor="#FFF8E1",
-        label="RLY4 uses NO for a fail-safe permissive:\nRLY4 ON = TB-1 connected to TB-4 (drive enabled)\nRLY4 OFF or loss of HAT power = STOP input opens."];
+        label="RLY4 uses NO for a fail-safe permissive:\nRLY4 ON = TB-1 connected to TB-4 (drive enabled)\nRLY4 OFF or loss of HAT power = STOP input opens.\nRLY4 NO goes to TB-4 itself, not to DB-0V (TB-2):\nTB-1 tied to 0 V would hold the drive stopped."];
   R4NO -> note [style=dashed, arrowhead=none, color="#777777"];
 }

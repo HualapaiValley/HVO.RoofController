@@ -27,20 +27,26 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   renewals stop, the roof stops with `OperatorLeaseExpired`. Renewal never starts motion.
   Losing the client stops motion only when the lease is enabled.
 - Limit switches (IN1/IN2) — stop at fully open and fully closed; polarity is set by
-  `UseNormallyClosedLimitSwitches`. Starting at a limit is handled as a departure phase;
-  contradictory limits (both active) stop motion and refuse starts.
+  `UseNormallyClosedLimitSwitches` (production `false`: the ME-8108 normally open pair).
+  Starting at a limit is handled as a departure phase; contradictory limits (both active)
+  stop motion and refuse starts. The optional `DepartureReleaseTimeout` stops a start limit
+  that has not released in time with `DepartureLimitNotReleased`.
 - Fault latch — watchdog expiry, drive fault (IN3), relay verification failure, input
-  read failure, contradictory limits and a reasserted start limit latch the fault.
+  read failure, contradictory limits, a reasserted start limit, the drive-running check
+  (`DriveNotRunning`) and an unreleased start limit latch the fault.
   Open/Close are refused (`FaultLatched`) until a successful `ClearFault`. The latch
   never blocks Stop, and Stop does not clear it.
 - Relay register read-back — every relay transition is verified by reading the HAT's
   relay register back. This proves the register, not the physical contacts; never
   describe it as contact verification. An unverified stop is reported as a failure
   (`RelayStateUnverified`), never as success.
-- VFD fault input (IN3) — polarity is `FaultInputActiveHigh` (default `true`: raw HIGH =
-  fault). Commissioning must confirm it against the real wiring before use.
-- Drive-running interlock (IN4, optional) — with `AtSpeedConfirmationTimeout` set, IN4 must
-  assert within that window after a start, otherwise the roof stops with `DriveNotRunning`.
+- VFD fault input (IN3) — polarity is `FaultInputActiveHigh` (code default `true`: raw HIGH
+  = fault; production `false` for the `P140 = 3` fault relay, closed while healthy).
+- Drive-running interlock (IN4) — with `AtSpeedConfirmationTimeout` set (production 3 s), a
+  start is refused with `InterlockActive` while IN4 reports running, IN4 must assert within
+  the window after a start, and IN4 low for 250 ms while moving without the destination
+  limit stops the roof; the last two latch `DriveNotRunning`. IN4 still high
+  `DriveStopConfirmationTimeout` after a stop is logged as Critical.
 - Input read failures — `MaxConsecutiveInputReadFailures` consecutive failed reads while
   moving stop the roof with `InputReadFailure`.
 - Relay register reads — supervision re-reads the register. One failed or stale read
@@ -91,10 +97,11 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 src/
   HVO.RoofControllerV4.RPi/         # Raspberry Pi server
   HVO.RoofControllerV4.Common/      # Shared models
+  HVO.RoofControllerV4.Simulation/  # Emulated drive, limit switches, HAT and wiring (tests only)
   HVO.WebSite.Themes/               # CSS theme RCL
   HVO.RoofController.sln            # Solution file
 tests/
-  HVO.RoofControllerV4.RPi.Tests/   # Unit and API tests (MSTest)
+  HVO.RoofControllerV4.RPi.Tests/   # Unit, API, simulation and emulated-plant tests (MSTest)
 docs/                               # Hardware, commissioning, security, deployment, CI runners
 ```
 
@@ -107,6 +114,8 @@ docs/                               # Hardware, commissioning, security, deploym
 - Keep controllers thin — business logic belongs in services
 - Use dependency injection throughout
 - Hardware abstractions must be mockable for testing
+- No test may rely on physical hardware. Model emulated devices on the vendor
+  documentation, and record what software cannot prove as a documented assumption
 
 ## Build and Test
 

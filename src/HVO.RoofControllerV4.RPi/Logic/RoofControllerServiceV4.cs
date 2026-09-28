@@ -38,6 +38,21 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     /// <summary>Shortest delay between supervision cycles, so a passed deadline cannot spin the loop.</summary>
     internal static readonly TimeSpan MinimumSupervisionDelay = TimeSpan.FromMilliseconds(10);
 
+    /// <summary>
+    /// How long the drive run input (IN4) may stay low after it confirmed a start before motion stops with
+    /// <see cref="RoofControllerStopReason.DriveNotRunning"/> (at-speed interlock only). At the destination limit the NC
+    /// contact removes the run command a few milliseconds before the NO monitoring contact closes (the ME-8108 transfer
+    /// time), so IN4 can drop before IN1/IN2 report the limit; this window covers that transfer with a wide margin, and the
+    /// inputs are re-read before the stop so an undelivered limit edge still wins.
+    /// </summary>
+    internal static readonly TimeSpan RunLossConfirmationDelay = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// SM-I-010 LED mode register value written at initialization: LED1-LED3 manual (driven by the controller with the
+    /// logical open limit, closed limit and drive fault states), LED4 automatic (the HAT shows IN4, the drive run output).
+    /// </summary>
+    internal const byte IndicatorLedModes = 0x07;
+
     /// <summary>Minimum age after which the cached safety inputs, or the last relay register read, are considered stale.</summary>
     internal static readonly TimeSpan MinimumReadStaleness = TimeSpan.FromSeconds(5);
 
@@ -114,9 +129,13 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private DateTimeOffset? _atSpeedDeadlineUtc;
     private bool _atSpeedConfirmed;
 
+    // When IN4 dropped after confirming the start (at-speed interlock only); null while it reports running.
+    private DateTimeOffset? _runLostUtc;
+
     // Departure supervision: the limit opposite to the direction of travel.
     private bool _departureReleaseVerified;
     private DateTimeOffset? _releaseObservedUtc;
+    private DateTimeOffset? _departureDeadlineUtc;
 
     // Relay register state (read-back of the HAT register, not contact state).
     private RoofRelayRegisterState _relayRegisterState = RoofRelayRegisterState.Unknown;
@@ -156,6 +175,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     // Background supervision.
     private CancellationTokenSource? _supervisionCts;
     private CancellationTokenSource? _supervisionWakeCts;
+    private long _supervisionWakeCount;
     private Task? _supervisionTask;
 
     // HAT input event subscriptions.
@@ -166,6 +186,8 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     // Indicator LED cache and telemetry edge tracking.
     private byte? _lastIndicatorLedMask;
+    private byte? _lastAttemptedIndicatorLedMask;
+    private bool _ledModesApplied;
     private bool? _telemetryOpenLimit;
     private bool? _telemetryClosedLimit;
     private bool? _telemetryFault;
@@ -604,7 +626,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     /// <summary>
     /// Updates HAT LEDs (LED1 = open limit, LED2 = closed limit, LED3 = drive fault) with minimal I2C traffic.
-    /// All LEDs are off while limit switches are ignored.
+    /// All three are off while limit switches are ignored. LED4 is left to the HAT, which shows IN4 (drive running).
     /// </summary>
     private void UpdateIndicatorLeds_NoLock()
     {
@@ -616,13 +638,21 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             if (DriveFaultActive_NoLock == true) mask |= 0x04;
         }
 
-        if (_lastIndicatorLedMask == mask)
+        // While moving, the LEDs are written once per mask change whether or not the write succeeded: each retry would
+        // add two bus transactions to every poll. While idle, a failed write is retried with every update.
+        var moving = _commandedMotion != RoofMotionDirection.None;
+        if (moving ? _lastAttemptedIndicatorLedMask == mask : _lastIndicatorLedMask == mask && _ledModesApplied)
         {
             return;
         }
 
+        _lastAttemptedIndicatorLedMask = mask;
         try
         {
+            // The SM-I-010 powers up with every LED following its input, where LED3 would show the raw IN3 level (lit
+            // while healthy with the active-low fault wiring). Re-assert the modes with each change, and while idle until
+            // a write succeeds, so a HAT that reset since initialization shows the logical states again.
+            ApplyIndicatorLedModes_NoLock();
             var result = _hat.SetLedsMask(mask);
             if (result.IsSuccessful)
             {
@@ -637,6 +667,62 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         {
             _logger.LogDebug(ex, "Exception while setting indicator LED mask 0x{Mask:X2}", mask);
         }
+    }
+
+    /// <summary>
+    /// Sets the HAT LED modes (<see cref="IndicatorLedModes"/>). Cosmetic: a failure is logged and never fatal, and the
+    /// next LED change, or the next update while idle, tries again.
+    /// </summary>
+    private void ApplyIndicatorLedModes_NoLock()
+    {
+        _ledModesApplied = false;
+        try
+        {
+            var result = _hat.SetLedModesMask(IndicatorLedModes);
+            if (result.IsSuccessful)
+            {
+                _ledModesApplied = true;
+            }
+            else
+            {
+                _logger.LogDebug(result.Error, "Failed to set the indicator LED modes 0x{Modes:X2}", IndicatorLedModes);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Exception while setting the indicator LED modes 0x{Modes:X2}", IndicatorLedModes);
+        }
+    }
+
+    /// <summary>
+    /// Reads the HAT LED modes back while idle. A HAT that resets between two input reads (a short supply dip) comes
+    /// back with every LED following its input and no failed read to show it; a mismatch, or a failed read, makes the
+    /// next LED update re-apply <see cref="IndicatorLedModes"/>. Cosmetic: never fatal.
+    /// </summary>
+    private void CheckIndicatorLedModes_NoLock()
+    {
+        if (!_ledModesApplied)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = _hat.GetLedModesMask();
+            if (result.IsSuccessful && (result.Value & 0x0F) == IndicatorLedModes)
+            {
+                return;
+            }
+
+            _logger.LogDebug(result.IsSuccessful ? null : result.Error, "Indicator LED modes read back {Modes}; re-applying 0x{Expected:X2}",
+                result.IsSuccessful ? $"0x{result.Value:X2}" : "nothing", IndicatorLedModes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Exception while reading the indicator LED modes");
+        }
+
+        _ledModesApplied = false;
     }
 
     private void RecordTelemetryState_NoLock(DateTimeOffset now)

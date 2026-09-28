@@ -21,6 +21,8 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     private const byte RelaySetRegister = 1;
     private const byte RelayClearRegister = 2;
     private const byte InputRegister = 3;
+    private const byte LedValueRegister = 5;
+    private const byte LedModeRegister = 8;
 
     private readonly FourRelayFourInputHatMemoryClient _inner = new();
     private readonly object _gate = new();
@@ -29,6 +31,9 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     private bool _failRelayWrites;
     private int _failNextRelayWrites;
     private bool _failRelayReads;
+    private bool _failLedModeWrites;
+    private bool _failLedValueWrites;
+    private int _ledWriteAttempts;
     private bool _failInputReads;
     private int _failNextInputReads;
     private byte _stuckRelayBits;
@@ -58,6 +63,26 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     {
         get { lock (_gate) { return _failRelayReads; } }
         set { lock (_gate) { _failRelayReads = value; } }
+    }
+
+    /// <summary>When true, every write to the LED mode register (8) throws.</summary>
+    public bool FailLedModeWrites
+    {
+        get { lock (_gate) { return _failLedModeWrites; } }
+        set { lock (_gate) { _failLedModeWrites = value; } }
+    }
+
+    /// <summary>When true, every write to the LED value registers (5-7) throws.</summary>
+    public bool FailLedValueWrites
+    {
+        get { lock (_gate) { return _failLedValueWrites; } }
+        set { lock (_gate) { _failLedValueWrites = value; } }
+    }
+
+    /// <summary>Number of writes to the LED registers (5-8), including failed ones.</summary>
+    public int LedWriteAttempts
+    {
+        get { lock (_gate) { return _ledWriteAttempts; } }
     }
 
     /// <summary>When true, reading the digital input register throws.</summary>
@@ -110,6 +135,13 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     public byte LedMask
     {
         get { lock (_gate) { return _inner.LedMask; } }
+    }
+
+    /// <summary>LED mode register (8): a set bit puts that LED under manual control. Set it to emulate a HAT reset.</summary>
+    public byte LedModeMask
+    {
+        get { lock (_gate) { return _inner.ReadByte(LedModeRegister); } }
+        set { lock (_gate) { _inner.WriteByte(LedModeRegister, value); } }
     }
 
     /// <summary>Relay register value after each relay write, in order.</summary>
@@ -215,6 +247,15 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
             }
             else
             {
+                if (register is >= LedValueRegister and <= LedModeRegister)
+                {
+                    _ledWriteAttempts++;
+                    if (register == LedModeRegister ? _failLedModeWrites : _failLedValueWrites)
+                    {
+                        throw new IOException($"Simulated LED register {register} write failure");
+                    }
+                }
+
                 _inner.WriteByte(register, value);
             }
         }

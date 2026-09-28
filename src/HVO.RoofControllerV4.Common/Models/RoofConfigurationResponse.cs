@@ -41,6 +41,12 @@ public sealed record class RoofConfigurationResponse
 
     public double? AtSpeedConfirmationTimeoutSeconds { get; init; }
 
+    /// <summary>Local-only setting; reported for visibility, never changed through the API.</summary>
+    public double? DriveStopConfirmationTimeoutSeconds { get; init; }
+
+    /// <summary>Local-only setting; reported for visibility, never changed through the API.</summary>
+    public double? DepartureReleaseTimeoutSeconds { get; init; }
+
     /// <summary>Local-only safeguard; reported for visibility, never changed through the API.</summary>
     public bool AllowIgnoringLimitSwitchesOnPhysicalHardware { get; init; }
 

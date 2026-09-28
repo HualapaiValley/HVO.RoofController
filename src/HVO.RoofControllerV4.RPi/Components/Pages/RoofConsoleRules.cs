@@ -99,6 +99,7 @@ internal static class RoofConsoleRules
         RoofControllerStopReason.RelayVerificationFailed => true,
         RoofControllerStopReason.OperatorLeaseExpired => true,
         RoofControllerStopReason.DriveNotRunning => true,
+        RoofControllerStopReason.DepartureLimitNotReleased => true,
         _ => false
     };
 
@@ -117,8 +118,9 @@ internal static class RoofConsoleRules
         RoofControllerStopReason.DriveFault => "Drive fault input active",
         RoofControllerStopReason.RelayVerificationFailed => "Relay register verification failed",
         RoofControllerStopReason.OperatorLeaseExpired => "Operator lease expired",
-        RoofControllerStopReason.DriveNotRunning => "Drive did not report running",
+        RoofControllerStopReason.DriveNotRunning => "Drive not reporting running (IN4)",
         RoofControllerStopReason.HostShutdown => "Host shutting down",
+        RoofControllerStopReason.DepartureLimitNotReleased => "Starting limit did not release",
         _ => reason.ToString()
     };
 
