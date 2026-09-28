@@ -143,8 +143,10 @@ jobs:
         run: |
           bash -n src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh
           bash -n tests/deploy/deploy-script-tests.sh
+          bash -n tests/emulator/compose-smoke-test.sh
           shellcheck --version
-          shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh
+          shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
+            tests/emulator/compose-smoke-test.sh
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
@@ -154,6 +156,9 @@ jobs:
         run: |
           docker compose --profile pi config --quiet
           docker compose --profile pi-lan-http config --quiet
+          docker compose --profile emulator config --quiet
+          # The emulator profile maps no devices, so it may run next to a Pi profile.
+          docker compose --profile pi --profile emulator config --quiet
           # Both profiles at once must be rejected: they would drive the HAT twice.
           if docker compose --profile pi --profile pi-lan-http config --quiet 2>/dev/null; then
             echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the pi and pi-lan-http profiles can be enabled together"

@@ -12,7 +12,20 @@
 #                key cross the network in clear text.
 #                  docker compose --profile pi-lan-http up -d
 #
-# Each profile first runs a one-shot deployment check (--validate-deployment) with the same environment and mounts,
+# A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
+# container and image names, so it does not collide with either profile above:
+#
+#   emulator     The controller (Production settings, plain HTTP, published on 127.0.0.1 port HVO_EMULATED_ROOF_PORT,
+#                default 5195) and the HAT emulator (src/HVO.RoofControllerV4.Emulator: an emulated roof, SMVector drive,
+#                ME-8108 limit switches and SM-I-010 HAT). The emulator's control API has no authentication and is
+#                published on 127.0.0.1 port HVO_EMULATOR_CONTROL_PORT (default 5290); its register port stays on the
+#                compose network. Both images build for this machine (amd64 or arm64). The controller shows an EMULATED
+#                HAT banner, reports Degraded health and does not operate the roof. Give it an admin key of at least 24
+#                characters in HVO_EMULATED_ROOF_API_KEY, or its API and console answer 401:
+#                  HVO_EMULATED_ROOF_API_KEY=$(openssl rand -hex 24) docker compose --profile emulator up -d --build
+#                tests/emulator/compose-smoke-test.sh opens and closes the emulated roof through this profile.
+#
+# Each Pi profile first runs a one-shot deployment check (--validate-deployment) with the same environment and mounts,
 # and the new controller starts only if it passes: roof options valid, a usable RoofOperator or RoofAdmin key, and,
 # for HTTPS, a loadable, unexpired certificate with its private key. The check reads configuration; it maps
 # /dev/i2c-1 only to see whether the HAT is present and never opens it.
@@ -111,6 +124,32 @@ x-deployment-check: &deployment-check
   healthcheck:
     disable: true
 
+# The controller against the HAT emulator (profile emulator). Production settings, with the HAT emulator allowed
+# explicitly (HatEmulator__AllowOutsideDevelopment), so this runs what a deployment runs except for the HAT.
+x-emulated-environment: &emulated-environment
+  ASPNETCORE_ENVIRONMENT: Production
+  ASPNETCORE_URLS: "http://+:8080"
+  # Plain HTTP, published on loopback only (a warning is logged at startup).
+  RoofControllerSecurity__RequireHttps: "false"
+  RoofControllerSecurity__ApiKeys__0__Name: emulator-admin
+  RoofControllerSecurity__ApiKeys__0__Role: RoofAdmin
+  RoofControllerSecurity__ApiKeys__0__Key: ${HVO_EMULATED_ROOF_API_KEY:-}
+  HatEmulator__Enabled: "true"
+  HatEmulator__Host: hat-emulator
+  HatEmulator__Port: "5291"
+  HatEmulator__AllowOutsideDevelopment: "true"
+  # The limit switches come from the emulator: the documented normally-open wiring, never ignored.
+  RoofControllerOptionsV4__UseNormallyClosedLimitSwitches: "false"
+  RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
+  # No cameras on an emulator rig.
+  BlueIris__BaseUrl: ""
+  AllowedHosts: "*"
+  # Telemetry only when an endpoint is given; the resource carries hvo.roof.hat.mode=emulated.
+  OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
+  OTEL_RESOURCE_ATTRIBUTES: service.instance.id=${HVO_EMULATED_ROOF_INSTANCE_ID:-roof-controller-emulated}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${HVO_EMULATED_ROOF_OTLP_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+
 services:
   roof-controller-check:
     <<: *deployment-check
@@ -157,3 +196,39 @@ services:
       - *secrets-mount
     profiles:
       - pi-lan-http
+
+  hat-emulator:
+    image: hvo/roof-hat-emulator:dev
+    build:
+      context: ../..
+      dockerfile: "src/HVO.RoofControllerV4.Emulator/Dockerfile"
+    environment:
+      Emulator__TimeScale: ${HVO_EMULATOR_TIME_SCALE:-1}
+    ports:
+      # The control API has no authentication: loopback only.
+      - "127.0.0.1:${HVO_EMULATOR_CONTROL_PORT:-5290}:5290"
+    restart: "no"
+    profiles:
+      - emulator
+
+  roof-controller-emulated:
+    image: hvo/roof-controller:emulated
+    build:
+      context: ../..
+      dockerfile: "src/HVO.RoofControllerV4.RPi/Dockerfile"
+    depends_on:
+      hat-emulator:
+        condition: service_healthy
+    environment: *emulated-environment
+    ports:
+      - "127.0.0.1:${HVO_EMULATED_ROOF_PORT:-5195}:8080"
+    restart: "no"
+    stop_grace_period: 30s
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    profiles:
+      - emulator
