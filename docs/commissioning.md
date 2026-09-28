@@ -158,8 +158,9 @@ Production uses `AtSpeedConfirmationTimeout = 3 s` with `P142 = 1` (Run). With i
 - IN4 still HIGH `DriveStopConfirmationTimeout` after a stop (default: the same window) is logged
   as Critical once per stop.
 
-The emulated plant covers each of these (`PlantProductionCycleTests`, `PlantDriveTests`, the
-`RunMonitorWireBroken` and dead-relay cases). With `P142 = 6` (At Speed) the window must exceed
+The emulated plant covers the first three (`PlantProductionCycleTests`, `PlantDriveTests`, the
+`RunMonitorWireBroken` and dead-relay cases); the Critical log after a stop is covered by
+`RoofControllerDriveRunTests` and `RoofControllerAtSpeedTests`. With `P142 = 6` (At Speed) the window must exceed
 `P104`: at 20 s acceleration a 3 s window latches `DriveNotRunning`. With a ramp stop (`P111` = 2
 or 3), set `DriveStopConfirmationTimeout` longer than `P105`.
 
@@ -252,16 +253,17 @@ Do this after C1-C9 pass, or first with the limit contacts simulated by a switch
    watchdog is the backstop. Record how the move ends.
 
 `DepartureReleaseTimeout` is off in production. When it is turned on, it must be longer than the
-start limit's release time with the installed acceleration (`P104`) and shorter than the time a
+start limit's release time with the installed acceleration (`P104`) plus `LimitSwitchDebounce`,
+since the release must hold for the debounce inside the window, and shorter than the time a
 wrong-way move (swapped motor leads) takes to reach the stop behind the limit. The emulated plant,
 with its assumed mechanics (2 m of travel at 0.1 m/s, hard stops 60 mm past the operating point),
 releases about 0.9 s after the command at `P104` = 2 s and about 2.7 s at 20 s, and a wrong-way
-move reaches the stop at about 1.4 s (`PlantWiringFaultTests`). Without the timeout, swapped motor
+move reaches the stop at about 1.4 s (`PlantDocumentedFiguresTests`). Without the timeout, swapped motor
 leads from a limit reach the hard stop before the stall trip.
 
 The stop method (`P111`) sets how far the roof runs past a limit. In the emulated plant coast stops
-about 10 mm past the operating point, while a ramp stop with `P105` = 2 s reaches the hard stop
-(`PlantDriveTests`); see the hardware overview, section 11.
+about 10 mm past the operating point (`PlantDocumentedFiguresTests`), while a ramp stop with
+`P105` = 2 s reaches the hard stop (`PlantDriveTests`); see the hardware overview, section 11.
 
 **Pass:** steps 1-3 behave as described in both directions; step 4 is recorded.
 

@@ -78,7 +78,7 @@ public class RoofControllerDepartureTimeoutTests
         rig.Service.LastStopReason.Should().Be(RoofControllerStopReason.DepartureLimitNotReleased);
         var snapshot = rig.Service.GetCurrentStatusSnapshot();
         snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DepartureLimitNotReleased);
-        snapshot.LastError.Should().Contain($"The {limitName} limit did not release within 3 s");
+        snapshot.LastError.Should().Contain($"The {limitName} limit did not release and stay released for 100 ms within 3 s");
         rig.Hat.RelayMask.Should().Be(0x00);
     }
 

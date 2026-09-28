@@ -89,6 +89,55 @@ public class RoofControllerLedIndicatorTests
     }
 
     [TestMethod]
+    public async Task LedModes_AreReappliedByIdleSupervision_AfterAHatResetWithNoLedChange()
+    {
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var svc = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+
+        hat.Registers.LedModeMask = 0x00; // a supply dip between two reads: nothing failed, nothing changed
+        svc.RunSupervisionCycle();
+
+        hat.LedModeMask.Should().Be(RoofControllerServiceV4.IndicatorLedModes);
+        hat.LedMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task LedModes_AreLeftAlone_WhileTheyReadBackCorrectly()
+    {
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var svc = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        hat.Registers.FailLedModeWrites = true;
+
+        svc.RunSupervisionCycle();
+        svc.RunSupervisionCycle();
+
+        hat.LedModeMask.Should().Be(RoofControllerServiceV4.IndicatorLedModes, "no write was needed, so the failing write was never tried");
+        svc.GetCurrentStatusSnapshot().LastError.Should().BeNullOrEmpty();
+    }
+
+    [TestMethod]
+    public async Task LedModeWriteFailure_IsRetriedWithTheNextUpdate_EvenWhenTheLedsAreUnchanged()
+    {
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var svc = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        hat.Registers.FailLedModeWrites = true;
+        (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        svc.ForceStatusRefresh();
+        hat.LedModeMask.Should().Be(0x00);
+
+        hat.Registers.FailLedModeWrites = false;
+        svc.ForceStatusRefresh();
+
+        hat.LedModeMask.Should().Be(RoofControllerServiceV4.IndicatorLedModes);
+        hat.LedMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
     public async Task LedModeWriteFailure_IsNotFatal()
     {
         var hat = new FakeRoofHat();

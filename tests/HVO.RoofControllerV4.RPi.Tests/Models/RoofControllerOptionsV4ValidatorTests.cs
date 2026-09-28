@@ -178,6 +178,7 @@ public sealed class RoofControllerOptionsV4ValidatorTests
         var options = new RoofControllerOptionsV4
         {
             SafetyWatchdogTimeout = TimeSpan.FromSeconds(90),
+            LimitSwitchDebounce = TimeSpan.Zero,
             DepartureReleaseTimeout = TimeSpan.FromSeconds(seconds)
         };
 
@@ -205,17 +206,36 @@ public sealed class RoofControllerOptionsV4ValidatorTests
     }
 
     [TestMethod]
-    public void Validate_ShouldFail_WhenDepartureReleaseTimeoutIsNotLongerThanTheDebounce()
+    [DataRow(500, 500)]
+    [DataRow(500, 999)]
+    [DataRow(50, 549)]
+    public void Validate_ShouldFail_WhenDepartureReleaseTimeoutLeavesLessThanHalfASecondAfterTheDebounce(int debounceMilliseconds, int departureMilliseconds)
     {
         var options = new RoofControllerOptionsV4
         {
-            LimitSwitchDebounce = TimeSpan.FromMilliseconds(500),
-            DepartureReleaseTimeout = TimeSpan.FromMilliseconds(500)
+            LimitSwitchDebounce = TimeSpan.FromMilliseconds(debounceMilliseconds),
+            DepartureReleaseTimeout = TimeSpan.FromMilliseconds(departureMilliseconds)
         };
 
         var result = new RoofControllerOptionsV4Validator().Validate(string.Empty, options);
 
-        result.Failures.Should().ContainSingle(f => f.Contains("DepartureReleaseTimeout must be longer than LimitSwitchDebounce"));
+        result.Failures.Should().ContainSingle(f => f.Contains("DepartureReleaseTimeout must be at least LimitSwitchDebounce plus 0.5 seconds"));
+    }
+
+    [TestMethod]
+    [DataRow(500, 1000)]
+    [DataRow(50, 550)]
+    public void Validate_ShouldSucceed_WhenDepartureReleaseTimeoutIsTheDebouncePlusHalfASecond(int debounceMilliseconds, int departureMilliseconds)
+    {
+        var options = new RoofControllerOptionsV4
+        {
+            LimitSwitchDebounce = TimeSpan.FromMilliseconds(debounceMilliseconds),
+            DepartureReleaseTimeout = TimeSpan.FromMilliseconds(departureMilliseconds)
+        };
+
+        var result = new RoofControllerOptionsV4Validator().Validate(string.Empty, options);
+
+        result.Succeeded.Should().BeTrue(string.Join("; ", result.Failures ?? []));
     }
 
     [TestMethod]

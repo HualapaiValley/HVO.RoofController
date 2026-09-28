@@ -83,7 +83,8 @@ namespace HVO.RoofControllerV4.Common.Models
         HostShutdown = 14,
 
         /// <summary>
-        /// Motion started on a limit and that limit did not release within the configured departure-release timeout.
+        /// Motion started on a limit and that limit did not release, and stay released for the limit-switch debounce,
+        /// within the configured departure-release timeout.
         /// </summary>
         DepartureLimitNotReleased = 15
     }

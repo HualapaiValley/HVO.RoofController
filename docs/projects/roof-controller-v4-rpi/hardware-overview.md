@@ -11,7 +11,7 @@
 >
 > - **Limits (`IN1`/`IN2`):** the monitoring contacts in sections 9.1 and 9.2 read HIGH when actuated, so `UseNormallyClosedLimitSwitches` is `false`. With `true`, the closed roof reads as open and the controller cannot move it.
 > - **VFD fault (`IN3`):** the fail-safe wiring in section 9.3 reads HIGH when healthy, so `FaultInputActiveHigh` is `false`. With `true`, a healthy drive latches `DriveFault` at startup. The code default stays `true` so that a controller configured without a setting does not silently invert its fault interpretation.
-> - **Drive running (`IN4`):** `AtSpeedConfirmationTimeout` is 3 s. A start is refused (`InterlockActive`) while `IN4` still reports running, `IN4` must go HIGH within 3 s of a start, and `IN4` dropping for more than 250 ms while moving without the destination limit stops the roof; the last two latch `DriveNotRunning`. After a stop, `IN4` still HIGH once `DriveStopConfirmationTimeout` (default: the same 3 s) has passed is logged as Critical; set it longer than `P105` if a ramp stop is used. See section 10.
+> - **Drive running (`IN4`):** `AtSpeedConfirmationTimeout` is 3 s. A start is refused (`InterlockActive`) while `IN4` still reports running, `IN4` must go HIGH within 3 s of a start, and `IN4` dropping for 250 ms while moving without the destination limit stops the roof; the last two latch `DriveNotRunning`. After a stop, `IN4` still HIGH once `DriveStopConfirmationTimeout` (default: the same 3 s) has passed is logged as Critical; set it longer than `P105` if a ramp stop is used. See section 10.
 > - **Input commons (`IN1`-`IN3`):** they return to `TB-2` (0 V), not `TB-4` (section 2, item 5). Commons on `TB-4` never conduct, which the controller sees as a drive fault.
 > - **Clear Fault (`RLY3`):** the controller pulses RLY3 for 250 ms by default (API range 50-2000 ms); section 8.3 recommends about 100-300 ms. The minimum pulse the drive needs is not documented; confirm that the configured pulse resets it.
 > - **Relay state:** the controller verifies each relay change by reading the HAT relay register back. That proves the register, not the contacts; section 14 and the commissioning checklist cover the meter checks.
@@ -49,7 +49,7 @@ The design provides:
 4. **VFD fault monitoring is fail-safe.** Set `P140 = 3 (Fault)`: the VFD relay is energized while healthy and drops out on a fault or loss of VFD power. Therefore:
    - `IN3 = HIGH` means VFD healthy
    - `IN3 = LOW` means fault, VFD power loss, or broken fault-monitor wiring
-5. **The `IN1`-`IN3` commons return to `TB-2`, not `TB-4`.** The SMVector manual (SV01J p.19-20) gives `TB-2` as the circuit common and `TB-4` as "+15 VDC / 0 VDC, depending on assertion level". With active-high inputs (`P120 = 2`) `TB-4` is +15 V, so inputs fed from `TB-11` (+12 V) and returned to `TB-4` never conduct. Earlier drafts fed DB-0V from `TB-4`; DB-0V is now fed from `TB-2`. The STOP permissive (`TB-1` to `TB-4` through `RLY4`, section 8.4) is unchanged, but `RLY4 NO` now lands on `TB-4` directly instead of on DB-0V: on the 0 V block it would tie `TB-1` to 0 V and hold the drive stopped. `IN4` returns through `TB-14` and is unaffected. Confirm the installed returns with a meter (section 14).
+5. **The `IN1`-`IN3` commons return to `TB-2`, not `TB-4`.** The SMVector manual (SV01J p.19-20) labels `TB-2` "Analog Common" (drawn as COM on p.19, the common return for the digital inputs) and `TB-4` as "+15 VDC / 0 VDC, depending on assertion level". With active-high inputs (`P120 = 2`) `TB-4` is +15 V, so inputs fed from `TB-11` (+12 V) and returned to `TB-4` never conduct. Earlier drafts fed DB-0V from `TB-4`; DB-0V is now fed from `TB-2`. The STOP permissive (`TB-1` to `TB-4` through `RLY4`, section 8.4) is unchanged, but `RLY4 NO` now lands on `TB-4` directly instead of on DB-0V: on the 0 V block it would tie `TB-1` to 0 V and hold the drive stopped. `IN4` returns through `TB-14` and is unaffected. This is an installation assumption: the emulated plant wired the old way (`InputCommonsOnTb4`, `StopPermitOnTb2` in `PlantWiringFaultTests`) latches `DriveFault` or `DriveNotRunning` and never moves the roof.
 
 ## 3. Safety and isolation rules
 
@@ -345,7 +345,7 @@ Controller status for these interlocks (bench verification in [`docs/commissioni
 | IN4 HIGH within a timeout after a start | Implemented with `AtSpeedConfirmationTimeout` (production: 3 s). A start is refused with `InterlockActive` while IN4 already reports running (for example during a reversal, until the drive has stopped), so confirmation is always a fresh LOW to HIGH transition; no confirmation within the window stops and latches `DriveNotRunning`. With `P142 = 6` (At Speed) the window must exceed `P104`. |
 | IN4 stays HIGH while moving | Implemented with the same setting: IN4 LOW for 250 ms after it confirmed, without the destination limit, stops and latches `DriveNotRunning` (a trip, an external STOP or drive power loss). The window covers the ME-8108 transfer at a limit, where the NC pair removes the run input before the NO pair reports the limit. |
 | IN4 LOW within a timeout after stop | Logged as Critical once per stop when IN4 is still HIGH after `DriveStopConfirmationTimeout` (default: `AtSpeedConfirmationTimeout`). The relays are already off, so only the hardwired stop can act on it. |
-| Start limit releases within a timeout | Optional `DepartureReleaseTimeout` (off in production): a start limit that has not released in time stops and latches `DepartureLimitNotReleased`. It catches a jammed roof or one driving the wrong way (swapped motor leads) before the hard stop. Set it from the release time with the installed `P104`; see section 11. |
+| Start limit releases within a timeout | Optional `DepartureReleaseTimeout` (off in production): a start limit that has not released, and stayed released for `LimitSwitchDebounce`, in time stops and latches `DepartureLimitNotReleased`. It catches a jammed roof or one driving the wrong way (swapped motor leads) before the hard stop. Set it from the release time with the installed `P104`; see section 11. |
 
 These software interlocks do not replace the hardwired limit contacts in section 8 or an independent stop path.
 
@@ -383,8 +383,8 @@ The acceleration/deceleration and stop method must be tested with the actual roo
 
 The emulated plant (`src/HVO.RoofControllerV4.Simulation`) shows what these settings do to the stop at a limit. Its roof numbers are assumptions, not measurements: 2 m of travel at 0.1 m/s, and the hard stop 60 mm past each limit's operating point. On that model:
 
-- **`P111` stop method.** Coast (`0`, factory default) stops about 10 mm past the operating point. A ramp stop (`2`) with `P105` = 2 s keeps driving through the deceleration and reaches the hard stop; `P105` = 0.3 s stops about 15 mm past, and coast with a 0.5 s DC brake (`1`) about 3 mm past. These figures come from the emulated plant's assumed mechanics (2 m of travel at 0.1 m/s, hard stops 60 mm past the operating point); keep coast unless the installed ramp is known to stop well inside the ME-8108 overtravel.
-- **`P104` acceleration.** The start limit releases later with a longer ramp: about 0.9 s after the command at 2 s, about 2.7 s at the 20 s factory default. `DepartureReleaseTimeout`, when used, must sit between the release time with the installed `P104` and the time a wrong-way move takes to reach the hard stop behind the limit (about 1.4 s at 2 s).
+- **`P111` stop method.** Coast (`0`, factory default) stops about 10 mm past the operating point. A ramp stop (`2`) with `P105` = 2 s keeps driving through the deceleration and reaches the hard stop; `P105` = 0.3 s stops about 15 mm past, and coast with a 0.5 s DC brake (`1`) about 3 mm past. These figures come from the emulated plant's assumed mechanics (2 m of travel at 0.1 m/s, hard stops 60 mm past the operating point) and are pinned by `PlantDocumentedFiguresTests`; keep coast unless the installed ramp is known to stop well inside the ME-8108 overtravel.
+- **`P104` acceleration.** The start limit releases later with a longer ramp: about 0.9 s after the command at 2 s, about 2.7 s at the 20 s factory default. `DepartureReleaseTimeout`, when used, must sit between the release time with the installed `P104` (plus `LimitSwitchDebounce`) and the time a wrong-way move takes to reach the hard stop behind the limit (about 1.4 s at 2 s; `PlantDocumentedFiguresTests`).
 
 ## 12. Suggested Cat6 allocation
 
@@ -469,7 +469,7 @@ The hardwired relay/limit design remains authoritative even when Modbus is used 
 
 1. Disconnect the motor from the roof mechanism or make the mechanism safe.
 2. Verify all distribution blocks with a continuity meter before energizing.
-3. Verify no continuity exists between the Pi/DIN-PSU 0 V and VFD TB-2 or TB-4. Verify DB-0V is fed from TB-2 and that RLY4 NO lands on TB-4 (section 2, item 5).
+3. Verify no continuity exists between the Pi/DIN-PSU 0 V and VFD TB-2 or TB-4.
 4. Verify each ME-8108:
    - terminals 1-2 closed when not actuated
    - terminals 1-2 open when actuated

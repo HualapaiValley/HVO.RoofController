@@ -637,6 +637,7 @@ public partial class RoofControllerServiceV4
 
         // The HAT may have reset (its LED modes return to following the inputs); re-apply them with the next LED update.
         _lastIndicatorLedMask = null;
+        _ledModesApplied = false;
         _lastError = $"Safety input read failed ({_consecutiveInputReadFailures} consecutive): {error?.Message ?? "unknown error"}";
         _logger.LogWarning(error, "Safety input read failed ({Failures} consecutive)", _consecutiveInputReadFailures);
         return false;
@@ -648,8 +649,8 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// One supervision pass: retries an unverified relay state, reads the inputs, applies the safety rules, compares the
-    /// relay register with the commanded state and enforces the watchdog, lease and at-speed deadlines.
-    /// Runs on the background loop; tests call it directly.
+    /// relay register with the commanded state and enforces the watchdog, lease and at-speed deadlines. While idle it
+    /// also reads back the HAT LED modes. Runs on the background loop; tests call it directly.
     /// </summary>
     internal void RunSupervisionCycle()
     {
@@ -682,6 +683,11 @@ public partial class RoofControllerServiceV4
 
             CheckRelayRegister_NoLock();
             CheckDeadlines_NoLock(now);
+            if (_commandedMotion == RoofMotionDirection.None)
+            {
+                CheckIndicatorLedModes_NoLock();
+            }
+
             FinishMutation_NoLock();
         }
     }
@@ -811,7 +817,7 @@ public partial class RoofControllerServiceV4
             {
                 var limitName = _commandedMotion == RoofMotionDirection.Opening ? "closed" : "open";
                 StopMotion_NoLock(RoofControllerStopReason.DepartureLimitNotReleased,
-                    $"The {limitName} limit did not release within {_options.DepartureReleaseTimeout?.TotalSeconds:0.#} s of the motion command; the roof may be jammed or moving the wrong way.");
+                    $"The {limitName} limit did not release and stay released for {_options.LimitSwitchDebounce.TotalMilliseconds:0} ms within {_options.DepartureReleaseTimeout?.TotalSeconds:0.#} s of the motion command; the roof may be jammed or moving the wrong way.");
                 return;
             }
 
@@ -842,20 +848,28 @@ public partial class RoofControllerServiceV4
     /// </summary>
     private void CheckDriveStoppedAfterStop_NoLock(DateTimeOffset now)
     {
-        if ((_options.DriveStopConfirmationTimeout ?? _options.AtSpeedConfirmationTimeout) is not { } window
-            || _lastMotionStopUtc is not { } stoppedAt
-            || _driveRunningAfterStopReported
-            || now - stoppedAt < window
+        if (DriveStopCheckDeadline_NoLock() is not { } deadline
+            || now < deadline
             || _rawIn4 != true)
         {
             return;
         }
+
+        var stoppedAt = _lastMotionStopUtc!.Value;
 
         _driveRunningAfterStopReported = true;
         _lastError = $"Drive still reports running (IN4) {(now - stoppedAt).TotalSeconds:0.#} s after the relays were released.";
         _logger.LogCritical("Drive still reports running (IN4) {Seconds:0.#}s after stop ({Reason}); relays read back off. Check the drive and use the independent hardware stop",
             (now - stoppedAt).TotalSeconds, _lastStopReason);
     }
+
+    /// <summary>When the drive-stop check is due, or null when it is off or already reported for the last stop.</summary>
+    private DateTimeOffset? DriveStopCheckDeadline_NoLock() =>
+        (_options.DriveStopConfirmationTimeout ?? _options.AtSpeedConfirmationTimeout) is { } window
+        && _lastMotionStopUtc is { } stoppedAt
+        && !_driveRunningAfterStopReported
+            ? stoppedAt + window
+            : null;
 
     /// <summary>The delay the supervision loop would wait now. Lets tests drive the loop's schedule on a manual clock.</summary>
     internal TimeSpan GetSupervisionDelay()
@@ -870,6 +884,12 @@ public partial class RoofControllerServiceV4
     {
         if (_commandedMotion == RoofMotionDirection.None)
         {
+            // Wake at the drive-stop check rather than up to one idle interval after it.
+            if (DriveStopCheckDeadline_NoLock() is { } stopCheck && stopCheck > now && stopCheck - now < IdleSupervisionInterval)
+            {
+                return stopCheck - now < MinimumSupervisionDelay ? MinimumSupervisionDelay : stopCheck - now;
+            }
+
             return IdleSupervisionInterval;
         }
 

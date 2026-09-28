@@ -186,6 +186,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     // Indicator LED cache and telemetry edge tracking.
     private byte? _lastIndicatorLedMask;
+    private bool _ledModesApplied;
     private bool? _telemetryOpenLimit;
     private bool? _telemetryClosedLimit;
     private bool? _telemetryFault;
@@ -636,7 +637,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             if (DriveFaultActive_NoLock == true) mask |= 0x04;
         }
 
-        if (_lastIndicatorLedMask == mask)
+        if (_lastIndicatorLedMask == mask && _ledModesApplied)
         {
             return;
         }
@@ -644,8 +645,8 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         try
         {
             // The SM-I-010 powers up with every LED following its input, where LED3 would show the raw IN3 level (lit
-            // while healthy with the active-low fault wiring). Re-assert the modes with each change so a HAT that reset
-            // since initialization shows the logical states again.
+            // while healthy with the active-low fault wiring). Re-assert the modes with each change, and until a write
+            // succeeds, so a HAT that reset since initialization shows the logical states again.
             ApplyIndicatorLedModes_NoLock();
             var result = _hat.SetLedsMask(mask);
             if (result.IsSuccessful)
@@ -663,13 +664,21 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         }
     }
 
-    /// <summary>Sets the HAT LED modes (<see cref="IndicatorLedModes"/>). Cosmetic: a failure is logged and never fatal.</summary>
+    /// <summary>
+    /// Sets the HAT LED modes (<see cref="IndicatorLedModes"/>). Cosmetic: a failure is logged and never fatal, and the
+    /// next LED update tries again.
+    /// </summary>
     private void ApplyIndicatorLedModes_NoLock()
     {
+        _ledModesApplied = false;
         try
         {
             var result = _hat.SetLedModesMask(IndicatorLedModes);
-            if (!result.IsSuccessful)
+            if (result.IsSuccessful)
+            {
+                _ledModesApplied = true;
+            }
+            else
             {
                 _logger.LogDebug(result.Error, "Failed to set the indicator LED modes 0x{Modes:X2}", IndicatorLedModes);
             }
@@ -678,6 +687,37 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         {
             _logger.LogDebug(ex, "Exception while setting the indicator LED modes 0x{Modes:X2}", IndicatorLedModes);
         }
+    }
+
+    /// <summary>
+    /// Reads the HAT LED modes back while idle. A HAT that resets between two input reads (a short supply dip) comes
+    /// back with every LED following its input and no failed read to show it; a mismatch, or a failed read, makes the
+    /// next LED update re-apply <see cref="IndicatorLedModes"/>. Cosmetic: never fatal.
+    /// </summary>
+    private void CheckIndicatorLedModes_NoLock()
+    {
+        if (!_ledModesApplied)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = _hat.GetLedModesMask();
+            if (result.IsSuccessful && (result.Value & 0x0F) == IndicatorLedModes)
+            {
+                return;
+            }
+
+            _logger.LogDebug(result.IsSuccessful ? null : result.Error, "Indicator LED modes read back {Modes}; re-applying 0x{Expected:X2}",
+                result.IsSuccessful ? $"0x{result.Value:X2}" : "nothing", IndicatorLedModes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Exception while reading the indicator LED modes");
+        }
+
+        _ledModesApplied = false;
     }
 
     private void RecordTelemetryState_NoLock(DateTimeOffset now)

@@ -132,9 +132,9 @@ public sealed class RoofControllerOptionsV4Validator : IValidateOptions<RoofCont
             {
                 AddFailure("DepartureReleaseTimeout must be shorter than SafetyWatchdogTimeout.");
             }
-            else if (departure <= options.LimitSwitchDebounce)
+            else if (departure < options.LimitSwitchDebounce + TimeSpan.FromSeconds(RoofControllerLimits.MinDepartureReleaseSeconds))
             {
-                AddFailure("DepartureReleaseTimeout must be longer than LimitSwitchDebounce; the release is verified only after the debounce.");
+                AddFailure($"DepartureReleaseTimeout must be at least LimitSwitchDebounce plus {RoofControllerLimits.MinDepartureReleaseSeconds} seconds; the release must stay released for the debounce inside the window.");
             }
         }
 

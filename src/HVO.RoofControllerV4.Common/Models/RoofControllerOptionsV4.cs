@@ -129,11 +129,13 @@ public record class RoofControllerOptionsV4
     public TimeSpan? DriveStopConfirmationTimeout { get; set; }
 
     /// <summary>
-    /// Optional departure-release timeout. When motion starts on a limit, that limit must release within this window,
-    /// otherwise motion stops and latches <see cref="RoofControllerStopReason.DepartureLimitNotReleased"/>: the roof is
-    /// jammed, stalled or moving the wrong way (for example swapped motor leads pushing it into the stop behind the
-    /// limit). Null (default) disables it. Set it from measured release times with margin for the drive's acceleration
-    /// (P104). Local configuration only: the remote configuration API reports it but never changes it.
+    /// Optional departure-release timeout. When motion starts on a limit, that limit must release and stay released for
+    /// <see cref="LimitSwitchDebounce"/> within this window, otherwise motion stops and latches
+    /// <see cref="RoofControllerStopReason.DepartureLimitNotReleased"/>: the roof is jammed, stalled or moving the wrong
+    /// way (for example swapped motor leads pushing it into the stop behind the limit). Null (default) disables it. It
+    /// must be at least <see cref="LimitSwitchDebounce"/> plus 0.5 s. Set it from the release time with the installed
+    /// acceleration (P104) plus the debounce. Local configuration only: the remote configuration API reports it but
+    /// never changes it.
     /// </summary>
     public TimeSpan? DepartureReleaseTimeout { get; set; }
 }

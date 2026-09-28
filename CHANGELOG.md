@@ -91,9 +91,10 @@ the roof against this server; use the authenticated browser console for operator
   how long IN4 may stay high after a stop before a Critical log entry. Set it longer than the
   drive's deceleration when a ramp stop is used.
 - `DepartureReleaseTimeout` (0.5-60 s, local only, off by default): a start limit that has not
-  released in time stops the roof and latches the new stop reason `DepartureLimitNotReleased`
-  (15), catching a jammed roof or one driving the wrong way before the stop behind the limit.
-  It must be shorter than `SafetyWatchdogTimeout` and longer than `LimitSwitchDebounce`.
+  released, and stayed released for `LimitSwitchDebounce`, in time stops the roof and latches
+  the new stop reason `DepartureLimitNotReleased` (15), catching a jammed roof or one driving
+  the wrong way before the stop behind the limit. It must be shorter than
+  `SafetyWatchdogTimeout` and at least `LimitSwitchDebounce` plus 0.5 s.
 - `HVO.RoofControllerV4.Simulation` and the emulated-plant tests (#29): the production
   controller and configuration, through the real HAT library, drive an emulated Lenze SMVector
   drive, two ME-8108 limit switches, the SM-I-010 HAT and the documented wiring, modelled from

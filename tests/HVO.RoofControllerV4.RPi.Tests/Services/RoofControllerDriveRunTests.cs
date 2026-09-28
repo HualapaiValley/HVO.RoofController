@@ -381,6 +381,41 @@ public class RoofControllerDriveRunTests
     }
 
     [TestMethod]
+    public async Task SupervisionDelay_WhileIdle_WakesAtTheDriveStopCheck()
+    {
+        var stopWindow = TimeSpan.FromSeconds(2.5);
+        using var rig = await CreateAsync(Window, stopWindow);
+        rig.Service.Open().IsSuccessful.Should().BeTrue();
+        rig.SetRunning(true);
+        rig.Service.Stop().IsSuccessful.Should().BeTrue();
+        rig.Service.GetSupervisionDelay().Should().Be(RoofControllerServiceV4.IdleSupervisionInterval);
+
+        rig.Time.Advance(TimeSpan.FromSeconds(2));
+        rig.Service.GetSupervisionDelay().Should().Be(TimeSpan.FromMilliseconds(500), "the check is due before the next idle cycle");
+
+        rig.Time.Advance(TimeSpan.FromMilliseconds(500));
+        rig.Service.RunSupervisionCycle();
+        rig.Logger.Contains(LogLevel.Critical, "Drive still reports running").Should().BeTrue("the check runs at the deadline");
+        rig.Service.GetSupervisionDelay().Should().Be(RoofControllerServiceV4.IdleSupervisionInterval, "the stop is reported once");
+    }
+
+    [TestMethod]
+    public async Task SupervisionDelay_WhileIdle_IsTheIdleInterval_AfterTheDriveStopCheckPassed()
+    {
+        using var rig = await CreateAsync(Window);
+        rig.Service.Open().IsSuccessful.Should().BeTrue();
+        rig.SetRunning(true);
+        rig.Service.Stop().IsSuccessful.Should().BeTrue();
+        rig.SetRunning(false);
+
+        rig.Time.Advance(Window + TimeSpan.FromSeconds(5));
+        rig.Service.RunSupervisionCycle();
+
+        rig.Service.GetSupervisionDelay().Should().Be(RoofControllerServiceV4.IdleSupervisionInterval, "a passed check never shortens the idle cycle");
+        rig.Logger.Contains(LogLevel.Critical, "Drive still reports running").Should().BeFalse();
+    }
+
+    [TestMethod]
     public async Task DriveThatStopsWithinTheStopWindow_IsNotReported()
     {
         using var rig = await CreateAsync(Window, TimeSpan.FromSeconds(5));

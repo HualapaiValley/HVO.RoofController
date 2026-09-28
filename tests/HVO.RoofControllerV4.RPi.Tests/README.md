@@ -7,8 +7,9 @@ relies on physical hardware.
 ## Documentation
 
 - [`docs/projects/roof-controller-v4-rpi/hardware-overview.md`](../../docs/projects/roof-controller-v4-rpi/hardware-overview.md) – wiring map and relay/limit switch context for the test assumptions.
-- [`docs/projects/roof-controller-v4-rpi/api-reference.md`](../../docs/projects/roof-controller-v4-rpi/api-reference.md) – REST contract enforced by controller API tests.
-- [`docs/projects/roof-controller-v4-rpi/logging-reference.md`](../../docs/projects/roof-controller-v4-rpi/logging-reference.md) – structured logging catalog referenced in verification assertions.
+- [`src/HVO.RoofControllerV4.RPi/README.md`](../../src/HVO.RoofControllerV4.RPi/README.md) – configuration options and their limits, as the validator and controller tests enforce them.
+- [`src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.http`](../../src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.http) – the REST requests the controller API tests cover.
+- [`docs/commissioning.md`](../../docs/commissioning.md) – the checks each emulated-plant test stands in for.
 
 ## Wiring and polarity assumptions
 
@@ -57,7 +58,7 @@ These stop reasons **latch** a safety fault:
 - `StartLimitReasserted` (the departure limit reasserted after its release was verified)
 - `DriveNotRunning` (no IN4 within `AtSpeedConfirmationTimeout` after a start, or IN4 low for 250 ms after it
   confirmed while the destination limit is not reached; only when the window is set)
-- `DepartureLimitNotReleased` (the start limit did not release within `DepartureReleaseTimeout`; only when it is set)
+- `DepartureLimitNotReleased` (the start limit did not release and stay released for the debounce within `DepartureReleaseTimeout`; only when it is set)
 
 Rules for latched faults:
 
@@ -136,6 +137,7 @@ models exactly that register.
 | `Plant/PlantDriveTests` | Drive trips and power loss, clear-fault pulse, external stops and run loss, stop methods and stop distance, acceleration |
 | `Plant/PlantLimitSwitchTests` | Contact action, bounce and transfer time, stuck switches, broken wires, a jammed roof |
 | `Plant/PlantHatTests` | HAT power loss and LED modes, dead and welded relays, register faults, I2C write and input read failures |
+| `Plant/PlantDocumentedFiguresTests` | The stop distances, start-limit release times and wrong-way timing the documents quote |
 | `Plant/PlantWiringFaultTests` | Each wiring mistake from closed, mid-travel and open; swapped motor leads; wrong polarity and output settings |
 | `Plant/ProductionConfigurationTests` | The deployed `appsettings.json` validates and matches the documented wiring |
 
