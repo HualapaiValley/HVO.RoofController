@@ -149,7 +149,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         var rig = new EmulatedRoofRig(options, session, server, values);
         try
         {
-            await rig.StartControllerAsync(waitForInitialization: !options.StartWithTheLinkDown);
+            await rig.StartControllerAsync(waitForInitialization: !options.StartWithTheLinkDown, options.InitialStatus);
             return rig;
         }
         catch
@@ -162,7 +162,8 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
     /// <summary>
     /// Stops the controller host and starts a new one against the same plant, as a container restart does. With
     /// <paramref name="crash"/>, the register port is down while the host stops, so its shutdown stop never reaches the
-    /// HAT: the process died and the HAT keeps the relays it was last given. The new host starts with the link back.
+    /// HAT: the process died and the HAT keeps the relays it was last given. The new host starts with the link back, and
+    /// the rig waits for it to initialize wherever the roof is.
     /// </summary>
     public async Task RestartControllerAsync(bool crash, Action<HatEmulatorSession>? whileStopped = null)
     {
@@ -176,7 +177,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         Server.Outage = false;
         Logs = new RecordingLoggerProvider();
         App = CreateApp(Logs);
-        await StartControllerAsync(waitForInitialization: true);
+        await StartControllerAsync(waitForInitialization: true, status: null);
     }
 
     private EmulatedRoofApp CreateApp(RecordingLoggerProvider logs)
@@ -190,7 +191,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         return app;
     }
 
-    private async Task StartControllerAsync(bool waitForInitialization)
+    private async Task StartControllerAsync(bool waitForInitialization, RoofControllerStatus? status)
     {
         if (Options.Kestrel)
         {
@@ -203,7 +204,6 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 
         if (waitForInitialization)
         {
-            var status = Options.InitialStatus;
             await WaitForControllerAsync(
                 s => s.IsInitialized && (status is null || s.Status == status),
                 TimeSpan.FromSeconds(20),
