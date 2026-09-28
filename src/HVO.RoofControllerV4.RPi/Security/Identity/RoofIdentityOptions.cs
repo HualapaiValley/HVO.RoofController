@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace HVO.RoofControllerV4.RPi.Security.Identity;
 
@@ -58,6 +59,12 @@ public sealed class RoofIdentityOptions
         if (MaximumLockoutDuration < LockoutDuration)
         {
             problems.Add($"{SectionName}:{nameof(MaximumLockoutDuration)} must be at least {nameof(LockoutDuration)}.");
+        }
+
+        if (FailureMemory < MaximumLockoutDuration)
+        {
+            // Otherwise a lockout could outlast the memory of the failures that caused it.
+            problems.Add($"{SectionName}:{nameof(FailureMemory)} must be at least {nameof(MaximumLockoutDuration)}.");
         }
 
         return problems;

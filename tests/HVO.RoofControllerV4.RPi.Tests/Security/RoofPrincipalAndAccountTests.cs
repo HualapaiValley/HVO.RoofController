@@ -99,16 +99,16 @@ public sealed class RoofPrincipalAndAccountTests
         store.TryValidate(ConsoleKey, out var identity);
         var principal = RoofPrincipalFactory.Create(identity!, RoofControllerSecurityDefaults.CookieScheme);
 
-        Assert.IsTrue(RoofConsoleAuthenticationStateProvider.IsStillValid(store, principal));
+        Assert.IsTrue(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(principal));
 
         monitor.Set(new RoofControllerSecurityOptions { ApiKeys = [KeyStoreFactory.Key("console", "RoofViewer", ConsoleKey)] });
-        Assert.IsFalse(RoofConsoleAuthenticationStateProvider.IsStillValid(store, principal), "a demoted key ends the session");
+        Assert.IsFalse(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(principal), "a demoted key ends the session");
 
         monitor.Set(new RoofControllerSecurityOptions { ApiKeys = [KeyStoreFactory.Key("renamed", "RoofOperator", ConsoleKey)] });
-        Assert.IsFalse(RoofConsoleAuthenticationStateProvider.IsStillValid(store, principal), "a renamed key ends the session");
+        Assert.IsFalse(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(principal), "a renamed key ends the session");
 
         monitor.Set(new RoofControllerSecurityOptions());
-        Assert.IsFalse(RoofConsoleAuthenticationStateProvider.IsStillValid(store, principal), "a removed key ends the session");
+        Assert.IsFalse(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(principal), "a removed key ends the session");
     }
 
     [TestMethod]
@@ -116,8 +116,8 @@ public sealed class RoofPrincipalAndAccountTests
     {
         using var store = KeyStoreFactory.Create(KeyStoreFactory.Monitor());
 
-        Assert.IsTrue(RoofConsoleAuthenticationStateProvider.IsStillValid(store, new ClaimsPrincipal(new ClaimsIdentity())));
-        Assert.IsTrue(RoofConsoleAuthenticationStateProvider.IsStillValid(store, null));
+        Assert.IsTrue(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(new ClaimsPrincipal(new ClaimsIdentity())));
+        Assert.IsTrue(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(null));
     }
 
     [TestMethod]

@@ -12,7 +12,7 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Security.Identity;
 
 /// <summary>The outcome of a change to the identity store: success, or the error code and a message without secrets.</summary>
-internal sealed record RoofIdentityResult<T>(T? Value, RoofControllerErrorCode? Error, string? Detail)
+public sealed record RoofIdentityResult<T>(T? Value, RoofControllerErrorCode? Error, string? Detail)
 {
     public bool Succeeded => Error is null;
 
@@ -22,10 +22,10 @@ internal sealed record RoofIdentityResult<T>(T? Value, RoofControllerErrorCode? 
 }
 
 /// <summary>A session that was just opened: the token (shown once) and what the store keeps.</summary>
-internal sealed record RoofIssuedSession(string Token, StoredSession Session);
+public sealed record RoofIssuedSession(string Token, StoredSession Session);
 
 /// <summary>What changing a person did.</summary>
-internal sealed record RoofUserChange(StoredUser User, int SessionsEnded);
+public sealed record RoofUserChange(StoredUser User, int SessionsEnded);
 
 /// <summary>
 /// People, managed API keys and open sessions, kept in the identity store file (<see cref="RoofIdentityOptions.StorePath"/>)
@@ -36,7 +36,7 @@ internal sealed record RoofUserChange(StoredUser User, int SessionsEnded);
 /// When the file cannot be read, the store is unavailable: sign-in and management answer 503, managed keys and sessions
 /// do not authenticate, and configured API keys (and so Stop and the roof itself) keep working.
 /// </remarks>
-internal sealed class RoofIdentityStore
+public sealed class RoofIdentityStore
 {
     /// <summary>A person's oldest sessions are ended beyond this many.</summary>
     internal const int MaximumSessionsPerUser = 20;
@@ -52,6 +52,8 @@ internal sealed class RoofIdentityStore
 
     /// <summary>Every generated API key starts with this.</summary>
     internal const string ApiKeyPrefix = "hvo_k_";
+
+    private const string KioskRoleRequired = "A kiosk key must have the RoofViewer role: a PIN unlocks more.";
 
     private readonly object _gate = new();
     private readonly RoofIdentityFile? _file;
@@ -383,6 +385,11 @@ internal sealed class RoofIdentityStore
     public RoofIdentityResult<StoredApiKey> AddManagedKey(string name, string role, bool kiosk, string keySha256)
         => Mutate<StoredApiKey>((document, now) =>
         {
+            if (kiosk && role != RoofControllerApiContract.ViewerRole)
+            {
+                return RoofIdentityResult<StoredApiKey>.Failure(RoofControllerErrorCode.InvalidRequest, KioskRoleRequired);
+            }
+
             if (document.ApiKeys.Exists(key => Same(key.Name, name)) || ConfiguredKeyNames().Contains(name))
             {
                 return RoofIdentityResult<StoredApiKey>.Failure(RoofControllerErrorCode.IdentityNameConflict, $"An API key named '{name}' already exists.");
@@ -468,9 +475,7 @@ internal sealed class RoofIdentityStore
 
             if (after.Kiosk && after.Role != RoofControllerApiContract.ViewerRole)
             {
-                return RoofIdentityResult<StoredApiKey>.Failure(
-                    RoofControllerErrorCode.InvalidRequest,
-                    "A kiosk key must have the RoofViewer role: a PIN unlocks more.");
+                return RoofIdentityResult<StoredApiKey>.Failure(RoofControllerErrorCode.InvalidRequest, KioskRoleRequired);
             }
 
             document.ApiKeys[index] = after;

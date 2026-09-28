@@ -174,7 +174,8 @@ public class Program
         // - /health/live (liveness probes for container orchestration)
         // Do NOT create duplicate HealthController - use the built-in functionality
         services.AddHealthChecks()
-            .AddCheck<RoofControllerHealthCheck>("roof_controller", tags: ["roof", "hardware"]);
+            .AddCheck<RoofControllerHealthCheck>("roof_controller", tags: ["roof", "hardware"])
+            .AddCheck<RoofIdentityStoreHealthCheck>("identity_store", tags: ["security"]);
 
         // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
         // NOTE: Use built-in OpenAPI/Swagger functionality instead of custom documentation endpoints
@@ -358,7 +359,7 @@ public class Program
         {
             openApi.RequireAuthorization(new AuthorizeAttribute(RoofControllerSecurityDefaults.AdminPolicy)
             {
-                AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme
+                AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme
             });
         }
 
@@ -414,11 +415,11 @@ public class Program
 
         app.MapControllers();
 
-        // Live status for API clients: the Viewer policy on the API key scheme only (never the console cookie).
+        // Live status for API clients: the Viewer policy with an API key or a session (never the console cookie).
         app.MapHub<RoofStatusHub>(RoofStatusHubContract.Path)
             .RequireAuthorization(new AuthorizeAttribute(RoofControllerSecurityDefaults.ViewerPolicy)
             {
-                AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme
+                AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme
             });
 
         RoofSecurityStartup.ReportSecurityPosture(app.Services, app.Configuration, app.Environment);

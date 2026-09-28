@@ -313,7 +313,7 @@ public sealed class RoofStatusHubTests
         await using (var refused = await StatusHub.ConnectAsync(host, TestApiKeys.Viewer))
         {
             var closed = await refused.ClosedAsync();
-            closed!.Message.Should().Contain("not accepting more status connections for this key");
+            closed!.Message.Should().Contain("not accepting more status connections for this key or session");
             refused.Received.Should().BeEmpty();
         }
 

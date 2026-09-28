@@ -186,7 +186,7 @@ public sealed class RoofStatusBroadcasterTests
     public async Task TheHeartbeat_IsDueOneIntervalAfterTheLastMessage()
     {
         var time = new TestSupport.ManualTimeProvider();
-        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, _keyStore, time, _logger, TimeSpan.FromSeconds(1), RoofStatusBroadcaster.DefaultMaxConnections);
+        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), time, _logger, TimeSpan.FromSeconds(1), RoofStatusBroadcaster.DefaultMaxConnections);
         await using var stopping = new AsyncBroadcaster(broadcaster);
         broadcaster.TryRegister("a", Viewer(), () => { });
         await broadcaster.StartAsync(CancellationToken.None);
@@ -308,8 +308,8 @@ public sealed class RoofStatusBroadcasterTests
         broadcaster.Value.TryRegister("b", Viewer(), () => { }).Should().BeTrue();
 
         broadcaster.Value.TryRegister("c", Viewer(), () => { }, out var refusal).Should().BeFalse();
-        refusal.Should().Be("The controller is not accepting more status connections for this key.");
-        _logger.Contains(LogLevel.Warning, "for this key. (2 are already open;").Should().BeTrue();
+        refusal.Should().Be("The controller is not accepting more status connections for this key or session.");
+        _logger.Contains(LogLevel.Warning, "for this key or session. (2 are already open;").Should().BeTrue();
         broadcaster.Value.TryRegister("d", Principal(TestApiKeys.Operator), () => { }).Should().BeTrue();
 
         broadcaster.Value.Unregister("a");
@@ -390,7 +390,7 @@ public sealed class RoofStatusBroadcasterTests
         int maxConnectionsPerKey = RoofStatusBroadcaster.DefaultMaxConnectionsPerKey)
     {
         var broadcaster = new RoofStatusBroadcaster(
-            _controller, _sender, _keyStore, TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections, maxConnectionsPerKey);
+            _controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections, maxConnectionsPerKey);
         await broadcaster.StartAsync(CancellationToken.None);
         return new AsyncBroadcaster(broadcaster);
     }

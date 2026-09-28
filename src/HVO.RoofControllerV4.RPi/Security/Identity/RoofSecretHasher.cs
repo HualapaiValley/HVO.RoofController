@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Security.Identity;
 
 /// <summary>The outcome of checking a password or PIN.</summary>
-internal enum RoofSecretCheck
+public enum RoofSecretCheck
 {
     /// <summary>Wrong.</summary>
     Failed = 0,
@@ -26,37 +26,44 @@ internal enum RoofSecretCheck
 /// Hashes and checks passwords and PINs with ASP.NET Core's <see cref="PasswordHasher{TUser}"/> (PBKDF2 with a random
 /// salt; the cost comes from <see cref="PasswordHasherOptions"/>). Each hash costs tens of milliseconds of CPU on a
 /// Raspberry Pi, so at most one or two run at once and a caller that cannot get a turn within
-/// <see cref="SlotWait"/> is told to retry; sign-in can then never starve the roof's own work.
+/// <see cref="DefaultSlotWait"/> is told to retry; sign-in can then never starve the roof's own work.
 /// </summary>
-internal sealed class RoofSecretHasher : IDisposable
+public sealed class RoofSecretHasher : IDisposable
 {
     /// <summary>How long a check waits for a turn before it is refused as busy.</summary>
-    internal static readonly TimeSpan SlotWait = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan DefaultSlotWait = TimeSpan.FromSeconds(5);
 
     private static readonly object HashOwner = new();
 
     private readonly PasswordHasher<object> _hasher;
     private readonly SemaphoreSlim _slots;
+    private readonly TimeSpan _slotWait;
     private readonly Lazy<string> _unknownUserHash;
 
     public RoofSecretHasher(IOptions<PasswordHasherOptions> options)
+        : this(options, Math.Clamp(Environment.ProcessorCount / 2, 1, 2), DefaultSlotWait)
+    {
+    }
+
+    internal RoofSecretHasher(IOptions<PasswordHasherOptions> options, int slots, TimeSpan slotWait)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentOutOfRangeException.ThrowIfLessThan(slots, 1);
         _hasher = new PasswordHasher<object>(options);
-        var slots = Math.Clamp(Environment.ProcessorCount / 2, 1, 2);
         _slots = new SemaphoreSlim(slots, slots);
+        _slotWait = slotWait;
 
         // Checked when the name is unknown, so an unknown name takes as long as a wrong password.
         _unknownUserHash = new Lazy<string>(() => _hasher.HashPassword(HashOwner, Convert.ToHexString(Guid.NewGuid().ToByteArray())));
     }
 
     /// <summary>
-    /// Hashes <paramref name="secret"/>, waiting for a turn. Returns null when no turn came within <see cref="SlotWait"/>.
+    /// Hashes <paramref name="secret"/>, waiting for a turn. Returns null when no turn came in time.
     /// </summary>
     public async Task<string?> HashAsync(string secret, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(secret);
-        if (!await _slots.WaitAsync(SlotWait, cancellationToken).ConfigureAwait(false))
+        if (!await _slots.WaitAsync(_slotWait, cancellationToken).ConfigureAwait(false))
         {
             return null;
         }
@@ -78,7 +85,7 @@ internal sealed class RoofSecretHasher : IDisposable
     public async Task<RoofSecretCheck> VerifyAsync(string? hash, string secret, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(secret);
-        if (!await _slots.WaitAsync(SlotWait, cancellationToken).ConfigureAwait(false))
+        if (!await _slots.WaitAsync(_slotWait, cancellationToken).ConfigureAwait(false))
         {
             return RoofSecretCheck.Busy;
         }
@@ -108,6 +115,9 @@ internal sealed class RoofSecretHasher : IDisposable
             _slots.Release();
         }
     }
+
+    /// <summary>How many checks could start now without waiting (for tests).</summary>
+    internal int FreeSlots => _slots.CurrentCount;
 
     public void Dispose() => _slots.Dispose();
 }

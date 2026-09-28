@@ -37,7 +37,7 @@ internal sealed class RoofIdentityDocument
 
 /// <summary>A person.</summary>
 /// <param name="Stamp">Changes whenever the password or role changes, so a sign-in checked against an older password cannot open a session.</param>
-internal sealed record StoredUser(
+public sealed record StoredUser(
     string Name,
     string Role,
     string? PasswordHash,
@@ -48,7 +48,7 @@ internal sealed record StoredUser(
 
 /// <summary>An API key added through the API.</summary>
 /// <param name="KeySha256">Lower-case hex SHA-256 of the key's UTF-8 bytes.</param>
-internal sealed record StoredApiKey(
+public sealed record StoredApiKey(
     string Name,
     string Role,
     bool Kiosk,
@@ -61,7 +61,7 @@ internal sealed record StoredApiKey(
 /// <param name="TokenSha256">Lower-case hex SHA-256 of the bearer token.</param>
 /// <param name="Device">For a PIN session, the kiosk key's name.</param>
 /// <param name="DeviceKeyId">For a PIN session, the kiosk key's identifier; the session ends when that key is removed or rotated.</param>
-internal sealed record StoredSession(
+public sealed record StoredSession(
     string Id,
     string TokenSha256,
     string UserName,

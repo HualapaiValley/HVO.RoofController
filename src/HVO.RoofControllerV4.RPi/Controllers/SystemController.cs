@@ -18,7 +18,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers;
 /// </summary>
 [ApiController, ApiVersion("1.0"), Produces("application/json")]
 [Route("api/v{version:apiVersion}/System")]
-[Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
+[Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]

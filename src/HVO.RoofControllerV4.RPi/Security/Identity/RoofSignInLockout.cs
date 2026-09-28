@@ -17,7 +17,7 @@ namespace HVO.RoofControllerV4.RPi.Security.Identity;
 /// lockout can never keep anyone from stopping the roof. At most <see cref="MaximumEntries"/> names and kiosks are
 /// remembered; past that, entries that are not locked out are forgotten first, oldest failure first.
 /// </remarks>
-internal sealed class RoofSignInLockout
+public sealed class RoofSignInLockout
 {
     internal const int MaximumEntries = 4096;
 

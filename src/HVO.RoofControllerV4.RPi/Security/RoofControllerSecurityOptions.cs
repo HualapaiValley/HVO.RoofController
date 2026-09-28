@@ -54,4 +54,10 @@ public sealed class RoofApiKeyOptions
 
     /// <summary>Lower- or upper-case hex SHA-256 of the key's UTF-8 bytes, as an alternative to storing the key.</summary>
     public string? KeySha256 { get; set; }
+
+    /// <summary>
+    /// True for a kiosk's key: people may sign in with a PIN at the device that holds it (<c>POST Auth/Pin</c>). A kiosk
+    /// key must have the <c>RoofViewer</c> role; the PIN unlocks more.
+    /// </summary>
+    public bool Kiosk { get; set; }
 }

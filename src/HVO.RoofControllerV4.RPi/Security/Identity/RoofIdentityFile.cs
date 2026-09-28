@@ -8,7 +8,7 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.RPi.Security.Identity;
 
 /// <summary>The identity store file could not be read or written. The message never contains the file's contents.</summary>
-internal sealed class RoofIdentityStoreException : Exception
+public sealed class RoofIdentityStoreException : Exception
 {
     public RoofIdentityStoreException(string message, Exception? innerException = null)
         : base(message, innerException)
