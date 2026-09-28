@@ -61,8 +61,11 @@ Accept: {{contentType}}
 X-Api-Key: {{apiKey}}
 
 ### Update configuration (Admin)
-# Every field is required. expectedVersion must equal the version just read (409 on mismatch). Changing relay ids,
-# limit/fault polarity or ignorePhysicalLimitSwitches also needs "confirmSafetyCriticalChange": true.
+# Every field except confirmSafetyCriticalChange must be sent (400 if one is missing). The values below are the
+# production settings; start from the ones just read. expectedVersion must equal the version just read (409 on
+# mismatch). operatorLeaseTimeoutSeconds and atSpeedConfirmationTimeoutSeconds may be null, which turns the lease or
+# the IN4 interlock off. Changing relay ids, limit/fault polarity or ignorePhysicalLimitSwitches, or turning the lease
+# or IN4 off, also needs "confirmSafetyCriticalChange": true (409 without it).
 POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Configuration
 Content-Type: {{contentType}}
 Accept: {{contentType}}
@@ -80,13 +83,13 @@ X-Api-Key: {{apiKey}}
   "digitalInputPollIntervalMilliseconds": 25,
   "enablePeriodicVerificationWhileMoving": true,
   "periodicVerificationIntervalSeconds": 1,
-  "useNormallyClosedLimitSwitches": true,
-  "limitSwitchDebounceMilliseconds": 50,
+  "useNormallyClosedLimitSwitches": false,
+  "limitSwitchDebounceMilliseconds": 25,
   "ignorePhysicalLimitSwitches": false,
-  "faultInputActiveHigh": true,
+  "faultInputActiveHigh": false,
   "maxConsecutiveInputReadFailures": 3,
   "operatorLeaseTimeoutSeconds": null,
-  "atSpeedConfirmationTimeoutSeconds": null
+  "atSpeedConfirmationTimeoutSeconds": 3
 }
 
 ### System information (Admin)

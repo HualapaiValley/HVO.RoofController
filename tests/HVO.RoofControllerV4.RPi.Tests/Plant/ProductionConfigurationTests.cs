@@ -29,6 +29,7 @@ public class ProductionConfigurationTests
         var options = ProductionOptions.Load();
 
         options.UseNormallyClosedLimitSwitches.Should().BeFalse("IN1 and IN2 are on the ME-8108 NO pair, HIGH at the limit");
+        options.LimitSwitchDebounce.Should().Be(TimeSpan.FromMilliseconds(25), "C3 assumes drive and motor noise settles inside it");
         options.FaultInputActiveHigh.Should().BeFalse("the drive relay (P140 = 3) opens on a trip, so IN3 is LOW when faulted");
         options.IgnorePhysicalLimitSwitches.Should().BeFalse();
         options.AllowIgnoringLimitSwitchesOnPhysicalHardware.Should().BeFalse();

@@ -32,9 +32,12 @@ the roof against this server; use the authenticated browser console for operator
 - **Error responses** are RFC 7807 ProblemDetails with `code` and `roofStatus` extensions
   (for example 409 `FaultLatched`, 409 `LeaseNotActive`, 503 `RelayStateUnverified`).
 - **Configuration updates** (`POST .../Configuration`, `RoofAdmin` only) must send every
-  field, plus `ExpectedVersion` from the last `GET` (a stale version returns 409
-  `ConfigurationVersionConflict`). Changes to relay mapping, limit or fault polarity, or
-  `IgnorePhysicalLimitSwitches` also need `ConfirmSafetyCriticalChange: true`. New fields:
+  field except `ConfirmSafetyCriticalChange`, with `ExpectedVersion` from the last `GET` (a
+  stale version returns 409 `ConfigurationVersionConflict`). A missing field returns 400; only
+  `OperatorLeaseTimeoutSeconds` and `AtSpeedConfirmationTimeoutSeconds` may be null, which
+  turns them off (#18). Changes to relay mapping, limit or fault polarity, or
+  `IgnorePhysicalLimitSwitches`, and turning off the operator lease or the IN4 interlock, also
+  need `ConfirmSafetyCriticalChange: true`. New fields:
   `FaultInputActiveHigh`, `MaxConsecutiveInputReadFailures`, `OperatorLeaseTimeoutSeconds`,
   `AtSpeedConfirmationTimeoutSeconds`. The response also reports the local-only
   `DriveStopConfirmationTimeoutSeconds` and `DepartureReleaseTimeoutSeconds`.
@@ -44,7 +47,8 @@ the roof against this server; use the authenticated browser console for operator
   healthy) and `AtSpeedConfirmationTimeout = 00:00:03` (IN4 on `TB-14`, `P142 = 1`). The
   previous values read the documented wiring inverted: the roof would not have moved, and the
   drive fault would have latched at start-up. A deployment that overrides these settings keeps
-  its own values.
+  its own values. It also pins `LimitSwitchDebounce = 00:00:00.025`, the code default that the
+  commissioning checklist's noise assumption (C3) depends on.
 - **HTTPS by default outside Development.** `RoofControllerSecurity:RequireHttps` defaults to
   true outside Development; plain-HTTP requests to protected endpoints get 403 except from
   loopback and for `/health/live` and `/health/ready`. Provide a certificate or opt out
@@ -274,6 +278,10 @@ the roof against this server; use the authenticated browser console for operator
   buttons, keeps the Controls heading for screen readers only and, wider than 576 px, puts the
   footer on one row, so Stop is in view without scrolling (#20). The browser tests found Stop
   below the footer.
+- The console's camera view (#20) closes a response that arrives for an attempt it already
+  cancelled, instead of reporting it as a failure that cancelled the attempt replacing it, and
+  leaving a stream open. Closing the view releases the player and the module even when the
+  player's own cleanup fails.
 - The idle supervision loop runs an overdue drive-stop check at once. It could wake just before
   the deadline and then fall back to the 1 s idle interval, so "Drive still reports running
   (IN4)" was logged about 1.1 s late.

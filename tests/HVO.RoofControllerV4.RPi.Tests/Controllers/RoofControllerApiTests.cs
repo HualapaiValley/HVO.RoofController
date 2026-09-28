@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using FluentAssertions;
 using HVO.Core.Results;
@@ -521,23 +522,126 @@ public sealed class RoofControllerApiTests
     }
 
     [TestMethod]
-    public async Task UpdateConfiguration_MissingSafetyFields_ReturnsValidationProblem()
+    public async Task UpdateConfiguration_AnyFieldLeftOut_ReturnsValidationProblemNamingIt()
     {
-        // A partial body must be rejected, never defaulted: omitted limit/fault settings could disable supervision.
-        var body = new { ExpectedVersion = 7, SafetyWatchdogTimeoutSeconds = 90, OpenRelayId = 1, CloseRelayId = 2, ClearFaultRelayId = 3, StopRelayId = 4 };
+        // A partial body must be rejected, never defaulted: an omitted limit or fault setting could turn supervision off,
+        // and an omitted lease or IN4 window would read as null, which turns it off.
+        var complete = JsonSerializer.SerializeToNode(WithLeaseAndIn4(), JsonSerializerOptions.Web)!.AsObject();
+        var fields = complete.Select(p => p.Key).Where(k => k != "confirmSafetyCriticalChange").ToList();
+        fields.Should().Contain(
+        [
+            "ignorePhysicalLimitSwitches",
+            "useNormallyClosedLimitSwitches",
+            "faultInputActiveHigh",
+            "operatorLeaseTimeoutSeconds",
+            "atSpeedConfirmationTimeoutSeconds"
+        ]);
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        foreach (var field in fields)
+        {
+            var body = complete.DeepClone().AsObject();
+            body.Remove(field);
+
+            var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", body);
+
+            response.StatusCode.Should().Be(HttpStatusCode.BadRequest, "{0} was left out", field);
+            var problem = await ApiJson.ReadAsync<ValidationProblemDetails>(response);
+            string.Join(" ", problem.Errors.Values.SelectMany(messages => messages)).Should().Contain($"'{field}'");
+        }
+        VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_WithoutTheConfirmationField_IsApplied()
+    {
+        var captured = CaptureAppliedConfiguration();
+        var body = JsonSerializer.SerializeToNode(ValidRequest(), JsonSerializerOptions.Web)!.AsObject();
+        body.Remove("confirmSafetyCriticalChange").Should().BeTrue();
         using var client = _host.CreateApiClient(TestApiKeys.Admin);
 
         var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", body);
 
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "the confirmation is optional and nothing safety-critical changes");
+        captured.Value.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_NullSafetyField_ReturnsValidationProblem()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync(
+            $"{BasePath}/Configuration",
+            ValidRequest() with { IgnorePhysicalLimitSwitches = null });
+
         Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await ApiJson.ReadAsync<ValidationProblemDetails>(response);
-        problem.Errors.Keys.Should().Contain(
-        [
-            nameof(RoofConfigurationRequest.IgnorePhysicalLimitSwitches),
-            nameof(RoofConfigurationRequest.UseNormallyClosedLimitSwitches),
-            nameof(RoofConfigurationRequest.FaultInputActiveHigh)
-        ]);
+        problem.Errors.Keys.Should().Contain(nameof(RoofConfigurationRequest.IgnorePhysicalLimitSwitches));
         VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    [DataRow(nameof(RoofConfigurationRequest.OperatorLeaseTimeoutSeconds))]
+    [DataRow(nameof(RoofConfigurationRequest.AtSpeedConfirmationTimeoutSeconds))]
+    public async Task UpdateConfiguration_TurningOffTheLeaseOrIn4_Unconfirmed_Returns409Rejected(string setting)
+    {
+        UseLeaseAndIn4();
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", WithLeaseAndIn4() with
+        {
+            OperatorLeaseTimeoutSeconds = setting == nameof(RoofConfigurationRequest.OperatorLeaseTimeoutSeconds) ? null : 30,
+            AtSpeedConfirmationTimeoutSeconds = setting == nameof(RoofConfigurationRequest.AtSpeedConfirmationTimeoutSeconds) ? null : 3
+        });
+
+        Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("ConfigurationRejected", problem.GetProperty("code").GetString());
+        problem.GetProperty("detail").GetString().Should().Contain("turns off the operator lease or the IN4 interlock")
+            .And.Contain("that the lease or the IN4 interlock should be off");
+        VerifyConfigurationNotApplied();
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_TurningOffTheLeaseAndIn4_Confirmed_IsApplied()
+    {
+        UseLeaseAndIn4();
+        var captured = CaptureAppliedConfiguration();
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var response = await client.PostAsJsonAsync(
+            $"{BasePath}/Configuration",
+            ValidRequest() with { ConfirmSafetyCriticalChange = true });
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.IsNotNull(captured.Value);
+        Assert.IsNull(captured.Value.OperatorLeaseTimeout);
+        Assert.IsNull(captured.Value.AtSpeedConfirmationTimeout);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_TurningOnOrRetuningTheLeaseAndIn4_NeedsNoConfirmation()
+    {
+        var captured = CaptureAppliedConfiguration();
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        // From off to on.
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", WithLeaseAndIn4());
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual(TimeSpan.FromSeconds(30), captured.Value?.OperatorLeaseTimeout);
+        Assert.AreEqual(TimeSpan.FromSeconds(3), captured.Value?.AtSpeedConfirmationTimeout);
+
+        // From one window to another.
+        UseLeaseAndIn4();
+        response = await client.PostAsJsonAsync(
+            $"{BasePath}/Configuration",
+            WithLeaseAndIn4() with { OperatorLeaseTimeoutSeconds = 60, AtSpeedConfirmationTimeoutSeconds = 5 });
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual(TimeSpan.FromSeconds(60), captured.Value?.OperatorLeaseTimeout);
+        Assert.AreEqual(TimeSpan.FromSeconds(5), captured.Value?.AtSpeedConfirmationTimeout);
     }
 
     [TestMethod]
@@ -713,6 +817,28 @@ public sealed class RoofControllerApiTests
         _roof.Verify(s => s.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never);
         _roof.Verify(s => s.RenewLease(), Times.Never);
         _roof.Verify(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static RoofConfigurationRequest WithLeaseAndIn4()
+        => ValidRequest() with { OperatorLeaseTimeoutSeconds = 30, AtSpeedConfirmationTimeoutSeconds = 3 };
+
+    /// <summary>The controller runs with a 30 s operator lease and the 3 s IN4 window, as <see cref="WithLeaseAndIn4"/> sends.</summary>
+    private void UseLeaseAndIn4()
+        => _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(
+            new RoofControllerOptionsV4
+            {
+                OperatorLeaseTimeout = TimeSpan.FromSeconds(30),
+                AtSpeedConfirmationTimeout = TimeSpan.FromSeconds(3)
+            },
+            7));
+
+    private StrongBox<RoofControllerOptionsV4?> CaptureAppliedConfiguration()
+    {
+        var captured = new StrongBox<RoofControllerOptionsV4?>();
+        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
+            .Callback<RoofControllerOptionsV4, long>((options, _) => captured.Value = options)
+            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        return captured;
     }
 
     private void VerifyConfigurationNotApplied()

@@ -69,13 +69,17 @@ Roof command failures are RFC 7807 ProblemDetails with two extensions:
 | 500 | `Unknown` | Unexpected. The detail text is generic; see the controller log. |
 
 Configuration updates are optimistic. `expectedVersion` must equal the `version` from the last GET; otherwise the
-update fails with 409 `ConfigurationVersionConflict`. Some changes also need `"confirmSafetyCriticalChange": true`,
-or they fail with 409 `ConfigurationRejected`:
+update fails with 409 `ConfigurationVersionConflict`. Every field except `confirmSafetyCriticalChange` must be sent,
+or the update fails with 400; only `operatorLeaseTimeoutSeconds` and `atSpeedConfirmationTimeoutSeconds` may be null,
+which turns them off. Some changes also need `"confirmSafetyCriticalChange": true`, or they fail with 409
+`ConfigurationRejected`:
 
 - relay ids
 - limit-switch type
 - fault polarity
 - `ignorePhysicalLimitSwitches`
+- turning off the operator lease or the IN4 interlock (turning either on, or changing its timeout, needs no
+  confirmation)
 
 Every applied change is written to the log as an `AUDIT` entry. The entry holds the key name, the old and new versions,
 and the changed fields.

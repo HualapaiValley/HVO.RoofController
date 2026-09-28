@@ -2,12 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Text.Json.Serialization;
 
 namespace HVO.RoofControllerV4.Common.Models;
 
 /// <summary>
-/// Full replacement of the remotely editable controller configuration. Every safety-relevant field is required:
-/// an omitted value is rejected rather than defaulted, so a partial body can never silently disable limits or faults.
+/// Full replacement of the remotely editable controller configuration. Every field but
+/// <see cref="ConfirmSafetyCriticalChange"/> must be present (<see cref="JsonRequiredAttribute"/>): an omitted value is
+/// rejected rather than defaulted, so a partial body can never silently disable limits, faults, the lease or the IN4
+/// interlock. Only the lease and the IN4 window may be null, which turns them off.
 /// </summary>
 public sealed record class RoofConfigurationRequest : IValidatableObject
 {
@@ -16,60 +19,78 @@ public sealed record class RoofConfigurationRequest : IValidatableObject
     /// <see cref="RoofControllerErrorCode.ConfigurationVersionConflict"/> when the configuration changed since.
     /// </summary>
     [Required]
+    [JsonRequired]
     public long? ExpectedVersion { get; init; }
 
     /// <summary>
     /// Must be true when the request changes relay mapping, limit-switch polarity, fault polarity or
-    /// <see cref="IgnorePhysicalLimitSwitches"/>. These are physical maintenance changes, not routine operation.
+    /// <see cref="IgnorePhysicalLimitSwitches"/>, or turns off the operator lease or the IN4 interlock. These are
+    /// safety-critical changes, not routine operation.
     /// </summary>
     public bool ConfirmSafetyCriticalChange { get; init; }
 
     [Required]
+    [JsonRequired]
     public double? SafetyWatchdogTimeoutSeconds { get; init; }
 
     [Required]
+    [JsonRequired]
     public int? OpenRelayId { get; init; }
 
     [Required]
+    [JsonRequired]
     public int? CloseRelayId { get; init; }
 
     [Required]
+    [JsonRequired]
     public int? ClearFaultRelayId { get; init; }
 
     [Required]
+    [JsonRequired]
     public int? StopRelayId { get; init; }
 
     [Required]
+    [JsonRequired]
     public bool? EnableDigitalInputPolling { get; init; }
 
     [Required]
+    [JsonRequired]
     public double? DigitalInputPollIntervalMilliseconds { get; init; }
 
     [Required]
+    [JsonRequired]
     public bool? EnablePeriodicVerificationWhileMoving { get; init; }
 
     [Required]
+    [JsonRequired]
     public double? PeriodicVerificationIntervalSeconds { get; init; }
 
     [Required]
+    [JsonRequired]
     public bool? UseNormallyClosedLimitSwitches { get; init; }
 
     [Required]
+    [JsonRequired]
     public double? LimitSwitchDebounceMilliseconds { get; init; }
 
     [Required]
+    [JsonRequired]
     public bool? IgnorePhysicalLimitSwitches { get; init; }
 
     [Required]
+    [JsonRequired]
     public bool? FaultInputActiveHigh { get; init; }
 
     [Required]
+    [JsonRequired]
     public int? MaxConsecutiveInputReadFailures { get; init; }
 
-    /// <summary>Renewable operator lease in seconds; null disables the lease.</summary>
+    /// <summary>Renewable operator lease in seconds. Must be sent; null turns the lease off.</summary>
+    [JsonRequired]
     public double? OperatorLeaseTimeoutSeconds { get; init; }
 
-    /// <summary>At-speed (IN4) confirmation window in seconds; null disables the interlock.</summary>
+    /// <summary>At-speed (IN4) confirmation window in seconds. Must be sent; null turns the interlock off.</summary>
+    [JsonRequired]
     public double? AtSpeedConfirmationTimeoutSeconds { get; init; }
 
     /// <summary>
@@ -102,7 +123,8 @@ public sealed record class RoofConfigurationRequest : IValidatableObject
     }
 
     /// <summary>
-    /// True when applying this request to <paramref name="current"/> changes a physical-maintenance setting.
+    /// True when applying this request to <paramref name="current"/> is a safety-critical change that needs
+    /// <see cref="ConfirmSafetyCriticalChange"/>.
     /// </summary>
     public bool ChangesSafetyCriticalSettings(RoofControllerOptionsV4 current)
     {
@@ -113,12 +135,14 @@ public sealed record class RoofConfigurationRequest : IValidatableObject
             || StopRelayId != current.StopRelayId
             || UseNormallyClosedLimitSwitches != current.UseNormallyClosedLimitSwitches
             || FaultInputActiveHigh != current.FaultInputActiveHigh
-            || IgnorePhysicalLimitSwitches != current.IgnorePhysicalLimitSwitches;
+            || IgnorePhysicalLimitSwitches != current.IgnorePhysicalLimitSwitches
+            || (OperatorLeaseTimeoutSeconds is null && current.OperatorLeaseTimeout is not null)
+            || (AtSpeedConfirmationTimeoutSeconds is null && current.AtSpeedConfirmationTimeout is not null);
     }
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        // Presence is enforced by [Required]; only range-check values that are present.
+        // Presence is enforced by [JsonRequired] and [Required]; only range-check values that are present.
         if (SafetyWatchdogTimeoutSeconds is { } watchdog
             && (double.IsNaN(watchdog) || watchdog < RoofControllerLimits.MinSafetyWatchdogTimeoutSeconds || watchdog > RoofControllerLimits.MaxSafetyWatchdogTimeoutSeconds))
         {
