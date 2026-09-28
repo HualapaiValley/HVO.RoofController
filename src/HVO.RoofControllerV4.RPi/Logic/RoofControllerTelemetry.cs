@@ -33,6 +33,32 @@ internal static class RoofControllerTelemetry
     private static readonly Counter<long> LimitSwitchEventCounter = Meter.CreateCounter<long>("roof.controller.limit.switch.events");
     private static readonly Counter<long> FaultEventCounter = Meter.CreateCounter<long>("roof.controller.fault.events");
     private static readonly Counter<long> ClearFaultCounter = Meter.CreateCounter<long>("roof.controller.clear_fault");
+
+    // The motion timing histograms (docs/telemetry.md, Motion timing) carry explicit bucket boundaries: the SDK's defaults (0, 5,
+    // 10, 25, ... s) would put every drive delay in the first bucket. DelayBuckets comes first because static fields
+    // initialize in declaration order.
+    private static readonly double[] DelayBuckets = [0.025, 0.05, 0.1, 0.15, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7.5, 10, 15, 30, 60];
+    private static readonly Histogram<double> TravelDuration = Meter.CreateHistogram<double>(
+        "roof.controller.travel.duration", unit: "s",
+        description: "Time from a move's start to its stop, by direction, stop reason and whether it started at the opposite limit.",
+        tags: null,
+        advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = [1, 2, 5, 10, 15, 20, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 450, 600] });
+    private static readonly Histogram<double> DriveStartDelay = Meter.CreateHistogram<double>(
+        "roof.controller.drive.start_delay", unit: "s",
+        description: "Time from a move's start until the drive run input (IN4) first reports running, by direction.",
+        tags: null,
+        advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = DelayBuckets });
+    private static readonly Histogram<double> DriveStopDelay = Meter.CreateHistogram<double>(
+        "roof.controller.drive.stop_delay", unit: "s",
+        description: "Time from a stop until the drive run input (IN4) reports stopped (0 when it already did), by direction and stop reason.",
+        tags: null,
+        advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = DelayBuckets });
+    private static readonly Histogram<double> DepartureRelease = Meter.CreateHistogram<double>(
+        "roof.controller.departure.release", unit: "s",
+        description: "Time from a move's start at a limit until that limit's release was observed (and then held for the debounce), by direction.",
+        tags: null,
+        advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = DelayBuckets });
+
     private static RoofControllerTelemetryState _currentState = RoofControllerTelemetryState.Initial;
     private static readonly ObservableGauge<long> LimitSwitchStateGauge = Meter.CreateObservableGauge("roof.controller.limit.switch.state", ObserveLimitSwitchStates);
     private static readonly ObservableGauge<long> FaultActiveGauge = Meter.CreateObservableGauge("roof.controller.fault.active", ObserveFaultActive);
@@ -90,6 +116,31 @@ internal static class RoofControllerTelemetry
             { "roof.stop.source", GetSafetyStopSourceTag(source) }
         });
     }
+
+    /// <summary>A move stopped <paramref name="duration"/> after it started, for <paramref name="reason"/>.</summary>
+    internal static void RecordTravel(RoofMotionDirection direction, RoofControllerStopReason reason, bool fromLimit, TimeSpan duration)
+        => TravelDuration.Record(duration.TotalSeconds, new TagList
+        {
+            { "roof.direction", GetDirectionTag(direction) },
+            { "roof.stop.reason", reason.ToString() },
+            { "roof.travel.from_limit", fromLimit }
+        });
+
+    /// <summary>The drive run input (IN4) first reported running <paramref name="delay"/> after the move started.</summary>
+    internal static void RecordDriveStartDelay(RoofMotionDirection direction, TimeSpan delay)
+        => DriveStartDelay.Record(delay.TotalSeconds, new TagList { { "roof.direction", GetDirectionTag(direction) } });
+
+    /// <summary>The drive run input (IN4) reported stopped <paramref name="delay"/> after the stop.</summary>
+    internal static void RecordDriveStopDelay(RoofMotionDirection direction, RoofControllerStopReason reason, TimeSpan delay)
+        => DriveStopDelay.Record(delay.TotalSeconds, new TagList
+        {
+            { "roof.direction", GetDirectionTag(direction) },
+            { "roof.stop.reason", reason.ToString() }
+        });
+
+    /// <summary>The start limit released <paramref name="delay"/> after the move started (the release then verified).</summary>
+    internal static void RecordDepartureRelease(RoofMotionDirection direction, TimeSpan delay)
+        => DepartureRelease.Record(delay.TotalSeconds, new TagList { { "roof.direction", GetDirectionTag(direction) } });
 
     internal static void RecordLimitSwitchTransition(string limitSwitch, bool reached)
     {
@@ -181,6 +232,13 @@ internal static class RoofControllerTelemetry
         var state = Volatile.Read(ref _currentState);
         return new Measurement<long>(1, new KeyValuePair<string, object?>("roof.status", state.Status.ToString()));
     }
+
+    private static string GetDirectionTag(RoofMotionDirection direction) => direction switch
+    {
+        RoofMotionDirection.Opening => "opening",
+        RoofMotionDirection.Closing => "closing",
+        _ => "none"
+    };
 
     private static string GetSafetyStopSourceTag(RoofSafetyStopSource source) => source switch
     {

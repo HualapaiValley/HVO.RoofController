@@ -55,6 +55,7 @@ starting the host or touching the HAT.
 - [Security](../../docs/security.md) – API keys, roles, HTTPS, console sign-in
 - [Deployment](../../docs/deployment.md) – deployment script, compose profiles, deployment check, verified stop and rollback
 - [HAT emulator](../../docs/emulator.md) – running without hardware: the emulator, `HatEmulator` settings, fault injection, containers
+- [Logging and telemetry](../../docs/telemetry.md) – log levels, OTLP export, roof metrics and the motion timing histograms
 
 ## Configuration Notes
 - Operational settings live in `appsettings*.json` under `RoofControllerOptionsV4` and `RoofControllerHostOptionsV4`.
@@ -76,10 +77,7 @@ starting the host or touching the HAT.
 - `HardwareDetection` section in `appsettings*.json` can provide default values for `ForceRaspberryPi`, `ContainerRpiHint`, or `UseRealGpio`; these populate the matching environment variables when not already set.
 - When running inside Docker on the Raspberry Pi, hardware detection now respects the environment variable overrides `HVO_FORCE_RASPBERRY_PI=true` (force hardware) and `HVO_CONTAINER_RPI_HINT="raspberrypi-5"` (optional hint when GPIO devices are not mounted by default).
 - Health check tags: `roof` and `hardware`. `/health/live` and `/health/ready` are anonymous with minimal bodies; `/health` needs the `RoofViewer` role and returns 503 with details when unhealthy.
-- OTLP export is enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the production compose file supplies a default off-Pi collector. Use `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`; `OTEL_SERVICE_NAME` defaults to `hvo-roof-controller`, `OTEL_SERVICE_INSTANCE_ID` defaults to `roof-controller-rpi`, and `OTEL_METRIC_EXPORT_INTERVAL` defaults to `10000` milliseconds. The exporter captures ASP.NET Core and outbound HTTP telemetry, standard runtime metrics, roof command outcomes/durations, and safety-stop reasons. It never determines roof-control readiness.
-- The shared collector prefixes roof metric names with `hvo_`. Safety stops are available through `hvo_roof_controller_safety_stops_total`, labelled with `roof_stop_reason` and `roof_stop_source`. Sources are `open-limit`, `closed-limit`, `fault`, `watchdog`, or `unknown`.
-- Limit transitions use `hvo_roof_controller_limit_switch_events_total` with `roof_limit_switch` (`open` or `closed`) and `roof_limit_state` (`reached` or `cleared`). Current switch state is exported by `hvo_roof_controller_limit_switch_state` with `roof_limit_switch`; a value of `1` means the named switch is reached.
-- Current fault, watchdog, drive, and controller state are exported as `hvo_roof_controller_fault_active`, `hvo_roof_controller_watchdog_active`, `hvo_roof_controller_watchdog_remaining_seconds`, `hvo_roof_controller_drive_at_speed`, and `hvo_roof_controller_status`. The status metric has the bounded `roof_status` label.
+- OTLP export is enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the production compose file supplies a default off-Pi collector. It never determines roof-control readiness. The [logging and telemetry reference](../../docs/telemetry.md) lists the settings, the log levels, and every roof metric, including the motion timing histograms (travel time by direction, the drive's IN4 start and stop delays, and the start limit's release) that set the timing options.
 
 ## Testing
 Run the dedicated test project to validate relay sequencing, watchdog behaviour, and idempotent command handling:

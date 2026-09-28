@@ -92,6 +92,8 @@ public partial class RoofControllerServiceV4
 
         if (_commandedMotion == RoofMotionDirection.None)
         {
+            RecordDriveStopped_NoLock(now);
+
             if (DriveFaultActive_NoLock == true)
             {
                 Latch_NoLock(RoofControllerStopReason.DriveFault, "Drive fault input (IN3) is active.");
@@ -117,6 +119,11 @@ public partial class RoofControllerServiceV4
             if (!_atSpeedConfirmed)
             {
                 _atSpeedConfirmed = true;
+                if (_driveStoppedAtStart && _motionStartUtc is { } startedAt)
+                {
+                    RoofControllerTelemetry.RecordDriveStartDelay(direction, now - startedAt);
+                }
+
                 _logger.LogDebug("Drive at-speed (IN4) confirmed while {Direction}", direction);
             }
 
@@ -168,6 +175,11 @@ public partial class RoofControllerServiceV4
                 if (now - _releaseObservedUtc.Value >= _options.LimitSwitchDebounce)
                 {
                     _departureReleaseVerified = true;
+                    if (_motionStartUtc is { } startedAt)
+                    {
+                        RoofControllerTelemetry.RecordDepartureRelease(_commandedMotion, _releaseObservedUtc.Value - startedAt);
+                    }
+
                     _logger.LogDebug("Departure limit release verified after {Elapsed} ms", (now - _releaseObservedUtc.Value).TotalMilliseconds);
                 }
             }
@@ -229,6 +241,9 @@ public partial class RoofControllerServiceV4
         var now = Now;
         var direction = _commandedMotion;
         var wasMoving = direction != RoofMotionDirection.None;
+        var startedAt = _motionStartUtc;
+        var startedAtLimit = _startedAtLimit;
+        var startConfirmed = _atSpeedConfirmed && _driveStoppedAtStart;
 
         CancelMotionSupervision_NoLock();
         _commandedMotion = RoofMotionDirection.None;
@@ -262,6 +277,7 @@ public partial class RoofControllerServiceV4
 
         if (wasMoving)
         {
+            RecordStopTiming_NoLock(now, direction, reason, startedAt, startedAtLimit, startConfirmed);
             RoofControllerTelemetry.RecordSafetyStop(reason, GetSafetyStopSource(reason, direction));
             if (IsLatchingReason(reason) || reason == RoofControllerStopReason.OperatorLeaseExpired)
             {
@@ -274,6 +290,38 @@ public partial class RoofControllerServiceV4
         }
 
         return verified;
+    }
+
+    /// <summary>
+    /// Records a move's travel time, and its drive stop delay: at once when the drive run input (IN4) already reports
+    /// stopped (zero, after a drive start it saw), or when IN4 drops (<see cref="RecordDriveStopped_NoLock"/>).
+    /// </summary>
+    private void RecordStopTiming_NoLock(DateTimeOffset now, RoofMotionDirection direction, RoofControllerStopReason reason,
+        DateTimeOffset? startedAt, bool startedAtLimit, bool startConfirmed)
+    {
+        if (startedAt is { } start)
+        {
+            RoofControllerTelemetry.RecordTravel(direction, reason, startedAtLimit, now - start);
+        }
+
+        if (_rawIn4 == true)
+        {
+            _driveStopDelayPending = (now, direction, reason);
+        }
+        else if (startConfirmed)
+        {
+            RoofControllerTelemetry.RecordDriveStopDelay(direction, reason, TimeSpan.Zero);
+        }
+    }
+
+    /// <summary>Records the drive stop delay of the last stop once the drive run input (IN4) reports stopped.</summary>
+    private void RecordDriveStopped_NoLock(DateTimeOffset now)
+    {
+        if (_driveStopDelayPending is { } pending && _rawIn4 == false)
+        {
+            _driveStopDelayPending = null;
+            RoofControllerTelemetry.RecordDriveStopDelay(pending.Direction, pending.Reason, now - pending.At);
+        }
     }
 
     /// <summary>
@@ -306,6 +354,8 @@ public partial class RoofControllerServiceV4
         _atSpeedDeadlineUtc = null;
         _atSpeedConfirmed = false;
         _runLostUtc = null;
+        _driveStoppedAtStart = false;
+        _startedAtLimit = false;
         _departureReleaseVerified = false;
         _releaseObservedUtc = null;
         _departureDeadlineUtc = null;

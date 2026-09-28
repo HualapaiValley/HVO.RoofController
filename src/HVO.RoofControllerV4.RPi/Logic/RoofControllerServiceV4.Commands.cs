@@ -263,12 +263,15 @@ public partial class RoofControllerServiceV4
             _lastMotionDirection = direction;
             _motionStartUtc = now;
             _lastMotionStopUtc = null;
+            _driveStopDelayPending = null;
             _lastError = null;
             ArmWatchdog_NoLock(now);
             _leaseDeadlineUtc = _options.OperatorLeaseTimeout is { } lease ? now + lease : null;
             _atSpeedDeadlineUtc = _options.AtSpeedConfirmationTimeout is { } atSpeed ? now + atSpeed : null;
             _atSpeedConfirmed = false;
             _runLostUtc = null;
+            _driveStoppedAtStart = _rawIn4 == false;
+            _startedAtLimit = departureLimit == true;
             _departureReleaseVerified = departureLimit != true;
             _releaseObservedUtc = null;
             _departureDeadlineUtc = departureLimit == true && _options.DepartureReleaseTimeout is { } departure ? now + departure : null;
