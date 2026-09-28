@@ -95,7 +95,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="200">Stop verified; status snapshot after the command.</response>
         /// <response code="503">The stop could not be verified (relay register unverified) or hardware is unavailable.</response>
         [HttpPost("Stop", Name = nameof(DoRoofStop))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.StopPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.StopScheme, Policy = RoofControllerSecurityDefaults.StopPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
         public ActionResult<RoofStatusResponse> DoRoofStop()

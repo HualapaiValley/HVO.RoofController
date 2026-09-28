@@ -48,9 +48,10 @@ public sealed class IdentityApiTests
         string? storePath = null,
         RecordingLoggerProvider? logs = null,
         TimeProvider? time = null,
-        string environment = "Development")
+        string environment = "Development",
+        IReadOnlyDictionary<string, string?>? extraSettings = null)
         => new(
-            settings: Settings(storePath),
+            settings: Settings(storePath).Concat(extraSettings ?? new Dictionary<string, string?>()).ToDictionary(),
             environment: environment,
             configureServices: services =>
             {
@@ -291,6 +292,70 @@ public sealed class IdentityApiTests
         response.Headers.WwwAuthenticate.Should().Contain(header => header.Scheme == RoofIdentityContract.BearerScheme);
     }
 
+    [TestMethod]
+    public async Task AnExpiredSessionSentWithAGoodApiKey_StillStops_ButNothingElseFallsBackToTheKey()
+    {
+        var clock = new WallClock(DateTimeOffset.UtcNow);
+        using var logs = new RecordingLoggerProvider();
+        using var host = CreateHost(logs: logs, time: clock);
+        await AddUserAsync(host, "wendy", RoofControllerApiContract.OperatorRole);
+        var token = (await SignInAsync(host, "wendy")).Token;
+        using var client = host.CreateApiClient(TestApiKeys.Viewer);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(RoofIdentityContract.BearerScheme, token);
+        (await client.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        logs.Entries.Select(entry => entry.Message)
+            .Should().Contain(m => m.Contains("Roof command stop requested by wendy", StringComparison.Ordinal), "a live session is used first");
+
+        clock.Now += TimeSpan.FromHours(12) + TimeSpan.FromSeconds(1);
+
+        (await client.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK, "Stop takes the key beside a dead session");
+        logs.Entries.Select(entry => entry.Message)
+            .Should().Contain(m => m.Contains("Roof command stop requested by test-viewer", StringComparison.Ordinal));
+        (await client.GetAsync($"{Roof}/Status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "only Stop falls back to the key");
+
+        using var noKey = Bearer(host, token);
+        var refused = await noKey.PostAsync($"{Roof}/Stop", content: null);
+        refused.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        refused.Headers.WwwAuthenticate.ToString().Should().Contain("error=\"invalid_token\"");
+        using var badKey = host.CreateApiClient("test-wrong-key-not-a-real-secret-0000");
+        badKey.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(RoofIdentityContract.BearerScheme, token);
+        (await badKey.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        host.RoofService.Verify(s => s.Stop(It.IsAny<RoofControllerStopReason>()), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    public async Task TooManySignInsFromOneAddress_Give429SignInBusy_BeforeAnySecretIsChecked_AndStopStillWorks()
+    {
+        using var logs = new RecordingLoggerProvider();
+        using var host = CreateHost(logs: logs, extraSettings: new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:SignInAttemptsPerMinute"] = "3"
+        });
+        await AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole, pin: TestSecrets.Pin);
+        using var anonymous = host.CreateApiClient();
+        for (var i = 0; i < 3; i++)
+        {
+            (await anonymous.PostAsJsonAsync($"{Auth}/Session", new RoofSignInRequest { Name = "guess-" + i, Password = TestSecrets.OtherPassword }))
+                .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        var limited = await anonymous.PostAsJsonAsync($"{Auth}/Session", new RoofSignInRequest { Name = "olive", Password = TestSecrets.Password });
+        using var kiosk = host.CreateApiClient(KioskKey);
+        var pin = await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin });
+
+        var problem = await ProblemAsync(limited);
+        problem.Status.Should().Be(429);
+        problem.Code.Should().Be("SignInBusy");
+        problem.Detail.Should().Contain("Stop still works");
+        limited.Headers.RetryAfter!.Delta.Should().BeGreaterThan(TimeSpan.Zero).And.BeLessThanOrEqualTo(TimeSpan.FromMinutes(1));
+        (await ProblemAsync(pin)).Code.Should().Be("SignInBusy", "the limit is per address, whatever the name or kiosk");
+        logs.Entries.Select(entry => entry.Message)
+            .Should().NotContain(m => m.Contains("sign-in for olive", StringComparison.Ordinal), "no secret was checked");
+        (await kiosk.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        using var viewer = host.CreateApiClient(TestApiKeys.Viewer);
+        (await viewer.GetAsync($"{Roof}/Status")).StatusCode.Should().Be(HttpStatusCode.OK, "only sign-in is limited");
+    }
+
     // ---- Signing in at a kiosk with a PIN -------------------------------------------------------------------------
 
     [TestMethod]
@@ -445,6 +510,36 @@ public sealed class IdentityApiTests
 
         (await root.PostAsJsonAsync($"{Identity}/Users", new RoofUserCreateRequest { Name = "bob", Role = "RoofViewer", Password = TestSecrets.Password }))
             .StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [TestMethod]
+    public async Task AnAdminsPinSession_CannotManagePeopleKeysOrSessions_ButCanRunTheRoof()
+    {
+        using var host = CreateHost();
+        await AddUserAsync(host, "alice", RoofControllerApiContract.AdminRole, pin: TestSecrets.Pin);
+        using var kiosk = host.CreateApiClient(KioskKey);
+        var session = await ApiJson.ReadAsync<RoofSessionResponse>(
+            await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "alice", Pin = TestSecrets.Pin }));
+        using var alice = Bearer(host, session.Token);
+
+        var responses = new[]
+        {
+            await alice.GetAsync($"{Identity}/Users"),
+            await alice.PostAsJsonAsync($"{Identity}/Users", new RoofUserCreateRequest { Name = "mallory", Role = "RoofAdmin", Password = TestSecrets.Password }),
+            await alice.PostAsJsonAsync($"{Identity}/Users", new RoofUserCreateRequest { Name = "-not a name-", Role = "nobody" }),
+            await alice.PostAsJsonAsync($"{Identity}/ApiKeys", new RoofApiKeyCreateRequest { Name = "backdoor", Role = "RoofAdmin" }),
+            await alice.GetAsync($"{Identity}/Sessions")
+        };
+
+        foreach (var response in responses)
+        {
+            (await ProblemAsync(response)).Should().Be((403, "CredentialNotAllowed",
+                "A PIN session cannot manage people, API keys or sessions. Use an admin API key, or sign in with a password."));
+        }
+
+        (await alice.PostAsync($"{Roof}/Open", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        (await ApiJson.ReadAsync<RoofUserResponse[]>(await admin.GetAsync($"{Identity}/Users"))).Should().ContainSingle("nobody was added");
     }
 
     [TestMethod]
@@ -689,6 +784,29 @@ public sealed class IdentityApiTests
         var check = health.GetProperty("checks").EnumerateArray().Single(c => c.GetProperty("name").GetString() == "identity_store");
         check.GetProperty("status").GetString().Should().Be("Unhealthy");
         (await File.ReadAllTextAsync(path)).Should().Be("{ not json", "an unavailable store never overwrites the file");
+    }
+
+    [TestMethod]
+    public async Task AFileWithASessionTwice_StillStarts_Refuses503_AndStopStillWorks()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = directory.File("identity.json");
+        using (var first = CreateHost(path))
+        {
+            await AddUserAsync(first, "alice", RoofControllerApiContract.OperatorRole);
+            await SignInAsync(first, "alice");
+        }
+
+        var edited = IdentityFiles.WithAnEntryTwice(await File.ReadAllTextAsync(path), "same-session");
+        await File.WriteAllTextAsync(path, edited);
+        using var host = CreateHost(path);
+
+        using var anonymous = host.CreateApiClient();
+        (await ProblemAsync(await anonymous.PostAsJsonAsync($"{Auth}/Session", new RoofSignInRequest { Name = "alice", Password = TestSecrets.Password })))
+            .Code.Should().Be("IdentityStoreUnavailable");
+        using var kiosk = host.CreateApiClient(KioskKey);
+        (await kiosk.PostAsync($"{Roof}/Stop", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await File.ReadAllTextAsync(path)).Should().Be(edited, "an unavailable store never overwrites the file");
     }
 
     [TestMethod]

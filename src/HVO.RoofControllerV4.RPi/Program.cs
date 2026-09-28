@@ -344,6 +344,9 @@ public class Program
         app.UseRouting();
 
         app.UseMiddleware<OriginCheckMiddleware>();
+
+        // Sign-in attempts per remote address (Auth/Session, Auth/Pin, Auth/Password), before any secret is checked.
+        app.UseRateLimiter();
         app.UseAuthentication();
         app.UseMiddleware<BlazorHubAuthorizationMiddleware>();
         app.UseAuthorization();

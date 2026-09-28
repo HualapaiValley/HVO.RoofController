@@ -36,6 +36,10 @@ API routes accept an API key in the `X-Api-Key` header (scheme `ApiKey`) or a se
 carries `Authorization: Bearer`, and the key otherwise. A console cookie is never accepted there, and neither a key nor a
 token is accepted in the query string. Commands use `POST`; a `GET` to a command route returns 405.
 
+Stop uses its own scheme, `RoofStop`, so that a client holding a session that has just ended can still stop the roof. It
+tries the session first; when the session is refused and the request also carries `X-Api-Key`, it uses the key. Every
+other route refuses such a request with 401, and never falls back to the key.
+
 | Method and route                                         | Policy            | Success | Other responses |
 |----------------------------------------------------------|-------------------|---------|-----------------|
 | `GET  /api/v4.0/RoofControl/Status`                      | Viewer            | 200 `RoofStatusResponse` (after a forced hardware read) | 401, 403, 500 |
@@ -54,9 +58,9 @@ token is accepted in the query string. Commands use `POST`; a `GET` to a command
 | `GET  /api/v4.0/Auth/Me`                                 | any key or session | 200 `RoofCallerResponse` | 401 |
 | `DELETE /api/v4.0/Auth/Session`                          | a session (signs it out) | 204 | 400 (an API key), 401, 503 |
 | `POST /api/v4.0/Auth/Password`                           | a session (own password) | 204 | 400, 401 (`SignInFailed`), 429, 503 |
-| `GET, POST /api/v4.0/Identity/Users`, `GET, PUT, DELETE /api/v4.0/Identity/Users/{name}` | Admin | 200, 201, 204 | 400, 401, 403, 404, 409, 429, 503 |
-| `GET, POST /api/v4.0/Identity/ApiKeys`, `PUT, DELETE /api/v4.0/Identity/ApiKeys/{name}`, `POST .../ApiKeys/{name}/Rotate` | Admin | 200, 201, 204 | 400, 401, 403, 404, 409, 503 |
-| `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin | 200, 204 | 401, 403, 404, 503 |
+| `GET, POST /api/v4.0/Identity/Users`, `GET, PUT, DELETE /api/v4.0/Identity/Users/{name}` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed` for a PIN session), 404, 409, 429, 503 |
+| `GET, POST /api/v4.0/Identity/ApiKeys`, `PUT, DELETE /api/v4.0/Identity/ApiKeys/{name}`, `POST .../ApiKeys/{name}/Rotate` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed`), 404, 409, 503 |
+| `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin (not a PIN session) | 200, 204 | 401, 403 (`CredentialNotAllowed`), 404, 503 |
 | `GET  /openapi/v4.json`                                  | Admin (API key or session) outside Development | 200 | 401, 403 |
 | `GET  /health`                                           | Viewer (API key, session or cookie) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
 | `GET  /health/live`, `GET /health/ready`                 | anonymous         | 200 / 503 | none |
@@ -84,6 +88,7 @@ Roof command failures are RFC 7807 ProblemDetails with two extensions:
 | 401 | `SignInFailed` | Wrong name, password or PIN. Every wrong answer looks the same. |
 | 429 | `SignInLockedOut`, `SignInBusy` | Wait for `Retry-After` (seconds) before trying again. |
 | 403 | `KioskKeyRequired` | PIN sign-in needs a kiosk key. |
+| 403 | `CredentialNotAllowed` | A PIN session, even an admin's, cannot manage people, keys or sessions. Use an admin API key, or sign in with a password. |
 | 404, 409 | `IdentityNotFound`; `IdentityNameConflict`, `IdentityReadOnly`, `LastAdministrator` | Refused change to people, keys or sessions. Show the reason. |
 | 503 | `IdentityStoreUnavailable` | The identity store could not be read or saved. Configured keys and Stop still work. |
 | 400 | `InvalidRequest`, and model validation | Fix the request. |
@@ -216,9 +221,23 @@ password. After `LockoutThreshold` failures in a row (default 5), sign-in is ref
 
 The first lockout lasts `LockoutDuration` (default 5 minutes). Each further one doubles, up to
 `MaximumLockoutDuration` (default 4 hours). A success, or `FailureMemory` (default 24 hours) without a failure, starts
-again from nothing. Hashing is limited to a few at a time, so sign-in cannot starve the roof. A sign-in that cannot get
-a turn gets 429 `SignInBusy`. The settings are under `RoofControllerSecurity:Identity`, and the controller refuses to
-start with invalid values.
+again from nothing.
+
+Each attempt is counted before its secret is checked, so attempts sent in parallel get no more guesses than the
+threshold. Once the failures plus the attempts still being checked reach it, further attempts for that name or kiosk get
+429 `SignInBusy` with `Retry-After: 2` until those end. The lockout remembers at most 16,384 names and kiosks, and
+forgets one only when its failures are older than `FailureMemory` and it is not locked out. While it is full, a name or
+kiosk it does not hold gets 429 `SignInBusy` with `Retry-After: 60`, so a flood of made-up names cannot wipe a real
+name's count.
+
+Each remote address may try `SignInAttemptsPerMinute` sign-ins (default 30; 0 turns the limit off) across
+`Auth/Session`, `Auth/Pin` and `Auth/Password`. Beyond that it gets 429 `SignInBusy` with `Retry-After` before any
+secret is checked, and a `SECURITY` warning is logged at most every 30 seconds. A client that signs people in for them,
+such as a web UI, counts as one address for all of them.
+
+Hashing is limited to a few at a time, so sign-in cannot starve the roof. A sign-in that cannot get a turn also gets
+429 `SignInBusy`. The settings are under `RoofControllerSecurity:Identity`, and the controller refuses to start with
+invalid values.
 
 A client that uses its own API key on a person's behalf (for example the web UI sending Stop) may add
 `X-On-Behalf-Of: <name>`. The audit log records it as `<key> for <name>`; it grants nothing.
@@ -232,6 +251,10 @@ Admins manage everything under `/api/v4.0/Identity`:
 | `GET/POST Identity/Users`, `GET/PUT/DELETE Identity/Users/{name}` | People. A person needs a password, a PIN or both. Secrets are never returned, only whether each is set. Changing a person's role or password ends all their sessions; changing or removing the PIN ends their PIN sessions; removing them ends every session. |
 | `GET/POST Identity/ApiKeys`, `PUT/DELETE Identity/ApiKeys/{name}`, `POST Identity/ApiKeys/{name}/Rotate` | API keys. The list includes the configured keys, marked `Configuration` and read-only (409 `IdentityReadOnly`). The controller generates a managed key's value and returns it once, on create and on rotate. A kiosk key must have the `RoofViewer` role. |
 | `GET Identity/Sessions`, `DELETE Identity/Sessions/{id}` | Open sessions (never their tokens), and ending one. |
+
+A PIN session cannot use these routes, even an admin's: it gets 403 `CredentialNotAllowed`. A PIN is short and typed
+where others can see it, so it must not be able to create people or keys that work from anywhere and outlive the
+session. Use an admin API key, or sign in with a password.
 
 A change that would leave no admin credential is refused with 409 `LastAdministrator`. An admin credential is an admin
 API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed
@@ -247,13 +270,15 @@ settings. On the Pi the deploy script and both Pi compose profiles mount `/var/l
 and set the path to `/var/lib/hvo-roof/identity/identity.json` (see [deployment.md](deployment.md#3-the-identity-store)).
 Back the directory up with the secrets directory.
 
-- Each change is written to a new file (mode 0600), flushed, and renamed over the old one. A crash or power cut leaves
-  the old file or the new one, never a torn one. The change is used only after it is saved.
+- Each change is written to a new file (mode 0600), flushed, and renamed over the old one, and then the directory is
+  flushed. A crash or power cut leaves the old file or the new one, never a torn one, and a change the controller has
+  confirmed stays saved. The change is used only after it is saved.
 - Sessions are kept in the file, so they survive a restart or a redeploy. A PIN session's idle time starts again when
   the controller starts.
 - Without a `StorePath`, the store is kept in memory: people, sessions and managed keys are lost when the controller
   restarts. `/health` reports `identity_store` as Degraded, and the deployment check warns outside Development.
-- When the file cannot be read (corrupt, or no permission), the controller still starts. Sign-in and identity
+- When the file cannot be used (corrupt, an entry repeated, no permission, or a `StorePath` that does not name a file),
+  the controller still starts. Sign-in and identity
   management return 503 `IdentityStoreUnavailable`, and `/health` reports `identity_store` as Unhealthy. Configured
   keys, Stop and the roof keep working. `identity_store` is not a hardware check, so readiness and deploys do not fail
   on it; the deployment check does (below).

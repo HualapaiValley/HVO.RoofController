@@ -51,6 +51,7 @@ internal static class RoofProblemResults
         RoofControllerErrorCode.IdentityReadOnly => "Defined in configuration",
         RoofControllerErrorCode.LastAdministrator => "Last admin credential",
         RoofControllerErrorCode.IdentityStoreUnavailable => "Identity store unavailable",
+        RoofControllerErrorCode.CredentialNotAllowed => "Not with this credential",
         RoofControllerErrorCode.InvalidRequest => "Invalid request",
         _ => "Roof controller error"
     };

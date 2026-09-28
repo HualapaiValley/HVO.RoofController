@@ -19,13 +19,15 @@ namespace HVO.RoofControllerV4.RPi.Controllers;
 /// Admin management of people, managed API keys and open sessions (#41). Secrets are never returned: a person shows
 /// only whether a password and PIN are set, and a managed key's value is shown once, when it is created or rotated.
 /// API keys from the controller's configuration are listed but read-only. Every change is logged as an <c>AUDIT</c>
-/// line naming the admin; no change may leave the controller without an admin credential.
+/// line naming the admin; no change may leave the controller without an admin credential. Needs an admin API key or an
+/// admin's password session: a PIN session is refused (<c>CredentialNotAllowed</c>).
 /// </summary>
 [ApiController, ApiVersion("4.0")]
 [Route(RoofIdentityContract.IdentityRoute)]
 [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
+[RoofRefusePinSession]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-[ProducesResponseType(StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
 [Tags("People and API keys")]

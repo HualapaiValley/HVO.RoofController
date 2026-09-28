@@ -81,6 +81,26 @@ public sealed class RoofSignInServiceTests
     }
 
     [TestMethod]
+    public async Task AParallelBurstOfWrongPins_ChecksNoMoreGuessesThanTheThreshold()
+    {
+        using var rig = new IdentityRig();
+        await rig.AddUserAsync("olive", Operator, password: null, pin: TestSecrets.Pin);
+        var threshold = rig.Options.LockoutThreshold;
+        var kiosk = rig.Kiosk;
+
+        var results = await Task.WhenAll(Enumerable.Range(0, threshold * 4).Select(_ => Task.Run(
+            () => rig.SignIn.SignInWithPinAsync(kiosk, "olive", TestSecrets.OtherPin, Remote, CancellationToken.None))));
+
+        LogAssertions.Count(rig.SignInLogger, LogLevel.Warning, "SECURITY PIN sign-in at cfg-kiosk for olive from 192.0.2.10 failed")
+            .Should().Be(threshold, "only the guesses left before the lockout were checked");
+        results.Should().OnlyContain(result => result.Error == RoofControllerErrorCode.SignInFailed
+            || result.Error == RoofControllerErrorCode.SignInLockedOut
+            || result.Error == RoofControllerErrorCode.SignInBusy);
+        (await rig.SignIn.SignInWithPinAsync(kiosk, "olive", TestSecrets.Pin, Remote, CancellationToken.None))
+            .Error.Should().Be(RoofControllerErrorCode.SignInLockedOut, "the right PIN after the burst is still locked out");
+    }
+
+    [TestMethod]
     public async Task ThePin_OpensAPinSessionAtTheKiosk_AndAViewersPinNeverWorks()
     {
         using var rig = new IdentityRig();

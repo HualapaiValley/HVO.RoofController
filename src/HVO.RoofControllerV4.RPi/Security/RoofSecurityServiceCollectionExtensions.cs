@@ -58,6 +58,7 @@ public static class RoofSecurityServiceCollectionExtensions
         services.AddSingleton<RoofSecretHasher>();
         services.AddSingleton<RoofSignInLockout>();
         services.AddSingleton<RoofSignInService>();
+        services.AddRoofSignInRateLimiting();
         services.AddSingleton(provider => new RoofApiKeyStore(
             provider.GetRequiredService<IOptionsMonitor<RoofControllerSecurityOptions>>(),
             provider.GetRequiredService<ILogger<RoofApiKeyStore>>(),
@@ -88,6 +89,10 @@ public static class RoofSecurityServiceCollectionExtensions
                     ? RoofControllerSecurityDefaults.SessionScheme
                     : RoofControllerSecurityDefaults.ApiKeyScheme;
             })
+            .AddScheme<AuthenticationSchemeOptions, RoofStopAuthenticationHandler>(
+                RoofControllerSecurityDefaults.StopScheme,
+                displayName: "Session, or the API key sent with it (Stop)",
+                _ => { })
             .AddCookie(RoofControllerSecurityDefaults.CookieScheme, options =>
             {
                 options.Cookie.Name = ConsoleCookieName;

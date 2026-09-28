@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Storage;
 
 namespace HVO.RoofControllerV4.RPi.Security.Identity;
 
@@ -18,20 +19,31 @@ public sealed class RoofIdentityStoreException : Exception
 
 /// <summary>
 /// Reads and writes the identity store file. A save writes a new file next to the old one (readable and writable by
-/// the controller's user only), flushes it to disk and renames it over the old one, so a crash or power cut leaves
-/// either the old file or the new one, never a torn one.
+/// the controller's user only), flushes it to disk, renames it over the old one and flushes the directory, so a crash or
+/// power cut leaves either the old file or the new one, never a torn one, and a confirmed save stays saved.
 /// </summary>
 internal sealed class RoofIdentityFile
 {
     private const string TemporarySuffix = ".tmp";
     private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
+    /// <summary>Throws <see cref="RoofIdentityStoreException"/> when <paramref name="path"/> cannot name a file in a directory.</summary>
     public RoofIdentityFile(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        Path = System.IO.Path.GetFullPath(path);
-        Directory = System.IO.Path.GetDirectoryName(Path)
-            ?? throw new ArgumentException("The identity store path has no directory.", nameof(path));
+        try
+        {
+            Path = System.IO.Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new RoofIdentityStoreException($"The identity store path '{path}' is not a valid file path.", ex);
+        }
+
+        Directory = System.IO.Path.GetDirectoryName(Path) is { Length: > 0 } directory && System.IO.Path.GetFileName(Path).Length > 0
+            ? directory
+            : throw new RoofIdentityStoreException(
+                $"The identity store path '{path}' must name a file in a directory, for example /var/lib/hvo-roof/identity/identity.json.");
     }
 
     public string Path { get; }
@@ -122,6 +134,7 @@ internal sealed class RoofIdentityFile
             }
 
             File.Move(temporary, Path, overwrite: true);
+            RoofDirectorySync.TryFlush(Directory);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -224,6 +237,11 @@ internal sealed class RoofIdentityFile
             problems.Add("two API keys have the same name.");
         }
 
+        if (HasDuplicates(keys.Select(key => key?.KeySha256)))
+        {
+            problems.Add("two API keys have the same key.");
+        }
+
         for (var i = 0; i < sessions.Count; i++)
         {
             var session = sessions[i];
@@ -235,8 +253,21 @@ internal sealed class RoofIdentityFile
             }
         }
 
+        if (HasDuplicates(sessions.Select(session => session?.Id)))
+        {
+            problems.Add("two sessions have the same id.");
+        }
+
+        if (HasDuplicates(sessions.Select(session => session?.TokenSha256)))
+        {
+            problems.Add("two sessions have the same token.");
+        }
+
         return problems;
     }
+
+    private static bool HasDuplicates(IEnumerable<string?> values)
+        => values.Where(value => value is not null).GroupBy(value => value, StringComparer.Ordinal).Any(group => group.Count() > 1);
 
     internal static bool IsSha256Hex(string? value)
         => value is { Length: 64 } && value.All(char.IsAsciiHexDigit);

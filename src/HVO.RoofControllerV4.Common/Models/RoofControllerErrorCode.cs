@@ -70,5 +70,11 @@ public enum RoofControllerErrorCode
     LastAdministrator = 19,
 
     /// <summary>The identity store could not be read or written, so sign-in and management are unavailable. HTTP 503.</summary>
-    IdentityStoreUnavailable = 20
+    IdentityStoreUnavailable = 20,
+
+    /// <summary>
+    /// The caller's role would allow this, but not the way they signed in: a PIN session cannot manage people, API keys
+    /// or sessions. Use an admin API key or sign in with a password. HTTP 403.
+    /// </summary>
+    CredentialNotAllowed = 21
 }

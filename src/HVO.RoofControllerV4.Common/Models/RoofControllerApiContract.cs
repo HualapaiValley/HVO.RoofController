@@ -60,6 +60,7 @@ public static class RoofControllerApiContract
         RoofControllerErrorCode.IdentityReadOnly => 409,
         RoofControllerErrorCode.LastAdministrator => 409,
         RoofControllerErrorCode.IdentityStoreUnavailable => 503,
+        RoofControllerErrorCode.CredentialNotAllowed => 403,
         _ => 500
     };
 }

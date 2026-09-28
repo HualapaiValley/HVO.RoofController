@@ -118,22 +118,169 @@ public sealed class RoofSignInLockoutTests
     }
 
     [TestMethod]
-    public void BeyondTheMaximum_EntriesThatAreNotLockedOutAreForgottenFirst()
+    public void AttemptsInProgress_CountTowardsTheThreshold_SoParallelGuessesNeverExceedIt()
+    {
+        var (lockout, _, _) = Create();
+        var key = RoofSignInLockout.ForDevice("0123456789abcdef");
+
+        for (var i = 0; i < 3; i++)
+        {
+            lockout.TryBeginAttempt(key, out _).Should().Be(RoofSignInAdmission.Admitted);
+        }
+
+        lockout.TryBeginAttempt(key, out var retryAfter).Should().Be(RoofSignInAdmission.Busy, "three guesses are already being checked");
+        retryAfter.Should().Be(RoofSignInLockout.InProgressRetry);
+
+        lockout.EndAttempt(key, RoofSignInOutcome.Failed).Should().BeNull();
+        lockout.EndAttempt(key, RoofSignInOutcome.Failed).Should().BeNull();
+        lockout.TryBeginAttempt(key, out _).Should().Be(RoofSignInAdmission.Busy, "two failures and one guess in progress reach three");
+        lockout.EndAttempt(key, RoofSignInOutcome.Failed).Should().Be(TimeSpan.FromMinutes(5));
+
+        lockout.TryBeginAttempt(key, out retryAfter).Should().Be(RoofSignInAdmission.LockedOut);
+        retryAfter.Should().Be(TimeSpan.FromMinutes(5));
+    }
+
+    [TestMethod]
+    public void AnAttemptThatWasNotChecked_GivesItsPlaceBack_WithoutCountingAFailure()
+    {
+        var (lockout, _, _) = Create();
+        var key = RoofSignInLockout.ForName("alice");
+        for (var i = 0; i < 3; i++)
+        {
+            lockout.TryBeginAttempt(key, out _).Should().Be(RoofSignInAdmission.Admitted);
+        }
+
+        lockout.EndAttempt(key, RoofSignInOutcome.NotChecked).Should().BeNull();
+        lockout.TryBeginAttempt(key, out _).Should().Be(RoofSignInAdmission.Admitted);
+        for (var i = 0; i < 3; i++)
+        {
+            lockout.EndAttempt(key, RoofSignInOutcome.NotChecked).Should().BeNull();
+        }
+
+        lockout.Count.Should().Be(0, "nothing was counted");
+        lockout.IsLockedOut(key, out _).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ASucceededAttempt_ForgetsTheFailures_ButOtherAttemptsStillInProgressKeepTheirPlace()
+    {
+        var (lockout, _, _) = Create();
+        var key = RoofSignInLockout.ForName("alice");
+        lockout.RecordFailure(key);
+        lockout.RecordFailure(key);
+        lockout.TryBeginAttempt(key, out _).Should().Be(RoofSignInAdmission.Admitted);
+
+        lockout.EndAttempt(key, RoofSignInOutcome.Succeeded).Should().BeNull();
+
+        lockout.Count.Should().Be(0);
+        for (var i = 0; i < 3; i++)
+        {
+            lockout.TryBeginAttempt(key, out _).Should().Be(RoofSignInAdmission.Admitted, "the failures were forgotten");
+        }
+
+        lockout.TryBeginAttempt(key, out _).Should().Be(RoofSignInAdmission.Busy);
+    }
+
+    [TestMethod]
+    public void EndingAnAttemptThatWasNeverBegun_Throws()
+    {
+        var (lockout, _, _) = Create();
+
+        var act = () => lockout.EndAttempt(RoofSignInLockout.ForName("alice"), RoofSignInOutcome.Failed);
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [TestMethod]
+    public async Task ManyThreadsGuessingAtOnce_GetNoMoreGuessesThanTheThreshold()
+    {
+        var (lockout, _, _) = Create();
+        var key = RoofSignInLockout.ForDevice("0123456789abcdef");
+        var admitted = 0;
+        using var gate = new ManualResetEventSlim();
+        using var checking = new CountdownEvent(3);
+
+        var guesses = Enumerable.Range(0, 64).Select(guess => Task.Run(() =>
+        {
+            gate.Wait();
+            if (lockout.TryBeginAttempt(key, out _) != RoofSignInAdmission.Admitted)
+            {
+                return;
+            }
+
+            Interlocked.Increment(ref admitted);
+            checking.Signal();
+            checking.Wait();
+            lockout.EndAttempt(key, RoofSignInOutcome.Failed);
+        })).ToArray();
+        gate.Set();
+        await Task.WhenAll(guesses);
+
+        admitted.Should().Be(3);
+        lockout.IsLockedOut(key, out _).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void AFloodOfNewNames_NeverForgetsANameWithRecentFailures_AndIsRefusedOnceTheTableIsFull()
     {
         var (lockout, time, _) = Create();
+        var alice = RoofSignInLockout.ForName("alice");
+        lockout.RecordFailure(alice);
+        lockout.RecordFailure(alice);
+
+        for (var i = 0; i < RoofSignInLockout.MaximumEntries - 1; i++)
+        {
+            lockout.RecordFailure(RoofSignInLockout.ForName("guess-" + i));
+        }
+
+        lockout.Count.Should().Be(RoofSignInLockout.MaximumEntries);
+        lockout.TryBeginAttempt(RoofSignInLockout.ForName("one-more"), out var retryAfter).Should().Be(RoofSignInAdmission.Busy);
+        retryAfter.Should().Be(RoofSignInLockout.FullRetry);
+
+        time.Now += TimeSpan.FromMinutes(59);
+        lockout.RecordFailure(alice).Should().Be(TimeSpan.FromMinutes(5), "alice's two failures were remembered through the flood");
+    }
+
+    [TestMethod]
+    public void OnceTheFailuresAreOlderThanTheMemory_AFullTableMakesRoom()
+    {
+        var (lockout, time, options) = Create();
+        for (var i = 0; i < RoofSignInLockout.MaximumEntries; i++)
+        {
+            lockout.RecordFailure(RoofSignInLockout.ForName("guess-" + i));
+        }
+
+        var locked = RoofSignInLockout.ForName("locked");
+        time.Now += options.FailureMemory - TimeSpan.FromMinutes(10);
+        lockout.TryBeginAttempt(locked, out _).Should().Be(RoofSignInAdmission.Busy);
+
+        time.Now += TimeSpan.FromMinutes(10);
+        lockout.TryBeginAttempt(locked, out _).Should().Be(RoofSignInAdmission.Admitted);
+        lockout.EndAttempt(locked, RoofSignInOutcome.Failed);
+        lockout.Count.Should().Be(1, "every stale entry was forgotten to make room");
+    }
+
+    [TestMethod]
+    public void ALockedOutName_IsNeverForgotten_ToMakeRoom()
+    {
+        var (lockout, time, options) = Create();
+        options.LockoutDuration = TimeSpan.FromHours(2);
+        options.MaximumLockoutDuration = TimeSpan.FromHours(2);
         var locked = RoofSignInLockout.ForName("locked");
         for (var i = 0; i < 3; i++)
         {
             lockout.RecordFailure(locked);
         }
 
-        for (var i = 0; i < RoofSignInLockout.MaximumEntries + 10; i++)
+        for (var i = 0; i < RoofSignInLockout.MaximumEntries - 1; i++)
         {
-            time.Now += TimeSpan.FromMilliseconds(1);
             lockout.RecordFailure(RoofSignInLockout.ForName("guess-" + i));
         }
 
-        lockout.Count.Should().Be(RoofSignInLockout.MaximumEntries);
-        lockout.IsLockedOut(locked, out _).Should().BeTrue("a flood of new names does not free a locked-out one");
+        time.Now += options.FailureMemory;
+        lockout.TryBeginAttempt(RoofSignInLockout.ForName("new"), out _).Should().Be(RoofSignInAdmission.Admitted);
+
+        lockout.IsLockedOut(locked, out var retryAfter).Should().BeTrue("its lockout is still in force");
+        retryAfter.Should().Be(TimeSpan.FromHours(1));
     }
 }

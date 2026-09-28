@@ -19,6 +19,12 @@ public static class RoofControllerSecurityDefaults
     /// </summary>
     public const string ApiScheme = "RoofApi";
 
+    /// <summary>
+    /// The scheme Stop accepts: like <see cref="ApiScheme"/>, except that when the session token is refused (ended, idle
+    /// or expired) an API key sent with it is tried, so a kiosk or UI can always stop with its own key.
+    /// </summary>
+    public const string StopScheme = "RoofStop";
+
     /// <summary>Cookie scheme used only by the Blazor console after an access-key login.</summary>
     public const string CookieScheme = "RoofConsoleCookie";
 

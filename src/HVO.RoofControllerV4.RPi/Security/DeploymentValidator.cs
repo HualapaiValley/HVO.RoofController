@@ -380,7 +380,17 @@ public static partial class DeploymentValidator
             return;
         }
 
-        var file = new RoofIdentityFile(options.StorePath);
+        RoofIdentityFile file;
+        try
+        {
+            file = new RoofIdentityFile(options.StorePath);
+        }
+        catch (RoofIdentityStoreException ex)
+        {
+            problems.Add($"Identity store: {ex.Message}");
+            return;
+        }
+
         var storeProblems = file.CheckUsable();
         problems.AddRange(storeProblems.Select(problem => $"Identity store: {problem}"));
         if (storeProblems.Count == 0)

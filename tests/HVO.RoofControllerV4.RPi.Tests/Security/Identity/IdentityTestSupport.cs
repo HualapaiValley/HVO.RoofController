@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Security.Identity;
@@ -166,4 +167,29 @@ internal static class LogAssertions
 
     public static int Count<T>(CapturingLogger<T> logger, LogLevel level, string fragment)
         => logger.Entries.Count(entry => entry.Level == level && entry.Message.Contains(fragment, StringComparison.Ordinal));
+}
+
+/// <summary>Edits a saved identity file by hand, as someone restoring or merging backups might.</summary>
+internal static class IdentityFiles
+{
+    /// <summary>
+    /// Adds a copy of the first session or managed key that repeats what must be unique: <c>same-session</c> (the whole
+    /// session), <c>same-token</c> (another id, the same token) or <c>same-key</c> (another name, the same key).
+    /// </summary>
+    public static string WithAnEntryTwice(string json, string mutation)
+    {
+        var document = JsonNode.Parse(json)!.AsObject();
+        var (list, change) = mutation switch
+        {
+            "same-session" => ("sessions", (Action<JsonObject>)(_ => { })),
+            "same-token" => ("sessions", copy => copy["id"] = new string('f', 32)),
+            "same-key" => ("apiKeys", copy => copy["name"] = "copy"),
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null)
+        };
+        var entries = document[list]!.AsArray();
+        var copy = entries[0]!.DeepClone().AsObject();
+        change(copy);
+        entries.Add(copy);
+        return document.ToJsonString();
+    }
 }

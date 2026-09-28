@@ -9,6 +9,7 @@ using HVO.RoofControllerV4.RPi.Security.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
@@ -55,6 +56,7 @@ public sealed class AuthController : ControllerBase
     /// <response code="429">Locked out after repeated failures, or too many sign-ins at once; see <c>Retry-After</c>.</response>
     /// <response code="503">The identity store is unavailable.</response>
     [HttpPost("Session", Name = nameof(CreateSession))]
+    [EnableRateLimiting(RoofSignInRateLimiting.PolicyName)]
     [AllowAnonymous]
     [ProducesResponseType(typeof(RoofSessionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -83,6 +85,7 @@ public sealed class AuthController : ControllerBase
     /// <response code="429">This kiosk is locked out after repeated failures, or too many sign-ins at once.</response>
     /// <response code="503">The identity store is unavailable.</response>
     [HttpPost("Pin", Name = nameof(SignInWithPin))]
+    [EnableRateLimiting(RoofSignInRateLimiting.PolicyName)]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme)]
     [ProducesResponseType(typeof(RoofSessionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -201,6 +204,7 @@ public sealed class AuthController : ControllerBase
     /// <response code="429">Locked out after repeated failures, or too many sign-ins at once.</response>
     /// <response code="503">The identity store is unavailable.</response>
     [HttpPost("Password", Name = nameof(ChangePassword))]
+    [EnableRateLimiting(RoofSignInRateLimiting.PolicyName)]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]

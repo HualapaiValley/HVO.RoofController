@@ -96,24 +96,36 @@ public sealed class RoofSignInService
         }
 
         var lockKey = RoofSignInLockout.ForName(name);
-        if (_lockout.IsLockedOut(lockKey, out var retryAfter))
+        var admission = _lockout.TryBeginAttempt(lockKey, out var retryAfter);
+        if (admission != RoofSignInAdmission.Admitted)
         {
-            return LockedOut(retryAfter);
+            return Refused(admission, "password change", name, remote, retryAfter);
         }
 
         _identity.TryGetUser(name, out var user);
         var oldHash = user?.PasswordHash;
         var stamp = user?.Stamp;
-        var check = await _hasher.VerifyAsync(oldHash, currentPassword, cancellationToken).ConfigureAwait(false);
+        var outcome = RoofSignInOutcome.NotChecked;
+        var lockedFor = TimeSpan.Zero;
+        RoofSecretCheck check;
+        try
+        {
+            check = await _hasher.VerifyAsync(oldHash, currentPassword, cancellationToken).ConfigureAwait(false);
+            outcome = Outcome(check);
+        }
+        finally
+        {
+            lockedFor = _lockout.EndAttempt(lockKey, outcome) ?? TimeSpan.Zero;
+        }
+
         switch (check)
         {
             case RoofSecretCheck.Busy:
                 return Busy();
             case RoofSecretCheck.Failed:
-                return Failed(lockKey, name, "password change", remote, "The current password is not correct.");
+                return Failed(lockedFor, name, "password change", remote, "The current password is not correct.");
         }
 
-        _lockout.RecordSuccess(lockKey);
         var newHash = await _hasher.HashAsync(newPassword, cancellationToken).ConfigureAwait(false);
         if (newHash is null)
         {
@@ -158,32 +170,38 @@ public sealed class RoofSignInService
         }
 
         var what = kind == RoofCredentialKind.Pin ? $"PIN sign-in at {kiosk!.Name}" : "sign-in";
-        if (_lockout.IsLockedOut(lockKey, out var retryAfter))
+        var admission = _lockout.TryBeginAttempt(lockKey, out var retryAfter);
+        if (admission != RoofSignInAdmission.Admitted)
         {
-            _logger.LogWarning(
-                "SECURITY {What} for {Name} from {Remote} refused: locked out for another {RetryAfter}.",
-                what,
-                name,
-                remote,
-                retryAfter);
-            return LockedOut(retryAfter);
+            return Refused(admission, what, name, remote, retryAfter);
         }
 
         // An unknown name, or a person without this kind of secret, is checked against a dummy hash (same time, same answer).
         _identity.TryGetUser(name, out var user);
         var hash = user is null ? null : selectHash(user);
         var stamp = user?.Stamp;
-        var check = await _hasher.VerifyAsync(hash, secret, cancellationToken).ConfigureAwait(false);
+        var outcome = RoofSignInOutcome.NotChecked;
+        var lockedFor = TimeSpan.Zero;
+        RoofSecretCheck check;
+        try
+        {
+            check = await _hasher.VerifyAsync(hash, secret, cancellationToken).ConfigureAwait(false);
+            outcome = Outcome(check);
+        }
+        finally
+        {
+            lockedFor = _lockout.EndAttempt(lockKey, outcome) ?? TimeSpan.Zero;
+        }
+
         switch (check)
         {
             case RoofSecretCheck.Busy:
                 _logger.LogWarning("{What} for {Name} from {Remote} refused: too many sign-ins are being checked at once.", what, name, remote);
                 return Busy();
             case RoofSecretCheck.Failed:
-                return Failed(lockKey, name, what, remote, WrongCredentials);
+                return Failed(lockedFor, name, what, remote, WrongCredentials);
         }
 
-        _lockout.RecordSuccess(lockKey);
         if (check == RoofSecretCheck.SucceededRehashNeeded)
         {
             var upgraded = await _hasher.HashAsync(secret, cancellationToken).ConfigureAwait(false);
@@ -218,18 +236,50 @@ public sealed class RoofSignInService
         }
     }
 
-    private RoofSignInResult Failed(string lockKey, string name, string what, string remote, string detail)
+    private static RoofSignInOutcome Outcome(RoofSecretCheck check) => check switch
     {
-        var lockedFor = _lockout.RecordFailure(lockKey);
-        if (lockedFor is { } duration)
+        RoofSecretCheck.Failed => RoofSignInOutcome.Failed,
+        RoofSecretCheck.Busy => RoofSignInOutcome.NotChecked,
+        _ => RoofSignInOutcome.Succeeded
+    };
+
+    private RoofSignInResult Refused(RoofSignInAdmission admission, string what, string name, string remote, TimeSpan retryAfter)
+    {
+        if (admission == RoofSignInAdmission.LockedOut)
+        {
+            _logger.LogWarning(
+                "SECURITY {What} for {Name} from {Remote} refused: locked out for another {RetryAfter}.",
+                what,
+                name,
+                remote,
+                retryAfter);
+            return LockedOut(retryAfter);
+        }
+
+        _logger.LogWarning(
+            "SECURITY {What} for {Name} from {Remote} refused: every guess left before a lockout is already being checked, " +
+            "or too many names and kiosks with recent failures are remembered.",
+            what,
+            name,
+            remote);
+        return RoofSignInResult.Failure(
+            RoofControllerErrorCode.SignInBusy,
+            "Too many sign-in attempts are in progress for this name or kiosk. Retry shortly.",
+            retryAfter);
+    }
+
+    /// <param name="lockedFor">The lockout this failure started, or zero.</param>
+    private RoofSignInResult Failed(TimeSpan lockedFor, string name, string what, string remote, string detail)
+    {
+        if (lockedFor > TimeSpan.Zero)
         {
             _logger.LogWarning(
                 "SECURITY {What} for {Name} from {Remote} failed; too many failures, locked out for {Duration}.",
                 what,
                 name,
                 remote,
-                duration);
-            return LockedOut(duration);
+                lockedFor);
+            return LockedOut(lockedFor);
         }
 
         _logger.LogWarning("SECURITY {What} for {Name} from {Remote} failed.", what, name, remote);

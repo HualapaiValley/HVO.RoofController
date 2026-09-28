@@ -42,6 +42,12 @@ public sealed class RoofIdentityOptions
     /// </summary>
     public TimeSpan FailureMemory { get; set; } = TimeSpan.FromHours(24);
 
+    /// <summary>
+    /// Sign-in attempts (password, PIN and password change together) accepted from one remote address per minute; more
+    /// are refused with 429 before any secret is checked. 0 turns the limit off. Default 30.
+    /// </summary>
+    public int SignInAttemptsPerMinute { get; set; } = 30;
+
     /// <summary>Returns the problems with these settings (empty when valid).</summary>
     internal IReadOnlyList<string> Validate()
     {
@@ -54,6 +60,11 @@ public sealed class RoofIdentityOptions
         if (LockoutThreshold < 1)
         {
             problems.Add($"{SectionName}:{nameof(LockoutThreshold)} must be at least 1.");
+        }
+
+        if (SignInAttemptsPerMinute is < 0 or > 10000)
+        {
+            problems.Add($"{SectionName}:{nameof(SignInAttemptsPerMinute)} must be between 0 (off) and 10000.");
         }
 
         if (MaximumLockoutDuration < LockoutDuration)

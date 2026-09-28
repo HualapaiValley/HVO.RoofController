@@ -472,6 +472,43 @@ public sealed class RoofIdentityStoreTests
     }
 
     [TestMethod]
+    [DataRow("same-session", "two sessions have the same id")]
+    [DataRow("same-token", "two sessions have the same token")]
+    [DataRow("same-key", "two API keys have the same key")]
+    public async Task AFileWithAnEntryTwice_MakesTheStoreUnavailable_InsteadOfFailingToStart(string mutation, string reason)
+    {
+        using var directory = new TemporaryDirectory();
+        var path = directory.File("identity.json");
+        using (var rig = new IdentityRig(path))
+        {
+            await rig.AddUserAsync("alice", Operator);
+            rig.Store.AddManagedKey("ci", Operator, kiosk: false, RoofIdentityStore.HashHex("test-managed-key-not-a-real-secret-0002"))
+                .Succeeded.Should().BeTrue();
+            rig.OpenSession("alice");
+        }
+
+        await File.WriteAllTextAsync(path, IdentityFiles.WithAnEntryTwice(await File.ReadAllTextAsync(path), mutation));
+
+        using var reopened = new IdentityRig(path);
+
+        reopened.Store.IsAvailable.Should().BeFalse();
+        reopened.Store.UnavailableReason.Should().Contain(reason);
+        reopened.Keys.TryValidate(TestSecrets.AdminKey, out _).Should().BeTrue("configured keys keep working");
+    }
+
+    [TestMethod]
+    [DataRow("/")]
+    [DataRow("a NUL character")]
+    public void APathThatIsNotAFile_MakesTheStoreUnavailable(string storePath)
+    {
+        using var rig = new IdentityRig(storePath == "/" ? storePath : "bad\0path/identity.json");
+
+        rig.Store.IsAvailable.Should().BeFalse();
+        rig.Store.UnavailableReason.Should().NotBeNullOrEmpty();
+        rig.Keys.TryValidate(TestSecrets.AdminKey, out _).Should().BeTrue("configured keys keep working");
+    }
+
+    [TestMethod]
     public void AMissingDirectory_MakesTheStoreUnavailable()
     {
         using var directory = new TemporaryDirectory();
@@ -549,13 +586,15 @@ public sealed class RoofIdentityStoreTests
             LockoutThreshold = 0,
             LockoutDuration = TimeSpan.FromHours(1),
             MaximumLockoutDuration = TimeSpan.FromMinutes(30),
-            FailureMemory = TimeSpan.FromMinutes(10)
+            FailureMemory = TimeSpan.FromMinutes(10),
+            SignInAttemptsPerMinute = -1
         }.Validate();
 
-        problems.Should().HaveCount(4);
+        problems.Should().HaveCount(5);
         problems.Should().Contain(problem => problem.Contains("SessionLifetime must be positive"));
         problems.Should().Contain(problem => problem.Contains("LockoutThreshold must be at least 1"));
         problems.Should().Contain(problem => problem.Contains("MaximumLockoutDuration must be at least LockoutDuration"));
         problems.Should().Contain(problem => problem.Contains("FailureMemory must be at least MaximumLockoutDuration"));
+        problems.Should().Contain(problem => problem.Contains("SignInAttemptsPerMinute must be between 0 (off) and 10000"));
     }
 }

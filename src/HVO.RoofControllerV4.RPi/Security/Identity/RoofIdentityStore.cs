@@ -91,9 +91,9 @@ public sealed class RoofIdentityStore
         }
         else
         {
-            _file = new RoofIdentityFile(path);
             try
             {
+                _file = new RoofIdentityFile(path);
                 _document = _file.Load();
                 _logger.LogInformation(
                     "Identity store {Path} loaded: {Users} people, {Keys} managed API keys, {Sessions} sessions.",
@@ -123,7 +123,21 @@ public sealed class RoofIdentityStore
             _lastActivity[session.Id] = now.UtcTicks;
         }
 
-        _snapshot = Build(_document);
+        try
+        {
+            _snapshot = Build(_document);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // Load checks for everything Build relies on; this is the last line that keeps a bad file from stopping startup.
+            UnavailableReason = $"The identity store '{_file?.Path}' is inconsistent: {ex.Message}";
+            _logger.LogError(
+                "Identity store unavailable: {Reason} Sign-in and identity management are refused; configured API keys still work.",
+                UnavailableReason);
+            _document = new RoofIdentityDocument();
+            _lastActivity.Clear();
+            _snapshot = Build(_document);
+        }
     }
 
     /// <summary>Raised after every saved change (outside the store's lock).</summary>
