@@ -14,7 +14,7 @@ using Microsoft.AspNetCore.Authorization;
 namespace HVO.RoofControllerV4.RPi.Controllers;
 
 /// <summary>
-/// Provides APIs for system-level administration and diagnostics. Requires an Admin API key (<c>X-Api-Key</c>).
+/// Provides APIs for system-level administration and diagnostics. Requires the Admin role (an <c>X-Api-Key</c> or an admin's session).
 /// </summary>
 [ApiController, ApiVersion("1.0"), Produces("application/json")]
 [Route("api/v{version:apiVersion}/System")]

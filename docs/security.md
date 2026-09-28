@@ -1,13 +1,14 @@
 # Roof Controller V4 security
 
 The controller drives a real roof motor, so its HTTP surface is closed by default. Every roof command, status read,
-configuration change, health detail and camera stream needs an API key or a signed-in console session. Only two
-anonymous endpoints remain: the liveness and readiness probes.
+configuration change, health detail and camera stream needs an API key, a person's session or a signed-in console
+session. The anonymous endpoints are the liveness and readiness probes, and signing in with a name and password.
 
 This page covers:
 
 - how to provision keys
 - what each role may do
+- how people sign in, and how admins manage people, keys and sessions
 - how the console and camera authenticate
 - the transport settings
 
@@ -15,7 +16,8 @@ For TLS certificates and the deploy script, see [deployment.md](deployment.md).
 
 ## Roles
 
-Each API key grants exactly one role. Roles are hierarchical: Admin includes Operator, and Operator includes Viewer.
+Each API key, person and session grants exactly one role. Roles are hierarchical: Admin includes Operator, and
+Operator includes Viewer.
 
 | Role (`Role` value) | Policy name        | Allows                                                                |
 |---------------------|--------------------|-----------------------------------------------------------------------|
@@ -23,35 +25,48 @@ Each API key grants exactly one role. Roles are hierarchical: Admin includes Ope
 | `RoofOperator`      | `RoofOperatorPolicy` | Everything above, plus Open, Close, ClearFault and lease renewal       |
 | `RoofAdmin`         | `RoofAdminPolicy`  | Everything above, plus configuration, `System/*` and the OpenAPI document |
 
-Stop uses its own policy, `RoofStopPolicy`. Any authenticated key may stop the roof, because Stop never starts motion.
+Stop uses its own policy, `RoofStopPolicy`. Any authenticated caller (any key or session) may stop the roof, because
+Stop never starts motion. Sign-in lockouts never apply to Stop.
 Anonymous callers may stop it only when `RoofControllerSecurity:AllowAnonymousStop` is `true` (default `false`).
 
 ## Endpoints
 
-API routes accept only the `X-Api-Key` header (scheme `ApiKey`). A console cookie is never accepted there. Commands
-use `POST`; a `GET` to a command route returns 405.
+API routes accept an API key in the `X-Api-Key` header (scheme `ApiKey`) or a session token in
+`Authorization: Bearer <token>` (scheme `RoofSession`). The policy scheme `RoofApi` uses the session when a request
+carries `Authorization: Bearer`, and the key otherwise. A console cookie is never accepted there, and neither a key nor a
+token is accepted in the query string. Commands use `POST`; a `GET` to a command route returns 405.
 
 | Method and route                                         | Policy            | Success | Other responses |
 |----------------------------------------------------------|-------------------|---------|-----------------|
 | `GET  /api/v4.0/RoofControl/Status`                      | Viewer            | 200 `RoofStatusResponse` (after a forced hardware read) | 401, 403, 500 |
 | `POST /api/v4.0/RoofControl/Open`                        | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
 | `POST /api/v4.0/RoofControl/Close`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
-| `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key)    | 200 `RoofStatusResponse` | 401, 503, 500 |
+| `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key or session) | 200 `RoofStatusResponse` | 401, 503, 500 |
 | `POST /api/v4.0/RoofControl/Lease`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409 (`LeaseNotActive`), 503 |
 | `POST /api/v4.0/RoofControl/ClearFault?pulseMs=250`      | Operator          | 200 `RoofStatusResponse` | 400 (`pulseMs` outside 50-2000), 401, 403, 409, 503 |
 | `GET  /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` (includes `version`) | 401, 403 |
 | `POST /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` | 400, 401, 403, 409 |
 | `GET  /api/v1.0/System/info`, `GET /api/v1.0/System/metrics` | Admin         | 200 | 401, 403 |
-| `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key or console cookie) | 200 MJPEG | 401, 502, 503, 504 |
-| `GET  /openapi/v4.json`                                  | Admin (API key) outside Development | 200 | 401, 403 |
-| `GET  /health`                                           | Viewer (API key or cookie) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
+| `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key, session or console cookie) | 200 MJPEG | 401, 502, 503, 504 |
+| `POST /api/v4.0/Auth/Session`                            | anonymous         | 200 `RoofSessionResponse` | 400, 401 (`SignInFailed`), 429 (`SignInLockedOut`, `SignInBusy`), 503 |
+| `POST /api/v4.0/Auth/Pin`                                | a kiosk key (API key only) | 200 `RoofSessionResponse` | 400, 401, 403 (`KioskKeyRequired`), 429, 503 |
+| `GET  /api/v4.0/Auth/Pin/Users`                          | a kiosk key (API key only) | 200 `RoofPinUserResponse[]` | 401, 403 (`KioskKeyRequired`), 503 |
+| `GET  /api/v4.0/Auth/Me`                                 | any key or session | 200 `RoofCallerResponse` | 401 |
+| `DELETE /api/v4.0/Auth/Session`                          | a session (signs it out) | 204 | 400 (an API key), 401, 503 |
+| `POST /api/v4.0/Auth/Password`                           | a session (own password) | 204 | 400, 401 (`SignInFailed`), 429, 503 |
+| `GET, POST /api/v4.0/Identity/Users`, `GET, PUT, DELETE /api/v4.0/Identity/Users/{name}` | Admin | 200, 201, 204 | 400, 401, 403, 404, 409, 429, 503 |
+| `GET, POST /api/v4.0/Identity/ApiKeys`, `PUT, DELETE /api/v4.0/Identity/ApiKeys/{name}`, `POST .../ApiKeys/{name}/Rotate` | Admin | 200, 201, 204 | 400, 401, 403, 404, 409, 503 |
+| `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin | 200, 204 | 401, 403, 404, 503 |
+| `GET  /openapi/v4.json`                                  | Admin (API key or session) outside Development | 200 | 401, 403 |
+| `GET  /health`                                           | Viewer (API key, session or cookie) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
 | `GET  /health/live`, `GET /health/ready`                 | anonymous         | 200 / 503 | none |
-| `/hubs/roof` (SignalR status hub, with `/hubs/roof/negotiate`) | Viewer (API key only) | status messages ([Status hub](#status-hub)) | 401, 403 (`https_required`) |
+| `/hubs/roof` (SignalR status hub, with `/hubs/roof/negotiate`) | Viewer (API key or session, never the cookie) | status messages ([Status hub](#status-hub)) | 401, 403 (`https_required`) |
 | `POST /account/login`, `POST /account/logout`            | anonymous (form)  | 302 | 403 (`origin_not_allowed`) |
 | `POST /console/stop`                                     | Stop (console cookie and antiforgery token only) | 200 `{outcome, message}` | 400 (stale form token), 401, 403 (`origin_not_allowed`), 503 (stop not verified), 500 |
 
-When a request has no key or an unknown key, the response is 401 with `WWW-Authenticate: ApiKey`. When a valid key
-lacks the required role, the response is 403.
+When a request has no key or an unknown key, the response is 401 with `WWW-Authenticate: ApiKey`. When a session
+token is unknown, ended or expired, the response is 401 with `WWW-Authenticate: Bearer error="invalid_token"`. When a
+valid key or session lacks the required role, the response is 403.
 
 ### Error bodies
 
@@ -66,6 +81,11 @@ Roof command failures are RFC 7807 ProblemDetails with two extensions:
 |--------|-------|---------------|
 | 409 | `FaultLatched`, `InterlockActive`, `OperationInProgress`, `LeaseNotActive`, `ConfigurationVersionConflict`, `ConfigurationRejected` | Refused by an interlock or state. Show the reason; do not retry blindly. |
 | 503 | `NotInitialized`, `ShuttingDown`, `HardwareUnavailable`, `RelayStateUnverified` | Not ready. `Retry-After: 2` is set. |
+| 401 | `SignInFailed` | Wrong name, password or PIN. Every wrong answer looks the same. |
+| 429 | `SignInLockedOut`, `SignInBusy` | Wait for `Retry-After` (seconds) before trying again. |
+| 403 | `KioskKeyRequired` | PIN sign-in needs a kiosk key. |
+| 404, 409 | `IdentityNotFound`; `IdentityNameConflict`, `IdentityReadOnly`, `LastAdministrator` | Refused change to people, keys or sessions. Show the reason. |
+| 503 | `IdentityStoreUnavailable` | The identity store could not be read or saved. Configured keys and Stop still work. |
 | 400 | `InvalidRequest`, and model validation | Fix the request. |
 | 500 | `Unknown` | Unexpected. The detail text is generic; see the controller log. |
 
@@ -82,8 +102,8 @@ which turns them off. Some changes also need `"confirmSafetyCriticalChange": tru
 - turning off the operator lease or the IN4 interlock (turning either on, or changing its timeout, needs no
   confirmation)
 
-Every applied change is written to the log as an `AUDIT` entry. The entry holds the key name, the old and new versions,
-and the changed fields.
+Every applied change is written to the log as an `AUDIT` entry. The entry holds the caller's key or person name, the
+old and new versions, and the changed fields.
 
 ## Provisioning API keys
 
@@ -96,9 +116,10 @@ Each entry has these settings:
 | `RoofControllerSecurity:ApiKeys:N:Role` | `RoofViewer`, `RoofOperator` or `RoofAdmin`. |
 | `RoofControllerSecurity:ApiKeys:N:Key` | The key, at least 24 characters. |
 | `RoofControllerSecurity:ApiKeys:N:KeySha256` | Alternative to `Key`: 64 hex characters of SHA-256 over the key's UTF-8 bytes. Use it so the controller never stores the key itself. |
+| `RoofControllerSecurity:ApiKeys:N:Kiosk` | Optional, default `false`. `true` marks a kiosk's key, at which people sign in with a PIN. A kiosk key must have the `RoofViewer` role. |
 
-Set exactly one of `Key` or `KeySha256`. An entry that is incomplete, too short, has an unknown role, or sets both is
-skipped. The startup log reports it by index and name, never by value. If no usable key remains, the controller logs a
+Set exactly one of `Key` or `KeySha256`. An entry that is incomplete, too short, has an unknown role, sets both, or is
+a kiosk key without the `RoofViewer` role is skipped. The startup log reports it by index and name, never by value. If no usable key remains, the controller logs a
 Critical message and answers 401 on every protected endpoint.
 
 Generate a key and its hash without a trailing newline:
@@ -138,12 +159,14 @@ Recommended keys:
 | Monitoring | `RoofViewer` |
 | Maintainer | `RoofAdmin` (configuration and OpenAPI) |
 
-The console login accepts any of these keys.
+The console login accepts any of these keys. Keys in the configuration are read-only through the API. An admin can
+also add keys through the API ([managed API keys](#managed-api-keys)); they need no restart and no file on the Pi.
 
 ### Rotation
 
 Keys reload when the configuration changes. After replacing a key file, restart the container to be certain. A console
-session that was signed in with a removed, rotated or re-roled key ends at the next request or revalidation.
+session that was signed in with a removed, rotated or re-roled key ends at the next request or revalidation. Managed
+keys are rotated through the API, and the old value stops working at once.
 
 ### Local development
 
@@ -157,6 +180,85 @@ export RoofControllerSecurity__ApiKeys__0__Key="$(openssl rand -base64 32 | tr -
 export ROOF_API_KEY="$RoofControllerSecurity__ApiKeys__0__Key"   # used by HVO.RoofControllerV4.RPi.http
 dotnet run --project src/HVO.RoofControllerV4.RPi --launch-profile Debug
 ```
+
+## People, sessions and managed API keys
+
+API keys suit devices and scripts. People sign in with their own name and a password (the web UI, the CLI), or a
+name and PIN at a kiosk, and get a session token. The controller keeps people, sessions and the keys added through the
+API in its identity store.
+
+### Signing in
+
+- **Password.** `POST /api/v4.0/Auth/Session` with `{"name": ..., "password": ...}` needs no key. The answer is a
+  `RoofSessionResponse`. Its `token` is shown only in this answer; send it as `Authorization: Bearer <token>`. A
+  password session lasts `SessionLifetime` (default 12 hours).
+- **PIN at a kiosk.** `POST /api/v4.0/Auth/Pin` with `{"name": ..., "pin": ...}`, sent with the kiosk's own key in
+  `X-Api-Key`. Only a kiosk key may do it; any other key gets 403 `KioskKeyRequired`. Only operators and admins may
+  have a PIN. A PIN session ends after `PinSessionIdleTimeout` (default 10 minutes) without a request, and after
+  `PinSessionLifetime` (default 12 hours) in any case. It also ends when its kiosk key is removed or is no longer a
+  kiosk key. `GET /api/v4.0/Auth/Pin/Users` lists the people who can sign in with a PIN, for the kiosk's picker.
+  Between sessions a kiosk shows status and offers Stop with its own key, which has the `RoofViewer` role.
+- **Who am I.** `GET /api/v4.0/Auth/Me` returns the caller's name, role and kind (`ApiKey`, `Session` or `Pin`).
+- **Sign out.** `DELETE /api/v4.0/Auth/Session` ends the session that sent it.
+- **Own password.** `POST /api/v4.0/Auth/Password` with `currentPassword` and `newPassword` changes a signed-in
+  person's password. Their other sessions end; this one stays open.
+
+Passwords are 12 to 256 characters. PINs are 6 to 12 digits. Names are 1 to 64 letters, digits, `.`, `_`, `@` or `-`,
+starting with a letter or digit. Passwords and PINs are stored as PBKDF2 hashes. Session tokens and managed keys are
+stored as SHA-256 hashes.
+
+A wrong name, password or PIN always gets the same 401 `SignInFailed`, and an unknown name takes as long as a wrong
+password. After `LockoutThreshold` failures in a row (default 5), sign-in is refused with 429 `SignInLockedOut` and
+`Retry-After`:
+
+- for that name, after wrong passwords;
+- at that kiosk, after wrong PINs, whichever names were tried.
+
+The first lockout lasts `LockoutDuration` (default 5 minutes). Each further one doubles, up to
+`MaximumLockoutDuration` (default 4 hours). A success, or `FailureMemory` (default 24 hours) without a failure, starts
+again from nothing. Hashing is limited to a few at a time, so sign-in cannot starve the roof. A sign-in that cannot get
+a turn gets 429 `SignInBusy`. The settings are under `RoofControllerSecurity:Identity`, and the controller refuses to
+start with invalid values.
+
+A client that uses its own API key on a person's behalf (for example the web UI sending Stop) may add
+`X-On-Behalf-Of: <name>`. The audit log records it as `<key> for <name>`; it grants nothing.
+
+### Managing people, keys and sessions
+
+Admins manage everything under `/api/v4.0/Identity`:
+
+| Route | What it does |
+|-------|--------------|
+| `GET/POST Identity/Users`, `GET/PUT/DELETE Identity/Users/{name}` | People. A person needs a password, a PIN or both. Secrets are never returned, only whether each is set. Changing a person's role or password ends all their sessions; changing or removing the PIN ends their PIN sessions; removing them ends every session. |
+| `GET/POST Identity/ApiKeys`, `PUT/DELETE Identity/ApiKeys/{name}`, `POST Identity/ApiKeys/{name}/Rotate` | API keys. The list includes the configured keys, marked `Configuration` and read-only (409 `IdentityReadOnly`). The controller generates a managed key's value and returns it once, on create and on rotate. A kiosk key must have the `RoofViewer` role. |
+| `GET Identity/Sessions`, `DELETE Identity/Sessions/{id}` | Open sessions (never their tokens), and ending one. |
+
+A change that would leave no admin credential is refused with 409 `LastAdministrator`. An admin credential is an admin
+API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed
+or locked-out sign-in as a `SECURITY` warning, with the name and remote address and never a secret. A request with a removed, rotated or re-roled key, or an ended
+session, is refused at once. A status hub connection that used it closes within a second, and a console session ends at
+its next revalidation.
+
+### The identity store
+
+`RoofControllerSecurity:Identity:StorePath` names the store's file. It holds hashes only, but a PIN hash can be
+attacked offline, so keep it in its own directory, readable only by the controller and never next to shareable
+settings. On the Pi the deploy script and both Pi compose profiles mount `/var/lib/hvo-roof/identity` read-write
+and set the path to `/var/lib/hvo-roof/identity/identity.json` (see [deployment.md](deployment.md#3-the-identity-store)).
+Back the directory up with the secrets directory.
+
+- Each change is written to a new file (mode 0600), flushed, and renamed over the old one. A crash or power cut leaves
+  the old file or the new one, never a torn one. The change is used only after it is saved.
+- Sessions are kept in the file, so they survive a restart or a redeploy. A PIN session's idle time starts again when
+  the controller starts.
+- Without a `StorePath`, the store is kept in memory: people, sessions and managed keys are lost when the controller
+  restarts. `/health` reports `identity_store` as Degraded, and the deployment check warns outside Development.
+- When the file cannot be read (corrupt, or no permission), the controller still starts. Sign-in and identity
+  management return 503 `IdentityStoreUnavailable`, and `/health` reports `identity_store` as Unhealthy. Configured
+  keys, Stop and the roof keep working. `identity_store` is not a hardware check, so readiness and deploys do not fail
+  on it; the deployment check does (below).
+- The deployment check (`--validate-deployment`) reads the file and saves a probe file next to it. It fails when the
+  directory is missing, not writable, or the file is not valid, and when the identity settings are invalid.
 
 ## Web console
 
@@ -202,18 +304,21 @@ The console runs over a SignalR connection, so two things do not depend on it:
 `GET .../Status`. It only sends: it has no methods a client can call, and every command, Stop included, stays on the
 REST API. Invoking any method returns an error for that call and changes nothing.
 
-- **Authentication.** Every role may connect, with the `X-Api-Key` header on the negotiate request and on the
-  WebSocket or long-polling requests that follow. The key is never accepted in the query string. The console cookie is
-  not accepted, so a page on another site cannot open a connection with a signed-in browser's cookie. Without a valid
-  key the negotiate request returns 401; plain HTTP from the network returns 403 `https_required` when
-  `RequireHttps` is on, as the API does.
+- **Authentication.** Every role may connect, with the `X-Api-Key` header or a session's `Authorization: Bearer`
+  header on the negotiate request and on the WebSocket or long-polling requests that follow. Neither is accepted in
+  the query string, so browser JavaScript, which cannot set headers on a WebSocket, cannot connect directly; a browser
+  UI gets status through its server. The console cookie is not accepted, so a page on another site cannot open a
+  connection with a signed-in browser's cookie. Without a valid key or session the negotiate request returns 401;
+  plain HTTP from the network returns 403 `https_required` when `RequireHttps` is on, as the API does.
 - **Revocation.** A connection authenticates once, when it opens. Once a second, on its own schedule and whether or
-  not the status is changing, the controller checks each connection's key again and closes the connection when the key
-  was removed, rotated or given another role, and logs the key's name (never its value).
-- **Limits.** At most 32 connections are open at once, and at most 8 with one key. Give each client (the kiosk, the
-  web UI, each CLI user) its own key: clients that share a key share its 8 connections, and the per-key limit only
-  stops one client that leaks connections from taking another's when their keys differ. A connection past a limit is
-  closed with the reason ("The controller is not accepting more status connections." or "... for this key.") and
+  not the status is changing, the controller checks each connection's key or session again. It closes the connection
+  when the key was removed, rotated or given another role, or the session ended or its person's role changed, and
+  logs the key's or person's name (never a secret).
+- **Limits.** At most 32 connections are open at once, and at most 8 with one key or session. Give each client (the
+  kiosk, the web UI, each CLI user) its own key or session: clients that share one share its 8 connections, and the
+  per-key limit only stops one client that leaks connections from taking another's when their keys differ. A
+  connection past a limit is closed with the reason ("The controller is not accepting more status connections." or
+  "... for this key or session.") and
   SignalR's close message tells the client not to reconnect; a client that still wants status reconnects on its own
   after a growing delay. Refusals are checked before the controller is read, and logged at Warning at most once every
   10 seconds with a count of the others; SignalR also logs each refused connection at Error under
@@ -294,5 +399,7 @@ never returned to clients outside Development.
 
 ## Logging
 
-Keys, cookies and Blue Iris credentials are never logged. Outgoing Blue Iris request headers are redacted in HTTP
-client logs. Each command logs the caller's key name and remote address. Configuration changes log an `AUDIT` entry.
+Keys, session tokens, passwords, PINs, cookies and Blue Iris credentials are never logged. Outgoing Blue Iris request
+headers are redacted in HTTP client logs. Each command logs the caller's key or person name and remote address.
+Configuration changes, sign-ins, sign-outs and identity changes log an `AUDIT` entry. Failed and locked-out sign-ins
+log a `SECURITY` warning. A refused session token is logged at Warning with the remote address.

@@ -17,8 +17,8 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Controllers
 {
     /// <summary>
-    /// Roof Controller API v4.0 - controls the observatory roof. Accepts only the <c>X-Api-Key</c> header (never the
-    /// console cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
+    /// Roof Controller API v4.0 - controls the observatory roof. Accepts the <c>X-Api-Key</c> header or a session's
+    /// <c>Authorization: Bearer</c> token (never the console cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
     /// coherent status snapshot; refusals are RFC 7807 ProblemDetails with <c>code</c> and <c>roofStatus</c> extensions.
     /// </summary>
     // No class-level [Produces]: it would override the application/problem+json content type of refusals.
