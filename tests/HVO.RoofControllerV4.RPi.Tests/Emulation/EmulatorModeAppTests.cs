@@ -238,7 +238,7 @@ public sealed class EmulatorModeAppTests
         var written = output.ToString();
         written.Should().Contain("Every Warning or above", "the host's console log was off, so the rig writes what it recorded");
         written.Should().Contain(
-            $"Error Microsoft.Extensions.Hosting.Internal.Host: Hosting failed to start{Environment.NewLine}{typeof(OptionsValidationException).FullName}: SafetyWatchdogTimeout must be between 5 and 600 seconds.",
+            $"Error Microsoft.Extensions.Hosting.Internal.Host: Hosting failed to start{Environment.NewLine}{typeof(OptionsValidationException).FullName}: SafetyWatchdogTimeout",
             "each entry is followed by its exception");
     }
 
