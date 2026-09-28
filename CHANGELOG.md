@@ -227,6 +227,12 @@ the roof against this server; use the authenticated browser console for operator
   `docker`/`curl`, and `docker compose config` for the Pi compose file's profiles (rejecting
   `pi` with `pi-lan-http`, and checking that the Pi profiles pin the HAT emulator off and the
   `emulator` profile maps no devices and has its own network) and for `src/docker-compose.yml`.
+- API security tests (#18; tests only, no behaviour change): every mapped endpoint must refuse
+  an anonymous caller unless allow-listed; a viewer is refused Close, ClearFault and Lease;
+  `System/metrics` needs an admin; malformed, empty and `text/plain` configuration bodies are
+  refused and change nothing; a cross-origin logout is refused and keeps the session; a host
+  outside `AllowedHosts` gets 400; and the console cookie expires after 8 idle hours and slides
+  with activity, judged by a manual clock.
 
 ### Changed
 

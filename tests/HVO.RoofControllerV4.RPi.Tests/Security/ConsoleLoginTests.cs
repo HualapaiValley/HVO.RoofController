@@ -8,8 +8,10 @@ using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Security;
@@ -17,7 +19,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Security;
 /// <summary>
 /// Web console sign-in: POST /account/login exchanges an access key for an HttpOnly, SameSite=Strict cookie. The cookie
 /// works for console-only surfaces (health details, camera, Blazor hub, the reconnect dialog's POST /console/stop) but
-/// never for the api/* command routes.
+/// never for the api/* command routes. The session ends after 8 hours without activity, renewed by activity past halfway.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -172,6 +174,25 @@ public sealed class ConsoleLoginTests
     }
 
     [TestMethod]
+    public async Task Logout_CrossOrigin_Returns403AndKeepsTheSession()
+    {
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, RoofControllerSecurityDefaults.LogoutPostPath);
+        request.Headers.Add("Cookie", cookie);
+        request.Headers.Add("Origin", "https://evil.example");
+
+        var response = await client.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+        var problem = await ApiJson.ReadElementAsync(response);
+        Assert.AreEqual("origin_not_allowed", problem.GetProperty("code").GetString());
+        // The session lives in the cookie alone, so signing out means clearing it; a refused logout must leave it be.
+        HasConsoleSetCookie(response).Should().BeFalse();
+        Assert.AreEqual(HttpStatusCode.OK, (await SendWithCookieAsync(client, HttpMethod.Get, "/", cookie)).StatusCode);
+    }
+
+    [TestMethod]
     public async Task BlazorHub_RequiresSignedInViewer()
     {
         using var client = _host.CreateApiClient();
@@ -318,6 +339,92 @@ public sealed class ConsoleLoginTests
         _host.RoofService.Verify(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>()), Moq.Times.Never);
     }
 
+    [TestMethod]
+    public async Task ConsoleSession_IdlePastEightHours_RedirectsToSignInAndConsoleStopReturns401()
+    {
+        var clock = UseClock();
+        var signedInAt = clock.Now;
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+        using var stop = await ConsoleStopRequestAsync(client, cookie);
+
+        clock.Now = signedInAt + TimeSpan.FromHours(8) + TimeSpan.FromMinutes(1);
+        var page = await SendWithCookieAsync(client, HttpMethod.Get, "/", cookie);
+        var stopResponse = await client.SendAsync(stop);
+
+        Assert.AreEqual(HttpStatusCode.Redirect, page.StatusCode);
+        Assert.AreEqual(RoofControllerSecurityDefaults.LoginPath, SignInRedirectPath(page));
+        Assert.AreEqual(HttpStatusCode.Unauthorized, stopResponse.StatusCode);
+        _host.RoofService.Verify(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>()), Moq.Times.Never);
+    }
+
+    [TestMethod]
+    public async Task ConsoleSession_IdleJustUnderEightHours_IsStillSignedIn()
+    {
+        var clock = UseClock();
+        var signedInAt = clock.Now;
+        var cookie = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+
+        clock.Now = signedInAt + TimeSpan.FromHours(8) - TimeSpan.FromMinutes(1);
+        var page = await SendWithCookieAsync(client, HttpMethod.Get, "/", cookie);
+
+        Assert.AreEqual(HttpStatusCode.OK, page.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task ConsoleSession_ActivityPastHalfTheWindow_RenewsTheCookieBeyondTheOriginalEightHours()
+    {
+        var clock = UseClock();
+        var signedInAt = clock.Now;
+        var original = await SignInAsync(TestApiKeys.Viewer);
+        using var client = _host.CreateApiClient();
+
+        clock.Now = signedInAt + TimeSpan.FromHours(3);
+        var early = await SendWithCookieAsync(client, HttpMethod.Get, "/", original);
+        clock.Now = signedInAt + TimeSpan.FromHours(5);
+        var pastHalfway = await SendWithCookieAsync(client, HttpMethod.Get, "/", original);
+
+        Assert.AreEqual(HttpStatusCode.OK, early.StatusCode);
+        HasConsoleSetCookie(early).Should().BeFalse("under half the window has passed, so the cookie is not renewed yet");
+        Assert.AreEqual(HttpStatusCode.OK, pastHalfway.StatusCode);
+        var renewed = ConsoleSetCookie(pastHalfway).Split(';')[0];
+        renewed.Should().NotBe(original);
+
+        clock.Now = signedInAt + TimeSpan.FromHours(8) + TimeSpan.FromMinutes(1);
+        var withRenewed = await SendWithCookieAsync(client, HttpMethod.Get, "/", renewed);
+        var withOriginal = await SendWithCookieAsync(client, HttpMethod.Get, "/", original);
+
+        Assert.AreEqual(HttpStatusCode.OK, withRenewed.StatusCode, "the renewed cookie runs 8 hours from the renewal");
+        Assert.AreEqual(HttpStatusCode.Redirect, withOriginal.StatusCode);
+        Assert.AreEqual(RoofControllerSecurityDefaults.LoginPath, SignInRedirectPath(withOriginal));
+    }
+
+    /// <summary>
+    /// Restarts the host with a manual clock as the app's TimeProvider and checks that the console cookie handler reads
+    /// it, so the session tests move the session's own clock. Starts at the real time so data-protection keys are valid.
+    /// </summary>
+    private ManualTimeProvider UseClock()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        _host.Dispose();
+        _host = new RoofApiTestHost(configureServices: services =>
+        {
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(clock);
+        });
+        var cookieOptions = _host.Services.GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>()
+            .Get(RoofControllerSecurityDefaults.CookieScheme);
+        cookieOptions.TimeProvider.Should().BeSameAs(clock, "the cookie handler must judge expiry by the test's clock");
+        return clock;
+    }
+
+    private static string SignInRedirectPath(HttpResponseMessage response)
+    {
+        var location = response.Headers.Location!;
+        return (location.IsAbsoluteUri ? location : new Uri(new Uri("http://localhost"), location)).AbsolutePath;
+    }
+
     /// <summary>
     /// Loads the console as the signed-in user and builds the POST the reconnect dialog's form sends: the rendered
     /// antiforgery field plus the antiforgery cookie issued with the page.
@@ -383,6 +490,10 @@ public sealed class ConsoleLoginTests
         request.Headers.Add("Cookie", cookie);
         return await client.SendAsync(request);
     }
+
+    private static bool HasConsoleSetCookie(HttpResponseMessage response)
+        => response.Headers.TryGetValues("Set-Cookie", out var values)
+            && values.Any(v => v.StartsWith(RoofSecurityServiceCollectionExtensions.ConsoleCookieName + "=", StringComparison.Ordinal));
 
     private static string ConsoleSetCookie(HttpResponseMessage response)
     {

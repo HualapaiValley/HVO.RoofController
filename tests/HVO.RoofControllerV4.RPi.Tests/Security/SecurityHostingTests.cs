@@ -1,16 +1,65 @@
 using System.Net;
+using Asp.Versioning;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Routing.Patterns;
+using Microsoft.Extensions.DependencyInjection;
+using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Security;
 
-/// <summary>Production security posture: HTTPS requirement, OpenAPI protection, and fail-closed behaviour without keys.</summary>
+/// <summary>
+/// Production security posture: HTTPS requirement, OpenAPI protection, fail-closed behaviour without keys, anonymous access
+/// to every mapped endpoint, and host filtering.
+/// </summary>
 [TestClass]
 [DoNotParallelize]
 public sealed class SecurityHostingTests
 {
     private const string StatusPath = "/api/v4.0/RoofControl/Status";
     private static readonly IPAddress LanClient = IPAddress.Parse("192.168.1.50");
+
+    /// <summary>
+    /// The only routes an anonymous caller may use. Every other endpoint the app maps must refuse one, so a new endpoint
+    /// that forgets its [Authorize] fails <see cref="EveryEndpoint_Anonymous_IsRefusedUnlessAllowListed"/> until it is
+    /// secured or deliberately added here.
+    /// </summary>
+    private static readonly string[] AnonymousRoutes =
+    [
+        "GET /health/live",
+        "GET /health/ready",
+        "POST /account/login",
+        "POST /account/logout",
+        "GET /login",
+        "POST /login",
+        "GET /access-denied",
+        "POST /access-denied",
+        // The Blazor boot script fetches its JS initializers before anyone signs in; BlazorHubAuthorizationMiddleware exempts it.
+        "GET /_blazor/initializers",
+        // Framework helper that turns an interactive navigation into a redirect; it serves no content of its own.
+        "GET /_framework/opaque-redirect"
+    ];
+
+    /// <summary>Development only: the OpenAPI document and the Scalar reference are open for local work.</summary>
+    private static readonly string[] DevelopmentAnonymousRoutes =
+    [
+        "GET /openapi/v4.json",
+        "GET /scalar/scalar.js",
+        "GET /scalar/scalar.aspnetcore.js",
+        "GET /scalar/favicon.svg",
+        "GET /scalar/v4"
+    ];
+
+    /// <summary>AllowAnonymousStop opens Stop, and only Stop, to anyone on the network, from the API and the console.</summary>
+    private static readonly string[] AnonymousStopRoutes =
+    [
+        "POST /api/v4.0/RoofControl/Stop",
+        "POST /console/stop"
+    ];
 
     [TestMethod]
     public async Task OpenApi_InProduction_RequiresAdminKey()
@@ -113,5 +162,132 @@ public sealed class SecurityHostingTests
         var response = await client.GetAsync(StatusPath);
 
         Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [TestMethod]
+    [DataRow("Production", false)]
+    [DataRow("Production", true)]
+    [DataRow("Development", false)]
+    public async Task EveryEndpoint_Anonymous_IsRefusedUnlessAllowListed(string environment, bool allowAnonymousStop)
+    {
+        using var host = new RoofApiTestHost(
+            settings: new Dictionary<string, string?> { ["RoofControllerSecurity:AllowAnonymousStop"] = allowAnonymousStop.ToString() },
+            environment: environment);
+        using var anonymous = host.CreateApiClient(https: true);
+        var allowed = AnonymousRoutes
+            .Concat(environment == "Development" ? DevelopmentAnonymousRoutes : [])
+            .Concat(allowAnonymousStop ? AnonymousStopRoutes : [])
+            .ToHashSet(StringComparer.Ordinal);
+        var probes = EnumerateProbes(host);
+        var failures = new List<string>();
+
+        foreach (var probe in probes)
+        {
+            using var request = new HttpRequestMessage(new HttpMethod(probe.Method), probe.Path);
+            var response = await anonymous.SendAsync(request);
+
+            var refused = response.StatusCode == HttpStatusCode.Unauthorized || IsSignInRedirect(probe.Method, response);
+            if (allowed.Contains(probe.Key) == refused)
+            {
+                failures.Add($"{probe.Key} [{probe.Route}] answered {(int)response.StatusCode} {response.Headers.Location} but is "
+                    + (refused ? "allow-listed" : "not allow-listed"));
+            }
+        }
+
+        string.Join(Environment.NewLine, failures).Should().BeEmpty(
+            "an anonymous caller gets 401 (or the sign-in page) everywhere but the allow-list");
+        var probed = probes.Select(p => p.Key).ToList();
+        probed.Should().Contain(allowed, "the allow-list must not name a route the app no longer maps");
+        probed.Should().Contain(
+        [
+            "GET /api/v4.0/RoofControl/Configuration",
+            "POST /api/v4.0/RoofControl/Configuration",
+            "GET /api/v1.0/System/info",
+            "GET /api/v1.0/System/metrics"
+        ]);
+        host.RoofService.Verify(s => s.Open(), Times.Never);
+        host.RoofService.Verify(s => s.Close(), Times.Never);
+        host.RoofService.Verify(s => s.RenewLease(), Times.Never);
+        host.RoofService.Verify(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        host.RoofService.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()), Times.Never);
+        host.RoofService.Verify(
+            s => s.Stop(It.IsAny<RoofControllerStopReason>()),
+            allowAnonymousStop ? Times.Once() : Times.Never());
+    }
+
+    [TestMethod]
+    public async Task AllowedHosts_Restricted_RefusesAnotherHostWith400()
+    {
+        using var host = new RoofApiTestHost(
+            settings: new Dictionary<string, string?> { ["AllowedHosts"] = "localhost;roof-pi.local" },
+            environment: "Production");
+        using var client = host.CreateApiClient(TestApiKeys.Viewer, https: true);
+
+        var foreign = await client.GetAsync($"https://evil.example{StatusPath}");
+        var local = await client.GetAsync(StatusPath);
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, foreign.StatusCode);
+        Assert.AreEqual(HttpStatusCode.OK, local.StatusCode);
+        host.RoofService.Verify(s => s.GetCurrentStatusSnapshot(), Times.Once);
+    }
+
+    private sealed record EndpointProbe(string Method, string Path, string Route)
+    {
+        public string Key => $"{Method} {Path}";
+    }
+
+    /// <summary>
+    /// One probe per mapped endpoint and HTTP method, with sample route values. An endpoint that accepts any method is
+    /// probed with GET: its authorization does not depend on the verb.
+    /// </summary>
+    private static List<EndpointProbe> EnumerateProbes(RoofApiTestHost host)
+    {
+        var probes = new List<EndpointProbe>();
+        foreach (var endpoint in host.Services.GetRequiredService<EndpointDataSource>().Endpoints)
+        {
+            if (endpoint is not RouteEndpoint route)
+            {
+                throw new AssertFailedException($"Endpoint '{endpoint.DisplayName}' is not routed; teach this test to reach it.");
+            }
+
+            var path = SamplePath(route);
+            IReadOnlyList<string> methods = endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods is { Count: > 0 } declared
+                ? declared
+                : ["GET"];
+            probes.AddRange(methods.Select(method => new EndpointProbe(method, path, route.RoutePattern.RawText ?? path)));
+        }
+
+        return probes;
+    }
+
+    private static string SamplePath(RouteEndpoint route)
+        => "/" + string.Join("/", route.RoutePattern.PathSegments.Select(segment => string.Concat(segment.Parts.Select(part => part switch
+        {
+            RoutePatternLiteralPart literal => literal.Content,
+            RoutePatternSeparatorPart separator => separator.Content,
+            RoutePatternParameterPart parameter => SampleValue(route, parameter.Name),
+            _ => throw new AssertFailedException($"Unexpected route part in '{route.RoutePattern.RawText}'.")
+        }))));
+
+    private static string SampleValue(RouteEndpoint route, string parameter) => parameter switch
+    {
+        "version" => route.Metadata.GetMetadata<ApiVersionMetadata>()?.Map(ApiVersionMapping.Explicit | ApiVersionMapping.Implicit)
+            .DeclaredApiVersions.Single().ToString()
+            ?? throw new AssertFailedException($"'{route.RoutePattern.RawText}' has no API version."),
+        "cameraId" => "1",
+        "documentName" => "v4",
+        _ => throw new AssertFailedException($"No sample value for '{{{parameter}}}' in '{route.RoutePattern.RawText}'; add one.")
+    };
+
+    /// <summary>A browser navigation to a console page is refused by sending it to the sign-in page rather than a 401.</summary>
+    private static bool IsSignInRedirect(string method, HttpResponseMessage response)
+    {
+        if (method != HttpMethods.Get || response.StatusCode != HttpStatusCode.Redirect || response.Headers.Location is not { } location)
+        {
+            return false;
+        }
+
+        var path = location.IsAbsoluteUri ? location.AbsolutePath : location.OriginalString.Split('?')[0];
+        return path == RoofControllerSecurityDefaults.LoginPath;
     }
 }
