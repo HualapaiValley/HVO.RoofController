@@ -416,6 +416,7 @@ public sealed class RoofIdentityStoreTests
         if (OperatingSystem.IsWindows())
         {
             Assert.Inconclusive("Unix file modes only.");
+            return; // Tells the platform analyzer the Unix-only calls below are not reached on Windows.
         }
 
         using var directory = new TemporaryDirectory();
@@ -487,6 +488,7 @@ public sealed class RoofIdentityStoreTests
         if (OperatingSystem.IsWindows() || Environment.UserName == "root")
         {
             Assert.Inconclusive("Needs a directory the test user cannot write to.");
+            return; // Tells the platform analyzer the Unix-only calls below are not reached on Windows.
         }
 
         using var directory = new TemporaryDirectory();

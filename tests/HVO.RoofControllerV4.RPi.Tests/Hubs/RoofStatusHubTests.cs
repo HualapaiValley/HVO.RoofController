@@ -402,7 +402,8 @@ internal sealed class StatusHub : IAsyncDisposable
         RoofApiTestHost host,
         string? apiKey,
         HttpTransportType transport = HttpTransportType.WebSockets,
-        bool https = false)
+        bool https = false,
+        string? bearerToken = null)
     {
         var server = host.Server;
         var baseAddress = new Uri(https ? "https://localhost/" : "http://localhost/");
@@ -420,12 +421,22 @@ internal sealed class StatusHub : IAsyncDisposable
                         {
                             request.Headers[RoofControllerApiContract.ApiKeyHeaderName] = apiKey;
                         }
+
+                        if (bearerToken is not null)
+                        {
+                            request.Headers.Authorization = $"{RoofIdentityContract.BearerScheme} {bearerToken}";
+                        }
                     };
                     return await client.ConnectAsync(context.Uri, cancellationToken);
                 };
                 if (apiKey is not null)
                 {
                     options.Headers[RoofControllerApiContract.ApiKeyHeaderName] = apiKey;
+                }
+
+                if (bearerToken is not null)
+                {
+                    options.Headers["Authorization"] = $"{RoofIdentityContract.BearerScheme} {bearerToken}";
                 }
             })
             .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()))
@@ -438,6 +449,10 @@ internal sealed class StatusHub : IAsyncDisposable
         HttpTransportType transport = HttpTransportType.WebSockets,
         bool https = false)
         => StartAsync(Build(host, apiKey, transport, https));
+
+    /// <summary>Connects with a session token (<c>Authorization: Bearer</c>) instead of an API key.</summary>
+    public static Task<StatusHub> ConnectWithSessionAsync(RoofApiTestHost host, string token)
+        => StartAsync(Build(host, apiKey: null, bearerToken: token));
 
     /// <summary>Connects over the network, as a client on another machine does.</summary>
     public static Task<StatusHub> ConnectAsync(Uri baseAddress, string apiKey)
