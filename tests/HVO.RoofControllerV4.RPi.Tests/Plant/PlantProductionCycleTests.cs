@@ -43,6 +43,29 @@ public class PlantProductionCycleTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task Open_ClosesTheStopPermit_BeforeTheDirection_SoTheDriveStartsOnTheRunEdge(bool restartWhenStopReleased)
+    {
+        // Each relay write takes its bus time, so the drive sees TB-1 close about 30 ms before TB-13A rises and starts on
+        // the run edge; it never sees STOP released with a run input already held (the assumption does not matter).
+        var plant = new RoofPlantOptions { DriveAssumptions = new SmVectorAssumptions { RestartWhenStopReleasedWithRunHeld = restartWhenStopReleased } };
+        using var h = await PlantHarness.StartAsync(plant);
+        var commanded = h.Elapsed;
+
+        h.Open().IsSuccessful.Should().BeTrue();
+
+        var permit = h.EventAt("TB-1 permit closed", commanded);
+        var run = h.EventAt("TB-13A (run forward) HIGH", commanded);
+        (run - permit).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(30), "RLY1 is written after RLY4's write and read-back");
+        h.EventAt("drive Running: run forward", commanded).Should().BeGreaterThanOrEqualTo(run);
+        h.RunUntilStopped(Travel).Should().BeTrue();
+        h.Status.Should().Be(RoofControllerStatus.Open);
+        h.Snapshot.LatchedFaultReason.Should().BeNull();
+        h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
     public async Task Stop_MidTravel_DropsEveryRelay_AndTheRoofComesToRest()
     {
         using var h = await PlantHarness.StartAsync();
@@ -61,25 +84,25 @@ public class PlantProductionCycleTests
     }
 
     [TestMethod]
-    public async Task Reversal_WhileTheDriveRuns_StopsTheRoof_AndRefusesTheNewDirectionUntilIN4Drops()
+    public async Task Reversal_WhileTheDriveRuns_WithTheCoastStop_ProceedsOnceIN4Drops()
     {
+        // P111 = coast: releasing RLY1 drops the drive's run output (IN4) within milliseconds, before the stop's
+        // remaining relay writes finish, so the controller's fresh read after the stop sees the drive stopped and the
+        // reversal proceeds while the roof coasts to rest. A ramp stop keeps IN4 high while it decelerates, and the
+        // reversal is refused (the next test).
         using var h = await PlantHarness.StartAsync();
         h.Open();
         h.RunFor(TimeSpan.FromSeconds(5));
-
-        var reverse = h.Close();
-
-        reverse.ErrorCode().Should().Be(RoofControllerErrorCode.InterlockActive);
-        h.Controller.IsMoving.Should().BeFalse();
-        h.RelayRegister.Should().Be(0);
-        h.Snapshot.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
-
-        h.RunUntil(() => !h.DriveRunOutput, TimeSpan.FromSeconds(1)).Should().BeTrue("a coast stop removes the output at once");
-        h.RunFor(h.Options.DigitalInputPollInterval * 2);
+        var commanded = h.Elapsed;
 
         h.Close().IsSuccessful.Should().BeTrue();
+
+        var runLost = h.EventAt("IN4 LOW", commanded);
+        runLost.Should().BeLessThan(h.CoilOffAt(4, commanded), "the drive stops as soon as its run input is removed");
+        h.CoilOnAt(2, commanded).Should().BeGreaterThan(h.CoilOnAt(4, commanded), "the permit is closed before the new direction");
         h.RunUntilStopped(Travel).Should().BeTrue();
         h.Status.Should().Be(RoofControllerStatus.Closed);
+        h.Snapshot.LatchedFaultReason.Should().BeNull();
         h.Violations.Should().BeEmpty();
     }
 

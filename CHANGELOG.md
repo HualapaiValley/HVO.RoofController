@@ -98,7 +98,9 @@ the roof against this server; use the authenticated browser console for operator
 - `HVO.RoofControllerV4.Simulation` and the emulated-plant tests (#29): the production
   controller and configuration, through the real HAT library, drive an emulated Lenze SMVector
   drive, two ME-8108 limit switches, the SM-I-010 HAT and the documented wiring, modelled from
-  the vendor documentation. The tests cover normal cycles, drive trips and power loss, external
+  the vendor documentation. Each I2C transaction takes the HAT library's bus time (the transfer
+  at an assumed 100 kHz, then its 15 ms pause), so the relays close in their real order and
+  spacing. The tests cover normal cycles, drive trips and power loss, external
   stops, stop methods, switch and wire faults, relay and I2C faults, and each wiring mistake from
   closed, mid-travel and open; none relies on physical hardware.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
@@ -187,8 +189,12 @@ assumptions, so the distances are indicative. Mitigations beyond these settings 
   and the time a wrong-way move takes to reach that stop.
 - An open limit that never operates reaches the hard stop; only a travel-time or position check
   would catch it.
-- A welded direction relay is invisible to the register read-back; RLY4 still stops the roof,
-  and a following reversal is refused by the drive and latches `DriveNotRunning`.
+- A welded direction relay is invisible to the register read-back; RLY4 still stops the roof.
+  A following reversal closes RLY4 about 30 ms before the new direction, so the drive runs the
+  welded way for that long, then refuses both inputs and latches `DriveNotRunning`.
+- With the coast stop, a reversal while moving proceeds as soon as IN4 drops (about 25 ms after
+  RLY1 releases), and the drive starts the other way while the roof is still coasting to rest.
+  A ramp stop keeps IN4 high while it decelerates, and the reversal is refused.
 
 ### Removed
 

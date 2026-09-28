@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
 using HVO.RoofControllerV4.Simulation.Drive;
@@ -128,12 +129,11 @@ public class PlantDriveTests
         h.RunFor(TimeSpan.FromSeconds(5));
 
         h.Plant.ExternalStopOpen = true;
-        var stoppedAt = h.Plant.Elapsed;
+        var stopped = h.Elapsed;
         h.RunUntil(() => h.Snapshot.LatchedFaultReason is not null, TimeSpan.FromSeconds(1)).Should().BeTrue();
 
         h.Snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveNotRunning);
-        (h.Plant.Elapsed - stoppedAt).Should().BeCloseTo(TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(50),
-            "the run-loss window starts when IN4 drops and is enforced when it ends");
+        ShouldEnforceTheRunLossWindowFromTheDrop(h, stopped);
         h.RelayRegister.Should().Be(0);
 
         var position = h.Plant.Position;
@@ -172,13 +172,29 @@ public class PlantDriveTests
         h.RunFor(TimeSpan.FromSeconds(5));
 
         h.Plant.ExternalStopOpen = true;
+        var stopped = h.Elapsed;
         h.RunFor(TimeSpan.FromMilliseconds(100));
         h.Plant.ExternalStopOpen = false;
 
         h.RunUntilStopped(TimeSpan.FromSeconds(5)).Should().BeTrue();
         h.Snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveNotRunning);
-        h.Plant.Elapsed.TotalSeconds.Should().BeLessThan(5.4, "the window started when IN4 dropped at 5 s");
+        ShouldEnforceTheRunLossWindowFromTheDrop(h, stopped);
         h.Violations.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The controller releases RLY1 when the 250 ms run-loss window that began when IN4 dropped ends: it sees the drop at
+    /// its next poll (the 25 ms interval plus a read) and reads the inputs once more before it writes the relay.
+    /// </summary>
+    private static void ShouldEnforceTheRunLossWindowFromTheDrop(PlantHarness h, TimeSpan stopped)
+    {
+        var window = RoofControllerServiceV4.RunLossConfirmationDelay;
+        var transaction = TimeSpan.FromMilliseconds(16);
+        var runLost = h.EventAt("IN4 LOW", stopped);
+
+        (h.CoilOffAt(1, stopped) - runLost).Should().BeGreaterThanOrEqualTo(window)
+            .And.BeLessThanOrEqualTo(window + h.Options.DigitalInputPollInterval + transaction * 2 + TimeSpan.FromMilliseconds(5),
+                "the window starts when IN4 drops, not when STOP is released");
     }
 
     [TestMethod]

@@ -8,7 +8,9 @@ namespace HVO.RoofControllerV4.Simulation.Hat;
 /// <see cref="II2cRegisterClient"/> backed by a <see cref="RoofPlant"/>'s SM-I-010 model, for use with the real
 /// <c>FourRelayFourInputHat</c>. Each access brings the plant up to the current time first, then reads or writes the
 /// register under the plant lock. Bus failures can be injected; they surface as <see cref="IOException"/>, as a failed
-/// I2C transfer does.
+/// I2C transfer does. With an <see cref="EmulatedBusTiming"/> each access also takes its bus time, as the library's
+/// <c>I2cRegisterClient</c> does: the transfer, then (after a successful one) the post-transaction pause. The calling
+/// thread spends that time through the wait it is given, outside the plant lock.
 /// </summary>
 /// <remarks>
 /// The HAT library treats a client that is not a <c>MemoryI2cRegisterClient</c> as hardware backed, so the controller
@@ -17,6 +19,10 @@ namespace HVO.RoofControllerV4.Simulation.Hat;
 public sealed class EmulatedHatRegisterClient : II2cRegisterClient
 {
     private readonly RoofPlant _plant;
+    private readonly EmulatedBusTiming _timing;
+    private readonly Action<TimeSpan> _wait;
+    private Func<HatBusAccess, bool>? _failWhen;
+    private long _injectedFailures;
     private bool _failReads;
     private bool _failWrites;
     private bool _failInputReads;
@@ -27,10 +33,20 @@ public sealed class EmulatedHatRegisterClient : II2cRegisterClient
     private long _writes;
     private bool _disposed;
 
-    public EmulatedHatRegisterClient(RoofPlant plant, int busId = 1)
+    /// <param name="plant">The plant whose HAT answers.</param>
+    /// <param name="busId">The I2C bus reported in <see cref="ConnectionSettings"/>.</param>
+    /// <param name="timing">The bus time each access takes; <see cref="EmulatedBusTiming.Instant"/> when null.</param>
+    /// <param name="wait">
+    /// How the calling thread spends bus time: a manual clock advances, a real-time host sleeps. <see cref="Thread.Sleep(TimeSpan)"/>
+    /// when null.
+    /// </param>
+    public EmulatedHatRegisterClient(RoofPlant plant, int busId = 1, EmulatedBusTiming? timing = null, Action<TimeSpan>? wait = null)
     {
         ArgumentNullException.ThrowIfNull(plant);
         _plant = plant;
+        _timing = timing ?? EmulatedBusTiming.Instant;
+        _timing.Validate();
+        _wait = wait ?? Thread.Sleep;
         ConnectionSettings = new I2cConnectionSettings(busId, plant.Hat.Options.I2cAddress);
     }
 
@@ -39,6 +55,24 @@ public sealed class EmulatedHatRegisterClient : II2cRegisterClient
     public object SyncRoot { get; } = new();
 
     public RoofPlant Plant => _plant;
+
+    public EmulatedBusTiming Timing => _timing;
+
+    /// <summary>
+    /// Fails each transaction this returns true for, in addition to the other settings. It runs under the plant lock,
+    /// once per transaction that the other settings let through.
+    /// </summary>
+    public Func<HatBusAccess, bool>? FailWhen
+    {
+        get { lock (_plant.SyncRoot) { return _failWhen; } }
+        set { lock (_plant.SyncRoot) { _failWhen = value; } }
+    }
+
+    /// <summary>The transactions that failed by injection so far.</summary>
+    public long InjectedFailures
+    {
+        get { lock (_plant.SyncRoot) { return _injectedFailures; } }
+    }
 
     /// <summary>Every read fails.</summary>
     public bool FailReads
@@ -115,14 +149,17 @@ public sealed class EmulatedHatRegisterClient : II2cRegisterClient
 
     public void ReadBlock(byte register, Span<byte> destination)
     {
+        Transfer(register, destination.Length, read: true);
         lock (_plant.SyncRoot)
         {
-            BeginAccess(register, destination.Length, read: true);
+            BeginAccess(new HatBusAccess(register, destination.Length, IsRead: true, Value: null));
             for (var i = 0; i < destination.Length; i++)
             {
                 destination[i] = _plant.Hat.ReadRegister((byte)(register + i));
             }
         }
+
+        PostTransactionDelay();
     }
 
     public void WriteByte(byte register, byte value)
@@ -140,19 +177,23 @@ public sealed class EmulatedHatRegisterClient : II2cRegisterClient
 
     public void WriteBlock(byte register, ReadOnlySpan<byte> data)
     {
+        Transfer(register, data.Length, read: false);
         lock (_plant.SyncRoot)
         {
-            BeginAccess(register, data.Length, read: false);
+            BeginAccess(new HatBusAccess(register, data.Length, IsRead: false, data.IsEmpty ? null : data[0]));
             for (var i = 0; i < data.Length; i++)
             {
                 _plant.Hat.WriteRegister((byte)(register + i), data[i]);
             }
         }
+
+        PostTransactionDelay();
     }
 
     public void Dispose() => _disposed = true;
 
-    private void BeginAccess(byte register, int length, bool read)
+    /// <summary>The transfer's bus time, spent before the register is read or written (the device acts at its end).</summary>
+    private void Transfer(byte register, int length, bool read)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (register + length > 256)
@@ -160,23 +201,45 @@ public sealed class EmulatedHatRegisterClient : II2cRegisterClient
             throw new ArgumentOutOfRangeException(nameof(length), "The access runs past register 0xFF.");
         }
 
+        Wait(_timing.TransferTime(length, read));
+    }
+
+    /// <summary>The library pauses only after a transaction that succeeded.</summary>
+    private void PostTransactionDelay() => Wait(_timing.PostTransactionDelay);
+
+    private void Wait(TimeSpan duration)
+    {
+        if (duration > TimeSpan.Zero)
+        {
+            _wait(duration);
+        }
+    }
+
+    private void BeginAccess(HatBusAccess access)
+    {
         _plant.Sync();
-        if (read)
+        bool fail;
+        if (access.IsRead)
         {
             _reads++;
-            var input = register <= SmI010Board.DigitalInputRegister && register + length > SmI010Board.DigitalInputRegister;
-            if (_failReads || Consume(ref _failNextReads) || (input && (_failInputReads || Consume(ref _failNextInputReads))))
-            {
-                throw new IOException($"Injected I2C read failure at register {register}.");
-            }
+            var input = access.Covers(SmI010Board.DigitalInputRegister);
+            fail = _failReads || Consume(ref _failNextReads) || (input && (_failInputReads || Consume(ref _failNextInputReads)));
         }
         else
         {
             _writes++;
-            if (_failWrites || Consume(ref _failNextWrites))
-            {
-                throw new IOException($"Injected I2C write failure at register {register}.");
-            }
+            fail = _failWrites || Consume(ref _failNextWrites);
+        }
+
+        if (!fail && _failWhen is { } failWhen)
+        {
+            fail = failWhen(access);
+        }
+
+        if (fail)
+        {
+            _injectedFailures++;
+            throw new IOException($"Injected I2C {(access.IsRead ? "read" : "write")} failure at register {access.Register}.");
         }
     }
 

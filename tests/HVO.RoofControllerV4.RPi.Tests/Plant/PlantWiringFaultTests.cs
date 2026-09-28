@@ -81,6 +81,7 @@ public class PlantWiringFaultTests
         // limit it is on never releases. Only the drive's stall trip ends it. DepartureReleaseTimeout (below) closes
         // this gap when it is set from the measured release time.
         using var h = await PlantHarness.StartAsync(new RoofPlantOptions { Wiring = WiringFault.SwappedMotorLeads, InitialPosition = start });
+        var commanded = h.Elapsed;
 
         var move = start < MidTravel ? h.Open() : h.Close();
         move.IsSuccessful.Should().BeTrue();
@@ -88,7 +89,7 @@ public class PlantWiringFaultTests
 
         var violation = h.Violations.Should().ContainSingle().Which;
         violation.Kind.Should().Be(PlantViolationKind.HardStopContact);
-        violation.At.Should().BeLessThan(TimeSpan.FromSeconds(1.5));
+        (violation.At - commanded).Should().BeLessThan(TimeSpan.FromSeconds(1.6));
         h.Plant.Drive.Trip.Should().Be(SmVectorTrip.MotorOverload);
         h.Snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
     }

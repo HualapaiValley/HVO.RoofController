@@ -41,30 +41,32 @@ public class PlantDocumentedFiguresTests
     }
 
     [TestMethod]
-    [DataRow(2, 0.87)]
-    [DataRow(20, 2.74)]
+    [DataRow(2, 0.954)]
+    [DataRow(20, 2.826)]
     public async Task StartLimitRelease_AfterTheCommand_ByAccelerationTime(int accelerationSeconds, double expectedSeconds)
     {
+        // The command's relay transactions take about 90 ms of bus time before the drive runs.
         var plant = new RoofPlantOptions { Drive = new SmVectorSettings { AccelerationTime = TimeSpan.FromSeconds(accelerationSeconds) } };
         using var h = await PlantHarness.StartAsync(plant);
-        var commanded = h.Plant.Elapsed;
+        var commanded = h.Elapsed;
 
         h.Open().IsSuccessful.Should().BeTrue();
         h.RunUntil(() => !h.Plant.ClosedLimit.ContactNoClosed, TimeSpan.FromSeconds(10)).Should().BeTrue();
 
-        (h.Plant.Elapsed - commanded).TotalSeconds.Should().BeApproximately(expectedSeconds, 0.05);
+        var released = h.EventAt("IN2 LOW", commanded);
+        (released - commanded).TotalSeconds.Should().BeApproximately(expectedSeconds, 0.005);
     }
 
     [TestMethod]
     public async Task WrongWayMove_FromTheClosedLimit_ReachesTheHardStop_AfterTheCommand()
     {
         using var h = await PlantHarness.StartAsync(new RoofPlantOptions { Wiring = WiringFault.SwappedMotorLeads });
-        var commanded = h.Plant.Elapsed;
+        var commanded = h.Elapsed;
 
         h.Open().IsSuccessful.Should().BeTrue();
         h.RunUntilStopped(Travel).Should().BeTrue();
 
         var hardStop = h.Violations.First(v => v.Kind == PlantViolationKind.HardStopContact);
-        (hardStop.At - commanded).TotalSeconds.Should().BeApproximately(1.41, 0.05);
+        (hardStop.At - commanded).TotalSeconds.Should().BeApproximately(1.50, 0.005);
     }
 }

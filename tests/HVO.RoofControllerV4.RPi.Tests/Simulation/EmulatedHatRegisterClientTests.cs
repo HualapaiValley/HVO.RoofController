@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using FluentAssertions;
 using HVO.Iot.Devices.Iot.Devices.Sequent;
@@ -120,6 +121,95 @@ public class EmulatedHatRegisterClientTests
         rig.Bus.Invoking(b => b.ReadByte(0)).Should().NotThrow("other registers do not use up the count");
         rig.Bus.Invoking(b => b.ReadByte(3)).Should().Throw<IOException>();
         rig.Bus.Invoking(b => b.ReadByte(3)).Should().NotThrow();
+    }
+
+    [TestMethod]
+    public void FailWhen_FailsOnlyTheMatchingTransactions_AndCountsThem()
+    {
+        var rig = new PlantRig();
+        var seen = new List<HatBusAccess>();
+        rig.Bus.FailWhen = access =>
+        {
+            seen.Add(access);
+            return !access.IsRead && access.Register == SmI010Board.RelaySetRegister && access.Value == 4;
+        };
+
+        rig.Bus.Invoking(b => b.WriteByte(SmI010Board.RelaySetRegister, 4)).Should().Throw<IOException>().WithMessage("*write failure at register 1*");
+        rig.Bus.WriteByte(SmI010Board.RelaySetRegister, 1);
+        rig.Bus.ReadUInt16(SmI010Board.RelayValueRegister);
+
+        rig.Bus.InjectedFailures.Should().Be(1);
+        rig.Plant.Hat.RelayRegister.Should().Be(0x01, "the failed set of RLY4 changed nothing");
+        seen.Should().Equal(
+            new HatBusAccess(SmI010Board.RelaySetRegister, 1, IsRead: false, Value: 4),
+            new HatBusAccess(SmI010Board.RelaySetRegister, 1, IsRead: false, Value: 1),
+            new HatBusAccess(SmI010Board.RelayValueRegister, 2, IsRead: true, Value: null));
+        seen[2].Covers(SmI010Board.RelaySetRegister).Should().BeTrue();
+        seen[2].Covers(SmI010Board.RelayClearRegister).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void BusTiming_EachTransactionSpendsItsTransferThenTheLibraryPause()
+    {
+        var plant = new RoofPlant(new RoofPlantOptions(), new ManualTimeProvider());
+        var waits = new List<TimeSpan>();
+        var client = new EmulatedHatRegisterClient(plant, timing: EmulatedBusTiming.LibraryDefault, wait: waits.Add);
+
+        client.ReadByte(SmI010Board.DigitalInputRegister);
+        client.WriteByte(SmI010Board.RelaySetRegister, 4);
+
+        waits.Should().Equal(
+            TimeSpan.FromMicroseconds(390), TimeSpan.FromMilliseconds(15),
+            TimeSpan.FromMicroseconds(290), TimeSpan.FromMilliseconds(15));
+    }
+
+    [TestMethod]
+    public void BusTiming_AFailedTransfer_SkipsThePause_AsTheLibraryDoes()
+    {
+        var plant = new RoofPlant(new RoofPlantOptions(), new ManualTimeProvider());
+        var waits = new List<TimeSpan>();
+        var client = new EmulatedHatRegisterClient(plant, timing: EmulatedBusTiming.LibraryDefault, wait: waits.Add) { FailReads = true };
+
+        client.Invoking(c => c.ReadByte(0)).Should().Throw<IOException>();
+
+        waits.Should().Equal(TimeSpan.FromMicroseconds(390));
+    }
+
+    [TestMethod]
+    public void BusTiming_ThroughAManualClock_MovesThePlantOn()
+    {
+        var time = new ManualTimeProvider();
+        var start = time.GetUtcNow();
+        var plant = new RoofPlant(new RoofPlantOptions(), time);
+        var client = new EmulatedHatRegisterClient(plant, timing: EmulatedBusTiming.LibraryDefault, wait: time.AdvanceWithoutTimers);
+
+        client.WriteByte(SmI010Board.RelaySetRegister, 4);
+        client.ReadByte(SmI010Board.RelayValueRegister).Should().Be(0x08);
+
+        (time.GetUtcNow() - start).Should().Be(TimeSpan.FromMicroseconds(290 + 15_000 + 390 + 15_000));
+        plant.Elapsed.Should().Be(TimeSpan.FromMilliseconds(15), "the read brought the plant to the end of its transfer, 15.68 ms, in 1 ms steps");
+    }
+
+    [TestMethod]
+    public void InstantTiming_IsTheDefault_AndNeverWaits()
+    {
+        var plant = new RoofPlant(new RoofPlantOptions(), new ManualTimeProvider());
+        var client = new EmulatedHatRegisterClient(plant, wait: _ => throw new InvalidOperationException("no bus time expected"));
+
+        client.Invoking(c => c.ReadByte(0)).Should().NotThrow();
+        client.Timing.Should().Be(EmulatedBusTiming.Instant);
+        EmulatedBusTiming.Instant.TransferTime(4, read: true).Should().Be(TimeSpan.Zero);
+    }
+
+    [TestMethod]
+    public void BusTiming_RejectsNegativeValues()
+    {
+        var plant = new RoofPlant(new RoofPlantOptions(), new ManualTimeProvider());
+
+        plant.Invoking(p => new EmulatedHatRegisterClient(p, timing: new EmulatedBusTiming { PostTransactionDelay = TimeSpan.FromMilliseconds(-1) }))
+            .Should().Throw<ArgumentOutOfRangeException>();
+        plant.Invoking(p => new EmulatedHatRegisterClient(p, timing: new EmulatedBusTiming { BusClockHz = -1 }))
+            .Should().Throw<ArgumentOutOfRangeException>();
     }
 
     [TestMethod]

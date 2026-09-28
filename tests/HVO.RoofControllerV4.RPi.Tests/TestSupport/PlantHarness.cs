@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using HVO.Core.Results;
@@ -19,22 +20,28 @@ namespace HVO.RoofControllerV4.RPi.Tests.TestSupport;
 /// real time: it polls the inputs every <see cref="RoofControllerOptionsV4.DigitalInputPollInterval"/> and delivers
 /// IN1-IN4 edges in order, as the HAT library's poll loop does, and runs a supervision cycle whenever the controller's
 /// supervision delay has elapsed, as the supervision loop does (recomputing the delay whenever the controller wakes the
-/// loop, and only then). Everything else is production code.
+/// loop, and only then). Everything else is production code. Each I2C transaction takes its bus time
+/// (<see cref="EmulatedBusTiming.LibraryDefault"/> unless a test gives another), spent by the calling code without
+/// firing timers: a timer that falls due meanwhile fires once the call returns, as its callback would wait for the
+/// controller's lock.
 /// </summary>
 internal sealed class PlantHarness : IDisposable
 {
+    private static readonly Regex RelayRegisterChange = new("^relay register 0x([0-9A-F]+) -> 0x([0-9A-F]+)$", RegexOptions.CultureInvariant);
+
     private readonly TimeSpan _pollInterval;
     private readonly bool _polling;
     private (bool, bool, bool, bool)? _lastInputs;
+    private bool _inPoll;
     private long _wakeCount;
     private DateTimeOffset _nextPoll;
     private DateTimeOffset _nextSupervision;
 
-    private PlantHarness(RoofPlantOptions plantOptions, RoofControllerOptionsV4 options)
+    private PlantHarness(RoofPlantOptions plantOptions, RoofControllerOptionsV4 options, EmulatedBusTiming bus)
     {
         Time = new ManualTimeProvider();
         Plant = new RoofPlant(plantOptions, Time);
-        Bus = new EmulatedHatRegisterClient(Plant);
+        Bus = new EmulatedHatRegisterClient(Plant, timing: bus, wait: Time.AdvanceWithoutTimers);
         Hat = new FourRelayFourInputHat(Bus, ownsClient: true);
         Log = new CapturingLogger<RoofControllerServiceV4>();
 
@@ -62,6 +69,19 @@ internal sealed class PlantHarness : IDisposable
     public RoofControllerOptionsV4 Options { get; }
 
     public DateTimeOffset Now => Time.GetUtcNow();
+
+    /// <summary>The plant's time, brought up to the clock (bus time moves the clock without stepping the plant).</summary>
+    public TimeSpan Elapsed
+    {
+        get
+        {
+            lock (Plant.SyncRoot)
+            {
+                Plant.Sync();
+                return Plant.Elapsed;
+            }
+        }
+    }
 
     /// <summary>Register 0 as the HAT holds it: the relay coils the controller has commanded.</summary>
     public byte RelayRegister
@@ -100,11 +120,12 @@ internal sealed class PlantHarness : IDisposable
     public static async Task<PlantHarness> StartAsync(
         RoofPlantOptions? plant = null,
         Action<RoofControllerOptionsV4>? configure = null,
-        bool initialize = true)
+        bool initialize = true,
+        EmulatedBusTiming? bus = null)
     {
         var options = ProductionOptions.Load();
         configure?.Invoke(options);
-        var harness = new PlantHarness(plant ?? new RoofPlantOptions(), options);
+        var harness = new PlantHarness(plant ?? new RoofPlantOptions(), options, bus ?? EmulatedBusTiming.LibraryDefault);
         if (initialize)
         {
             var result = await harness.Controller.Initialize(CancellationToken.None);
@@ -145,8 +166,9 @@ internal sealed class PlantHarness : IDisposable
     /// </summary>
     public async Task<Result<bool>> ClearFaultAsync(int pulseMs = RoofControllerLimits.DefaultClearFaultPulseMilliseconds)
     {
-        var end = Now + TimeSpan.FromMilliseconds(pulseMs);
+        // The pulse's timer starts once the relay transactions before it have spent their bus time.
         var clear = Controller.ClearFault(pulseMs);
+        var end = Now + TimeSpan.FromMilliseconds(pulseMs);
         while (!clear.IsCompleted && Now < end)
         {
             AdvanceTo(NextEvent(end));
@@ -156,10 +178,22 @@ internal sealed class PlantHarness : IDisposable
             }
         }
 
+        // Bus time may have carried the clock past the end before the pulse's timer fired; fire it now.
+        AdvanceTo(Now);
         var result = await clear.WaitAsync(TimeSpan.FromSeconds(10));
         FollowWakes();
         ServiceDue();
         return result;
+    }
+
+    /// <summary>
+    /// Fails the controller's next <paramref name="count"/> reads of the input register; the HAT library's poll reads
+    /// (which the harness makes) still succeed.
+    /// </summary>
+    public void FailNextControllerInputReads(int count)
+    {
+        var remaining = count;
+        Bus.FailWhen = access => access.IsRead && access.Covers(SmI010Board.DigitalInputRegister) && !_inPoll && remaining-- > 0;
     }
 
     /// <summary>Runs the loops for <paramref name="duration"/> of simulated time.</summary>
@@ -193,6 +227,20 @@ internal sealed class PlantHarness : IDisposable
     public bool RunUntilStopped(TimeSpan timeout)
         => RunUntil(() => !Controller.IsMoving && Plant.Velocity == 0 && !Plant.Drive.IsDriving, timeout);
 
+    /// <summary>The plant time of the first history event with <paramref name="detail"/> at or after <paramref name="from"/>.</summary>
+    public TimeSpan EventAt(string detail, TimeSpan from) => EventAt(e => e.Detail == detail, from, $"\"{detail}\"");
+
+    /// <summary>The plant time of the first history event that matches, at or after <paramref name="from"/>.</summary>
+    public TimeSpan EventAt(Func<PlantEvent, bool> match, TimeSpan from, string description = "matching")
+        => Plant.History.FirstOrDefault(e => e.At >= from && match(e))?.At
+           ?? throw new InvalidOperationException($"No {description} plant event at or after {from}.");
+
+    /// <summary>The plant time the HAT energized <paramref name="relay"/>'s coil, at or after <paramref name="from"/>.</summary>
+    public TimeSpan CoilOnAt(int relay, TimeSpan from) => CoilChangeAt(relay, on: true, from);
+
+    /// <summary>The plant time the HAT released <paramref name="relay"/>'s coil, at or after <paramref name="from"/>.</summary>
+    public TimeSpan CoilOffAt(int relay, TimeSpan from) => CoilChangeAt(relay, on: false, from);
+
     /// <summary>Violations of the plant's invariants so far.</summary>
     public PlantViolation[] Violations => Plant.Violations.ToArray();
 
@@ -200,6 +248,26 @@ internal sealed class PlantHarness : IDisposable
     {
         Controller.Dispose();
         Hat.Dispose();
+    }
+
+    private TimeSpan CoilChangeAt(int relay, bool on, TimeSpan from)
+    {
+        var bit = 1 << (relay - 1);
+        return EventAt(
+            e =>
+            {
+                var change = RelayRegisterChange.Match(e.Detail);
+                if (!change.Success)
+                {
+                    return false;
+                }
+
+                var before = Convert.ToInt32(change.Groups[1].Value, 16) & bit;
+                var after = Convert.ToInt32(change.Groups[2].Value, 16) & bit;
+                return before != after && (after != 0) == on;
+            },
+            from,
+            $"RLY{relay} coil-{(on ? "on" : "off")}");
     }
 
     private Result<RoofControllerStatus> Command(Func<Result<RoofControllerStatus>> command)
@@ -234,11 +302,8 @@ internal sealed class PlantHarness : IDisposable
 
     private void AdvanceTo(DateTimeOffset target)
     {
-        if (target > Now)
-        {
-            Time.Advance(target - Now);
-        }
-
+        // Bus time may already have passed the target; a zero advance still fires the timers that fell due meanwhile.
+        Time.Advance(target > Now ? target - Now : TimeSpan.Zero);
         Plant.Sync();
     }
 
@@ -270,7 +335,17 @@ internal sealed class PlantHarness : IDisposable
             return;
         }
 
-        var read = Hat.GetAllDigitalInputs();
+        Result<(bool, bool, bool, bool)> read;
+        _inPoll = true;
+        try
+        {
+            read = Hat.GetAllDigitalInputs();
+        }
+        finally
+        {
+            _inPoll = false;
+        }
+
         if (!read.IsSuccessful)
         {
             return;

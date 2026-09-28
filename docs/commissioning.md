@@ -257,8 +257,9 @@ start limit's release time with the installed acceleration (`P104`) plus `LimitS
 since the release must hold for the debounce inside the window, and shorter than the time a
 wrong-way move (swapped motor leads) takes to reach the stop behind the limit. The emulated plant,
 with its assumed mechanics (2 m of travel at 0.1 m/s, hard stops 60 mm past the operating point),
-releases about 0.9 s after the command at `P104` = 2 s and about 2.7 s at 20 s, and a wrong-way
-move reaches the stop at about 1.4 s (`PlantDocumentedFiguresTests`). Without the timeout, swapped motor
+releases about 1.0 s after the command at `P104` = 2 s and about 2.8 s at 20 s, and a wrong-way
+move reaches the stop at about 1.5 s (`PlantDocumentedFiguresTests`, with the HAT library's I2C
+timing). Without the timeout, swapped motor
 leads from a limit reach the hard stop before the stall trip.
 
 The stop method (`P111`) sets how far the roof runs past a limit. In the emulated plant coast stops

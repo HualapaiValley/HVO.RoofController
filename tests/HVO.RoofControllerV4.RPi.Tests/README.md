@@ -136,7 +136,7 @@ models exactly that register.
 | `Plant/PlantProductionCycleTests` | Open and close on the limits, stop, reversals, watchdog and lease, with the production configuration |
 | `Plant/PlantDriveTests` | Drive trips and power loss, clear-fault pulse, external stops and run loss, stop methods and stop distance, acceleration |
 | `Plant/PlantLimitSwitchTests` | Contact action, bounce and transfer time, stuck switches, broken wires, a jammed roof |
-| `Plant/PlantHatTests` | HAT power loss and LED modes, dead and welded relays, register faults, I2C write and input read failures |
+| `Plant/PlantHatTests` | HAT power loss and LED modes, dead and welded relays, register faults, failed relay writes while energizing (abort with every relay off), input read failures below and at the limit |
 | `Plant/PlantDocumentedFiguresTests` | The stop distances, start-limit release times and wrong-way timing the documents quote |
 | `Plant/PlantWiringFaultTests` | Each wiring mistake from closed, mid-travel and open; swapped motor leads; wrong polarity and output settings |
 | `Plant/ProductionConfigurationTests` | The deployed `appsettings.json` validates and matches the documented wiring |
@@ -151,7 +151,10 @@ records `PlantViolation`s such as a hard-stop contact or both direction contacts
 
 `PlantHarness` runs the production controller, through the real `FourRelayFourInputHat` library and the emulated I2C
 client, with the production `appsettings.json` on a `ManualTimeProvider`. It stands in for the two background loops
-(input polling and supervision) so the whole run is deterministic.
+(input polling and supervision) so the whole run is deterministic. Each I2C transaction takes the HAT library's bus time
+(`EmulatedBusTiming.LibraryDefault`: the transfer at 100 kHz, then the 15 ms post-transaction pause), which the calling
+code spends without firing timers, so relay writes land in their real order and spacing. Timing assertions measure
+from the plant's `History` (`PlantHarness.EventAt`, `CoilOnAt`, `CoilOffAt`) relative to the command.
 
 The plant's defaults are **assumptions**, documented where they are defined (`RoofPlantOptions`,
 `SmVectorAssumptions`, `Me8108Options`): 2 m of travel at 0.1 m/s, hard stops 60 mm past each limit's operate point,
