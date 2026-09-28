@@ -637,7 +637,9 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             if (DriveFaultActive_NoLock == true) mask |= 0x04;
         }
 
-        if (_lastIndicatorLedMask == mask && _ledModesApplied)
+        // A failed mode write is retried with every update only while idle: during a move each retry would add two bus
+        // transactions to every poll.
+        if (_lastIndicatorLedMask == mask && (_ledModesApplied || _commandedMotion != RoofMotionDirection.None))
         {
             return;
         }
@@ -645,8 +647,8 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         try
         {
             // The SM-I-010 powers up with every LED following its input, where LED3 would show the raw IN3 level (lit
-            // while healthy with the active-low fault wiring). Re-assert the modes with each change, and until a write
-            // succeeds, so a HAT that reset since initialization shows the logical states again.
+            // while healthy with the active-low fault wiring). Re-assert the modes with each change, and while idle until
+            // a write succeeds, so a HAT that reset since initialization shows the logical states again.
             ApplyIndicatorLedModes_NoLock();
             var result = _hat.SetLedsMask(mask);
             if (result.IsSuccessful)
@@ -666,7 +668,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     /// <summary>
     /// Sets the HAT LED modes (<see cref="IndicatorLedModes"/>). Cosmetic: a failure is logged and never fatal, and the
-    /// next LED update tries again.
+    /// next LED change, or the next update while idle, tries again.
     /// </summary>
     private void ApplyIndicatorLedModes_NoLock()
     {

@@ -400,6 +400,31 @@ public class RoofPlantTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void ClearFaultHeldWithoutATrip_ConsumesTheClosure_WhetherTheTimeIsSteppedOrFastForwarded(bool oneMillisecondSteps)
+    {
+        var rig = new PlantRig();
+        rig.Relays(0x04);
+        if (oneMillisecondSteps)
+        {
+            for (var i = 0; i < 100; i++)
+            {
+                rig.AdvanceMs(1);
+            }
+        }
+        else
+        {
+            rig.AdvanceMs(100);
+        }
+
+        rig.Plant.TripDrive();
+        rig.AdvanceMs(100);
+
+        rig.Plant.Drive.Trip.Should().Be(SmVectorTrip.External, "Clear Fault acts once per closure, and this one was held 100 ms before the trip");
+    }
+
+    [TestMethod]
     public void SameScript_SameHistory()
     {
         static IReadOnlyList<PlantEvent> Run()

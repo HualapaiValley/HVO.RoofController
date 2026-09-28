@@ -31,6 +31,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     private int _failNextRelayWrites;
     private bool _failRelayReads;
     private bool _failLedModeWrites;
+    private int _ledModeWriteAttempts;
     private bool _failInputReads;
     private int _failNextInputReads;
     private byte _stuckRelayBits;
@@ -67,6 +68,12 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     {
         get { lock (_gate) { return _failLedModeWrites; } }
         set { lock (_gate) { _failLedModeWrites = value; } }
+    }
+
+    /// <summary>Number of writes to the LED mode register (8), including failed ones.</summary>
+    public int LedModeWriteAttempts
+    {
+        get { lock (_gate) { return _ledModeWriteAttempts; } }
     }
 
     /// <summary>When true, reading the digital input register throws.</summary>
@@ -231,9 +238,13 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
             }
             else
             {
-                if (register == LedModeRegister && _failLedModeWrites)
+                if (register == LedModeRegister)
                 {
-                    throw new IOException("Simulated LED mode register write failure");
+                    _ledModeWriteAttempts++;
+                    if (_failLedModeWrites)
+                    {
+                        throw new IOException("Simulated LED mode register write failure");
+                    }
                 }
 
                 _inner.WriteByte(register, value);

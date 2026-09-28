@@ -134,10 +134,10 @@ models exactly that register.
 | `Security/DeploymentValidationCommandTests` | The `--validate-deployment` command as `Program.Main` runs it, with real configuration sources and a temporary secrets directory |
 | `Simulation/…` | The emulator models on their own (`PlantRig`, raw register writes): SMVector drive, ME-8108 switch, SM-I-010 board and bus, the assembled plant |
 | `Plant/PlantProductionCycleTests` | Open and close on the limits, stop, reversals, watchdog and lease, with the production configuration |
-| `Plant/PlantDriveTests` | Drive trips and power loss, clear-fault pulse, external stops and run loss, stop methods and stop distance, acceleration, DC brakes after a stop and before a start (`P175`, `P110` = 2), `P100` and `P112` at their factory defaults |
+| `Plant/PlantDriveTests` | Drive trips and power loss, clear-fault pulse, external stops and run loss, stop methods and stop distance, acceleration, DC brakes after a stop and before a start (`P174`, `P175`, `P110` = 2), `P100` and `P112` at their factory defaults |
 | `Plant/PlantLimitSwitchTests` | Contact action, bounce and transfer time, stuck switches, broken wires, a jammed roof |
 | `Plant/PlantHatTests` | HAT power loss and LED modes, dead and welded relays, register faults, failed relay writes while energizing (abort with every relay off), input read failures below and at the limit |
-| `Plant/PlantDocumentedFiguresTests` | The stop distances, start-limit release times and wrong-way timing the documents quote |
+| `Plant/PlantDocumentedFiguresTests` | The stop distances, start-limit release times, coast-stop reversal and wrong-way timing the documents quote |
 | `Plant/PlantWiringFaultTests` | Each wiring mistake from closed, mid-travel and open; swapped motor leads; wrong polarity and output settings |
 | `Plant/ProductionConfigurationTests` | The deployed `appsettings.json` validates and matches the documented wiring |
 
@@ -158,15 +158,19 @@ from the plant's `History` (`PlantHarness.EventAt`, `CoilOnAt`, `CoilOffAt`) rel
 
 The plant's defaults are **assumptions**, documented where they are defined (`RoofPlantOptions`,
 `SmVectorAssumptions`, `Me8108Options`): 2 m of travel at 0.1 m/s, hard stops 60 mm past each limit's operate point,
-the installed `P1xx` values, a 4 ms drive input response, the Run output during a DC brake, and switch bounce and
-transfer times (the bounce needs a plant step of 1 ms or less). Tests that depend on an
-assumption vary it. Software cannot prove the wiring, that contacts move, or the hardwired stop path; those remain
+the installed `P1xx` values, a 4 ms drive input response, the Run output during a DC brake, one braking rate for any
+`P174` above 0, and switch bounce and transfer times (the bounce needs a plant step of 1 ms or less). Tests that depend
+on an assumption vary it. `SmVectorAssumptions` also lists the readings of the manual the model fixes: `P110` = 2 brakes
+only with the output off, a run during the brake after a stop starts the full brake before the start, `P112` = 0 ignores
+Run Reverse, and `P174` = 0.0 still runs the `P175` brake period without braking current. Software cannot prove the wiring, that contacts move, or the hardwired stop path; those remain
 commissioning checks ([docs/commissioning.md](../../docs/commissioning.md)).
 
 Known limitations the plant tests document:
 
 - A ramp stop with the 2 s deceleration (`P105`) runs into the hard stop; coast (`P111 = 0`), a short ramp or DC braking
-  stops clear of it.
+  (with `P174` above 0) stops clear of it.
+- With the coast stop the IN4 interlock does not hold a reversal: IN4 drops about 8 ms after the RLY1 write and the
+  drive starts the other way about 170 ms after it, while the roof is still coasting.
 - Swapped motor leads, from a limit, drive the roof into the stop behind that limit before the stall trip. Only
   `DepartureReleaseTimeout`, set from the release time with the installed `P104`, stops it first.
 - An open limit that never operates reaches the hard stop; only a travel-time or position check would catch it.

@@ -20,7 +20,10 @@ public sealed record RoofMechanicsOptions
     /// <summary>Deceleration while the motor coasts (output off).</summary>
     public double CoastDeceleration { get; init; } = 0.5;
 
-    /// <summary>Deceleration while the DC brake is applied.</summary>
+    /// <summary>
+    /// Deceleration while the DC brake is applied with a P174 voltage above 0. Assumption: one figure for any non-zero
+    /// P174; the real braking torque rises with the voltage and depends on the motor.
+    /// </summary>
     public double DcBrakeDeceleration { get; init; } = 2.0;
 
     /// <summary>

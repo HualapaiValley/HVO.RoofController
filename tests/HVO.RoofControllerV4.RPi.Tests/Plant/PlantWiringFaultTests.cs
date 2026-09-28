@@ -79,7 +79,7 @@ public class PlantWiringFaultTests
     {
         // The named exception: the roof drives away from the limit it rests on, into the hard stop behind it, and the
         // limit it is on never releases. Only the drive's stall trip ends it. DepartureReleaseTimeout (below) closes
-        // this gap when it is set from the measured release time.
+        // this gap when it is set from the release time with the installed P104.
         using var h = await PlantHarness.StartAsync(new RoofPlantOptions { Wiring = WiringFault.SwappedMotorLeads, InitialPosition = start });
         var commanded = h.Elapsed;
 
@@ -135,7 +135,7 @@ public class PlantWiringFaultTests
     [TestMethod]
     public async Task DepartureReleaseTimeout_BelowTheReleaseTime_StopsEveryStart()
     {
-        // The timeout must be measured against the installed ramp: with P104 = 20 s the limit takes about 2.7 s to
+        // The timeout must be set against the installed ramp: with P104 = 20 s the limit takes about 2.8 s to
         // release, so a 1.2 s timeout stops a correctly wired roof.
         using var h = await PlantHarness.StartAsync(
             new RoofPlantOptions { Drive = new SmVectorSettings { AccelerationTime = TimeSpan.FromSeconds(20) } },

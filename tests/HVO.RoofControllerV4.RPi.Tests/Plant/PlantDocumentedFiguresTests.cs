@@ -20,15 +20,23 @@ public class PlantDocumentedFiguresTests
     private static readonly TimeSpan Travel = TimeSpan.FromSeconds(60);
 
     [TestMethod]
-    [DataRow(SmVectorStopMethod.Coast, 0, 0.010)]
-    [DataRow(SmVectorStopMethod.Ramp, 300, 0.015)]
-    [DataRow(SmVectorStopMethod.CoastWithDcBrake, 500, 0.003)]
-    public async Task StopDistancePastTheOperatingPoint_ByStopMethod(SmVectorStopMethod method, int milliseconds, double expectedMeters)
+    [DataRow(SmVectorStopMethod.Coast, 0, 0d, 0.010)]
+    [DataRow(SmVectorStopMethod.Ramp, 300, 0d, 0.015)]
+    [DataRow(SmVectorStopMethod.CoastWithDcBrake, 500, 10d, 0.003)]
+    [DataRow(SmVectorStopMethod.CoastWithDcBrake, 500, 0d, 0.010)]
+    public async Task StopDistancePastTheOperatingPoint_ByStopMethod(
+        SmVectorStopMethod method, int milliseconds, double dcBrakeVoltagePercent, double expectedMeters)
     {
+        // With P174 = 0.0 (factory) the P175 brake period passes without braking current: the roof coasts.
         var drive = method switch
         {
             SmVectorStopMethod.Ramp => new SmVectorSettings { StopMethod = method, DecelerationTime = TimeSpan.FromMilliseconds(milliseconds) },
-            SmVectorStopMethod.CoastWithDcBrake => new SmVectorSettings { StopMethod = method, DcBrakeTime = TimeSpan.FromMilliseconds(milliseconds) },
+            SmVectorStopMethod.CoastWithDcBrake => new SmVectorSettings
+            {
+                StopMethod = method,
+                DcBrakeTime = TimeSpan.FromMilliseconds(milliseconds),
+                DcBrakeVoltagePercent = dcBrakeVoltagePercent
+            },
             _ => new SmVectorSettings { StopMethod = method }
         };
         using var h = await PlantHarness.StartAsync(new RoofPlantOptions { Drive = drive });
@@ -36,8 +44,31 @@ public class PlantDocumentedFiguresTests
         h.Open();
         h.RunUntilStopped(Travel).Should().BeTrue();
 
-        h.Plant.MaximumOpenOvertravel.Should().BeApproximately(expectedMeters, 0.003);
+        h.Plant.MaximumOpenOvertravel.Should().BeApproximately(expectedMeters, 0.0005);
         h.Violations.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task CoastStopReversal_DropsIN4_AndStartsTheOtherWay_WhileTheRoofStillCoasts()
+    {
+        // With the coast stop TB-14 drops as soon as the output shuts off, so the start interlock does not hold a
+        // reversal: the drive starts the other way before the coasting roof has stopped (a known limitation).
+        using var h = await PlantHarness.StartAsync();
+        h.Open().IsSuccessful.Should().BeTrue();
+        h.RunFor(TimeSpan.FromSeconds(5));
+        var commanded = h.Elapsed;
+
+        h.Close().IsSuccessful.Should().BeTrue();
+        h.RunUntil(() => h.Plant.Drive.OutputDirection == -1, TimeSpan.FromSeconds(1)).Should().BeTrue();
+
+        var openReleased = h.CoilOffAt(1, commanded);
+        (h.EventAt("IN4 LOW", commanded) - openReleased).TotalMilliseconds.Should().BeApproximately(8, 0.5);
+        var reverse = h.EventAt("drive Running: run reverse", commanded) - openReleased;
+        reverse.TotalMilliseconds.Should().BeApproximately(167, 0.5);
+
+        var mechanics = h.Plant.Options.Mechanics;
+        var coast = TimeSpan.FromSeconds(mechanics.SpeedAtBaseFrequency / mechanics.CoastDeceleration);
+        reverse.Should().BeLessThan(coast, "the roof coasts for 0.2 s from full speed");
     }
 
     [TestMethod]

@@ -82,8 +82,9 @@ the roof against this server; use the authenticated browser console for operator
   token), and the console stops renewing the operator lease as soon as its connection drops.
   Renewal does not resume on reconnect.
 - Drive-running interlock on IN4 (#29), with `AtSpeedConfirmationTimeout` set: a start is
-  refused with `InterlockActive` while IN4 still reports the drive running (a reversal stops the
-  roof and is refused until the drive has stopped), and IN4 low for 250 ms after it confirmed,
+  refused with `InterlockActive` while IN4 still reports the drive running (after a ramp stop a
+  reversal is refused until the drive has stopped; with the coast stop IN4 drops within
+  milliseconds and the reversal proceeds while the roof is still coasting), and IN4 low for 250 ms after it confirmed,
   without the destination limit, stops the roof and latches `DriveNotRunning` (an external stop,
   a trip the fault input missed, drive power loss). The inputs are re-read first, so a limit
   edge not yet delivered still ends the move as `LimitSwitchReached`.
@@ -100,11 +101,13 @@ the roof against this server; use the authenticated browser console for operator
   drive, two ME-8108 limit switches, the SM-I-010 HAT and the documented wiring, modelled from
   the vendor documentation. Each I2C transaction takes the HAT library's bus time (the transfer
   at an assumed 100 kHz, then its 15 ms pause), so the relays close in their real order and
-  spacing. The drive model follows `P100`, `P112`, `P110` = 2 and `P175` (including 999.9),
-  with the Run output during a DC brake as a named assumption; the ME-8108 bounce follows
-  elapsed time. The tests cover normal cycles, drive trips and power loss, external
-  stops, stop methods and DC brakes, the factory `P100` and `P112`, switch and wire faults, relay and I2C faults, and each wiring mistake from
-  closed, mid-travel and open; none relies on physical hardware.
+  spacing. The drive model follows `P100` (0-5; 6 is only for 15 HP and larger drives),
+  `P112`, `P110` = 2, `P174` and `P175` (including 999.9), with the Run output during a DC
+  brake as a named assumption and the manual's other open points listed in
+  `SmVectorAssumptions`; the ME-8108 bounce follows elapsed time. The tests cover normal
+  cycles, drive trips and power loss, external stops, stop methods and DC brakes, the
+  factory `P100` and `P112`, switch and wire faults, relay and I2C faults, and each wiring
+  mistake from closed, mid-travel and open; none relies on physical hardware.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
 - [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
   telemetry-outage and RV-6 soak procedures) and [docs/ci-runners.md](docs/ci-runners.md).
@@ -168,8 +171,9 @@ the roof against this server; use the authenticated browser console for operator
   RLY4 on 0 V, holds the drive stopped. The diagrams, `hardware-overview.md` (sections 2, 3, 5,
   7, 8, 10-12 and the bring-up checks) and the wiring package zip are updated.
 - The SM-I-010 LED modes (LED1-LED3 from the controller, LED4 showing IN4) are re-applied with
-  each indicator change, so a HAT that reset shows the logical states again instead of the raw
-  inputs.
+  each indicator change, and while idle when a mode write failed or the modes read back wrong,
+  so a HAT that reset shows the logical states again instead of the raw inputs. A failed mode
+  write is not retried with every poll during a move.
 - The supervision loop wakes when a start limit's release is first seen and when IN4 drops, so
   the release is verified and the run-loss window enforced on time rather than at the next
   verification interval.
@@ -194,8 +198,9 @@ assumptions, so the distances are indicative. Mitigations beyond these settings 
 - A welded direction relay is invisible to the register read-back; RLY4 still stops the roof.
   A following reversal closes RLY4 about 30 ms before the new direction, so the drive runs the
   welded way for that long, then refuses both inputs and latches `DriveNotRunning`.
-- With the coast stop, a reversal while moving proceeds as soon as IN4 drops (about 25 ms after
-  RLY1 releases), and the drive starts the other way while the roof is still coasting to rest.
+- With the coast stop, a reversal while moving proceeds as soon as IN4 drops (in the emulated
+  plant about 8 ms after the RLY1 write), and the drive starts the other way about 170 ms after
+  the write, while the roof is still coasting to rest (`PlantDocumentedFiguresTests`).
   A ramp stop keeps IN4 high while it decelerates, and the reversal is refused.
 - If the Run output stays on during a DC brake (`P111` = 1 or 3; SV01J does not say), the next
   move is refused until `P175` has passed, and with `P175` = 999.9 every move after a stop is

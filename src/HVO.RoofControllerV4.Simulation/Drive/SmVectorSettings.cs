@@ -79,16 +79,25 @@ public sealed record SmVectorSettings
     public TimeSpan DcBrakeTime { get; init; } = TimeSpan.Zero;
 
     /// <summary>
+    /// P174 DC brake voltage, 0.0-30.0 % of the nominal DC bus voltage (SV01J p.34). Factory default 0.0, which applies
+    /// no braking current. The installed value is not documented. The drive still goes through the P175 brake period
+    /// with 0.0 (see <see cref="SmVectorAssumptions"/>); the plant brakes the roof only when this is above 0.
+    /// </summary>
+    public double DcBrakeVoltagePercent { get; init; }
+
+    /// <summary>
     /// P110 start method. Only 0 (normal) and 2 (DC brake for P175 before the motor starts, SV01J p.27) are modelled;
     /// both have the power-up start lockout.
     /// </summary>
     public int StartMethod { get; init; }
 
     /// <summary>
-    /// P100 start control source, 0-6 (SV01J p.25, p.30). The wiring doc sets 1 (terminal strip); the factory default is 0
-    /// (local keypad). TB-1 is an active STOP input for any value but 0, and the run inputs (P121-P124 = 10-14) are valid
-    /// only in terminal strip mode (1, 4, 5 or 6). With 4 or 5 a TB-13 input set to 8 (Control Select) would switch to
-    /// a keypad; none is. The model has no keypad or network, so with 0, 2 or 3 the drive never starts.
+    /// P100 start control source (SV01J p.25, p.30). The wiring doc sets 1 (terminal strip); the factory default is 0
+    /// (local keypad). The manual lists 0-6, but 6 applies only to 15 HP and larger drives and the installed drive is
+    /// 0.33-10 HP, so the model accepts 0-5. TB-1 is an active STOP input for any value but 0, and the run inputs
+    /// (P121-P124 = 10-14) are valid only in terminal strip mode (1, 4 or 5). With 4 or 5 a TB-13 input set to 8 (Control
+    /// Select) would switch to a keypad; none is. The model has no keypad or network, so with 0, 2 or 3 the drive never
+    /// starts.
     /// </summary>
     public int StartControlSource { get; init; } = 1;
 
@@ -111,8 +120,8 @@ public sealed record SmVectorSettings
     /// <summary>TB-1 is an active STOP input (P100 != 0).</summary>
     internal bool StopInputActive => StartControlSource != 0;
 
-    /// <summary>The run inputs are valid: terminal strip start control (P100 = 1, 4, 5 or 6).</summary>
-    internal bool TerminalRunInputsActive => StartControlSource is 1 or 4 or 5 or 6;
+    /// <summary>The run inputs are valid: terminal strip start control (P100 = 1, 4 or 5).</summary>
+    internal bool TerminalRunInputsActive => StartControlSource is 1 or 4 or 5;
 
     /// <summary>The DC brake after a stop with P111 = 1 or 3; <see cref="Timeout.InfiniteTimeSpan"/> when continuous.</summary>
     internal TimeSpan StopDcBrakeTime => DcBrakeTime == ContinuousDcBrake ? Timeout.InfiniteTimeSpan : DcBrakeTime;
@@ -146,14 +155,20 @@ public sealed record SmVectorSettings
             throw new ArgumentOutOfRangeException(nameof(DcBrakeTime), "P175 is 0-999.9 s.");
         }
 
+        if (DcBrakeVoltagePercent is < 0 or > 30 || double.IsNaN(DcBrakeVoltagePercent))
+        {
+            throw new ArgumentOutOfRangeException(nameof(DcBrakeVoltagePercent), "P174 is 0.0-30.0 %.");
+        }
+
         if (StartMethod is not (0 or 2))
         {
             throw new ArgumentOutOfRangeException(nameof(StartMethod), "Only P110 = 0 or 2 (no automatic restart) is modelled.");
         }
 
-        if (StartControlSource is < 0 or > 6)
+        if (StartControlSource is < 0 or > 5)
         {
-            throw new ArgumentOutOfRangeException(nameof(StartControlSource), "P100 is 0-6.");
+            throw new ArgumentOutOfRangeException(
+                nameof(StartControlSource), "P100 is 0-5; 6 is only for 15 HP and larger drives (SV01J p.25).");
         }
 
         if (OutputInversion is < 0 or > 3)
@@ -167,6 +182,18 @@ public sealed record SmVectorSettings
 /// SMVector behaviour the manual does not state. Each default is the variant that is harder for the controller, unless
 /// noted, and tests run both ways.
 /// </summary>
+/// <remarks>
+/// The model also fixes these readings of the manual, which have no switch here; each is covered by a drive test:
+/// <list type="bullet">
+/// <item>P110 = 2 brakes only when the output is off: a run input that arrives while the drive is running or ramping
+/// down (a reversal) ramps through 0 Hz without a brake.</item>
+/// <item>A run input during the brake after a stop (P111 = 1 or 3) with P110 = 2 ends that brake and starts the full
+/// P175 brake before the start.</item>
+/// <item>With P112 = 0 the drive ignores Run Reverse (<see cref="SmVectorSettings.ReverseEnabled"/>).</item>
+/// <item>With P174 = 0.0 the drive still goes through the P175 brake period, including the Run output during it, but
+/// applies no braking current (<see cref="SmVectorSettings.DcBrakeVoltagePercent"/>).</item>
+/// </list>
+/// </remarks>
 public sealed record SmVectorAssumptions
 {
     /// <summary>

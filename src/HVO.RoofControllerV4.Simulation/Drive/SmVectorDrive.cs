@@ -114,13 +114,17 @@ public sealed class SmVectorDrive
     /// <summary>The DC brake is applied, after a stop or before a start.</summary>
     public bool IsDcBraking => Mode is SmVectorMode.DcBraking or SmVectorMode.StartDcBraking;
 
-    /// <summary>True when nothing will change unless an input, power or time-dependent trip changes.</summary>
+    /// <summary>
+    /// True when nothing will change unless an input, power or time-dependent trip changes. A held Clear Fault that has
+    /// not yet been held for <see cref="SmVectorAssumptions.MinimumClearFaultPulse"/> is not settled even with no trip:
+    /// the closure is consumed once it has been held that long, so a later trip stays latched.
+    /// </summary>
     internal bool IsSettled
         => (Mode is SmVectorMode.Unpowered or SmVectorMode.Stopped or SmVectorMode.Faulted
             || (Mode == SmVectorMode.DcBraking && _dcBrakeRemaining == Timeout.InfiniteTimeSpan))
            && _stopPermit.IsSettled && _runForward.IsSettled && _runReverse.IsSettled && _clearFault.IsSettled
            && _stallTime == TimeSpan.Zero
-           && !(Trip != SmVectorTrip.None && _clearFault.Value && !_clearFaultConsumed);
+           && !(_clearFault.Value && !_clearFaultConsumed);
 
     internal event Action<string>? Changed;
 

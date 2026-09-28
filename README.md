@@ -43,8 +43,9 @@ authenticated web console and HTTP API.
   inputs. Stop is never blocked by the latch and does not clear it.
 - **Relay register read-back**: after every relay change the controller reads the HAT's
   relay register back and reports `Verified` or `Unverified`. This proves what the HAT
-  register holds, not that the relay contacts opened; commissioning checks the contacts
-  with a meter. A stop that cannot be verified is reported as a failure.
+  register holds, not that the relay contacts opened; the emulated plant's dead- and
+  welded-contact tests show what the controller does when they differ. A stop that cannot
+  be verified is reported as a failure.
 - **Limit switches** (IN1/IN2, polarity `UseNormallyClosedLimitSwitches`, `false` in
   production because IN1/IN2 are on the ME-8108 normally open pair): the roof stops at the
   destination limit; leaving a limit is handled as a departure phase, and both limits
@@ -54,7 +55,9 @@ authenticated web console and HTTP API.
   default stays `true` (raw HIGH = fault).
 - **Drive-running interlock** (IN4, the drive's run output; `AtSpeedConfirmationTimeout`,
   3 s in production, off when unset): a start is refused with `InterlockActive` while the
-  drive still reports running, so a reversal waits until the drive has stopped. The drive
+  drive still reports running. After a ramp stop a reversal waits until the drive has
+  stopped; with the coast stop IN4 drops within milliseconds, so a reversal proceeds and the
+  drive starts the other way while the roof is still coasting (a known limitation). The drive
   must report running within the window after a start, and IN4 dropping for 250 ms while
   moving without the destination limit (a trip, an external stop, drive power loss) stops
   the roof; both latch `DriveNotRunning`. IN4 still HIGH after a stop is logged as
@@ -62,8 +65,9 @@ authenticated web console and HTTP API.
 - **Departure-release timeout** (optional, `DepartureReleaseTimeout`, off when unset): a
   start limit that has not released within the window stops the roof with
   `DepartureLimitNotReleased`. It catches a jammed roof or swapped motor leads before the
-  roof reaches the hard stop behind the limit. Set it from the release time measured with
-  the installed acceleration (`P104`).
+  roof reaches the hard stop behind the limit. Set it from the release time with the
+  installed acceleration (`P104`); the emulated plant gives that time
+  (`PlantDocumentedFiguresTests`).
 - **Input read failures**: `MaxConsecutiveInputReadFailures` (default 3) consecutive failed
   reads while moving stop the roof with `InputReadFailure`.
 - `IgnorePhysicalLimitSwitches` is for simulation; on physical hardware it is refused

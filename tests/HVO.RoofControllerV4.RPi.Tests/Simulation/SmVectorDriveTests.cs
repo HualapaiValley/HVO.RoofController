@@ -176,6 +176,11 @@ public class SmVectorDriveTests
 
         drive.Mode.Should().Be(SmVectorMode.Faulted);
         drive.Tb14Sinking.Should().BeFalse();
+
+        Step(drive, ClearFault, 30);
+        drive.Mode.Should().Be(SmVectorMode.Stopped, "the reset does not resume the brake");
+        drive.Tb14Sinking.Should().BeFalse();
+        drive.RelayOutputClosed.Should().BeTrue();
     }
 
     [TestMethod]
@@ -270,7 +275,6 @@ public class SmVectorDriveTests
     [DataRow(1)]
     [DataRow(4)]
     [DataRow(5)]
-    [DataRow(6)]
     public void StartControlSource_WithTheTerminalStrip_RunsAndHonoursTheStopPermit(int p100)
     {
         var drive = Create(new SmVectorSettings { StartControlSource = p100 });
@@ -473,7 +477,10 @@ public class SmVectorDriveTests
         Step(drive, Forward, 4);
         drive.Mode.Should().Be(SmVectorMode.StartDcBraking);
 
-        Step(drive, Forward, 500);
+        Step(drive, Forward, 499);
+        drive.Mode.Should().Be(SmVectorMode.StartDcBraking, "the full P175 brake, not the 400 ms left of the stop brake");
+
+        Step(drive, Forward, 1);
         drive.Mode.Should().Be(SmVectorMode.Running);
     }
 
@@ -519,6 +526,23 @@ public class SmVectorDriveTests
 
         drive.Mode.Should().Be(SmVectorMode.Stopped);
         drive.Trip.Should().Be(SmVectorTrip.None);
+    }
+
+    [TestMethod]
+    public void ClearFault_HeldWithoutAFault_IsNotSettledUntilTheClosureIsConsumed()
+    {
+        // The plant fast-forwards a settled drive without stepping it; the held time must still reach the minimum pulse.
+        var drive = Create();
+
+        Step(drive, ClearFault, 22);
+        drive.IsSettled.Should().BeFalse("the input takes effect on the 4th step, so it has been held 19 ms of the 20 ms pulse");
+
+        Step(drive, ClearFault, 1);
+        drive.IsSettled.Should().BeTrue();
+
+        drive.InjectTrip();
+        Step(drive, ClearFault, 100);
+        drive.Trip.Should().Be(SmVectorTrip.External, "the closure was consumed before the trip");
     }
 
     [TestMethod]
@@ -709,7 +733,11 @@ public class SmVectorDriveTests
             new SmVectorSettings { DcBrakeTime = TimeSpan.FromSeconds(-1) },
             new SmVectorSettings { DcBrakeTime = TimeSpan.FromSeconds(1000) },
             new SmVectorSettings { StartControlSource = -1 },
+            new SmVectorSettings { StartControlSource = 6 },
             new SmVectorSettings { StartControlSource = 7 },
+            new SmVectorSettings { DcBrakeVoltagePercent = -0.1 },
+            new SmVectorSettings { DcBrakeVoltagePercent = 30.1 },
+            new SmVectorSettings { DcBrakeVoltagePercent = double.NaN },
             new SmVectorSettings { OutputInversion = 4 }
         };
 
@@ -720,7 +748,7 @@ public class SmVectorDriveTests
         }
 
         new SmVectorSettings().Invoking(s => s.Validate()).Should().NotThrow();
-        new SmVectorSettings { DcBrakeTime = SmVectorSettings.ContinuousDcBrake, StartControlSource = 6 }
+        new SmVectorSettings { DcBrakeTime = SmVectorSettings.ContinuousDcBrake, DcBrakeVoltagePercent = 30, StartControlSource = 5 }
             .Invoking(s => s.Validate()).Should().NotThrow();
     }
 
@@ -733,6 +761,7 @@ public class SmVectorDriveTests
         settings.ReverseEnabled.Should().BeTrue("P112 = 1");
         settings.StartMethod.Should().Be(0, "P110 = 0");
         settings.DcBrakeTime.Should().Be(TimeSpan.Zero, "P175 factory default");
+        settings.DcBrakeVoltagePercent.Should().Be(0, "P174 factory default");
         settings.RelayOutput.Should().Be(SmVectorOutputFunction.Fault, "P140 = 3");
         settings.Tb14Output.Should().Be(SmVectorOutputFunction.Run, "P142 = 1");
         settings.OutputInversion.Should().Be(0, "P144 = 0");

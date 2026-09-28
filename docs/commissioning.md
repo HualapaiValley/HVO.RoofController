@@ -149,8 +149,9 @@ hardware overview, section 8.3, recommends about 100-300 ms.
 
 Production uses `AtSpeedConfirmationTimeout = 3 s` with `P142 = 1` (Run). With it set:
 
-- a start is refused with `InterlockActive` while IN4 still reports the drive running (a reversal
-  stops the roof first and is refused until IN4 drops);
+- a start is refused with `InterlockActive` while IN4 still reports the drive running (after a
+  ramp stop a reversal is refused until IN4 drops; with the coast stop IN4 drops within
+  milliseconds, so a reversal proceeds while the roof is still coasting);
 - IN4 must go HIGH within the window after a start, otherwise the roof stops with
   `DriveNotRunning`;
 - IN4 LOW for 250 ms after it confirmed, without the destination limit, stops the roof with

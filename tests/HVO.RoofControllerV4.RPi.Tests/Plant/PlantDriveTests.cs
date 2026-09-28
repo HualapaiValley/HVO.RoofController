@@ -220,7 +220,7 @@ public class PlantDriveTests
     {
         var drive = method == SmVectorStopMethod.Ramp
             ? new SmVectorSettings { StopMethod = method, DecelerationTime = TimeSpan.FromMilliseconds(milliseconds) }
-            : new SmVectorSettings { StopMethod = method, DcBrakeTime = TimeSpan.FromMilliseconds(milliseconds) };
+            : new SmVectorSettings { StopMethod = method, DcBrakeTime = TimeSpan.FromMilliseconds(milliseconds), DcBrakeVoltagePercent = 10 };
         using var h = await PlantHarness.StartAsync(new RoofPlantOptions { Drive = drive });
 
         h.Open();
