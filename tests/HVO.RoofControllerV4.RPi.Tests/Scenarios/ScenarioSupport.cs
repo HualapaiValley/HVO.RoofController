@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
@@ -94,6 +95,69 @@ internal static class Scenario
             .Where(e => e.Kind == PlantEventKind.Relay && e.Detail.StartsWith($"RLY{relay} contact ", StringComparison.Ordinal))
             .Select(e => (e.At / rig.Options.TimeScale, e.Detail.EndsWith("closed", StringComparison.Ordinal)))
             .ToArray();
+
+    /// <summary>When the plant recorded <paramref name="detail"/> (an input edge such as <c>IN4 HIGH</c>), in real time as <see cref="ContactChanges"/>.</summary>
+    public static IReadOnlyList<TimeSpan> EventTimes(this EmulatedRoofRig rig, PlantEventKind kind, string detail)
+        => rig.Session.Plant.History
+            .Where(e => e.Kind == kind && string.Equals(e.Detail, detail, StringComparison.Ordinal))
+            .Select(e => e.At / rig.Options.TimeScale)
+            .ToArray();
+
+    /// <summary>
+    /// Commands a full move to <paramref name="destination"/>, waits for the roof to rest there, and checks that the
+    /// destination limit stopped it without a fault.
+    /// </summary>
+    public static async Task<RoofStatusResponse> MoveToLimitAsync(this EmulatedRoofRig rig, HttpClient client, RoofControllerStatus destination)
+    {
+        var command = destination switch
+        {
+            RoofControllerStatus.Open => "Open",
+            RoofControllerStatus.Closed => "Close",
+            _ => throw new ArgumentOutOfRangeException(nameof(destination), destination, "a limit")
+        };
+        await client.AcceptedAsync(command);
+        await rig.WaitForControllerAsync(s => s.Status == destination && !s.IsMoving, $"the roof to reach {destination}");
+        var stopped = await rig.WaitForRestAsync($"the {command}");
+        stopped.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached, "{0} ends at its limit", command);
+        stopped.IsFaultLatched.Should().BeFalse();
+        return stopped;
+    }
+
+    /// <summary>
+    /// Changes the running configuration as an administrator does: reads it, changes what <paramref name="change"/>
+    /// changes and posts the whole configuration back with its version (a missing lease or at-speed window disables it).
+    /// </summary>
+    public static async Task<RoofConfigurationResponse> ConfigureAsync(this EmulatedRoofRig rig, Func<RoofConfigurationRequest, RoofConfigurationRequest> change)
+    {
+        using var admin = rig.CreateApiClient(TestApiKeys.Admin);
+        using var current = await admin.GetAsync($"{RoofApi}/Configuration");
+        current.StatusCode.Should().Be(HttpStatusCode.OK);
+        var c = await ApiJson.ReadAsync<RoofConfigurationResponse>(current);
+        var request = change(new RoofConfigurationRequest
+        {
+            ExpectedVersion = c.Version,
+            ConfirmSafetyCriticalChange = true,
+            SafetyWatchdogTimeoutSeconds = c.SafetyWatchdogTimeoutSeconds,
+            OpenRelayId = c.OpenRelayId,
+            CloseRelayId = c.CloseRelayId,
+            ClearFaultRelayId = c.ClearFaultRelayId,
+            StopRelayId = c.StopRelayId,
+            EnableDigitalInputPolling = c.EnableDigitalInputPolling,
+            DigitalInputPollIntervalMilliseconds = c.DigitalInputPollIntervalMilliseconds,
+            EnablePeriodicVerificationWhileMoving = c.EnablePeriodicVerificationWhileMoving,
+            PeriodicVerificationIntervalSeconds = c.PeriodicVerificationIntervalSeconds,
+            UseNormallyClosedLimitSwitches = c.UseNormallyClosedLimitSwitches,
+            LimitSwitchDebounceMilliseconds = c.LimitSwitchDebounceMilliseconds,
+            IgnorePhysicalLimitSwitches = c.IgnorePhysicalLimitSwitches,
+            FaultInputActiveHigh = c.FaultInputActiveHigh,
+            MaxConsecutiveInputReadFailures = c.MaxConsecutiveInputReadFailures,
+            OperatorLeaseTimeoutSeconds = c.OperatorLeaseTimeoutSeconds,
+            AtSpeedConfirmationTimeoutSeconds = c.AtSpeedConfirmationTimeoutSeconds
+        });
+        using var response = await admin.PostAsJsonAsync($"{RoofApi}/Configuration", request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "the configuration must be accepted: {0}", await response.Content.ReadAsStringAsync());
+        return await ApiJson.ReadAsync<RoofConfigurationResponse>(response);
+    }
 
     public static async Task<RoofStatusResponse> StatusAsync(this HttpClient client)
     {
