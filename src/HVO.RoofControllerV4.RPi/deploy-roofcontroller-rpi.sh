@@ -493,7 +493,8 @@ remote_api() {
         -w '\n%{http_code}' "${REMOTE_BASE_URL}/${API_PATH}/${path}"
 }
 
-# Prints "<relayRegisterState>\t<relayRegisterMask>\t<commandedMotion>\t<hatMode>" from a status JSON on stdin.
+# Prints "<relayRegisterState>\t<relayRegisterMask>\t<commandedMotion>\t<hatMode>\t<isUsingPhysicalHardware>" from a
+# status JSON on stdin, with "null" for a missing field.
 parse_status() {
   if command -v jq >/dev/null 2>&1; then
     jq -r '[(.relayRegisterState // "null"), (.relayRegisterMask // "null" | tostring), (.commandedMotion // "null"), (.hatMode // "null"),

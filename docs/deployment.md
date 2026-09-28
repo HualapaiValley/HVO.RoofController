@@ -528,7 +528,7 @@ What each deployment should report:
 | Deployment | `/health` | `/health/ready` | What proves the rest |
 |------------|-----------|-----------------|----------------------|
 | Pi, deploy script | Healthy | 200 | Step 7: an in-container Status reporting `hatMode` `Physical`, then an authenticated Status and a verified Stop from the deploying machine |
-| Pi, Compose `pi` or `pi-lan-http` | Healthy | 200 | The deployment check before start, then `--verify-remote` from another machine ([Checking a Compose controller](#checking-a-compose-controller-from-another-machine)), which also requires `hatMode` `Physical` |
+| Pi, Compose `pi` or `pi-lan-http` | Healthy | 200 | The deployment check before start, then `--verify-remote` from another machine ([Checking a Compose controller](#checking-a-compose-controller-from-another-machine)), which also requires `hatMode` `Physical` (or, from a version before emulator mode, no `hatMode` and `isUsingPhysicalHardware` `true`) |
 | Test rig with the HAT emulator (script with `HAT_EMULATOR_ENDPOINT`, or the compose `emulator` profile) | Degraded, naming the emulator | 200 | `hatMode` `Emulated` and the `EMULATED HAT` banner ([HAT emulator mode](#hat-emulator-mode-test-rigs)) |
 | No I²C bus and emulator mode off (a development machine) | Degraded, "simulation mode" | 200 | `hatMode` `Simulation`. Not a deployment: the deploy script and `--verify-remote` refuse it. |
 
