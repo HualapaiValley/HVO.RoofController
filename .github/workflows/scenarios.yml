@@ -1,0 +1,218 @@
+name: Scenarios
+
+# The commissioning checks (docs/commissioning.md) as automated scenarios against the emulated HAT, roof and VFD. No
+# hardware is involved, and nothing is pushed or deployed.
+#   scenarios            every [TestCategory("Scenario")] test, the short C14 soak included
+#   browser              the console in Chromium with phone and tablet emulation ([TestCategory("Browser")])
+#   container-scenarios  the Docker lifecycle, the C12 deploy and rollback, and the Compose migration
+#                        (tests/emulator/deploy-scenarios.sh)
+#   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main, feature/** ]
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      soak_duration:
+        description: 'C14 soak duration (a time span such as 02:00:00)'
+        required: false
+        default: '02:00:00'
+
+permissions:
+  contents: read
+
+concurrency:
+  # The event is part of the group so a push to main does not cancel the nightly soak.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  TEST_PROJECT: ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # dotnet resolves global.json from the working directory, so every dotnet command runs from src/.
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Build
+        run: |
+          dotnet restore "$TEST_PROJECT" --configfile NuGet.config -v minimal
+          dotnet build "$TEST_PROJECT" --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
+
+      - name: Scenarios
+        env:
+          HVO_SOAK_RESULTS_DIR: ${{ github.workspace }}/src/TestResults/soak
+        run: >
+          dotnet test "$TEST_PROJECT"
+          --no-build -c Debug -v minimal
+          --filter "TestCategory=Scenario"
+          --logger "trx;LogFileName=scenarios.trx"
+          --results-directory TestResults
+          -- RunConfiguration.TreatNoTestsAsError=true
+
+      - name: Soak summary
+        if: always()
+        run: |
+          if [ -f TestResults/soak/soak-summary.md ]; then
+            cat TestResults/soak/soak-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scenario-results-${{ github.run_id }}
+          path: src/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Build
+        run: |
+          dotnet restore "$TEST_PROJECT" --configfile NuGet.config -v minimal
+          dotnet build "$TEST_PROJECT" --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
+
+      # The Chromium build that this Microsoft.Playwright version drives, and its system libraries.
+      - name: Install Chromium
+        run: pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
+
+      - name: Browser tests
+        run: >
+          dotnet test "$TEST_PROJECT"
+          --no-build -c Debug -v minimal
+          --filter "TestCategory=Browser"
+          --logger "trx;LogFileName=browser.trx"
+          --results-directory TestResults
+          -- RunConfiguration.TreatNoTestsAsError=true
+
+      # Screenshots and traces of a failed test are attached to its result.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-results-${{ github.run_id }}
+          path: src/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  container-scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SCN_RESULTS_DIR: ${{ github.workspace }}/deploy-scenario-results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Lifecycle, C12 deploy and rollback, Compose migration
+        run: tests/emulator/deploy-scenarios.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$SCN_RESULTS_DIR/deploy-scenarios.md" ]; then
+            cat "$SCN_RESULTS_DIR/deploy-scenarios.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deploy-scenario-results-${{ github.run_id }}
+          path: deploy-scenario-results/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  soak:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: src
+    env:
+      HVO_SOAK_DURATION: ${{ inputs.soak_duration || '02:00:00' }}
+      HVO_SOAK_RESULTS_DIR: ${{ github.workspace }}/soak-results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Build
+        run: |
+          dotnet restore "$TEST_PROJECT" --configfile NuGet.config -v minimal
+          dotnet build "$TEST_PROJECT" --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
+
+      - name: C14 soak
+        run: >
+          dotnet test "$TEST_PROJECT"
+          --no-build -c Debug -v minimal
+          --filter "TestCategory=Soak"
+          --logger "trx;LogFileName=soak.trx"
+          --results-directory TestResults
+          -- RunConfiguration.TreatNoTestsAsError=true
+
+      # The invariant checks, the timing table and the samples are written even when a check fails.
+      - name: Soak summary
+        if: always()
+        run: |
+          if [ -f "$HVO_SOAK_RESULTS_DIR/soak-summary.md" ]; then
+            cat "$HVO_SOAK_RESULTS_DIR/soak-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The soak wrote no summary; see the test log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload soak results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-results-${{ github.run_id }}
+          path: |
+            soak-results/**
+            src/TestResults/**
+          if-no-files-found: warn
+          retention-days: 30

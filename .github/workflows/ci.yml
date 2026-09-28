@@ -85,12 +85,14 @@ jobs:
       - name: Build (Debug)
         run: dotnet build HVO.RoofController.sln --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
 
-      # There is no separate integration tier: every test, including the WebApplicationFactory
-      # API tests, runs here. TreatNoTestsAsError fails the step if discovery finds nothing.
+      # Every unit and API test, including the WebApplicationFactory API tests, runs here. The
+      # emulated commissioning scenarios, the browser tests and the soak run in scenarios.yml.
+      # TreatNoTestsAsError fails the step if discovery finds nothing.
       - name: Test
         run: >
           dotnet test "$TEST_PROJECT"
           --no-build -c Debug -v minimal
+          --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak"
           --settings coverage.runsettings
           --collect:"XPlat Code Coverage"
           --logger "trx;LogFileName=tests.trx"
@@ -144,9 +146,10 @@ jobs:
           bash -n src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh
           bash -n tests/deploy/deploy-script-tests.sh
           bash -n tests/emulator/compose-smoke-test.sh
+          bash -n tests/emulator/deploy-scenarios.sh
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
-            tests/emulator/compose-smoke-test.sh
+            tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
