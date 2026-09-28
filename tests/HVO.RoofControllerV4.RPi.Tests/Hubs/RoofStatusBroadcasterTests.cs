@@ -235,7 +235,7 @@ public sealed class RoofStatusBroadcasterTests
     [DataRow("removed")]
     [DataRow("rotated")]
     [DataRow("re-roled")]
-    public async Task AConnectionWhoseKeyIsRevoked_IsClosedAtTheNextHeartbeat(string change)
+    public async Task AConnectionWhoseKeyIsRevoked_IsClosedWithinAKeyCheckInterval(string change)
     {
         await using var broadcaster = await StartAsync(heartbeat: TimeSpan.FromMilliseconds(50));
         var viewerClosed = 0;
@@ -309,7 +309,7 @@ public sealed class RoofStatusBroadcasterTests
 
         broadcaster.Value.TryRegister("c", Viewer(), () => { }, out var refusal).Should().BeFalse();
         refusal.Should().Be("The controller is not accepting more status connections for this key.");
-        _logger.Contains(LogLevel.Warning, "for this key. (2 are already open)").Should().BeTrue();
+        _logger.Contains(LogLevel.Warning, "for this key. (2 are already open;").Should().BeTrue();
         broadcaster.Value.TryRegister("d", Principal(TestApiKeys.Operator), () => { }).Should().BeTrue();
 
         broadcaster.Value.Unregister("a");
@@ -326,11 +326,34 @@ public sealed class RoofStatusBroadcasterTests
 
         broadcaster.Value.TryRegister("c", Principal(TestApiKeys.Operator), () => { }, out var refusal).Should().BeFalse();
         refusal.Should().Be("The controller is not accepting more status connections.");
-        _logger.Contains(LogLevel.Warning, "status connections. (2 are already open)").Should().BeTrue();
+        _logger.Contains(LogLevel.Warning, "status connections. (2 are already open;").Should().BeTrue();
 
         broadcaster.Value.Unregister("a");
         broadcaster.Value.TryRegister("c", Viewer(), () => { }).Should().BeTrue();
         broadcaster.Value.ConnectionCount.Should().Be(2);
+    }
+
+    [TestMethod]
+    public async Task ARefusedConnection_DoesNotReadTheController_AndRefusalsAreLoggedAtMostOnceAnInterval()
+    {
+        var time = new TestSupport.ManualTimeProvider();
+        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, _keyStore, time, _logger, NoHeartbeat, maxConnections: 1);
+        await using var stopping = new AsyncBroadcaster(broadcaster);
+        broadcaster.TryRegister("a", Viewer(), () => { }).Should().BeTrue();
+        var reads = _controller.SnapshotCallCount;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            broadcaster.TryRegister($"refused-{attempt}", Viewer(), () => { }).Should().BeFalse();
+        }
+
+        _controller.SnapshotCallCount.Should().Be(reads, "a connection past a limit is refused before the controller is read");
+        _logger.MessagesAt(LogLevel.Warning).Where(m => m.Contains("refused", StringComparison.Ordinal)).Should().ContainSingle();
+
+        time.Advance(RoofStatusBroadcaster.RefusalLogInterval);
+        broadcaster.TryRegister("refused-5", Viewer(), () => { }).Should().BeFalse();
+        _logger.MessagesAt(LogLevel.Warning).Where(m => m.Contains("refused", StringComparison.Ordinal)).Should().HaveCount(2)
+            .And.Contain(m => m.Contains("4 more refusal(s)", StringComparison.Ordinal), "the four in between are counted");
     }
 
     [TestMethod]

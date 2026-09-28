@@ -210,11 +210,15 @@ REST API. Invoking any method returns an error for that call and changes nothing
 - **Revocation.** A connection authenticates once, when it opens. Once a second, on its own schedule and whether or
   not the status is changing, the controller checks each connection's key again and closes the connection when the key
   was removed, rotated or given another role, and logs the key's name (never its value).
-- **Limits.** At most 32 connections are open at once, and at most 8 with one key, so one client that leaks
-  connections cannot take the kiosk's or the web UI's. A connection past a limit is closed with the reason ("The
-  controller is not accepting more status connections." or "... for this key.") and SignalR's close message tells
-  the client not to reconnect; a client that still wants status reconnects on its own after a growing delay. A client
-  may send nothing but the handshake and pings (messages over 4 KB close the connection).
+- **Limits.** At most 32 connections are open at once, and at most 8 with one key. Give each client (the kiosk, the
+  web UI, each CLI user) its own key: clients that share a key share its 8 connections, and the per-key limit only
+  stops one client that leaks connections from taking another's when their keys differ. A connection past a limit is
+  closed with the reason ("The controller is not accepting more status connections." or "... for this key.") and
+  SignalR's close message tells the client not to reconnect; a client that still wants status reconnects on its own
+  after a growing delay. Refusals are checked before the controller is read, and logged at Warning at most once every
+  10 seconds with a count of the others; SignalR also logs each refused connection at Error under
+  `Microsoft.AspNetCore.SignalR.HubConnectionHandler`. A client may send nothing but the handshake and pings (messages
+  over 4 KB close the connection).
 - **Messages.** The client method `Status` receives a `RoofStatusHubMessage` (`RoofStatusHubContract` in
   `HVO.RoofControllerV4.Common`):
 

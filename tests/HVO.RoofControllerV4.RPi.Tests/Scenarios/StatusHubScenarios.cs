@@ -21,7 +21,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
 public sealed class StatusHubScenarios
 {
     [TestMethod]
-    public async Task AViewer_SeesAnOpen_AStop_AndADriveTrip_InOrder_AndTheLastMessageAgreesWithTheStatusEndpoint()
+    public async Task AViewer_SeesAnOpen_AStop_AndADriveTrip_InOrder_AndTheMessageWithTheEndpointsVersionAgreesWithIt()
     {
         await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production(travelMeters: 1.0) with { Kestrel = true });
         using var operatorClient = rig.CreateApiClient(TestApiKeys.Operator);

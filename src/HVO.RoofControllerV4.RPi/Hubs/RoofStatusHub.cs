@@ -20,6 +20,8 @@ public sealed class RoofStatusHub(RoofStatusBroadcaster broadcaster) : Hub
         {
             // SignalR closes the connection with this reason and tells the client not to reconnect, so the client's
             // automatic reconnect stops: a client retries on its own, with a growing delay (RoofStatusHubContract).
+            // SignalR also logs each such close at Error (category HubConnectionHandler); that category is not
+            // filtered, as it carries real transport errors too. The broadcaster's own Warning is rate-limited.
             throw new HubException(refusal);
         }
 

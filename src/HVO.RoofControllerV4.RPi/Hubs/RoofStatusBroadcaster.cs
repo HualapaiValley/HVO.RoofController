@@ -48,6 +48,9 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     /// </summary>
     public const int DefaultMaxConnectionsPerKey = RoofStatusHubContract.MaxConnectionsPerKey;
 
+    /// <summary>Refused connections are logged at most once in this interval.</summary>
+    internal static readonly TimeSpan RefusalLogInterval = TimeSpan.FromSeconds(10);
+
     private readonly IRoofControllerServiceV4 _controller;
     private readonly IRoofStatusSender _sender;
     private readonly RoofApiKeyStore _keyStore;
@@ -61,6 +64,8 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     private readonly CancellationTokenSource _stopping = new();
     private RoofStatusHubMessage? _latest;
     private long _lastPublishTimestamp;
+    private long? _lastRefusalLogged;
+    private int _refusalsNotLogged;
     private Task _heartbeat = Task.CompletedTask;
     private bool _started;
 
@@ -187,51 +192,89 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         ArgumentNullException.ThrowIfNull(abort);
 
         var keyId = user?.FindFirst(RoofPrincipalFactory.KeyIdClaimType)?.Value;
-        var status = _controller.GetCurrentStatusSnapshot();
         int limit;
         lock (_gate)
         {
-            if (_stopping.IsCancellationRequested || _subscribers.ContainsKey(connectionId))
-            {
-                refusal = "The controller is not accepting status connections.";
-                return false;
-            }
+            // Checked before the snapshot is read, so a refused connection costs no controller read.
+            refusal = Refusal_NoLock(connectionId, keyId, out limit);
+        }
 
-            if (_subscribers.Count >= _maxConnections)
+        if (refusal is null)
+        {
+            var status = _controller.GetCurrentStatusSnapshot();
+            lock (_gate)
             {
-                limit = _maxConnections;
-                refusal = "The controller is not accepting more status connections.";
-            }
-            else if (keyId is not null && _subscribers.Values.Count(s => s.KeyId == keyId) >= _maxConnectionsPerKey)
-            {
-                limit = _maxConnectionsPerKey;
-                refusal = "The controller is not accepting more status connections for this key.";
-            }
-            else
-            {
-                var subscriber = new Subscriber(connectionId, user, keyId, abort, _sender, _logger);
-                _subscribers.Add(connectionId, subscriber);
-                if (!Publish_NoLock(status, fromChange: false))
+                // Checked again: other connections may have registered while the snapshot was read.
+                refusal = Refusal_NoLock(connectionId, keyId, out limit);
+                if (refusal is null)
                 {
-                    subscriber.Offer(_latest!);
+                    var subscriber = new Subscriber(connectionId, user, keyId, abort, _sender, _logger);
+                    _subscribers.Add(connectionId, subscriber);
+                    if (!Publish_NoLock(status, fromChange: false))
+                    {
+                        subscriber.Offer(_latest!);
+                    }
                 }
-
-                refusal = null;
-                limit = 0;
             }
         }
 
-        // Logged outside the lock: the status dispatcher takes it for every change.
         if (refusal is not null)
         {
-            _logger.LogWarning(
-                "Status hub connection {ConnectionId} ({User}) refused: {Refusal} ({Limit} are already open).",
-                connectionId, user?.Identity?.Name, refusal, limit);
+            LogRefusal(connectionId, user, refusal, limit);
             return false;
         }
 
         _logger.LogDebug("Status hub connection {ConnectionId} ({User}) registered.", connectionId, user?.Identity?.Name);
         return true;
+    }
+
+    private string? Refusal_NoLock(string connectionId, string? keyId, out int limit)
+    {
+        limit = 0;
+        if (_stopping.IsCancellationRequested || _subscribers.ContainsKey(connectionId))
+        {
+            return "The controller is not accepting status connections.";
+        }
+
+        if (_subscribers.Count >= _maxConnections)
+        {
+            limit = _maxConnections;
+            return "The controller is not accepting more status connections.";
+        }
+
+        if (keyId is not null && _subscribers.Values.Count(s => s.KeyId == keyId) >= _maxConnectionsPerKey)
+        {
+            limit = _maxConnectionsPerKey;
+            return "The controller is not accepting more status connections for this key.";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Logs a refused connection at Warning, at most once per <see cref="RefusalLogInterval"/> with a count of the
+    /// refusals in between, so a client that keeps retrying does not flood the log. Logged outside the lock: the status
+    /// dispatcher takes it for every change.
+    /// </summary>
+    private void LogRefusal(string connectionId, ClaimsPrincipal? user, string refusal, int limit)
+    {
+        int suppressed;
+        lock (_gate)
+        {
+            if (_lastRefusalLogged is { } last && _time.GetElapsedTime(last) < RefusalLogInterval)
+            {
+                _refusalsNotLogged++;
+                return;
+            }
+
+            _lastRefusalLogged = _time.GetTimestamp();
+            suppressed = _refusalsNotLogged;
+            _refusalsNotLogged = 0;
+        }
+
+        _logger.LogWarning(
+            "Status hub connection {ConnectionId} ({User}) refused: {Refusal} ({Limit} are already open; {Suppressed} more refusal(s) since the last one logged).",
+            connectionId, user?.Identity?.Name, refusal, limit, suppressed);
     }
 
     /// <summary>Removes a hub connection and cancels any send still in progress to it.</summary>
@@ -324,7 +367,8 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
                 }
                 catch (Exception ex)
                 {
-                    // The key store could not be read; the next interval tries again.
+                    // Not expected (the keys are an in-memory snapshot and each close is guarded); kept so the heartbeat
+                    // loop never ends. The next interval checks every connection again.
                     _logger.LogWarning(ex, "Status hub key check failed.");
                 }
 
@@ -394,13 +438,27 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
             }
         }
 
+        // They are no longer registered, so no later check would find them: each is closed on its own, and one that
+        // throws does not leave the rest open.
         foreach (var subscriber in revoked)
         {
             _logger.LogInformation(
                 "Status hub connection {ConnectionId} closed: the key '{KeyName}' that opened it was removed, rotated or re-roled.",
                 subscriber.ConnectionId, subscriber.User?.Identity?.Name);
-            subscriber.Stop();
-            subscriber.Abort();
+            Guarded(subscriber.Stop, subscriber.ConnectionId);
+            Guarded(subscriber.Abort, subscriber.ConnectionId);
+        }
+    }
+
+    private void Guarded(Action close, string connectionId)
+    {
+        try
+        {
+            close();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Status hub connection {ConnectionId} could not be closed cleanly.", connectionId);
         }
     }
 
