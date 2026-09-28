@@ -138,6 +138,9 @@ public sealed class RoofStatusHubTests
         received.Select(m => m.Sequence).Should().BeInAscendingOrder().And.OnlyHaveUniqueItems();
         var gaps = received.Zip(received.Skip(1), (a, b) => b.ServerTimeUtc - a.ServerTimeUtc).ToList();
         gaps.Should().OnlyContain(gap => gap >= TimeSpan.FromMilliseconds(900), "a heartbeat is sent only after a quiet interval");
+        gaps.Should().OnlyContain(
+            gap => gap <= TimeSpan.FromSeconds(2),
+            "a heartbeat follows about one interval later, well inside the 3 s after which a client treats its view as stale");
     }
 
     [TestMethod]
@@ -293,6 +296,29 @@ public sealed class RoofStatusHubTests
         broadcaster.Unregister("filler-0");
         await using var accepted = await StatusHub.ConnectAsync(host, TestApiKeys.Viewer);
         (await accepted.NextAsync()).Status.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task PastTheLimitForOneKey_ANewConnectionWithThatKeyIsClosed_WhileOtherKeysConnect()
+    {
+        using var host = new RoofApiTestHost();
+        var broadcaster = host.Services.GetRequiredService<RoofStatusBroadcaster>();
+        host.Services.GetRequiredService<RoofApiKeyStore>().TryValidate(TestApiKeys.Viewer, out var viewerKey).Should().BeTrue();
+        var viewer = RoofPrincipalFactory.Create(viewerKey!, RoofControllerSecurityDefaults.ApiKeyScheme);
+        for (var i = 0; i < RoofStatusHubContract.MaxConnectionsPerKey; i++)
+        {
+            broadcaster.TryRegister($"leaked-{i}", viewer, () => { }).Should().BeTrue();
+        }
+
+        await using (var refused = await StatusHub.ConnectAsync(host, TestApiKeys.Viewer))
+        {
+            var closed = await refused.ClosedAsync();
+            closed!.Message.Should().Contain("not accepting more status connections for this key");
+            refused.Received.Should().BeEmpty();
+        }
+
+        await using var otherKey = await StatusHub.ConnectAsync(host, TestApiKeys.Operator);
+        (await otherKey.NextAsync()).Status.Should().NotBeNull("one key's leaked connections do not lock out the others");
     }
 
     [TestMethod]

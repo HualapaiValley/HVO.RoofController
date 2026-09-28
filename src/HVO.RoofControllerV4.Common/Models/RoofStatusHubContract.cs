@@ -20,6 +20,16 @@ public static class RoofStatusHubContract
     /// quiet controller from a lost connection.
     /// </summary>
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>Most connections open at once; a connection past the limit is closed with a reason.</summary>
+    public const int MaxConnections = 32;
+
+    /// <summary>
+    /// Most connections open at once with one API key. A connection past a limit is closed with a reason and a close
+    /// message that tells SignalR's automatic reconnect not to try again, so a client that wants status reconnects on its
+    /// own, with a growing delay.
+    /// </summary>
+    public const int MaxConnectionsPerKey = 8;
 }
 
 /// <summary>

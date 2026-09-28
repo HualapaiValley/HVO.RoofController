@@ -16,10 +16,11 @@ public sealed class RoofStatusHub(RoofStatusBroadcaster broadcaster) : Hub
 {
     public override async Task OnConnectedAsync()
     {
-        if (!broadcaster.TryRegister(Context.ConnectionId, Context.User, Context.Abort))
+        if (!broadcaster.TryRegister(Context.ConnectionId, Context.User, Context.Abort, out var refusal))
         {
-            // SignalR closes the connection and tells the client not to reconnect.
-            throw new HubException("The controller is not accepting more status connections.");
+            // SignalR closes the connection with this reason and tells the client not to reconnect, so the client's
+            // automatic reconnect stops: a client retries on its own, with a growing delay (RoofStatusHubContract).
+            throw new HubException(refusal);
         }
 
         await base.OnConnectedAsync().ConfigureAwait(false);

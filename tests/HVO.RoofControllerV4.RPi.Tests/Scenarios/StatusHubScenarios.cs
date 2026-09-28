@@ -43,10 +43,19 @@ public sealed class StatusHubScenarios
         tripped.Status.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
         tripped.Status.LastStopReason.Should().Be(RoofControllerStopReason.DriveFault);
 
-        var endpoint = await operatorClient.StatusAsync();
-        var next = await viewer.NextAsync();
-        next.Status.StatusVersion.Should().BeGreaterThanOrEqualTo(endpoint.StatusVersion);
-        Steady(next.Status).Should().Be(Steady(endpoint), "the hub and GET Status report the same state");
+        // Messages queued before the GET are older than it, and the status can still change after it (relay readback,
+        // the drive coasting down), so compare the endpoint with the message that has its version.
+        RoofStatusResponse? endpoint = null;
+        RoofStatusHubMessage? same = null;
+        for (var attempt = 0; attempt < 10 && same is null; attempt++)
+        {
+            var read = await operatorClient.StatusAsync();
+            var caughtUp = (await viewer.UntilAsync(m => m.Status.StatusVersion >= read.StatusVersion))[^1];
+            (endpoint, same) = (read, caughtUp.Status.StatusVersion == read.StatusVersion ? caughtUp : null);
+        }
+
+        same.Should().NotBeNull("the status settles after the trip, and the hub then sends the version GET Status reports");
+        Steady(same!.Status).Should().Be(Steady(endpoint!), "the hub and GET Status report the same state");
 
         var received = viewer.Received;
         received.Select(m => m.Sequence).Should().BeInAscendingOrder().And.OnlyHaveUniqueItems();

@@ -76,8 +76,8 @@ the roof against this server; use the authenticated browser console for operator
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`
   header; the console cookie is not accepted. A slow client receives only the newest status
   and never delays the controller or other clients. Connections whose key is removed, rotated
-  or re-roled are closed within about a second, and at most 32 are open at once. The hub
-  accepts no commands. See [docs/security.md](docs/security.md#status-hub).
+  or re-roled are closed within about a second, even while the roof moves; at most 32 are open
+  at once, and at most 8 with one key. The hub accepts no commands. See [docs/security.md](docs/security.md#status-hub).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.

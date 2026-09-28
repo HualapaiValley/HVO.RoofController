@@ -207,12 +207,14 @@ REST API. Invoking any method returns an error for that call and changes nothing
   not accepted, so a page on another site cannot open a connection with a signed-in browser's cookie. Without a valid
   key the negotiate request returns 401; plain HTTP from the network returns 403 `https_required` when
   `RequireHttps` is on, as the API does.
-- **Revocation.** A connection authenticates once, when it opens. About once a second the controller checks each
-  connection's key again and closes the connection when the key was removed, rotated or given another role, and logs
-  the key's name (never its value).
-- **Limits.** At most 32 connections are open at once; a connection past the limit is closed with the reason "The
-  controller is not accepting more status connections." and told not to reconnect. A client may send nothing but
-  the handshake and pings (messages over 4 KB close the connection).
+- **Revocation.** A connection authenticates once, when it opens. Once a second, on its own schedule and whether or
+  not the status is changing, the controller checks each connection's key again and closes the connection when the key
+  was removed, rotated or given another role, and logs the key's name (never its value).
+- **Limits.** At most 32 connections are open at once, and at most 8 with one key, so one client that leaks
+  connections cannot take the kiosk's or the web UI's. A connection past a limit is closed with the reason ("The
+  controller is not accepting more status connections." or "... for this key.") and SignalR's close message tells
+  the client not to reconnect; a client that still wants status reconnects on its own after a growing delay. A client
+  may send nothing but the handshake and pings (messages over 4 KB close the connection).
 - **Messages.** The client method `Status` receives a `RoofStatusHubMessage` (`RoofStatusHubContract` in
   `HVO.RoofControllerV4.Common`):
 

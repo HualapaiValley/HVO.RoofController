@@ -91,10 +91,28 @@ public sealed class RoofStatusBroadcasterTests
         broadcaster.Value.Latest!.Status.StatusVersion.Should().Be(7, "a heartbeat that raced a change must not turn the status back");
         broadcaster.Value.Latest.Sequence.Should().Be(2);
 
-        _controller.RaiseStatusChanged(Version(7));
-        broadcaster.Value.Latest.Sequence.Should().Be(3, "the same version again is a fresh copy, as a heartbeat is");
+        _controller.Snapshot = Version(7);
+        broadcaster.Value.TryRegister("b", Viewer(), () => { });
+        broadcaster.Value.Latest.Sequence.Should().Be(3, "a connect or heartbeat read of the same version is a fresh copy");
         (await _sender.WaitForAsync("a", d => d.Count > 0 && d[^1].Sequence == 3, "the last message"))
             .Should().NotContain(m => m.Status.StatusVersion == 6);
+    }
+
+    [TestMethod]
+    public async Task AChangeEvent_WhoseVersionWasAlreadyPublished_IsNotPublishedAgain()
+    {
+        await using var broadcaster = await StartAsync();
+        broadcaster.Value.TryRegister("a", Viewer(), () => { });
+
+        // A new connection read version 8 while the event for 8, raised earlier, still waited on the dispatcher.
+        _controller.Snapshot = Version(8) with { SnapshotUtc = DateTimeOffset.UtcNow };
+        broadcaster.Value.TryRegister("b", Viewer(), () => { });
+        _controller.RaiseStatusChanged(Version(8) with { SnapshotUtc = DateTimeOffset.UtcNow.AddSeconds(-1) });
+
+        broadcaster.Value.Latest!.Sequence.Should().Be(2, "the event's copy of version 8 is older than the one already sent");
+        broadcaster.Value.Latest.Status.Should().Be(_controller.Snapshot);
+        _controller.RaiseStatusChanged(Version(9));
+        broadcaster.Value.Latest.Sequence.Should().Be(3);
     }
 
     [TestMethod]
@@ -203,7 +221,7 @@ public sealed class RoofStatusBroadcasterTests
     {
         await using var broadcaster = await StartAsync(heartbeat: TimeSpan.FromMilliseconds(50));
         broadcaster.Value.TryRegister("a", Viewer(), () => { });
-        await _sender.WaitForAsync("a", d => d.Count == 1, "the first message");
+        await _sender.WaitForAsync("a", d => d.Count >= 1, "the first message");
 
         _controller.SnapshotException = new InvalidOperationException("controller unavailable");
         await WaitUntilAsync(() => _logger.Contains(LogLevel.Warning, "heartbeat failed"), "the failed heartbeat to be logged");
@@ -245,14 +263,70 @@ public sealed class RoofStatusBroadcasterTests
     }
 
     [TestMethod]
+    public async Task WhileStatusChangesFasterThanTheHeartbeat_ARevokedKeysConnection_IsStillClosed()
+    {
+        await using var broadcaster = await StartAsync(heartbeat: TimeSpan.FromMilliseconds(200));
+        var viewerClosed = 0;
+        broadcaster.Value.TryRegister("viewer", Viewer(), () => Interlocked.Increment(ref viewerClosed));
+        using var moving = new CancellationTokenSource();
+        var version = 5L;
+        var changes = Task.Run(async () =>
+        {
+            // A change every 60 ms, as a moving roof's countdowns give one every second: the heartbeat is never due.
+            while (!moving.IsCancellationRequested)
+            {
+                _controller.RaiseStatusChanged(Version(Interlocked.Increment(ref version)));
+                await Task.Delay(60);
+            }
+        });
+
+        await Task.Delay(300);
+        _keys.Set(new RoofControllerSecurityOptions
+        {
+            ApiKeys = [KeyStoreFactory.Key("operator", RoofControllerApiContract.OperatorRole, TestApiKeys.Operator)]
+        });
+
+        try
+        {
+            await WaitUntilAsync(() => Volatile.Read(ref viewerClosed) == 1, "the revoked key's connection to be closed while changes flow");
+        }
+        finally
+        {
+            await moving.CancelAsync();
+            await changes;
+        }
+
+        broadcaster.Value.ConnectionCount.Should().Be(0);
+        Interlocked.Read(ref version).Should().BeGreaterThan(8, "changes kept flowing until the connection closed");
+    }
+
+    [TestMethod]
+    public async Task PastTheLimitForOneKey_ANewConnectionWithThatKeyIsRefused_OtherKeysAreNot()
+    {
+        await using var broadcaster = await StartAsync(maxConnectionsPerKey: 2);
+        broadcaster.Value.TryRegister("a", Viewer(), () => { }).Should().BeTrue();
+        broadcaster.Value.TryRegister("b", Viewer(), () => { }).Should().BeTrue();
+
+        broadcaster.Value.TryRegister("c", Viewer(), () => { }, out var refusal).Should().BeFalse();
+        refusal.Should().Be("The controller is not accepting more status connections for this key.");
+        _logger.Contains(LogLevel.Warning, "for this key. (2 are already open)").Should().BeTrue();
+        broadcaster.Value.TryRegister("d", Principal(TestApiKeys.Operator), () => { }).Should().BeTrue();
+
+        broadcaster.Value.Unregister("a");
+        broadcaster.Value.TryRegister("c", Viewer(), () => { }).Should().BeTrue();
+        broadcaster.Value.ConnectionCount.Should().Be(3);
+    }
+
+    [TestMethod]
     public async Task PastTheConnectionLimit_ANewConnectionIsRefused_UntilOneCloses()
     {
         await using var broadcaster = await StartAsync(maxConnections: 2);
         broadcaster.Value.TryRegister("a", Viewer(), () => { }).Should().BeTrue();
         broadcaster.Value.TryRegister("b", Viewer(), () => { }).Should().BeTrue();
 
-        broadcaster.Value.TryRegister("c", Viewer(), () => { }).Should().BeFalse();
-        _logger.Contains(LogLevel.Warning, "2 connections are already open").Should().BeTrue();
+        broadcaster.Value.TryRegister("c", Principal(TestApiKeys.Operator), () => { }, out var refusal).Should().BeFalse();
+        refusal.Should().Be("The controller is not accepting more status connections.");
+        _logger.Contains(LogLevel.Warning, "status connections. (2 are already open)").Should().BeTrue();
 
         broadcaster.Value.Unregister("a");
         broadcaster.Value.TryRegister("c", Viewer(), () => { }).Should().BeTrue();
@@ -287,9 +361,13 @@ public sealed class RoofStatusBroadcasterTests
         broadcaster.Value.Dispose();
     }
 
-    private async Task<AsyncBroadcaster> StartAsync(TimeSpan? heartbeat = null, int maxConnections = RoofStatusBroadcaster.DefaultMaxConnections)
+    private async Task<AsyncBroadcaster> StartAsync(
+        TimeSpan? heartbeat = null,
+        int maxConnections = RoofStatusBroadcaster.DefaultMaxConnections,
+        int maxConnectionsPerKey = RoofStatusBroadcaster.DefaultMaxConnectionsPerKey)
     {
-        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, _keyStore, TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections);
+        var broadcaster = new RoofStatusBroadcaster(
+            _controller, _sender, _keyStore, TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections, maxConnectionsPerKey);
         await broadcaster.StartAsync(CancellationToken.None);
         return new AsyncBroadcaster(broadcaster);
     }
