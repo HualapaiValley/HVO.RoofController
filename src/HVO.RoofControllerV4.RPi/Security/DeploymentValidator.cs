@@ -374,8 +374,8 @@ public static partial class DeploymentValidator
         if (!CanOperate(match.Role))
         {
             problems.Add(
-                $"The deploy script's API key ({match.Name}) has the {match.Role} role, so the new controller would answer 403 to its " +
-                "verified stop and the deployment would be rolled back. Point the script at a RoofOperator or RoofAdmin key.");
+                $"The deploy script's API key ({match.Name}) has the {match.Role} role, but the script must use a key that can operate " +
+                "the roof. Point the script at a RoofOperator or RoofAdmin key.");
         }
     }
 

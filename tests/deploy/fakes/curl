@@ -6,7 +6,7 @@ URL's port (from state.json); HTTPS must hit container port 8443 and HTTP contai
 as curl would. The key (FAKE_EXPECTED_KEY) must arrive on stdin (-H @-), otherwise the call gets 401.
 FAKE_REMOTE_STATUS_CODE overrides the Status response code, FAKE_REMOTE_STOP=unverified the Stop result, and
 FAKE_REQUIRE_CACERT=true fails HTTPS without --cacert. The Status and the Stop report the container's hatMode as the fake
-docker does (FAKE_<KIND>_HAT_MODE, otherwise from its HatEmulator__Enabled setting).
+docker does (FAKE_<KIND>_HAT_MODE, otherwise from its HatEmulator__Enabled setting, and FAKE_<KIND>_PHYSICAL).
 """
 import json
 import os
@@ -28,6 +28,8 @@ def with_hat_mode(c, body):
     if not mode:
         enabled = [o for o in c.get("options", []) if o.startswith("HatEmulator__Enabled=")]
         mode = "Emulated" if enabled and enabled[-1] == "HatEmulator__Enabled=true" else "Physical"
+    physical = os.environ.get(f"FAKE_{c['kind'].upper()}_PHYSICAL", "false" if mode == "Simulation" else "true")
+    body = dict(body, isUsingPhysicalHardware=physical == "true")
     return body if mode == "absent" else dict(body, hatMode=mode)
 
 

@@ -246,8 +246,10 @@ anything.
    `HTTPS_HOST_PORT` is published; plain HTTP listens on loopback inside the container, for the health check and the
    script's `docker exec` calls.
 7. **Verifies the new controller:**
-   - `/health/ready` within `READY_TIMEOUT_SECONDS` (from inside the container). A new container that stops before it
-     is ready fails this check at once, without waiting for the timeout.
+   - `/health/ready` within `READY_TIMEOUT_SECONDS` (from inside the container). A new controller that exits before
+     it is ready fails this check at once, without waiting for the timeout, whether its container stopped or Docker
+     restarted it (`--restart unless-stopped` restarts a controller that exits). One that Docker restarted before the
+     first check is caught when it exits again.
    - an authenticated `GET Status` inside the container returns 200 and reports the HAT this run deploys: `hatMode`
      `Physical`, or `Emulated` in [HAT emulator mode](#hat-emulator-mode-test-rigs). The secrets directory is read
      after the script's `--env` settings, so a `HatEmulator` file there could switch the HAT; this check catches it.
@@ -348,7 +350,9 @@ The restored version's HAT is checked twice. Before anything is stopped, the scr
 `<name>-previous` was deployed with: a version deployed for the HAT emulator is refused, with nothing changed, unless
 `ALLOW_EMULATED_HAT=true` (a test rig). With the flag, a warning names the emulator, and so does a readiness failure.
 Once the restored version runs, the checks include the `hatMode` it reports. `Physical` is accepted, and so is a Status
-without `hatMode` (a version from before HAT emulator mode). `Emulated` is accepted only with `ALLOW_EMULATED_HAT=true`;
+without `hatMode` (a version from before HAT emulator mode) that reports `isUsingPhysicalHardware` `true`. With `false`,
+such a version ran on the register simulation, as it did without an I2C bus, and the check fails. `Emulated` is
+accepted only with `ALLOW_EMULATED_HAT=true`;
 a version that reports it without being deployed for the emulator takes it from elsewhere, such as the secrets
 directory. Without the flag that check fails, the restored version is left running as above, and `--rollback` again
 swaps back. The final line names the `hatMode`.
@@ -425,7 +429,9 @@ container:
 
 1. An authenticated `GET Status` at the published URL must return 200 with `hatMode` `Physical` (`Emulated` with
    `HAT_EMULATOR_ENDPOINT` and `ALLOW_EMULATED_HAT=true`). The Pi profiles pin the HAT emulator off, so any other
-   value points to a `HatEmulator` setting in the secrets directory.
+   value points to a `HatEmulator` setting in the secrets directory. A controller from before emulator mode reports
+   no `hatMode`. It passes when `Physical` is expected and it reports `isUsingPhysicalHardware` `true`; with `false`
+   it ran on the register simulation, and the check fails before the Stop.
 2. A `POST Stop` must return 200 with `relayRegisterState` `Verified`, `relayRegisterMask` `0` and `commandedMotion`
    `None`. This stops the roof.
 
@@ -439,9 +445,10 @@ sends it on standard input and never prints it. The URL is built from the deploy
 
 Run it before `up` replaces a running controller: the verified Stop is the stop the script would request, and a
 failure means the roof is not known to be stopped. Run it again after `up`: until it passes, do not rely on remote
-control. A 401 means the controller does not know the key (check the secrets directory), a 403 on the Stop that the
-key is not an operator key, and a 400 that `PI_HOST` is not in `HVO_ROOF_ALLOWED_HOSTS`. A connection or TLS failure
-points to the port, the network or the certificate (set `REMOTE_CA_CERT`).
+control. A 401 means the controller does not know the key (check the secrets directory), and a 400 that `PI_HOST` is
+not in `HVO_ROOF_ALLOWED_HOSTS`. A connection or TLS failure points to the port, the network or the certificate (set
+`REMOTE_CA_CERT`). The check does not prove the key's role: any key may send a Stop, so a viewer key passes too. Only
+a deploy's pre-flight refuses a key that cannot operate the roof; `--rollback` and `--verify-remote` run no pre-flight.
 
 A third profile, `emulator`, runs the production settings against the [HAT emulator](emulator.md) on any machine,
 with no devices, on `http://127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). It builds both images, maps no devices,
@@ -526,9 +533,10 @@ What each deployment should report:
 | No I²C bus and emulator mode off (a development machine) | Degraded, "simulation mode" | 200 | `hatMode` `Simulation`. Not a deployment: the deploy script and `--verify-remote` refuse it. |
 
 Readiness does not prove that the controller is usable remotely. `/health/ready` needs no key and is exempt from
-`RequireHttps`, and the deploy script polls it inside the container. The port, certificate, `AllowedHosts` and
-operator key are proven only by the authenticated remote check: step 7 of the script, or `--verify-remote` for
-Compose.
+`RequireHttps`, and the deploy script polls it inside the container. The port, the certificate, `AllowedHosts` and a
+key the controller accepts are proven only by the authenticated remote check: step 7 of the script, or
+`--verify-remote` for Compose. That the key can operate the roof is checked only by a deploy's pre-flight, not by
+`--rollback` or `--verify-remote`.
 
 Readiness also passes while Degraded. On a Pi with the physical HAT, Degraded means limit switches ignored (allowed
 only with `AllowIgnoringLimitSwitchesOnPhysicalHardware`), input polling off, or a status not yet known. After a deploy,

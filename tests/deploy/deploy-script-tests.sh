@@ -67,6 +67,12 @@ seed_label() {
     "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
 }
 
+# seed_restart_count <name> <count>: how often Docker has restarted the seeded container (docker inspect reports it).
+seed_restart_count() {
+  jq --arg name "$1" --argjson count "$2" '.containers[$name].restart_count = $count' \
+    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+}
+
 # build_command [NAME=value...] [-- script args...]: sets RUN_CMD to run the deploy script with the test environment
 # plus the given variables. The script runs in ${WORK} and records its PID in script.pid (for FAKE_SIGNAL_ON).
 build_command() {
@@ -390,13 +396,15 @@ test_new_controller_never_ready_rolls_back_to_previous() {
   assert_container roof-controller-previous missing false
 }
 
-test_new_controller_that_exits_rolls_back_without_waiting() {
+# The new controller runs with --restart unless-stopped, so Docker restarts it when it exits and shows it stopped only
+# when it cannot start it again: a restart, a wait for one, or a stop must fail readiness at once, not at the timeout.
+new_controller_that_exits_rolls_back_without_waiting() {
   seed_container roof-controller old true 8080:8080
   local started=${SECONDS}
-  deploy "${HTTPS_ENV[@]}" FAKE_NEW_EXITS=true READY_TIMEOUT_SECONDS=60
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_EXITS="$1" FAKE_NEW_READY=false READY_TIMEOUT_SECONDS=60
 
-  assert_status 1
-  assert_output_contains "roof-controller stopped before it became ready"
+  assert_status_is 1
+  assert_output_contains "roof-controller exited before it became ready (it stopped, or Docker restarted it)"
   assert_output_not_contains "did not become ready within"
   assert_output_contains "fake controller log line"
   assert_output_contains "Rolled back: the previous controller is running and ready."
@@ -405,6 +413,18 @@ test_new_controller_that_exits_rolls_back_without_waiting() {
   [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller was not removed"
   # The restore checks the restarted controller with the same 60s limit, so a wait for the exited one would show.
   (( SECONDS - started < 30 )) || fail_test "the deploy waited for the exited controller ($((SECONDS - started))s)"
+}
+
+test_new_controller_that_exits_and_is_restarted_rolls_back_without_waiting() {
+  new_controller_that_exits_rolls_back_without_waiting restarted
+}
+
+test_new_controller_that_exits_and_waits_to_restart_rolls_back_without_waiting() {
+  new_controller_that_exits_rolls_back_without_waiting restarting
+}
+
+test_new_controller_that_exits_and_stays_stopped_rolls_back_without_waiting() {
+  new_controller_that_exits_rolls_back_without_waiting exited
 }
 
 test_remote_https_rejection_rolls_back() {
@@ -566,6 +586,20 @@ test_failed_docker_stop_does_not_remove_old_controller() {
   [[ -z "$(docker_calls rm)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "a container was removed, renamed or replaced"
 }
 
+# Docker restarted the old controller before this deploy. With its stop failing, the restore's docker start does nothing
+# and keeps that restart count, which must not read as an exit.
+test_failed_docker_stop_restores_a_controller_that_docker_restarted_before() {
+  seed_container roof-controller old true 8080:8080
+  seed_restart_count roof-controller 2
+  deploy "${HTTPS_ENV[@]}" FAKE_STOP_FAIL=true
+
+  assert_status_is 1
+  assert_output_contains "WARNING: could not stop the original controller; starting it anyway"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_output_not_contains "exited before it became ready"
+  assert_container roof-controller old true unless-stopped
+}
+
 test_restore_that_cannot_read_docker_does_not_claim_the_controller_is_gone() {
   seed_container roof-controller old true 8443:8443
   # The stop fails (a lost connection), and so does every lookup by ID the restore makes.
@@ -685,6 +719,36 @@ test_verify_remote_fails_on_the_wrong_hat_before_the_stop() {
   assert_no_docker_calls "--verify-remote"
 }
 
+# A controller from before emulator mode reports no hatMode. With isUsingPhysicalHardware true it drives the physical
+# HAT; without an I2C bus it fell back to the register simulation, whose verified Stop proves nothing about the roof.
+test_verify_remote_takes_a_missing_hat_mode_as_physical_only_on_the_physical_hat() {
+  seed_container roof-controller compose true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_COMPOSE_HAT_MODE=absent -- --verify-remote
+
+  assert_status_is 0
+  assert_output_contains "authenticated Status (hatMode Physical (no hatMode: a version from before emulator mode)) and a verified Stop"
+  [[ "$(wc -l < "${FAKE_STATE_DIR}/remote.log")" -eq 2 ]] || fail_test "expected a Status and a Stop"
+  assert_no_docker_calls "--verify-remote"
+
+  : > "${FAKE_STATE_DIR}/remote.log"
+  deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true FAKE_COMPOSE_HAT_MODE=absent \
+    -- --verify-remote
+
+  assert_status_is 1
+  assert_output_contains "but this deployment is for hatMode Emulated"
+  assert_output_not_contains "[done]"
+  [[ "$(wc -l < "${FAKE_STATE_DIR}/remote.log")" -eq 1 ]] || fail_test "a Stop was sent after the HAT check failed"
+  assert_no_docker_calls "--verify-remote"
+
+  : > "${FAKE_STATE_DIR}/remote.log"
+  deploy "${HTTPS_ENV[@]}" FAKE_COMPOSE_HAT_MODE=absent FAKE_COMPOSE_PHYSICAL=false -- --verify-remote
+
+  assert_status_is 1
+  assert_output_contains "reports no hatMode and isUsingPhysicalHardware false: a version from before emulator mode on the register simulation, not the physical HAT"
+  assert_output_not_contains "[done]"
+  [[ "$(wc -l < "${FAKE_STATE_DIR}/remote.log")" -eq 1 ]] || fail_test "a Stop was sent after the HAT check failed"
+}
+
 test_verify_remote_fails_on_a_rejected_key_an_unverified_stop_or_no_answer() {
   seed_container roof-controller compose true 8080:8080
   deploy ALLOW_INSECURE_HTTP=true ROOF_OPERATOR_API_KEY=not-the-configured-key -- --verify-remote
@@ -706,12 +770,12 @@ test_verify_remote_refuses_other_modes_and_skip_remote_check() {
   local other
   for other in --dry-run --force-unverified-stop --rollback; do
     deploy "${HTTPS_ENV[@]}" -- --verify-remote "${other}"
-    assert_status 2
+    assert_status_is 2
     assert_output_contains "--verify-remote cannot be combined with --dry-run, --force-unverified-stop or --rollback"
   done
 
   deploy "${HTTPS_ENV[@]}" SKIP_REMOTE_CHECK=true -- --verify-remote
-  assert_status 1
+  assert_status_is 1
   assert_output_contains "unset SKIP_REMOTE_CHECK"
   assert_no_docker_calls "--verify-remote"
   [[ ! -s "${FAKE_STATE_DIR}/remote.log" ]] || fail_test "the remote URL was called"
@@ -1221,6 +1285,16 @@ test_rollback_to_a_version_without_hat_mode_is_physical() {
   assert_status 0
   assert_output_contains "HAT: hatMode Physical (no hatMode: a version from before emulator mode)."
   assert_container roof-controller old true unless-stopped
+}
+
+test_rollback_to_a_version_without_hat_mode_on_the_register_simulation_fails() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=absent FAKE_OLD_PHYSICAL=false -- --rollback
+
+  assert_status_is 1
+  assert_output_contains "reports no hatMode and isUsingPhysicalHardware false: a version from before emulator mode on the register simulation, not the physical HAT"
+  assert_output_not_contains "HAT: hatMode Physical"
 }
 
 test_rollback_requires_certificate_or_explicit_insecure_opt_in() {

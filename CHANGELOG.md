@@ -135,8 +135,10 @@ the roof against this server; use the authenticated browser console for operator
   checks the `hatMode` the new controller reports against the one deployed and rolls back on a
   mismatch. `--rollback` accepts a version that uses the emulator only with
   `ALLOW_EMULATED_HAT=true`: one deployed for the emulator is refused before anything is stopped,
-  and the restored version's `hatMode` is checked once it runs. The dry-run and the final report
-  name the HAT the controller uses.
+  and the restored version's `hatMode` is checked once it runs. A version from before emulator
+  mode reports none and passes only with `isUsingPhysicalHardware` true: without an I2C bus it
+  ran on the register simulation, whose verified Stop says nothing about the roof. The dry-run
+  and the final report name the HAT the controller uses.
 - Emulator container (#30): `src/HVO.RoofControllerV4.Emulator/Dockerfile` (non-root,
   `linux/amd64` and `linux/arm64`), the compose `emulator` profile (production settings
   against the emulator container, no devices, loopback only, on its own network), and
@@ -233,16 +235,19 @@ the roof against this server; use the authenticated browser console for operator
   authenticated `GET Status` must report the expected `hatMode`, then `POST Stop` must be
   verified. It makes no Docker call and changes no container. Run it before
   `docker compose up` replaces a controller and after, as the script's own deploy does in its
-  step 7.
+  step 7. A controller from before emulator mode reports no `hatMode` and passes as the
+  physical HAT when it reports `isUsingPhysicalHardware` true. Any key may send a Stop, so it
+  does not prove that the key can operate the roof; only a deploy's pre-flight checks that.
 - Health and readiness semantics per deployment in [docs/deployment.md](docs/deployment.md#health-and-readiness)
   (#18): what `/health/live`, `/health/ready` and `/health` answer, which conditions make the
   controller Degraded or Unhealthy, what each deployment should report, and why readiness does
   not prove remote access.
 - CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
   `docker`/`curl` (including `--force-unverified-stop` without a terminal, without the flag,
-  with a wrong answer and with the typed confirmation, #17), and `docker compose config` for the Pi compose file's profiles (rejecting
-  `pi` with `pi-lan-http`, and checking that the Pi profiles pin the HAT emulator off and the
-  `emulator` profile maps no devices and has its own network) and for `src/docker-compose.yml`.
+  with a wrong answer and with the typed confirmation, #17), and `docker compose config` for
+  the Pi compose file's profiles (rejecting `pi` with `pi-lan-http`, and checking that the Pi
+  profiles pin the HAT emulator off and the `emulator` profile maps no devices and has its own
+  network) and for `src/docker-compose.yml`.
 - API security tests (#18; tests only, no behaviour change): every mapped endpoint must refuse
   an anonymous caller unless allow-listed; a viewer is refused Close, ClearFault and Lease;
   `System/metrics` needs an admin; malformed, empty and `text/plain` configuration bodies are
@@ -296,9 +301,10 @@ the roof against this server; use the authenticated browser console for operator
   [docs/deployment.md](docs/deployment.md) describes moving between Compose and the script.
   `BUILD_PLATFORM` (default `linux/arm64`) builds `linux/amd64` for a test rig on the HAT
   emulator, and in emulator mode the container maps no host device or Pi file.
-- The deploy script fails the new controller's readiness check at once when the container
-  stops before it is ready ("stopped before it became ready"), instead of waiting out
-  `READY_TIMEOUT_SECONDS`, and then rolls back (#17).
+- The deploy script fails the new controller's readiness check at once when the controller
+  exits before it is ready, whether its container stopped or Docker restarted it ("exited
+  before it became ready"), instead of waiting out `READY_TIMEOUT_SECONDS`, and then rolls
+  back (#17).
 - The console on short screens, such as a phone held sideways, puts the roof state beside the
   buttons, keeps the Controls heading for screen readers only and, wider than 576 px, puts the
   footer on one row, so Stop is in view without scrolling (#20). The browser tests found Stop
