@@ -52,6 +52,15 @@ seed_container() {
     "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
 }
 
+# seed_env <name> <NAME=value>...: the --env options the seeded container was run with (docker inspect reports them).
+seed_env() {
+  local name=$1 options
+  shift
+  options=$(for pair in "$@"; do printf '%s\n%s\n' --env "${pair}"; done | jq -R . | jq -s .)
+  jq --arg name "${name}" --argjson options "${options}" '.containers[$name].options = $options' \
+    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+}
+
 # build_command [NAME=value...] [-- script args...]: sets RUN_CMD to run the deploy script with the test environment
 # plus the given variables. The script runs in ${WORK} and records its PID in script.pid (for FAKE_SIGNAL_ON).
 build_command() {
@@ -846,18 +855,66 @@ test_physical_deploy_allows_extra_devices_and_mounts() {
     || fail_test "EXTRA_DOCKER_ARGS not passed on: $(controller_run_args)"
 }
 
-test_rollback_to_an_emulated_version_needs_the_flag() {
+test_rollback_to_a_version_deployed_for_the_emulator_needs_the_flag() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_env roof-controller-previous HatEmulator__Enabled=true HatEmulator__Host=hat-emulator HatEmulator__Port=5291
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+
+  # Known from how it was deployed, so refused before anything is stopped.
+  assert_status 1
+  assert_output_contains "roof-controller-previous was deployed for the HAT emulator at hat-emulator:5291, not the physical HAT, and does not operate the roof. Nothing was changed. To roll back to it on a test rig, set ALLOW_EMULATED_HAT=true."
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls update)$(docker_calls start)" ]] \
+    || fail_test "the refused rollback changed a container: $(cat "${FAKE_STATE_DIR}/calls.log")"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+
+  deploy "${HTTPS_ENV[@]}" ALLOW_EMULATED_HAT=true -- --rollback
+  assert_status 0
+  assert_output_contains "[rollback] WARNING: roof-controller-previous was deployed for the HAT emulator at hat-emulator:5291 (ALLOW_EMULATED_HAT=true): the restored controller does not operate the roof."
+  assert_output_contains "HAT: hatMode Emulated (ALLOW_EMULATED_HAT=true): the roof does not move."
+  assert_container roof-controller old true unless-stopped
+
+  # Swapping back to the physical version needs no flag.
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 0
+  assert_output_contains "HAT: hatMode Physical."
+  assert_container roof-controller current true unless-stopped
+}
+
+test_rollback_to_an_emulator_version_that_does_not_become_ready_names_the_emulator() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_env roof-controller-previous HatEmulator__Enabled=true HatEmulator__Host=hat-emulator HatEmulator__Port=5291
+  deploy "${HTTPS_ENV[@]}" ALLOW_EMULATED_HAT=true FAKE_OLD_READY=false -- --rollback
+
+  assert_status 1
+  assert_output_contains "roof-controller did not become ready within 1s (it was deployed for the HAT emulator at hat-emulator:5291: check that the emulator is running). It is left running. Run --rollback again to swap back."
+}
+
+test_rollback_that_cannot_read_the_previous_environment_changes_nothing() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_FAIL=inspect -- --rollback
+
+  assert_status 1
+  assert_output_contains "Could not read the environment of roof-controller-previous from Docker. Nothing was changed; check the Docker context and retry."
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+# A HatEmulator setting from elsewhere (the secrets directory) shows only once the restored version runs.
+test_rollback_to_a_version_that_reports_the_emulator_needs_the_flag() {
   seed_container roof-controller current true 8443:8443
   seed_container roof-controller-previous old false 8443:8443
   deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=Emulated -- --rollback
 
-  # The HAT is known only once the restored version runs; like any failed check after the start, it is left running.
+  # Like any failed check after the start, it is left running, and --rollback swaps back.
   assert_status 1
-  assert_output_contains "roof-controller uses the HAT emulator (hatMode Emulated), not the physical HAT, and does not operate the roof; set ALLOW_EMULATED_HAT=true to roll back to it on a test rig. It is left running. Run --rollback again to swap back."
+  assert_output_contains "roof-controller uses the HAT emulator (hatMode Emulated), not the physical HAT, and does not operate the roof, although it was not deployed for the emulator; check for HatEmulator settings in the secrets directory. It is left running. Run --rollback again to swap back."
   assert_container roof-controller old true unless-stopped
   assert_container roof-controller-previous current false no
 
-  # Swapping back to the physical version needs no flag.
   deploy "${HTTPS_ENV[@]}" FAKE_OLD_HAT_MODE=Emulated -- --rollback
   assert_status 0
   assert_output_contains "HAT: hatMode Physical."

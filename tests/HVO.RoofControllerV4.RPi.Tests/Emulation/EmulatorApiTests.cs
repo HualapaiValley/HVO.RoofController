@@ -353,6 +353,10 @@ public sealed class EmulatorApiTests
     [DataRow("/relay-fault", """{"relay":1,"fault":1}""")]
     [DataRow("/wiring", """{"wiring":1024}""")]
     [DataRow("/reset", """{"wiring":2}""")]
+    // A list of names only for a [Flags] enum: for any other, it reads as another value ("Open, Closed" is Closed).
+    [DataRow("/limit-fault", """{"limit":"Open, Closed","fault":"StuckActuated"}""")]
+    [DataRow("/drive/trip", """{"trip":"StartTooSoonAfterPowerUp, MotorOverload"}""")]
+    [DataRow("/relay-fault", """{"relay":1,"fault":"None, Welded"}""")]
     public async Task ARequestThatDoesNotParse_IsABadRequest(string path, string body)
     {
         await using var host = new EmulatorHost();
@@ -363,6 +367,16 @@ public sealed class EmulatorApiTests
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         host.Session.GetStatus().Should().BeEquivalentTo(before, o => o.Excluding(status => status.Elapsed), "a refused request changes nothing");
+    }
+
+    [TestMethod]
+    public async Task AListOfNames_SetsEachFlag_OfAFlagsEnum()
+    {
+        await using var host = new EmulatorHost();
+        using var client = host.CreateClient();
+
+        (await PostAsync(client, "/wiring", new { wiring = "SwappedLimitInputs, SwappedMotorLeads" })).Plant.Wiring
+            .Should().Be(WiringFault.SwappedLimitInputs | WiringFault.SwappedMotorLeads);
     }
 
     [TestMethod]

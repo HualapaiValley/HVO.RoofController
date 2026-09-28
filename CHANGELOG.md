@@ -126,8 +126,10 @@ the roof against this server; use the authenticated browser console for operator
   in an `--env-file` (which must be readable). In emulator mode an I2C `--device`,
   `--privileged` and a mount of the host's `/` or `/dev` are refused too. The verification
   checks the `hatMode` the new controller reports against the one deployed and rolls back on a
-  mismatch; `--rollback` accepts a version that uses the emulator only with
-  `ALLOW_EMULATED_HAT=true`. The dry-run and the final report name the HAT the controller uses.
+  mismatch. `--rollback` accepts a version that uses the emulator only with
+  `ALLOW_EMULATED_HAT=true`: one deployed for the emulator is refused before anything is stopped,
+  and the restored version's `hatMode` is checked once it runs. The dry-run and the final report
+  name the HAT the controller uses.
 - Emulator container (#30): `src/HVO.RoofControllerV4.Emulator/Dockerfile` (non-root,
   `linux/amd64` and `linux/arm64`), the compose `emulator` profile (production settings
   against the emulator container, no devices, loopback only), and
@@ -145,8 +147,8 @@ the roof against this server; use the authenticated browser console for operator
   the `http://localhost:8080` listener the health check needs, and endpoints Kestrel would refuse),
   every configured certificate (loaded as Kestrel loads it, with the Server Authentication usage)
   and that `AllowedHosts` includes `localhost`. The deploy script runs it with the final
-  container's configuration before stopping anything; both compose profiles run it before the
-  controller starts.
+  container's configuration before stopping anything; both Pi compose profiles (`pi`,
+  `pi-lan-http`) run it before the controller starts, and the `emulator` profile does not.
 - The deploy script verifies the new controller from the deploying machine (authenticated
   Status and a verified Stop at the published URL, `REMOTE_CA_CERT` for a private CA), keeps
   the old container as `roof-controller-previous` and rolls back to it when the new one fails.
@@ -174,7 +176,8 @@ the roof against this server; use the authenticated browser console for operator
   all-off stop runs if the stuck call returns; until then the controller is shutting down, not
   disposed).
 - CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
-  `docker`/`curl`, and `docker compose config` for both profiles.
+  `docker`/`curl`, and `docker compose config` for the Pi compose file's profiles (rejecting
+  `pi` with `pi-lan-http`) and for `src/docker-compose.yml`.
 
 ### Changed
 

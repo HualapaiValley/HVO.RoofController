@@ -309,10 +309,14 @@ controller is back as `<name>` and restarted if it was running, `<name>-previous
 with `Undone:`. Once the start has succeeded, the restored controller is left running, even when the checks after it
 fail or the script is interrupted, and the script exits non-zero.
 
-The checks include the restored version's HAT. `hatMode` `Physical` is accepted, and so is a Status without `hatMode`
-(a version from before HAT emulator mode). A version that uses the HAT emulator is accepted only with
-`ALLOW_EMULATED_HAT=true` (a test rig); without it the check fails, the restored version is left running as above,
-and `--rollback` again swaps back. The final line names the `hatMode`.
+The restored version's HAT is checked twice. Before anything is stopped, the script reads the environment
+`<name>-previous` was deployed with: a version deployed for the HAT emulator is refused, with nothing changed, unless
+`ALLOW_EMULATED_HAT=true` (a test rig). With the flag, a warning names the emulator, and so does a readiness failure.
+Once the restored version runs, the checks include the `hatMode` it reports. `Physical` is accepted, and so is a Status
+without `hatMode` (a version from before HAT emulator mode). `Emulated` is accepted only with `ALLOW_EMULATED_HAT=true`;
+a version that reports it without being deployed for the emulator takes it from elsewhere, such as the secrets
+directory. Without the flag that check fails, the restored version is left running as above, and `--rollback` again
+swaps back. The final line names the `hatMode`.
 
 A rollback that could not be undone leaves `<name>-swap` behind. Later rollbacks refuse to run until it is gone, and
 change nothing. Find out which version it is (`docker ps -a --filter name=<name>`), then either rename it to whichever

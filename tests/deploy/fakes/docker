@@ -5,6 +5,8 @@ Keeps containers in $FAKE_STATE_DIR/state.json (keyed by name, each with a 64-he
 (as JSON) to $FAKE_STATE_DIR/calls.log. Commands take a container name or an ID prefix, as docker does. A container's
 docker state is "running" or "exited" from its "running" flag, or its optional "state" (paused, restarting, created);
 stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex>|id=<prefix> and Go-style --format.
+`inspect` supports only --format '{{range .Config.Env}}{{println .}}{{end}}': the --env/-e values the container was run
+with (its "options").
 Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
   FAKE_<KIND>_READY=false          /health/ready fails
   FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
@@ -122,6 +124,32 @@ def with_hat_mode(c, body):
         enabled = [o for o in c.get("options", []) if o.startswith("HatEmulator__Enabled=")]
         mode = "Emulated" if enabled and enabled[-1] == "HatEmulator__Enabled=true" else "Physical"
     return body if mode == "absent" else dict(body, hatMode=mode)
+
+
+def env_of(c):
+    options, env = c.get("options", []), []
+    for i, value in enumerate(options):
+        if value in ("--env", "-e") and i + 1 < len(options):
+            env.append(options[i + 1])
+        elif value.startswith("--env="):
+            env.append(value[len("--env="):])
+    return env
+
+
+def inspect(state, args):
+    fmt, refs, i = None, [], 0
+    while i < len(args):
+        if args[i] in ("--format", "-f"):
+            fmt, i = args[i + 1], i + 2
+        else:
+            refs.append(args[i])
+            i += 1
+    if fmt != "{{range .Config.Env}}{{println .}}{{end}}":
+        die(f"fake docker: unsupported inspect format: {fmt}")
+    for ref in refs:
+        _, c = container(state, ref)
+        # println ends each value with a newline, and docker adds one after the template.
+        out("".join(f"{e}\n" for e in env_of(c)))
 
 
 def docker_state(c):
@@ -500,6 +528,9 @@ def main():
         out("fake controller log line")
         return
 
+    if command == "inspect":
+        inspect(state, args)
+        return
     if command == "ps":
         ps(state, args)
         return

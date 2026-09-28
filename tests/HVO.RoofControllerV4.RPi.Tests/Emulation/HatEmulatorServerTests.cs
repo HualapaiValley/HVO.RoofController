@@ -12,6 +12,7 @@ using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
 using HVO.RoofControllerV4.Simulation.Emulator;
 using HVO.RoofControllerV4.Simulation.Hat;
+using Microsoft.Extensions.Logging;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Emulation;
 
@@ -267,9 +268,11 @@ public sealed class HatEmulatorServerTests
     {
         await using var rig = ServerRig.Start();
         rig.Server.HelloTimeout.Should().Be(TimeSpan.FromSeconds(5));
-        rig.Server.HelloTimeout = TimeSpan.FromMilliseconds(200);
         using var greeted = await RawLink.ConnectAsync(rig.Server);
         await greeted.HelloAsync();
+
+        // A handler reads the timeout as it starts: the short one applies to the silent connection only.
+        rig.Server.HelloTimeout = TimeSpan.FromMilliseconds(200);
         using var silent = await RawLink.ConnectAsync(rig.Server);
 
         (await silent.ReceiveOrClosedAsync()).Should().BeNull("a connection that sends no Hello is closed");
@@ -332,6 +335,7 @@ public sealed class HatEmulatorServerTests
         await rig.DisposeAsync().AsTask().WaitAsync(ReceiveTimeout);
 
         rig.Server.OpenConnections.Should().Be(0);
+        rig.Log.MessagesAt(LogLevel.Warning).Should().BeEmpty("a dropped connection ends its handler without an error");
     }
 
     [TestMethod]
@@ -370,9 +374,11 @@ public sealed class HatEmulatorServerTests
         {
             Plant = new RoofPlant(new RoofPlantOptions(), new ManualTimeProvider());
             Target = new EmulatedHatRegisterClient(Plant, busId, EmulatedBusTiming.Instant);
-            Server = new HatEmulatorServer(() => Target, new IPEndPoint(IPAddress.Loopback, 0));
+            Server = new HatEmulatorServer(() => Target, new IPEndPoint(IPAddress.Loopback, 0), Log);
             Server.Start();
         }
+
+        public CapturingLogger<HatEmulatorServer> Log { get; } = new();
 
         public RoofPlant Plant { get; }
 

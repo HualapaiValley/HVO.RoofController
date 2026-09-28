@@ -343,12 +343,15 @@ unreachable collector configured.
 
 Run on the Pi with the production image and configuration. Two variants, in this order:
 
-- **Simulated:** the compose `emulator` profile (the production configuration with only the HAT
-  emulated; see [HAT emulator](emulator.md)), with a script that cycles Open, Stop, Close, Stop through
-  the API, plus status polling at client rates and a camera stream opened and closed periodically.
-  Each cycle reaches the emulated limits.
+- **Simulated:** the compose `emulator` profile (the Production environment and roof settings against
+  the HAT emulator; see [HAT emulator](emulator.md)), with a script that cycles Open, Stop, Close,
+  Stop through the API, plus status polling at client rates. Each cycle reaches the emulated limits.
+  The profile has no camera proxy (camera streams answer 503), and it exports metrics only when
+  `HVO_EMULATED_ROOF_OTLP_ENDPOINT` is set: set it for the counter samples below. Its logs rotate as
+  the Pi profiles' do.
 - **Bench:** the real HAT and VFD with the **motor decoupled**. Limit inputs are driven by a relay
-  board or switch box that the cycling script controls. Never the roof mechanism.
+  board or switch box that the cycling script controls. Never the roof mechanism. The same script,
+  plus a camera stream opened and closed periodically.
 
 Sample every minute and keep the samples:
 

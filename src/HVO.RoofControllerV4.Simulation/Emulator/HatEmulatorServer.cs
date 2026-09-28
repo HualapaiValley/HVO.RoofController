@@ -146,16 +146,20 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             DisconnectAll();
             if (_acceptLoop is not null)
             {
-                await _acceptLoop.ConfigureAwait(false);
+                try
+                {
+                    await _acceptLoop.ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // The loop ends by itself on shutdown; a failure must not stop the shutdown or skip the handlers.
+                    _logger.LogWarning(ex, "HAT emulator: the accept loop failed");
+                }
             }
 
-            // The accept loop has ended, so no handler is added after this snapshot.
-            await Task.WhenAll(_handlers.Values).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // A handler that failed must not stop the shutdown.
-            _logger.LogWarning(ex, "HAT emulator: a connection handler failed");
+            // The accept loop has ended, so no handler is added after this snapshot. A handler that failed is logged by
+            // its continuation.
+            await Task.WhenAll(_handlers.Values).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
         finally
         {
@@ -173,8 +177,10 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             {
                 client = await _listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException && cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException or InvalidOperationException
+                && cancellationToken.IsCancellationRequested)
             {
+                // A listener stopped by the shutdown throws InvalidOperationException, even with the token cancelled.
                 return;
             }
             catch (SocketException ex)
@@ -199,7 +205,15 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             var handler = HandleAsync(id, client, remote, cancellationToken);
             _handlers[id] = handler;
             _ = handler.ContinueWith(
-                _ => _handlers.TryRemove(id, out var _),
+                ended =>
+                {
+                    _handlers.TryRemove(id, out var _);
+                    if (ended.Exception is { } failure)
+                    {
+                        // HandleAsync handles the connection's own errors; anything else is a defect to see.
+                        _logger.LogWarning(failure.GetBaseException(), "HAT emulator: the handler for the connection from {Remote} failed", remote);
+                    }
+                },
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);

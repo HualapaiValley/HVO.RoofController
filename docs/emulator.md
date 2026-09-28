@@ -132,9 +132,10 @@ after its caller has given up on it.
 ## Control API
 
 Everything is under `/api/emulator`, in JSON. Enum values are names, such as `"Open"` or `"StuckReleased"`; numbers are
-refused. The fields in the examples are required unless the table says otherwise. The API changes the emulated plant
-and link only. **It has no authentication:** keep it on loopback (the default, and how both compose files publish it) or on a
-private test network.
+refused, and so is a list of names except for the flag sets (`wiring`, a limit `fault`), such as
+`"SwappedLimitInputs, SwappedMotorLeads"`. The fields in the examples are required unless the table says otherwise.
+The API changes the emulated plant and link only. **It has no authentication:** keep it on loopback (the default, and
+how both compose files publish it) or on a private test network.
 
 | Request | Body | Effect |
 |---------|------|--------|
@@ -155,8 +156,10 @@ private test network.
 | `POST /link` | `{"outage": true}`, `{"responseDelayMilliseconds": 200}`, `{"disconnect": true}` | Link faults, each field optional. An outage closes the open connections and each new one as soon as it is accepted, as a stopped emulator would, so the controller sees connection errors. A response delay (0 to 60000 ms) models a stalled emulator: use it to exercise the controller's timeouts. `disconnect` drops the open connections once. |
 
 Each `POST` answers with the new `/status`, or with 400 and no change. A body that does not parse (malformed JSON, an
-unknown name, or a number where a name belongs) gets a plain 400. A missing required field or an out-of-range value
-gets a problem detail that names it. For example, to jam the roof mid-travel and watch the controller stop it:
+unknown name, a number or a list where one name belongs) gets a 400 with no body from the container (Production), or
+with the developer exception details under `dotnet run` (Development). A missing required field or an out-of-range value
+gets a problem detail titled "Invalid emulator request" that names it. For example, to jam the roof mid-travel and watch
+the controller stop it:
 
 ```bash
 curl -s -X POST http://127.0.0.1:5290/api/emulator/jam -H 'Content-Type: application/json' -d '{"jammed": true}'
@@ -181,7 +184,7 @@ Two compose files run the controller with the emulator:
 | File | Environment | Purpose |
 |------|-------------|---------|
 | `src/docker-compose.yml` | Development | Local development, on `http://localhost:5200`. The admin key comes from `HVO_DEV_ROOF_API_KEY`. |
-| `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, profile `emulator` | Production, with `HatEmulator__AllowOutsideDevelopment=true` | The production configuration with only the HAT emulated, on `127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). The admin key comes from `HVO_EMULATED_ROOF_API_KEY`. It maps no devices, so it can run next to a Pi profile. |
+| `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, profile `emulator` | Production, with `HatEmulator__AllowOutsideDevelopment=true` | The production roof settings against the emulator, on plain HTTP at `127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). The admin key comes from `HVO_EMULATED_ROOF_API_KEY`. It has no camera proxy (camera streams answer 503), exports telemetry only when `HVO_EMULATED_ROOF_OTLP_ENDPOINT` is set, and rotates its logs as the Pi profiles do. It maps no devices, so it can run next to a Pi profile. |
 
 `tests/emulator/compose-smoke-test.sh` builds both images through the `emulator` profile. It opens and closes the
 emulated roof through the controller's API, checks that the plant recorded no violations, and checks the banner, the
@@ -205,7 +208,7 @@ No test relies on physical hardware.
 | `EmulatedHatDisplayTests` | The banner in the main layout (the console) and on its own, the console's HAT badge and the footer |
 | `DevelopmentConfigurationTests` | Development uses the emulator, with the limit switches in force and the production wiring |
 | `tests/emulator/compose-smoke-test.sh` | The two images together through the compose `emulator` profile |
-| `tests/deploy/deploy-script-tests.sh` | The deploy script's refusal without `ALLOW_EMULATED_HAT` and its record of the flag |
+| `tests/deploy/deploy-script-tests.sh` | Emulator mode: the refusal without `ALLOW_EMULATED_HAT`, the unmapped HAT and the recorded flag; `HatEmulator` settings refused in `EXTRA_DOCKER_ARGS` and in an `--env-file`; I2C devices, `--privileged` and `/dev` mounts refused in emulator mode; the verified `hatMode`, with a rollback on a mismatch; and the rollback's HAT checks, before the swap and once the restored version runs |
 
 `EmulatorModeAppTests` is `[DoNotParallelize]`. Each test starts a whole controller host whose startup and HAT polling
 hold thread-pool threads, and the in-process emulator needs those threads to answer. Run in parallel, the hosts starve

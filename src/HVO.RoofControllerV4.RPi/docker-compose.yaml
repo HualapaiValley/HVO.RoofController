@@ -84,6 +84,13 @@ x-thermal-mount: &thermal-mount
   target: /sys/class/thermal/thermal_zone0/temp
   read_only: true
 
+# Log rotation for the long-running services (the Pi controllers and the emulator rig, which a soak runs).
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 x-roof-controller: &roof-controller
   image: hvov9/roof-controller:v4
   build:
@@ -105,11 +112,7 @@ x-roof-controller: &roof-controller
     timeout: 5s
     retries: 3
     start_period: 10s
-  logging:
-    driver: local
-    options:
-      max-size: "10m"
-      max-file: "5"
+  logging: *logging
 
 x-deployment-check: &deployment-check
   image: hvov9/roof-controller:v4
@@ -125,7 +128,8 @@ x-deployment-check: &deployment-check
     disable: true
 
 # The controller against the HAT emulator (profile emulator). Production settings, with the HAT emulator allowed
-# explicitly (HatEmulator__AllowOutsideDevelopment), so this runs what a deployment runs except for the HAT.
+# explicitly (HatEmulator__AllowOutsideDevelopment): a deployment's configuration except for the HAT, HTTPS and the
+# cameras.
 x-emulated-environment: &emulated-environment
   ASPNETCORE_ENVIRONMENT: Production
   ASPNETCORE_URLS: "http://+:8080"
@@ -208,6 +212,7 @@ services:
       # The control API has no authentication: loopback only.
       - "127.0.0.1:${HVO_EMULATOR_CONTROL_PORT:-5290}:5290"
     restart: "no"
+    logging: *logging
     profiles:
       - emulator
 
@@ -224,6 +229,7 @@ services:
       - "127.0.0.1:${HVO_EMULATED_ROOF_PORT:-5195}:8080"
     restart: "no"
     stop_grace_period: 30s
+    logging: *logging
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
       interval: 10s

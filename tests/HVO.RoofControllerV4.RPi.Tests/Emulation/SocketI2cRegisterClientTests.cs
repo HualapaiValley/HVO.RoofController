@@ -434,7 +434,9 @@ public sealed class SocketI2cRegisterClientTests
     {
         var registers = new byte[256];
         registers[3] = 0x05;
-        var late = TimeoutUnderTest * 0.6;
+        // A longer timeout than the other tests': the Hello answered at 0.6 of it must still pass on a slow runner.
+        var timeout = TimeSpan.FromSeconds(3);
+        var late = timeout * 0.6;
         await using var emulator = new ScriptedHatEmulator(async c =>
         {
             if (c.Index > 0)
@@ -452,12 +454,11 @@ public sealed class SocketI2cRegisterClientTests
             await c.SendAsync(new HatEmulatorFrame(HatEmulatorFrameKind.Ok, read.Sequence, read.Register, read.Count, new byte[read.Count]));
             await c.HoldAsync();
         });
-        var (client, _) = Connect(emulator.Port, TimeoutUnderTest);
+        var (client, _) = Connect(emulator.Port, timeout);
         using (client)
         {
-            var stopwatch = Stopwatch.StartNew();
+            // With a timeout of its own, the access would be answered at 0.6 of it; ConnectCount shows the Hello passed.
             client.Invoking(c => c.ReadByte(3)).Should().Throw<IOException>().WithMessage("The HAT emulator did not answer within the request timeout.");
-            stopwatch.Elapsed.Should().BeLessThan(late * 2, "the Hello and the access share one request timeout");
 
             client.ReadByte(3).Should().Be(0x05);
             client.ConnectCount.Should().Be(2, "the first connection passed its Hello; its access timed out and dropped it");

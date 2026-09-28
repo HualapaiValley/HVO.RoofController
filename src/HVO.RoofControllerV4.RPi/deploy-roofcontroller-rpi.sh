@@ -30,7 +30,8 @@ set -euo pipefail
 # HAT emulator mode: HAT_EMULATOR_ENDPOINT=<host>:<port> deploys a controller that uses the HAT emulator
 #   (HVO.RoofControllerV4.Emulator) in place of the physical HAT; the HAT's I2C device is not mapped and the roof does
 #   not move. It is refused unless ALLOW_EMULATED_HAT=true, and the report says which HAT the controller uses. A
-#   rollback checks the restored version's HAT too: the emulator is accepted only with ALLOW_EMULATED_HAT=true.
+#   rollback checks the restored version's HAT too, before anything is stopped and again once it runs: the emulator is
+#   accepted only with ALLOW_EMULATED_HAT=true.
 
 usage() {
   sed -n '/^# Project-local/,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -389,6 +390,23 @@ container_state() {
   lookup_container "$(name_filter "${1:-${CONTAINER_NAME}}")" && echo "${CSTATE}"
 }
 
+# Sets PREVIOUS_EMULATOR to the emulator's host:port when the stopped previous version was deployed in HAT emulator mode,
+# otherwise to empty; returns 1 when Docker cannot be asked. Reads the keys this script sets (EXTRA_DOCKER_ARGS cannot set
+# them); the last one wins, as in .NET.
+read_previous_hat() {
+  local env line enabled="" host="" port=""
+  PREVIOUS_EMULATOR=""
+  env=$(dockerc inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${PREVIOUS_ID}") || return 1
+  while IFS= read -r line; do
+    case "${line}" in
+      HatEmulator__Enabled=*) enabled=${line#*=} ;;
+      HatEmulator__Host=*) host=${line#*=} ;;
+      HatEmulator__Port=*) port=${line#*=} ;;
+    esac
+  done <<<"${env}"
+  [[ "${enabled}" != "true" ]] || PREVIOUS_EMULATOR="${host}:${port}"
+}
+
 # Sets STATE/CURRENT_ID and PREVIOUS_STATE/PREVIOUS_ID, or stops the script (nothing has been changed when it runs).
 read_container_states() {
   lookup_container "$(name_filter "${CONTAINER_NAME}")" \
@@ -535,7 +553,7 @@ check_hat_mode() {
           VERIFIED_HAT_MODE="Emulated (ALLOW_EMULATED_HAT=true): the roof does not move"
           return 0
         fi
-        FAILURE="${name} uses the HAT emulator (hatMode Emulated), not the physical HAT, and does not operate the roof; set ALLOW_EMULATED_HAT=true to roll back to it on a test rig" ;;
+        FAILURE="${name} uses the HAT emulator (hatMode Emulated), not the physical HAT, and does not operate the roof, although it was not deployed for the emulator; check for HatEmulator settings in the secrets directory" ;;
       *) FAILURE="${name} reports hatMode ${hat_mode}, not the physical HAT" ;;
     esac
     return 1
@@ -870,6 +888,16 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   [[ "${PREVIOUS_STATE}" == "stopped" ]] \
     || fail "There is no stopped ${PREVIOUS_CONTAINER_NAME} to roll back to."
 
+  # The HAT the previous version was deployed for, known before anything is stopped. The hatMode check once it runs
+  # stays the backstop, for a HatEmulator setting from elsewhere (the secrets directory).
+  read_previous_hat \
+    || fail "Could not read the environment of ${PREVIOUS_CONTAINER_NAME} from Docker. Nothing was changed; check the Docker context and retry."
+  if [[ -n "${PREVIOUS_EMULATOR}" ]]; then
+    [[ "${ALLOW_EMULATED_HAT}" == "true" ]] \
+      || fail "${PREVIOUS_CONTAINER_NAME} was deployed for the HAT emulator at ${PREVIOUS_EMULATOR}, not the physical HAT, and does not operate the roof. Nothing was changed. To roll back to it on a test rig, set ALLOW_EMULATED_HAT=true."
+    log_err "[rollback] WARNING: ${PREVIOUS_CONTAINER_NAME} was deployed for the HAT emulator at ${PREVIOUS_EMULATOR} (ALLOW_EMULATED_HAT=true): the restored controller does not operate the roof."
+  fi
+
   if [[ "${STATE}" == "running" ]]; then
     stop_roof_before_replacing
   fi
@@ -912,6 +940,8 @@ if [[ "${ROLLBACK}" == "true" ]]; then
 
   if ! verify_controller "${CONTAINER_NAME}"; then
     show_containers
+    [[ -z "${PREVIOUS_EMULATOR}" ]] \
+      || FAILURE+=" (it was deployed for the HAT emulator at ${PREVIOUS_EMULATOR}: check that the emulator is running)"
     fail "The rolled-back controller did not pass verification: ${FAILURE}. It is left running. Run --rollback again to swap back."
   fi
   show_containers

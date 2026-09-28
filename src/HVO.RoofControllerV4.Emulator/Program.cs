@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using HVO.RoofControllerV4.Simulation.Emulator;
 using Microsoft.Extensions.Options;
 
@@ -35,8 +34,9 @@ public class Program
     internal static void ConfigureServices(IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<EmulatorHostOptions>(configuration.GetSection(EmulatorHostOptions.SectionName));
-        // Enum values by name only: a number would reach the plant as a value it may not model.
-        services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false)));
+        // Enum values by name only: a number, or a list of names for an enum that is not [Flags], would reach the plant
+        // as a value it may not model or one the request did not name.
+        services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new NamedEnumConverter()));
         services.AddProblemDetails();
 
         services.AddSingleton(sp => new HatEmulatorSession(sp.GetRequiredService<IOptions<EmulatorHostOptions>>().Value.SessionOptions()));

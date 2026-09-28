@@ -218,6 +218,7 @@ Docker call, a Docker context that would prompt, pre-flight parity with the cont
 publishing, the verified-stop gate, the remote check, restoring the old controller after a failure, a signal
 (including a Ctrl-C that reaches docker, a second one during the restore, and a stop the daemon finishes after its
 client was cut off) or a lost terminal (`tests/deploy/on-terminal` runs the script on a pseudo-terminal), the
-restore's report when Docker cannot be read, `--rollback` and its undo, and that the key never appears in an argument
-list. An unknown test name counts as a failure. Run `tests/deploy/deploy-script-tests.sh [test_name ...]` from the
+restore's report when Docker cannot be read, `--rollback` and its undo, HAT emulator mode (the settings it refuses,
+the verified `hatMode`, and the HAT a rollback restores), and that the key never appears in an argument list. An
+unknown test name counts as a failure. Run `tests/deploy/deploy-script-tests.sh [test_name ...]` from the
 repository root.
