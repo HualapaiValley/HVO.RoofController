@@ -4,6 +4,7 @@ using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using HVO.Core.Results;
@@ -99,6 +100,20 @@ public sealed class RoofControllerApiTests
 
         Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
         _roof.Verify(s => s.Open(), Times.Never);
+    }
+
+    [TestMethod]
+    [DataRow("Close")]
+    [DataRow("ClearFault")]
+    [DataRow("Lease")]
+    public async Task OperatorCommand_Viewer_Returns403AndNeverActs(string command)
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Viewer);
+
+        var response = await client.PostAsync($"{BasePath}/{command}", content: null);
+
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
+        VerifyNoCommandSent();
     }
 
     [TestMethod]
@@ -670,6 +685,78 @@ public sealed class RoofControllerApiTests
         VerifyConfigurationNotApplied();
     }
 
+    [TestMethod]
+    public async Task UpdateConfiguration_MalformedJson_Returns400AndChangesNothing()
+    {
+        UseVersionedConfiguration();
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+        var before = await ReadConfigurationAsync(client);
+        var truncated = JsonSerializer.Serialize(ValidRequest(), JsonSerializerOptions.Web)[..40];
+
+        var response = await client.PostAsync(
+            $"{BasePath}/Configuration",
+            new StringContent(truncated, Encoding.UTF8, "application/json"));
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.AreEqual("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var problem = await ApiJson.ReadAsync<ValidationProblemDetails>(response);
+        problem.Errors.Should().NotBeEmpty();
+        await AssertConfigurationUnchangedAsync(client, before);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_EmptyBody_Returns400AndChangesNothing()
+    {
+        UseVersionedConfiguration();
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+        var before = await ReadConfigurationAsync(client);
+
+        var response = await client.PostAsync(
+            $"{BasePath}/Configuration",
+            new StringContent(string.Empty, Encoding.UTF8, "application/json"));
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.AreEqual("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var problem = await ApiJson.ReadAsync<ValidationProblemDetails>(response);
+        string.Join(" ", problem.Errors.Values.SelectMany(messages => messages)).Should().Contain("Request body is required.");
+        await AssertConfigurationUnchangedAsync(client, before);
+    }
+
+    [TestMethod]
+    public async Task UpdateConfiguration_ValidJsonAsTextPlain_Returns415AndChangesNothing()
+    {
+        UseVersionedConfiguration();
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+        var before = await ReadConfigurationAsync(client);
+
+        var response = await client.PostAsync(
+            $"{BasePath}/Configuration",
+            new StringContent(JsonSerializer.Serialize(ValidRequest(), JsonSerializerOptions.Web), Encoding.UTF8, "text/plain"));
+
+        Assert.AreEqual(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.AreEqual("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var problem = await ApiJson.ReadAsync<ProblemDetails>(response);
+        Assert.AreEqual((int)HttpStatusCode.UnsupportedMediaType, problem.Status);
+        await AssertConfigurationUnchangedAsync(client, before);
+    }
+
+    [TestMethod]
+    public async Task VersionedConfigurationDouble_AppliedUpdate_ChangesTheReadBack()
+    {
+        // Guards the double behind the malformed-body tests: were it frozen, "unchanged" would prove nothing.
+        UseVersionedConfiguration();
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+        var before = await ReadConfigurationAsync(client);
+
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest());
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var after = await ReadConfigurationAsync(client);
+        Assert.AreEqual(7, before.GetProperty("version").GetInt64());
+        Assert.AreEqual(8, after.GetProperty("version").GetInt64());
+        Assert.AreNotEqual(before.GetRawText(), after.GetRawText());
+    }
+
     // ---- System and health ----------------------------------------------------------------------------------------
 
     [TestMethod]
@@ -681,6 +768,19 @@ public sealed class RoofControllerApiTests
         using var client = _host.CreateApiClient(key);
 
         var response = await client.GetAsync("/api/v1.0/System/info");
+
+        Assert.AreEqual(expected, response.StatusCode);
+    }
+
+    [TestMethod]
+    [DataRow(TestApiKeys.Viewer, HttpStatusCode.Forbidden)]
+    [DataRow(TestApiKeys.Operator, HttpStatusCode.Forbidden)]
+    [DataRow(TestApiKeys.Admin, HttpStatusCode.OK)]
+    public async Task SystemMetrics_RequiresAdmin(string key, HttpStatusCode expected)
+    {
+        using var client = _host.CreateApiClient(key);
+
+        var response = await client.GetAsync("/api/v1.0/System/metrics");
 
         Assert.AreEqual(expected, response.StatusCode);
     }
@@ -843,4 +943,37 @@ public sealed class RoofControllerApiTests
 
     private void VerifyConfigurationNotApplied()
         => _roof.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()), Times.Never);
+
+    /// <summary>
+    /// Makes the configuration double stateful: it starts at version 7 with a 90 s watchdog, and an applied update replaces
+    /// the options and bumps the version, as the controller does, so reading back shows whether anything changed.
+    /// </summary>
+    private void UseVersionedConfiguration()
+    {
+        var state = new RoofControllerConfigurationState(
+            new RoofControllerOptionsV4 { SafetyWatchdogTimeout = TimeSpan.FromSeconds(90) },
+            7);
+        _roof.Setup(s => s.GetConfigurationState()).Returns(() => state);
+        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()))
+            .Returns<RoofControllerOptionsV4, long>((options, _) =>
+            {
+                state = new RoofControllerConfigurationState(options, state.Version + 1);
+                return Result<RoofControllerOptionsV4>.Success(options);
+            });
+    }
+
+    private static async Task<JsonElement> ReadConfigurationAsync(HttpClient client)
+    {
+        var response = await client.GetAsync($"{BasePath}/Configuration");
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        return await ApiJson.ReadElementAsync(response);
+    }
+
+    private async Task AssertConfigurationUnchangedAsync(HttpClient client, JsonElement before)
+    {
+        var after = await ReadConfigurationAsync(client);
+        Assert.AreEqual(7, after.GetProperty("version").GetInt64());
+        Assert.AreEqual(before.GetRawText(), after.GetRawText());
+        VerifyConfigurationNotApplied();
+    }
 }
