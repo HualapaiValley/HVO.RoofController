@@ -210,7 +210,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                         RoofControllerErrorCode.ConfigurationRejected,
                         "This change affects relay mapping, limit-switch or fault polarity, or ignoring limit switches, " +
                         "or turns off the operator lease or the IN4 interlock. " +
-                        "Resend with ConfirmSafetyCriticalChange=true after checking the wiring."),
+                        "Check the wiring, or that the lease or the IN4 interlock should be off, " +
+                        "then resend with ConfirmSafetyCriticalChange=true."),
                     "update_configuration");
             }
 

@@ -101,10 +101,37 @@ public class CameraStreamTests
     public async Task Dispose_WhenThePlayerThrows_StillReleasesThePlayerAndTheModule()
     {
         await using var context = new BunitContext();
+        var (player, module) = RenderWithAPlayerWhoseDisposeThrows(context, new JSException("dispose failed"));
+
+        var dispose = async () => await context.DisposeComponentsAsync();
+
+        await dispose.Should().NotThrowAsync();
+        player.Verify(p => p.InvokeAsync<IJSVoidResult>("dispose", It.IsAny<object?[]?>()), Times.Once);
+        player.Verify(p => p.DisposeAsync(), Times.Once);
+        module.Verify(m => m.DisposeAsync(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Dispose_AfterTheCircuitIsGone_MakesNoFurtherJsCalls()
+    {
+        await using var context = new BunitContext();
+        var (player, module) = RenderWithAPlayerWhoseDisposeThrows(context, new JSDisconnectedException("circuit gone"));
+
+        var dispose = async () => await context.DisposeComponentsAsync();
+
+        await dispose.Should().NotThrowAsync();
+        player.Verify(p => p.InvokeAsync<IJSVoidResult>("dispose", It.IsAny<object?[]?>()), Times.Once);
+        player.Verify(p => p.DisposeAsync(), Times.Never, "the circuit is gone, so the call cannot reach the browser");
+        module.Verify(m => m.DisposeAsync(), Times.Never, "the circuit is gone, so the call cannot reach the browser");
+    }
+
+    private static (Mock<IJSObjectReference> Player, Mock<IJSObjectReference> Module) RenderWithAPlayerWhoseDisposeThrows(
+        BunitContext context, Exception failure)
+    {
         context.Services.AddLogging();
         var player = new Mock<IJSObjectReference>();
         player.Setup(p => p.InvokeAsync<IJSVoidResult>("dispose", It.IsAny<object?[]?>()))
-            .Returns(ValueTask.FromException<IJSVoidResult>(new JSException("dispose failed")));
+            .Returns(ValueTask.FromException<IJSVoidResult>(failure));
         var module = new Mock<IJSObjectReference>();
         module.Setup(m => m.InvokeAsync<IJSObjectReference>("createPlayer", It.IsAny<object?[]?>()))
             .ReturnsAsync(player.Object);
@@ -114,13 +141,7 @@ public class CameraStreamTests
         context.Services.AddSingleton(js.Object);
         var cut = context.Render<CameraStream>();
         cut.WaitForAssertion(() => cut.Find("button[title=Pause]").HasAttribute("disabled").Should().BeFalse());
-
-        var dispose = async () => await context.DisposeComponentsAsync();
-
-        await dispose.Should().NotThrowAsync();
-        player.Verify(p => p.InvokeAsync<IJSVoidResult>("dispose", It.IsAny<object?[]?>()), Times.Once);
-        player.Verify(p => p.DisposeAsync(), Times.Once);
-        module.Verify(m => m.DisposeAsync(), Times.Once);
+        return (player, module);
     }
 
     private static BunitContext CreateContext(out BunitJSInterop module, out BunitJSInterop player)

@@ -598,7 +598,8 @@ public sealed class RoofControllerApiTests
         Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
         var problem = await ApiJson.ReadElementAsync(response);
         Assert.AreEqual("ConfigurationRejected", problem.GetProperty("code").GetString());
-        problem.GetProperty("detail").GetString().Should().Contain("turns off the operator lease or the IN4 interlock");
+        problem.GetProperty("detail").GetString().Should().Contain("turns off the operator lease or the IN4 interlock")
+            .And.Contain("that the lease or the IN4 interlock should be off");
         VerifyConfigurationNotApplied();
     }
 

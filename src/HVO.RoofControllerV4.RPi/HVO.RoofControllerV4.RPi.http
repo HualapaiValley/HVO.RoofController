@@ -61,11 +61,11 @@ Accept: {{contentType}}
 X-Api-Key: {{apiKey}}
 
 ### Update configuration (Admin)
-# Every field must be sent (400 if one is missing). The values below are the production settings; start from the ones
-# just read. expectedVersion must equal the version just read (409 on mismatch). operatorLeaseTimeoutSeconds and
-# atSpeedConfirmationTimeoutSeconds may be null, which turns the lease or the IN4 interlock off. Changing relay ids,
-# limit/fault polarity or ignorePhysicalLimitSwitches, or turning the lease or IN4 off, also needs
-# "confirmSafetyCriticalChange": true (409 without it).
+# Every field except confirmSafetyCriticalChange must be sent (400 if one is missing). The values below are the
+# production settings; start from the ones just read. expectedVersion must equal the version just read (409 on
+# mismatch). operatorLeaseTimeoutSeconds and atSpeedConfirmationTimeoutSeconds may be null, which turns the lease or
+# the IN4 interlock off. Changing relay ids, limit/fault polarity or ignorePhysicalLimitSwitches, or turning the lease
+# or IN4 off, also needs "confirmSafetyCriticalChange": true (409 without it).
 POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Configuration
 Content-Type: {{contentType}}
 Accept: {{contentType}}

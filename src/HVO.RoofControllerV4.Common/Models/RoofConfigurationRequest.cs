@@ -25,7 +25,7 @@ public sealed record class RoofConfigurationRequest : IValidatableObject
     /// <summary>
     /// Must be true when the request changes relay mapping, limit-switch polarity, fault polarity or
     /// <see cref="IgnorePhysicalLimitSwitches"/>, or turns off the operator lease or the IN4 interlock. These are
-    /// physical maintenance changes, not routine operation.
+    /// safety-critical changes, not routine operation.
     /// </summary>
     public bool ConfirmSafetyCriticalChange { get; init; }
 
@@ -123,7 +123,8 @@ public sealed record class RoofConfigurationRequest : IValidatableObject
     }
 
     /// <summary>
-    /// True when applying this request to <paramref name="current"/> changes a physical-maintenance setting.
+    /// True when applying this request to <paramref name="current"/> is a safety-critical change that needs
+    /// <see cref="ConfirmSafetyCriticalChange"/>.
     /// </summary>
     public bool ChangesSafetyCriticalSettings(RoofControllerOptionsV4 current)
     {

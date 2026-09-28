@@ -274,14 +274,16 @@ namespace HVO.RoofControllerV4.RPi.Components
             try
             {
                 // Each step runs even when the one before it fails, so a player whose dispose throws still has its
-                // reference and the module released.
+                // reference and the module released. Once the circuit is gone no step can reach the browser, so the
+                // rest are skipped.
+                var connected = true;
                 if (player is not null)
                 {
-                    await ReleaseStepAsync(() => player.InvokeVoidAsync("dispose"));
-                    await ReleaseStepAsync(player.DisposeAsync);
+                    connected = await ReleaseStepAsync(() => player.InvokeVoidAsync("dispose"))
+                        && await ReleaseStepAsync(player.DisposeAsync);
                 }
 
-                if (module is not null)
+                if (connected && module is not null)
                 {
                     await ReleaseStepAsync(module.DisposeAsync);
                 }
@@ -292,7 +294,8 @@ namespace HVO.RoofControllerV4.RPi.Components
             }
         }
 
-        private async Task ReleaseStepAsync(Func<ValueTask> step)
+        /// <summary>Runs one cleanup step; false when the circuit is gone.</summary>
+        private async Task<bool> ReleaseStepAsync(Func<ValueTask> step)
         {
             try
             {
@@ -300,11 +303,14 @@ namespace HVO.RoofControllerV4.RPi.Components
             }
             catch (Exception ex) when (IsDisconnection(ex))
             {
+                return false;
             }
             catch (JSException ex)
             {
                 Logger.LogDebug(ex, "Camera player cleanup failed");
             }
+
+            return true;
         }
     }
 }

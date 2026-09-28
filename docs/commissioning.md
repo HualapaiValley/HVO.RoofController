@@ -52,7 +52,7 @@ The test fails when any of the following is true:
 
 The production `appsettings.json` matches the documented wiring:
 
-- `UseNormallyClosedLimitSwitches = false` (C3)
+- `UseNormallyClosedLimitSwitches = false` and `LimitSwitchDebounce = 25 ms` (C3)
 - `FaultInputActiveHigh = false` (C4)
 - `AtSpeedConfirmationTimeout = 3 s` (C6)
 - `MaxConsecutiveInputReadFailures = 3` (C7)
@@ -133,12 +133,12 @@ moved. The emulated HAT reports both.
   as above. A broken wire therefore reads "not at the limit", which the controller cannot tell from a roof between its
   limits. The fail-safe result is that the limit's run-circuit contact stops the drive (step 4).
 - **Electrical noise from the drive and the motor does not hold an input in the wrong state for longer than the
-  debounce.** This assumes the Cat6 control and monitoring cables (hardware overview, section 7.4) are routed apart
-  from the motor leads.
+  debounce.** This assumes the separation rule in the hardware overview, section 3, is followed: the motor leads run
+  apart from the Cat6 relay, limit and monitoring cables (section 12).
   The setting that depends on it is `LimitSwitchDebounce` (25 ms). The emulated plant cannot show noise, but every
   result it could have is a stop:
   - Chatter on the start limit inside the debounce is ignored (`RoofControllerLimitDepartureTests`), and so is an IN4
-    dropout shorter than 250 ms (C6).
+    dropout shorter than the 250 ms run-loss window (`RoofControllerDriveRunTests`).
   - A glitch on the destination limit stops the move early. A glitch on both limits during a move latches
     `ContradictoryLimitInputs` (step 3, `RoofControllerRelayBehaviorTests`), and a glitch on IN3 latches `DriveFault`
     (C4).
