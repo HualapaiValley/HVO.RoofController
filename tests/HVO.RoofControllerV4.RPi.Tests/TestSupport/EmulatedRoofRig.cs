@@ -10,6 +10,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.Simulation;
+using HVO.RoofControllerV4.Simulation.Camera;
 using HVO.RoofControllerV4.Simulation.Emulator;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -58,6 +59,12 @@ internal sealed record EmulatedRoofRigOptions
 
     /// <summary>Runs on the plant after it is built and before the controller starts (a relay a dead controller left on).</summary>
     public Action<HatEmulatorSession>? BeforeTheControllerStarts { get; init; }
+
+    /// <summary>
+    /// Serve an emulated MJPEG camera of the plant on loopback (<see cref="EmulatedRoofRig.Camera"/>) and point the
+    /// controller's camera proxy at it, without credentials. Otherwise the proxy is not configured (503).
+    /// </summary>
+    public bool Camera { get; init; }
 }
 
 /// <summary>
@@ -75,12 +82,19 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
     public static readonly TimeSpan MotionTimeout = TimeSpan.FromSeconds(30);
 
     private readonly Dictionary<string, string?> _settings;
+    private readonly EmulatedCameraHost? _camera;
 
-    private EmulatedRoofRig(EmulatedRoofRigOptions options, HatEmulatorSession session, HatEmulatorServer server, Dictionary<string, string?> settings)
+    private EmulatedRoofRig(
+        EmulatedRoofRigOptions options,
+        HatEmulatorSession session,
+        HatEmulatorServer server,
+        EmulatedCameraHost? camera,
+        Dictionary<string, string?> settings)
     {
         Options = options;
         Session = session;
         Server = server;
+        _camera = camera;
         _settings = settings;
         Logs = new RecordingLoggerProvider();
         App = CreateApp(Logs);
@@ -92,8 +106,14 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 
     public HatEmulatorServer Server { get; }
 
+    /// <summary>The emulated camera the proxy reads, with <see cref="EmulatedRoofRigOptions.Camera"/>.</summary>
+    public EmulatedCamera Camera => _camera?.Camera ?? throw new InvalidOperationException("The rig was started without a camera.");
+
     /// <summary>The controller host now running (a new one after <see cref="RestartControllerAsync"/>).</summary>
     public EmulatedRoofApp App { get; private set; }
+
+    /// <summary>How long the last <see cref="RestartControllerAsync"/> took to stop the old host.</summary>
+    public TimeSpan LastStopDuration { get; private set; }
 
     /// <summary>What the controller host now running has logged.</summary>
     public RecordingLoggerProvider Logs { get; private set; }
@@ -125,6 +145,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
         var server = new HatEmulatorServer(session.CurrentClient, new IPEndPoint(IPAddress.Loopback, 0)) { Outage = options.StartWithTheLinkDown };
         options.BeforeTheControllerStarts?.Invoke(session);
         server.Start();
+        var camera = options.Camera ? await EmulatedCameraHost.StartAsync(session.GetStatus) : null;
 
         var values = new Dictionary<string, string?>
         {
@@ -141,12 +162,20 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
             values["RoofControllerSecurity:RequireHttps"] = "false";
         }
 
+        if (camera is not null)
+        {
+            // No credentials: appsettings.json has none, but a developer's user secrets might.
+            values["BlueIris:BaseUrl"] = camera.BaseAddress.ToString();
+            values["BlueIris:UserName"] = string.Empty;
+            values["BlueIris:Password"] = string.Empty;
+        }
+
         foreach (var (key, value) in options.Settings ?? new Dictionary<string, string?>())
         {
             values[key] = value;
         }
 
-        var rig = new EmulatedRoofRig(options, session, server, values);
+        var rig = new EmulatedRoofRig(options, session, server, camera, values);
         try
         {
             await rig.StartControllerAsync(waitForInitialization: !options.StartWithTheLinkDown, options.InitialStatus);
@@ -172,7 +201,9 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
             Server.Outage = true;
         }
 
+        var stopping = Stopwatch.StartNew();
         await App.DisposeAsync();
+        LastStopDuration = stopping.Elapsed;
         whileStopped?.Invoke(Session);
         Server.Outage = false;
         Logs = new RecordingLoggerProvider();
@@ -274,6 +305,11 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
     {
         // The controller first, so its shutdown stop reaches the emulator.
         await App.DisposeAsync();
+        if (_camera is not null)
+        {
+            await _camera.DisposeAsync();
+        }
+
         await Server.DisposeAsync();
         Session.Dispose();
     }

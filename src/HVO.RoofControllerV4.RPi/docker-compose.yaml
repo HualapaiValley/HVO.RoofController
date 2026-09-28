@@ -149,8 +149,10 @@ x-emulated-environment: &emulated-environment
   # The limit switches come from the emulator: the documented normally-open wiring, never ignored.
   RoofControllerOptionsV4__UseNormallyClosedLimitSwitches: "false"
   RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
-  # No cameras on an emulator rig.
-  BlueIris__BaseUrl: ""
+  # The emulator's MJPEG camera of the plant, on its control port, without credentials.
+  BlueIris__BaseUrl: http://hat-emulator:5290
+  BlueIris__UserName: ""
+  BlueIris__Password: ""
   AllowedHosts: "*"
   # Telemetry only when an endpoint is given; the resource carries hvo.roof.hat.mode=emulated.
   OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
@@ -212,6 +214,7 @@ services:
       dockerfile: "src/HVO.RoofControllerV4.Emulator/Dockerfile"
     environment:
       Emulator__TimeScale: ${HVO_EMULATOR_TIME_SCALE:-1}
+      Emulator__CameraFramesPerSecond: ${HVO_EMULATOR_CAMERA_FPS:-5}
     ports:
       # The control API has no authentication: loopback only.
       - "127.0.0.1:${HVO_EMULATOR_CONTROL_PORT:-5290}:5290"

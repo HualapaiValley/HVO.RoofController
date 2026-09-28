@@ -8,13 +8,14 @@
 #   docker build -f src/HVO.RoofControllerV4.Emulator/Dockerfile -t hvo/roof-hat-emulator:dev .
 #
 # Ports:
-#   5290  the HTTP control API (/api/emulator). It has NO authentication: publish it on loopback only
+#   5290  the HTTP control API (/api/emulator) and the emulated MJPEG camera (/mjpg/camNN/video.mjpg, the path the
+#         controller's BlueIris:BaseUrl proxy reads). Neither has authentication: publish it on loopback only
 #         (-p 127.0.0.1:5290:5290) or keep it on a private test network.
 #   5291  the register port the controller's HatEmulator:Host and HatEmulator:Port point at. Reach it over a Docker
 #         network (docker-compose.yaml, profile emulator); it does not need to be published.
 #
 # Settings (environment variables): Emulator__TimeScale, Emulator__TravelMeters, Emulator__InitialPosition,
-# Emulator__RegisterPort (see EmulatorHostOptions).
+# Emulator__RegisterPort, Emulator__CameraFramesPerSecond (see EmulatorHostOptions).
 #
 # Image pins: the same as src/HVO.RoofControllerV4.RPi/Dockerfile. The SDK tag must match src/global.json and the
 # runtime tag should stay on the latest ASP.NET Core patch; the "Emulator image" workflow checks the SDK tag.

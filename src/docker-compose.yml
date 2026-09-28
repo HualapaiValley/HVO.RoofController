@@ -38,6 +38,8 @@ services:
       - ASPNETCORE_URLS=http://+:8080
       # appsettings.Development.json turns the HAT emulator on; here it is the hat-emulator service.
       - HatEmulator__Host=hat-emulator
+      # And the camera is the emulator's MJPEG camera of the emulated roof.
+      - BlueIris__BaseUrl=http://hat-emulator:5290
       - RoofControllerSecurity__ApiKeys__0__Name=dev-admin
       - RoofControllerSecurity__ApiKeys__0__Role=RoofAdmin
       - RoofControllerSecurity__ApiKeys__0__Key=${HVO_DEV_ROOF_API_KEY:-}

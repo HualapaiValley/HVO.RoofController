@@ -2,7 +2,8 @@
 # End-to-end check of the emulator compose profile (src/HVO.RoofControllerV4.RPi/docker-compose.yaml, profile
 # emulator): builds the controller and HAT emulator images for this machine, starts them, and drives the emulated roof
 # through the controller's API: open to the open limit, close to the closed limit, with no plant violations. It also
-# checks that the controller says it is emulated (health, status and the console banner).
+# checks that the controller says it is emulated (health, status and the console banner), and that its camera proxy
+# relays the emulator's MJPEG camera.
 #
 # Needs docker with compose v2, curl and jq. It touches no hardware: the controller maps no devices and talks to the
 # emulator over the compose network. Everything it starts is removed on exit.
@@ -118,6 +119,21 @@ echo "[smoke] Health is Degraded and names the emulated HAT"
 curl -fsS --max-time 10 "${roof}/login" | grep -q 'data-testid="emulated-hat-banner"' \
     || fail "the console login page does not carry the EMULATED HAT banner"
 echo "[smoke] The console shows the EMULATED HAT banner"
+
+# The camera proxy relays the emulator's MJPEG camera: three seconds of the stream hold JPEG parts. curl ends the
+# endless stream with its time limit (exit 28).
+camera_dir=$(mktemp -d)
+curl -sS --max-time 3 -D "${camera_dir}/headers" -o "${camera_dir}/body" \
+    -H "X-Api-Key: ${HVO_EMULATED_ROOF_API_KEY}" "${roof}/api/v1.0/Camera/2/mjpeg" 2>/dev/null || true
+head -n 1 "${camera_dir}/headers" | grep -q ' 200' || fail "the camera proxy did not answer 200: $(head -n 1 "${camera_dir}/headers")"
+grep -qi '^content-type: multipart/x-mixed-replace' "${camera_dir}/headers" || fail "the camera stream is not multipart/x-mixed-replace"
+[ "$(grep -ac '^Content-Type: image/jpeg' "${camera_dir}/body")" -ge 2 ] || fail "the camera stream held fewer than two JPEG parts"
+rm -rf "${camera_dir}"
+curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' -d '{"mode":"Unavailable"}' "${emulator_api}/camera" >/dev/null
+camera_status=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -H "X-Api-Key: ${HVO_EMULATED_ROOF_API_KEY}" "${roof}/api/v1.0/Camera/2/mjpeg")
+[ "${camera_status}" = 502 ] || fail "the camera proxy answered ${camera_status}, not 502, for an unavailable camera"
+curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' -d '{"mode":"Live"}' "${emulator_api}/camera" >/dev/null
+echo "[smoke] The camera proxy relays the emulated camera, and answers 502 when it is unavailable"
 
 roof_post Open
 wait_for "the roof opened to the open limit" 90 roof_is Open

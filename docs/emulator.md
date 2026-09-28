@@ -8,6 +8,7 @@ or the roof: on a development machine, in CI, or on a Pi test rig. It hosts the 
 - the Lenze SMVector drive, with the installed parameters;
 - the ME-8108 limit switches;
 - the roof;
+- an MJPEG camera of the roof, standing in for the Blue Iris server (see [Camera](#camera));
 - the wiring in the [hardware overview](projects/roof-controller-v4-rpi/hardware-overview.md).
 
 Each part is modelled on its vendor documentation. The emulator serves the HAT's registers on a TCP port. With
@@ -22,7 +23,9 @@ at the configured travel position instead, which exercises the same controller l
 
 Development runs against the emulator. `appsettings.Development.json` turns emulator mode on at `127.0.0.1:5291`. The
 limit switches come from the emulator, so they stay in force, with the documented normally open wiring as in
-production. Start the emulator first, from `src/`:
+production. The console's camera is the emulator's camera (`BlueIris:BaseUrl` is `http://127.0.0.1:5290`, with no
+credentials; the dev container's compose file points it at `http://hat-emulator:5290`). Start the emulator first, from
+`src/`:
 
 ```bash
 dotnet run --project HVO.RoofControllerV4.Emulator     # register port 127.0.0.1:5291, control API http://127.0.0.1:5290
@@ -122,6 +125,7 @@ The emulator's `Emulator` section (environment variables `Emulator__TimeScale` a
 | `TimeScale` | `1` | How many times as fast as real time the roof runs, from 0.1 to 100. The controller's own timing is not scaled. |
 | `TravelMeters` | `2.0` | Distance between the limits' operating points (about 20 s of travel) |
 | `InitialPosition` | just past the closed limit | Where the roof starts, in metres from the closed limit's operating point |
+| `CameraFramesPerSecond` | `5` | The emulated camera's frame rate, from 0.1 to 30 (see [Camera](#camera)) |
 
 The control API listens on `http://127.0.0.1:5290` unless `--urls` or `ASPNETCORE_URLS` says otherwise. Invalid
 settings stop the emulator before it listens.
@@ -140,10 +144,10 @@ how both compose files publish it) or on a private test network.
 
 | Request | Body | Effect |
 |---------|------|--------|
-| `GET /status` | | The plant (position, velocity, relays, inputs, drive, limits, faults) and the link |
+| `GET /status` | | The plant (position, velocity, relays, inputs, drive, limits, faults), the link and the camera |
 | `GET /history?limit=200` | | The latest plant events (1 to 5000), with plant time since the last reset |
 | `GET /violations` | | Invariant violations the plant recorded, such as the roof at a hard stop or both directions energized; empty in a correct run |
-| `POST /reset` | `{"positionMeters": 1.0, "wiring": "None"}` | A fresh plant. Both fields are optional, and so is the body. |
+| `POST /reset` | `{"positionMeters": 1.0, "wiring": "None"}` | A fresh plant, and a live camera at its frame rate. Both fields are optional, and so is the body. |
 | `POST /time-scale` | `{"scale": 4}` | Change the time scale; time stays continuous |
 | `POST /drive/trip` | `{"trip": "External"}` | Trip the drive: `External` (the default), `MotorOverload` or `StartTooSoonAfterPowerUp`. The drive's Clear Fault input (RLY3) resets it. |
 | `POST /drive/power` | `{"powered": false}` | Drive power loss and return |
@@ -155,6 +159,7 @@ how both compose files publish it) or on a private test network.
 | `POST /wiring` | `{"wiring": "SwappedLimitInputs"}` | Wiring variants, comma-separated. Examples: `SwappedDirectionRelays`, `SwappedMotorLeads`, `StopPermitBypassed`, `NoHardwiredEndStops`, `FaultMonitorWireBroken`, `RunMonitorWireBroken` |
 | `POST /bus` | `{"failReads": true, "failNextWrites": 2}` | I2C transaction failures, answered as I/O errors (the link stays up). Each field is optional; one left out is unchanged. |
 | `POST /link` | `{"outage": true}`, `{"responseDelayMilliseconds": 200}`, `{"disconnect": true}` | Link faults, each field optional. An outage closes the open connections and each new one as soon as it is accepted, as a stopped emulator would, so the controller sees connection errors. A response delay (0 to 60000 ms) models a stalled emulator: use it to exercise the controller's timeouts. `disconnect` drops the open connections once. |
+| `POST /camera` | `{"mode": "Frozen"}`, `{"framesPerSecond": 2}`, `{"disconnect": true}` | Camera faults, each field optional (see [Camera](#camera)). The mode is `Live`, `Frozen`, `Unavailable` or `Unauthorized`; the frame rate is 0.1 to 30. `disconnect` ends the open streams once, as a camera server restart does. |
 
 Each `POST` answers with the new `/status`, or with 400 and no change. A body that does not parse (malformed JSON, an
 unknown name, a number or a list where one name belongs) gets a 400 with no body from the container (Production), or
@@ -166,6 +171,27 @@ the controller stop it:
 curl -s -X POST http://127.0.0.1:5290/api/emulator/jam -H 'Content-Type: application/json' -d '{"jammed": true}'
 curl -s 'http://127.0.0.1:5290/api/emulator/history?limit=20'
 ```
+
+## Camera
+
+The emulator also stands in for the Blue Iris server that the controller's camera proxy reads. `GET
+/mjpg/camNN/video.mjpg` (camera 1 to 99, the path the proxy requests under `BlueIris:BaseUrl`) answers
+`multipart/x-mixed-replace` with one JPEG per part, each with its `Content-Length`. Each frame is a 320x240 greyscale
+drawing of the plant: the roof on its track between the two limit switches (bright while actuated), the plant time, the
+position as a percentage and a frame counter, so consecutive frames always differ. Like the control API, it has no
+authentication, and it ignores any credentials the proxy sends. Point a controller at it with `BlueIris__BaseUrl` set to
+the emulator's control URL and `BlueIris__UserName` and `BlueIris__Password` empty.
+
+`POST /api/emulator/camera` injects the failures the console must survive:
+
+| Mode | The camera | The controller's proxy and console |
+|------|------------|------------------------------------|
+| `Live` | Streams a frame every `1/framesPerSecond` s | The proxy relays each frame; the console shows `Live` |
+| `Frozen` | Keeps the stream open and sends nothing, as a hung encoder does | The console shows `Stalled` after 5 s and reconnects after 15 s; the proxy aborts a stream that has had no data for `BlueIris:StreamIdleTimeout` (30 s) |
+| `Unavailable` | Ends the open streams, and answers 503 | The proxy answers 502 "Camera unavailable"; the console shows `Offline` and retries with backoff |
+| `Unauthorized` | Ends the open streams, and answers 401 with `WWW-Authenticate: Basic` | As `Unavailable`: the proxy's 502 tells the console nothing about the camera's credentials |
+
+A disconnect, a change of mode and a reset end a stream between parts, never inside one.
 
 ## Containers
 
@@ -185,7 +211,7 @@ Two compose files run the controller with the emulator:
 | File | Environment | Purpose |
 |------|-------------|---------|
 | `src/docker-compose.yml` | Development | Local development, on `http://localhost:5200`. The admin key comes from `HVO_DEV_ROOF_API_KEY`. |
-| `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, profile `emulator` | Production, with `HatEmulator__AllowOutsideDevelopment=true` | The production roof settings against the emulator, on plain HTTP at `127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). The admin key comes from `HVO_EMULATED_ROOF_API_KEY`. It has no camera proxy (camera streams answer 503), exports telemetry only when `HVO_EMULATED_ROOF_OTLP_ENDPOINT` is set, and rotates its logs as the Pi profiles do. It maps no devices, so it can run next to a Pi profile. |
+| `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, profile `emulator` | Production, with `HatEmulator__AllowOutsideDevelopment=true` | The production roof settings against the emulator, on plain HTTP at `127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). The admin key comes from `HVO_EMULATED_ROOF_API_KEY`. Its camera proxy reads the emulator's camera (`BlueIris__BaseUrl=http://hat-emulator:5290`, no credentials; the frame rate is `HVO_EMULATOR_CAMERA_FPS`, 5 by default). It exports telemetry only when `HVO_EMULATED_ROOF_OTLP_ENDPOINT` is set, and rotates its logs as the Pi profiles do. It maps no devices, so it can run next to a Pi profile. |
 
 `tests/emulator/compose-smoke-test.sh` builds both images through the `emulator` profile. It opens and closes the
 emulated roof through the controller's API, checks that the plant recorded no violations, and checks the banner, the
@@ -205,12 +231,14 @@ No test relies on physical hardware.
 | `SocketI2cRegisterClientTests` | The controller's socket client: the Hello check, the time bounds of each access (connect, Hello, request), disconnects, reconnects, disposal during an access, and the `Host` rules |
 | `RoofHatConnectionTests` | Emulator mode selection, the refusal outside Development, the startup warning and the telemetry attributes |
 | `EmulatorApiTests` | The emulator host: the control API changes the plant and the link, and the register port serves the HAT |
+| `EmulatedCameraTests` | The camera: its JPEG encoder against an independent decoder, the frames it draws of the plant, the MJPEG stream, each mode, a disconnect, the status and the refused requests |
+| `CameraProxyScenarios` | The controller's camera proxy reading the emulated camera over a socket: the frames relayed, 502 for a camera that refuses, the stream aborted after the idle timeout for a frozen one, and the stream ended by a camera server restart |
 | `EmulatorModeAppTests` | The whole controller in emulator mode: open and close through the API; a link outage while moving stops the roof and latches a fault until ClearFault; a controller started before the emulator initializes with a latched fault until ClearFault; the sign-in page banner and the Degraded health |
 | `EmulatedHatDisplayTests` | The banner in the main layout (the console) and on its own, the console's HAT badge and the footer |
 | `DevelopmentConfigurationTests` | Development uses the emulator, with the limit switches in force and the production wiring |
 | `RoofControllerHealthCheckTests` | Emulator mode's health: Degraded naming the endpoint, and every more serious result naming the emulator |
 | `DeploymentValidatorTests` | The deployment check: emulator mode refused outside Development without `AllowOutsideDevelopment`, refused with `/dev/i2c-1` mapped, invalid `HatEmulator` settings |
-| `tests/emulator/compose-smoke-test.sh` | The two images together through the compose `emulator` profile |
+| `tests/emulator/compose-smoke-test.sh` | The two images together through the compose `emulator` profile, including the camera proxy against the emulated camera |
 | CI "Compose profiles" step | The Pi profiles pin emulator mode off; the `emulator` profile maps no devices and has its own network |
 | `tests/deploy/deploy-script-tests.sh` | Emulator mode: the refusal without `ALLOW_EMULATED_HAT`, the unmapped HAT and the recorded flag; `HatEmulator` settings refused in `EXTRA_DOCKER_ARGS` and in an `--env-file`; I2C devices, `--privileged` (any value Docker reads as true) and `/dev` mounts refused in emulator mode; the verified `hatMode`, with a rollback on a mismatch; and the rollback's HAT checks, before the swap and once the restored version runs |
 

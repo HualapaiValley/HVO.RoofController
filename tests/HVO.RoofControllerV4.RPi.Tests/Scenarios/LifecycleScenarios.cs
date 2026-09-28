@@ -1,6 +1,9 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -25,25 +28,36 @@ namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
 public sealed class LifecycleScenarios
 {
     [TestMethod]
+    [CommissioningCheck("C11", "1")]
     [CommissioningCheck("C11", "2")]
     [CommissioningCheck("C11", "3")]
-    public async Task AHostShutdown_DuringTravel_StopsTheRoofWithHostShutdown_AndTheNextHostStartsIdle()
+    public async Task AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle()
     {
-        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production(travelMeters: 2.0));
+        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production(travelMeters: 2.0) with { Kestrel = true, Camera = true });
+        using var viewer = rig.CreateApiClient(TestApiKeys.Viewer);
+        using var camera = await viewer.GetAsync("/api/v1.0/Camera/2/mjpeg", HttpCompletionOption.ResponseHeadersRead);
+        camera.StatusCode.Should().Be(HttpStatusCode.OK);
+        var streamEnded = DrainAsync(await camera.Content.ReadAsStreamAsync());
         using (var client = rig.CreateApiClient(TestApiKeys.Operator))
         {
             await client.AcceptedAsync("Open");
         }
 
         await rig.WaitForPlantAsync(p => p.PositionMeters > 0.08, "the roof to travel");
+        rig.Camera.GetStatus().FramesSent.Should().BeGreaterThan(0, "the viewer is watching the roof move");
         var stopping = rig.Controller;
         var logs = rig.Logs;
         var requested = rig.Plant.Elapsed / rig.Options.TimeScale;
+        var stopRequested = Stopwatch.GetTimestamp();
 
         await rig.RestartControllerAsync(crash: false);
 
         var off = rig.ContactChanges(1).Last().At - requested;
         off.Should().BeLessThan(TimeSpan.FromSeconds(1), "the host's shutdown stop turns the relays off at once");
+        rig.LastStopDuration.Should().BeLessThan(TimeSpan.FromSeconds(5), "the open stream does not hold up the host's 20 s shutdown timeout");
+        Stopwatch.GetElapsedTime(stopRequested, await streamEnded.WaitAsync(TimeSpan.FromSeconds(5)))
+            .Should().BeLessThan(TimeSpan.FromSeconds(5), "the host ends the viewer's stream as it stops");
+        rig.Camera.GetStatus().OpenStreams.Should().Be(0, "the proxy closed its camera connection");
         var last = stopping.GetCurrentStatusSnapshot();
         last.LastStopReason.Should().Be(RoofControllerStopReason.HostShutdown);
         last.RelayRegisterState.Should().Be(RoofRelayRegisterState.Verified);
@@ -138,6 +152,20 @@ public sealed class LifecycleScenarios
         rig.Plant.DriveTrip.Should().Be(SmVectorTrip.None);
         await rig.MoveToLimitAsync(client, RoofControllerStatus.Open);
         rig.Session.Plant.Violations.Should().BeEmpty();
+    }
+
+    /// <summary>Reads <paramref name="stream"/> until it ends or fails, and returns the <see cref="Stopwatch"/> timestamp then.</summary>
+    private static async Task<long> DrainAsync(Stream stream)
+    {
+        try
+        {
+            await stream.CopyToAsync(Stream.Null);
+        }
+        catch (Exception e) when (e is IOException or HttpRequestException)
+        {
+        }
+
+        return Stopwatch.GetTimestamp();
     }
 
     /// <summary>The restarted controller has turned the relays off, the roof rests between the limits and closes normally.</summary>
