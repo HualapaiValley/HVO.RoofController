@@ -218,6 +218,30 @@ emulated roof through the controller's API, checks that the plant recorded no vi
 status and the Degraded health. CI runs it in the "Emulator image" workflow, which also builds the emulator image for
 both platforms.
 
+### Container scenarios
+
+`tests/emulator/deploy-scenarios.sh` runs what the in-process scenarios cannot reach: the deployed container, the
+deploy script and Compose, on real Docker. It uses the default Docker context and the HAT emulator, maps no host
+device, and builds both images for the machine it runs on (the script's `BUILD_PLATFORM=linux/amd64` on a PC). It
+serves HTTPS with a self-signed certificate for `127.0.0.1` and an operator key, both generated for the run.
+
+| Scenario | What it runs |
+|----------|--------------|
+| `lifecycle` | `docker stop` while the roof travels: the controller stops the roof (`HostShutdown`, relays off) within the grace period and exits 0, not 137, then starts again ready and still (C11 steps 2-3). `docker kill` while it travels: the HAT holds the relays, the restart policy does not restart the killed container, and the controller turns the relays off when it is started again. |
+| `c12` | [Commissioning](commissioning.md) C12 with `deploy-roofcontroller-rpi.sh`: a deploy with the roof idle; a deploy while it moves, which stops it (verified all-off) before the old controller is stopped; `--rollback` twice; pre-flight failures (a key that is not configured, a renamed certificate, a wrong certificate password, no RoofOperator key) that leave the running controller untouched; `ALLOWED_HOSTS=localhost`, which fails the remote check and rolls back; and the relay register sampled every 0.1 s through steps 3-6, never energized. |
+| `migration` | [Moving between Compose and the deploy script](deployment.md#moving-between-compose-and-the-deploy-script): the `pi` profile on the emulator (a Compose override maps no devices and points the controller at the emulator), the script refusing its container, the move to the script, `docker compose up` failing on the name while the script's controller runs, and the move back to the Compose version. |
+
+```bash
+tests/emulator/deploy-scenarios.sh                      # all three
+tests/emulator/deploy-scenarios.sh c12                  # one
+SCN_RESULTS_DIR=out tests/emulator/deploy-scenarios.sh  # also writes out/deploy-scenarios.md, with the timings
+```
+
+It needs docker with buildx and compose 2.24 or later, curl, jq and openssl. The controller is named `roof-controller`,
+as the script and the Compose `pi` profile name it, so the run refuses to start while a `roof-controller` container
+exists on that Docker host. It removes everything it started when it ends, and prints the containers, the controller's
+last log lines and the emulator's history when a check fails. CI runs it in the "Scenarios" workflow.
+
 ## Tests
 
 No test relies on physical hardware.
@@ -240,6 +264,7 @@ No test relies on physical hardware.
 | `DeploymentValidatorTests` | The deployment check: emulator mode refused outside Development without `AllowOutsideDevelopment`, refused with `/dev/i2c-1` mapped, invalid `HatEmulator` settings |
 | `tests/emulator/compose-smoke-test.sh` | The two images together through the compose `emulator` profile, including the camera proxy against the emulated camera |
 | CI "Compose profiles" step | The Pi profiles pin emulator mode off; the `emulator` profile maps no devices and has its own network |
+| `tests/emulator/deploy-scenarios.sh` | The container's stop and kill while the roof travels, C12 with the deploy script, and moving between Compose and the script ([Container scenarios](#container-scenarios)) |
 | `tests/deploy/deploy-script-tests.sh` | Emulator mode: the refusal without `ALLOW_EMULATED_HAT`, the unmapped HAT and the recorded flag; `HatEmulator` settings refused in `EXTRA_DOCKER_ARGS` and in an `--env-file`; I2C devices, `--privileged` (any value Docker reads as true) and `/dev` mounts refused in emulator mode; the verified `hatMode`, with a rollback on a mismatch; and the rollback's HAT checks, before the swap and once the restored version runs |
 
 `EmulatorModeAppTests` is `[DoNotParallelize]`. Each test starts a whole controller host whose startup and HAT polling

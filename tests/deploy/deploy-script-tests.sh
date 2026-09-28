@@ -61,6 +61,12 @@ seed_env() {
     "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
 }
 
+# seed_label <name> <key> <value>: a label on the seeded container (docker ps --format '{{.Label "<key>"}}' reads it).
+seed_label() {
+  jq --arg name "$1" --arg key "$2" --arg value "$3" '.containers[$name].labels[$key] = $value' \
+    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+}
+
 # build_command [NAME=value...] [-- script args...]: sets RUN_CMD to run the deploy script with the test environment
 # plus the given variables. The script runs in ${WORK} and records its PID in script.pid (for FAKE_SIGNAL_ON).
 build_command() {
@@ -670,7 +676,12 @@ test_physical_deploy_maps_the_hat_and_turns_the_emulator_off() {
            and (map(select(startswith("HatEmulator__")))
                 == ["HatEmulator__Enabled=false", "HatEmulator__AllowOutsideDevelopment=false"])' <<<"${args}" >/dev/null \
       || fail_test "expected the HAT's I2C device and the emulator off and refused: ${args}"
+    jq -e '(.[index("/dev/gpiomem:/dev/gpiomem") - 1] == "--device")
+           and (.[index("type=bind,src=/sys/class/thermal/thermal_zone0/temp,dst=/sys/class/thermal/thermal_zone0/temp,readonly") - 1] == "--mount")' \
+      <<<"${args}" >/dev/null || fail_test "expected /dev/gpiomem and the thermal sensor mapped: ${args}"
   done
+  docker_calls buildx | jq -e -s 'map(select(.[1] == "build")) | length == 1 and (.[0] | .[index("--platform") + 1] == "linux/arm64")' \
+    >/dev/null || fail_test "expected one build for linux/arm64: $(docker_calls buildx)"
 }
 
 test_emulator_endpoint_without_the_flag_is_refused_before_any_docker_call() {
@@ -701,8 +712,55 @@ test_emulator_mode_with_the_flag_unmaps_the_hat_and_records_the_flag() {
     jq -e '(index("/dev/i2c-1:/dev/i2c-1") | not)
            and (map(select(startswith("HatEmulator__"))) == ["HatEmulator__Enabled=true", "HatEmulator__Host=hat-emulator",
                 "HatEmulator__Port=5291", "HatEmulator__AllowOutsideDevelopment=true"])
-           and (.[index("HatEmulator__Enabled=true") - 1] == "--env")' <<<"${args}" >/dev/null \
+           and (.[index("HatEmulator__Enabled=true") - 1] == "--env")
+           and (map(select(test("gpiomem|thermal"))) == [])' <<<"${args}" >/dev/null \
       || fail_test "unexpected emulator-mode arguments: ${args}"
+  done
+}
+
+test_build_platform_amd64_is_for_the_emulator_only() {
+  seed_container roof-controller old true 8443:8443
+  local value
+  for value in linux/amd64 linux/arm/v7 arm64 "linux/arm64 --push"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "BUILD_PLATFORM=${value}"
+    assert_status 1
+    if [[ "${value}" == "linux/amd64" ]]; then
+      assert_output_contains "BUILD_PLATFORM=linux/amd64 is for a test rig on the HAT emulator"
+    else
+      assert_output_contains "BUILD_PLATFORM must be linux/arm64 (the Pi) or linux/amd64 (a test rig on the HAT emulator), got '${value}'. Nothing was changed."
+    fi
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+
+  deploy "${HTTPS_ENV[@]}" BUILD_PLATFORM=linux/amd64 HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true
+  assert_status 0
+  assert_output_contains "[build] Building ${IMAGE} for linux/amd64..."
+  assert_container roof-controller new true unless-stopped
+  docker_calls buildx | jq -e -s 'map(select(.[1] == "build")) | length == 1 and (.[0] | .[index("--platform") + 1] == "linux/amd64")' \
+    >/dev/null || fail_test "expected one build for linux/amd64: $(docker_calls buildx)"
+}
+
+test_compose_managed_controller_is_refused_before_anything_changes() {
+  local name args
+  for name in roof-controller roof-controller-previous; do
+    for args in "" --rollback --dry-run; do
+      teardown
+      setup
+      seed_container roof-controller old true 8443:8443
+      seed_container roof-controller-previous older false
+      seed_label "${name}" com.docker.compose.project hvoroofcontrollerv4rpi
+      deploy "${HTTPS_ENV[@]}" -- ${args:+"${args}"}
+
+      assert_status 1
+      assert_output_contains "${name} was created by Docker Compose (project hvoroofcontrollerv4rpi): this script replaces or restores only controllers it created. Nothing was changed."
+      assert_output_contains "Moving between Compose and the deploy script"
+      assert_container roof-controller old true unless-stopped
+      assert_container roof-controller-previous older false
+      [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls run)$(docker_calls buildx)$(docker_calls exec)" ]] \
+        || fail_test "${name} ${args:-deploy}: a controller was stopped, renamed, run, built or called"
+    done
   done
 }
 

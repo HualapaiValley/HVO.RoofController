@@ -31,7 +31,10 @@ set -euo pipefail
 #   (HVO.RoofControllerV4.Emulator) in place of the physical HAT; the HAT's I2C device is not mapped and the roof does
 #   not move. It is refused unless ALLOW_EMULATED_HAT=true, and the report says which HAT the controller uses. A
 #   rollback checks the restored version's HAT too, before anything is stopped and again once it runs: the emulator is
-#   accepted only with ALLOW_EMULATED_HAT=true.
+#   accepted only with ALLOW_EMULATED_HAT=true. The container then maps no host device or Pi file (no /dev/gpiomem, no
+#   thermal sensor), so a test rig need not be a Pi, and BUILD_PLATFORM=linux/amd64 builds the image for a PC.
+# Compose: the script replaces only controllers it created. A <name> or <name>-previous that Docker Compose created is
+#   refused before anything changes; docs/deployment.md describes moving between Compose and the script.
 
 usage() {
   sed -n '/^# Project-local/,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -57,6 +60,8 @@ fi
 
 DOCKER_CONTEXT=${DOCKER_CONTEXT:-rpi-remote}
 IMAGE_TAG=${IMAGE_TAG:-hvov9/roof-controller:v4}
+# Platform the image is built for: the Pi's. linux/amd64 is for a test rig on a PC, in HAT emulator mode only.
+BUILD_PLATFORM=${BUILD_PLATFORM:-linux/arm64}
 CONTAINER_NAME=${CONTAINER_NAME:-roof-controller}
 PREVIOUS_CONTAINER_NAME="${CONTAINER_NAME}-previous"
 # Holds the current controller for a moment while --rollback swaps the names.
@@ -191,6 +196,16 @@ if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
 else
   HAT_SUMMARY="physical HAT (/dev/i2c-1)"
 fi
+
+# The physical HAT is on a Raspberry Pi (arm64): an image for another platform is for a test rig on the HAT emulator.
+case "${BUILD_PLATFORM}" in
+  linux/arm64) ;;
+  linux/amd64)
+    [[ -n "${HAT_EMULATOR_ENDPOINT}" ]] \
+      || fail "BUILD_PLATFORM=linux/amd64 is for a test rig on the HAT emulator (set HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT=true): the physical HAT is on a Raspberry Pi (linux/arm64). Nothing was changed."
+    ;;
+  *) fail "BUILD_PLATFORM must be linux/arm64 (the Pi) or linux/amd64 (a test rig on the HAT emulator), got '${BUILD_PLATFORM}'. Nothing was changed." ;;
+esac
 
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
@@ -369,21 +384,22 @@ name_filter() {
   printf 'name=^/%s$' "${1//./\\.}"
 }
 
-# lookup_container <docker ps filter>: sets CSTATE (running | stopped | missing), CID (full ID) and CNAME for the one
-# container matching the filter. Returns 1 when Docker cannot be asked or the answer is ambiguous; callers must then
+# lookup_container <docker ps filter>: sets CSTATE (running | stopped | missing), CID (full ID), CNAME and CPROJECT (the
+# Docker Compose project that created it, or empty) for the one container matching the filter. Returns 1 when Docker cannot be asked or the answer is ambiguous; callers must then
 # stop, because treating an unknown container as missing could start a second controller next to it or remove it while
 # it runs. Anything but exited, created or dead counts as running: a restarting or paused container still owns its
 # name and can drive the HAT.
 lookup_container() {
   local lines state
-  CSTATE="" CID="" CNAME=""
-  lines=$(dockerc ps -a --no-trunc --filter "$1" --format '{{.State}} {{.ID}} {{.Names}}') || return 1
+  CSTATE="" CID="" CNAME="" CPROJECT=""
+  lines=$(dockerc ps -a --no-trunc --filter "$1" \
+    --format '{{.State}} {{.ID}} {{.Names}} {{.Label "com.docker.compose.project"}}') || return 1
   if [[ -z "${lines}" ]]; then
     CSTATE=missing
     return 0
   fi
   [[ "${lines}" != *$'\n'* ]] || return 1
-  read -r state CID CNAME <<<"${lines}"
+  read -r state CID CNAME CPROJECT <<<"${lines}"
   [[ -n "${CID}" ]] || return 1
   case "${state}" in
     exited|created|dead) CSTATE=stopped ;;
@@ -417,10 +433,22 @@ read_previous_hat() {
 read_container_states() {
   lookup_container "$(name_filter "${CONTAINER_NAME}")" \
     || fail "Could not read the state of ${CONTAINER_NAME} from Docker (docker ps failed or matched more than one container). Nothing was changed; check the Docker context and retry."
-  STATE=${CSTATE} CURRENT_ID=${CID}
+  STATE=${CSTATE} CURRENT_ID=${CID} CURRENT_PROJECT=${CPROJECT}
   lookup_container "$(name_filter "${PREVIOUS_CONTAINER_NAME}")" \
     || fail "Could not read the state of ${PREVIOUS_CONTAINER_NAME} from Docker (docker ps failed or matched more than one container). Nothing was changed; check the Docker context and retry."
-  PREVIOUS_STATE=${CSTATE} PREVIOUS_ID=${CID}
+  PREVIOUS_STATE=${CSTATE} PREVIOUS_ID=${CID} PREVIOUS_PROJECT=${CPROJECT}
+  refuse_compose_managed "${CONTAINER_NAME}" "${CURRENT_PROJECT}"
+  refuse_compose_managed "${PREVIOUS_CONTAINER_NAME}" "${PREVIOUS_PROJECT}"
+}
+
+# A container keeps its Compose labels under any name. Renamed to <name>-previous, a Compose controller would still be
+# Compose's: a later `docker compose up` could start it next to this script's controller, and `down` could remove the
+# rollback target. So the script replaces or restores only containers it created.
+refuse_compose_managed() {
+  local name=$1 project=$2
+  if [[ -n "${project}" ]]; then
+    fail "${name} was created by Docker Compose (project ${project}): this script replaces or restores only controllers it created. Nothing was changed. To move this controller to the script, follow \"Moving between Compose and the deploy script\" in docs/deployment.md."
+  fi
 }
 
 # Two controllers must never drive the HAT, so a running <name>-previous stops a deploy or a rollback before anything
@@ -872,7 +900,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   if [[ "${ROLLBACK}" == "true" ]]; then
     echo "[dry-run] Would request a verified Stop, swap ${CONTAINER_NAME} with ${PREVIOUS_CONTAINER_NAME} and verify it at ${REMOTE_BASE_URL}."
   else
-    echo "[dry-run] Would build ${IMAGE_TAG}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
+    echo "[dry-run] Would build ${IMAGE_TAG} for ${BUILD_PLATFORM}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
     echo "[dry-run] HAT: ${HAT_SUMMARY}"
   fi
   echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
@@ -961,9 +989,9 @@ if ! docker buildx version >/dev/null 2>&1; then
   fail "docker buildx is required but not available. Install Docker Buildx and try again."
 fi
 
-echo "[build] Building ${IMAGE_TAG} for linux/arm64..."
+echo "[build] Building ${IMAGE_TAG} for ${BUILD_PLATFORM}..."
 docker buildx build \
-  --platform linux/arm64 \
+  --platform "${BUILD_PLATFORM}" \
   -f "${DOCKERFILE_PATH}" \
   -t "${IMAGE_TAG}" \
   --load \
@@ -985,14 +1013,13 @@ container_args=(
   --env "OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}"
   --env "OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL}"
   --env "OTEL_METRIC_EXPORT_INTERVAL=${OTEL_METRIC_EXPORT_INTERVAL}"
-  --device /dev/gpiomem:/dev/gpiomem
-  --mount type=bind,src=/sys/class/thermal/thermal_zone0/temp,dst=/sys/class/thermal/thermal_zone0/temp,readonly
   --mount "type=bind,src=${SECRETS_DIR},dst=/run/secrets,readonly"
 )
 
 if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
-  # The HAT emulator answers the HAT's registers. The HAT's I2C device is not mapped, so this controller cannot reach
-  # the physical HAT whatever its settings say.
+  # The HAT emulator answers the HAT's registers. No host device or Pi file is mapped: not the HAT's I2C device, so this
+  # controller cannot reach the physical HAT whatever its settings say, and not /dev/gpiomem or the thermal sensor,
+  # which a test rig that is not a Pi does not have.
   container_args+=(
     --env "HatEmulator__Enabled=true"
     --env "HatEmulator__Host=${HAT_EMULATOR_HOST}"
@@ -1002,7 +1029,10 @@ if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
 else
   # Explicitly off, and not allowed outside Development. The verification then checks the hatMode the controller
   # reports, since a setting in the secrets directory would override these.
+  # shellcheck disable=SC2054 # commas are part of --mount values
   container_args+=(
+    --device /dev/gpiomem:/dev/gpiomem
+    --mount type=bind,src=/sys/class/thermal/thermal_zone0/temp,dst=/sys/class/thermal/thermal_zone0/temp,readonly
     --device /dev/i2c-1:/dev/i2c-1
     --env "HatEmulator__Enabled=false"
     --env "HatEmulator__AllowOutsideDevelopment=false"
