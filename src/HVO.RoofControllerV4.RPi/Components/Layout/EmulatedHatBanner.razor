@@ -1,0 +1,13 @@
+@using HVO.RoofControllerV4.RPi.Services.HatEmulation
+@namespace HVO.RoofControllerV4.RPi.Components.Layout
+@inject RoofHatConnection HatConnection
+
+@* Shown on every page while the controller runs against the HAT emulator, so an emulator run is never mistaken for the roof. *@
+@if (HatConnection.IsEmulated)
+{
+    <div class="alert alert-warning emulated-hat-banner mb-0 rounded-0 text-center" role="alert" data-testid="emulated-hat-banner">
+        <i class="bi bi-cpu" aria-hidden="true"></i>
+        <strong>EMULATED HAT</strong>: this controller is connected to the HAT emulator at
+        <code>@HatConnection.EmulatorEndpoint</code>, not the physical HAT. The observatory roof does not move.
+    </div>
+}

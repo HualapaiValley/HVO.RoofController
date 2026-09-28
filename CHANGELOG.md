@@ -108,6 +108,36 @@ the roof against this server; use the authenticated browser console for operator
   cycles, drive trips and power loss, external stops, stop methods and DC brakes, the
   factory `P100` and `P112`, switch and wire faults, relay and I2C faults, and each wiring
   mistake from closed, mid-travel and open; none relies on physical hardware.
+- HAT emulator (#30): `HVO.RoofControllerV4.Emulator` serves the emulated plant's HAT registers
+  over TCP (register port 5291) and has a fault-injection API on loopback port 5290 (drive trips
+  and power, HAT power, external stop, jam, limit switch, relay, wiring, I2C and link faults,
+  plant history and violations, time scale 0.1-100). See [docs/emulator.md](docs/emulator.md).
+- HAT emulator mode (#30): with `HatEmulator:Enabled`, the controller sends its HAT register
+  accesses to the emulator instead of the I2C bus, with nothing else changed. A lost link, a
+  timeout or a malformed reply is an I/O error, which the controller fails safe on as for a
+  failed I2C transfer. Emulator mode is refused outside Development unless
+  `HatEmulator:AllowOutsideDevelopment` is set. It shows as an `EMULATED HAT` banner on every
+  console page, `hatMode: "Emulated"` in Status, Degraded health (every health description
+  names the emulator, a fault's too), startup warnings and the
+  telemetry attributes `hvo.roof.hat.mode` and `hvo.roof.hat.emulator.endpoint`. The deployment
+  check fails on refused emulator settings and on emulator mode with `/dev/i2c-1` mapped, and
+  warns on allowed ones.
+- Deploy script (#30): `HAT_EMULATOR_ENDPOINT` with `ALLOW_EMULATED_HAT=true` deploys a
+  test-rig controller against the HAT emulator, without `/dev/i2c-1`. The endpoint without the
+  flag is refused, and so is a `HatEmulator` setting in `EXTRA_DOCKER_ARGS`, given directly or
+  in an `--env-file` (which must be readable). In emulator mode an I2C `--device`,
+  `--privileged` and a mount of the host's `/` or `/dev` are refused too. The verification
+  checks the `hatMode` the new controller reports against the one deployed and rolls back on a
+  mismatch. `--rollback` accepts a version that uses the emulator only with
+  `ALLOW_EMULATED_HAT=true`: one deployed for the emulator is refused before anything is stopped,
+  and the restored version's `hatMode` is checked once it runs. The dry-run and the final report
+  name the HAT the controller uses.
+- Emulator container (#30): `src/HVO.RoofControllerV4.Emulator/Dockerfile` (non-root,
+  `linux/amd64` and `linux/arm64`), the compose `emulator` profile (production settings
+  against the emulator container, no devices, loopback only, on its own network), and
+  `tests/emulator/compose-smoke-test.sh`, which opens and closes the emulated roof through the
+  containerized controller. CI workflow `emulator-image.yml` builds the image for both
+  platforms and runs the smoke test.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
 - [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
   telemetry-outage and RV-6 soak procedures) and [docs/ci-runners.md](docs/ci-runners.md).
@@ -119,8 +149,8 @@ the roof against this server; use the authenticated browser console for operator
   the `http://localhost:8080` listener the health check needs, and endpoints Kestrel would refuse),
   every configured certificate (loaded as Kestrel loads it, with the Server Authentication usage)
   and that `AllowedHosts` includes `localhost`. The deploy script runs it with the final
-  container's configuration before stopping anything; both compose profiles run it before the
-  controller starts.
+  container's configuration before stopping anything; both Pi compose profiles (`pi`,
+  `pi-lan-http`) run it before the controller starts, and the `emulator` profile does not.
 - The deploy script verifies the new controller from the deploying machine (authenticated
   Status and a verified Stop at the published URL, `REMOTE_CA_CERT` for a private CA), keeps
   the old container as `roof-controller-previous` and rolls back to it when the new one fails.
@@ -148,7 +178,9 @@ the roof against this server; use the authenticated browser console for operator
   all-off stop runs if the stuck call returns; until then the controller is shutting down, not
   disposed).
 - CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
-  `docker`/`curl`, and `docker compose config` for both profiles.
+  `docker`/`curl`, and `docker compose config` for the Pi compose file's profiles (rejecting
+  `pi` with `pi-lan-http`, and checking that the Pi profiles pin the HAT emulator off and the
+  `emulator` profile maps no devices and has its own network) and for `src/docker-compose.yml`.
 
 ### Changed
 
@@ -177,6 +209,20 @@ the roof against this server; use the authenticated browser console for operator
 - The supervision loop wakes when a start limit's release is first seen and when IN4 drops, so
   the release is verified and the run-loss window enforced on time rather than at the next
   verification interval.
+- Development runs against the HAT emulator (#30): `appsettings.Development.json` enables
+  emulator mode with the limit switches in force and the production wiring, instead of the
+  in-memory register simulation with the limit switches ignored. Start the emulator before
+  the controller. The in-memory simulation remains for unit tests and as the fallback with
+  emulator mode off and no I2C bus. `devcontainer.rpi.json` sets `HatEmulator__Enabled=false`
+  to use the physical HAT, and `src/docker-compose.yml` runs the controller in Development
+  against the emulator container (admin key from `HVO_DEV_ROOF_API_KEY`).
+- The deploy script sets `HatEmulator__Enabled=false` and
+  `HatEmulator__AllowOutsideDevelopment=false` for a physical-HAT deployment. A setting in the
+  secrets directory is read later and could override them, so the verified `hatMode` is what
+  makes the HAT certain: a physical deployment whose controller reports anything else is rolled
+  back. The Pi compose profiles set the same two settings. With `/dev/i2c-1` mapped, such an
+  override now fails the deployment check, so the script's pre-flight and the profiles' check
+  service refuse it before anything is stopped.
 - Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile

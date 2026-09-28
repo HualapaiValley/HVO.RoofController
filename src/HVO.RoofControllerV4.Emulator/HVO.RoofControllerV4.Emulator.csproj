@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <RuntimeIdentifiers>linux-arm64;linux-x64;win-x64</RuntimeIdentifiers>
+    <RootNamespace>HVO.RoofControllerV4.Emulator</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Simulation/HVO.RoofControllerV4.Simulation.csproj" />
+  </ItemGroup>
+
+</Project>

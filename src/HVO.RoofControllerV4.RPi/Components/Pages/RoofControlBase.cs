@@ -854,9 +854,11 @@ public class RoofControlBase : ComponentBase, IDisposable
 
     #region UI Helpers
 
-    public string GetHardwareBadgeClass() => IsUsingPhysicalHardware ? "bg-primary" : "bg-warning text-dark";
+    public bool IsUsingEmulatedHat => Snapshot.HatMode == RoofHatMode.Emulated;
 
-    public string GetHardwareModeLabel() => IsUsingPhysicalHardware ? "Physical I²C" : "Simulation";
+    public string GetHardwareBadgeClass() => IsUsingPhysicalHardware && !IsUsingEmulatedHat ? "bg-primary" : "bg-warning text-dark";
+
+    public string GetHardwareModeLabel() => IsUsingEmulatedHat ? "Emulated HAT" : IsUsingPhysicalHardware ? "Physical I²C" : "Simulation";
 
     public string GetLimitSwitchBadgeClass() => "bg-warning text-dark";
 
@@ -1160,7 +1162,8 @@ public class RoofControlBase : ComponentBase, IDisposable
         if (AreInputsUnhealthy) parts.Add("Inputs unhealthy");
         if (AreRelayReadsUnhealthy) parts.Add("Relay reads failing");
         if (IsIgnoringLimitSwitches) parts.Add("Limits ignored");
-        if (!IsUsingPhysicalHardware) parts.Add("Simulation");
+        if (IsUsingEmulatedHat) parts.Add("Emulated HAT");
+        else if (!IsUsingPhysicalHardware) parts.Add("Simulation");
         return string.Join(" • ", parts);
     }
 

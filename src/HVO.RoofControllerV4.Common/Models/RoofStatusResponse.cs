@@ -86,6 +86,12 @@ namespace HVO.RoofControllerV4.Common.Models
         /// <summary>Random identifier generated at process start; changes when the controller restarts.</summary>
         public string? ControllerInstanceId { get; init; }
 
+        /// <summary>
+        /// What answers the HAT register accesses. <see cref="IsUsingPhysicalHardware"/> is true for
+        /// <see cref="RoofHatMode.Emulated"/> as well, because the controller then takes its physical-hardware paths.
+        /// </summary>
+        public RoofHatMode HatMode { get; init; }
+
         /// <summary>Most recent safety or hardware error message, if any.</summary>
         public string? LastError { get; init; }
     }

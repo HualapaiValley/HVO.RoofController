@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="HVO.Iot.Devices" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj" />
   </ItemGroup>
 
   <ItemGroup>

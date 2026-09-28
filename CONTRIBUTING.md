@@ -43,13 +43,17 @@ and instructions for contributing to this project.
 
    The solution builds on Linux without Apple tooling.
 
-4. Run the server locally with the simulated HAT (`http://localhost:5195`):
+4. Run the server locally against the HAT emulator (`http://localhost:5195`). Development
+   uses the emulator, with the limit switches in force, so start it first, in its own terminal:
 
    ```bash
+   dotnet run --project HVO.RoofControllerV4.Emulator
    dotnet run --project HVO.RoofControllerV4.RPi
    ```
 
-   Protected endpoints need an API key; see [docs/security.md](docs/security.md).
+   Protected endpoints need an API key; see [docs/security.md](docs/security.md). The
+   emulator's fault-injection API, and how to run both in containers, are in
+   [docs/emulator.md](docs/emulator.md).
 
 ## Development Workflow
 
@@ -103,7 +107,8 @@ This repository includes Dev Container configurations in `.devcontainer/`
 for a consistent development environment. Open the repository in VS Code and
 use the "Reopen in Container" command to get started.
 
-- `devcontainer.json` is the standard configuration (simulated HAT, no devices).
+- `devcontainer.json` is the standard configuration (no devices; run the server against the
+  HAT emulator as in step 4 above).
 - `devcontainer.rpi.json` runs on a Raspberry Pi with the real I2C bus and GPIO, so it can
   move the roof. It forces `IgnorePhysicalLimitSwitches=false`. Use it only on a
   commissioned bench or with the roof mechanism isolated (see

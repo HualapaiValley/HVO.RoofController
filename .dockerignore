@@ -1,9 +1,13 @@
-# Build context for src/HVO.RoofControllerV4.RPi/Dockerfile is the repository root
-# (docker-compose.yaml uses context ../.., deploy-roofcontroller-rpi.sh passes the repo
-# root). Docker only reads .dockerignore from the context root, so it lives here.
+# The build context of both images is the repository root (docker-compose.yaml uses context
+# ../.., src/docker-compose.yml uses .., deploy-roofcontroller-rpi.sh passes the repo root).
+# Docker only reads .dockerignore from the context root, so it lives here and serves both:
 #
-# The Dockerfile needs: Directory.Build.props, Directory.Packages.props, src/global.json,
-# src/NuGet.config and the Common, RPi and WebSite.Themes project folders under src/.
+# - src/HVO.RoofControllerV4.RPi/Dockerfile (the controller) needs Directory.Build.props,
+#   Directory.Packages.props, src/global.json, src/NuGet.config and the Common, RPi and
+#   WebSite.Themes project folders under src/.
+# - src/HVO.RoofControllerV4.Emulator/Dockerfile (the HAT emulator) needs the same root files
+#   and the Common, Simulation and Emulator project folders under src/.
+#
 # Do not exclude any of those.
 
 # VCS, CI and editor metadata
@@ -29,7 +33,7 @@
 **/*.nupkg
 **/*.snupkg
 
-# Projects and folders the Pi image does not build
+# Projects and folders neither image builds
 tests
 docs
 src/HVO.RoofController.sln

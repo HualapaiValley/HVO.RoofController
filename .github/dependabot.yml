@@ -12,13 +12,23 @@ updates:
     schedule:
       interval: "weekly"
 
-  # Pi image base images (mcr.microsoft.com/dotnet/sdk and aspnet).
+  # Pi image and HAT emulator image base images (mcr.microsoft.com/dotnet/sdk and aspnet).
+  # The emulator's aspnet tag must equal the Pi image's ("Emulator image" workflow), so each
+  # image is bumped in both Dockerfiles in one PR (group-by: dependency-name).
   # The sdk tag must match src/global.json: a PR that bumps the SDK image must update
-  # src/global.json in the same PR. The "Pi image" workflow fails until they agree.
+  # src/global.json in the same PR. The "Pi image" and "Emulator image" workflows fail until
+  # they agree.
   - package-ecosystem: "docker"
-    directory: "/src/HVO.RoofControllerV4.RPi"
+    directories:
+      - "/src/HVO.RoofControllerV4.RPi"
+      - "/src/HVO.RoofControllerV4.Emulator"
     schedule:
       interval: "weekly"
+    groups:
+      dotnet-images:
+        group-by: dependency-name
+        patterns:
+          - "*"
 
   # Dev container image (mcr.microsoft.com/devcontainers/dotnet). Its SDK must be in the
   # feature band that src/global.json pins; CI ("Check dev container SDK") fails until it is.

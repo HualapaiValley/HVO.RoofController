@@ -47,8 +47,10 @@ public sealed record DeploymentValidationResult(
 /// is http with HTTPS-only settings; when no listener serves http://localhost:8080 (the health check and the deploy
 /// script's calls); when HTTPS is required but Kestrel would not listen on HTTPS; when an HTTPS listener has no
 /// certificate, or a configured certificate cannot be loaded, has no private key, is not for server authentication,
-/// or is outside its validity period; or when AllowedHosts would refuse localhost. Reachability from the network is
-/// checked by the deploy script after the switch.
+/// or is outside its validity period; when AllowedHosts would refuse localhost; or when HAT emulator mode
+/// (<c>HatEmulator:Enabled</c>) has invalid settings, or is on outside Development without
+/// <c>HatEmulator:AllowOutsideDevelopment</c>. Emulator mode that is allowed is a warning. Reachability from the network
+/// is checked by the deploy script after the switch.
 /// </remarks>
 public static partial class DeploymentValidator
 {
@@ -91,7 +93,8 @@ public static partial class DeploymentValidator
         var warnings = new List<string>();
         var notes = new List<string>();
 
-        ValidateRoofOptions(configuration, hatBusPresent, problems);
+        var emulated = ValidateHatEmulator(configuration, environment, hatBusPresent, problems, warnings);
+        ValidateRoofOptions(configuration, hatBusPresent, emulated, problems);
         ValidateOtherOptions(configuration, problems, warnings);
         ValidateLogLevels(configuration, problems);
         var security = ValidateApiKeys(configuration, problems, notes);
@@ -152,7 +155,7 @@ public static partial class DeploymentValidator
         return result.IsValid ? 0 : 1;
     }
 
-    private static void ValidateRoofOptions(IConfiguration configuration, bool hatBusPresent, List<string> problems)
+    private static void ValidateRoofOptions(IConfiguration configuration, bool hatBusPresent, bool emulated, List<string> problems)
     {
         var options = Bind<RoofControllerOptionsV4>(configuration, nameof(RoofControllerOptionsV4), problems);
         if (options is null)
@@ -167,17 +170,71 @@ public static partial class DeploymentValidator
         }
 
         // The controller checks this at initialization, against the HAT it actually found: the real one whenever its
-        // I2C device exists (see HatBusDevicePath), whatever HVO_FORCE_RASPBERRY_PI or USE_REAL_GPIO say.
+        // I2C device exists (see HatBusDevicePath), whatever HVO_FORCE_RASPBERRY_PI or USE_REAL_GPIO say, and the HAT
+        // emulator in emulator mode, which the controller treats as hardware.
         if (options.IgnorePhysicalLimitSwitches
             && !options.AllowIgnoringLimitSwitchesOnPhysicalHardware
-            && hatBusPresent)
+            && (hatBusPresent || emulated))
         {
+            var hat = emulated
+                ? "HAT emulator mode is on, so the controller would treat the HAT emulator as hardware"
+                : $"the HAT's I2C device ({HatBusDevicePath}) is mapped, so the controller would drive the roof hardware";
             problems.Add(
                 $"{nameof(RoofControllerOptionsV4)}: IgnorePhysicalLimitSwitches is true without AllowIgnoringLimitSwitchesOnPhysicalHardware, " +
-                $"and the HAT's I2C device ({HatBusDevicePath}) is mapped, so the controller would drive the roof hardware, refuse to " +
-                "initialize and accept no roof commands. Set IgnorePhysicalLimitSwitches to false (or, for supervised testing only, " +
-                "AllowIgnoringLimitSwitchesOnPhysicalHardware to true).");
+                $"and {hat}, refuse to initialize and accept no roof commands. Set IgnorePhysicalLimitSwitches to false (or, for " +
+                "supervised testing only, AllowIgnoringLimitSwitchesOnPhysicalHardware to true).");
         }
+    }
+
+    /// <summary>
+    /// Checks HAT emulator mode as <see cref="Services.HatEmulation.RoofHatConnection"/> does at startup, and returns
+    /// whether the controller would use the HAT emulator.
+    /// </summary>
+    private static bool ValidateHatEmulator(
+        IConfiguration configuration,
+        IHostEnvironment environment,
+        bool hatBusPresent,
+        List<string> problems,
+        List<string> warnings)
+    {
+        var options = Bind<HatEmulatorOptions>(configuration, HatEmulatorOptions.SectionName, problems);
+        if (options is not { Enabled: true })
+        {
+            return false;
+        }
+
+        var settingsProblems = options.Validate();
+        problems.AddRange(settingsProblems);
+
+        // No supported deployment has both: the deploy script maps no I2C device in emulator mode, and the emulator
+        // compose profile maps no devices. Both together mean emulator settings left behind on a physical deployment,
+        // typically in the secrets directory, which overrides the environment.
+        if (hatBusPresent)
+        {
+            problems.Add(
+                $"{HatEmulatorOptions.SectionName}:Enabled is true and the HAT's I2C device ({HatBusDevicePath}) is mapped. " +
+                "A physical deployment must not run on the HAT emulator, and an emulated one must not see the HAT. Remove " +
+                $"the {HatEmulatorOptions.SectionName} settings (check the secrets directory too, which overrides the " +
+                "environment) or the device mapping.");
+        }
+
+        if (!environment.IsDevelopment() && !options.AllowOutsideDevelopment)
+        {
+            problems.Add(
+                $"{HatEmulatorOptions.SectionName}:Enabled is true in the {environment.EnvironmentName} environment without " +
+                $"{HatEmulatorOptions.SectionName}:AllowOutsideDevelopment (the deploy script's ALLOW_EMULATED_HAT=true), so the " +
+                "controller would refuse to start. Emulator mode does not operate the roof; turn it off for the observatory.");
+            return true;
+        }
+
+        if (settingsProblems.Count == 0)
+        {
+            warnings.Add(
+                $"HAT emulator mode: the controller will use the HAT emulator at {options.Endpoint}, not the physical HAT. " +
+                "The roof will not move.");
+        }
+
+        return true;
     }
 
     /// <summary>

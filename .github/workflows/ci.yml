@@ -143,8 +143,10 @@ jobs:
         run: |
           bash -n src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh
           bash -n tests/deploy/deploy-script-tests.sh
+          bash -n tests/emulator/compose-smoke-test.sh
           shellcheck --version
-          shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh
+          shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
+            tests/emulator/compose-smoke-test.sh
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
@@ -154,8 +156,27 @@ jobs:
         run: |
           docker compose --profile pi config --quiet
           docker compose --profile pi-lan-http config --quiet
+          docker compose --profile emulator config --quiet
+          # The emulator profile maps no devices, so it may run next to a Pi profile. The Pi services pin the HAT
+          # emulator off, and the emulator services map no devices and use a network of their own.
+          for profile in pi pi-lan-http; do
+            docker compose --profile "${profile}" --profile emulator config --format json | jq -e '
+              .services as $s
+              | [$s[] | select(.profiles | index("emulator"))] as $emulated
+              | [$s[] | select(.profiles | index("emulator") | not)] as $pi
+              | ($pi | length) > 0 and ($emulated | length) == 2
+                and ([$pi[].environment | .HatEmulator__Enabled, .HatEmulator__AllowOutsideDevelopment] | all(. == "false"))
+                and ([$emulated[].devices // [] | length] | all(. == 0))
+                and ([$emulated[].networks | keys[]] | all(. == "emulator"))
+                and ([$pi[].networks // {} | keys[]] | index("emulator") | not)' >/dev/null || {
+              echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the ${profile} and emulator profiles are not kept apart"
+              exit 1
+            }
+          done
           # Both profiles at once must be rejected: they would drive the HAT twice.
           if docker compose --profile pi --profile pi-lan-http config --quiet 2>/dev/null; then
             echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the pi and pi-lan-http profiles can be enabled together"
             exit 1
           fi
+          # The local development compose file (the controller against the emulator container).
+          docker compose -f ../docker-compose.yml config --quiet

@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using HVO.Core.Results;
 using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Logic;
@@ -194,12 +195,16 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     private long _stopSequenceCount;
 
+    // What answers the HAT register accesses; fixed for the controller's lifetime.
+    private readonly RoofHatMode _hatMode;
+
     public RoofControllerServiceV4(
         ILogger<RoofControllerServiceV4> logger,
         IOptions<RoofControllerOptionsV4> roofControllerOptions,
         FourRelayFourInputHat fourRelayFourInputHat,
         IOptions<RoofControllerHostOptionsV4>? hostOptions = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        RoofHatConnection? hatConnection = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(roofControllerOptions);
@@ -212,6 +217,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         _clockOriginTimestamp = _timeProvider.GetTimestamp();
         _options = (roofControllerOptions.Value ?? new RoofControllerOptionsV4()) with { };
         _hatTransactionLock = HatTransactionLocks.GetValue(fourRelayFourInputHat, static _ => new object());
+        _hatMode = RoofHatConnection.ModeFor(hatConnection?.IsEmulated == true, _hat.IsHardwareBacked);
 
         var configuredName = hostOptions?.Value?.ControllerName;
         _controllerName = string.IsNullOrWhiteSpace(configuredName) ? new RoofControllerHostOptionsV4().ControllerName : configuredName;
@@ -224,8 +230,16 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         });
         _statusDispatcherTask = Task.Run(DispatchStatusChangesAsync);
 
-        _logger.LogInformation("RoofControllerServiceV4 using {HardwareMode} mode for relay HAT. Controller={ControllerName} Instance={InstanceId}",
-            _hat.ConnectionMode, _controllerName, _controllerInstanceId);
+        if (_hatMode == RoofHatMode.Emulated)
+        {
+            _logger.LogWarning("RoofControllerServiceV4 using the HAT emulator at {Endpoint} for the relay HAT, not the physical HAT. Controller={ControllerName} Instance={InstanceId}",
+                hatConnection!.EmulatorEndpoint, _controllerName, _controllerInstanceId);
+        }
+        else
+        {
+            _logger.LogInformation("RoofControllerServiceV4 using {HardwareMode} mode for relay HAT. Controller={ControllerName} Instance={InstanceId}",
+                _hat.ConnectionMode, _controllerName, _controllerInstanceId);
+        }
     }
 
     /// <inheritdoc />
@@ -306,6 +320,9 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     public bool IsShuttingDown => _shuttingDown;
 
     public bool IsUsingPhysicalHardware => _hat.IsHardwareBacked;
+
+    /// <summary>What answers the HAT register accesses: the physical HAT, the HAT emulator or the register simulation.</summary>
+    public RoofHatMode HatMode => _hatMode;
 
     public bool IsIgnoringPhysicalLimitSwitches
     {
@@ -554,6 +571,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             IsShuttingDown = _shuttingDown,
             ControllerName = _controllerName,
             ControllerInstanceId = _controllerInstanceId,
+            HatMode = _hatMode,
             LastError = _lastError
         };
     }

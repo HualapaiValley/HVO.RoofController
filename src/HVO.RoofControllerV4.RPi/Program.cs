@@ -7,6 +7,7 @@ using HVO.Enterprise.Telemetry.OpenTelemetry;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using HVO.RoofControllerV4.RPi.Logic;
@@ -21,6 +22,7 @@ using System.Runtime.Loader;
 using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Services;
+using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -123,11 +125,17 @@ public class Program
 
         services.AddSingleton<IGpioControllerClient>(_ => GpioControllerClientFactory.CreateAutoSelecting());
 
+        // The HAT answers on the Pi's I2C bus, or on the HAT emulator in emulator mode (HatEmulator:Enabled, refused
+        // outside Development unless HatEmulator:AllowOutsideDevelopment is set).
+        services.AddOptions<HatEmulatorOptions>().Bind(Configuration.GetSection(HatEmulatorOptions.SectionName));
+        services.AddSingleton<RoofHatConnection>();
         services.AddFourRelayFourInputHat(options =>
         {
             options.DigitalInputPollInterval = TimeSpan.FromMilliseconds(25);
+            options.OwnsClientFromFactory = true;
+            options.ClientFactory = serviceProvider => serviceProvider.GetRequiredService<RoofHatConnection>()
+                .CreateClient(options, serviceProvider.GetRequiredService<ILoggerFactory>());
         });
-
 
         services.AddHostedService<RoofControllerServiceV4Host>();
 
@@ -249,6 +257,8 @@ public class Program
         });
 
         services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource.AddDetector(serviceProvider =>
+                new RoofHatModeResourceDetector(serviceProvider.GetRequiredService<RoofHatConnection>())))
             .WithTracing(tracerProvider => tracerProvider
                 .AddSource(RoofControllerTelemetry.InstrumentationName)
                 .AddAspNetCoreInstrumentation()
@@ -391,5 +401,6 @@ public class Program
         app.MapControllers();
 
         RoofSecurityStartup.ReportSecurityPosture(app.Services, app.Configuration, app.Environment);
+        HatEmulatorStartup.ReportHatMode(app.Services);
     }
 }
