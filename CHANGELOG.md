@@ -308,8 +308,8 @@ assumptions, so the distances are indicative. Mitigations beyond these settings 
 ### Removed
 
 - The native iPad/MAUI app and its iOS and self-hosted M5 build workflows. The authenticated
-  web console is the supported operator client. Server API and physical safety commissioning
-  remain in #24.
+  web console is the supported operator client. The server findings from its review were fixed
+  in #28, and the safety checks run as the emulated commissioning scenarios (#31).
 
 ## [1.0.0] - 2025-03-01
 
