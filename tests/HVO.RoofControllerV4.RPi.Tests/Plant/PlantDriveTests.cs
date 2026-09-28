@@ -276,7 +276,7 @@ public class PlantDriveTests
     [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
-    public async Task StopDcBrake_TheNextMoveWaitsForIN4_WhenTheRunOutputStaysOnDuringTheBrake(bool runOutputDuringDcBrake)
+    public async Task StopDcBrake_TheNextMoveIsRefusedUntilIN4Drops_WhenTheRunOutputStaysOnDuringTheBrake(bool runOutputDuringDcBrake)
     {
         var plant = new RoofPlantOptions
         {
