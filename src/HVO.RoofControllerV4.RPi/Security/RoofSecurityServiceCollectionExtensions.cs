@@ -27,7 +27,8 @@ public static class RoofSecurityServiceCollectionExtensions
         new("/openapi"),
         new("/_blazor"),
         new("/_framework"),
-        new("/account")
+        new("/account"),
+        new("/hubs")
     ];
 
     public static IServiceCollection AddRoofControllerSecurity(this IServiceCollection services, IConfiguration configuration)

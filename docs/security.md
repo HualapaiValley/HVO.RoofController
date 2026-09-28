@@ -46,6 +46,7 @@ use `POST`; a `GET` to a command route returns 405.
 | `GET  /openapi/v4.json`                                  | Admin (API key) outside Development | 200 | 401, 403 |
 | `GET  /health`                                           | Viewer (API key or cookie) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
 | `GET  /health/live`, `GET /health/ready`                 | anonymous         | 200 / 503 | none |
+| `/hubs/roof` (SignalR status hub, with `/hubs/roof/negotiate`) | Viewer (API key only) | status messages ([Status hub](#status-hub)) | 401, 403 (`https_required`) |
 | `POST /account/login`, `POST /account/logout`            | anonymous (form)  | 302 | 403 (`origin_not_allowed`) |
 | `POST /console/stop`                                     | Stop (console cookie and antiforgery token only) | 200 `{outcome, message}` | 400 (stale form token), 401, 403 (`origin_not_allowed`), 503 (stop not verified), 500 |
 
@@ -194,6 +195,38 @@ The console runs over a SignalR connection, so two things do not depend on it:
 - **Operator lease.** The console renews the lease on the server only while the browser connection is up. When the
   server sees the connection drop (at once for a closed tab, within about 30 s for a silent network loss) renewal
   stops, and it does not resume on reconnect, so the lease runs out and stops the roof.
+
+## Status hub
+
+`/hubs/roof` is a SignalR hub (JSON protocol only) that pushes the roof's status to UI clients, so they do not poll
+`GET .../Status`. It only sends: it has no methods a client can call, and every command, Stop included, stays on the
+REST API. Invoking any method returns an error for that call and changes nothing.
+
+- **Authentication.** Every role may connect, with the `X-Api-Key` header on the negotiate request and on the
+  WebSocket or long-polling requests that follow. The key is never accepted in the query string. The console cookie is
+  not accepted, so a page on another site cannot open a connection with a signed-in browser's cookie. Without a valid
+  key the negotiate request returns 401; plain HTTP from the network returns 403 `https_required` when
+  `RequireHttps` is on, as the API does.
+- **Revocation.** A connection authenticates once, when it opens. About once a second the controller checks each
+  connection's key again and closes the connection when the key was removed, rotated or given another role, and logs
+  the key's name (never its value).
+- **Limits.** At most 32 connections are open at once; a connection past the limit is closed with the reason "The
+  controller is not accepting more status connections." and told not to reconnect. A client may send nothing but
+  the handshake and pings (messages over 4 KB close the connection).
+- **Messages.** The client method `Status` receives a `RoofStatusHubMessage` (`RoofStatusHubContract` in
+  `HVO.RoofControllerV4.Common`):
+
+  | Field | Meaning |
+  |-------|---------|
+  | `status` | The full `RoofStatusResponse`, as `GET .../Status` returns it (camelCase names, enums as strings). |
+  | `sequence` | Goes up by one for each message the controller publishes, from 1 when the process starts. A slow client can see gaps, never an older message after a newer one. |
+  | `serverTimeUtc` | The controller's clock when the message was published. |
+  | `instanceId` | Changes when the controller restarts; the sequence starts again, so compare sequences only within one instance. |
+
+  A connection receives the current status when it opens, every status change, and the current status again when
+  nothing was published for 1 second (the heartbeat). A client that has heard nothing for 3 seconds should treat its
+  view as stale. A client that falls behind receives only the newest message it has not yet had, so a slow or stalled
+  client never delays the controller or the other clients.
 
 ## Camera proxy
 

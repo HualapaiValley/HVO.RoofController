@@ -71,6 +71,13 @@ the roof against this server; use the authenticated browser console for operator
 
 ### Added
 
+- Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
+  status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
+  (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`
+  header; the console cookie is not accepted. A slow client receives only the newest status
+  and never delays the controller or other clients. Connections whose key is removed, rotated
+  or re-roled are closed within about a second, and at most 32 are open at once. The hub
+  accepts no commands. See [docs/security.md](docs/security.md#status-hub).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.
