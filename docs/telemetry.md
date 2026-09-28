@@ -23,12 +23,17 @@ and configuration changes log an `AUDIT` entry ([security.md](security.md#loggin
 OTLP export is on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. The production compose file supplies a default off-Pi
 collector, and the emulator profile uses `HVO_EMULATED_ROOF_OTLP_ENDPOINT`.
 
-| Setting | Default | |
+| Setting | Compose and deploy-script default | |
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | Use this protocol. |
 | `OTEL_SERVICE_NAME` | `hvo-roof-controller` | |
 | `OTEL_SERVICE_INSTANCE_ID` | `roof-controller-rpi` | |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `10000` (ms) | |
+
+`OTEL_SERVICE_INSTANCE_ID` is read by the compose file and the deploy script, which pass it as
+`OTEL_RESOURCE_ATTRIBUTES=service.instance.id=<value>`; the SDK does not read it. The `emulator` profile uses
+`HVO_EMULATED_ROOF_INSTANCE_ID` (default `roof-controller-emulated`) and leaves the metric interval at the SDK default
+of 60 s.
 
 The resource carries `hvo.roof.hat.mode` (`hardware`, or `emulated` against the HAT emulator) and, in emulator mode,
 `hvo.roof.hat.emulator.endpoint`, so an emulator run's telemetry is never mistaken for the roof's.

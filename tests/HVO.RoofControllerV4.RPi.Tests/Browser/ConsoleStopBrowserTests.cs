@@ -98,6 +98,7 @@ public sealed class ConsoleStopBrowserTests
     [TestMethod]
     [DataRow(ConsoleDevices.Phone)]
     [DataRow(ConsoleDevices.PhoneLandscape)]
+    [DataRow(ConsoleDevices.SmallPhoneLandscape)]
     [DataRow(ConsoleDevices.Tablet)]
     [DataRow(ConsoleDevices.TabletLandscape)]
     public async Task WhileTheRoofMoves_StopIsInViewWithoutScrolling_AndATapOnItStopsTheRoof(string device)

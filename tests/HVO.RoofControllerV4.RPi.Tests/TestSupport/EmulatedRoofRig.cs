@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
@@ -86,6 +87,20 @@ internal sealed record EmulatedRoofRigOptions
 internal sealed class EmulatedRoofRig : IAsyncDisposable
 {
     public static readonly TimeSpan MotionTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>The fewest pool worker threads a test process with a rig starts with.</summary>
+    private const int MinWorkerThreads = 32;
+
+    static EmulatedRoofRig()
+    {
+        // The in-process emulator answers on pool threads, while the controller's HAT client blocks pool threads until
+        // it answers. On a 2-core runner the pool starts with 2 workers and adds about 2 a second, so a burst (a
+        // command's writes and read-backs, the 25 ms input poll, status polls, the camera, the exporter) can hold the
+        // emulator's answer past the 1 s request timeout. The deployed emulator is a separate process and never
+        // shares the controller's pool.
+        ThreadPool.GetMinThreads(out var workers, out var completionPorts);
+        ThreadPool.SetMinThreads(Math.Max(workers, MinWorkerThreads), completionPorts);
+    }
 
     private readonly Dictionary<string, string?> _settings;
     private readonly EmulatedCameraHost? _camera;

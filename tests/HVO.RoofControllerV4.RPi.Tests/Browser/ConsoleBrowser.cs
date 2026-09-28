@@ -13,8 +13,8 @@ using Microsoft.Playwright;
 namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 
 /// <summary>
-/// The phone and the tablet the console is tested on, each held upright and sideways: Playwright's device descriptors
-/// (viewport, scale, touch, mobile user agent), run in Chromium.
+/// The phone and the tablet the console is tested on, each held upright and sideways, and a small phone held sideways:
+/// Playwright's device descriptors (viewport, scale, touch, mobile user agent), run in Chromium.
 /// </summary>
 internal static class ConsoleDevices
 {
@@ -23,6 +23,9 @@ internal static class ConsoleDevices
 
     /// <summary>750 x 342 CSS pixels.</summary>
     public const string PhoneLandscape = "iPhone 13 landscape";
+
+    /// <summary>568 x 320 CSS pixels: short, and as narrow as the footer's narrow-screen layout (576 px or less).</summary>
+    public const string SmallPhoneLandscape = "iPhone SE landscape";
 
     /// <summary>810 x 1080 CSS pixels.</summary>
     public const string Tablet = "iPad (gen 7)";

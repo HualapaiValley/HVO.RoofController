@@ -10,11 +10,12 @@
 #              following "Moving between Compose and the deploy script" in docs/deployment.md, and the refusals that
 #              keep the two from managing the same controller.
 #
-# Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It uses the default Docker context and touches
-# no hardware: the controller runs in HAT emulator mode, maps no host device, and reaches the emulator over a network of
-# this run's own. The controller is named roof-controller, as the script and the Compose `pi` profile name it, so the
-# run refuses to start while a roof-controller container exists. Everything it starts is removed on exit; the images
-# stay (the build cache).
+# Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It runs only against the local Docker daemon
+# (the default context, with DOCKER_HOST unset or a unix socket), not on a Raspberry Pi, and touches no hardware: the
+# controller runs in HAT emulator mode, maps no host device, and reaches the emulator over a network of this run's own.
+# The controller is named roof-controller, as the script and the Compose `pi` profile name it, so the run refuses to
+# start while a roof-controller container, or this run's emulator container or network, exists. Only a run that got
+# past that check removes them on exit; the images stay (the build cache).
 #
 #   tests/emulator/deploy-scenarios.sh [lifecycle] [c12] [migration]     (all three by default, in that order)
 #
@@ -32,6 +33,17 @@ deploy_script="${repo_root}/src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-r
 compose_file="${repo_root}/src/HVO.RoofControllerV4.RPi/docker-compose.yaml"
 
 export DOCKER_CONTEXT=default
+# The default context's endpoint is DOCKER_HOST when that is set, so it could be another machine (ssh://, tcp://). The
+# value is not printed: it can name a user and a host.
+if [[ -n "${DOCKER_HOST:-}" && "${DOCKER_HOST}" != unix://* ]]; then
+  echo "[scenarios] FAIL: DOCKER_HOST points at a Docker daemon that is not local; unset it to run against this machine's." >&2
+  exit 1
+fi
+# The roof's Pi runs the real roof-controller. (A PC can have /dev/i2c-1 too, for its graphics, so that is no sign.)
+if [[ -e /dev/gpiomem ]] || grep -qs 'Raspberry Pi' /proc/device-tree/model; then
+  echo "[scenarios] FAIL: this host is a Raspberry Pi; run the scenarios on a PC or a CI runner." >&2
+  exit 1
+fi
 https_port=${SCN_HTTPS_PORT:-18443}
 emulator_port=${SCN_EMULATOR_PORT:-15390}
 network=hvo-deploy-scenarios
@@ -106,6 +118,13 @@ remove_controllers() {
 cleanup() {
   local status=$?
   set +e
+  stop_background_deploy
+  if (( owns_resources != 1 )); then
+    # Refused before it created anything: what exists belongs to someone else.
+    write_results
+    rm -rf "${work}"
+    exit "${status}"
+  fi
   if (( status != 0 )); then
     echo "[scenarios] Containers:" >&2
     docker ps -a --filter "name=${controller}" --filter "name=${emulator_name}" >&2
@@ -245,6 +264,13 @@ container_log_has() {
   grep -qF -- "$2" <<<"${log}"
 }
 
+# container_log_count <name> <text>: how many lines of the container's log have the text.
+container_log_count() {
+  local log
+  log=$(docker logs "$1" 2>&1)
+  grep -cF -- "$2" <<<"${log}" || true
+}
+
 container_image() {
   docker inspect --format '{{.Image}}' "$1"
 }
@@ -320,6 +346,11 @@ setup() {
   if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap)?$")" ]]; then
     fail "a ${controller} container exists on this Docker host; these scenarios deploy their own under that name. Remove it first."
   fi
+  if [[ -n "$(docker ps -aq --filter "name=^/${emulator_name}$")" ]] || docker network inspect "${network}" >/dev/null 2>&1; then
+    fail "${emulator_name} or the ${network} network exists: another run is using them, or one was killed. Remove them first."
+  fi
+  # From here on, every roof-controller container, the emulator and the network are this run's, and cleanup removes them.
+  owns_resources=1
 
   operator_key=$(openssl rand -hex 24)
   other_key=$(openssl rand -hex 24)
@@ -453,7 +484,8 @@ scenario_lifecycle() {
   docker stop -t 30 "${controller}" >/dev/null
   stop_seconds=$(seconds_since "${start}")
   exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${controller}")
-  [[ "${exit_code}" != 137 ]] || fail "the container was killed after the grace period (exit 137)"
+  (( exit_code != 137 )) || fail "the container was killed after the grace period (exit 137)"
+  (( exit_code == 0 )) || fail "the controller exited ${exit_code} after docker stop (expected 0)"
   plant_is '.relayRegister == 0' || fail "the relays are still energized after the container stopped: $(plant)"
   assert_relays_off
   container_log_has "${controller}" 'stopped: HostShutdown' || fail "the controller's log has no HostShutdown stop"
@@ -518,6 +550,10 @@ scenario_c12() {
   roof_post Stop >/dev/null
   assert_relays_off
   old_id=$(container_id "${controller}")
+  # That Stop logged a NormalStop too: only one more, and no HostShutdown, shows the script's stop gate stopped the move.
+  local normal_stops shutdown_stops
+  normal_stops=$(container_log_count "${controller}" 'stopped: NormalStop')
+  shutdown_stops=$(container_log_count "${controller}" 'stopped: HostShutdown')
   deploy_in_background
   wait_for "the deploy script's pre-flight" 900 background_deploy_reached "[deploy] Pre-flight"
   roof_post Open >/dev/null
@@ -533,8 +569,10 @@ scenario_c12() {
   [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "the old controller is not kept as ${previous}"
   plant_is '.openLimitActuated == false and .closedLimitActuated == false' \
     || fail "the roof reached a limit: the stop gate did not stop it mid-travel: $(plant)"
-  container_log_has "${previous}" 'stopped: NormalStop' \
-    || fail "the old controller's log does not show the moving roof stopped by the script's Stop (NormalStop)"
+  (( $(container_log_count "${previous}" 'stopped: NormalStop') == normal_stops + 1 )) \
+    || fail "the old controller's log does not show one NormalStop of the moving roof by the script's Stop"
+  (( $(container_log_count "${previous}" 'stopped: HostShutdown') == shutdown_stops )) \
+    || fail "the old controller stopped the moving roof at its shutdown (HostShutdown), not at the script's stop gate"
   assert_relays_off
   pass "the script stopped the moving roof (NormalStop, verified all-off) before replacing the controller; the roof stopped between its limits at $(plant | jq '.openPercent | floor')% open"
 
@@ -622,15 +660,18 @@ scenario_c12() {
   pass "every relay-register sample in steps 3-6 was 0, and the emulator recorded no violations"
 }
 
+# The deploy runs in a process group of its own (job control on for the fork), so a failed run can stop all of it.
 deploy_in_background() {
   DEPLOY_LOG="${work}/deploy-$((++deploy_runs)).log"
   : > "${DEPLOY_LOG}"
   rm -f "${work}/background.status"
+  set -m
   (
     run_deploy "${DEPLOY_LOG}"
     echo "${DEPLOY_STATUS} ${DEPLOY_SECONDS}" > "${work}/background.status"
   ) &
   background_deploy_pid=$!
+  set +m
 }
 
 # background_deploy_reached <text>: the background deploy printed the text, or it ended (its checks then fail).
@@ -640,8 +681,20 @@ background_deploy_reached() {
 
 wait_for_background_deploy() {
   wait "${background_deploy_pid}" || true
+  background_deploy_pid=""
+  [[ -s "${work}/background.status" ]] || fail "the background deploy ended without writing its status"
   read -r DEPLOY_STATUS DEPLOY_SECONDS < "${work}/background.status"
   rm -f "${work}/background.status"
+}
+
+# Stops a background deploy that is still running (a check failed while it ran), before cleanup removes its containers.
+stop_background_deploy() {
+  [[ -n "${background_deploy_pid:-}" ]] || return 0
+  if kill -0 "${background_deploy_pid}" 2>/dev/null; then
+    kill -- "-${background_deploy_pid}" 2>/dev/null || kill "${background_deploy_pid}" 2>/dev/null
+    wait "${background_deploy_pid}" 2>/dev/null
+  fi
+  background_deploy_pid=""
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -748,6 +801,8 @@ for scenario in "${scenarios[@]}"; do
 done
 
 current_check=""
+owns_resources=0
+background_deploy_pid=""
 trap cleanup EXIT
 setup
 for scenario in "${scenarios[@]}"; do

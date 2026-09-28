@@ -46,8 +46,9 @@
 }
 
 /* Short screens, such as a phone held sideways: one row, with the roof status widest, so the footer leaves the console
-   as much height as it can (Stop stays above it without scrolling). */
-@media (max-height: 500px) {
+   as much height as it can (Stop stays above it without scrolling). A screen 576 px wide or narrower keeps the stacked,
+   wrapped status above: one row there would cut the status short. */
+@media (max-height: 500px) and (min-width: 577px) {
     .global-footer.global-footer {
         grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
         padding-block: 0.25rem;

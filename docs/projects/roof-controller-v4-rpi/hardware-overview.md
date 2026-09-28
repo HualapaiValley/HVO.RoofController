@@ -469,7 +469,9 @@ For the optional module:
 
 The hardwired relay/limit design remains authoritative even when Modbus is used for telemetry.
 
-## 14. Bring-up and verification sequence
+## 14. Installation record (electrician's bring-up)
+
+This is the sequence the installer followed when the wiring was built. It is a record, not a test or commissioning step: the installed wiring is working and is not re-tested. The software's behaviour for each item is checked against the emulated plant in [`docs/commissioning.md`](../../commissioning.md) (the controller-side checks: input polarity settings, relay register versus contacts, watchdog, operator lease, fault latch, input read failures, deployment stop), and what the emulator cannot prove is listed there as an installation assumption (C1-C4).
 
 1. Disconnect the motor from the roof mechanism or make the mechanism safe.
 2. Verify all distribution blocks with a continuity meter before energizing.
@@ -495,8 +497,6 @@ The hardwired relay/limit design remains authoritative even when Modbus is used 
    - RLY4 drops out
    - TB-1 stop permissive opens
 
-The controller-side checks (input polarity settings, relay register versus contacts, watchdog, operator lease, fault latch, input read failures, deployment stop) are automated scenarios against the emulated plant in [`docs/commissioning.md`](../../commissioning.md).
-
 ## 15. Source documents
 
 - [Sequent Microsystems SM-I-010 product and technical details](https://sequentmicrosystems.com/products/four-relays-four-inputs-for-raspberry-pi)
@@ -513,4 +513,4 @@ The exact SMVector model number and software revision have not yet been confirme
 - Verify the control terminal strip matches the 0.33-10 HP diagram.
 - Verify `P501` software revision if using `P144`.
 - Verify the physical AL assertion switch position.
-- Verify the ME-8108 terminal numbers with a continuity meter rather than relying only on molded markings.
+- Record the ME-8108 terminal numbers from the installed wiring (commissioning C1 and C3 installation assumptions).

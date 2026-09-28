@@ -56,12 +56,17 @@ public sealed class C14SoakScenarios
     private const int MinimumTrendSamples = 10;
     private const int LogCapacity = 1_000;
     private const int MaxNotes = 100;
+
+    // A quarter's 99th percentile is compared only when every quarter has this many Stops (a soak of about half an hour
+    // or more); in fewer it is little more than the quarter's slowest Stop.
+    private const int MinimumPercentileStops = 100;
     private static readonly TimeSpan DefaultDuration = TimeSpan.FromSeconds(90);
 
     // The resources are assessed over at least this long after the warm-up; a shorter run (the scenario job) records them.
     private static readonly TimeSpan MinimumTrendWindow = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan StatusPollInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan CameraHold = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan StreamCloseWait = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StopBound = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopLatencyMargin = TimeSpan.FromMilliseconds(100);
 
@@ -124,6 +129,7 @@ public sealed class C14SoakScenarios
         await stopping.CancelAsync();
         await Task.WhenAll(polling, watching);
         run.Elapsed = clock.Elapsed;
+        await WaitForCameraStreamsToCloseAsync(rig);
 
         var checks = Evaluate(run, rig, counters, limitEventsAtStart, safetyStopsAtStart, collector, cycleFailure);
         var results = WriteResults(run, checks, counters, rig);
@@ -351,9 +357,10 @@ public sealed class C14SoakScenarios
         checks.Add(StopLatencyCheck(run));
         checks.AddRange(ResourceChecks(run));
 
+        var openStreams = rig.Camera.GetStatus().OpenStreams;
         checks.Add(new("The camera streamed through the proxy, and every stream closed",
-            run.CameraStreams > 0 && run.CameraFailures == 0 && rig.Camera.GetStatus().OpenStreams == 0,
-            $"{run.CameraStreams} streams, {run.CameraFrames} frames, {run.CameraFailures} failed, {rig.Camera.GetStatus().OpenStreams} still open"));
+            run.CameraStreams > 0 && run.CameraFailures == 0 && openStreams == 0,
+            $"{run.CameraStreams} streams, {run.CameraFrames} frames, {run.CameraFailures} failed, {openStreams} still open {StreamCloseWait.TotalSeconds:0} s after the soak"));
 
         checks.Add(new("The exporter kept trying the collector that never answers",
             collector.Connections > 0,
@@ -361,24 +368,46 @@ public sealed class C14SoakScenarios
         return checks;
     }
 
-    /// <summary>Every Stop under 1 s, and each quarter's 99th percentile within 100 ms of the first quarter's.</summary>
+    /// <summary>
+    /// Every Stop under 1 s, and no drift through the outage: each quarter's median, and its 99th percentile once every
+    /// quarter has <see cref="MinimumPercentileStops"/> Stops, within 100 ms (the C13 margin) of the first quarter's.
+    /// C13 compares Stops during an outage with a reachable collector.
+    /// </summary>
     private static Check StopLatencyCheck(SoakRun run)
     {
         var stops = run.StopLatencies.ToArray();
         if (stops.Length == 0)
         {
-            return new Check("Stop latency stayed within the baseline", false, "no Stop was timed");
+            return new Check("Stop latency did not drift", false, "no Stop was timed");
         }
 
         var quarters = Enumerable.Range(0, 4)
             .Select(q => stops.Where(s => s.At >= run.Elapsed * q / 4 && (q == 3 || s.At < run.Elapsed * (q + 1) / 4)).Select(s => s.Latency).ToArray())
             .Where(q => q.Length > 0)
-            .Select(P99)
             .ToArray();
+        var medians = quarters.Select(q => TimeSpan.FromTicks((long)Median(q.Select(l => (double)l.Ticks)))).ToArray();
+        var percentiles = quarters.All(q => q.Length >= MinimumPercentileStops) ? quarters.Select(P99).ToArray() : [];
         var slowest = stops.Max(s => s.Latency);
-        return new Check("Stop latency stayed within the baseline",
-            slowest < StopBound && quarters.All(q => q <= quarters[0] + StopLatencyMargin),
-            $"{stops.Length} Stops, slowest {slowest.TotalMilliseconds:0} ms; 99th percentile by quarter {string.Join(", ", quarters.Select(q => $"{q.TotalMilliseconds:0} ms"))}");
+        return new Check("Stop latency did not drift",
+            slowest < StopBound
+            && medians.All(m => m <= medians[0] + StopLatencyMargin)
+            && percentiles.All(p => p <= percentiles[0] + StopLatencyMargin),
+            $"{stops.Length} Stops, slowest {slowest.TotalMilliseconds:0} ms; by quarter: median {Milliseconds(medians)}, "
+            + (percentiles.Length > 0
+                ? $"99th percentile {Milliseconds(percentiles)}"
+                : $"99th percentile not compared (fewer than {MinimumPercentileStops} Stops in a quarter: {string.Join(", ", quarters.Select(q => q.Length))})"));
+    }
+
+    private static string Milliseconds(IEnumerable<TimeSpan> values) => string.Join(", ", values.Select(v => $"{v.TotalMilliseconds:0} ms"));
+
+    /// <summary>Waits up to <see cref="StreamCloseWait"/> for the proxy to notice that the soak's last viewer left.</summary>
+    private static async Task WaitForCameraStreamsToCloseAsync(EmulatedRoofRig rig)
+    {
+        var waited = Stopwatch.StartNew();
+        while (rig.Camera.GetStatus().OpenStreams != 0 && waited.Elapsed < StreamCloseWait)
+        {
+            await Task.Delay(20);
+        }
     }
 
     /// <summary>

@@ -212,6 +212,33 @@ public class RoofControllerMotionTimingTests
     }
 
     [TestMethod]
+    public async Task AReversal_MeasuresTheStopDelayUntilTheReadThatSawIn4Drop()
+    {
+        // The reversal's stop and its input read take time, and the drive can stop within them: here IN4 drops 80 ms
+        // into the stop's relay writes, and the read after them sees it.
+        using var rig = await CreateAsync();
+        rig.Service.Open().IsSuccessful.Should().BeTrue();
+        rig.Hat.SetInputs(true, true, false, true);
+        rig.Service.SimAtSpeedRaw(true);
+        rig.Advance(5);
+
+        var dropped = false;
+        rig.Hat.Registers.RelayWriteObserver = (_, _, _) =>
+        {
+            if (!dropped)
+            {
+                dropped = true;
+                rig.Advance(0.08);
+                rig.Hat.SetInputs(true, true, false, false);
+            }
+        };
+        rig.Service.Close().IsSuccessful.Should().BeTrue();
+
+        rig.Service.IsMoving.Should().BeTrue();
+        rig.Timing.Of("roof.controller.drive.stop_delay").Should().Equal(new TimingSample(0.08, "opening", "NormalStop"));
+    }
+
+    [TestMethod]
     public async Task ANewMoveBeforeIn4Drops_MeasuresItsOwnStopDelay()
     {
         using var rig = await CreateAsync();

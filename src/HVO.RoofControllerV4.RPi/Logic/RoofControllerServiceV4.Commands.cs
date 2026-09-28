@@ -216,6 +216,9 @@ public partial class RoofControllerServiceV4
                     "Safety inputs could not be read; motion refused.");
             }
 
+            // A reversal's stop and this read take time, and IN4 can drop within them: measure the stop delay, and this
+            // move's timing, from the read.
+            now = Now;
             Evaluate_NoLock(now);
             if (DriveFaultActive_NoLock == true)
             {

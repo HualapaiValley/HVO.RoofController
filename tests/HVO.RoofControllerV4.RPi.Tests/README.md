@@ -151,7 +151,7 @@ models exactly that register.
 | `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API ([Commissioning scenarios](#commissioning-scenarios)) |
 | `Scenarios/CameraProxyScenarios` | The camera proxy against the emulated camera: frames relayed, a refusing camera, a frozen one, a camera server restart |
 | `Scenarios/ScenarioCoverageTests` | `docs/commissioning.md` and the scenarios agree: every check has a scenario that CI runs, and every step and assumption is listed |
-| `Browser/*BrowserTests` | The console in Chromium on a phone and a tablet, each upright and sideways ([Browser tests](#browser-tests)) |
+| `Browser/*BrowserTests` | The console in Chromium on a phone and a tablet, each upright and sideways, and a small phone sideways ([Browser tests](#browser-tests)) |
 
 ## Emulated plant
 
@@ -216,14 +216,15 @@ scenario job, and for `HVO_SOAK_DURATION` (two hours nightly), with its results 
 ## Browser tests
 
 `Browser/` runs the console in a headless Chromium through Playwright, with the phone and tablet device descriptors
-(iPhone 13 and iPad (gen 7), each upright and sideways), against an `EmulatedRoofRig` served on a loopback port.
-`ConsoleBrowser` signs in, measures where Stop is without scrolling, and cuts and restores the console's connection
-through Playwright's WebSocket route. After a failed test it attaches a screenshot, the Playwright trace and the browser
-log to the test's results. The tests are `[TestCategory("Browser")]` and `[DoNotParallelize]`, and C9 step 4 and C15
-are among them. They need Chromium, installed once after a build:
+(iPhone 13 and iPad (gen 7), each upright and sideways, and iPhone SE sideways), against an `EmulatedRoofRig` served on
+a loopback port. `ConsoleBrowser` signs in, measures where Stop is without scrolling, and cuts and restores the
+console's connection through Playwright's WebSocket route. After a failed test it attaches a screenshot, the Playwright
+trace and the browser log to the test's results. The tests are `[TestCategory("Browser")]` and `[DoNotParallelize]`, and
+C9 step 4 and C15 are among them. They need Chromium, installed once after a build, with its system libraries (leave out
+`--with-deps` when they are already installed):
 
 ```
-pwsh tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install chromium
+pwsh tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
 ```
 
 ## Adding new tests

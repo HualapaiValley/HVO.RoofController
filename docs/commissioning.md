@@ -1,8 +1,9 @@
 # Roof Controller Commissioning
 
-Every commissioning check runs as an automated scenario against the emulated HAT, drive, limit switches, camera and
-roof ([HAT emulator](emulator.md)). The scenarios run in the "Scenarios" CI workflow on every pull request, and the long
-soak runs nightly. No check needs the Pi, the HAT, the VFD, test instruments or the roof mechanism.
+Every commissioning check runs as an automated scenario against the emulated HAT, drive, limit switches, camera and roof
+([HAT emulator](emulator.md)). The scenarios run in the "Scenarios" CI workflow on pull requests to `main` and
+`feature/**`, and the long soak runs nightly. No check needs the Pi, the HAT, the VFD, test instruments or the roof
+mechanism.
 
 A scenario proves the controller's logic against the documented installation. It cannot prove that the installation
 matches that documentation. Each check therefore lists **installation assumptions**. An assumption is a fact about the
@@ -17,8 +18,8 @@ assumption of its own; `SmVectorAssumptions` and `PlantDocumentedFiguresTests` h
 
 | Runs | Covers | Command (the `dotnet` commands run from `src/`) |
 |---|---|---|
-| `Scenario` tests | C1-C11 and C13, plus a 90 s C14. The production host and settings run in process against the emulated plant. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
-| `Browser` tests | C9 step 4 and C15, plus the console on phones and tablets in Chromium | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Browser`, after installing Chromium once with `pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install chromium` |
+| `Scenario` tests | C1-C11 and C13, plus a 90 s C14 that does not assess resources. The production host and settings run in process against the emulated plant. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
+| `Browser` tests | C9 step 4 and C15, plus the console on phones and tablets in Chromium | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Browser`, after installing Chromium once with `pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium` (without `--with-deps` when its system libraries are installed) |
 | [Container scenarios](emulator.md#container-scenarios) | C11 in a real container, C12, and the move between Compose and the deploy script, on real Docker | `tests/emulator/deploy-scenarios.sh` (from the repository root) |
 | Nightly soak | C14 for two hours. Its invariant results go to the run summary and an artifact. | `HVO_SOAK_DURATION=02:00:00 HVO_SOAK_RESULTS_DIR="$PWD/soak" dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Soak` |
 
@@ -73,7 +74,7 @@ is energized, software cannot de-energize it: the stop has to come from the wiri
 | Step | Checked | Scenario |
 |---|---|---|
 | 1 | The site has a stop that works without the Pi | Installation assumption |
-| 2 | An external stop opens the drive's STOP loop during travel. The drive stops and the controller latches `DriveNotRunning`. Nothing the controller commands restarts the drive, before or after the stop is reset. | `C1IndependentStopPathScenarios.TheExternalStop_StopsTheDrive_AndNothingTheControllerCommandsRestartsIt` |
+| 2 | An external stop opens the drive's STOP loop during travel. The drive stops and the controller latches `DriveNotRunning`. While the stop is open, an Open after ClearFault does not start the drive. Resetting the stop does not restart it. | `C1IndependentStopPathScenarios.TheExternalStop_StopsTheDrive_AndNothingTheControllerCommandsRestartsIt` |
 | 3 | The HAT loses power while the roof opens. Every relay drops, the drive stops short of the limit and the controller latches `RelayVerificationFailed`. When power returns, the controller verifies the relays off and waits for ClearFault. | `C1IndependentStopPathScenarios.HatPowerLoss_WhileOpening_DropsEveryRelay_AndStopsTheDrive` |
 | 4 | Both limit monitoring wires are broken. Each limit's contact in its run circuit stops the drive short of the hard stop, and the controller latches `DriveNotRunning`. | `C1IndependentStopPathScenarios.TheHardwiredLimitContacts_StopTheDrive_WithTheControllersLimitInputsDisconnected` |
 
@@ -85,8 +86,10 @@ is energized, software cannot de-energize it: the stop has to come from the wiri
 - **Each relay is de-energized without HAT power, and RLY4 is the STOP permit in series with `TB-1`** (sections 8
   and 10). No setting depends on it. The emulated HAT drops every contact without power (step 3).
 - **Each limit switch's normally closed contact is wired into its direction's run circuit** (section 8, terminals 1-2).
-  No setting depends on it. Without these contacts, a broken monitoring wire (C3 step 4) leaves the watchdog (C8) as
-  the only bound on the move.
+  No setting depends on it. Without these contacts, a broken monitoring wire (C3 step 4) lets the roof reach the hard
+  stop. The drive's stall trip then stops it and the controller latches `DriveFault`, long before the watchdog (C8,
+  2 min 30 s) would (`RoofPlantTests.WithoutHardwiredEndStops_TheRoofHitsTheHardStop_AndTheDriveTripsOnTheStall`,
+  `PlantLimitSwitchTests.OpenLimitStuckReleased_ReachesTheHardStop_AndOnlyTheStallTripStopsIt`).
 
 ### C2. Relay register versus contacts
 
@@ -113,7 +116,7 @@ moved. The emulated HAT reports both.
 |---|---|---|
 | 1 | The production setting on the documented wiring, and each of the two mistakes the plant can show: the normally closed setting, and the input commons on `TB-4` | `C3LimitInputPolarityScenarios.EachLimitInput_IsActiveOnlyWhileItsSwitchIsActuated`, `C3LimitInputPolarityScenarios.TheNormallyClosedSetting_OnTheNormallyOpenWiring_ReadsTheLimitsInverted_AndTheRoofNeverMoves`, `C3LimitInputPolarityScenarios.InputCommonsOnTb4_ReadTheDriveAsFaulted_AndNothingMoves` |
 | 2 | `isOpenLimitActive` (IN1) and `isClosedLimitActive` (IN2) are `true` only while the matching switch is actuated | `C3LimitInputPolarityScenarios.EachLimitInput_IsActiveOnlyWhileItsSwitchIsActuated` |
-| 3 | With both limits actuated during a move, the controller stops, latches `ContradictoryLimitInputs`, and refuses Open and Close | `C3LimitInputPolarityScenarios.BothLimitsActuated_WhileMoving_StopsWithContradictoryLimitInputs_LatchesIt_AndRefusesMotion` |
+| 3 | With both limits actuated during a move, the controller stops, latches `ContradictoryLimitInputs`, and refuses Open, Close and ClearFault. `lastStopReason` may be `LimitSwitchReached`, because the open limit's edge is handled first. | `C3LimitInputPolarityScenarios.BothLimitsActuated_WhileMoving_StopsWithContradictoryLimitInputs_LatchesIt_AndRefusesMotion` |
 | 4 | A broken monitoring wire reads "not at the limit". The limit's run-circuit contact (C1 step 4) stops the drive. | `C3LimitInputPolarityScenarios.ABrokenMonitorWire_ReadsNotAtTheLimit` |
 
 **Installation assumptions**
@@ -271,7 +274,7 @@ The lease applies only when `OperatorLeaseTimeout` is set (2-120 s); production 
 | 1 | Open from the closed limit. The closed limit releases without a false stop, and the roof stops at the open limit with `LimitSwitchReached`. | `C10DepartureScenarios.FromEitherLimit_TheStartLimitReleases_WithoutAFalseStop_AndTheRoofStopsAtTheOther` |
 | 2 | Close from the open limit, with the same checks in reverse | `C10DepartureScenarios.FromEitherLimit_TheStartLimitReleases_WithoutAFalseStop_AndTheRoofStopsAtTheOther` |
 | 3 | The start limit is actuated again after it released. The move stops with `StartLimitReasserted` and latches. | `C10DepartureScenarios.TheStartLimit_ActuatedAgainAfterItReleased_StopsTheMove_WithStartLimitReasserted` |
-| 4 | The start limit never releases. With `DepartureReleaseTimeout` set, the move stops with `DepartureLimitNotReleased` and latches. Without it, the watchdog ends the move. | `C10DepartureScenarios.AStartLimitThatNeverReleases_WithTheDepartureTimeout_StopsWithDepartureLimitNotReleased`, `C10DepartureScenarios.AStartLimitThatNeverReleases_WithoutTheDepartureTimeout_RunsUntilTheWatchdog` |
+| 4 | The start limit never releases. With `DepartureReleaseTimeout` set, the move stops with `DepartureLimitNotReleased` and latches. Without it, the move runs until the watchdog or the other limit ends it. The scenario sets `SafetyWatchdogTimeout` to 5 s on a 1 m roof; with the production settings, the open limit ends it first. | `C10DepartureScenarios.AStartLimitThatNeverReleases_WithTheDepartureTimeout_StopsWithDepartureLimitNotReleased`, `C10DepartureScenarios.AStartLimitThatNeverReleases_WithoutTheDepartureTimeout_RunsUntilTheWatchdog` |
 | — | Swapped motor leads from the closed limit. With the departure timeout, the roof stops before the hard stop. Without it, the roof reaches the hard stop and the drive trips (`DriveFault`). | `C10DepartureScenarios.SwappedMotorLeads_FromTheClosedLimit_TheDepartureTimeoutStopsTheRoof_BeforeTheHardStop`, `C10DepartureScenarios.SwappedMotorLeads_FromTheClosedLimit_WithoutTheDepartureTimeout_ReachTheHardStop` |
 
 **Installation assumptions**
@@ -308,13 +311,15 @@ sequence every 500 ms. It stops when the register verifies, when the controller 
 usually comes first. The host waits up to 5 s for each of its shutdown calls (usually two, at most three), so the retry
 ends about 10 s after the stop request, plus the time the web server takes to stop.
 
-Two log entries mean the relay state is unknown:
+After `Shutdown could not verify the relay register all-off state`, one of these follows:
 
-- `Shutdown stop retry N verified the relay register all-off` means a retry verified the relays off.
-- A Critical `Roof controller shutdown stop did not complete within` entry means a HAT call was stuck and was abandoned.
-  Later triggers log `shutdown stop not attempted`, and disposal logs `Disposal could not acquire the controller lock`.
+- `Shutdown stop retry N verified the relay register all-off` (Warning): a retry verified the relays off.
+- `Shutdown stop retry gave up after N attempts` (Critical): the relays were never verified off.
 
-When that happens, treat the relay state as unknown and use the independent stop (C1).
+A Critical `Roof controller shutdown stop did not complete within` entry means a HAT call was stuck and was abandoned.
+Later triggers log `shutdown stop not attempted`, and disposal logs `Disposal could not acquire the controller lock`.
+
+After either Critical entry, treat the relay state as unknown and use the independent stop (C1).
 
 ### C12. Deployment script stop gate, pre-flight, remote check and rollback
 
@@ -352,7 +357,7 @@ to the stop path.
 | 1 | The baseline, with the collector reachable: Stop idle and during moves, timed from the request to all relays off | `C13TelemetryOutageScenarios.ACollectorThatTimesOutOrRefuses_AddsNoLatencyToStop_LimitStops_OrWatchdogStops` |
 | 2 | The same with a collector that never answers (a timeout), and with a closed port (an immediate refusal) | `C13TelemetryOutageScenarios.ACollectorThatTimesOutOrRefuses_AddsNoLatencyToStop_LimitStops_OrWatchdogStops` |
 | 3 | A limit stop and a watchdog stop during each outage, compared with the baseline | `C13TelemetryOutageScenarios.ACollectorThatTimesOutOrRefuses_AddsNoLatencyToStop_LimitStops_OrWatchdogStops` |
-| 4 | An outage lasting the soak, with resources flat | `C14SoakScenarios.TheRoof_CyclesForTheSoakDuration_WithFlatResources_AndEveryInvariantHeld` |
+| 4 | An outage lasting the soak, with resources flat (assessed by the nightly soak) | `C14SoakScenarios.TheRoof_CyclesForTheSoakDuration_WithFlatResources_AndEveryInvariantHeld` |
 
 The pass criteria for steps 1-3:
 
@@ -372,8 +377,9 @@ The production settings run against the emulated plant with the roof shortened t
 Open, Stop, Close and Stop through the API, and every fifth cycle stops in mid-travel first. It polls status at a
 client's rate, opens and closes a camera stream through the proxy, and exports to a collector that never answers. A
 cycle takes about 10 s where the installation moves about twice a night, so an hour of soak is about a year of moves.
-The scenario job runs it for 90 s. The nightly soak runs it for two hours and publishes `soak-summary.md` (the invariant
-table and the motion timings), `soak-summary.json` and `soak-samples.csv`.
+The scenario job runs it for 90 s, which records resources but does not assess them: that needs at least 5 minutes after
+the warm-up. Only the nightly soak checks that resources stay flat. It runs for two hours and publishes
+`soak-summary.md` (the invariant table and the motion timings), `soak-summary.json` and `soak-samples.csv`.
 
 | Step | Checked | Scenario |
 |---|---|---|
@@ -386,7 +392,10 @@ The soak's checks:
 - No plant invariant breaks.
 - Status always answers, and `statusVersion` only increases.
 - The controller is ready at every sample, with healthy and fresh input and relay reads.
-- Stop latency stays within the C13 baseline.
+- Every Stop completes in under 1 s, and Stop latency does not drift through the outage: each quarter of the soak
+  stays within 100 ms (the C13 margin) of the first quarter, by the median and, once every quarter has at least 100
+  Stops (a soak of about half an hour or more), by the 99th percentile. C13 steps 1-3 compare Stops during an outage
+  with a reachable collector.
 - After the warm-up, the working set and the managed heap grow less than 10%, and threads and file descriptors stay
   flat.
 - Every camera stream closes.
@@ -405,7 +414,7 @@ The soak's checks:
 ### C15. Stop from the console's reconnect dialog
 
 The reconnect dialog's **Stop roof** button sends `POST /console/stop` without the console's live connection. The
-browser tests run the console in Chromium with phone and tablet emulation. The lease is unset and the watchdog is longer
+browser test runs the console in Chromium with phone emulation. The lease is unset and the watchdog is longer
 than the test, so only the dialog's Stop can end the move.
 
 | Step | Checked | Scenario |

@@ -320,7 +320,8 @@ public partial class RoofControllerServiceV4
         if (_driveStopDelayPending is { } pending && _rawIn4 == false)
         {
             _driveStopDelayPending = null;
-            RoofControllerTelemetry.RecordDriveStopDelay(pending.Direction, pending.Reason, now - pending.At);
+            RoofControllerTelemetry.RecordDriveStopDelay(pending.Direction, pending.Reason,
+                now > pending.At ? now - pending.At : TimeSpan.Zero);
         }
     }
 

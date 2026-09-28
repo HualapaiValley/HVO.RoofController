@@ -51,7 +51,7 @@ starting the host or touching the HAT.
 ## Documentation
 - [Hardware Overview](../../docs/projects/roof-controller-v4-rpi/hardware-overview.md) – wiring, relay/limit mappings, safety philosophy
 - [Wiring diagrams](../../docs/projects/roof-controller-v4-rpi/diagrams/) – source Graphviz DOT files, SVG diagrams, and PNG renderings for the hardware overview
-- [Commissioning checklist](../../docs/commissioning.md) – bench and HAT checks before connecting the roof
+- [Commissioning](../../docs/commissioning.md) – checks C1-C15 as automated scenarios against the emulated plant, with the installation assumptions each depends on
 - [Security](../../docs/security.md) – API keys, roles, HTTPS, console sign-in
 - [Deployment](../../docs/deployment.md) – deployment script, compose profiles, deployment check, verified stop and rollback
 - [HAT emulator](../../docs/emulator.md) – running without hardware: the emulator, `HatEmulator` settings, fault injection, containers

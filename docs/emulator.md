@@ -24,7 +24,7 @@ at the configured travel position instead, which exercises the same controller l
 Development runs against the emulator. `appsettings.Development.json` turns emulator mode on at `127.0.0.1:5291`. The
 limit switches come from the emulator, so they stay in force, with the documented normally open wiring as in
 production. The console's camera is the emulator's camera (`BlueIris:BaseUrl` is `http://127.0.0.1:5290`, with no
-credentials; the dev container's compose file points it at `http://hat-emulator:5290`). Start the emulator first, from
+credentials; `src/docker-compose.yml` points it at `http://hat-emulator:5290`). Start the emulator first, from
 `src/`:
 
 ```bash
@@ -220,10 +220,12 @@ both platforms.
 
 ### Container scenarios
 
-`tests/emulator/deploy-scenarios.sh` runs what the in-process scenarios cannot reach: the deployed container, the
-deploy script and Compose, on real Docker. It uses the default Docker context and the HAT emulator, maps no host
-device, and builds both images for the machine it runs on (the script's `BUILD_PLATFORM=linux/amd64` on a PC). It
-serves HTTPS with a self-signed certificate for `127.0.0.1` and an operator key, both generated for the run.
+`tests/emulator/deploy-scenarios.sh` runs what the in-process scenarios cannot reach: the deployed container, the deploy
+script and Compose, on real Docker. It runs only against the local Docker daemon: it uses the default context, and
+refuses to start when `DOCKER_HOST` names anything but a `unix://` socket, or on a Raspberry Pi. It uses the HAT
+emulator, maps no host device, and builds both images for the machine it runs on (the script's
+`BUILD_PLATFORM=linux/amd64` on a PC). It serves HTTPS with a self-signed certificate for `127.0.0.1` and an operator
+key, both generated for the run.
 
 | Scenario | What it runs |
 |----------|--------------|
@@ -238,9 +240,11 @@ SCN_RESULTS_DIR=out tests/emulator/deploy-scenarios.sh  # also writes out/deploy
 ```
 
 It needs docker with buildx and compose 2.24 or later, curl, jq and openssl. The controller is named `roof-controller`,
-as the script and the Compose `pi` profile name it, so the run refuses to start while a `roof-controller` container
-exists on that Docker host. It removes everything it started when it ends, and prints the containers, the controller's
-last log lines and the emulator's history when a check fails. CI runs it in the "Scenarios" workflow.
+as the script and the Compose `pi` profile name it, so the run refuses to start while a `roof-controller` container, or
+the run's emulator container (`hvo-deploy-scenarios-hat`) or network (`hvo-deploy-scenarios`), exists on that Docker
+host. A refused run removes nothing. A run that starts removes everything it started when it ends, stops a deploy it
+left running, and prints the containers, the controller's last log lines and the emulator's history when a check
+fails. CI runs it in the "Scenarios" workflow.
 
 ## Tests
 

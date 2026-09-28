@@ -140,8 +140,10 @@ the roof against this server; use the authenticated browser console for operator
   containerized controller. CI workflow `emulator-image.yml` builds the image for both
   platforms and runs the smoke test.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
-- [docs/commissioning.md](docs/commissioning.md) (the commissioning checks C1-C15, each with
-  its scenarios and installation assumptions) and [docs/ci-runners.md](docs/ci-runners.md).
+- [docs/commissioning.md](docs/commissioning.md) (the commissioning checks C1-C15, #31): no
+  meter, oscilloscope or bench step remains. Each step names the scenario that covers it, and
+  each check lists its installation assumptions with the setting that depends on each one and
+  what the emulated plant shows when it is wrong. Also [docs/ci-runners.md](docs/ci-runners.md).
 - Commissioning scenarios (#31): every check C1-C15 in docs/commissioning.md is an automated
   scenario. `EmulatedRoofRig` starts the whole controller host with the production
   `appsettings.json` against an in-process HAT emulator and plant (a 25 cm roof in real time,
@@ -153,21 +155,23 @@ the roof against this server; use the authenticated browser console for operator
 - C14 soak (#31): the production settings cycle the emulated roof, with a mid-travel Stop every
   fifth cycle, the camera streaming through the proxy and OTLP export to a collector that never
   answers. It checks the #29 plant invariants, every stop reason, Status, input and relay read
-  freshness, Stop latency, memory, threads and file descriptors, and writes a summary with the
-  motion timing. It runs for 90 s with the scenarios and for `HVO_SOAK_DURATION` (two hours
-  nightly), with its results in `HVO_SOAK_RESULTS_DIR`.
+  freshness, Stop latency drift, memory, threads and file descriptors, and writes a summary
+  with the motion timing. It runs for 90 s with the scenarios and for `HVO_SOAK_DURATION`
+  (two hours nightly), with its results in `HVO_SOAK_RESULTS_DIR`.
 - Container scenarios (#31): `tests/emulator/deploy-scenarios.sh` runs, on Docker against the
   HAT emulator, `docker stop` and `docker kill` during travel (C11), commissioning C12 with the
   deploy script (an idle deploy, a deploy while moving, pre-flight failures, a failed remote
   check that rolls back, `--rollback` twice, with the relays sampled throughout), and the move
   from Compose to the deploy script and back.
 - CI workflow `scenarios.yml` (#31): the scenarios, the browser tests and the container
-  scenarios on every pull request and push to `main`, and the two-hour soak nightly and on
-  demand, with the soak's invariant results in the run summary and its artifacts.
+  scenarios on pull requests to `main` and `feature/**` and on pushes to `main`, and the
+  two-hour soak nightly and on demand, with the soak's invariant results in the run summary
+  and its artifacts.
 - Browser tests (#31): Playwright runs the console in Chromium on an iPhone 13 and an iPad
-  (gen 7), each upright and sideways, against the whole controller and the emulated plant:
-  sign-in, Stop in view without scrolling and stopping the roof, stale and unhealthy status,
-  the camera stalling and going offline, the lease during a lost connection (C9) and the
+  (gen 7), each upright and sideways, and on an iPhone SE sideways, against the whole
+  controller and the emulated plant: sign-in, Stop in view without scrolling and stopping the
+  roof, stale and unhealthy status, the whole roof status in the footer on a narrow screen, the
+  camera stalling and going offline, the lease during a lost connection (C9) and the
   reconnect dialog's Stop (C15). A failed test attaches a screenshot, the trace and the browser
   log.
 - Emulated camera (#31): the HAT emulator serves an MJPEG camera of the emulated roof at
@@ -267,15 +271,12 @@ the roof against this server; use the authenticated browser console for operator
   `BUILD_PLATFORM` (default `linux/arm64`) builds `linux/amd64` for a test rig on the HAT
   emulator, and in emulator mode the container maps no host device or Pi file.
 - The console on short screens, such as a phone held sideways, puts the roof state beside the
-  buttons, keeps the Controls heading for screen readers only and puts the footer on one row,
-  so Stop is in view without scrolling (#20). The browser tests found Stop below the footer.
+  buttons, keeps the Controls heading for screen readers only and, wider than 576 px, puts the
+  footer on one row, so Stop is in view without scrolling (#20). The browser tests found Stop
+  below the footer.
 - The idle supervision loop runs an overdue drive-stop check at once. It could wake just before
   the deadline and then fall back to the 1 s idle interval, so "Drive still reports running
   (IN4)" was logged about 1.1 s late.
-- [docs/commissioning.md](docs/commissioning.md) is rewritten (#31): no meter, oscilloscope or
-  bench step remains. Each step names the scenario that covers it, and each check lists its
-  installation assumptions with the setting that depends on each one and what the emulated
-  plant shows when it is wrong.
 - Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile

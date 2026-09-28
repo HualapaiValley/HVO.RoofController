@@ -61,6 +61,32 @@ public sealed class ConsoleStaleStatusBrowserTests
         rig.Controller.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeTrue("a lost relay register latches a fault an operator must clear");
     }
 
+    /// <summary>
+    /// On a screen 576 px wide or narrower the footer wraps the roof status instead of cutting it short, also when the
+    /// screen is short (a small phone held sideways): an unhealthy HAT gives the longest status.
+    /// </summary>
+    [TestMethod]
+    [DataRow(ConsoleDevices.Phone)]
+    [DataRow(ConsoleDevices.SmallPhoneLandscape)]
+    public async Task OnANarrowScreen_TheFooterShowsTheWholeRoofStatus(string device)
+    {
+        var browser = _browser = await ConsoleBrowser.StartAsync(TestContext, Scenario.Production(), device);
+        var rig = browser.Rig;
+        await browser.SignInAsync(TestApiKeys.Operator);
+
+        rig.Server.Outage = true;
+        await Expect(browser.FooterStatus).ToContainTextAsync("Relay reads failing", new() { Timeout = 15_000 });
+
+        var status = await browser.FooterStatus.TextContentAsync();
+        var clipped = await browser.FooterStatus.EvaluateAsync<bool>("""
+            chip => {
+              const clips = e => e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1;
+              return clips(chip) || clips(chip.querySelector('.footer-chip__text'));
+            }
+            """);
+        clipped.Should().BeFalse("the footer must show the whole status \"{0}\" on the {1}", status?.Trim(), device);
+    }
+
     [TestMethod]
     public async Task WhenTheConsoleLosesItsConnection_TheReconnectDialogCoversTheStaleStatus_AndTheConsoleShowsTheRoofAsItIsOnReconnecting()
     {
