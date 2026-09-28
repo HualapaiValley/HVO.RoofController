@@ -117,9 +117,11 @@ the roof against this server; use the authenticated browser console for operator
   timeout or a malformed reply is an I/O error, which the controller fails safe on as for a
   failed I2C transfer. Emulator mode is refused outside Development unless
   `HatEmulator:AllowOutsideDevelopment` is set. It shows as an `EMULATED HAT` banner on every
-  console page, `hatMode: "Emulated"` in Status, Degraded health, startup warnings and the
+  console page, `hatMode: "Emulated"` in Status, Degraded health (every health description
+  names the emulator, a fault's too), startup warnings and the
   telemetry attributes `hvo.roof.hat.mode` and `hvo.roof.hat.emulator.endpoint`. The deployment
-  check fails on refused emulator settings and warns on allowed ones.
+  check fails on refused emulator settings and on emulator mode with `/dev/i2c-1` mapped, and
+  warns on allowed ones.
 - Deploy script (#30): `HAT_EMULATOR_ENDPOINT` with `ALLOW_EMULATED_HAT=true` deploys a
   test-rig controller against the HAT emulator, without `/dev/i2c-1`. The endpoint without the
   flag is refused, and so is a `HatEmulator` setting in `EXTRA_DOCKER_ARGS`, given directly or
@@ -132,7 +134,7 @@ the roof against this server; use the authenticated browser console for operator
   name the HAT the controller uses.
 - Emulator container (#30): `src/HVO.RoofControllerV4.Emulator/Dockerfile` (non-root,
   `linux/amd64` and `linux/arm64`), the compose `emulator` profile (production settings
-  against the emulator container, no devices, loopback only), and
+  against the emulator container, no devices, loopback only, on its own network), and
   `tests/emulator/compose-smoke-test.sh`, which opens and closes the emulated roof through the
   containerized controller. CI workflow `emulator-image.yml` builds the image for both
   platforms and runs the smoke test.
@@ -177,7 +179,8 @@ the roof against this server; use the authenticated browser console for operator
   disposed).
 - CI job `deploy-script`: ShellCheck and tests for the deploy script against fake
   `docker`/`curl`, and `docker compose config` for the Pi compose file's profiles (rejecting
-  `pi` with `pi-lan-http`) and for `src/docker-compose.yml`.
+  `pi` with `pi-lan-http`, and checking that the Pi profiles pin the HAT emulator off and the
+  `emulator` profile maps no devices and has its own network) and for `src/docker-compose.yml`.
 
 ### Changed
 
@@ -217,7 +220,9 @@ the roof against this server; use the authenticated browser console for operator
   `HatEmulator__AllowOutsideDevelopment=false` for a physical-HAT deployment. A setting in the
   secrets directory is read later and could override them, so the verified `hatMode` is what
   makes the HAT certain: a physical deployment whose controller reports anything else is rolled
-  back.
+  back. The Pi compose profiles set the same two settings. With `/dev/i2c-1` mapped, such an
+  override now fails the deployment check, so the script's pre-flight and the profiles' check
+  service refuse it before anything is stopped.
 - Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile

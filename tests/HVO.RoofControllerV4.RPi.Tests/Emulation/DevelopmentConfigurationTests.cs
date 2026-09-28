@@ -11,7 +11,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Emulation;
 /// <summary>
 /// The Development settings (<c>appsettings.json</c> overlaid with <c>appsettings.Development.json</c>, as the
 /// Development environment loads them): Development runs against the HAT emulator, which supplies the limit switches,
-/// so they are in force with the production wiring. The in-memory register simulation is for unit tests only.
+/// so they are in force with the production wiring. The in-memory register simulation is kept for unit tests, and as the
+/// fallback with emulator mode off and no I2C bus.
 /// </summary>
 [TestClass]
 public class DevelopmentConfigurationTests

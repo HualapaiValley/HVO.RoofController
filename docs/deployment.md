@@ -115,6 +115,9 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - HAT emulator mode (`HatEmulator:Enabled`) outside Development without `HatEmulator:AllowOutsideDevelopment`, or with
   invalid `HatEmulator` settings: the controller would refuse to start. See
   [HAT emulator mode (test rigs)](#hat-emulator-mode-test-rigs).
+- HAT emulator mode with `/dev/i2c-1` mapped. No supported deployment has both, so this is emulator settings left on a
+  physical deployment, usually a `HatEmulator` file in the secrets directory: it is read last, so it overrides the
+  `HatEmulator__Enabled=false` that the deploy script and the Pi compose profiles set.
 - a value that cannot be converted in `RoofControllerOptionsV4`, `RoofControllerSecurity`,
   `RoofControllerHostOptionsV4`, `ConsoleLogBuffer`, `BlueIris`, `Telemetry` or `HatEmulator` (the report names the setting, not the
   value), and `Telemetry` options that the controller would refuse
@@ -141,7 +144,8 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 
 It warns on plain HTTP outside Development, a certificate that expires within 30 days, a certificate given only by
 store subject, `AllowAnonymousStop`, a misconfigured camera proxy (the roof still works), `AllowedHosts=*` in
-Production, allowed HAT emulator mode (the roof will not move), and `/dev/i2c-1` mapped in emulator mode. It never prints key values, passwords or other setting values.
+Production, and allowed HAT emulator mode (the roof will not move). It never prints key values, passwords or other
+setting values.
 
 The deploy script runs it as its pre-flight, and each Pi compose profile (`pi`, `pi-lan-http`) runs it as a one-shot
 service that the controller depends on. The `emulator` profile, a test rig, does not run it.
@@ -266,6 +270,22 @@ A test Pi can run the production image and settings with only the HAT emulated: 
 [HAT emulator](emulator.md) answers the HAT's registers, and an emulated roof, drive and limit switches stand behind
 it. **Never use this on the observatory Pi:** the controller then does not operate the roof.
 
+The script does not start the emulator, so set it up on the test Pi first. Build its image for `linux/arm64` as the
+script builds the controller's, load it into the Pi's Docker context (the script's `DOCKER_CONTEXT`, default
+`rpi-remote`), and run it on a Docker network of its own, with its unauthenticated control API on the Pi's loopback
+only. From the repository root:
+
+```bash
+docker buildx build --platform linux/arm64 -f src/HVO.RoofControllerV4.Emulator/Dockerfile \
+  -t hvo/roof-hat-emulator:dev --load .
+docker save hvo/roof-hat-emulator:dev | docker --context rpi-remote load
+docker --context rpi-remote network create hvo-emulator
+docker --context rpi-remote run -d --name hat-emulator --network hvo-emulator --restart unless-stopped \
+  -p 127.0.0.1:5290:5290 hvo/roof-hat-emulator:dev
+```
+
+Then deploy the controller onto the same network, pointing it at the emulator's register port:
+
 ```bash
 PI_HOST=test-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/test-pi.crt \
   HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true \
@@ -281,14 +301,18 @@ PI_HOST=test-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/test-pi.crt 
   host's `/` or `/dev`, so the controller cannot reach a physical HAT whatever its settings say.
 - Without `HAT_EMULATOR_ENDPOINT`, the script maps `/dev/i2c-1` and sets `HatEmulator__Enabled=false` and
   `HatEmulator__AllowOutsideDevelopment=false`. The secrets directory is read after these settings and could still
-  override them, so what makes the HAT certain is the check in step 7: the new controller must report `hatMode`
-  `Physical` (or `Emulated` in emulator mode), or the deploy is rolled back.
-- The emulator must be reachable from the controller's container, for example on a Docker network given in
-  `EXTRA_DOCKER_ARGS`. The script does not start it.
+  override them. The pre-flight [deployment check](#the-deployment-check) then fails, because emulator mode with
+  `/dev/i2c-1` mapped is refused, and nothing is stopped. The check in step 7 is the backstop: the new controller
+  must report `hatMode` `Physical` (or `Emulated` in emulator mode), or the deploy is rolled back.
+- The emulator must be reachable from the controller's container, here over the `hvo-emulator` network given in
+  `EXTRA_DOCKER_ARGS`. The pre-flight check runs with the same options, so it fails if the network is missing. If
+  the emulator is not running, the new controller latches `RelayVerificationFailed`, fails readiness and is rolled
+  back.
 - The script prints a warning before it changes anything, and the dry-run and the final report name the HAT the
   controller uses.
 
-A controller in emulator mode shows an `EMULATED HAT` banner on every page and reports Degraded health. For a rig
+A controller in emulator mode shows an `EMULATED HAT` banner on every page and reports Degraded health, or worse, with
+every health description naming the emulator. For a rig
 without a Pi, use the compose `emulator` profile below.
 
 ### Rolling back
@@ -375,8 +399,9 @@ Before `up` replaces a running controller, stop the roof yourself with `POST ...
 it, check the published URL from another machine (see below). Prefer the script.
 
 A third profile, `emulator`, runs the production settings against the [HAT emulator](emulator.md) on any machine,
-with no devices, on `http://127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). It builds both images, maps no devices and
-publishes on loopback only, so it can run next to a Pi profile. It does not run the deployment check. It is for
+with no devices, on `http://127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). It builds both images, maps no devices,
+publishes on loopback only and uses a network of its own, so it can run next to a Pi profile and a Pi-profile
+controller cannot reach its emulator. It does not run the deployment check. It is for
 testing, not for the observatory:
 
 ```bash

@@ -70,7 +70,7 @@ A controller in emulator mode cannot be mistaken for the roof:
 |-------|------|
 | Every page (the console's layout and the sign-in layout) | An `EMULATED HAT` banner naming the emulator endpoint: "The observatory roof does not move." |
 | Console status badge and footer | `Emulated HAT` |
-| `/health` | `Degraded`, "Roof controller is running against the HAT emulator (*host:port*), not the physical HAT". The data has `HardwareMode` `Emulated` and `HatEmulatorEndpoint`. |
+| `/health` | `Degraded`, "Roof controller is running against the HAT emulator (*host:port*), not the physical HAT". A more serious result, such as a latched fault or failing reads, takes its place with " (HAT emulator at *host:port*)" at the end, so every description names the emulator. The data always has `HardwareMode` `Emulated` and `HatEmulatorEndpoint`. |
 | `GET .../RoofControl/Status` | `hatMode: "Emulated"` |
 | Startup log | Warnings from `HVO.RoofControllerV4.RPi.HatEmulation` and `RoofControllerServiceV4` naming the endpoint. The HAT library's own `Mode: Physical I²C` line is expected: the library takes its hardware path, and only the register accesses go to the emulator. |
 | Telemetry | Resource attributes `hvo.roof.hat.mode=emulated` and `hvo.roof.hat.emulator.endpoint` |
@@ -83,8 +83,9 @@ test rig.
 Outside the Development environment, the controller **refuses to start** in emulator mode. It starts only when
 `HatEmulator:AllowOutsideDevelopment` is also `true`: a test rig, never the observatory roof.
 
-- `--validate-deployment` fails in the same case. With the setting, it warns instead, and it also warns when
-  `/dev/i2c-1` is mapped, since the controller does not use it in emulator mode.
+- `--validate-deployment` fails in the same case. With the setting, it warns instead. It also fails whenever
+  `/dev/i2c-1` is mapped in emulator mode: no supported deployment has both, so that is emulator settings left on the
+  roof's Pi, for example in its secrets directory.
 - The deploy script turns emulator mode on only with both `HAT_EMULATOR_ENDPOINT` and `ALLOW_EMULATED_HAT=true`. It then
   records the choice in its dry-run, its warning and its final report. See
   [HAT emulator mode](deployment.md#hat-emulator-mode-test-rigs) in the deployment guide.
@@ -207,8 +208,11 @@ No test relies on physical hardware.
 | `EmulatorModeAppTests` | The whole controller in emulator mode: open and close through the API; a link outage while moving stops the roof and latches a fault until ClearFault; a controller started before the emulator initializes with a latched fault until ClearFault; the sign-in page banner and the Degraded health |
 | `EmulatedHatDisplayTests` | The banner in the main layout (the console) and on its own, the console's HAT badge and the footer |
 | `DevelopmentConfigurationTests` | Development uses the emulator, with the limit switches in force and the production wiring |
+| `RoofControllerHealthCheckTests` | Emulator mode's health: Degraded naming the endpoint, and every more serious result naming the emulator |
+| `DeploymentValidatorTests` | The deployment check: emulator mode refused outside Development without `AllowOutsideDevelopment`, refused with `/dev/i2c-1` mapped, invalid `HatEmulator` settings |
 | `tests/emulator/compose-smoke-test.sh` | The two images together through the compose `emulator` profile |
-| `tests/deploy/deploy-script-tests.sh` | Emulator mode: the refusal without `ALLOW_EMULATED_HAT`, the unmapped HAT and the recorded flag; `HatEmulator` settings refused in `EXTRA_DOCKER_ARGS` and in an `--env-file`; I2C devices, `--privileged` and `/dev` mounts refused in emulator mode; the verified `hatMode`, with a rollback on a mismatch; and the rollback's HAT checks, before the swap and once the restored version runs |
+| CI "Compose profiles" step | The Pi profiles pin emulator mode off; the `emulator` profile maps no devices and has its own network |
+| `tests/deploy/deploy-script-tests.sh` | Emulator mode: the refusal without `ALLOW_EMULATED_HAT`, the unmapped HAT and the recorded flag; `HatEmulator` settings refused in `EXTRA_DOCKER_ARGS` and in an `--env-file`; I2C devices, `--privileged` (any value Docker reads as true) and `/dev` mounts refused in emulator mode; the verified `hatMode`, with a rollback on a mismatch; and the rollback's HAT checks, before the swap and once the restored version runs |
 
 `EmulatorModeAppTests` is `[DoNotParallelize]`. Each test starts a whole controller host whose startup and HAT polling
 hold thread-pool threads, and the in-process emulator needs those threads to answer. Run in parallel, the hosts starve

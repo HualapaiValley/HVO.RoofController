@@ -255,9 +255,15 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
     case "${arg}" in
       --env-file|--device|--volume|--mount) pending_option=${arg} ;;
       --env-file=*|--device=*|--volume=*|--mount=*) check_extra_option "${arg%%=*}" "${arg#*=}" ;;
-      --privileged|--privileged=true)
-        [[ -z "${HAT_EMULATOR_ENDPOINT}" ]] \
-          || fail "EXTRA_DOCKER_ARGS must not contain '${arg}' in HAT emulator mode: it maps every host device, the HAT's I2C bus included." ;;
+      --privileged|--privileged=*)
+        # Docker reads the value as Go's strconv.ParseBool does, so 1, t and True turn it on as well as true.
+        if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
+          case "$(printf '%s' "${arg#--privileged}" | tr '[:upper:]' '[:lower:]')" in
+            =false|=f|=0) ;;
+            *) fail "EXTRA_DOCKER_ARGS must not contain '${arg}' in HAT emulator mode: it maps every host device, the HAT's I2C bus included." ;;
+          esac
+        fi
+        ;;
       *)
         # -v and boolean short options combined with it (-itv), with the volume next or attached (-v/dev:/dev).
         if [[ "${arg}" =~ ^-[ditPq]*v(.*)$ ]]; then

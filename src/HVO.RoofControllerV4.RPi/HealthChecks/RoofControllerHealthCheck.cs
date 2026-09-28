@@ -14,6 +14,7 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
     /// unverified, relay register reads failing or stale, a latched safety fault, or <see cref="RoofControllerStatus.Error"/>.
     /// Degraded: status Unknown, physical limit switches ignored, the HAT emulator in place of the physical HAT, simulation
     /// (no physical hardware), or input polling disabled (edge detection relies on periodic verification only).
+    /// In HAT emulator mode every description names the emulator, so a result cannot be taken for the physical HAT's.
     /// </remarks>
     public class RoofControllerHealthCheck : IHealthCheck
     {
@@ -74,59 +75,62 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                     ["LastError"] = snapshot.LastError ?? string.Empty
                 };
 
+                var emulated = snapshot.HatMode == RoofHatMode.Emulated;
+                var endpoint = _hatConnection?.EmulatorEndpoint;
+                var onEmulator = !emulated ? string.Empty : endpoint is null ? " (HAT emulator)" : $" (HAT emulator at {endpoint})";
+
                 if (disposed)
                 {
-                    return Unhealthy("Roof controller service is disposed", data);
+                    return Unhealthy("Roof controller service is disposed" + onEmulator, data);
                 }
 
                 if (snapshot.IsShuttingDown)
                 {
-                    return Unhealthy("Roof controller is shutting down", data);
+                    return Unhealthy("Roof controller is shutting down" + onEmulator, data);
                 }
 
                 if (!snapshot.IsInitialized)
                 {
-                    return Unhealthy("Roof controller is not initialized", data);
+                    return Unhealthy("Roof controller is not initialized" + onEmulator, data);
                 }
 
                 if (snapshot.RelayRegisterState == RoofRelayRegisterState.Unverified)
                 {
-                    return Unhealthy("Roof controller relay register state is unverified", data);
+                    return Unhealthy("Roof controller relay register state is unverified" + onEmulator, data);
                 }
 
                 if (snapshot.IsFaultLatched)
                 {
-                    return Unhealthy($"Roof controller safety fault is latched ({snapshot.LatchedFaultReason})", data);
+                    return Unhealthy($"Roof controller safety fault is latched ({snapshot.LatchedFaultReason}){onEmulator}", data);
                 }
 
                 if (!snapshot.InputsHealthy)
                 {
-                    return Unhealthy("Roof controller safety inputs are not healthy", data);
+                    return Unhealthy("Roof controller safety inputs are not healthy" + onEmulator, data);
                 }
 
                 if (!snapshot.RelayRegisterReadsHealthy)
                 {
-                    return Unhealthy("Roof controller relay register reads are failing or stale", data);
+                    return Unhealthy("Roof controller relay register reads are failing or stale" + onEmulator, data);
                 }
 
                 if (snapshot.Status == RoofControllerStatus.Error)
                 {
-                    return Unhealthy("Roof controller is in error state", data);
+                    return Unhealthy("Roof controller is in error state" + onEmulator, data);
                 }
 
                 if (snapshot.Status == RoofControllerStatus.Unknown)
                 {
-                    return Degraded("Roof controller status is unknown", data);
+                    return Degraded("Roof controller status is unknown" + onEmulator, data);
                 }
 
                 if (snapshot.IsIgnoringPhysicalLimitSwitches)
                 {
-                    return Degraded("Roof controller is ignoring physical limit switches", data);
+                    return Degraded("Roof controller is ignoring physical limit switches" + onEmulator, data);
                 }
 
-                if (snapshot.HatMode == RoofHatMode.Emulated)
+                if (emulated)
                 {
-                    var endpoint = _hatConnection?.EmulatorEndpoint;
                     return Degraded(
                         endpoint is null
                             ? "Roof controller is running against the HAT emulator, not the physical HAT"

@@ -13,7 +13,7 @@
 #                  docker compose --profile pi-lan-http up -d
 #
 # A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
-# container and image names, so it does not collide with either profile above:
+# container and image names and its own network, so it does not collide with either profile above:
 #
 #   emulator     The controller (Production settings, plain HTTP, published on 127.0.0.1 port HVO_EMULATED_ROOF_PORT,
 #                default 5195) and the HAT emulator (src/HVO.RoofControllerV4.Emulator: an emulated roof, SMVector drive,
@@ -37,6 +37,10 @@ x-roof-environment: &roof-environment
   ASPNETCORE_ENVIRONMENT: Production
   HVO_FORCE_RASPBERRY_PI: "true"
   RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
+  # Never the HAT emulator, as with the deploy script. The secrets directory is read last and can still turn it on; the
+  # deployment check then fails, because /dev/i2c-1 is mapped.
+  HatEmulator__Enabled: "false"
+  HatEmulator__AllowOutsideDevelopment: "false"
   # Host names/IPs clients use to reach the controller (semicolon-separated). A list must include localhost (the
   # health check calls it); "*" logs a startup warning.
   AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
@@ -213,6 +217,8 @@ services:
       - "127.0.0.1:${HVO_EMULATOR_CONTROL_PORT:-5290}:5290"
     restart: "no"
     logging: *logging
+    networks:
+      - emulator
     profiles:
       - emulator
 
@@ -230,6 +236,8 @@ services:
     restart: "no"
     stop_grace_period: 30s
     logging: *logging
+    networks:
+      - emulator
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
       interval: 10s
@@ -238,3 +246,7 @@ services:
       start_period: 15s
     profiles:
       - emulator
+
+networks:
+  # The emulator rig's own network, so a Pi-profile controller cannot reach the HAT emulator.
+  emulator:

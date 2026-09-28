@@ -311,7 +311,55 @@ public sealed class RoofControllerHealthCheckTests
         var result = await CreateHealthCheck(service, hatConnection: HatConnections.Emulated()).CheckHealthAsync(new HealthCheckContext());
 
         result.Status.Should().Be(HealthStatus.Degraded);
-        result.Description.Should().Be("Roof controller is ignoring physical limit switches");
+        result.Description.Should().Be($"Roof controller is ignoring physical limit switches (HAT emulator at 127.0.0.1:{HatEmulatorOptions.DefaultPort})");
+    }
+
+    [TestMethod]
+    [DataRow("latched", HealthStatus.Unhealthy, "Roof controller safety fault is latched (RelayVerificationFailed) (HAT emulator at hat-emulator:5391)")]
+    [DataRow("unverified", HealthStatus.Unhealthy, "Roof controller relay register state is unverified (HAT emulator at hat-emulator:5391)")]
+    [DataRow("inputs", HealthStatus.Unhealthy, "Roof controller safety inputs are not healthy (HAT emulator at hat-emulator:5391)")]
+    [DataRow("shutting-down", HealthStatus.Unhealthy, "Roof controller is shutting down (HAT emulator at hat-emulator:5391)")]
+    [DataRow("error", HealthStatus.Unhealthy, "Roof controller is in error state (HAT emulator at hat-emulator:5391)")]
+    [DataRow("unknown", HealthStatus.Degraded, "Roof controller status is unknown (HAT emulator at hat-emulator:5391)")]
+    public async Task InEmulatorMode_EveryResultNamesTheEmulator(string state, HealthStatus expectedStatus, string expected)
+    {
+        // A fault on a test rig must not read as a fault on the observatory roof.
+        var snapshot = FakeRoofControllerService.HealthySnapshot() with { HatMode = RoofHatMode.Emulated };
+        snapshot = state switch
+        {
+            "latched" => snapshot with
+            {
+                Status = RoofControllerStatus.Error,
+                IsFaultLatched = true,
+                LatchedFaultReason = RoofControllerStopReason.RelayVerificationFailed
+            },
+            "unverified" => snapshot with { Status = RoofControllerStatus.Error, RelayRegisterState = RoofRelayRegisterState.Unverified, RelayRegisterMask = null },
+            "inputs" => snapshot with { InputsHealthy = false, ConsecutiveInputReadFailures = 2 },
+            "shutting-down" => snapshot with { IsShuttingDown = true },
+            "error" => snapshot with { Status = RoofControllerStatus.Error },
+            "unknown" => snapshot with { Status = RoofControllerStatus.Unknown },
+            _ => throw new ArgumentOutOfRangeException(nameof(state), state, null)
+        };
+        var service = new FakeRoofControllerService { Snapshot = snapshot };
+
+        var result = await CreateHealthCheck(service, hatConnection: HatConnections.Emulated("hat-emulator", 5391)).CheckHealthAsync(new HealthCheckContext());
+
+        result.Status.Should().Be(expectedStatus);
+        result.Description.Should().Be(expected);
+    }
+
+    [TestMethod]
+    public async Task InEmulatorMode_WithoutTheConnection_AFaultStillNamesTheEmulator()
+    {
+        var service = new FakeRoofControllerService
+        {
+            Snapshot = FakeRoofControllerService.HealthySnapshot() with { HatMode = RoofHatMode.Emulated, Status = RoofControllerStatus.Error }
+        };
+
+        var result = await CheckAsync(service);
+
+        result.Status.Should().Be(HealthStatus.Unhealthy);
+        result.Description.Should().Be("Roof controller is in error state (HAT emulator)");
     }
 
     [TestMethod]

@@ -350,15 +350,20 @@ Run on the Pi with the production image and configuration. Two variants, in this
   `HVO_EMULATED_ROOF_OTLP_ENDPOINT` is set: set it for the counter samples below. Its logs rotate as
   the Pi profiles' do.
 - **Bench:** the real HAT and VFD with the **motor decoupled**. Limit inputs are driven by a relay
-  board or switch box that the cycling script controls. Never the roof mechanism. The same script,
-  plus a camera stream opened and closed periodically.
+  board or switch box that the cycling script controls. Never the roof mechanism. The same script.
+
+Still open: soaking the camera proxy (a stream opened and closed periodically). The proxy does not
+depend on the HAT, but the `emulator` profile has no camera source yet. An emulated MJPEG source
+for that profile is an emulator gap, to be filled with the automated soak in #31.
 
 Sample every minute and keep the samples:
 
 - Container memory and CPU (`docker stats --no-stream`), thread count and open file descriptors
   of the app process (`/proc/<pid>/status`, `/proc/<pid>/fd`).
-- Container log size (the file at `docker inspect --format '{{.LogPath}}'`) and free space on the
-  SD card or SSD.
+- Container log size and free space on the SD card or SSD. Both compose profiles and the deploy
+  script use Docker's `local` log driver, which keeps the logs in the container's folder (and
+  leaves `docker inspect --format '{{.LogPath}}'` empty):
+  `sudo du -sb /var/lib/docker/containers/$(docker inspect --format '{{.Id}}' <name>)/local-logs`.
 - `/health/ready`, `relayRegisterState`, `inputsHealthy`, age of `lastSuccessfulInputReadUtc`,
   `consecutiveInputReadFailures`, `relayRegisterReadsHealthy`, age of
   `lastSuccessfulRelayReadUtc`, `consecutiveRelayReadFailures`, `statusVersion` (must only

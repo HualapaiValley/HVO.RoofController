@@ -826,6 +826,10 @@ test_emulator_mode_refuses_extra_args_that_reach_the_hat() {
       "--device=/dev/I2C-1:/dev/i2c-1|must not map an I2C device ('--device /dev/I2C-1:/dev/i2c-1')" \
       "--privileged|must not contain '--privileged' in HAT emulator mode: it maps every host device" \
       "--privileged=true|must not contain '--privileged=true' in HAT emulator mode" \
+      "--privileged=1|must not contain '--privileged=1' in HAT emulator mode" \
+      "--privileged=True|must not contain '--privileged=True' in HAT emulator mode" \
+      "--privileged=t|must not contain '--privileged=t' in HAT emulator mode" \
+      "--privileged=TRUE|must not contain '--privileged=TRUE' in HAT emulator mode" \
       "-v /dev:/dev|must not mount the host's /dev ('--volume /dev:/dev')" \
       "-v/dev/i2c-1:/dev/i2c-1|must not mount the host's /dev/i2c-1 ('--volume /dev/i2c-1:/dev/i2c-1')" \
       "-itv /:/host|must not mount the host's / ('--volume /:/host')" \
@@ -842,6 +846,17 @@ test_emulator_mode_refuses_extra_args_that_reach_the_hat() {
     assert_no_docker_calls "${value}"
   done
   assert_container roof-controller old true unless-stopped
+}
+
+test_emulator_mode_allows_privileged_false() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true \
+    "EXTRA_DOCKER_ARGS=--privileged=false --privileged=F --privileged=0"
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  jq -e 'index("--privileged=false") and index("--privileged=F") and index("--privileged=0")' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "EXTRA_DOCKER_ARGS not passed on: $(controller_run_args)"
 }
 
 test_physical_deploy_allows_extra_devices_and_mounts() {

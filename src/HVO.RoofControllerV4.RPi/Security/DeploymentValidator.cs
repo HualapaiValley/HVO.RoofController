@@ -205,6 +205,19 @@ public static partial class DeploymentValidator
 
         var settingsProblems = options.Validate();
         problems.AddRange(settingsProblems);
+
+        // No supported deployment has both: the deploy script maps no I2C device in emulator mode, and the emulator
+        // compose profile maps no devices. Both together mean emulator settings left behind on a physical deployment,
+        // typically in the secrets directory, which overrides the environment.
+        if (hatBusPresent)
+        {
+            problems.Add(
+                $"{HatEmulatorOptions.SectionName}:Enabled is true and the HAT's I2C device ({HatBusDevicePath}) is mapped. " +
+                "A physical deployment must not run on the HAT emulator, and an emulated one must not see the HAT. Remove " +
+                $"the {HatEmulatorOptions.SectionName} settings (check the secrets directory too, which overrides the " +
+                "environment) or the device mapping.");
+        }
+
         if (!environment.IsDevelopment() && !options.AllowOutsideDevelopment)
         {
             problems.Add(
@@ -219,12 +232,6 @@ public static partial class DeploymentValidator
             warnings.Add(
                 $"HAT emulator mode: the controller will use the HAT emulator at {options.Endpoint}, not the physical HAT. " +
                 "The roof will not move.");
-        }
-
-        if (hatBusPresent)
-        {
-            warnings.Add(
-                $"The HAT's I2C device ({HatBusDevicePath}) is mapped, but in HAT emulator mode the controller does not use it.");
         }
 
         return true;

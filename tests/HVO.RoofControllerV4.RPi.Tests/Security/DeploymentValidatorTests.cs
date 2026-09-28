@@ -755,17 +755,36 @@ public sealed class DeploymentValidatorTests
     }
 
     [TestMethod]
-    public void HatEmulatorMode_WithTheHatDeviceMapped_WarnsThatTheDeviceIsNotUsed()
+    [DataRow("Production", "true")]
+    [DataRow("Development", null)]
+    public void HatEmulatorMode_WithTheHatDeviceMapped_Fails(string environment, string? allow)
     {
         var configuration = OperatorKeys();
         configuration["RoofControllerSecurity:RequireHttps"] = "false";
         configuration["HatEmulator:Enabled"] = "true";
-        configuration["HatEmulator:AllowOutsideDevelopment"] = "true";
+        configuration["HatEmulator:Host"] = "hat-emulator";
+        configuration["HatEmulator:AllowOutsideDevelopment"] = allow;
 
-        var result = Validate(configuration, hatBusPresent: true);
+        var result = Validate(configuration, environment, hatBusPresent: true);
 
-        result.Problems.Should().BeEmpty();
-        result.Warnings.Should().Contain(warning => warning.Contains(DeploymentValidator.HatBusDevicePath) && warning.Contains("does not use it"));
+        result.Problems.Should().ContainSingle().Which.Should()
+            .StartWith($"HatEmulator:Enabled is true and the HAT's I2C device ({DeploymentValidator.HatBusDevicePath}) is mapped")
+            .And.Contain("secrets directory");
+    }
+
+    [TestMethod]
+    public void HatEmulatorMode_OutsideDevelopment_WithoutConsent_AndTheHatDeviceMapped_ReportsBoth()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["HatEmulator:Enabled"] = "true";
+        configuration["HatEmulator:Host"] = "hat-emulator";
+
+        var result = Validate(configuration, "Production", hatBusPresent: true);
+
+        result.Problems.Should().HaveCount(2)
+            .And.Contain(problem => problem.Contains(DeploymentValidator.HatBusDevicePath))
+            .And.Contain(problem => problem.Contains("without HatEmulator:AllowOutsideDevelopment"));
     }
 
     [TestMethod]
