@@ -15,7 +15,8 @@ public sealed class ApiKeyAuthenticationOptions : AuthenticationSchemeOptions
 
 /// <summary>
 /// Authenticates requests carrying <c>X-Api-Key</c>. A missing header yields no result (anonymous); a wrong key fails
-/// and is logged at Warning with the remote address (never the key). Challenges return 401 with
+/// and is logged at Warning with the remote address (never the key). A valid <c>X-On-Behalf-Of</c> name is kept on the
+/// principal for audit logs; it grants nothing. Challenges return 401 with
 /// <c>WWW-Authenticate: ApiKey</c>; forbidden returns 403. Never redirects.
 /// </summary>
 public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthenticationOptions>
@@ -51,7 +52,11 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAu
             return Task.FromResult(AuthenticateResult.Fail("Invalid API key."));
         }
 
-        var principal = RoofPrincipalFactory.Create(identity, Scheme.Name);
+        // The person the key's holder acts for (the web UI names who is signed in); for the audit log only.
+        var onBehalfOf = Request.Headers.TryGetValue(RoofIdentityContract.OnBehalfOfHeaderName, out var person) && person.Count == 1
+            ? person[0]
+            : null;
+        var principal = RoofPrincipalFactory.Create(identity, Scheme.Name, onBehalfOf);
         return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, Scheme.Name)));
     }
 

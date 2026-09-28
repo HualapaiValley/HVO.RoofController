@@ -2,7 +2,7 @@
 
 This page covers:
 
-- preparing the Pi (secrets, TLS certificate)
+- preparing the Pi (secrets, TLS certificate, identity store)
 - deploying with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` or `docker-compose.yaml`
 - the deployment check (`--validate-deployment`) both of them run first
 - how the controller is stopped safely during a deploy, verified afterwards and rolled back
@@ -84,7 +84,24 @@ start, because keys then cross the network in clear text. There is no mode where
 HTTPS listener: the deployment check rejects it, because every remote request would get 403 while `/health/ready`
 still passed.
 
-### 3. Operator key for the deploy script
+### 3. The identity store
+
+People, their sessions and the API keys added through the API live in the identity store, a file the controller writes
+(see [security.md](security.md#the-identity-store)). The deploy script and both Pi compose profiles mount
+`/var/lib/hvo-roof/identity` read-write at the same path in the container, and set
+`RoofControllerSecurity__Identity__StorePath` to `identity.json` inside it. Create the directory once:
+
+```bash
+sudo install -d -m 0700 /var/lib/hvo-roof/identity
+```
+
+The controller runs as root in its image, so root owning the directory is enough. Compose does not create it, and the
+[deployment check](#the-deployment-check) fails when it is missing or not writable. Back the directory up with the
+secrets directory: without it, every person, session and managed key is gone. To use another directory, set
+`IDENTITY_DIR` for the script or `HVO_ROOF_IDENTITY_DIR` for compose. The script and Compose use the same default, so
+people and sessions carry over when you [move between them](#moving-between-compose-and-the-deploy-script).
+
+### 4. Operator key for the deploy script
 
 The deploy script sends a Stop before replacing the running controller, and afterwards checks the new one with an
 authenticated Status and Stop. It uses an operator key, which must also be one of the keys in the secrets directory.
@@ -124,6 +141,9 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - a `Logging` level (`Logging:LogLevel:*` or `Logging:<provider>:LogLevel:*`, nested categories included) that is not
   a log level name, such as `Info`: the controller would not start
 - API key entries that would be ignored, no usable key, or no `RoofOperator`/`RoofAdmin` key
+- `RoofControllerSecurity:Identity` settings that the controller would refuse, or an identity store that cannot be
+  used: its directory is missing, a probe file cannot be written next to it, or the store file is not valid. The
+  check reads the file without changing it, so it is safe to run next to a running controller.
 - with `DeploymentCheck__DeployKeySha256` set (the deploy script sets it): no configured key has that SHA-256, or
   that key has neither the `RoofOperator` nor the `RoofAdmin` role
 - `RoofControllerSecurity:RequireHttps` in effect when Kestrel would not listen on HTTPS
@@ -143,7 +163,8 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - a configuration that cannot be loaded at all, such as a malformed settings file
 
 It warns on plain HTTP outside Development, a certificate that expires within 30 days, a certificate given only by
-store subject, `AllowAnonymousStop`, a misconfigured camera proxy (the roof still works), `AllowedHosts=*` in
+store subject, no identity store outside Development (people and sessions would be lost at each restart),
+`AllowAnonymousStop`, a misconfigured camera proxy (the roof still works), `AllowedHosts=*` in
 Production, and allowed HAT emulator mode (the roof will not move). It never prints key values, passwords or other
 setting values.
 
@@ -181,6 +202,7 @@ deploy.
 | `SECRETS_DIR` | `/etc/hvo-roof/secrets` | Secrets directory on the Pi |
 | `HTTPS_CERT_DIR` | (empty) | Certificate directory on the Pi. Required unless `ALLOW_INSECURE_HTTP=true`. |
 | `HTTPS_CERT_FILE` | `roof-controller.pfx` | PFX file name inside `HTTPS_CERT_DIR` |
+| `IDENTITY_DIR` | `/var/lib/hvo-roof/identity` | [Identity store](#3-the-identity-store) directory on the Pi, mounted read-write for the pre-flight and the controller. Empty keeps the store in memory: people, sessions and managed keys are lost at each restart. |
 | `ALLOW_INSECURE_HTTP` | `false` | Plain HTTP on `HOST_PORT` with `RoofControllerSecurity__RequireHttps=false` |
 | `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts`. A list must include `localhost`: the health check and the script's in-container calls use it. |
 | `REMOTE_CA_CERT` | (empty) | PEM file on this machine that verifies the Pi's certificate, for the remote check |
@@ -406,8 +428,9 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./d
 ```
 
 Both Pi profiles mirror the script: the secrets directory at `/run/secrets` (`HVO_ROOF_SECRETS_DIR`, default
-`/etc/hvo-roof/secrets`), `stop_grace_period: 30s`, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets and
-certificate directories must exist; compose does not create them.
+`/etc/hvo-roof/secrets`), the identity store directory (`HVO_ROOF_IDENTITY_DIR`, default `/var/lib/hvo-roof/identity`),
+`stop_grace_period: 30s`, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets, certificate and identity
+directories must exist; compose does not create them.
 
 Each Pi profile first runs the [deployment check](#the-deployment-check) as a one-shot service with the same environment
 and mounts (`roof-controller-check` or `roof-controller-lan-http-check`), and the new controller starts only if it
@@ -501,8 +524,11 @@ Compose ran; keep it under a tag of its own to return to it.
    ([above](#checking-a-compose-controller-from-another-machine)) and the checks in
    [After deploying](#after-deploying-checks-on-the-device).
 
+Both sides mount the same identity directory, so people, managed keys and open sessions carry over in both
+directions.
+
 `tests/emulator/deploy-scenarios.sh migration` runs both moves against the HAT emulator, with the refusals on each
-side (see [Container scenarios](emulator.md#container-scenarios)).
+side and a person whose session carries over (see [Container scenarios](emulator.md#container-scenarios)).
 
 ## Health and readiness
 

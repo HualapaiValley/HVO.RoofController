@@ -15,8 +15,11 @@ authenticated web console and HTTP API.
 - **Safety Systems** — see [Safety behavior](#safety-behavior); these are software
   controls and do not replace an independent hardware stop path
 - **GPIO / I2C** — direct hardware interface on Raspberry Pi for motor and sensor management
-- **Authenticated API** — every protected request needs an `X-Api-Key`; commands are `POST`
-  only ([docs/security.md](docs/security.md))
+- **Authenticated API** — every protected request needs an `X-Api-Key` or a person's session
+  token; commands are `POST` only ([docs/security.md](docs/security.md))
+- **People and sessions** — people sign in with a name and password, or a PIN at a kiosk;
+  admins manage people, API keys and sessions through the API
+  ([People, sessions and managed API keys](docs/security.md#people-sessions-and-managed-api-keys))
 - **Live status hub** — UI clients receive every status change, and a heartbeat each second,
   from the SignalR hub at `/hubs/roof` ([Status hub](docs/security.md#status-hub))
 - **Web Console** — browser-based roof control for desktop, tablet and phone; browser tests
@@ -138,7 +141,7 @@ HTTPS profile (`pi`, port 8443) and an explicit plain-HTTP profile for an isolat
 (`pi-lan-http`, port 8080); both run the deployment check before the controller starts. Its
 `emulator` profile runs the production settings against the HAT emulator container on any
 machine, for testing. See [docs/deployment.md](docs/deployment.md) for the full procedure,
-including the operator API key and TLS.
+including the operator API key, TLS and the identity store directory.
 
 For local development only (Development environment, against the HAT emulator container, no
 devices, on `http://localhost:5200`):
@@ -164,7 +167,7 @@ with the roof mechanism isolated.
 |----------|-------------|
 | [Roof controller hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md) | Canonical SMVector, relay, limit-switch, monitoring, and safety wiring reference |
 | [Commissioning](docs/commissioning.md) | Checks C1-C15 as automated scenarios against the emulated plant, and the installation assumptions each depends on |
-| [Security](docs/security.md) | API keys, roles, HTTPS and console sign-in |
+| [Security](docs/security.md) | API keys, roles, people and sessions, HTTPS and console sign-in |
 | [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
 | [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |
 | [CI runners](docs/ci-runners.md) | Active CI workflows and runner security settings |

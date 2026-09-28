@@ -26,9 +26,10 @@
 #                tests/emulator/compose-smoke-test.sh opens and closes the emulated roof through this profile.
 #
 # Each Pi profile first runs a one-shot deployment check (--validate-deployment) with the same environment and mounts,
-# and the new controller starts only if it passes: roof options valid, a usable RoofOperator or RoofAdmin key, and,
-# for HTTPS, a loadable, unexpired certificate with its private key. The check reads configuration; it maps
-# /dev/i2c-1 only to see whether the HAT is present and never opens it.
+# and the new controller starts only if it passes: roof options valid, a usable RoofOperator or RoofAdmin key, a
+# readable and writable identity store, and, for HTTPS, a loadable, unexpired certificate with its private key. The
+# check reads configuration and writes nothing but a probe file it removes at once; it maps /dev/i2c-1 only to see
+# whether the HAT is present and never opens it.
 # `up` stops and replaces a running controller before the check runs, so a failed check leaves NO controller
 # running. Run the check on its own first (docs/deployment.md):
 #   docker compose --profile pi build && docker compose --profile pi run --rm roof-controller-check
@@ -41,6 +42,8 @@ x-roof-environment: &roof-environment
   # deployment check then fails, because /dev/i2c-1 is mapped.
   HatEmulator__Enabled: "false"
   HatEmulator__AllowOutsideDevelopment: "false"
+  # People, sessions and managed API keys (the identity store), in the directory mounted by identity-mount.
+  RoofControllerSecurity__Identity__StorePath: /var/lib/hvo-roof/identity/identity.json
   # Host names/IPs clients use to reach the controller (semicolon-separated). A list must include localhost (the
   # health check calls it); "*" logs a startup warning.
   AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
@@ -79,6 +82,17 @@ x-cert-mount: &cert-mount
   source: ${HVO_ROOF_CERT_DIR:-/etc/hvo-roof/https}
   target: /https
   read_only: true
+  bind:
+    create_host_path: false
+
+# The identity store: people, sessions and managed API keys, kept in one owner-only file that the controller writes.
+# Read-write, and the directory must exist (sudo install -d -m 0700 /var/lib/hvo-roof/identity): it is not created,
+# so a mistyped path fails the deployment check instead of starting a controller that forgets everyone. Back it up with
+# the secrets directory.
+x-identity-mount: &identity-mount
+  type: bind
+  source: ${HVO_ROOF_IDENTITY_DIR:-/var/lib/hvo-roof/identity}
+  target: /var/lib/hvo-roof/identity
   bind:
     create_host_path: false
 
@@ -167,6 +181,7 @@ services:
     volumes:
       - *secrets-mount
       - *cert-mount
+      - *identity-mount
     profiles:
       - pi
 
@@ -182,6 +197,7 @@ services:
       - *thermal-mount
       - *secrets-mount
       - *cert-mount
+      - *identity-mount
     profiles:
       - pi
 
@@ -190,6 +206,7 @@ services:
     environment: *lan-http-environment
     volumes:
       - *secrets-mount
+      - *identity-mount
     profiles:
       - pi-lan-http
 
@@ -204,6 +221,7 @@ services:
     volumes:
       - *thermal-mount
       - *secrets-mount
+      - *identity-mount
     profiles:
       - pi-lan-http
 

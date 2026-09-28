@@ -186,7 +186,7 @@ public sealed class RoofStatusBroadcasterTests
     public async Task TheHeartbeat_IsDueOneIntervalAfterTheLastMessage()
     {
         var time = new TestSupport.ManualTimeProvider();
-        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, _keyStore, time, _logger, TimeSpan.FromSeconds(1), RoofStatusBroadcaster.DefaultMaxConnections);
+        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), time, _logger, TimeSpan.FromSeconds(1), RoofStatusBroadcaster.DefaultMaxConnections);
         await using var stopping = new AsyncBroadcaster(broadcaster);
         broadcaster.TryRegister("a", Viewer(), () => { });
         await broadcaster.StartAsync(CancellationToken.None);
@@ -258,7 +258,7 @@ public sealed class RoofStatusBroadcasterTests
         await WaitUntilAsync(() => Volatile.Read(ref viewerClosed) == 1, "the viewer connection to be closed");
         broadcaster.Value.ConnectionCount.Should().Be(1);
         Volatile.Read(ref operatorClosed).Should().Be(0, "the operator's key did not change");
-        _logger.Contains(LogLevel.Information, "key 'viewer' that opened it was removed, rotated or re-roled").Should().BeTrue();
+        _logger.Contains(LogLevel.Information, "key or session 'viewer' that opened it was removed, rotated, re-roled or ended").Should().BeTrue();
         _logger.Entries.Should().NotContain(e => e.Message.Contains(TestApiKeys.Viewer, StringComparison.Ordinal), "key values are never logged");
     }
 
@@ -308,8 +308,8 @@ public sealed class RoofStatusBroadcasterTests
         broadcaster.Value.TryRegister("b", Viewer(), () => { }).Should().BeTrue();
 
         broadcaster.Value.TryRegister("c", Viewer(), () => { }, out var refusal).Should().BeFalse();
-        refusal.Should().Be("The controller is not accepting more status connections for this key.");
-        _logger.Contains(LogLevel.Warning, "for this key. (2 are already open;").Should().BeTrue();
+        refusal.Should().Be("The controller is not accepting more status connections for this key or session.");
+        _logger.Contains(LogLevel.Warning, "for this key or session. (2 are already open;").Should().BeTrue();
         broadcaster.Value.TryRegister("d", Principal(TestApiKeys.Operator), () => { }).Should().BeTrue();
 
         broadcaster.Value.Unregister("a");
@@ -337,7 +337,7 @@ public sealed class RoofStatusBroadcasterTests
     public async Task ARefusedConnection_DoesNotReadTheController_AndRefusalsAreLoggedAtMostOnceAnInterval()
     {
         var time = new TestSupport.ManualTimeProvider();
-        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, _keyStore, time, _logger, NoHeartbeat, maxConnections: 1);
+        var broadcaster = new RoofStatusBroadcaster(_controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), time, _logger, NoHeartbeat, maxConnections: 1);
         await using var stopping = new AsyncBroadcaster(broadcaster);
         broadcaster.TryRegister("a", Viewer(), () => { }).Should().BeTrue();
         var reads = _controller.SnapshotCallCount;
@@ -390,7 +390,7 @@ public sealed class RoofStatusBroadcasterTests
         int maxConnectionsPerKey = RoofStatusBroadcaster.DefaultMaxConnectionsPerKey)
     {
         var broadcaster = new RoofStatusBroadcaster(
-            _controller, _sender, _keyStore, TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections, maxConnectionsPerKey);
+            _controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections, maxConnectionsPerKey);
         await broadcaster.StartAsync(CancellationToken.None);
         return new AsyncBroadcaster(broadcaster);
     }

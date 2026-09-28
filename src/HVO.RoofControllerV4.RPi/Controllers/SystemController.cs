@@ -14,11 +14,11 @@ using Microsoft.AspNetCore.Authorization;
 namespace HVO.RoofControllerV4.RPi.Controllers;
 
 /// <summary>
-/// Provides APIs for system-level administration and diagnostics. Requires an Admin API key (<c>X-Api-Key</c>).
+/// Provides APIs for system-level administration and diagnostics. Requires the Admin role (an <c>X-Api-Key</c> or an admin's session).
 /// </summary>
 [ApiController, ApiVersion("1.0"), Produces("application/json")]
 [Route("api/v{version:apiVersion}/System")]
-[Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
+[Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
 [ProducesResponseType(StatusCodes.Status401Unauthorized)]
 [ProducesResponseType(StatusCodes.Status403Forbidden)]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]

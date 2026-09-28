@@ -7,8 +7,23 @@ namespace HVO.RoofControllerV4.RPi.Security;
 /// </summary>
 public static class RoofControllerSecurityDefaults
 {
-    /// <summary>Header-based API key scheme. The only scheme accepted by <c>api/*</c> routes, so they never use cookies.</summary>
+    /// <summary>Header-based API key scheme (<c>X-Api-Key</c>).</summary>
     public const string ApiKeyScheme = RoofControllerApiContract.ApiKeyScheme;
+
+    /// <summary>Session scheme: <c>Authorization: Bearer &lt;token&gt;</c> from a sign-in.</summary>
+    public const string SessionScheme = "RoofSession";
+
+    /// <summary>
+    /// The scheme <c>api/*</c> routes, the status hub and OpenAPI accept: a session when the request carries
+    /// <c>Authorization: Bearer</c>, otherwise an API key. Never a cookie.
+    /// </summary>
+    public const string ApiScheme = "RoofApi";
+
+    /// <summary>
+    /// The scheme Stop accepts: like <see cref="ApiScheme"/>, except that when the session token is refused (ended, idle
+    /// or expired) an API key sent with it is tried, so a kiosk or UI can always stop with its own key.
+    /// </summary>
+    public const string StopScheme = "RoofStop";
 
     /// <summary>Cookie scheme used only by the Blazor console after an access-key login.</summary>
     public const string CookieScheme = "RoofConsoleCookie";

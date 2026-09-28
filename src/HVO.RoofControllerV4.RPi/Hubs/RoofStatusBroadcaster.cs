@@ -43,7 +43,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     public const int DefaultMaxConnections = RoofStatusHubContract.MaxConnections;
 
     /// <summary>
-    /// Most hub connections open at once with one API key, so one client that leaks connections (or one leaked key)
+    /// Most hub connections open at once with one API key or session, so one client that leaks connections (or one leaked key)
     /// cannot take every slot from the kiosk and the other UIs.
     /// </summary>
     public const int DefaultMaxConnectionsPerKey = RoofStatusHubContract.MaxConnectionsPerKey;
@@ -53,7 +53,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
 
     private readonly IRoofControllerServiceV4 _controller;
     private readonly IRoofStatusSender _sender;
-    private readonly RoofApiKeyStore _keyStore;
+    private readonly RoofCredentialValidator _credentials;
     private readonly TimeProvider _time;
     private readonly ILogger<RoofStatusBroadcaster> _logger;
     private readonly TimeSpan _heartbeatInterval;
@@ -72,17 +72,17 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     public RoofStatusBroadcaster(
         IRoofControllerServiceV4 controller,
         IRoofStatusSender sender,
-        RoofApiKeyStore keyStore,
+        RoofCredentialValidator credentials,
         TimeProvider time,
         ILogger<RoofStatusBroadcaster> logger)
-        : this(controller, sender, keyStore, time, logger, RoofStatusHubContract.HeartbeatInterval, DefaultMaxConnections, DefaultMaxConnectionsPerKey)
+        : this(controller, sender, credentials, time, logger, RoofStatusHubContract.HeartbeatInterval, DefaultMaxConnections, DefaultMaxConnectionsPerKey)
     {
     }
 
     internal RoofStatusBroadcaster(
         IRoofControllerServiceV4 controller,
         IRoofStatusSender sender,
-        RoofApiKeyStore keyStore,
+        RoofCredentialValidator credentials,
         TimeProvider time,
         ILogger<RoofStatusBroadcaster> logger,
         TimeSpan heartbeatInterval,
@@ -91,7 +91,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _sender = sender ?? throw new ArgumentNullException(nameof(sender));
-        _keyStore = keyStore ?? throw new ArgumentNullException(nameof(keyStore));
+        _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(heartbeatInterval, TimeSpan.Zero);
@@ -191,7 +191,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         ArgumentException.ThrowIfNullOrEmpty(connectionId);
         ArgumentNullException.ThrowIfNull(abort);
 
-        var keyId = user?.FindFirst(RoofPrincipalFactory.KeyIdClaimType)?.Value;
+        var keyId = RoofPrincipalFactory.GetCredentialId(user);
         int limit;
         lock (_gate)
         {
@@ -245,7 +245,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         if (keyId is not null && _subscribers.Values.Count(s => s.KeyId == keyId) >= _maxConnectionsPerKey)
         {
             limit = _maxConnectionsPerKey;
-            return "The controller is not accepting more status connections for this key.";
+            return "The controller is not accepting more status connections for this key or session.";
         }
 
         return null;
@@ -431,7 +431,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         List<Subscriber> revoked;
         lock (_gate)
         {
-            revoked = _subscribers.Values.Where(s => !RoofConsoleAuthenticationStateProvider.IsStillValid(_keyStore, s.User)).ToList();
+            revoked = _subscribers.Values.Where(s => !_credentials.IsStillValid(s.User)).ToList();
             foreach (var subscriber in revoked)
             {
                 _subscribers.Remove(subscriber.ConnectionId);
@@ -443,7 +443,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         foreach (var subscriber in revoked)
         {
             _logger.LogInformation(
-                "Status hub connection {ConnectionId} closed: the key '{KeyName}' that opened it was removed, rotated or re-roled.",
+                "Status hub connection {ConnectionId} closed: the key or session '{Caller}' that opened it was removed, rotated, re-roled or ended.",
                 subscriber.ConnectionId, subscriber.User?.Identity?.Name);
             Guarded(subscriber.Stop, subscriber.ConnectionId);
             Guarded(subscriber.Abort, subscriber.ConnectionId);
@@ -485,7 +485,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
 
         public ClaimsPrincipal? User { get; }
 
-        /// <summary>The identifier of the API key that opened the connection, or null.</summary>
+        /// <summary>The identifier of the API key or session that opened the connection, or null.</summary>
         public string? KeyId { get; }
 
         /// <summary>Completes when the send loop ends; never faults.</summary>

@@ -17,8 +17,8 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Controllers
 {
     /// <summary>
-    /// Roof Controller API v4.0 - controls the observatory roof. Accepts only the <c>X-Api-Key</c> header (never the
-    /// console cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
+    /// Roof Controller API v4.0 - controls the observatory roof. Accepts the <c>X-Api-Key</c> header or a session's
+    /// <c>Authorization: Bearer</c> token (never the console cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
     /// coherent status snapshot; refusals are RFC 7807 ProblemDetails with <c>code</c> and <c>roofStatus</c> extensions.
     /// </summary>
     // No class-level [Produces]: it would override the application/problem+json content type of refusals.
@@ -52,7 +52,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// </summary>
         /// <response code="200">Coherent status snapshot.</response>
         [HttpGet("Status", Name = nameof(GetRoofStatus))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         public ActionResult<RoofStatusResponse> GetRoofStatus()
         {
@@ -68,7 +68,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="409">Refused by an interlock (fault latched, limit, operation in progress).</response>
         /// <response code="503">Controller not ready (not initialized, shutting down, hardware or relay state unverified).</response>
         [HttpPost("Open", Name = nameof(DoRoofOpen))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
@@ -82,7 +82,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="409">Refused by an interlock (fault latched, limit, operation in progress).</response>
         /// <response code="503">Controller not ready (not initialized, shutting down, hardware or relay state unverified).</response>
         [HttpPost("Close", Name = nameof(DoRoofClose))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
@@ -95,7 +95,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="200">Stop verified; status snapshot after the command.</response>
         /// <response code="503">The stop could not be verified (relay register unverified) or hardware is unavailable.</response>
         [HttpPost("Stop", Name = nameof(DoRoofStop))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.StopPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.StopScheme, Policy = RoofControllerSecurityDefaults.StopPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
         public ActionResult<RoofStatusResponse> DoRoofStop()
@@ -107,7 +107,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="200">Lease renewed; status snapshot after the command.</response>
         /// <response code="409">No lease is active (roof not moving or lease disabled).</response>
         [HttpPost("Lease", Name = nameof(RenewRoofLease))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
         public ActionResult<RoofStatusResponse> RenewRoofLease()
@@ -122,7 +122,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="400">pulseMs out of range.</response>
         /// <response code="409">Refused (roof moving, another clear in progress).</response>
         [HttpPost("ClearFault", Name = nameof(DoClearFault))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
@@ -148,7 +148,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// </summary>
         /// <response code="200">Configuration snapshot including its Version.</response>
         [HttpGet("Configuration", Name = nameof(GetRoofConfiguration))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
         [ProducesResponseType(typeof(RoofConfigurationResponse), StatusCodes.Status200OK)]
         public ActionResult<RoofConfigurationResponse> GetRoofConfiguration()
         {
@@ -166,7 +166,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="400">Missing or invalid values.</response>
         /// <response code="409">Version conflict, unconfirmed safety-critical change, or refused by the controller.</response>
         [HttpPost("Configuration", Name = nameof(UpdateRoofConfiguration))]
-        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiKeyScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
+        [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
         [ProducesResponseType(typeof(RoofConfigurationResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]

@@ -321,7 +321,9 @@ test_https_deploy_validates_first_publishes_only_https_and_keeps_previous() {
     || fail_test "expected only 8443 published: ${run}"
   for expected in "ASPNETCORE_URLS=http://localhost:8080;https://+:8443" "RoofControllerSecurity__RequireHttps=true" \
       "Kestrel__Certificates__Default__Path=/https/roof-controller.pfx" \
-      "type=bind,src=/etc/hvo-roof/https,dst=/https,readonly" "type=bind,src=/etc/hvo-roof/secrets,dst=/run/secrets,readonly"; do
+      "type=bind,src=/etc/hvo-roof/https,dst=/https,readonly" "type=bind,src=/etc/hvo-roof/secrets,dst=/run/secrets,readonly" \
+      "type=bind,src=/var/lib/hvo-roof/identity,dst=/var/lib/hvo-roof/identity" \
+      "RoofControllerSecurity__Identity__StorePath=/var/lib/hvo-roof/identity/identity.json"; do
     jq -e --arg value "${expected}" 'index($value)' <<<"${run}" >/dev/null || fail_test "controller run lacks ${expected}"
   done
 
@@ -355,6 +357,33 @@ test_failed_preflight_leaves_running_controller_untouched() {
   assert_container roof-controller old true unless-stopped
   [[ -z "$(docker_calls stop)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "the controller was stopped, renamed or replaced"
   [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested before the pre-flight passed"
+}
+
+test_identity_dir_is_mounted_read_write_for_the_check_and_the_controller() {
+  seed_container roof-controller old true 8080:8080
+  deploy ALLOW_INSECURE_HTTP=true IDENTITY_DIR=/srv/roof/identity
+
+  assert_status 0
+  local call
+  for call in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e 'index("type=bind,src=/srv/roof/identity,dst=/var/lib/hvo-roof/identity")
+           and index("RoofControllerSecurity__Identity__StorePath=/var/lib/hvo-roof/identity/identity.json")
+           and (map(select(startswith("type=bind,src=/srv/roof/identity") and contains("readonly"))) | length == 0)' \
+      <<<"${call}" >/dev/null || fail_test "the identity directory is not mounted read-write with the store path: ${call}"
+  done
+}
+
+test_an_empty_identity_dir_keeps_the_store_in_memory() {
+  seed_container roof-controller old true 8080:8080
+  deploy ALLOW_INSECURE_HTTP=true IDENTITY_DIR=
+
+  assert_status 0
+  local call
+  for call in "$(preflight_args)" "$(controller_run_args)"; do
+    [[ -n "${call}" ]] || fail_test "a docker run is missing"
+    jq -e 'map(select(contains("hvo-roof/identity") or startswith("RoofControllerSecurity__Identity__"))) | length == 0' \
+      <<<"${call}" >/dev/null || fail_test "an empty IDENTITY_DIR still mounts or configures the identity store: ${call}"
+  done
 }
 
 test_requires_certificate_or_explicit_insecure_opt_in() {
@@ -817,6 +846,7 @@ test_dry_run_changes_nothing() {
   assert_status 0
   assert_output_contains "[dry-run] relayRegisterState=Verified relayRegisterMask=0 commandedMotion=None"
   assert_output_contains "GET Status at https://pi.test:8443 from this machine -> HTTP 200"
+  assert_output_contains "identity dir: /var/lib/hvo-roof/identity;"
   [[ -z "$(docker_calls run)$(docker_calls stop)$(docker_calls rename)$(docker_calls buildx)" ]] || fail_test "dry run changed something"
   assert_container roof-controller old true
 }

@@ -51,6 +51,16 @@ public static class RoofControllerApiContract
         RoofControllerErrorCode.ConfigurationVersionConflict => 409,
         RoofControllerErrorCode.ConfigurationRejected => 409,
         RoofControllerErrorCode.InvalidRequest => 400,
+        RoofControllerErrorCode.SignInFailed => 401,
+        RoofControllerErrorCode.SignInLockedOut => 429,
+        RoofControllerErrorCode.SignInBusy => 429,
+        RoofControllerErrorCode.KioskKeyRequired => 403,
+        RoofControllerErrorCode.IdentityNotFound => 404,
+        RoofControllerErrorCode.IdentityNameConflict => 409,
+        RoofControllerErrorCode.IdentityReadOnly => 409,
+        RoofControllerErrorCode.LastAdministrator => 409,
+        RoofControllerErrorCode.IdentityStoreUnavailable => 503,
+        RoofControllerErrorCode.CredentialNotAllowed => 403,
         _ => 500
     };
 }

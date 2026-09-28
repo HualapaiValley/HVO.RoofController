@@ -127,6 +127,96 @@ public sealed class DeploymentValidatorTests
     }
 
     [TestMethod]
+    public void NoIdentityStore_WarnsOutsideDevelopment()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+
+        var production = Validate(configuration);
+        var development = Validate(configuration, Environments.Development);
+
+        production.Problems.Should().BeEmpty();
+        production.Warnings.Should().ContainSingle(warning => warning.StartsWith("No identity store is configured"));
+        development.Warnings.Should().NotContain(warning => warning.Contains("identity store"));
+    }
+
+    [TestMethod]
+    public void AWritableIdentityStore_Passes_AndLeavesNothingBehind()
+    {
+        var path = Path.Combine(_directory, "identity.json");
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["RoofControllerSecurity:Identity:StorePath"] = path;
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().BeEmpty();
+        result.Notes.Should().Contain($"Identity store: {path}.");
+        result.Warnings.Should().NotContain(warning => warning.Contains("identity store", StringComparison.OrdinalIgnoreCase));
+        Directory.EnumerateFileSystemEntries(_directory).Should().BeEmpty("the check neither creates the store nor leaves its probe file");
+    }
+
+    [TestMethod]
+    public void TheIdentityCheck_KeepsTheRunningControllersSaveInProgress()
+    {
+        var path = Path.Combine(_directory, "identity.json");
+        var inProgress = path + ".0123456789abcdef0123456789abcdef.tmp";
+        File.WriteAllText(inProgress, "{");
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["RoofControllerSecurity:Identity:StorePath"] = path;
+
+        Validate(configuration).Problems.Should().BeEmpty();
+
+        File.Exists(inProgress).Should().BeTrue("the old controller is still running while the check runs");
+    }
+
+    [TestMethod]
+    [DataRow("missing-directory", "does not exist")]
+    [DataRow("corrupt-file", "is not valid JSON")]
+    [DataRow("bad-threshold", "LockoutThreshold must be at least 1")]
+    [DataRow("bad-duration", "the value of RoofControllerSecurity:Identity:SessionLifetime is not a valid System.TimeSpan")]
+    [DataRow("root-path", "must name a file in a directory")]
+    [DataRow("directory-path", "is a directory")]
+    [DataRow("bad-rate-limit", "SignInAttemptsPerMinute must be between 0 (off) and 10000")]
+    public void AnUnusableIdentityStore_OrBadIdentitySettings_Fail(string setup, string expected)
+    {
+        var path = Path.Combine(_directory, "identity.json");
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["RoofControllerSecurity:Identity:StorePath"] = path;
+        switch (setup)
+        {
+            case "missing-directory":
+                configuration["RoofControllerSecurity:Identity:StorePath"] = Path.Combine(_directory, "missing", "identity.json");
+                break;
+            case "corrupt-file":
+                File.WriteAllText(path, "{ not json");
+                break;
+            case "bad-threshold":
+                configuration["RoofControllerSecurity:Identity:LockoutThreshold"] = "0";
+                break;
+            case "bad-duration":
+                configuration["RoofControllerSecurity:Identity:SessionLifetime"] = "soon";
+                break;
+            case "root-path":
+                configuration["RoofControllerSecurity:Identity:StorePath"] = "/";
+                break;
+            case "directory-path":
+                Directory.CreateDirectory(path);
+                break;
+            case "bad-rate-limit":
+                configuration["RoofControllerSecurity:Identity:SignInAttemptsPerMinute"] = "-1";
+                break;
+        }
+
+        var result = Validate(configuration);
+
+        result.IsValid.Should().BeFalse();
+        result.Problems.Should().ContainSingle().Which.Should().Contain(expected);
+    }
+
+    [TestMethod]
     public void InvalidRoofOptions_Fail()
     {
         var configuration = OperatorKeys();

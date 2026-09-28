@@ -41,7 +41,9 @@ public sealed class SecurityHostingTests
         // The Blazor boot script fetches its JS initializers before anyone signs in; BlazorHubAuthorizationMiddleware exempts it.
         "GET /_blazor/initializers",
         // Framework helper that turns an interactive navigation into a redirect; it serves no content of its own.
-        "GET /_framework/opaque-redirect"
+        "GET /_framework/opaque-redirect",
+        // Signing in with a name and password is how a person without a key gets a session token.
+        "POST /api/v4.0/Auth/Session"
     ];
 
     /// <summary>Development only: the OpenAPI document and the Scalar reference are open for local work.</summary>
@@ -203,7 +205,10 @@ public sealed class SecurityHostingTests
             "GET /api/v4.0/RoofControl/Configuration",
             "POST /api/v4.0/RoofControl/Configuration",
             "GET /api/v1.0/System/info",
-            "GET /api/v1.0/System/metrics"
+            "GET /api/v1.0/System/metrics",
+            "POST /api/v4.0/Auth/Pin",
+            "GET /api/v4.0/Identity/Users",
+            "DELETE /api/v4.0/Identity/Sessions/sample-id"
         ]);
         host.RoofService.Verify(s => s.Open(), Times.Never);
         host.RoofService.Verify(s => s.Close(), Times.Never);
@@ -276,6 +281,8 @@ public sealed class SecurityHostingTests
             ?? throw new AssertFailedException($"'{route.RoutePattern.RawText}' has no API version."),
         "cameraId" => "1",
         "documentName" => "v4",
+        "name" => "sample-name",
+        "id" => "sample-id",
         _ => throw new AssertFailedException($"No sample value for '{{{parameter}}}' in '{route.RoutePattern.RawText}'; add one.")
     };
 
