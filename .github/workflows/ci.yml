@@ -176,6 +176,20 @@ jobs:
               exit 1
             }
           done
+          # Every Pi service (the check and the controller) keeps the identity store in the writable identity mount:
+          # the check probes that it can write there, and a store outside a mount is lost when the container is replaced.
+          for profile in pi pi-lan-http; do
+            docker compose --profile "${profile}" config --format json | jq -e '
+              [.services[]
+                | .environment.RoofControllerSecurity__Identity__StorePath as $store
+                | ($store | type) == "string"
+                  and ([.volumes[] | select(.target == "/var/lib/hvo-roof/identity" and (.read_only // false | not))] | length) == 1
+                  and ($store | startswith("/var/lib/hvo-roof/identity/"))]
+              | length == 2 and all' >/dev/null || {
+              echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the ${profile} services do not all keep the identity store in a writable mount"
+              exit 1
+            }
+          done
           # Both profiles at once must be rejected: they would drive the HAT twice.
           if docker compose --profile pi --profile pi-lan-http config --quiet 2>/dev/null; then
             echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the pi and pi-lan-http profiles can be enabled together"

@@ -11,7 +11,9 @@
 #   migration  A controller moved from the Compose `pi` profile to the deploy script and back to the Compose version,
 #              following "Moving between Compose and the deploy script" in docs/deployment.md, and the refusals that
 #              keep the two from managing the same controller. The script's --verify-remote checks each Compose
-#              controller from this machine without Docker, and rejects a key the controller does not know.
+#              controller from this machine without Docker, and rejects a key the controller does not know. A person
+#              added on the Compose controller, and the session they opened there, still work after each move: both
+#              mount the same identity directory.
 #
 # Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It runs only against the local Docker daemon
 # (the default context, with DOCKER_HOST unset or a unix socket), not on a Raspberry Pi, and touches no hardware: the
@@ -173,6 +175,33 @@ roof_post() {
   response=$(roof_call POST "$1") || fail "POST $1 failed"
   [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || fail "POST $1 answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
   sed '$d' <<<"${response}"
+}
+
+# identity_call <method> <path under api/v4.0> [JSON body file]: as the scenario's admin key, the key on stdin. Prints the
+# body, then the HTTP status on the last line.
+identity_call() {
+  local body=()
+  [[ -n "${3:-}" ]] && body=(-H 'Content-Type: application/json' --data-binary "@$3")
+  printf 'X-Api-Key: %s\n' "${admin_key}" \
+    | curl -sS --max-time 15 --cacert "${work}/ca.pem" -X "$1" -H @- -H 'Accept: application/json' ${body[@]+"${body[@]}"} \
+        -w '\n%{http_code}' "${roof}/api/v4.0/$2"
+}
+
+# person_signs_in: the scenario's person signs in with a name and password (no key) and GET Auth/Me knows them.
+person_signs_in() {
+  local response token
+  response=$(curl -sS --max-time 15 --cacert "${work}/ca.pem" -X POST -H 'Content-Type: application/json' \
+    --data-binary "@${work}/sign-in.json" -w '\n%{http_code}' "${roof}/api/v4.0/Auth/Session") || return 1
+  [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || return 1
+  token=$(sed '$d' <<<"${response}" | jq -r '.token')
+  session_knows_person "${token}"
+}
+
+# session_knows_person <token>: GET Auth/Me with the session's bearer token (on stdin) answers as the scenario's person.
+session_knows_person() {
+  printf 'Authorization: Bearer %s\n' "$1" \
+    | curl -fsS --max-time 15 --cacert "${work}/ca.pem" -H @- "${roof}/api/v4.0/Auth/Me" \
+    | jq -e '.name == "scenario-person" and .kind == "Session"' >/dev/null
 }
 
 controller_ready() {
@@ -343,7 +372,7 @@ run_deploy() {
   set +e
   env PI_HOST=127.0.0.1 DOCKER_CONTEXT=default IMAGE_TAG="${image}" BUILD_PLATFORM="${platform}" \
     HTTPS_HOST_PORT="${https_port}" HTTPS_CERT_DIR="${work}/certs" REMOTE_CA_CERT="${work}/ca.pem" \
-    SECRETS_DIR="${work}/secrets" ROOF_OPERATOR_API_KEY="${operator_key}" \
+    SECRETS_DIR="${work}/secrets" IDENTITY_DIR="${work}/identity" ROOF_OPERATOR_API_KEY="${operator_key}" \
     HAT_EMULATOR_ENDPOINT="${emulator_name}:5291" ALLOW_EMULATED_HAT=true EXTRA_DOCKER_ARGS="--network ${network}" \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 POLL_INTERVAL_SECONDS=0.5 \
     ${env_pairs[@]+"${env_pairs[@]}"} \
@@ -394,6 +423,7 @@ setup() {
   owns_resources=1
 
   operator_key=$(openssl rand -hex 24)
+  admin_key=$(openssl rand -hex 24)
   other_key=$(openssl rand -hex 24)
   pfx_password=$(openssl rand -hex 16)
 
@@ -419,6 +449,16 @@ setup() {
   secrets_dir "${work}/secrets" RoofOperator "${pfx_password}"
   secrets_dir "${work}/secrets-wrong-password" RoofOperator "not-the-${pfx_password}"
   secrets_dir "${work}/secrets-viewer-only" RoofViewer "${pfx_password}"
+  # An admin key for the identity checks, in the main secrets directory only: the pre-flight cases that use the other
+  # directories must find no usable key but the operator's.
+  printf '%s' scenario-admin > "${work}/secrets/RoofControllerSecurity__ApiKeys__1__Name"
+  printf '%s' RoofAdmin > "${work}/secrets/RoofControllerSecurity__ApiKeys__1__Role"
+  printf '%s' "${admin_key}" > "${work}/secrets/RoofControllerSecurity__ApiKeys__1__Key"
+  chmod 600 "${work}/secrets"/RoofControllerSecurity__ApiKeys__1__*
+  # The identity store's directory, as docs/deployment.md has it created: the controller (root in its image) writes
+  # identity.json there.
+  mkdir -p "${work}/identity"
+  chmod 700 "${work}/identity"
   # The camera proxy reads the emulator's camera, as it reads Blue Iris on the Pi (C11).
   printf '%s' "http://${emulator_name}:5290" > "${work}/secrets/BlueIris__BaseUrl"
   chmod 600 "${work}/secrets/BlueIris__BaseUrl"
@@ -469,6 +509,9 @@ services:
         source: ${work}/certs
         target: /https
         read_only: true
+      - type: bind
+        source: ${work}/identity
+        target: /var/lib/hvo-roof/identity
     networks:
       - hat
 networks:
@@ -479,8 +522,8 @@ YAML
 }
 
 compose() {
-  HVO_ROOF_SECRETS_DIR="${work}/secrets" HVO_ROOF_CERT_DIR="${work}/certs" OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
-    docker compose -f "${compose_file}" -f "${work}/compose.override.yaml" -p "${compose_project}" --profile pi "$@"
+  HVO_ROOF_SECRETS_DIR="${work}/secrets" HVO_ROOF_CERT_DIR="${work}/certs" HVO_ROOF_IDENTITY_DIR="${work}/identity" \
+    OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 docker compose -f "${compose_file}" -f "${work}/compose.override.yaml" -p "${compose_project}" --profile pi "$@"
 }
 
 # Closes the roof to its limit through the controller, so a check starts from a known place.
@@ -880,6 +923,23 @@ scenario_migration() {
   assert_relays_off
   pass "the pi profile runs ${controller} on the emulator (project ${compose_project})"
 
+  current_check="Migration: a person added on the Compose controller"
+  local password response compose_session
+  password=$(openssl rand -hex 16)
+  jq -n --arg password "${password}" '{name: "scenario-person", role: "RoofOperator", password: $password}' > "${work}/person.json"
+  jq -n --arg password "${password}" '{name: "scenario-person", password: $password}' > "${work}/sign-in.json"
+  response=$(identity_call POST Identity/Users "${work}/person.json")
+  [[ "$(tail -n 1 <<<"${response}")" == 201 ]] || fail "adding a person answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
+  response=$(curl -sS --max-time 15 --cacert "${work}/ca.pem" -X POST -H 'Content-Type: application/json' \
+    --data-binary "@${work}/sign-in.json" "${roof}/api/v4.0/Auth/Session")
+  compose_session=$(jq -r '.token // empty' <<<"${response}")
+  [[ -n "${compose_session}" ]] || fail "the person could not sign in on the Compose controller"
+  session_knows_person "${compose_session}" || fail "the Compose controller does not know the person's session"
+  [[ -f "${work}/identity/identity.json" ]] || fail "the Compose controller did not save identity.json in the identity mount"
+  [[ "$(stat -c %a "${work}/identity/identity.json")" == 600 ]] \
+    || fail "identity.json is mode $(stat -c %a "${work}/identity/identity.json"), not 600"
+  pass "an admin added a person, who signed in; identity.json is saved in the identity mount, mode 600"
+
   # The remote check of a Compose deployment. The Docker context does not exist, so any Docker call would fail.
   current_check="Migration: --verify-remote checks the Compose controller"
   deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
@@ -921,8 +981,10 @@ scenario_migration() {
   [[ -z "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${controller}")" ]] \
     || fail "the script's controller carries a Compose label"
   [[ "$(container_image "${controller}")" != "${compose_image}" ]] || fail "the script's controller runs the Compose version"
+  session_knows_person "${compose_session}" || fail "the session opened on the Compose controller does not work on the script's"
+  person_signs_in || fail "the person added on the Compose controller cannot sign in on the script's"
   assert_relays_off
-  pass "a verified Stop (--verify-remote), the Compose version tagged ${image}-compose, compose down, then the script deployed in ${DEPLOY_SECONDS} s"
+  pass "a verified Stop (--verify-remote), the Compose version tagged ${image}-compose, compose down, then the script deployed in ${DEPLOY_SECONDS} s; the person and their session carried over"
 
   current_check="Migration: Compose refuses while the script's controller exists"
   if compose up -d --no-build roof-controller >/dev/null 2>"${work}/compose.err"; then
@@ -950,8 +1012,9 @@ scenario_migration() {
   [[ "$(container_image "${controller}")" == "${compose_image}" ]] || fail "Compose does not run the Compose version again"
   deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
   (( DEPLOY_STATUS == 0 )) || fail "--verify-remote failed on the Compose version (exit ${DEPLOY_STATUS})"
+  person_signs_in || fail "the person cannot sign in on the Compose version again"
   assert_relays_off
-  pass "a verified Stop (--verify-remote), docker stop and rm, the Compose version tagged back, then the check, compose up and --verify-remote: the Compose version runs again"
+  pass "a verified Stop (--verify-remote), docker stop and rm, the Compose version tagged back, then the check, compose up and --verify-remote: the Compose version runs again, and the person still signs in"
 
   compose down >/dev/null 2>&1
   docker rmi "${image}-compose" >/dev/null 2>&1 || true

@@ -6,8 +6,9 @@ set -euo pipefail
 # 0. Settings are checked before any Docker call (numbers, EXTRA_DOCKER_ARGS, the HTTPS choice). If Docker cannot
 #    report the containers' state, the script stops without changing anything.
 # 1. Pre-flight: the new image runs --validate-deployment on the Pi with the final container's environment, devices,
-#    secrets and certificate mounts (roof options, a usable RoofOperator/RoofAdmin key, this script's key, the
-#    HTTPS listener and certificate). If it fails, the running controller is not touched.
+#    secrets, identity and certificate mounts (roof options, a usable RoofOperator/RoofAdmin key, this script's key, a
+#    readable and writable identity store, the HTTPS listener and certificate). If it fails, the running controller is
+#    not touched.
 # 2. The running controller is replaced only after a VERIFIED stop: POST /Stop (from inside the container, over
 #    loopback) must return 200 with relayRegisterState=Verified, relayRegisterMask=0 and commandedMotion=None.
 #    Anything else aborts, unless --force-unverified-stop is given AND the operator types a confirmation. The old
@@ -100,6 +101,10 @@ ALLOW_EMULATED_HAT=${ALLOW_EMULATED_HAT:-false}
 # Directory ON THE PI holding one file per secret setting (API keys, Blue Iris password, certificate password),
 # mounted read-only at /run/secrets. See docs/security.md for the file names.
 SECRETS_DIR=${SECRETS_DIR:-/etc/hvo-roof/secrets}
+# Directory ON THE PI holding the identity store (people, sessions and managed API keys), mounted read-write at
+# /var/lib/hvo-roof/identity. It must exist (sudo install -d -m 0700 /var/lib/hvo-roof/identity). Set it to an empty
+# value to keep them in memory instead, where a restart forgets them (test rigs only; the pre-flight check warns).
+IDENTITY_DIR=${IDENTITY_DIR-/var/lib/hvo-roof/identity}
 # Directory ON THE PI holding the TLS certificate (PFX). Required unless ALLOW_INSECURE_HTTP=true.
 HTTPS_CERT_DIR=${HTTPS_CERT_DIR:-}
 HTTPS_CERT_FILE=${HTTPS_CERT_FILE:-roof-controller.pfx}
@@ -973,7 +978,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] Would build ${IMAGE_TAG} for ${BUILD_PLATFORM}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
     echo "[dry-run] HAT: ${HAT_SUMMARY}"
   fi
-  echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
+  echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; identity dir: ${IDENTITY_DIR:-<none, kept in memory>}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
   exit 0
 fi
 
@@ -1086,6 +1091,14 @@ container_args=(
   --env "OTEL_METRIC_EXPORT_INTERVAL=${OTEL_METRIC_EXPORT_INTERVAL}"
   --mount "type=bind,src=${SECRETS_DIR},dst=/run/secrets,readonly"
 )
+
+if [[ -n "${IDENTITY_DIR}" ]]; then
+  # Read-write: the controller saves the store here, and the pre-flight check makes sure it can.
+  container_args+=(
+    --mount "type=bind,src=${IDENTITY_DIR},dst=/var/lib/hvo-roof/identity"
+    --env "RoofControllerSecurity__Identity__StorePath=/var/lib/hvo-roof/identity/identity.json"
+  )
+fi
 
 if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
   # The HAT emulator answers the HAT's registers. No host device or Pi file is mapped: not the HAT's I2C device, so this
