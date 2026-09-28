@@ -86,6 +86,48 @@ public sealed class RoofStatusHubTests
     }
 
     [TestMethod]
+    public async Task AClientThatNeverReads_DelaysNeitherStatusChanges_NorOtherClients()
+    {
+        var sends = new SendTracker();
+        using var host = new RoofApiTestHost(configureServices: services =>
+            services.AddSingleton<IRoofStatusSender>(provider => sends.Wrap(ActivatorUtilities.CreateInstance<HubRoofStatusSender>(provider))));
+        await using var live = await StatusHub.ConnectAsync(host, TestApiKeys.Viewer);
+        await live.NextAsync();
+
+        // A long-polling client that completes the handshake and then never polls: what the server sends it stays in
+        // the connection's transport buffer until that is full, and then the send to it waits.
+        using var stalled = host.CreateApiClient(TestApiKeys.Viewer);
+        var negotiated = await ApiJson.ReadElementAsync(await stalled.PostAsync($"{RoofStatusHubContract.Path}/negotiate?negotiateVersion=1", content: null));
+        var stalledId = negotiated.GetProperty("connectionId").GetString()!;
+        var poll = $"{RoofStatusHubContract.Path}?id={Uri.EscapeDataString(negotiated.GetProperty("connectionToken").GetString()!)}";
+        (await stalled.GetAsync(poll)).StatusCode.Should().Be(HttpStatusCode.OK, "the first poll opens the connection");
+        (await stalled.PostAsync(poll, new StringContent("{\"protocol\":\"json\",\"version\":1}\u001e"))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var version = 11L;
+        var clock = Stopwatch.StartNew();
+        while (sends.WaitingFor(stalledId) < TimeSpan.FromMilliseconds(500))
+        {
+            clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "the stalled client's buffer should fill and hold up its sends");
+            host.RoofService.Raise(s => s.StatusChanged += null, new RoofStatusChangedEventArgs(RoofServiceMock.Snapshot() with { StatusVersion = ++version }));
+            await Task.Delay(2);
+        }
+
+        var raising = Task.Run(() =>
+        {
+            for (var i = 0; i < 500; i++)
+            {
+                host.RoofService.Raise(s => s.StatusChanged += null, new RoofStatusChangedEventArgs(RoofServiceMock.Snapshot() with { StatusVersion = ++version }));
+            }
+        });
+        (await Task.WhenAny(raising, Task.Delay(TimeSpan.FromSeconds(10)))).Should().BeSameAs(raising, "the controller's status dispatcher never waits for a client");
+
+        var last = version;
+        await live.UntilAsync(m => m.Status.StatusVersion == last);
+        sends.WaitingFor(stalledId).Should().BeGreaterThan(TimeSpan.FromMilliseconds(500), "the stalled client is still not reading");
+        host.Services.GetRequiredService<RoofStatusBroadcaster>().ConnectionCount.Should().Be(2);
+    }
+
+    [TestMethod]
     public async Task WhileNothingChanges_AHeartbeatArrivesAboutOnceASecond()
     {
         using var host = new RoofApiTestHost();
@@ -433,5 +475,33 @@ internal sealed class StatusHub : IAsyncDisposable
     {
         await Connection.DisposeAsync();
         _pending.Dispose();
+    }
+}
+
+/// <summary>Wraps the hub's sender and records how long the send to each connection has been waiting.</summary>
+internal sealed class SendTracker
+{
+    private readonly ConcurrentDictionary<string, long> _waitingSince = new(StringComparer.Ordinal);
+
+    public IRoofStatusSender Wrap(IRoofStatusSender inner) => new Tracking(inner, this);
+
+    /// <summary>How long the send in progress to <paramref name="connectionId"/> has waited; zero when none is.</summary>
+    public TimeSpan WaitingFor(string connectionId)
+        => _waitingSince.TryGetValue(connectionId, out var since) ? Stopwatch.GetElapsedTime(since) : TimeSpan.Zero;
+
+    private sealed class Tracking(IRoofStatusSender inner, SendTracker tracker) : IRoofStatusSender
+    {
+        public async Task SendAsync(string connectionId, RoofStatusHubMessage message, CancellationToken cancellationToken)
+        {
+            tracker._waitingSince[connectionId] = Stopwatch.GetTimestamp();
+            try
+            {
+                await inner.SendAsync(connectionId, message, cancellationToken);
+            }
+            finally
+            {
+                tracker._waitingSince.TryRemove(connectionId, out _);
+            }
+        }
     }
 }
