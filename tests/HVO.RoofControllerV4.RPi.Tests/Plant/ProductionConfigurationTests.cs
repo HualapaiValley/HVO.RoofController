@@ -34,6 +34,7 @@ public class ProductionConfigurationTests
         options.AllowIgnoringLimitSwitchesOnPhysicalHardware.Should().BeFalse();
         options.AtSpeedConfirmationTimeout.Should().Be(TimeSpan.FromSeconds(3), "IN4 carries the drive's run output (P142 = 1)");
         options.SafetyWatchdogTimeout.Should().Be(TimeSpan.FromSeconds(150));
+        options.MaxConsecutiveInputReadFailures.Should().Be(3);
         options.DepartureReleaseTimeout.Should().BeNull("it must be set against the release time with the installed P104 before it is turned on");
     }
 }

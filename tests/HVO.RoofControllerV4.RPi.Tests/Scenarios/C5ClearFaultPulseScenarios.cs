@@ -24,6 +24,7 @@ public sealed class C5ClearFaultPulseScenarios
     [TestMethod]
     [CommissioningCheck("C5", "1")]
     [CommissioningCheck("C5", "4")]
+    [CommissioningCheck("C4", "5")]
     public async Task TheDefaultPulse_ClosesRly3ForItsLength_AndResetsTheTrippedDrive()
     {
         await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production());

@@ -69,6 +69,7 @@ public sealed class LifecycleScenarios
     }
 
     [TestMethod]
+    [CommissioningCheck("C11")]
     public async Task ACrash_DuringTravel_LeavesTheRelaysHeld_AndTheRestartedControllerTurnsThemOff()
     {
         await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production(travelMeters: 2.0));
@@ -91,6 +92,7 @@ public sealed class LifecycleScenarios
     }
 
     [TestMethod]
+    [CommissioningCheck("C11")]
     public async Task ACrash_ThatOutlastsTheTravel_LeavesTheOpenLimitToStopTheDrive_AndTheRestartedControllerReportsOpen()
     {
         await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production());
