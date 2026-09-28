@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 Safety, security and operations fixes from the August 2026 architecture review
-(issues #16-#22). The hardware checks in [docs/commissioning.md](docs/commissioning.md) are
-still open; do not treat this release as validated on the roof until they pass.
+(issues #16-#22). The commissioning checks in [docs/commissioning.md](docs/commissioning.md) run
+as automated scenarios against the emulated plant (#31). Each check lists the installation
+assumptions the emulator cannot prove, tied to the setting that depends on them; confirm them
+against the installed drive and wiring before relying on the roof.
 
 ### BREAKING
 
@@ -17,8 +19,7 @@ Upgrade the controller and API automation scripts together. Older clients cannot
 the roof against this server; use the authenticated browser console for operator access.
 
 - **iPad app retired.** The native iPad app is retired; operators must use the authenticated
-  web console. Tablet and phone use of the console still needs the browser checks tracked in
-  #20 and #26.
+  web console. Browser tests run it with phone and tablet emulation (#31).
 - **API keys required.** Every protected endpoint needs an `X-Api-Key` header with a key
   from `RoofControllerSecurity:ApiKeys` (roles `RoofViewer`, `RoofOperator`, `RoofAdmin`).
   Keys come from environment variables or Docker secrets, never committed settings. With no
@@ -139,8 +140,49 @@ the roof against this server; use the authenticated browser console for operator
   containerized controller. CI workflow `emulator-image.yml` builds the image for both
   platforms and runs the smoke test.
 - `pi-image.yml`: builds the `linux/arm64` Pi image in CI.
-- [docs/commissioning.md](docs/commissioning.md) (bench checklist, including the RV-5
-  telemetry-outage and RV-6 soak procedures) and [docs/ci-runners.md](docs/ci-runners.md).
+- [docs/commissioning.md](docs/commissioning.md) (the commissioning checks C1-C15, #31): no
+  meter, oscilloscope or bench step remains. Each step names the scenario that covers it, and
+  each check lists its installation assumptions with the setting that depends on each one and
+  what the emulated plant shows when it is wrong. Also [docs/ci-runners.md](docs/ci-runners.md).
+- Commissioning scenarios (#31): every check C1-C15 in docs/commissioning.md is an automated
+  scenario. `EmulatedRoofRig` starts the whole controller host with the production
+  `appsettings.json` against an in-process HAT emulator and plant (a 25 cm roof in real time,
+  so the controller's windows keep their production values), and each scenario drives it
+  through the API as an operator does. `[CommissioningCheck]` names the check and step a
+  scenario covers, and `ScenarioCoverageTests` fails when the document and the scenarios
+  disagree: a check or step without a scenario, a scenario naming a step the document lacks, a
+  scenario that CI does not run, a check without its installation assumptions.
+- C14 soak (#31): the production settings cycle the emulated roof, with a mid-travel Stop every
+  fifth cycle, the camera streaming through the proxy and OTLP export to a collector that never
+  answers. It checks the #29 plant invariants, every stop reason, Status, input and relay read
+  freshness, Stop latency drift, memory, threads and file descriptors, and writes a summary
+  with the motion timing. It runs for 90 s with the scenarios and for `HVO_SOAK_DURATION`
+  (two hours nightly), with its results in `HVO_SOAK_RESULTS_DIR`.
+- Container scenarios (#31): `tests/emulator/deploy-scenarios.sh` runs, on Docker against the
+  HAT emulator, `docker stop` and `docker kill` during travel (C11), commissioning C12 with the
+  deploy script (an idle deploy, a deploy while moving, pre-flight failures, a failed remote
+  check that rolls back, `--rollback` twice, with the relays sampled throughout), and the move
+  from Compose to the deploy script and back.
+- CI workflow `scenarios.yml` (#31): the scenarios, the browser tests and the container
+  scenarios on pull requests to `main` and `feature/**` and on pushes to `main`, and the
+  two-hour soak nightly and on demand, with the soak's invariant results in the run summary
+  and its artifacts.
+- Browser tests (#31): Playwright runs the console in Chromium on an iPhone 13 and an iPad
+  (gen 7), each upright and sideways, and on an iPhone SE sideways, against the whole
+  controller and the emulated plant: sign-in, Stop in view without scrolling and stopping the
+  roof, stale and unhealthy status, the whole roof status in the footer on a narrow screen, the
+  camera stalling and going offline, the lease during a lost connection (C9) and the
+  reconnect dialog's Stop (C15). A failed test attaches a screenshot, the trace and the browser
+  log.
+- Emulated camera (#31): the HAT emulator serves an MJPEG camera of the emulated roof at
+  `/mjpg/camNN/video.mjpg`, the Blue Iris path the camera proxy requests, and
+  `POST /api/emulator/camera` freezes it, refuses with 503 or 401, changes its frame rate or ends
+  the open streams. The Development settings, the compose `emulator` profile and
+  `src/docker-compose.yml` point the camera proxy at it.
+- Motion timing metrics (#31): the histograms `roof.controller.travel.duration`,
+  `roof.controller.drive.start_delay`, `roof.controller.drive.stop_delay` and
+  `roof.controller.departure.release` record what the timing options should be set from. See
+  [docs/telemetry.md](docs/telemetry.md).
 - Root `.dockerignore` for the repository-root build context.
 - Deployment check: `dotnet HVO.RoofControllerV4.RPi.dll --validate-deployment` validates the
   configuration without starting the host or touching the HAT: the roof options (including the
@@ -223,6 +265,18 @@ the roof against this server; use the authenticated browser console for operator
   back. The Pi compose profiles set the same two settings. With `/dev/i2c-1` mapped, such an
   override now fails the deployment check, so the script's pre-flight and the profiles' check
   service refuse it before anything is stopped.
+- The deploy script (#31) refuses a `<name>` or `<name>-previous` container that Docker Compose
+  created, before anything changes: it replaces and restores only controllers it created, and
+  [docs/deployment.md](docs/deployment.md) describes moving between Compose and the script.
+  `BUILD_PLATFORM` (default `linux/arm64`) builds `linux/amd64` for a test rig on the HAT
+  emulator, and in emulator mode the container maps no host device or Pi file.
+- The console on short screens, such as a phone held sideways, puts the roof state beside the
+  buttons, keeps the Controls heading for screen readers only and, wider than 576 px, puts the
+  footer on one row, so Stop is in view without scrolling (#20). The browser tests found Stop
+  below the footer.
+- The idle supervision loop runs an overdue drive-stop check at once. It could wake just before
+  the deadline and then fall back to the 1 s idle interval, so "Drive still reports running
+  (IN4)" was logged about 1.1 s late.
 - Removed `.LocalPackages` directory — all HVO packages now sourced from nuget.org
 - Removed `LocalPackages` NuGet source from `NuGet.config`
 - Removed `.LocalPackages` COPY from Dockerfile
@@ -255,8 +309,8 @@ assumptions, so the distances are indicative. Mitigations beyond these settings 
 ### Removed
 
 - The native iPad/MAUI app and its iOS and self-hosted M5 build workflows. The authenticated
-  web console is the supported operator client. Server API and physical safety commissioning
-  remain in #24.
+  web console is the supported operator client. The server findings from its review were fixed
+  in #28, and the safety checks run as the emulated commissioning scenarios (#31).
 
 ## [1.0.0] - 2025-03-01
 

@@ -561,3 +561,63 @@
 @media (max-width: 576px) {
   .rc2-kpis { grid-template-columns: 1fr; }
 }
+
+/* Short screens, such as a phone held sideways: Stop must stay above the footer without scrolling (#20). The roof state
+   sits beside the buttons instead of above them, the Controls heading is kept for screen readers only, and the header
+   and buttons are more compact. */
+@media (max-height: 500px) and (min-width: 560px) {
+  .rc2-shell { padding: 0.5rem; }
+  .rc2-header { padding: 0.35rem 0.75rem; align-items: center; }
+  .rc2-header-text { flex: 0 1 auto; }
+  .rc2-title { font-size: 1.1rem; }
+  .rc2-status-pill { gap: 0.35rem; }
+
+  .rc2-badge,
+  .rc2-badge-button {
+    min-height: 28px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .rc2-main { margin-top: 0.5rem; }
+
+  .rc2-controls .rc2-card-head {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .rc2-controls .rc2-card-body {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-areas:
+      "state actions"
+      "outcome outcome"
+      "hint hint";
+    gap: 0.5rem 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .rc2-state {
+    grid-area: state;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+    margin-bottom: 0;
+    align-content: start;
+  }
+
+  .rc2-state-item { padding: 0.4rem 0.6rem; }
+  .rc2-state-value { font-size: 1.1rem; }
+  .rc2-state-value--position { font-size: 1.2rem; }
+  .rc2-action-grid { grid-area: actions; gap: 0.5rem; }
+  .rc2-action { min-height: 48px; }
+  .rc2-action--stop { min-height: 60px; }
+  .rc2-stop-outcome { grid-area: outcome; margin-top: 0; }
+  .rc2-controls .rc2-role-hint { grid-area: hint; margin: 0; }
+}

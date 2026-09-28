@@ -28,6 +28,9 @@ public sealed class EmulatorHostOptions
     /// <summary>Where the roof starts, metres from the closed limit's operating point (just past the closed limit by default).</summary>
     public double? InitialPosition { get; set; }
 
+    /// <summary>The emulated camera's frame rate (<c>/mjpg/camNN/video.mjpg</c> on the control port): 0.1 to 30.</summary>
+    public double CameraFramesPerSecond { get; set; } = 5;
+
     /// <summary>The register endpoint; throws when the address or port is not valid.</summary>
     public IPEndPoint RegisterEndPoint()
     {

@@ -101,4 +101,4 @@ Use OpenTelemetry metrics with OTLP export to a collector hosted off the Pi. Tel
 - Verify telemetry collector outages do not affect command latency or safety behavior.
 - Run a 24-hour Pi soak test with bounded disk growth, stable memory, and no missed safety transitions.
 
-The bench procedures and pass criteria for the last two items (telemetry outage and soak test) are checks C13 and C14 in [commissioning.md](commissioning.md). Both are open.
+The last two items (telemetry outage and soak test) are checks C13 and C14 in [commissioning.md](commissioning.md): automated scenarios against the emulated plant, with the soak run for two hours nightly in the "Scenarios" workflow (#31).

@@ -85,8 +85,11 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - Link the relevant issue in the PR description
 - Ensure CI passes before requesting review
 - Changes to relays, inputs, limits, the watchdog, the operator lease, the fault latch or
-  the Stop path need tests, and anything that can only be checked on the Pi and HAT must
-  be added to [docs/commissioning.md](docs/commissioning.md)
+  the Stop path need tests. A change a commissioning check covers needs its scenario on the
+  emulated plant, named with `[CommissioningCheck]` and listed in
+  [docs/commissioning.md](docs/commissioning.md) with the installation assumptions it depends
+  on. `ScenarioCoverageTests` fails when the two disagree. No test may rely on physical
+  hardware.
 
 ### CI workflows
 
@@ -110,6 +113,5 @@ use the "Reopen in Container" command to get started.
 - `devcontainer.json` is the standard configuration (no devices; run the server against the
   HAT emulator as in step 4 above).
 - `devcontainer.rpi.json` runs on a Raspberry Pi with the real I2C bus and GPIO, so it can
-  move the roof. It forces `IgnorePhysicalLimitSwitches=false`. Use it only on a
-  commissioned bench or with the roof mechanism isolated (see
-  [docs/commissioning.md](docs/commissioning.md)).
+  move the roof. It forces `IgnorePhysicalLimitSwitches=false`. Use it only with the roof
+  mechanism isolated.

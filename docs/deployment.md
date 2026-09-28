@@ -173,6 +173,7 @@ deploy.
 | `PI_HOST` | (required) | Host name of the Pi, used for the remote check |
 | `DOCKER_CONTEXT` | `rpi-remote` | Docker context that targets the Pi |
 | `IMAGE_TAG` | `hvov9/roof-controller:v4` | Image tag |
+| `BUILD_PLATFORM` | `linux/arm64` | Platform the image is built for: the Pi's. `linux/amd64` is accepted only in [HAT emulator mode](#hat-emulator-mode-test-rigs), for a test rig on a PC. |
 | `CONTAINER_NAME` | `roof-controller` | Container name. The previous version is kept as `<name>-previous`. |
 | `HTTPS_HOST_PORT` | `8443` | Published HTTPS port (the only published port in HTTPS mode) |
 | `HOST_PORT` | `8080` | Published HTTP port, only with `ALLOW_INSECURE_HTTP=true` |
@@ -215,11 +216,14 @@ anything.
      container, the script stops and nothing is changed.
    - `<name>-previous` is not running, restarting or paused, even when there is no `<name>`: two controllers must never
      drive the HAT. Stop it and retry.
-2. **Builds** the arm64 image and loads it on the Pi.
+   - neither `<name>` nor `<name>-previous` was created by Docker Compose. The script replaces and restores only
+     controllers it created; see [Moving between Compose and the deploy script](#moving-between-compose-and-the-deploy-script).
+2. **Builds** the image for `BUILD_PLATFORM` (the Pi's, `linux/arm64`) and loads it on the Pi.
 3. **Runs the pre-flight check** on the Pi: the new image with `--validate-deployment` and exactly the environment,
    devices and mounts the controller will get (see [The deployment check](#the-deployment-check)), plus the SHA-256 of
-   the script's key. Docker also fails here on a missing `/dev/gpiomem`, `/dev/i2c-1` (not mapped in HAT emulator
-   mode), thermal file, secrets directory or certificate directory. Any failure stops the deploy while the old controller is still running and untouched.
+   the script's key. Docker also fails here on a missing `/dev/gpiomem`, `/dev/i2c-1` or thermal file (none of them
+   mapped in HAT emulator mode), secrets directory or certificate directory. Any failure stops the deploy while the old
+   controller is still running and untouched.
 4. **Requests a verified stop** if the old container is running. The script sends `POST /api/v4.0/RoofControl/Stop`
    from inside the container over loopback: `docker exec ... curl`, with the key passed on stdin so it never shows in
    a process list. The stop counts as verified only when the response is HTTP 200 and the body has:
@@ -297,10 +301,12 @@ PI_HOST=test-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/test-pi.crt 
   must be readable on the machine running it): emulator mode is chosen only through these two variables, so that the
   deployment records it.
 - The container gets `HatEmulator__Enabled=true`, the host and port, and `HatEmulator__AllowOutsideDevelopment=true`.
-  `/dev/i2c-1` is **not** mapped, and `EXTRA_DOCKER_ARGS` may not map an I2C device, use `--privileged` or mount the
-  host's `/` or `/dev`, so the controller cannot reach a physical HAT whatever its settings say.
-- Without `HAT_EMULATOR_ENDPOINT`, the script maps `/dev/i2c-1` and sets `HatEmulator__Enabled=false` and
-  `HatEmulator__AllowOutsideDevelopment=false`. The secrets directory is read after these settings and could still
+  No host device or Pi file is mapped: **not** `/dev/i2c-1`, and `EXTRA_DOCKER_ARGS` may not map an I2C device, use
+  `--privileged` or mount the host's `/` or `/dev`, so the controller cannot reach a physical HAT whatever its settings
+  say. Nor `/dev/gpiomem` or the thermal sensor, so the rig need not be a Pi: on a PC, add
+  `BUILD_PLATFORM=linux/amd64` (accepted in emulator mode only) and a Docker context for that PC.
+- Without `HAT_EMULATOR_ENDPOINT`, the script maps `/dev/gpiomem`, the thermal sensor and `/dev/i2c-1` and sets
+  `HatEmulator__Enabled=false` and `HatEmulator__AllowOutsideDevelopment=false`. The secrets directory is read after these settings and could still
   override them. The pre-flight [deployment check](#the-deployment-check) then fails, because emulator mode with
   `/dev/i2c-1` mapped is refused, and nothing is stopped. The check in step 7 is the backstop: the new controller
   must report `hatMode` `Physical` (or `Emulated` in emulator mode), or the deploy is rolled back.
@@ -312,8 +318,9 @@ PI_HOST=test-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/test-pi.crt 
   controller uses.
 
 A controller in emulator mode shows an `EMULATED HAT` banner on every page and reports Degraded health, or worse, with
-every health description naming the emulator. For a rig
-without a Pi, use the compose `emulator` profile below.
+every health description naming the emulator. `tests/emulator/deploy-scenarios.sh` deploys this way on a PC, with the
+default Docker context, to test the script (see [Container scenarios](emulator.md#container-scenarios)). To run the
+controller against the emulator without the script, use the compose `emulator` profile below.
 
 ### Rolling back
 
@@ -410,6 +417,44 @@ HVO_EMULATED_ROOF_API_KEY=$(openssl rand -hex 24) docker compose --profile emula
 ```
 
 `tests/emulator/compose-smoke-test.sh` opens and closes the emulated roof through it.
+
+## Moving between Compose and the deploy script
+
+The script and the Compose Pi profiles must never manage the same controller. Both name it `roof-controller`, so
+Docker refuses to create one while the other's container exists: `docker compose up` fails with the name already in
+use and changes nothing. The script, for its part, refuses a `<name>` or `<name>-previous` that Compose created (it
+carries Compose's project label), for a deploy, `--rollback` and `--dry-run` alike, before anything changes. Renamed
+by the script, such a container would keep the label, and a later `docker compose up` or `down` could start it next
+to the new controller or remove the version kept for rollback.
+
+So a move removes one side's controller before the other starts one. Run the commands on the Pi (or with a Docker
+context that targets it), and the `docker compose` commands in `src/HVO.RoofControllerV4.RPi` with the same `HVO_ROOF_*`
+variables as for `up`. Both use the image tag `hvov9/roof-controller:v4`, so the script's build replaces the image
+Compose ran; keep it under a tag of its own to return to it.
+
+**From Compose to the script:**
+
+1. Stop the roof and check that the stop is verified: `POST .../Stop` returns 200 with `relayRegisterState` `Verified`,
+   `relayRegisterMask` `0` and `commandedMotion` `None`.
+2. Keep the Compose version: `docker tag hvov9/roof-controller:v4 hvov9/roof-controller:v4-compose`.
+3. `docker compose --profile pi down`. The controller stops the roof again on SIGTERM, as in step 5 of the script.
+4. Run the script. It finds no `<name>` and deploys as a first deploy (`[deploy] No existing container.`), so there is
+   no `<name>-previous` for `--rollback` until the next deploy. To return to the Compose version before then, follow
+   the steps below.
+
+**From the script to Compose:**
+
+1. Stop the roof and check that the stop is verified, as above.
+2. `docker stop -t 30 roof-controller`, then `docker rm roof-controller roof-controller-previous` (Compose keeps no
+   previous version).
+3. To run the Compose version kept above: `docker tag hvov9/roof-controller:v4-compose hvov9/roof-controller:v4`.
+   Otherwise `docker compose --profile pi build` builds the current source.
+4. `docker compose --profile pi run --rm roof-controller-check`, then, only if it passed,
+   `docker compose --profile pi up -d --no-build`.
+5. Check the published URL from another machine ([After deploying](#after-deploying-checks-on-the-device)).
+
+`tests/emulator/deploy-scenarios.sh migration` runs both moves against the HAT emulator, with the refusals on each
+side (see [Container scenarios](emulator.md#container-scenarios)).
 
 ## Shutdown timing
 

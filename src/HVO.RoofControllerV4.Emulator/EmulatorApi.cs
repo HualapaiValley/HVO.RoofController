@@ -1,4 +1,5 @@
 using HVO.RoofControllerV4.Simulation;
+using HVO.RoofControllerV4.Simulation.Camera;
 using HVO.RoofControllerV4.Simulation.Drive;
 using HVO.RoofControllerV4.Simulation.Emulator;
 using HVO.RoofControllerV4.Simulation.Hat;
@@ -48,7 +49,10 @@ public sealed record LinkRequest(bool? Outage = null, double? ResponseDelayMilli
 /// <summary>The register link's state.</summary>
 public sealed record LinkStatus(string RegisterEndpoint, bool Outage, double ResponseDelayMilliseconds, int OpenConnections, long AcceptedConnections, long Requests);
 
-public sealed record EmulatorStatusResponse(HatEmulatorStatus Plant, LinkStatus Link);
+public sealed record EmulatorStatusResponse(HatEmulatorStatus Plant, LinkStatus Link, EmulatedCameraStatus Camera);
+
+/// <summary>The emulated camera's failure modes. Null leaves a setting unchanged; <c>Disconnect</c> ends the open streams once.</summary>
+public sealed record CameraRequest(EmulatedCameraMode? Mode = null, double? FramesPerSecond = null, bool Disconnect = false);
 
 /// <summary>One plant event: <c>At</c> is plant time since the last reset.</summary>
 public sealed record PlantEventResponse(TimeSpan At, PlantEventKind Kind, string Detail);
@@ -76,12 +80,16 @@ internal static class EmulatorApi
         api.MapGet("/violations", (HatEmulatorSession session) => session.Plant.Violations);
 
         // Both reset fields are optional, and so is the body.
-        api.MapPost("/reset", (ResetRequest? request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Reset(request?.PositionMeters, request?.Wiring)));
-        api.MapPost("/time-scale", (TimeScaleRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Clock.Scale = Required(request.Scale, "scale")));
-        api.MapPost("/drive/trip", (DriveTripRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () =>
+        api.MapPost("/reset", (ResetRequest? request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () =>
+            {
+                session.Reset(request?.PositionMeters, request?.Wiring);
+                camera.Reset(camera.FramesPerSecond);
+            }));
+        api.MapPost("/time-scale", (TimeScaleRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Clock.Scale = Required(request.Scale, "scale")));
+        api.MapPost("/drive/trip", (DriveTripRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () =>
             {
                 if (request.Trip == SmVectorTrip.None)
                 {
@@ -90,24 +98,42 @@ internal static class EmulatorApi
 
                 session.Plant.TripDrive(request.Trip);
             }));
-        api.MapPost("/drive/power", (PowerRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetDrivePower(Required(request.Powered, "powered"))));
-        api.MapPost("/hat/power", (PowerRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetHatPower(Required(request.Powered, "powered"))));
-        api.MapPost("/external-stop", (ExternalStopRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.ExternalStopOpen = Required(request.Open, "open")));
-        api.MapPost("/jam", (JamRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.Jammed = Required(request.Jammed, "jammed")));
-        api.MapPost("/limit-fault", (LimitFaultRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetLimitFault(IsOpenLimit(Required(request.Limit, "limit")), Required(request.Fault, "fault"))));
-        api.MapPost("/relay-fault", (RelayFaultRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.SetRelayFault(Required(request.Relay, "relay"), Required(request.Fault, "fault"))));
-        api.MapPost("/wiring", (WiringRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => session.Plant.Wiring = Required(request.Wiring, "wiring")));
-        api.MapPost("/bus", (BusFaultRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () => ApplyBusFaults(session.Client, request)));
-        api.MapPost("/link", (LinkRequest request, HatEmulatorSession session, HatEmulatorServer server)
-            => Apply(session, server, () =>
+        api.MapPost("/drive/power", (PowerRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Plant.SetDrivePower(Required(request.Powered, "powered"))));
+        api.MapPost("/hat/power", (PowerRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Plant.SetHatPower(Required(request.Powered, "powered"))));
+        api.MapPost("/external-stop", (ExternalStopRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Plant.ExternalStopOpen = Required(request.Open, "open")));
+        api.MapPost("/jam", (JamRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Plant.Jammed = Required(request.Jammed, "jammed")));
+        api.MapPost("/limit-fault", (LimitFaultRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Plant.SetLimitFault(IsOpenLimit(Required(request.Limit, "limit")), Required(request.Fault, "fault"))));
+        api.MapPost("/relay-fault", (RelayFaultRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Plant.SetRelayFault(Required(request.Relay, "relay"), Required(request.Fault, "fault"))));
+        api.MapPost("/wiring", (WiringRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => session.Plant.Wiring = Required(request.Wiring, "wiring")));
+        api.MapPost("/bus", (BusFaultRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () => ApplyBusFaults(session.Client, request)));
+        api.MapPost("/camera", (CameraRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () =>
+            {
+                if (request.FramesPerSecond is { } rate)
+                {
+                    camera.FramesPerSecond = rate;
+                }
+
+                if (request.Mode is { } mode)
+                {
+                    camera.Mode = mode;
+                }
+
+                if (request.Disconnect)
+                {
+                    camera.DisconnectAll();
+                }
+            }));
+        api.MapPost("/link", (LinkRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+            => Apply(session, server, camera, () =>
             {
                 if (request.ResponseDelayMilliseconds is { } delay)
                 {
@@ -131,14 +157,15 @@ internal static class EmulatorApi
             }));
     }
 
-    private static EmulatorStatusResponse Status(HatEmulatorSession session, HatEmulatorServer server)
+    private static EmulatorStatusResponse Status(HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
         => new(session.GetStatus(), new LinkStatus(
             server.LocalEndPoint.ToString(),
             server.Outage,
             server.ResponseDelay.TotalMilliseconds,
             server.OpenConnections,
             server.AcceptedConnections,
-            server.Requests));
+            server.Requests),
+            camera.GetStatus());
 
     /// <summary>A field the request must give.</summary>
     private static T Required<T>(T? value, string name)
@@ -152,7 +179,7 @@ internal static class EmulatorApi
         _ => throw new ArgumentOutOfRangeException(nameof(limit), "The limit must be Open or Closed.")
     };
 
-    private static IResult Apply(HatEmulatorSession session, HatEmulatorServer server, Action action)
+    private static IResult Apply(HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera, Action action)
     {
         try
         {
@@ -165,7 +192,7 @@ internal static class EmulatorApi
             return Results.Problem(detail, statusCode: StatusCodes.Status400BadRequest, title: "Invalid emulator request");
         }
 
-        return Results.Ok(Status(session, server));
+        return Results.Ok(Status(session, server, camera));
     }
 
     private static void ApplyBusFaults(EmulatedHatRegisterClient client, BusFaultRequest request)

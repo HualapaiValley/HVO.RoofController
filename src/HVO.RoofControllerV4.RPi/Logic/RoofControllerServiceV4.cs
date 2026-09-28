@@ -133,7 +133,13 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     // When IN4 dropped after confirming the start (at-speed interlock only); null while it reports running.
     private DateTimeOffset? _runLostUtc;
 
-    // Departure supervision: the limit opposite to the direction of travel.
+    // IN4 reported stopped when the move started, so its first HIGH is this move's drive start and not the last move's
+    // run-down (a start while IN4 runs is refused with the interlock). Motion timing measures the drive only then.
+    private bool _driveStoppedAtStart;
+
+    // Departure supervision: the limit opposite to the direction of travel, and whether the move started on it (motion
+    // timing tells a full travel from a partial one by it).
+    private bool _startedAtLimit;
     private bool _departureReleaseVerified;
     private DateTimeOffset? _releaseObservedUtc;
     private DateTimeOffset? _departureDeadlineUtc;
@@ -159,6 +165,10 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private RoofControllerStopReason _lastStopReason = RoofControllerStopReason.None;
     private DateTimeOffset? _lastMotionStopUtc;
     private bool _driveRunningAfterStopReported;
+
+    // The last stop while the drive run input (IN4) still reported running, until IN4 drops (its drive stop delay is then
+    // recorded) or the next move starts.
+    private (DateTimeOffset At, RoofMotionDirection Direction, RoofControllerStopReason Reason)? _driveStopDelayPending;
 
     // Clear-fault pulse.
     private readonly SemaphoreSlim _clearFaultGate = new(1, 1);

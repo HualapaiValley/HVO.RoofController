@@ -4,7 +4,8 @@
 Keeps containers in $FAKE_STATE_DIR/state.json (keyed by name, each with a 64-hex "id") and appends every call's argv
 (as JSON) to $FAKE_STATE_DIR/calls.log. Commands take a container name or an ID prefix, as docker does. A container's
 docker state is "running" or "exited" from its "running" flag, or its optional "state" (paused, restarting, created);
-stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex>|id=<prefix> and Go-style --format.
+stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex>|id=<prefix> and Go-style --format
+({{.Label "<key>"}} reads the container's optional "labels", as a Compose-created container has).
 `inspect` supports only --format '{{range .Config.Env}}{{println .}}{{end}}': the --env/-e values the container was run
 with (its "options").
 Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
@@ -352,7 +353,13 @@ def ps(state, args):
                 "Image": c.get("image", os.environ["IMAGE_TAG"]),
                 "State": docker_state(c),
             }
-            out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: fields[m.group(1)], fmt))
+
+            def field(m):
+                if m.group(1) == "Label":
+                    return c.get("labels", {}).get(m.group(2), "")
+                return fields[m.group(1)]
+
+            out(re.sub(r'\{\{\.(\w+)(?: "([^"]*)")?\}\}', field, fmt))
 
 
 def run(state, args, image):

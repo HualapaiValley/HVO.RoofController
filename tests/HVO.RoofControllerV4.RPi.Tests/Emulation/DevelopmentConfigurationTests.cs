@@ -1,7 +1,9 @@
+using System;
 using System.IO;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Emulator;
+using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -10,9 +12,9 @@ namespace HVO.RoofControllerV4.RPi.Tests.Emulation;
 
 /// <summary>
 /// The Development settings (<c>appsettings.json</c> overlaid with <c>appsettings.Development.json</c>, as the
-/// Development environment loads them): Development runs against the HAT emulator, which supplies the limit switches,
-/// so they are in force with the production wiring. The in-memory register simulation is kept for unit tests, and as the
-/// fallback with emulator mode off and no I2C bus.
+/// Development environment loads them): Development runs against the HAT emulator, which supplies the limit switches
+/// (so they are in force with the production wiring) and the camera. The in-memory register simulation is kept for unit
+/// tests, and as the fallback with emulator mode off and no I2C bus.
 /// </summary>
 [TestClass]
 public class DevelopmentConfigurationTests
@@ -47,6 +49,17 @@ public class DevelopmentConfigurationTests
         options.FaultInputActiveHigh.Should().Be(production.FaultInputActiveHigh);
         options.AtSpeedConfirmationTimeout.Should().Be(production.AtSpeedConfirmationTimeout);
         new RoofControllerOptionsV4Validator().Validate(null, options).Succeeded.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void Development_ViewsTheEmulatorsCamera_WithoutCredentials()
+    {
+        var camera = new BlueIrisOptions();
+        LoadDevelopment().GetSection(BlueIrisOptions.SectionName).Bind(camera);
+
+        camera.GetConfigurationProblem().Should().BeNull();
+        camera.GetBaseUri().Should().Be(new Uri(EmulatorHostOptions.DefaultControlUrl), "dotnet run of the emulator serves its camera there");
+        (camera.UserName, camera.Password).Should().Be((string.Empty, string.Empty));
     }
 
     private static IConfigurationRoot LoadDevelopment()

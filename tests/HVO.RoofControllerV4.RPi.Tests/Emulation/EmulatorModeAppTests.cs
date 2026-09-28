@@ -25,14 +25,10 @@ using OpenTelemetry.Trace;
 namespace HVO.RoofControllerV4.RPi.Tests.Emulation;
 
 /// <summary>
-/// The whole controller in HAT emulator mode: the production host (controller, HAT library, health check, console, API)
-/// with <c>HatEmulator:Enabled</c>, its socket client talking over TCP to an emulator session and server in the test
-/// process. Nothing is mocked between the API and the emulated plant.
+/// The whole controller in HAT emulator mode (<see cref="EmulatedRoofRig"/>): the production host with
+/// <c>HatEmulator:Enabled</c>, talking over TCP to an emulator session and server in the test process.
 /// </summary>
-/// <remarks>
-/// Serialized: each test starts a whole host, whose blocking start and HAT polling hold pool threads that the
-/// in-process emulator needs to answer within the request timeout. (The deployed emulator is a separate process.)
-/// </remarks>
+/// <remarks>Serialized: see <see cref="EmulatedRoofRig"/>.</remarks>
 [TestClass]
 [DoNotParallelize]
 public sealed class EmulatorModeAppTests
@@ -43,8 +39,8 @@ public sealed class EmulatorModeAppTests
     [TestMethod]
     public async Task TheRoof_OpensAndCloses_ThroughTheApi_AgainstTheEmulator()
     {
-        await using var rig = await EmulatorModeRig.StartAsync();
-        using var client = rig.App.CreateApiClient(TestApiKeys.Operator);
+        await using var rig = await EmulatedRoofRig.StartAsync();
+        using var client = rig.CreateApiClient(TestApiKeys.Operator);
 
         using (var open = await client.PostAsync($"{RoofApi}/Open", content: null))
         {
@@ -77,8 +73,8 @@ public sealed class EmulatorModeAppTests
     [TestMethod]
     public async Task ALinkOutageWhileMoving_StopsTheRoof_AndLatchesAFault_UntilCleared()
     {
-        await using var rig = await EmulatorModeRig.StartAsync();
-        using var client = rig.App.CreateApiClient(TestApiKeys.Operator);
+        await using var rig = await EmulatedRoofRig.StartAsync();
+        using var client = rig.CreateApiClient(TestApiKeys.Operator);
         using (var open = await client.PostAsync($"{RoofApi}/Open", content: null))
         {
             open.StatusCode.Should().Be(HttpStatusCode.OK, await open.Content.ReadAsStringAsync());
@@ -134,10 +130,12 @@ public sealed class EmulatorModeAppTests
     public async Task AControllerStartedBeforeTheEmulator_InitializesWithALatchedFault_UntilCleared()
     {
         // The link is down from the start, as when the controller starts first. The host retries every second.
-        await using var rig = await EmulatorModeRig.StartAsync(
-            new() { ["RoofControllerOptionsV4:RestartOnFailureWaitTime"] = "1" },
-            startWithTheLinkDown: true);
-        using var client = rig.App.CreateApiClient(TestApiKeys.Operator);
+        await using var rig = await EmulatedRoofRig.StartAsync(new EmulatedRoofRigOptions
+        {
+            Settings = new Dictionary<string, string?> { ["RoofControllerOptionsV4:RestartOnFailureWaitTime"] = "1" },
+            StartWithTheLinkDown = true
+        });
+        using var client = rig.CreateApiClient(TestApiKeys.Operator);
 
         var failed = await rig.WaitForControllerAsync(s => s.IsFaultLatched, MotionTimeout, "the first initialization to fail");
         failed.IsInitialized.Should().BeFalse();
@@ -178,8 +176,8 @@ public sealed class EmulatorModeAppTests
     [TestMethod]
     public async Task Health_IsDegraded_AndNamesTheEmulator()
     {
-        await using var rig = await EmulatorModeRig.StartAsync();
-        using var client = rig.App.CreateApiClient(TestApiKeys.Viewer);
+        await using var rig = await EmulatedRoofRig.StartAsync();
+        using var client = rig.CreateApiClient(TestApiKeys.Viewer);
 
         using var response = await client.GetAsync("/health");
 
@@ -197,8 +195,8 @@ public sealed class EmulatorModeAppTests
     public async Task TheSignInPage_CarriesTheEmulatedHatBanner()
     {
         // The sign-in page has its own layout; EmulatedHatDisplayTests covers the main layout, which serves the console.
-        await using var rig = await EmulatorModeRig.StartAsync();
-        using var client = rig.App.CreateApiClient();
+        await using var rig = await EmulatedRoofRig.StartAsync();
+        using var client = rig.CreateApiClient();
 
         var login = await client.GetStringAsync("/login");
 
@@ -222,7 +220,7 @@ public sealed class EmulatorModeAppTests
     [TestMethod]
     public async Task TheStart_WarnsThatTheHatIsEmulated()
     {
-        await using var rig = await EmulatorModeRig.StartAsync();
+        await using var rig = await EmulatedRoofRig.StartAsync();
 
         rig.Logs.Entries.Should().Contain(e =>
             e.Category == HatEmulatorStartup.LoggerCategory
@@ -239,7 +237,10 @@ public sealed class EmulatorModeAppTests
     public async Task Telemetry_MarksTheRunAsEmulated()
     {
         // An exporter endpoint nothing listens on: telemetry is set up, and its exports fail quietly.
-        await using var rig = await EmulatorModeRig.StartAsync(new() { ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:1" });
+        await using var rig = await EmulatedRoofRig.StartAsync(new EmulatedRoofRigOptions
+        {
+            Settings = new Dictionary<string, string?> { ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:1" }
+        });
 
         var resource = rig.App.Services.GetRequiredService<TracerProvider>().GetResource();
 
@@ -253,7 +254,7 @@ public sealed class EmulatorModeAppTests
     [DataRow("Staging")]
     public async Task OutsideDevelopment_WithoutConsent_TheControllerDoesNotStart(string environment)
     {
-        await using var app = new EmulatorModeApp(new Dictionary<string, string?>
+        await using var app = new EmulatedRoofApp(new Dictionary<string, string?>
         {
             ["HatEmulator:Enabled"] = "true",
             ["HatEmulator:Host"] = "127.0.0.1",
@@ -264,158 +265,5 @@ public sealed class EmulatorModeAppTests
 
         start.Should().Throw<InvalidOperationException>()
             .WithMessage($"HAT emulator mode (HatEmulator:Enabled) is refused in the {environment} environment.*");
-    }
-
-    /// <summary>An emulator session and register server on a free loopback port, and the controller host pointed at it.</summary>
-    private sealed class EmulatorModeRig : IAsyncDisposable
-    {
-        private EmulatorModeRig(HatEmulatorSession session, HatEmulatorServer server, EmulatorModeApp app, RecordingLoggerProvider logs)
-        {
-            Session = session;
-            Server = server;
-            App = app;
-            Logs = logs;
-        }
-
-        public HatEmulatorSession Session { get; }
-
-        public HatEmulatorServer Server { get; }
-
-        public EmulatorModeApp App { get; }
-
-        public RecordingLoggerProvider Logs { get; }
-
-        public string Endpoint => $"127.0.0.1:{Server.LocalEndPoint.Port}";
-
-        public HatEmulatorStatus Plant => Session.GetStatus();
-
-        public IRoofControllerServiceV4 Controller => App.Services.GetRequiredService<IRoofControllerServiceV4>();
-
-        /// <summary>
-        /// Starts the emulator (40 cm of travel at twice real time, so a full run takes about 2 s), then the controller
-        /// with the documented wiring (normally open limits, not ignored), and waits for it to initialize. With
-        /// <paramref name="startWithTheLinkDown"/>, the link is in an outage when the controller starts, and the rig
-        /// does not wait.
-        /// </summary>
-        public static async Task<EmulatorModeRig> StartAsync(Dictionary<string, string?>? settings = null, bool startWithTheLinkDown = false)
-        {
-            var plant = new RoofPlantOptions();
-            var session = new HatEmulatorSession(new HatEmulatorSessionOptions
-            {
-                Plant = plant with { Mechanics = plant.Mechanics with { TravelMeters = 0.4 } },
-                TimeScale = 2
-            });
-            var server = new HatEmulatorServer(session.CurrentClient, new IPEndPoint(IPAddress.Loopback, 0)) { Outage = startWithTheLinkDown };
-            server.Start();
-
-            var values = new Dictionary<string, string?>
-            {
-                ["HatEmulator:Enabled"] = "true",
-                ["HatEmulator:Host"] = "127.0.0.1",
-                ["HatEmulator:Port"] = server.LocalEndPoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["RoofControllerOptionsV4:UseNormallyClosedLimitSwitches"] = "false",
-                ["RoofControllerOptionsV4:IgnorePhysicalLimitSwitches"] = "false"
-            };
-            foreach (var (key, value) in settings ?? new Dictionary<string, string?>())
-            {
-                values[key] = value;
-            }
-
-            var logs = new RecordingLoggerProvider();
-            var rig = new EmulatorModeRig(session, server, new EmulatorModeApp(values, "Development", logs), logs);
-            try
-            {
-                rig.App.CreateApiClient().Dispose();
-                if (startWithTheLinkDown)
-                {
-                    return rig;
-                }
-
-                await rig.WaitForControllerAsync(s => s.IsInitialized && s.Status == RoofControllerStatus.Closed, TimeSpan.FromSeconds(20), "the controller to initialize");
-                return rig;
-            }
-            catch
-            {
-                await rig.DisposeAsync();
-                throw;
-            }
-        }
-
-        public async Task<RoofStatusResponse> WaitForControllerAsync(Func<RoofStatusResponse, bool> condition, TimeSpan timeout, string what)
-        {
-            var clock = Stopwatch.StartNew();
-            while (true)
-            {
-                var snapshot = Controller.GetCurrentStatusSnapshot();
-                if (condition(snapshot))
-                {
-                    return snapshot;
-                }
-
-                if (clock.Elapsed > timeout)
-                {
-                    throw new AssertFailedException($"Timed out waiting for {what}. Controller: {snapshot}. Plant: {Plant}.");
-                }
-
-                await Task.Delay(20);
-            }
-        }
-
-        public async Task WaitForPlantAsync(Func<HatEmulatorStatus, bool> condition, string what)
-        {
-            var clock = Stopwatch.StartNew();
-            while (!condition(Plant))
-            {
-                if (clock.Elapsed > MotionTimeout)
-                {
-                    throw new AssertFailedException($"Timed out waiting for {what}. Plant: {Plant}. Controller: {Controller.GetCurrentStatusSnapshot()}.");
-                }
-
-                await Task.Delay(20);
-            }
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            // The controller first, so its shutdown stop reaches the emulator.
-            await App.DisposeAsync();
-            await Server.DisposeAsync();
-            Session.Dispose();
-        }
-    }
-
-    /// <summary>The production host with the settings given and the test API keys; nothing is replaced.</summary>
-    private sealed class EmulatorModeApp(Dictionary<string, string?> settings, string environment, RecordingLoggerProvider logs) : WebApplicationFactory<Program>
-    {
-        public HttpClient CreateApiClient(string? apiKey = null)
-        {
-            var client = CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = false });
-            if (apiKey is not null)
-            {
-                client.DefaultRequestHeaders.Add(RoofControllerApiContract.ApiKeyHeaderName, apiKey);
-            }
-
-            return client;
-        }
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            var values = RoofApiTestHost.DefaultKeySettings();
-            values["BlueIris:BaseUrl"] = string.Empty;
-            foreach (var (key, value) in settings)
-            {
-                values[key] = value;
-            }
-
-            builder.UseEnvironment(environment);
-            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(values));
-
-            // Program reads the exporter endpoint while it adds services, before the configuration above applies.
-            if (values.TryGetValue("OTEL_EXPORTER_OTLP_ENDPOINT", out var otlpEndpoint))
-            {
-                builder.UseSetting("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint);
-            }
-            builder.ConfigureLogging(logging => logging.AddProvider(logs));
-        }
     }
 }
