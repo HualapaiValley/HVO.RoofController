@@ -463,6 +463,28 @@ public class SmVectorDriveTests
     }
 
     [TestMethod]
+    public void StartMethod2_ARunDuringARampStop_DoesNotBrake()
+    {
+        var drive = AtSpeed(new SmVectorSettings
+        {
+            StartMethod = 2,
+            StopMethod = SmVectorStopMethod.Ramp,
+            DcBrakeTime = TimeSpan.FromMilliseconds(500)
+        });
+        Step(drive, Idle, 100);
+        drive.Mode.Should().Be(SmVectorMode.Decelerating);
+
+        for (var i = 0; i < 3000; i++)
+        {
+            Step(drive, Reverse, 1);
+            drive.IsDcBraking.Should().BeFalse("the output is still on while it ramps down; it ramps through 0 Hz");
+        }
+
+        drive.Mode.Should().Be(SmVectorMode.Running);
+        drive.OutputDirection.Should().Be(-1);
+    }
+
+    [TestMethod]
     public void StartMethod2_ARunDuringTheStopBrake_BrakesAgainBeforeStarting()
     {
         var drive = AtSpeed(new SmVectorSettings

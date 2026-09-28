@@ -138,22 +138,26 @@ public class RoofControllerLedIndicatorTests
     }
 
     [TestMethod]
-    public async Task LedModeWriteFailure_IsNotRetriedWithEveryPollDuringAMove_OnlyOnceIdle()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task LedWriteFailure_IsNotRetriedWithEveryPollDuringAMove_OnlyOnceIdle(bool ledValueWritesFailToo)
     {
         var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false);
         using var svc = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
         hat.Registers.FailLedModeWrites = true;
+        hat.Registers.FailLedValueWrites = ledValueWritesFailToo;
         (await svc.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
         svc.Close().IsSuccessful.Should().BeTrue();
-        var attempts = hat.Registers.LedModeWriteAttempts;
+        var attempts = hat.Registers.LedWriteAttempts;
 
         svc.ForceStatusRefresh();
         svc.ForceStatusRefresh();
         svc.ForceStatusRefresh();
-        hat.Registers.LedModeWriteAttempts.Should().Be(attempts, "the LEDs did not change, so the moving roof's polls add no bus traffic");
+        hat.Registers.LedWriteAttempts.Should().Be(attempts, "the LEDs did not change, so the moving roof's polls add no bus traffic");
 
         hat.Registers.FailLedModeWrites = false;
+        hat.Registers.FailLedValueWrites = false;
         svc.Stop().IsSuccessful.Should().BeTrue();
         svc.ForceStatusRefresh();
 

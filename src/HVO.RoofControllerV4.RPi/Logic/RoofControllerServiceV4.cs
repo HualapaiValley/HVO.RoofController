@@ -186,6 +186,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
     // Indicator LED cache and telemetry edge tracking.
     private byte? _lastIndicatorLedMask;
+    private byte? _lastAttemptedIndicatorLedMask;
     private bool _ledModesApplied;
     private bool? _telemetryOpenLimit;
     private bool? _telemetryClosedLimit;
@@ -637,13 +638,15 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             if (DriveFaultActive_NoLock == true) mask |= 0x04;
         }
 
-        // A failed mode write is retried with every update only while idle: during a move each retry would add two bus
-        // transactions to every poll.
-        if (_lastIndicatorLedMask == mask && (_ledModesApplied || _commandedMotion != RoofMotionDirection.None))
+        // While moving, the LEDs are written once per mask change whether or not the write succeeded: each retry would
+        // add two bus transactions to every poll. While idle, a failed write is retried with every update.
+        var moving = _commandedMotion != RoofMotionDirection.None;
+        if (moving ? _lastAttemptedIndicatorLedMask == mask : _lastIndicatorLedMask == mask && _ledModesApplied)
         {
             return;
         }
 
+        _lastAttemptedIndicatorLedMask = mask;
         try
         {
             // The SM-I-010 powers up with every LED following its input, where LED3 would show the raw IN3 level (lit

@@ -172,8 +172,8 @@ the roof against this server; use the authenticated browser console for operator
   7, 8, 10-12 and the bring-up checks) and the wiring package zip are updated.
 - The SM-I-010 LED modes (LED1-LED3 from the controller, LED4 showing IN4) are re-applied with
   each indicator change, and while idle when a mode write failed or the modes read back wrong,
-  so a HAT that reset shows the logical states again instead of the raw inputs. A failed mode
-  write is not retried with every poll during a move.
+  so a HAT that reset shows the logical states again instead of the raw inputs. During a move
+  the LEDs are written once per change, so a failed LED write is not retried with every poll.
 - The supervision loop wakes when a start limit's release is first seen and when IN4 drops, so
   the release is verified and the run-loss window enforced on time rather than at the next
   verification interval.

@@ -238,8 +238,8 @@ public partial class RoofControllerServiceV4
 
             // With the run interlock configured, the start must be confirmed by IN4 rising. A drive that already reports
             // running (ramping down after a ramp stop, in a DC brake with the Run output on, or running without a
-            // command) would confirm it at once, so the start waits for IN4 to drop. With the coast stop IN4 drops within
-            // milliseconds, so a reversal proceeds while the roof is still coasting.
+            // command) would confirm it at once, so the start is refused until IN4 drops. With the coast stop IN4 drops
+            // within milliseconds, so a reversal proceeds while the roof is still coasting.
             if (_options.AtSpeedConfirmationTimeout is not null && _rawIn4 == true)
             {
                 FinishMutation_NoLock();

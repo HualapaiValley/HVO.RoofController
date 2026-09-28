@@ -637,6 +637,7 @@ public partial class RoofControllerServiceV4
 
         // The HAT may have reset (its LED modes return to following the inputs); re-apply them with the next LED update.
         _lastIndicatorLedMask = null;
+        _lastAttemptedIndicatorLedMask = null;
         _ledModesApplied = false;
         _lastError = $"Safety input read failed ({_consecutiveInputReadFailures} consecutive): {error?.Message ?? "unknown error"}";
         _logger.LogWarning(error, "Safety input read failed ({Failures} consecutive)", _consecutiveInputReadFailures);

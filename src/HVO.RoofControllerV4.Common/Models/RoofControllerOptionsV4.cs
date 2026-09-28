@@ -107,8 +107,9 @@ public record class RoofControllerOptionsV4
     /// Optional drive run interlock on IN4 (the drive's run output: SMVector TB-14 with P142 = 1). When set:
     /// <list type="bullet">
     /// <item>a start is refused with <see cref="RoofControllerErrorCode.InterlockActive"/> while IN4 already reports the
-    /// drive running, so confirmation is always a fresh LOW to HIGH transition (an immediate reversal is refused until
-    /// the drive has stopped);</item>
+    /// drive running, so confirmation is always a fresh LOW to HIGH transition (after a ramp stop an immediate reversal
+    /// is refused until the drive has stopped; with the coast stop IN4 drops within milliseconds and the reversal
+    /// proceeds while the roof coasts);</item>
     /// <item>motion stops and latches <see cref="RoofControllerStopReason.DriveNotRunning"/> when IN4 does not report
     /// running within this window of the motion command;</item>
     /// <item>after IN4 has confirmed, motion stops and latches <see cref="RoofControllerStopReason.DriveNotRunning"/> when

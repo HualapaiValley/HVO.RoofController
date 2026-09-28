@@ -55,8 +55,8 @@ authenticated web console and HTTP API.
   default stays `true` (raw HIGH = fault).
 - **Drive-running interlock** (IN4, the drive's run output; `AtSpeedConfirmationTimeout`,
   3 s in production, off when unset): a start is refused with `InterlockActive` while the
-  drive still reports running. After a ramp stop a reversal waits until the drive has
-  stopped; with the coast stop IN4 drops within milliseconds, so a reversal proceeds and the
+  drive still reports running. After a ramp stop a reversal is refused until the drive
+  has stopped; with the coast stop IN4 drops within milliseconds, so a reversal proceeds and the
   drive starts the other way while the roof is still coasting (a known limitation). The drive
   must report running within the window after a start, and IN4 dropping for 250 ms while
   moving without the destination limit (a trip, an external stop, drive power loss) stops
