@@ -79,8 +79,9 @@ public interface IRoofControllerServiceV4
         /// Applies a configuration update against the current version (no version check). Otherwise identical to the
         /// versioned overload: validated, transactional, refused while moving or during a clear-fault pulse
         /// (<see cref="RoofControllerErrorCode.OperationInProgress"/>). Invalid options fail with
-        /// <see cref="RoofControllerErrorCode.InvalidRequest"/>. <c>AllowIgnoringLimitSwitchesOnPhysicalHardware</c> is
-        /// local-only and is never changed by an update.
+        /// <see cref="RoofControllerErrorCode.InvalidRequest"/>. The local-only settings
+        /// (<c>AllowIgnoringLimitSwitchesOnPhysicalHardware</c>, <c>DriveStopConfirmationTimeout</c> and
+        /// <c>DepartureReleaseTimeout</c>) are never changed by this overload.
         /// </summary>
         /// <param name="updatedOptions">The configuration values to apply.</param>
         /// <returns>A result containing the effective configuration when successful.</returns>
@@ -90,9 +91,18 @@ public interface IRoofControllerServiceV4
         /// Applies a configuration update only if the current configuration version equals <paramref name="expectedVersion"/>.
         /// Fails with <see cref="RoofControllerErrorCode.ConfigurationVersionConflict"/> on mismatch, and with
         /// <see cref="RoofControllerErrorCode.ConfigurationRejected"/> when the options are unsafe for the current hardware mode.
-        /// The update is transactional: on failure the previous options, timers and subscriptions remain in effect.
+        /// The update is transactional: on failure the previous options, timers and subscriptions remain in effect. The
+        /// local-only settings are never changed by this overload.
         /// </summary>
         Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion);
+
+        /// <summary>
+        /// Applies options the settings store has already checked: the same validation, motion check and transaction as
+        /// <see cref="UpdateConfiguration(RoofControllerOptionsV4)"/>, with no version check. The local-only settings
+        /// are applied only when <paramref name="includeLocalOnlySettings"/> is true (the caller holds a local
+        /// credential, or the values come from the controller's own files); otherwise the current ones are kept.
+        /// </summary>
+        Result<RoofControllerOptionsV4> ApplyConfiguration(RoofControllerOptionsV4 updatedOptions, bool includeLocalOnlySettings);
 
         /// <summary>
         /// Returns the configuration and its version, read atomically.

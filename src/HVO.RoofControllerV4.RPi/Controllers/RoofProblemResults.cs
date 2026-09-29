@@ -7,8 +7,9 @@ using Microsoft.AspNetCore.Mvc;
 namespace HVO.RoofControllerV4.RPi.Controllers;
 
 /// <summary>
-/// RFC 7807 answers for the sign-in and identity endpoints, shaped like the roof's: the <c>type</c> URI and the
-/// <c>code</c> extension name the <see cref="RoofControllerErrorCode"/>, and 429 and 503 carry <c>Retry-After</c>.
+/// RFC 7807 answers for the sign-in, identity, settings and restart endpoints, shaped like the roof's: the <c>type</c>
+/// URI and the <c>code</c> extension name the <see cref="RoofControllerErrorCode"/>, and 429 and 503 carry
+/// <c>Retry-After</c>.
 /// </summary>
 internal static class RoofProblemResults
 {
@@ -53,6 +54,15 @@ internal static class RoofProblemResults
         RoofControllerErrorCode.IdentityStoreUnavailable => "Identity store unavailable",
         RoofControllerErrorCode.CredentialNotAllowed => "Not with this credential",
         RoofControllerErrorCode.InvalidRequest => "Invalid request",
+        RoofControllerErrorCode.SettingNotPermitted => "Setting not permitted",
+        RoofControllerErrorCode.SettingsHandEditPending => "Hand edit pending",
+        RoofControllerErrorCode.SettingsStoreUnavailable => "Settings store unavailable",
+        RoofControllerErrorCode.RestartRefused => "Restart refused",
+        RoofControllerErrorCode.SettingNotFound => "Not found",
+        RoofControllerErrorCode.ConfigurationVersionConflict => "Configuration version conflict",
+        RoofControllerErrorCode.ConfigurationRejected => "Configuration rejected",
+        RoofControllerErrorCode.OperationInProgress => "Operation in progress",
+        RoofControllerErrorCode.RelayStateUnverified => "Relay state unverified",
         _ => "Roof controller error"
     };
 }

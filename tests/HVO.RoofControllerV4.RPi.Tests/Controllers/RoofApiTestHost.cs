@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -33,7 +34,9 @@ internal static class TestApiKeys
 
 /// <summary>
 /// WebApplicationFactory for the RPi host with a strict roof-service mock, the hardware host service removed, and test
-/// API keys configured. Development environment by default (RequireHttps off), Production on request.
+/// API keys configured. Development environment by default (RequireHttps off), Production on request. The test settings
+/// sit just below the settings file, where appsettings.json is, so the settings API can change them; the settings file
+/// and the managed secrets file are held in memory unless paths are given.
 /// </summary>
 internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
 {
@@ -41,6 +44,9 @@ internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
     private readonly string _environment;
     private readonly IPAddress? _remoteIp;
     private readonly Action<IServiceCollection>? _configureServices;
+    private readonly string? _settingsFilePath;
+    private readonly string? _secretsFilePath;
+    private readonly IReadOnlyDictionary<string, string?>? _hostSettings;
 
     public RoofApiTestHost(
         Mock<IRoofControllerServiceV4>? roofService = null,
@@ -48,7 +54,10 @@ internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
         string environment = "Development",
         IPAddress? remoteIp = null,
         Action<IServiceCollection>? configureServices = null,
-        bool includeDefaultKeys = true)
+        bool includeDefaultKeys = true,
+        string? settingsFilePath = null,
+        string? secretsFilePath = null,
+        IReadOnlyDictionary<string, string?>? hostSettings = null)
     {
         RoofService = roofService ?? RoofServiceMock.Create();
         _settings = includeDefaultKeys ? DefaultKeySettings() : new Dictionary<string, string?>();
@@ -65,6 +74,9 @@ internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
         _environment = environment;
         _remoteIp = remoteIp;
         _configureServices = configureServices;
+        _settingsFilePath = settingsFilePath;
+        _secretsFilePath = secretsFilePath;
+        _hostSettings = hostSettings;
     }
 
     public Mock<IRoofControllerServiceV4> RoofService { get; }
@@ -106,7 +118,36 @@ internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment(_environment);
-        builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(_settings));
+        // Host settings reach Program.Main as command-line arguments, so the settings files are opened at these paths.
+        if (_settingsFilePath is not null)
+        {
+            builder.UseSetting(RoofSettingsConfiguration.FilePathKey, _settingsFilePath);
+        }
+
+        if (_secretsFilePath is not null)
+        {
+            builder.UseSetting(RoofSettingsConfiguration.SecretsFilePathKey, _secretsFilePath);
+        }
+
+        // Settings on the command line, above the settings file.
+        foreach (var (key, value) in _hostSettings ?? new Dictionary<string, string?>())
+        {
+            builder.UseSetting(key, value);
+        }
+
+        builder.ConfigureAppConfiguration((_, configuration) =>
+        {
+            var source = new Microsoft.Extensions.Configuration.Memory.MemoryConfigurationSource { InitialData = _settings };
+            var settingsFile = configuration.Sources.ToList().FindIndex(entry => entry is RoofSettingsFileSource);
+            if (settingsFile >= 0)
+            {
+                configuration.Sources.Insert(settingsFile, source);
+            }
+            else
+            {
+                configuration.Add(source);
+            }
+        });
         builder.ConfigureServices(services =>
         {
             // No hardware host service: it would call Initialize/ShutdownAsync on the mock.

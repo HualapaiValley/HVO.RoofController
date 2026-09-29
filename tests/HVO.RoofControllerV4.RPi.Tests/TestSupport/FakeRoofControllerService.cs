@@ -107,6 +107,9 @@ internal sealed class FakeRoofControllerService : IRoofControllerServiceV4
     public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion)
         => UpdateConfiguration(updatedOptions);
 
+    public Result<RoofControllerOptionsV4> ApplyConfiguration(RoofControllerOptionsV4 updatedOptions, bool includeLocalOnlySettings)
+        => UpdateConfiguration(updatedOptions);
+
     public Result<RoofStatusResponse> RenewLease() => Result<RoofStatusResponse>.Success(Snapshot);
 
     public Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken)

@@ -373,14 +373,14 @@ public sealed class RoofControllerApiTests
     public async Task GetConfiguration_Admin_ReturnsSnapshotWithVersion()
     {
         var options = new RoofControllerOptionsV4 { SafetyWatchdogTimeout = TimeSpan.FromSeconds(120), LimitSwitchDebounce = TimeSpan.FromMilliseconds(40) };
-        _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(options, 7));
+        _roof.Setup(s => s.GetConfigurationSnapshot()).Returns(options);
         using var client = _host.CreateApiClient(TestApiKeys.Admin);
 
         var response = await client.GetAsync($"{BasePath}/Configuration");
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         var payload = await ApiJson.ReadAsync<RoofConfigurationResponse>(response);
-        Assert.AreEqual(7, payload.Version);
+        Assert.AreEqual(1, payload.Version);
         Assert.AreEqual(120, payload.SafetyWatchdogTimeoutSeconds);
         Assert.AreEqual(40, payload.LimitSwitchDebounceMilliseconds);
         Assert.AreEqual(42, payload.RestartOnFailureWaitTimeSeconds);
@@ -390,9 +390,11 @@ public sealed class RoofControllerApiTests
     public async Task UpdateConfiguration_ValidRequest_AppliesWithExpectedVersion()
     {
         RoofControllerOptionsV4? captured = null;
-        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
-            .Callback<RoofControllerOptionsV4, long>((options, _) => captured = options)
-            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        var applied = new RoofControllerOptionsV4();
+        _roof.Setup(s => s.GetConfigurationSnapshot()).Returns(() => applied);
+        _roof.Setup(s => s.ApplyConfiguration(It.IsAny<RoofControllerOptionsV4>(), false))
+            .Callback<RoofControllerOptionsV4, bool>((options, _) => captured = applied = options)
+            .Returns<RoofControllerOptionsV4, bool>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
         using var client = _host.CreateApiClient(TestApiKeys.Admin);
 
         var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest());
@@ -400,11 +402,12 @@ public sealed class RoofControllerApiTests
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         var payload = await ApiJson.ReadAsync<RoofConfigurationResponse>(response);
         Assert.AreEqual(120, payload.SafetyWatchdogTimeoutSeconds);
+        Assert.AreEqual(2, payload.Version);
         Assert.IsNotNull(captured);
         Assert.AreEqual(TimeSpan.FromSeconds(120), captured.SafetyWatchdogTimeout);
         Assert.AreEqual(TimeSpan.FromMilliseconds(75), captured.DigitalInputPollInterval);
         Assert.AreEqual(TimeSpan.FromSeconds(5), captured.PeriodicVerificationInterval);
-        _roof.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7), Times.Once);
+        _roof.Verify(s => s.ApplyConfiguration(It.IsAny<RoofControllerOptionsV4>(), false), Times.Once);
     }
 
     [TestMethod]
@@ -415,7 +418,7 @@ public sealed class RoofControllerApiTests
             DriveStopConfirmationTimeout = TimeSpan.FromSeconds(6),
             DepartureReleaseTimeout = TimeSpan.FromSeconds(8)
         };
-        _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(options, 7));
+        _roof.Setup(s => s.GetConfigurationSnapshot()).Returns(options);
         using var client = _host.CreateApiClient(TestApiKeys.Admin);
 
         var payload = await ApiJson.ReadAsync<RoofConfigurationResponse>(await client.GetAsync($"{BasePath}/Configuration"));
@@ -443,11 +446,11 @@ public sealed class RoofControllerApiTests
             DriveStopConfirmationTimeout = TimeSpan.FromSeconds(6),
             DepartureReleaseTimeout = TimeSpan.FromSeconds(8)
         };
-        _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(current, 7));
+        _roof.Setup(s => s.GetConfigurationSnapshot()).Returns(current);
         RoofControllerOptionsV4? captured = null;
-        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
-            .Callback<RoofControllerOptionsV4, long>((options, _) => captured = options)
-            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        _roof.Setup(s => s.ApplyConfiguration(It.IsAny<RoofControllerOptionsV4>(), false))
+            .Callback<RoofControllerOptionsV4, bool>((options, _) => captured = options)
+            .Returns<RoofControllerOptionsV4, bool>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
         using var client = _host.CreateApiClient(TestApiKeys.Admin);
 
         var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest());
@@ -463,7 +466,7 @@ public sealed class RoofControllerApiTests
     {
         using var client = _host.CreateApiClient(TestApiKeys.Admin);
 
-        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest() with { ExpectedVersion = 6 });
+        var response = await client.PostAsJsonAsync($"{BasePath}/Configuration", ValidRequest() with { ExpectedVersion = 0 });
 
         Assert.AreEqual(HttpStatusCode.Conflict, response.StatusCode);
         var problem = await ApiJson.ReadElementAsync(response);
@@ -490,9 +493,9 @@ public sealed class RoofControllerApiTests
     public async Task UpdateConfiguration_ConfirmedRelaySwap_IsApplied()
     {
         RoofControllerOptionsV4? captured = null;
-        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
-            .Callback<RoofControllerOptionsV4, long>((options, _) => captured = options)
-            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        _roof.Setup(s => s.ApplyConfiguration(It.IsAny<RoofControllerOptionsV4>(), false))
+            .Callback<RoofControllerOptionsV4, bool>((options, _) => captured = options)
+            .Returns<RoofControllerOptionsV4, bool>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
         using var client = _host.CreateApiClient(TestApiKeys.Admin);
 
         var response = await client.PostAsJsonAsync(
@@ -648,11 +651,11 @@ public sealed class RoofControllerApiTests
         Assert.AreEqual(TimeSpan.FromSeconds(30), captured.Value?.OperatorLeaseTimeout);
         Assert.AreEqual(TimeSpan.FromSeconds(3), captured.Value?.AtSpeedConfirmationTimeout);
 
-        // From one window to another.
+        // From one window to another, against the settings version the first change saved.
         UseLeaseAndIn4();
         response = await client.PostAsJsonAsync(
             $"{BasePath}/Configuration",
-            WithLeaseAndIn4() with { OperatorLeaseTimeoutSeconds = 60, AtSpeedConfirmationTimeoutSeconds = 5 });
+            WithLeaseAndIn4() with { ExpectedVersion = 2, OperatorLeaseTimeoutSeconds = 60, AtSpeedConfirmationTimeoutSeconds = 5 });
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         Assert.AreEqual(TimeSpan.FromSeconds(60), captured.Value?.OperatorLeaseTimeout);
@@ -752,8 +755,8 @@ public sealed class RoofControllerApiTests
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         var after = await ReadConfigurationAsync(client);
-        Assert.AreEqual(7, before.GetProperty("version").GetInt64());
-        Assert.AreEqual(8, after.GetProperty("version").GetInt64());
+        Assert.AreEqual(1, before.GetProperty("version").GetInt64());
+        Assert.AreEqual(2, after.GetProperty("version").GetInt64());
         Assert.AreNotEqual(before.GetRawText(), after.GetRawText());
     }
 
@@ -893,7 +896,7 @@ public sealed class RoofControllerApiTests
 
     private static RoofConfigurationRequest ValidRequest() => new()
     {
-        ExpectedVersion = 7,
+        ExpectedVersion = 1,
         SafetyWatchdogTimeoutSeconds = 120,
         OpenRelayId = 1,
         CloseRelayId = 2,
@@ -924,41 +927,39 @@ public sealed class RoofControllerApiTests
 
     /// <summary>The controller runs with a 30 s operator lease and the 3 s IN4 window, as <see cref="WithLeaseAndIn4"/> sends.</summary>
     private void UseLeaseAndIn4()
-        => _roof.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(
+        => _roof.Setup(s => s.GetConfigurationSnapshot()).Returns(
             new RoofControllerOptionsV4
             {
                 OperatorLeaseTimeout = TimeSpan.FromSeconds(30),
                 AtSpeedConfirmationTimeout = TimeSpan.FromSeconds(3)
-            },
-            7));
+            });
 
     private StrongBox<RoofControllerOptionsV4?> CaptureAppliedConfiguration()
     {
         var captured = new StrongBox<RoofControllerOptionsV4?>();
-        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), 7))
-            .Callback<RoofControllerOptionsV4, long>((options, _) => captured.Value = options)
-            .Returns<RoofControllerOptionsV4, long>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
+        _roof.Setup(s => s.ApplyConfiguration(It.IsAny<RoofControllerOptionsV4>(), false))
+            .Callback<RoofControllerOptionsV4, bool>((options, _) => captured.Value = options)
+            .Returns<RoofControllerOptionsV4, bool>((options, _) => Result<RoofControllerOptionsV4>.Success(options));
         return captured;
     }
 
     private void VerifyConfigurationNotApplied()
-        => _roof.Verify(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()), Times.Never);
+        => _roof.Verify(s => s.ApplyConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<bool>()), Times.Never);
 
     /// <summary>
-    /// Makes the configuration double stateful: it starts at version 7 with a 90 s watchdog, and an applied update replaces
-    /// the options and bumps the version, as the controller does, so reading back shows whether anything changed.
+    /// Makes the configuration double stateful: it starts with a 90 s watchdog, and an applied update replaces the options,
+    /// as the controller does, so reading back shows whether anything changed. The version is the settings store's: 1
+    /// before anything is saved, and one more for each saved change.
     /// </summary>
     private void UseVersionedConfiguration()
     {
-        var state = new RoofControllerConfigurationState(
-            new RoofControllerOptionsV4 { SafetyWatchdogTimeout = TimeSpan.FromSeconds(90) },
-            7);
-        _roof.Setup(s => s.GetConfigurationState()).Returns(() => state);
-        _roof.Setup(s => s.UpdateConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<long>()))
-            .Returns<RoofControllerOptionsV4, long>((options, _) =>
+        var options = new RoofControllerOptionsV4 { SafetyWatchdogTimeout = TimeSpan.FromSeconds(90) };
+        _roof.Setup(s => s.GetConfigurationSnapshot()).Returns(() => options);
+        _roof.Setup(s => s.ApplyConfiguration(It.IsAny<RoofControllerOptionsV4>(), It.IsAny<bool>()))
+            .Returns<RoofControllerOptionsV4, bool>((updated, _) =>
             {
-                state = new RoofControllerConfigurationState(options, state.Version + 1);
-                return Result<RoofControllerOptionsV4>.Success(options);
+                options = updated;
+                return Result<RoofControllerOptionsV4>.Success(updated);
             });
     }
 
@@ -972,7 +973,7 @@ public sealed class RoofControllerApiTests
     private async Task AssertConfigurationUnchangedAsync(HttpClient client, JsonElement before)
     {
         var after = await ReadConfigurationAsync(client);
-        Assert.AreEqual(7, after.GetProperty("version").GetInt64());
+        Assert.AreEqual(1, after.GetProperty("version").GetInt64());
         Assert.AreEqual(before.GetRawText(), after.GetRawText());
         VerifyConfigurationNotApplied();
     }

@@ -26,6 +26,7 @@ using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Security;
+using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components.Server.Circuits;
 
@@ -45,7 +46,20 @@ public class Program
             return RunValidation(args, SecretsDirectory, Console.Out);
         }
 
-        var builder = CreateBuilder(args, SecretsDirectory);
+        WebApplicationBuilder builder;
+        try
+        {
+            builder = CreateBuilder(args, SecretsDirectory);
+
+            // A settings file the controller cannot use stops the start here, before the host is built or the HAT touched.
+            new RoofSettingsValidator([new RoofControllerOptionsV4Validator()], builder.Environment).ValidateStartup(builder.Configuration);
+        }
+        catch (RoofSettingsFileException ex)
+        {
+            // Say which file and setting, never a value, and exit without a stack trace.
+            Console.Error.WriteLine($"The roof controller did not start: {ex.Message}");
+            return 1;
+        }
 
         ApplyHardwareDetectionOverrides(builder.Configuration);
         ConfigureServices(builder.Services, builder.Configuration, builder.Environment);
@@ -55,8 +69,19 @@ public class Program
         // The roof stop on shutdown is registered by RoofControllerServiceV4Host (ApplicationStopping -> ShutdownAsync).
         Configure(app);
 
+        return Run(app);
+    }
+
+    /// <summary>
+    /// Runs the host until it stops. Returns <see cref="RoofSettingsContract.RestartExitCode"/> after POST System/Restart,
+    /// which asks whatever supervises the controller to start it again, and 0 otherwise.
+    /// </summary>
+    internal static int Run(WebApplication app)
+    {
+        // Resolve the signal first: Run disposes the service provider when the host stops.
+        var restart = app.Services.GetRequiredService<RoofRestartSignal>();
         app.Run();
-        return 0;
+        return restart.Requested ? RoofSettingsContract.RestartExitCode : 0;
     }
 
     /// <summary>
@@ -96,6 +121,10 @@ public class Program
         // Docker secrets: a file named e.g. RoofControllerSecurity__ApiKeys__0__Key or BlueIris__Password under
         // the secrets directory becomes that configuration key. Never commit keys or passwords to appsettings.
         builder.Configuration.AddKeyPerFile(secretsDirectory, optional: true);
+
+        // The settings changed through the API (appsettings.Local.json) and the managed secrets file, above the shipped
+        // appsettings files and below the user secrets, environment, command line and secrets directory.
+        builder.Configuration.AddRoofSettingsFiles(builder.Environment.EnvironmentName, builder.Environment.ContentRootPath);
         return builder;
     }
 
@@ -103,6 +132,11 @@ public class Program
     private static void ConfigureServices(IServiceCollection services, ConfigurationManager Configuration, IWebHostEnvironment Environment)
     {
         services.AddOptions();
+
+        services.AddSingleton<RoofSettingsValidator>();
+        services.AddSingleton<RoofSettingsStore>();
+        services.AddSingleton<RoofRestartSignal>();
+        services.Configure<RoofControllerUiOptions>(Configuration.GetSection(RoofControllerUiOptions.SectionName));
 
         // Give the hosted-service stop path (verified roof stop) and long-lived camera streams time to finish on
         // SIGTERM; docker-compose stop_grace_period (30 s) must stay above this.

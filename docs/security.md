@@ -9,6 +9,7 @@ This page covers:
 - how to provision keys
 - what each role may do
 - how people sign in, and how admins manage people, keys and sessions
+- remote settings: who may change what, the settings file, hand edits and restarts
 - how the console and camera authenticate
 - the transport settings
 
@@ -22,8 +23,8 @@ Operator includes Viewer.
 | Role (`Role` value) | Policy name        | Allows                                                                |
 |---------------------|--------------------|-----------------------------------------------------------------------|
 | `RoofViewer`        | `RoofViewerPolicy` | Roof status, `/health` details, camera streams, console (read-only) |
-| `RoofOperator`      | `RoofOperatorPolicy` | Everything above, plus Open, Close, ClearFault and lease renewal       |
-| `RoofAdmin`         | `RoofAdminPolicy`  | Everything above, plus configuration, `System/*` and the OpenAPI document |
+| `RoofOperator`      | `RoofOperatorPolicy` | Everything above, plus Open, Close, ClearFault, lease renewal and the `ui` settings |
+| `RoofAdmin`         | `RoofAdminPolicy`  | Everything above, plus every other setting, `System/*` (including Restart) and the OpenAPI document |
 
 Stop uses its own policy, `RoofStopPolicy`. Any authenticated caller (any key or session) may stop the roof, because
 Stop never starts motion. Sign-in lockouts never apply to Stop.
@@ -49,7 +50,11 @@ other route refuses such a request with 401, and never falls back to the key.
 | `POST /api/v4.0/RoofControl/Lease`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409 (`LeaseNotActive`), 503 |
 | `POST /api/v4.0/RoofControl/ClearFault?pulseMs=250`      | Operator          | 200 `RoofStatusResponse` | 400 (`pulseMs` outside 50-2000), 401, 403, 409, 503 |
 | `GET  /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` (includes `version`) | 401, 403 |
-| `POST /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` | 400, 401, 403, 409 |
+| `POST /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` | 400, 401, 403, 409, 503 (`SettingsStoreUnavailable`) |
+| `GET  /api/v4.0/Settings`, `GET /api/v4.0/Settings/Catalogue` | Viewer (API key or session) | 200 `RoofSettingsResponse`, `RoofSettingsCatalogueResponse` (only the settings the caller may read) | 401 |
+| `POST /api/v4.0/Settings/{group}`                        | Operator for `ui`, Admin for every other group | 200 `RoofSettingsResponse` | 400, 401, 403 (`SettingNotPermitted`), 404 (`SettingNotFound`), 409, 503 (`SettingsStoreUnavailable`) |
+| `POST /api/v4.0/Settings/Reload`, `POST /api/v4.0/Settings/Discard` | Admin (API key or session) | 200 `RoofSettingsResponse` | 400, 401, 403, 409, 503 |
+| `POST /api/v4.0/System/Restart`                          | Admin (API key or session) | 202 `RoofRestartResponse`, then the controller exits with code 75 | 401, 403, 409 (`RestartRefused`) |
 | `GET  /api/v1.0/System/info`, `GET /api/v1.0/System/metrics` | Admin         | 200 | 401, 403 |
 | `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key, session or console cookie) | 200 MJPEG | 401, 502, 503, 504 |
 | `POST /api/v4.0/Auth/Session`                            | anonymous         | 200 `RoofSessionResponse` | 400, 401 (`SignInFailed`), 429 (`SignInLockedOut`, `SignInBusy`), 503 |
@@ -91,8 +96,17 @@ Roof command failures are RFC 7807 ProblemDetails with two extensions:
 | 403 | `CredentialNotAllowed` | A PIN session, even an admin's, cannot manage people, keys or sessions. Use an admin API key, or sign in with a password. |
 | 404, 409 | `IdentityNotFound`; `IdentityNameConflict`, `IdentityReadOnly`, `LastAdministrator` | Refused change to people, keys or sessions. Show the reason. |
 | 503 | `IdentityStoreUnavailable` | The identity store could not be read or saved. Configured keys and Stop still work. |
+| 403 | `SettingNotPermitted` | The caller may not change that setting: it needs a higher role or a [local credential](#local-only-settings), or a layer above the settings file sets it. |
+| 404 | `SettingNotFound` | There is no such settings group. |
+| 409 | `SettingsHandEditPending` | The settings file was edited outside the API. An admin must reload or discard the edit first ([Hand edits](#hand-edits)). |
+| 503 | `SettingsStoreUnavailable` | The settings could not be saved, and nothing was changed; or the store is not available. |
+| 409 | `RestartRefused` | The roof stop could not be verified, or a pending hand edit cannot be loaded as it is. The controller did not restart. |
 | 400 | `InvalidRequest`, and model validation | Fix the request. |
 | 500 | `Unknown` | Unexpected. The detail text is generic; see the controller log. |
+
+`RoofControl/Configuration` is the roof group of the [settings API](#settings) under its old route. Its `version` is
+the settings version, an accepted change is saved to the settings file, and it never changes the
+[local-only settings](#local-only-settings): it reports them, but its request has no fields for them.
 
 Configuration updates are optimistic. `expectedVersion` must equal the `version` from the last GET; otherwise the
 update fails with 409 `ConfigurationVersionConflict`. Every field except `confirmSafetyCriticalChange` must be sent,
@@ -122,6 +136,7 @@ Each entry has these settings:
 | `RoofControllerSecurity:ApiKeys:N:Key` | The key, at least 24 characters. |
 | `RoofControllerSecurity:ApiKeys:N:KeySha256` | Alternative to `Key`: 64 hex characters of SHA-256 over the key's UTF-8 bytes. Use it so the controller never stores the key itself. |
 | `RoofControllerSecurity:ApiKeys:N:Kiosk` | Optional, default `false`. `true` marks a kiosk's key, at which people sign in with a PIN. A kiosk key must have the `RoofViewer` role. |
+| `RoofControllerSecurity:ApiKeys:N:Local` | Optional, default `false`. `true` marks a key kept only on the controller or the kiosk beside it. It makes the key a [local credential](#local-only-settings): a local admin key, or an admin's PIN session at a local kiosk, may change the local-only settings. |
 
 Set exactly one of `Key` or `KeySha256`. An entry that is incomplete, too short, has an unknown role, sets both, or is
 a kiosk key without the `RoofViewer` role is skipped. The startup log reports it by index and name, never by value. If no usable key remains, the controller logs a
@@ -270,8 +285,9 @@ where others can see it, so it must not be able to create people or keys that wo
 session. Use an admin API key, or sign in with a password.
 
 Everything else an admin may do, an admin's PIN session may do too, by design: run the roof, clear faults, read and
-change the roof configuration (including ignoring the limit switches where local configuration allows it, and turning
-off the operator lease or the IN4 interlock, each with `ConfirmSafetyCriticalChange`), and read the `System` routes and the OpenAPI document. Only a
+change the settings (including ignoring the limit switches where local configuration allows it, and turning off the
+operator lease or the IN4 interlock, each with `ConfirmSafetyCriticalChange`; the [local-only settings](#local-only-settings)
+only at a kiosk marked `Local`), restart the controller, and read the `System` routes and the OpenAPI document. Only a
 kiosk's key can open a PIN session, but the bearer token it returns is not tied to the kiosk: whoever holds it can use
 it from anywhere until it idles out (`PinSessionIdleTimeout`, default 10 minutes) or is ended. A kiosk must keep it as safe as its own key.
 
@@ -303,6 +319,177 @@ Back the directory up with the secrets directory.
   on it; the deployment check does (below).
 - The deployment check (`--validate-deployment`) reads the file and saves a probe file next to it. It fails when the
   directory is missing, not writable, or the file is not valid, and when the identity settings are invalid.
+
+## Settings
+
+The clients configure the controller remotely through `/api/v4.0/Settings`. Every setting is described once, in the
+settings catalogue, and the CLI, the web UI and the kiosk build their forms from it.
+
+### The catalogue and the groups
+
+`GET Settings/Catalogue` lists each setting the caller may read: its full configuration key, group, type, range, unit
+and default, the role that may change it (`writeRole`), and whether a change is safety-critical (`safety`), takes effect
+only after a restart (`appliesAfterRestart`), needs a local credential (`localOnly`) or is a secret (`secret`).
+
+`GET Settings` returns the settings the caller may read, with:
+
+- the settings `version`, which every change must send back;
+- each value in effect and where it comes from (`source`: the settings file, the managed secrets file, the shipped
+  defaults, the environment, the secrets directory, the command line or the code default);
+- whether the caller may change it now (`canWrite`, and `readOnlyReason` when not);
+- `restartPending` for a saved value that takes effect only after a restart;
+- for admins only: the settings file's path, a [pending hand edit](#hand-edits), and warnings.
+
+| Group | Changed by | Settings |
+|-------|------------|----------|
+| `roof` | Admin | `RoofControllerOptionsV4`: the relay ids, polling, the limit-switch type and debounce, the limit-switch bypass and its consent, fault polarity, input read failures, the watchdog, the operator lease, the IN4 interlock and its stop confirmation, and the departure check |
+| `controller` | Admin | `RoofControllerHostOptionsV4`: `RestartOnFailureWaitTime` and `ControllerName` (both after a restart) |
+| `camera` | Admin | `BlueIris`: the server address, the user and password (secrets), the timeouts and the stream limit (`MaxConcurrentStreams` and `ConnectTimeout` after a restart) |
+| `security` | Admin | `RoofControllerSecurity`: `AllowAnonymousStop`, `RequireHttps` and `AllowedOrigins` |
+| `identity` | Admin | `RoofControllerSecurity:Identity`: the session lifetimes, lockouts and the sign-in rate limit |
+| `logging` | Admin | The log levels of the controller, the web server and the console's log view |
+| `ui` | Operator | `RoofControllerUi`: `DefaultCamera` and `KioskScreenTimeout` |
+
+Admin covers anything that changes how the roof moves, what is trusted, or who may act. The operator settings are
+limited to presentation. Only admins can read the admin groups; everyone can read `ui`. API keys and people are not
+settings: admins manage them under [`Identity`](#managing-people-keys-and-sessions).
+
+### Changing settings
+
+`POST Settings/{group}` replaces one group's settings:
+
+```json
+{
+  "expectedVersion": 7,
+  "confirmSafetyCriticalChange": false,
+  "values": {
+    "RoofControllerUi:DefaultCamera": "roof",
+    "RoofControllerUi:KioskScreenTimeout": 600
+  }
+}
+```
+
+- `expectedVersion` is required and must equal the `version` from the last `GET Settings`; otherwise the change fails
+  with 409 `ConfigurationVersionConflict`. One version covers every group.
+- Send every setting of the group that you may change, by its full key, or the change fails with 400. You may leave out
+  settings you may not change, or send them unchanged. You may leave out a secret, which keeps it.
+- Values are sent in the setting's type: `true` or `false`, numbers, strings, arrays of strings, and durations as a
+  number of seconds. A nullable setting takes `null`, which turns it off or leaves it unset.
+- A safety-critical change needs `"confirmSafetyCriticalChange": true`, or it fails with 409 `ConfigurationRejected`.
+  The catalogue's `safety` says when: `Always` for the relay ids, the limit-switch type, the limit-switch bypass and its
+  consent, fault polarity, `AllowAnonymousStop` and `RequireHttps`; `WhenTurnedOff` for the operator lease, the IN4
+  interlock and its stop confirmation, and the departure check, which need it only to be set to `null`.
+- The group is checked as a whole, with the rules the controller checks at startup, before anything is saved. Every
+  problem is returned with 400. `RequireHttps` cannot be turned on while there is no HTTPS listener (409
+  `ConfigurationRejected`).
+- Roof settings do not change while the roof moves or a clear-fault pulse runs: 409 `OperationInProgress`. Stop first.
+- A setting that a layer above the settings file sets (the environment, the command line or the secrets directory)
+  cannot be changed through the API: 403 `SettingNotPermitted`, and `source` names the layer. Change or remove it
+  there. On the Pi, the deploy script and both compose profiles set `RoofControllerSecurity:RequireHttps` and
+  `RoofControllerOptionsV4:IgnorePhysicalLimitSwitches` in the environment, so those two are read-only there: change
+  them by redeploying (see [deployment.md](deployment.md#4-the-settings-directories)).
+- The change is applied and saved together. When the files cannot be saved, the roof settings are put back and the
+  change fails with 503 `SettingsStoreUnavailable`: nothing changed.
+
+Most settings take effect at once. The others show `restartPending` until the controller [restarts](#restart).
+
+Every change is written to the log as an `AUDIT` entry with the caller's key or person name, the old and new versions,
+and each setting's old and new value. A safety-critical change is logged at Warning, any other at Information. A
+secret is shown only as `(not set)` or `(set)`. So that no change can hide the entries, `Logging:LogLevel:Default`
+takes only `Trace`, `Debug` or `Information`, through the API and in the settings file.
+
+### Local-only settings
+
+`AllowIgnoringLimitSwitchesOnPhysicalHardware`, `DriveStopConfirmationTimeout` and `DepartureReleaseTimeout` are
+local-only, so that no one can, for example, allow ignoring the limit switches on the real roof from across the network.
+Only a local credential may change them:
+
+- an admin API key configured with `Local: true` and kept only on the controller, for the CLI in its shell; or
+- an admin's PIN session at a kiosk whose configured key has both `Kiosk: true` and `Local: true`.
+
+A password session and a key added through the API are never local. The check is on the credential, never on the
+caller's address: behind Docker's port publishing, and with the web UI in the same container, an address does not show
+where a person is. Everyone else gets 403 `SettingNotPermitted` for these settings. `RoofControl/Configuration` never
+changes them.
+
+### Secrets
+
+The Blue Iris user and password are write-only: `GET Settings` returns only whether each is set. A value set through the
+API is kept in the managed secrets file (`RoofControllerSettings:SecretsFilePath`, mode 0600, in a directory of its own
+with mode 0700), never in the settings file. It holds only these settings. The secrets directory, `/run/secrets`, stays
+read-only; a secret provisioned there takes precedence, and the API cannot change it.
+
+Sending a secret always counts as a change, even with the value it already has, so neither the answer nor the version
+shows whether a guess was right. The controller refuses to start with a settings file that holds a secret: any key whose
+last part is `Key` or `Password`, or a secret setting.
+
+The credentials stay with the server they were set for. Pointing `BlueIris:BaseUrl` at another server (another scheme,
+host or port) while a Blue Iris user or password is set gets 409 `ConfigurationRejected`, unless the same request sends
+both `BlueIris:UserName` and `BlueIris:Password` (null clears them). So a stolen admin credential cannot redirect the
+proxy to collect them. Credentials provisioned in the secrets directory cannot be sent through the API; with those,
+change the server where they are set. Turning the proxy off (null) is always allowed.
+
+### The settings file
+
+`RoofControllerSettings:FilePath` names the settings file; on the Pi it is `/etc/hvo-roof/config/appsettings.Local.json`
+(see [commissioning.md](commissioning.md#the-settings-file)). It uses the section and key names of `appsettings.json`.
+It holds only settings in the catalogue, because only those pass the checks of a change through the API. Other
+configuration, such as Kestrel endpoints or API keys, belongs in the deployment's environment or the secrets directory.
+
+- The configuration layers, lowest first: `appsettings.json`, `appsettings.{Environment}.json`, the settings file, the
+  managed secrets file, user secrets (Development only), environment variables, the command line and the secrets
+  directory. A higher layer overrides a lower one.
+- A list the file sets, such as `AllowedOrigins`, replaces the list below it, and `[]` clears it. (The layers above the
+  file still merge by index, as .NET configuration does.)
+- The file holds only the settings that differ from the layers below it, so a default that a later release changes
+  still takes effect.
+- Its first property, `HvoRoofSettings`, holds the version and when and by whom it was last saved, so `expectedVersion`
+  keeps working across restarts.
+- Each save writes a new file, flushes it, renames it over the old one and flushes the directory. A crash or power cut
+  leaves the old file or the new one, never a torn one. The file is mode 0644: it holds no secrets.
+- The controller reads comments and trailing commas in the file, but a save through the API rewrites it without them.
+- A file that is not valid JSON, sets a secret or a key outside the catalogue, or holds a value the controller cannot
+  use stops the start. The error names the key but never its value. The controller writes
+  `The roof controller did not start: ...` to standard error and exits with code 1. It never falls back to the defaults.
+- Without a `FilePath` (or a `SecretsFilePath`), changes are kept in memory and lost at a restart. `GET Settings`
+  reports `fileBacked: false` with a warning, and the deployment check warns outside Development.
+
+### Hand edits
+
+The file can be edited by hand while the controller runs. The controller compares the files on disk with the ones it
+loaded at every settings request. An edit it finds is **not** in effect:
+
+- `GET Settings` shows it to admins as `pendingHandEdit`: each changed setting, from and to (never a secret's value),
+  values that cannot be used, and whether reloading it needs confirmation or a local credential. An edit that sets a key
+  outside the catalogue shows as a file that cannot be used (`fileProblem`). An edit that turns `RequireHttps` on
+  without an HTTPS listener is listed with the values that cannot be used, because a restart would load it.
+- Every change through the API fails with 409 `SettingsHandEditPending`, so neither change silently overwrites the
+  other. `GET Settings` reports every setting as read-only until then.
+- `POST Settings/Reload` with the edit's `token` applies it, with the rules of a change through the API: 400 for values
+  that cannot be used, 409 `ConfigurationRejected` for a file that cannot be read, or for a safety-critical change
+  without `confirmSafetyCriticalChange: true`, 403 `SettingNotPermitted` for a local-only setting without a local
+  credential, and 409 `OperationInProgress` for a roof setting while the roof moves. The reload saves the file again,
+  without its comments, and is audited.
+- `POST Settings/Discard` with the token overwrites the edit with the settings in effect. It also recovers from a file
+  that can no longer be read. It is audited.
+- When the files change again after the edit was read, the token no longer matches: 409
+  `ConfigurationVersionConflict`. Read the settings again and review the edit.
+
+A restart also loads a pending edit, so it is refused while the edit could not be reloaded (below).
+
+### Restart
+
+`POST System/Restart` (Admin) restarts the controller so that settings marked `appliesAfterRestart` take effect. It:
+
+1. refuses with 409 `RestartRefused` when a pending hand edit could not be loaded as it is: the file cannot be read, a
+   value cannot be used, a safety-critical change is not confirmed with `confirmSafetyCriticalChange: true` in the
+   optional body, or a local-only setting changes and the caller has no local credential;
+2. stops the roof and verifies the stop, and refuses with 409 `RestartRefused` when it cannot be verified;
+3. writes an `AUDIT` entry, answers 202, then shuts down as on SIGTERM (running the verified stop again) and exits with
+   code 75.
+
+The container's restart policy, `unless-stopped`, starts it again. A controller that no supervisor restarts stays
+stopped.
 
 ## Web console
 
@@ -430,6 +617,11 @@ neither. When both are empty, no `Authorization` header is sent. An empty `BaseU
 | `RoofControllerSecurity:AllowedOrigins` | empty | Extra origins allowed for the console hub and `/account/*`. |
 | `AllowedHosts` | `*` | Set it to the controller's host names (for example `roof-pi;roof-pi.local;localhost`) to refuse DNS-rebinding requests. The list must include `localhost`: the container health check and the deploy script's in-container calls use it, and the [deployment check](deployment.md#the-deployment-check) refuses a list without it. Production logs a warning while it is `*`. |
 
+The first three are the `security` [settings](#settings) group, so admins can change them through the API, each with
+`ConfirmSafetyCriticalChange` except `AllowedOrigins`. On the Pi, `RequireHttps` is the exception: the deploy script
+(from `ALLOW_INSECURE_HTTP`) and both compose profiles set it in the environment, so the API shows it as read-only and a
+redeploy changes it. `AllowedHosts` is not in the catalogue.
+
 HSTS is sent only when an HTTPS endpoint is configured.
 
 Because `/health/ready` is exempt, readiness passes even when every remote API request would get 403. The deployment
@@ -445,5 +637,5 @@ never returned to clients outside Development.
 
 Keys, session tokens, passwords, PINs, cookies and Blue Iris credentials are never logged. Outgoing Blue Iris request
 headers are redacted in HTTP client logs. Each command logs the caller's key or person name and remote address.
-Configuration changes, sign-ins, sign-outs and identity changes log an `AUDIT` entry. Failed and locked-out sign-ins
+Configuration and settings changes, restarts, sign-ins, sign-outs and identity changes log an `AUDIT` entry. Failed and locked-out sign-ins
 log a `SECURITY` warning. A refused session token is logged at Warning with the remote address.

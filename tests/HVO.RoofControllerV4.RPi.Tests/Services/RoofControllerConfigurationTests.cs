@@ -192,6 +192,64 @@ public class RoofControllerConfigurationTests
     }
 
     [TestMethod]
+    public async Task ApplyConfiguration_WithoutTheLocalOnlySettings_KeepsTheCurrentOnes()
+    {
+        var (service, _, _) = await CreateInitializedAsync(hardwareBacked: true);
+        using var _ = service;
+        var before = service.GetConfigurationState();
+
+        var result = service.ApplyConfiguration(before.Options with
+        {
+            SafetyWatchdogTimeout = TimeSpan.FromSeconds(120),
+            AllowIgnoringLimitSwitchesOnPhysicalHardware = true,
+            DriveStopConfirmationTimeout = TimeSpan.FromSeconds(9),
+            DepartureReleaseTimeout = TimeSpan.FromSeconds(9)
+        }, includeLocalOnlySettings: false);
+
+        result.IsSuccessful.Should().BeTrue();
+        var after = service.GetConfigurationState();
+        after.Version.Should().Be(before.Version + 1);
+        after.Options.SafetyWatchdogTimeout.Should().Be(TimeSpan.FromSeconds(120));
+        after.Options.AllowIgnoringLimitSwitchesOnPhysicalHardware.Should().Be(before.Options.AllowIgnoringLimitSwitchesOnPhysicalHardware);
+        after.Options.DriveStopConfirmationTimeout.Should().Be(before.Options.DriveStopConfirmationTimeout);
+        after.Options.DepartureReleaseTimeout.Should().Be(before.Options.DepartureReleaseTimeout);
+    }
+
+    [TestMethod]
+    public async Task ApplyConfiguration_WithTheLocalOnlySettings_AppliesThem()
+    {
+        var (service, _, _) = await CreateInitializedAsync(hardwareBacked: true);
+        using var _ = service;
+
+        var result = service.ApplyConfiguration(service.GetConfigurationSnapshot() with
+        {
+            IgnorePhysicalLimitSwitches = true,
+            AllowIgnoringLimitSwitchesOnPhysicalHardware = true,
+            DepartureReleaseTimeout = TimeSpan.FromSeconds(9)
+        }, includeLocalOnlySettings: true);
+
+        result.IsSuccessful.Should().BeTrue();
+        service.GetConfigurationSnapshot().AllowIgnoringLimitSwitchesOnPhysicalHardware.Should().BeTrue();
+        service.GetConfigurationSnapshot().DepartureReleaseTimeout.Should().Be(TimeSpan.FromSeconds(9));
+        service.IsIgnoringPhysicalLimitSwitches.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task ApplyConfiguration_ShouldFail_WhenRoofIsMoving()
+    {
+        var (service, _, _) = await CreateInitializedAsync();
+        using var _ = service;
+        var before = service.GetConfigurationState();
+        service.Open().IsSuccessful.Should().BeTrue();
+
+        var result = service.ApplyConfiguration(before.Options with { SafetyWatchdogTimeout = TimeSpan.FromSeconds(120) }, includeLocalOnlySettings: true);
+
+        result.ErrorCode().Should().Be(RoofControllerErrorCode.OperationInProgress);
+        service.GetConfigurationState().Should().BeEquivalentTo(before);
+        service.Stop().IsSuccessful.Should().BeTrue();
+    }
+
+    [TestMethod]
     public void Initialize_ShouldRefuse_IgnoringLimitSwitchesOnPhysicalHardwareWithoutConsent()
     {
         var hat = new FakeRoofHat(hardwareBacked: true);

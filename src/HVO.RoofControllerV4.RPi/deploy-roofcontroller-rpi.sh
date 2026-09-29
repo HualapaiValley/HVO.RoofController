@@ -6,9 +6,9 @@ set -euo pipefail
 # 0. Settings are checked before any Docker call (numbers, EXTRA_DOCKER_ARGS, the HTTPS choice). If Docker cannot
 #    report the containers' state, the script stops without changing anything.
 # 1. Pre-flight: the new image runs --validate-deployment on the Pi with the final container's environment, devices,
-#    secrets, identity and certificate mounts (roof options, a usable RoofOperator/RoofAdmin key, this script's key, a
-#    readable and writable identity store, the HTTPS listener and certificate). If it fails, the running controller is
-#    not touched.
+#    secrets, identity, settings and certificate mounts (roof options, a usable RoofOperator/RoofAdmin key, this
+#    script's key, a readable and writable identity store, readable settings files in writable directories, the HTTPS
+#    listener and certificate). If it fails, the running controller is not touched.
 # 2. The running controller is replaced only after a VERIFIED stop: POST /Stop (from inside the container, over
 #    loopback) must return 200 with relayRegisterState=Verified, relayRegisterMask=0 and commandedMotion=None.
 #    Anything else aborts, unless --force-unverified-stop is given AND the operator types a confirmation. The old
@@ -105,6 +105,15 @@ SECRETS_DIR=${SECRETS_DIR:-/etc/hvo-roof/secrets}
 # /var/lib/hvo-roof/identity. It must exist (sudo install -d -m 0700 /var/lib/hvo-roof/identity). Set it to an empty
 # value to keep them in memory instead, where a restart forgets them (test rigs only; the pre-flight check warns).
 IDENTITY_DIR=${IDENTITY_DIR-/var/lib/hvo-roof/identity}
+# Directory ON THE PI holding the settings file (appsettings.Local.json: the settings changed through the API, or by
+# hand), mounted read-write at /etc/hvo-roof/config. It must exist (sudo install -d -m 0755 /etc/hvo-roof/config). Set it
+# to an empty value to keep settings changed through the API in memory instead (test rigs only; the pre-flight check
+# warns).
+CONFIG_DIR=${CONFIG_DIR-/etc/hvo-roof/config}
+# Directory ON THE PI holding the managed secrets file (secrets set through the API), mounted read-write at
+# /var/lib/hvo-roof/settings-secrets. It must exist (sudo install -d -m 0700 /var/lib/hvo-roof/settings-secrets). Empty
+# keeps them in memory, as for CONFIG_DIR.
+MANAGED_SECRETS_DIR=${MANAGED_SECRETS_DIR-/var/lib/hvo-roof/settings-secrets}
 # Directory ON THE PI holding the TLS certificate (PFX). Required unless ALLOW_INSECURE_HTTP=true.
 HTTPS_CERT_DIR=${HTTPS_CERT_DIR:-}
 HTTPS_CERT_FILE=${HTTPS_CERT_FILE:-roof-controller.pfx}
@@ -979,6 +988,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] HAT: ${HAT_SUMMARY}"
   fi
   echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; identity dir: ${IDENTITY_DIR:-<none, kept in memory>}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
+  echo "[dry-run] Settings dir on Pi: ${CONFIG_DIR:-<none, kept in memory>}; managed secrets dir: ${MANAGED_SECRETS_DIR:-<none, kept in memory>}"
   exit 0
 fi
 
@@ -1097,6 +1107,21 @@ if [[ -n "${IDENTITY_DIR}" ]]; then
   container_args+=(
     --mount "type=bind,src=${IDENTITY_DIR},dst=/var/lib/hvo-roof/identity"
     --env "RoofControllerSecurity__Identity__StorePath=/var/lib/hvo-roof/identity/identity.json"
+  )
+fi
+
+if [[ -n "${CONFIG_DIR}" ]]; then
+  # Read-write: the controller saves the settings changed through the API here, and the pre-flight check makes sure it can.
+  container_args+=(
+    --mount "type=bind,src=${CONFIG_DIR},dst=/etc/hvo-roof/config"
+    --env "RoofControllerSettings__FilePath=/etc/hvo-roof/config/appsettings.Local.json"
+  )
+fi
+
+if [[ -n "${MANAGED_SECRETS_DIR}" ]]; then
+  container_args+=(
+    --mount "type=bind,src=${MANAGED_SECRETS_DIR},dst=/var/lib/hvo-roof/settings-secrets"
+    --env "RoofControllerSettings__SecretsFilePath=/var/lib/hvo-roof/settings-secrets/secrets.json"
   )
 fi
 

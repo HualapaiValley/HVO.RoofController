@@ -603,13 +603,20 @@ public partial class RoofControllerServiceV4
 
     /// <inheritdoc />
     public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions)
-        => UpdateConfigurationCore(updatedOptions, expectedVersion: null);
+        => UpdateConfigurationCore(updatedOptions, expectedVersion: null, includeLocalOnlySettings: false);
 
     /// <inheritdoc />
     public Result<RoofControllerOptionsV4> UpdateConfiguration(RoofControllerOptionsV4 updatedOptions, long expectedVersion)
-        => UpdateConfigurationCore(updatedOptions, expectedVersion);
+        => UpdateConfigurationCore(updatedOptions, expectedVersion, includeLocalOnlySettings: false);
 
-    private Result<RoofControllerOptionsV4> UpdateConfigurationCore(RoofControllerOptionsV4? updatedOptions, long? expectedVersion)
+    /// <inheritdoc />
+    public Result<RoofControllerOptionsV4> ApplyConfiguration(RoofControllerOptionsV4 updatedOptions, bool includeLocalOnlySettings)
+        => UpdateConfigurationCore(updatedOptions, expectedVersion: null, includeLocalOnlySettings);
+
+    private Result<RoofControllerOptionsV4> UpdateConfigurationCore(
+        RoofControllerOptionsV4? updatedOptions,
+        long? expectedVersion,
+        bool includeLocalOnlySettings)
     {
         lock (_syncLock)
         {
@@ -635,11 +642,16 @@ public partial class RoofControllerServiceV4
                     "Configuration cannot be changed while the roof is moving or a clear-fault pulse is in progress.");
             }
 
-            // The consent flag is local-only configuration; the remote update cannot change it.
-            var candidate = updatedOptions with
-            {
-                AllowIgnoringLimitSwitchesOnPhysicalHardware = _options.AllowIgnoringLimitSwitchesOnPhysicalHardware
-            };
+            // The consent flag and the drive-stop and departure windows are local-only configuration: only a caller the
+            // settings store has checked for a local credential may change them.
+            var candidate = includeLocalOnlySettings
+                ? updatedOptions with { }
+                : updatedOptions with
+                {
+                    AllowIgnoringLimitSwitchesOnPhysicalHardware = _options.AllowIgnoringLimitSwitchesOnPhysicalHardware,
+                    DriveStopConfirmationTimeout = _options.DriveStopConfirmationTimeout,
+                    DepartureReleaseTimeout = _options.DepartureReleaseTimeout
+                };
 
             var validation = _optionsValidator.Validate(null, candidate);
             if (validation.Failed)

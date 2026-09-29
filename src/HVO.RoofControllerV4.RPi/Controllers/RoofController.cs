@@ -9,6 +9,7 @@ using HVO.Core.Results;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
+using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -34,17 +35,20 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         private readonly IRoofControllerServiceV4 _roofController;
         private readonly IOptionsMonitor<RoofControllerHostOptionsV4> _hostOptions;
         private readonly IEnumerable<IValidateOptions<RoofControllerOptionsV4>> _configurationValidators;
+        private readonly RoofSettingsStore _settings;
 
         public RoofController(
             ILogger<RoofController> logger,
             IRoofControllerServiceV4 roofController,
             IOptionsMonitor<RoofControllerHostOptionsV4> hostOptions,
-            IEnumerable<IValidateOptions<RoofControllerOptionsV4>> configurationValidators)
+            IEnumerable<IValidateOptions<RoofControllerOptionsV4>> configurationValidators,
+            RoofSettingsStore settings)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _roofController = roofController ?? throw new ArgumentNullException(nameof(roofController));
             _hostOptions = hostOptions ?? throw new ArgumentNullException(nameof(hostOptions));
             _configurationValidators = configurationValidators ?? throw new ArgumentNullException(nameof(configurationValidators));
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
 
         /// <summary>
@@ -144,7 +148,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         }
 
         /// <summary>
-        /// Retrieves the configuration applied to the roof controller service (Admin).
+        /// Retrieves the configuration applied to the roof controller service (Admin). The Version is the settings version
+        /// (<c>GET Settings</c>): any settings change moves it.
         /// </summary>
         /// <response code="200">Configuration snapshot including its Version.</response>
         [HttpGet("Configuration", Name = nameof(GetRoofConfiguration))]
@@ -152,15 +157,16 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(RoofConfigurationResponse), StatusCodes.Status200OK)]
         public ActionResult<RoofConfigurationResponse> GetRoofConfiguration()
         {
-            var state = _roofController.GetConfigurationState();
-            return Ok(CreateConfigurationResponse(state.Options, state.Version));
+            var version = _settings.Version;
+            return Ok(CreateConfigurationResponse(_roofController.GetConfigurationSnapshot(), version));
         }
 
         /// <summary>
         /// Replaces the remotely editable configuration (Admin). Every field but ConfirmSafetyCriticalChange must be sent,
         /// ExpectedVersion must match the current version, and changes to relay mapping, limit/fault polarity or
         /// IgnorePhysicalLimitSwitches, or turning off the operator lease or the IN4 interlock, also need
-        /// ConfirmSafetyCriticalChange=true. Refused while the roof is moving.
+        /// ConfirmSafetyCriticalChange=true. Refused while the roof is moving. The same change as <c>POST Settings/roof</c>:
+        /// it is saved to the settings file, and the local-only roof settings are left as they are.
         /// </summary>
         /// <response code="200">Configuration applied; the new configuration and version.</response>
         /// <response code="400">Missing or invalid values.</response>
@@ -184,21 +190,22 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             }
 
             var caller = RoofPrincipalFactory.DescribeCaller(User);
-            var current = _roofController.GetConfigurationState();
-            if (request.ExpectedVersion != current.Version)
+            var currentVersion = _settings.Version;
+            var currentOptions = _roofController.GetConfigurationSnapshot();
+            if (request.ExpectedVersion != currentVersion)
             {
                 return RoofProblem(
                     new RoofControllerException(
                         RoofControllerErrorCode.ConfigurationVersionConflict,
                         string.Create(
                             CultureInfo.InvariantCulture,
-                            $"The configuration changed since it was read (expected version {request.ExpectedVersion}, current version {current.Version}). Reload and retry.")),
+                            $"The configuration changed since it was read (expected version {request.ExpectedVersion}, current version {currentVersion}). Reload and retry.")),
                     "update_configuration");
             }
 
-            var updatedOptions = request.ToOptions(current.Options);
-            var changes = DescribeChanges(current.Options, updatedOptions);
-            var safetyCritical = request.ChangesSafetyCriticalSettings(current.Options);
+            var updatedOptions = request.ToOptions(currentOptions);
+            var changes = DescribeChanges(currentOptions, updatedOptions);
+            var safetyCritical = request.ChangesSafetyCriticalSettings(currentOptions);
             if (safetyCritical && !request.ConfirmSafetyCriticalChange)
             {
                 _logger.LogWarning(
@@ -232,27 +239,36 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 return ValidationProblem(ModelState);
             }
 
-            var result = _roofController.UpdateConfiguration(updatedOptions, request.ExpectedVersion!.Value);
-            if (!result.IsSuccessful)
+            var result = _settings.UpdateRoofFromAlias(updatedOptions, request.ExpectedVersion!.Value, User);
+            if (result.ValidationErrors is { } errors)
             {
-                _logger.LogWarning(
-                    "Configuration update by {Caller} refused by the controller: {Error}",
-                    caller,
-                    result.Error?.Message);
-                return RoofProblem(result.Error, "update_configuration");
+                foreach (var failure in errors)
+                {
+                    ModelState.AddModelError(nameof(RoofConfigurationRequest), failure);
+                }
+
+                return ValidationProblem(ModelState);
             }
 
-            var applied = _roofController.GetConfigurationState();
+            if (result.Error is { } code)
+            {
+                _logger.LogWarning(
+                    "Configuration update by {Caller} refused: {Error}",
+                    caller,
+                    result.Detail);
+                return RoofProblem(new RoofControllerException(code, result.Detail ?? "The configuration change was refused."), "update_configuration");
+            }
+
             _logger.Log(
                 safetyCritical ? LogLevel.Warning : LogLevel.Information,
                 "AUDIT configuration updated by {Caller} (version {OldVersion} -> {NewVersion}, safety-critical: {SafetyCritical}): {Changes}",
                 caller,
-                current.Version,
-                applied.Version,
+                currentVersion,
+                result.Version,
                 safetyCritical,
                 changes);
 
-            return Ok(CreateConfigurationResponse(result.Value, applied.Version));
+            return Ok(CreateConfigurationResponse(_roofController.GetConfigurationSnapshot(), result.Version));
         }
 
         private ActionResult<RoofStatusResponse> RunCommand<T>(string command, Func<Result<T>> execute)

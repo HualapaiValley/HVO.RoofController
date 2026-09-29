@@ -13,6 +13,7 @@ using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Middleware;
 using HVO.RoofControllerV4.RPi.Security.Identity;
+using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -101,6 +102,7 @@ public static partial class DeploymentValidator
         ValidateLogLevels(configuration, problems);
         var security = ValidateApiKeys(configuration, problems, notes);
         ValidateIdentityStore(configuration, environment, problems, warnings, notes);
+        ValidateSettingsFiles(configuration, environment, problems, warnings, notes);
         ValidateTransport(configuration, environment, security, timeProvider.GetUtcNow(), problems, warnings, notes);
 
         if (security?.AllowAnonymousStop == true)
@@ -401,6 +403,62 @@ public static partial class DeploymentValidator
                 warnings.Add(
                     $"The identity store {file.Path} can be read or written by other users; the controller saves it readable " +
                     "by itself only at the next change. Run chmod 600 on it.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The settings file and the managed secrets file (#42): configured, and in a directory the controller can write.
+    /// Their contents were read with the rest of the configuration, so a file that cannot be used has already failed the
+    /// check.
+    /// </summary>
+    private static void ValidateSettingsFiles(
+        IConfiguration configuration,
+        IHostEnvironment environment,
+        List<string> problems,
+        List<string> warnings,
+        List<string> notes)
+    {
+        foreach (var (key, kind) in new[]
+                 {
+                     (RoofSettingsConfiguration.FilePathKey, RoofSettingsFileKind.Settings),
+                     (RoofSettingsConfiguration.SecretsFilePathKey, RoofSettingsFileKind.Secrets)
+                 })
+        {
+            var path = RoofSettingsConfiguration.Resolve(configuration[key], environment.ContentRootPath);
+            if (path is null)
+            {
+                if (!environment.IsDevelopment())
+                {
+                    warnings.Add(
+                        $"No {RoofSettingsFile.Describe(kind)} is configured ({key}): settings changed through the API would " +
+                        "be kept in memory and lost when the controller restarts. Mount a directory for it (docs/deployment.md).");
+                }
+
+                continue;
+            }
+
+            if (RoofSettingsFile.CheckWritable(path, kind) is { } problem)
+            {
+                problems.Add(problem);
+            }
+            else
+            {
+                notes.Add(kind == RoofSettingsFileKind.Settings ? $"Settings file: {path}." : $"Managed secrets file: {path}.");
+            }
+        }
+
+        // The settings the files set, checked as the controller checks them at startup, so a bad file stops the deployment
+        // instead of the new controller.
+        if (configuration is IConfigurationRoot root)
+        {
+            try
+            {
+                new RoofSettingsValidator([new RoofControllerOptionsV4Validator()], environment).ValidateStartup(root);
+            }
+            catch (RoofSettingsFileException ex)
+            {
+                problems.Add(ex.Message);
             }
         }
     }

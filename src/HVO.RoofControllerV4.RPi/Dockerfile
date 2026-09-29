@@ -87,11 +87,10 @@ RUN apt-get update && \
 # Copy the published binaries from the build stage
 COPY --from=build /app/publish .
 
-# Configure ASP.NET Core and logging defaults
+# Configure ASP.NET Core. The log levels come from appsettings.json, not the environment, so that the settings API
+# can change them (an environment variable is a layer above the settings file, which would make them read-only).
 ENV ASPNETCORE_URLS=http://+:8080 \
     ASPNETCORE_ENVIRONMENT=Production \
-    Logging__LogLevel__Default=Information \
-    Logging__LogLevel__Microsoft.AspNetCore=Warning \
     TZ=UTC \
     HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI} \
     HVO_CONTAINER_RPI_HINT=${HVO_CONTAINER_RPI_HINT}

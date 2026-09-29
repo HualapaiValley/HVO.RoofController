@@ -8,10 +8,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Settings;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation.Drive;
 using HVO.RoofControllerV4.Simulation.Emulator;
+using HVO.RoofControllerV4.Simulation.Hat;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
@@ -20,7 +24,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
 /// The controller's own life cycle on the emulated plant: the host stopping during travel (as <c>docker stop</c>
 /// does), a crash that leaves the relays as they were followed by a restart, and the drive's mains cycled during
 /// travel, with the start-too-soon trip (F_UF) the drive raises when a run command arrives within 2 s of power-up.
-/// The roof is the documented 2 m (about 21 s from limit to limit), so each event happens in mid-travel.
+/// The roof is the documented 2 m (about 21 s from limit to limit), so each event happens in mid-travel. A restart
+/// through the API is refused while the relays cannot be read back.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -66,6 +71,31 @@ public sealed class LifecycleScenarios
         logs.Entries.Should().NotContain(e => e.Level >= LogLevel.Error);
 
         await AtRestInMidTravelAsync(rig);
+    }
+
+    [TestMethod]
+    public async Task ARestart_IsRefused_WhileTheRelaysCannotBeReadBack_AndTheControllerKeepsRunning()
+    {
+        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production());
+        using var admin = rig.CreateApiClient(TestApiKeys.Admin);
+        rig.Session.Client.FailWhen = access => access.IsRead && access.Covers(SmI010Board.RelayValueRegister);
+
+        var response = await admin.PostAsync("/api/v4.0/System/Restart", content: null);
+
+        var problem = await ApiJson.ReadElementAsync(response);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, problem.ToString());
+        problem.GetProperty("code").GetString().Should().Be(nameof(RoofControllerErrorCode.RestartRefused));
+        problem.GetProperty("detail").GetString().Should().StartWith("The roof stop could not be verified, so the controller was not restarted:");
+        rig.App.Services.GetRequiredService<RoofRestartSignal>().Requested.Should().BeFalse();
+        rig.App.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.IsCancellationRequested.Should().BeFalse();
+        rig.Logs.Entries.Should().Contain(e => e.Level == LogLevel.Warning
+            && e.Message.StartsWith("Restart by test-admin refused: the roof stop could not be verified", StringComparison.Ordinal));
+        rig.Plant.RelayRegister.Should().Be(0, "the stop still turned the relays off; only the read-back failed");
+        rig.Session.Client.InjectedFailures.Should().BeGreaterThan(0);
+
+        rig.Session.Client.FailWhen = null;
+        (await rig.WaitForControllerAsync(s => s.RelayRegisterState == RoofRelayRegisterState.Verified && s.RelayRegisterReadsHealthy,
+            TimeSpan.FromSeconds(10), "supervision to verify the relays once they can be read")).ShouldBeDeenergized(rig);
     }
 
     [TestMethod]

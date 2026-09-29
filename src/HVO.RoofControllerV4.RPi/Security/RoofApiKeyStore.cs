@@ -18,12 +18,16 @@ namespace HVO.RoofControllerV4.RPi.Security;
 /// <param name="KeyId">Non-reversible identifier of the key value; changes when the key is rotated.</param>
 /// <param name="Kiosk">True for a kiosk's key, at which people may sign in with a PIN.</param>
 /// <param name="Source">Whether the key comes from the configuration or was added through the API.</param>
+/// <param name="Local">
+/// True for a configured key marked <c>Local</c>: a local credential, which may change local-only settings.
+/// </param>
 public sealed record RoofApiKeyIdentity(
     string Name,
     string Role,
     string KeyId,
     bool Kiosk = false,
-    RoofApiKeySource Source = RoofApiKeySource.Configuration);
+    RoofApiKeySource Source = RoofApiKeySource.Configuration,
+    bool Local = false);
 
 /// <summary>
 /// Holds the API keys as SHA-256 hashes and validates presented keys in constant time (the presented key is hashed and
@@ -272,7 +276,7 @@ public sealed class RoofApiKeyStore : IDisposable
                 continue;
             }
 
-            entries.Add(new Entry(new RoofApiKeyIdentity(key.Name.Trim(), role, ComputeKeyId(hash), key.Kiosk), hash));
+            entries.Add(new Entry(new RoofApiKeyIdentity(key.Name.Trim(), role, ComputeKeyId(hash), key.Kiosk, RoofApiKeySource.Configuration, key.Local), hash));
         }
 
         var configuredNames = entries.Select(entry => entry.Identity.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);

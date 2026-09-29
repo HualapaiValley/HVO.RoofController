@@ -56,7 +56,7 @@ the roof against this server; use the authenticated browser console for operator
   and `/health/ready` stay anonymous.
 - **Limit override on hardware.** `IgnorePhysicalLimitSwitches` is refused on physical
   hardware unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local
-  configuration (it cannot be set through the API).
+  configuration (through the API, only a local credential may change it; #42).
 - **Camera.** Blue Iris credentials come from `BlueIris:UserName` and `BlueIris:Password`
   (environment variables or Docker secrets); the hard-coded credential was removed and must be
   rotated because it remains in the git history. `GET api/v1.0/Camera/{id}/mjpeg` needs a
@@ -68,6 +68,12 @@ the roof against this server; use the authenticated browser console for operator
   that used `http://<pi>:8080` must move to `https://<pi>:8443`. The compose `pi` profile
   likewise needs a certificate and publishes only 8443; the new `pi-lan-http` profile is the
   explicit plain-HTTP opt-out. See [docs/deployment.md](docs/deployment.md).
+- **Settings directories (#42).** Before upgrading, create `/etc/hvo-roof/config` (mode 0755)
+  and `/var/lib/hvo-roof/settings-secrets` (mode 0700) on the Pi. The deploy script and both
+  Pi compose profiles mount them, and Docker refuses to start the controller while either is
+  missing. A version from before this change ignores the settings file, so after rolling back
+  to one, check `GET api/v4.0/RoofControl/Configuration` against the wiring. See
+  [docs/deployment.md](docs/deployment.md#upgrading-to-the-settings-file).
 
 ### Added
 
@@ -101,6 +107,33 @@ the roof against this server; use the authenticated browser console for operator
   `identity_store` Unhealthy in `/health`, while configured keys and Stop keep working. The
   deployment check fails on an unusable store (including a `StorePath` that is a directory). See
   [docs/security.md](docs/security.md#people-sessions-and-managed-api-keys).
+- Remote settings and restart (#42). `GET api/v4.0/Settings/Catalogue` describes every
+  setting once: group, type, range, default, the role that may change it, and whether it is
+  safety-critical, local-only, a secret or needs a restart. `GET api/v4.0/Settings` returns the
+  values in effect, where each comes from and the version. `POST .../Settings/{group}` changes
+  one group (`roof`, `controller`, `camera`, `security`, `identity` and `logging` need
+  `RoofAdmin`; `ui`, the default camera and the kiosk screen timeout, needs `RoofOperator`),
+  with the configuration rules: `ExpectedVersion`, every field, `ConfirmSafetyCriticalChange`
+  for a safety-critical change, no roof change while the roof moves or a clear-fault pulse
+  runs, and an `AUDIT` entry naming the caller. The local-only settings
+  (`AllowIgnoringLimitSwitchesOnPhysicalHardware`, `DriveStopConfirmationTimeout`,
+  `DepartureReleaseTimeout`) need a local credential: a configured admin key marked `Local`,
+  or an admin's PIN session at a kiosk whose key is marked `Local`; the check is on the
+  credential, never the address. Changes are saved atomically to a settings file
+  (`RoofControllerSettings:FilePath`, on the Pi `/etc/hvo-roof/config/appsettings.Local.json`)
+  that holds only the values that differ from the shipped defaults, and the version, so
+  changes and `ExpectedVersion` survive a restart. The Blue Iris user and password are
+  write-only and kept in a separate managed secrets file (mode 0600). A hand edit to the file
+  is shown as pending and blocks API changes (409 `SettingsHandEditPending`) until an admin
+  reloads it, checked like an API change, or discards it. A file the controller cannot use
+  stops startup with a clear error and exit code 1. `POST api/v4.0/System/Restart`
+  (`RoofAdmin`) stops the roof, verifies the stop (409 `RestartRefused` otherwise), answers 202
+  and exits with code 75 for the restart policy. `POST .../RoofControl/Configuration` is now
+  the `roof` group under its old route, and its changes are saved too. The deploy script
+  (`CONFIG_DIR`, `MANAGED_SECRETS_DIR`) and both Pi compose profiles mount the two
+  directories, and the deployment check fails when they cannot be written. See
+  [docs/security.md](docs/security.md#settings) and
+  [docs/commissioning.md](docs/commissioning.md#the-settings-file).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.

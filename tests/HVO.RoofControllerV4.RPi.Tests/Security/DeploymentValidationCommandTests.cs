@@ -111,6 +111,50 @@ public sealed class DeploymentValidationCommandTests
         report.Should().NotContain(value);
     }
 
+    [TestMethod]
+    public void TheSettingsFiles_AreCheckedWithTheValuesTheySet()
+    {
+        WriteAppSettings("""{ "urls": "http://+:8080", "AllowedHosts": "roof-pi;localhost", "RoofControllerSecurity": { "RequireHttps": false } }""");
+        WriteOperatorKeySecrets();
+        var settingsPath = Path.Combine(_contentRoot, "config", "appsettings.Local.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+        File.WriteAllText(settingsPath, """{ "RoofControllerOptionsV4": { "SafetyWatchdogTimeout": "00:03:00" } }""");
+
+        var (exitCode, report) = RunSettingsValidation(settingsPath);
+
+        exitCode.Should().Be(0, report);
+        report.Should().Contain($"Settings file: {settingsPath}.").And.Contain("Managed secrets file: ");
+    }
+
+    [TestMethod]
+    [DataRow("{ \"RoofControllerUi\": { \"DefaultCamera\": \"value-inside-torn-json", "not valid JSON")]
+    [DataRow("{ \"RoofControllerOptionsV4\": { \"SafetyWatchdogTimeout\": \"00:00:01\" } }", "SafetyWatchdogTimeout must be between 5 and 600 seconds")]
+    public void ASettingsFileTheControllerCouldNotUse_Fails_WithoutValues(string content, string expected)
+    {
+        WriteAppSettings("""{ "urls": "http://+:8080", "AllowedHosts": "roof-pi;localhost", "RoofControllerSecurity": { "RequireHttps": false } }""");
+        WriteOperatorKeySecrets();
+        var settingsPath = Path.Combine(_contentRoot, "config", "appsettings.Local.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+        File.WriteAllText(settingsPath, content);
+
+        var (exitCode, report) = RunSettingsValidation(settingsPath);
+
+        exitCode.Should().Be(1, report);
+        report.Should().Contain("PROBLEM: ").And.Contain(settingsPath).And.Contain(expected);
+        report.Should().NotContain("value-inside-torn-json").And.NotContain(OperatorKey);
+    }
+
+    private (int ExitCode, string Report) RunSettingsValidation(string settingsPath)
+    {
+        var secretsDirectory = Directory.CreateDirectory(Path.Combine(_contentRoot, "managed-secrets")).FullName;
+        return RunValidation(
+            DeploymentValidator.CommandLineSwitch,
+            "--contentRoot", _contentRoot,
+            "--environment", "Production",
+            "--RoofControllerSettings:FilePath", settingsPath,
+            "--RoofControllerSettings:SecretsFilePath", Path.Combine(secretsDirectory, "managed-secrets.json"));
+    }
+
     private (int ExitCode, string Report) RunValidation(params string[] args)
     {
         if (args.Length == 0)

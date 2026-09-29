@@ -96,7 +96,8 @@ public sealed record class RoofConfigurationRequest : IValidatableObject
     /// <summary>
     /// Builds the options this request describes. Callers must have validated the request first.
     /// Local-only settings (such as <see cref="RoofControllerOptionsV4.AllowIgnoringLimitSwitchesOnPhysicalHardware"/>)
-    /// are copied from <paramref name="current"/> and can never be changed remotely.
+    /// are copied from <paramref name="current"/>: this endpoint never changes them. The settings API does, for a caller
+    /// with a local credential.
     /// </summary>
     public RoofControllerOptionsV4 ToOptions(RoofControllerOptionsV4 current)
     {

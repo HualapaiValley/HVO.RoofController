@@ -172,6 +172,75 @@ public sealed class DeploymentValidatorTests
     }
 
     [TestMethod]
+    public void NoSettingsFiles_WarnOutsideDevelopment()
+    {
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+
+        var production = Validate(configuration);
+        var development = Validate(configuration, Environments.Development);
+
+        production.Problems.Should().BeEmpty();
+        production.Warnings.Should().ContainSingle(warning => warning.StartsWith("No settings file is configured (RoofControllerSettings:FilePath)"));
+        production.Warnings.Should().ContainSingle(warning => warning.StartsWith("No managed secrets file is configured (RoofControllerSettings:SecretsFilePath)"));
+        development.Warnings.Should().NotContain(warning => warning.Contains("RoofControllerSettings"));
+    }
+
+    [TestMethod]
+    public void WritableSettingsFiles_Pass_AndLeaveNothingBehind()
+    {
+        var settingsPath = Path.Combine(_directory, "config", "appsettings.Local.json");
+        var secretsPath = Path.Combine(_directory, "secrets", "managed-secrets.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(secretsPath)!);
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration["RoofControllerSettings:FilePath"] = settingsPath;
+        configuration["RoofControllerSettings:SecretsFilePath"] = secretsPath;
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().BeEmpty();
+        result.Notes.Should().Contain($"Settings file: {settingsPath}.").And.Contain($"Managed secrets file: {secretsPath}.");
+        result.Warnings.Should().NotContain(warning => warning.Contains("RoofControllerSettings"));
+        Directory.EnumerateFiles(_directory, "*", SearchOption.AllDirectories).Should().BeEmpty("the check leaves no probe file");
+    }
+
+    [TestMethod]
+    [DataRow("RoofControllerSettings:FilePath", "appsettings.Local.json", "settings file", "0755")]
+    [DataRow("RoofControllerSettings:SecretsFilePath", "secrets.json", "managed secrets file", "0700")]
+    public void ASettingsFileInAMissingDirectory_Fails_AndSaysHowToCreateIt(string key, string name, string kind, string mode)
+    {
+        var path = Path.Combine(_directory, "not-mounted", name);
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration[key] = path;
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle(problem => problem.Contains("does not exist")).Which.Should()
+            .Contain($"The {kind} directory '{Path.GetDirectoryName(path)}' does not exist")
+            .And.Contain($"'sudo install -d -m {mode} <directory>' (docs/deployment.md, preparation step 4)")
+            .And.NotContain("the deploy script does");
+    }
+
+    [TestMethod]
+    [DataRow("RoofControllerSettings:FilePath", "settings file")]
+    [DataRow("RoofControllerSettings:SecretsFilePath", "managed secrets file")]
+    public void ASettingsFilePathThatIsADirectory_Fails(string key, string kind)
+    {
+        var path = Path.Combine(_directory, "config");
+        Directory.CreateDirectory(path);
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration[key] = path;
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle().Which.Should().StartWith($"The {kind} path '{path}' is a directory.");
+    }
+
+    [TestMethod]
     [DataRow("missing-directory", "does not exist")]
     [DataRow("corrupt-file", "is not valid JSON")]
     [DataRow("bad-threshold", "LockoutThreshold must be at least 1")]

@@ -61,6 +61,11 @@ public static class RoofControllerApiContract
         RoofControllerErrorCode.LastAdministrator => 409,
         RoofControllerErrorCode.IdentityStoreUnavailable => 503,
         RoofControllerErrorCode.CredentialNotAllowed => 403,
+        RoofControllerErrorCode.SettingNotPermitted => 403,
+        RoofControllerErrorCode.SettingsHandEditPending => 409,
+        RoofControllerErrorCode.SettingsStoreUnavailable => 503,
+        RoofControllerErrorCode.RestartRefused => 409,
+        RoofControllerErrorCode.SettingNotFound => 404,
         _ => 500
     };
 }
