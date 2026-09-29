@@ -337,7 +337,8 @@ only after a restart (`appliesAfterRestart`), needs a local credential (`localOn
 - the settings `version`, which every change must send back;
 - each value in effect and where it comes from (`source`: the settings file, the managed secrets file, the shipped
   defaults, the environment, the secrets directory, the command line or the code default);
-- whether the caller may change it now (`canWrite`, and `readOnlyReason` when not);
+- whether the caller may change it now (`canWrite`; when not, `readOnlyReason`, and `readOnlyCode`, the error code a
+  change would be refused with: `SettingNotPermitted`, `SettingsHandEditPending` or `SettingsStoreUnavailable`);
 - `restartPending` for a saved value that takes effect only after a restart;
 - for admins only: the settings file's path, a [pending hand edit](#hand-edits), and warnings.
 

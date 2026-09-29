@@ -113,6 +113,9 @@ public sealed class RoofSettingsFormField
     /// <summary>Why the caller may not change it.</summary>
     public string? ReadOnlyReason => CanWrite ? null : State?.ReadOnlyReason ?? "The controller did not return this setting.";
 
+    /// <summary>The code the controller would refuse a change with (null when it may be changed, or is unknown).</summary>
+    public RoofControllerErrorCode? ReadOnlyCode => CanWrite ? null : State?.ReadOnlyCode;
+
     /// <summary>
     /// A change needs a local credential: a configured admin key marked <c>Local</c>, or an admin PIN at a local kiosk.
     /// </summary>

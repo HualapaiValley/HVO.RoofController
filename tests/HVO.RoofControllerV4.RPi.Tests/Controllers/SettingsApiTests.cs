@@ -383,6 +383,7 @@ public sealed class SettingsApiTests
         var remoteView = State(await GetAsync(admin), Departure);
         remoteView.CanWrite.Should().BeFalse();
         remoteView.ReadOnlyReason.Should().Contain("is local-only");
+        remoteView.ReadOnlyCode.Should().Be(RoofControllerErrorCode.SettingNotPermitted, "it is the code a write would get");
         var remote = await ReadGroupAsync(admin, RoofSettingsContract.RoofGroup);
         remote.Values.Should().NotContainKey(Departure);
         var refused = await ProblemAsync(await PostGroupAsync(admin, RoofSettingsContract.RoofGroup,
@@ -614,6 +615,7 @@ public sealed class SettingsApiTests
         state.Source.Should().Be("command line");
         state.CanWrite.Should().BeFalse();
         state.ReadOnlyReason.Should().Contain("is set by the command line, which takes precedence over the settings file");
+        state.ReadOnlyCode.Should().Be(RoofControllerErrorCode.SettingNotPermitted);
 
         var request = await ReadGroupAsync(@operator, RoofSettingsContract.UiGroup, values => values[KioskTimeout] = Json("600"));
         request.Values.Should().NotContainKey(DefaultCamera);
@@ -862,11 +864,13 @@ public sealed class SettingsApiTests
         pending.Warnings.Should().Contain("The settings file was edited outside the API. Review the pending edit, then reload or discard it.");
         State(pending, DefaultCamera).Value!.Value.GetString().Should().Be("Roof", "a hand edit takes effect only when reloaded");
         State(pending, DefaultCamera).CanWrite.Should().BeFalse();
+        State(pending, DefaultCamera).ReadOnlyCode.Should().Be(RoofControllerErrorCode.SettingsHandEditPending);
         host.Services.GetRequiredService<IOptionsMonitor<RoofControllerUiOptions>>().CurrentValue.DefaultCamera.Should().Be("Roof");
 
         var operatorView = await GetAsync(@operator);
         operatorView.PendingHandEdit.Should().BeNull("only an admin reviews an edit");
         State(operatorView, DefaultCamera).ReadOnlyReason.Should().Contain("edited outside the API");
+        State(operatorView, DefaultCamera).ReadOnlyCode.Should().Be(RoofControllerErrorCode.SettingsHandEditPending);
         var blocked = await ProblemAsync(await PostGroupAsync(@operator, RoofSettingsContract.UiGroup, new RoofSettingsUpdateRequest
         {
             ExpectedVersion = 1,

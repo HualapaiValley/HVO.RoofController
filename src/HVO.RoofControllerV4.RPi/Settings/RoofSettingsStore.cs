@@ -243,7 +243,7 @@ public sealed class RoofSettingsStore
 
                 if (refusal is not null)
                 {
-                    forbidden.Add(refusal);
+                    forbidden.Add(refusal.Reason);
                     continue;
                 }
 
@@ -344,7 +344,7 @@ public sealed class RoofSettingsStore
 
                 if (WriteRefusal(layers, definition, user, local: false) is { } refusal)
                 {
-                    forbidden.Add(refusal);
+                    forbidden.Add(refusal.Reason);
                     continue;
                 }
 
@@ -548,7 +548,11 @@ public sealed class RoofSettingsStore
             }
 
             var refusal = WriteRefusal(layers, definition, user, local)
-                ?? (edit is null ? null : "The settings file was edited outside the API; an admin must reload or discard that edit first.");
+                ?? (edit is null
+                    ? null
+                    : new Refusal(
+                        RoofControllerErrorCode.SettingsHandEditPending,
+                        "The settings file was edited outside the API; an admin must reload or discard that edit first."));
             var restartPending = definition.AppliesAfterRestart
                 && _startupValues.TryGetValue(definition.Key, out var startup)
                 && !RoofSettingDefinition.ValuesEqual(startup, value);
@@ -559,9 +563,10 @@ public sealed class RoofSettingsStore
                 IsSet(value),
                 Source(layers, definition),
                 refusal is null,
-                refusal,
+                refusal?.Reason,
                 restartPending,
-                problem));
+                problem,
+                refusal?.Code));
         }
 
         var warnings = new List<string>();
@@ -952,17 +957,17 @@ public sealed class RoofSettingsStore
             : null;
 
     /// <summary>Why <paramref name="user"/> may not change <paramref name="definition"/>, or null.</summary>
-    private string? WriteRefusal(Layers layers, RoofSettingDefinition definition, ClaimsPrincipal user, bool local)
+    private Refusal? WriteRefusal(Layers layers, RoofSettingDefinition definition, ClaimsPrincipal user, bool local)
     {
         if (!user.IsInRole(definition.WriteRole))
         {
-            return $"{definition.Key} needs the {definition.WriteRole} role.";
+            return new Refusal(RoofControllerErrorCode.SettingNotPermitted, $"{definition.Key} needs the {definition.WriteRole} role.");
         }
 
         var layer = layers.LayerOf(definition);
         if (layer is null)
         {
-            return "The settings store is not available.";
+            return new Refusal(RoofControllerErrorCode.SettingsStoreUnavailable, "The settings store is not available.");
         }
 
         var index = layers.IndexOf(layer);
@@ -970,15 +975,19 @@ public sealed class RoofSettingsStore
         {
             if (RoofConfigurationView.Sets(layers.Providers[i], definition.Key, definition.IsList))
             {
-                return $"{definition.Key} is set by the {Label(layers.Providers[i])}, which takes precedence over the " +
-                    "settings file; change it there.";
+                return new Refusal(
+                    RoofControllerErrorCode.SettingNotPermitted,
+                    $"{definition.Key} is set by the {Label(layers.Providers[i])}, which takes precedence over the " +
+                    "settings file; change it there.");
             }
         }
 
         if (definition.LocalOnly && !local)
         {
-            return $"{definition.Key} is local-only: change it at the controller, from the kiosk with an admin PIN or " +
-                "with a local admin API key.";
+            return new Refusal(
+                RoofControllerErrorCode.SettingNotPermitted,
+                $"{definition.Key} is local-only: change it at the controller, from the kiosk with an admin PIN or " +
+                "with a local admin API key.");
         }
 
         return null;
@@ -1252,6 +1261,9 @@ public sealed class RoofSettingsStore
     }
 
     private sealed record DiskState(string Hash, RoofSettingsDocument? Document, string? Problem);
+
+    /// <summary>Why a setting cannot be changed: the code the controller answers a change with, and the reason.</summary>
+    private sealed record Refusal(RoofControllerErrorCode Code, string Reason);
 
     private sealed record HandEdit(
         string Token,

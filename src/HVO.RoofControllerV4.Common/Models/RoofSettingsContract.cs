@@ -139,6 +139,12 @@ public sealed record RoofSettingsCatalogueResponse(IReadOnlyList<RoofSettingsGro
 /// <param name="ReadOnlyReason">Why the caller may not change it, when <paramref name="CanWrite"/> is false.</param>
 /// <param name="RestartPending">True when a saved change takes effect only after a restart.</param>
 /// <param name="Problem">Why the stored value cannot be used, when it cannot.</param>
+/// <param name="ReadOnlyCode">
+/// The error code a change would be refused with, when <paramref name="CanWrite"/> is false:
+/// <see cref="RoofControllerErrorCode.SettingNotPermitted"/> (the role, a local-only setting, or a value set by a source
+/// that takes precedence), <see cref="RoofControllerErrorCode.SettingsHandEditPending"/> or
+/// <see cref="RoofControllerErrorCode.SettingsStoreUnavailable"/>.
+/// </param>
 public sealed record RoofSettingState(
     string Key,
     string Group,
@@ -148,7 +154,8 @@ public sealed record RoofSettingState(
     bool CanWrite,
     string? ReadOnlyReason,
     bool RestartPending,
-    string? Problem);
+    string? Problem,
+    RoofControllerErrorCode? ReadOnlyCode = null);
 
 /// <summary>One changed setting in a pending hand edit. Both values are null for a secret.</summary>
 public sealed record RoofSettingChange(string Key, JsonElement? From, JsonElement? To, bool Secret);
