@@ -291,6 +291,35 @@ internal sealed class TuiDriver : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs the loop until <paramref name="until"/> holds, or fails after 10 s: for waiting while a request is held on
+    /// its way, which <see cref="WaitIdle"/> would wait for.
+    /// </summary>
+    public void WaitFor(string what, Func<bool> until) => PumpUntil(App, what, until);
+
+    /// <summary>Runs <paramref name="app"/>'s loop until <paramref name="until"/> holds, or fails after 10 s.</summary>
+    public static void PumpUntil(IApplication app, string what, Func<bool> until)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (true)
+        {
+            app.TimedEvents!.RunTimers();
+            if (until())
+            {
+                app.TimedEvents!.RunTimers();
+                return;
+            }
+
+            if (DateTime.UtcNow > deadline)
+            {
+                app.LayoutAndDraw(true);
+                throw new AssertFailedException($"Timed out waiting for {what}. Screen:\n{app.Driver!.ToString()}");
+            }
+
+            Thread.Sleep(10);
+        }
+    }
+
     public void Dispose()
     {
         if (_session is { } session)
@@ -346,5 +375,69 @@ internal sealed class GatedHandler(HttpMessageHandler inner, string path, Task g
         }
 
         return await base.SendAsync(request, cancellationToken);
+    }
+}
+
+/// <summary>
+/// Holds the answer to the request whose path ends in <paramref name="path"/> (while <paramref name="holding"/> says so,
+/// always when not given) until <paramref name="gate"/> opens, and sets <paramref name="reached"/> when it is held. With
+/// <paramref name="forwardFirst"/> the controller gets the request at once and only its answer waits; without it, the
+/// request itself waits, then is answered by <paramref name="heldAnswer"/> or sent on.
+/// </summary>
+internal sealed class HeldAnswerHandler(
+    HttpMessageHandler inner,
+    string path,
+    TaskCompletionSource reached,
+    Task gate,
+    Func<bool>? holding = null,
+    bool forwardFirst = true,
+    Func<HttpRequestMessage, HttpResponseMessage>? heldAnswer = null) : DelegatingHandler(inner)
+{
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (!request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase) || !(holding?.Invoke() ?? true))
+        {
+            return await base.SendAsync(request, cancellationToken);
+        }
+
+        if (!forwardFirst)
+        {
+            reached.TrySetResult();
+            await gate.WaitAsync(cancellationToken);
+            return heldAnswer?.Invoke(request) ?? await base.SendAsync(request, cancellationToken);
+        }
+
+        var response = await base.SendAsync(request, CancellationToken.None);
+        reached.TrySetResult();
+        try
+        {
+            await gate.WaitAsync(cancellationToken);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+
+        return response;
+    }
+}
+
+/// <summary>
+/// Sends the request whose path ends in <paramref name="path"/> to the controller, then loses its answer: throws
+/// <paramref name="error"/>, as a connection dropping before the answer arrives does.
+/// </summary>
+internal sealed class DroppedAnswerHandler(HttpMessageHandler inner, string path, Exception error) : DelegatingHandler(inner)
+{
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var response = await base.SendAsync(request, cancellationToken);
+        if (!request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase))
+        {
+            return response;
+        }
+
+        response.Dispose();
+        throw error;
     }
 }

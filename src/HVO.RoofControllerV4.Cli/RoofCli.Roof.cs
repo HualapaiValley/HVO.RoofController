@@ -312,6 +312,12 @@ public static partial class RoofCli
                 // The command may have reached the controller before Ctrl+C, and the roof may be moving.
                 return await StopOnInterruptAsync(context, client).ConfigureAwait(false);
             }
+            catch (Exception error) when (MayHaveReachedController(error))
+            {
+                // Not "not sent": the controller may have acted on it. The exit code stays the failure's.
+                throw new RoofCliRefusedException(
+                    Unanswered(error, verb, $"run '{CommandName} stop', or use the stop control at the roof"), RoofCliContext.Classify(error).Code, error);
+            }
 
             if (!follow || !status.IsMoving)
             {
@@ -340,6 +346,32 @@ public static partial class RoofCli
 
             return await FollowMotionAsync(context, client, direction, status, cancellationToken).ConfigureAwait(false);
         }
+
+        /// <summary>
+        /// True when Open or Close failed with no answer from the controller after it may have been sent: a timeout, the
+        /// connection dropping, an answer that could not be read, or a proxy's 502 or 504 (the controller answers Open and
+        /// Close with neither). The controller may have acted on it. A connection that could not be made sent nothing.
+        /// </summary>
+        internal static bool MayHaveReachedController(Exception error) => error switch
+        {
+            HttpRequestException { HttpRequestError: HttpRequestError.NameResolutionError or HttpRequestError.ConnectionError or HttpRequestError.SecureConnectionError } => false,
+            HttpRequestException or TimeoutException or TaskCanceledException { InnerException: TimeoutException } or RoofProtocolException => true,
+            RoofApiException { StatusCode: System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout } => true,
+            _ => false
+        };
+
+        /// <summary>
+        /// Said after Open or Close got no answer (<see cref="MayHaveReachedController"/>): why, and that the roof may be
+        /// moving; <paramref name="how"/> stops it. A connection that failed after the command was sent is not "could not
+        /// be reached".
+        /// </summary>
+        internal static string Unanswered(Exception error, string verb, string how)
+        {
+            var why = error is HttpRequestException ? UnansweredConnection : RoofCliContext.Classify(error).Message;
+            return $"{why} The {verb} may have reached the controller, and the roof may be moving. To stop it, {how}.";
+        }
+
+        internal const string UnansweredConnection = "The connection to the controller ended before its answer arrived.";
 
         /// <summary>
         /// Ctrl+C (or the terminal closing) during a motion command: sends Stop, reports it, and exits as interrupted.

@@ -163,20 +163,47 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         }
 
         var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
+        var stopsSent = Ui.StopsSent;
         Command($"Sending {verb}…", async (client, cancellationToken) =>
         {
-            var status = direction == RoofMotionDirection.Opening
-                ? await client.Roof.OpenAsync(cancellationToken).ConfigureAwait(false)
-                : await client.Roof.CloseAsync(cancellationToken).ConfigureAwait(false);
+            RoofStatusResponse status;
+            try
+            {
+                status = direction == RoofMotionDirection.Opening
+                    ? await client.Roof.OpenAsync(cancellationToken).ConfigureAwait(false)
+                    : await client.Roof.CloseAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (RoofCli.CommandBuilder.MayHaveReachedController(error))
+            {
+                return () =>
+                {
+                    // The controller may have set the roof moving: it is followed as if the command had been accepted.
+                    Ui.FollowUnansweredMotion();
+                    Ui.Say(RoofCli.CommandBuilder.Unanswered(error, verb, "press F9"), error: true);
+                    if (Ui.StopsSent != stopsSent)
+                    {
+                        Ui.Stop();
+                    }
+                };
+            }
+
             return () =>
             {
                 Ui.Apply(status);
                 Ui.HoldLease(status);
+                if (status.IsMoving && Ui.StopsSent != stopsSent)
+                {
+                    // Stop was sent while this command was on its way, and may have reached the controller first: Stop wins.
+                    Ui.Say($"{verb} was accepted after Stop was sent from here, so Stop is sent again.", error: true);
+                    Ui.Stop();
+                    return;
+                }
+
                 Ui.Say(!status.IsMoving ? $"{verb} accepted. Roof: {RoofCliFormat.DescribeRoof(status)}."
                     : Ui.HoldsLease ? $"{verb} accepted. This interface renews the operator lease while the roof moves; F9 or quitting stops it."
                     : $"{verb} accepted. F9 or quitting stops it.");
             };
-        });
+        }, motion: true);
     }
 
     private void ClearFault()
@@ -195,7 +222,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
                 Ui.Apply(status);
                 Ui.Say($"Clear fault accepted. Fault: {RoofCliFormat.DescribeFault(status)}.");
             };
-        });
+        }, motion: false);
     }
 
     private void Refresh() => _ = Ui.Run("Reading the status…", async (client, cancellationToken) =>
@@ -208,8 +235,11 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         });
     });
 
-    /// <summary>Sends one command at a time; a refusal's status (the controller attaches it) is shown too.</summary>
-    private void Command(string busy, Func<RoofControllerClient, CancellationToken, Task<Action>> send)
+    /// <summary>
+    /// Sends one command at a time; a refusal's status (the controller attaches it) is shown too. <paramref name="motion"/>
+    /// marks Open and Close, which quitting cancels and then stops.
+    /// </summary>
+    private void Command(string busy, Func<RoofControllerClient, CancellationToken, Task<Action>> send, bool motion)
     {
         _commandInFlight = true;
         StatusChanged();
@@ -233,7 +263,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
                     StatusChanged();
                 });
             }
-        });
+        }, motion);
         if (!started)
         {
             _commandInFlight = false;

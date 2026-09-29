@@ -124,7 +124,9 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
 
         _header.Text = form.PendingHandEdit is { } pending
             ? $"Version {form.Version}. The settings file was edited by hand ({pending.Changes.Count} change(s)): changes here are refused until it is applied or discarded (Hand edit)."
-            : $"Version {form.Version}.{(form.Settings.FileBacked ? string.Empty : " Kept in memory only: changes are lost when the controller restarts.")}";
+            : RoofCli.CommandBuilder.HandEditSeen(form)
+                ? $"Version {form.Version}. The settings file was edited by hand: changes here are refused until an admin applies or discards it."
+                : $"Version {form.Version}.{(form.Settings.FileBacked ? string.Empty : " Kept in memory only: changes are lost when the controller restarts.")}";
         SetLines(_groups, form.Groups.Select(group => group.Title).ToArray());
         ShowFields();
     }
@@ -342,7 +344,20 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
 
         if (form.PendingHandEdit is not { } pending)
         {
-            Ui.Say("No hand edit is pending: the settings file matches what the controller uses.");
+            // The controller shows a hand edit only to admins: for anyone else, "none is pending" would be a guess.
+            if (Ui.Caller is not { } caller)
+            {
+                Ui.Say("The controller has not said who this credential is yet. Try again shortly.", error: true);
+            }
+            else if (caller.Role != RoofControllerApiContract.AdminRole)
+            {
+                Ui.Say(RoofCli.CommandBuilder.HandEditNeedsAdmin(form), error: true);
+            }
+            else
+            {
+                Ui.Say("No hand edit is pending: the settings file matches what the controller uses.");
+            }
+
             return;
         }
 

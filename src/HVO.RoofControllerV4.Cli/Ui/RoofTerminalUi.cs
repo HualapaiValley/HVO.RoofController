@@ -42,14 +42,26 @@ internal sealed class RoofTerminalUi : IDisposable
     // no motion, 0 while a renewal is on its way.
     private int _leaseTicks = -1;
 
-    // True from Open or Close accepted here until the roof stops or Stop is sent, with or without a lease.
+    // True from Open or Close accepted here until a status says the roof is not moving, with or without a lease. A Stop
+    // that nothing confirmed leaves it set: quitting then sends Stop again.
     private bool _startedMotion;
+
+    // Open or Close sent from here and not yet ended. The controller may act on one before its answer arrives, so
+    // quitting cancels them (_motionCancel) and sends Stop once they have ended.
+    private int _motionsInFlight;
+    private CancellationTokenSource? _motionCancel;
 
     // Every Stop sent from here that may still be on its way; the client is not disposed before they are answered.
     private Task _stops = Task.CompletedTask;
     private int _stopsInFlight;
+
+    // Numbers the Stops sent from here: only the answer to the newest decides the result shown and UnconfirmedStop.
+    private int _stopsSent;
     private bool _quitAfterStop;
     private bool _quitInterrupted;
+
+    // Set when quitting stayed open on a Stop that nothing confirmed: F10 then closes without sending Stop again.
+    private bool _closeWithoutStop;
 
     // When the status shown was taken; with no live status, a status read over REST is stale from then.
     private DateTimeOffset? _statusTakenAt;
@@ -153,6 +165,12 @@ internal sealed class RoofTerminalUi : IDisposable
 
     /// <summary>True while a motion started here is under way: quitting sends Stop first.</summary>
     public bool FollowsMotion => (_startedMotion || HoldsLease) && Status is { IsMoving: true };
+
+    /// <summary>True while Open or Close sent from here has not ended: quitting cancels it, then sends Stop.</summary>
+    public bool MotionInFlight => _motionsInFlight > 0;
+
+    /// <summary>How many Stops were sent from here: a command compares it to see whether Stop was sent meanwhile.</summary>
+    public int StopsSent => _stopsSent;
 
     /// <summary>True while a Stop sent from here has not been answered.</summary>
     public bool StopInFlight => _stopsInFlight > 0;
@@ -266,9 +284,10 @@ internal sealed class RoofTerminalUi : IDisposable
     /// </summary>
     public void Stop()
     {
-        // Stop ends this interface's hold on a motion: the lease is no longer renewed.
+        // Stop ends this interface's hold on a motion: the lease is no longer renewed. The motion is still followed until
+        // a status says the roof stopped, so quitting after a Stop that nothing confirmed sends Stop again.
         _leaseTicks = -1;
-        _startedMotion = false;
+        var sequence = ++_stopsSent;
         ShowStopResult(RoofStopOutcome.Sent, RoofStopText.Sending);
         if (_client is not { } client)
         {
@@ -301,8 +320,14 @@ internal sealed class RoofTerminalUi : IDisposable
                 Post(() =>
                 {
                     _stopsInFlight--;
-                    ShowStopResult(result.Outcome, result.Message);
-                    UnconfirmedStop = result.IsAcknowledged ? null : result;
+
+                    // An older Stop's answer says nothing about a newer one, which may have failed or been confirmed.
+                    if (sequence == _stopsSent)
+                    {
+                        ShowStopResult(result.Outcome, result.Message);
+                        UnconfirmedStop = result.IsAcknowledged ? null : result;
+                    }
+
                     if (result.Status is { } status)
                     {
                         Apply(status);
@@ -321,16 +346,25 @@ internal sealed class RoofTerminalUi : IDisposable
     }
 
     /// <summary>
-    /// Closes the interface. A motion started here is stopped first, as Ctrl+C does for 'open', and a Stop still on its
-    /// way is answered before the interface closes. When quitting waited for a Stop that nothing then confirmed, F10
-    /// leaves the interface open with that result on screen; a termination signal (<paramref name="interrupted"/>)
-    /// closes it anyway, and 'hvo-roof ui' says so on the restored terminal.
+    /// Closes the interface. A motion started here is stopped first, as Ctrl+C does for 'open': an Open or Close still on
+    /// its way is cancelled, and Stop is sent once it has ended, since the controller may have acted on it. A Stop still
+    /// on its way is answered before the interface closes. When quitting waited for a Stop that nothing then confirmed,
+    /// F10 leaves the interface open with that result on screen, and the next F10 closes it; a termination signal
+    /// (<paramref name="interrupted"/>) closes it anyway, and 'hvo-roof ui' says so on the restored terminal.
     /// </summary>
     public void Quit(bool interrupted = false)
     {
         QuitRequested = true;
         _quitInterrupted |= interrupted;
-        if (FollowsMotion)
+        if (MotionInFlight)
+        {
+            Say(StoppingMotionInFlight);
+            _quitAfterStop = true;
+            _motionCancel?.Cancel();
+            return;
+        }
+
+        if (FollowsMotion && !_closeWithoutStop)
         {
             Say("Stopping the roof, which moves on a command from this interface, before closing.");
             _quitAfterStop = true;
@@ -348,19 +382,22 @@ internal sealed class RoofTerminalUi : IDisposable
         _app.RequestStop();
     }
 
+    private const string StoppingMotionInFlight = "Stopping the roof, which may move on a command from this interface, before closing.";
+
     /// <summary>Closes the interface when F10 (or a termination signal) waited for the Stops sent from here.</summary>
     private void QuitIfAsked()
     {
-        if (!_quitAfterStop || _stopsInFlight > 0)
+        if (!_quitAfterStop || _stopsInFlight > 0 || _motionsInFlight > 0)
         {
             return;
         }
 
         _quitAfterStop = false;
-        if (UnconfirmedStop is not null && !_quitInterrupted)
+        if (UnconfirmedStop is not null && !_quitInterrupted && !_closeWithoutStop)
         {
             // Quitting said it stops the roof first; it does not close on a Stop that nothing confirmed.
             QuitRequested = false;
+            _closeWithoutStop = true;
             Say("Nothing confirmed the Stop, so the interface stays open. F10 closes it.", error: true);
             return;
         }
@@ -376,9 +413,10 @@ internal sealed class RoofTerminalUi : IDisposable
     /// <summary>
     /// Runs <paramref name="work"/> off the interface's thread with the current client. A failure is shown on the
     /// message line in the shared wording. <paramref name="busy"/>, when given, is shown until the work says more.
-    /// Returns false, having said why, when there is no controller to send to.
+    /// Returns false, having said why, when there is no controller to send to. <paramref name="motion"/> marks Open or
+    /// Close: quitting while it is on its way cancels it and then sends Stop.
     /// </summary>
-    public bool Run(string? busy, Func<RoofControllerClient, CancellationToken, Task> work)
+    public bool Run(string? busy, Func<RoofControllerClient, CancellationToken, Task> work, bool motion = false)
     {
         if (_client is not { } client)
         {
@@ -391,14 +429,25 @@ internal sealed class RoofTerminalUi : IDisposable
             Say(busy);
         }
 
+        var cancellationToken = _closing.Token;
+        if (motion)
+        {
+            _motionsInFlight++;
+            _motionCancel ??= CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
+            cancellationToken = _motionCancel.Token;
+
+            // A new motion is followed again: quitting sends Stop for it, whatever an earlier Stop's result.
+            _closeWithoutStop = false;
+        }
+
         Interlocked.Increment(ref _pending);
         _ = Task.Run(async () =>
         {
             try
             {
-                await work(client, _closing.Token).ConfigureAwait(false);
+                await work(client, cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (_closing.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
             }
             catch (Exception error)
@@ -407,10 +456,35 @@ internal sealed class RoofTerminalUi : IDisposable
             }
             finally
             {
+                if (motion)
+                {
+                    Post(MotionEnded);
+                }
+
                 Interlocked.Decrement(ref _pending);
             }
         });
         return true;
+    }
+
+    /// <summary>
+    /// After Open or Close ended, answered or not: when quitting cancelled it, Stop is sent now. It was not sent at once,
+    /// since it could then reach the controller before the command it is to stop.
+    /// </summary>
+    private void MotionEnded()
+    {
+        if (--_motionsInFlight > 0)
+        {
+            return;
+        }
+
+        _motionCancel?.Dispose();
+        _motionCancel = null;
+        if (_quitAfterStop)
+        {
+            Say(StoppingMotionInFlight);
+            Stop();
+        }
     }
 
     /// <summary>Runs <paramref name="action"/> on the interface's thread.</summary>
@@ -483,9 +557,15 @@ internal sealed class RoofTerminalUi : IDisposable
     /// </summary>
     public void HoldLease(RoofStatusResponse status)
     {
-        _startedMotion = status.IsMoving;
+        _startedMotion |= status.IsMoving;
         _leaseTicks = NextRenewal(status);
     }
+
+    /// <summary>
+    /// After Open or Close got no answer: the controller may have set the roof moving, so quitting sends Stop while a
+    /// status shows it moving, as after an accepted one.
+    /// </summary>
+    public void FollowUnansweredMotion() => _startedMotion = true;
 
     /// <summary>Shows a prompt over the page. Esc (or Cancel) closes it; F9 still sends Stop.</summary>
     public void Ask(RoofUiPrompt prompt)
@@ -780,6 +860,7 @@ internal sealed class RoofTerminalUi : IDisposable
         }
 
         client?.Dispose();
+        _motionCancel?.Dispose();
         _closing.Dispose();
 
         // The window disposes the page and prompt it shows; the other pages are not in it.

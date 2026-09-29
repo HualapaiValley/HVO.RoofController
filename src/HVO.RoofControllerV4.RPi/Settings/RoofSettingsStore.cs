@@ -547,12 +547,7 @@ public sealed class RoofSettingsStore
                 definition.TryRead(view, out value, out problem);
             }
 
-            var refusal = WriteRefusal(layers, definition, user, local)
-                ?? (edit is null
-                    ? null
-                    : new Refusal(
-                        RoofControllerErrorCode.SettingsHandEditPending,
-                        "The settings file was edited outside the API; an admin must reload or discard that edit first."));
+            var refusal = FormRefusal(layers, definition, user, local, edit);
             var restartPending = definition.AppliesAfterRestart
                 && _startupValues.TryGetValue(definition.Key, out var startup)
                 && !RoofSettingDefinition.ValuesEqual(startup, value);
@@ -955,6 +950,31 @@ public sealed class RoofSettingsStore
                 RoofControllerErrorCode.SettingsStoreUnavailable,
                 "The settings store is not available: settings can be read but not changed.")
             : null;
+
+    /// <summary>
+    /// Why <paramref name="user"/> may not change <paramref name="definition"/>, or null, in the order
+    /// <see cref="Update"/> refuses: a group whose settings the user may not change, then the store, then a pending hand
+    /// edit, then the setting itself. The command line refuses a change with this code before sending it.
+    /// </summary>
+    private Refusal? FormRefusal(Layers layers, RoofSettingDefinition definition, ClaimsPrincipal user, bool local, HandEdit? edit)
+    {
+        if (RoofSettingsCatalogue.InGroup(definition.Group).Any(entry => user.IsInRole(entry.WriteRole)))
+        {
+            if (Unavailable(layers) is { Error: { } code, Detail: { } detail })
+            {
+                return new Refusal(code, detail);
+            }
+
+            if (edit is not null)
+            {
+                return new Refusal(
+                    RoofControllerErrorCode.SettingsHandEditPending,
+                    "The settings file was edited outside the API; an admin must reload or discard that edit first.");
+            }
+        }
+
+        return WriteRefusal(layers, definition, user, local);
+    }
 
     /// <summary>Why <paramref name="user"/> may not change <paramref name="definition"/>, or null.</summary>
     private Refusal? WriteRefusal(Layers layers, RoofSettingDefinition definition, ClaimsPrincipal user, bool local)

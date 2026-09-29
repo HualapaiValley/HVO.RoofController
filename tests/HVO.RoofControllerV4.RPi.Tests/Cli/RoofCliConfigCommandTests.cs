@@ -1,6 +1,8 @@
 using System.Text.Json;
 using FluentAssertions;
 using HVO.RoofControllerV4.Cli;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using Microsoft.AspNetCore.Identity;
@@ -660,6 +662,35 @@ public sealed class RoofCliConfigCommandTests
 
         result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
         result.Error.Should().Contain("edited outside the API; an admin must reload or discard that edit first.");
+    }
+
+    [TestMethod]
+    public async Task Set_ALocalOnlySettingFromARemoteAdmin_WhileAHandEditIsPending_IsRefusedAsTheControllerRefusesIt()
+    {
+        using var controller = new ControllerWithFiles();
+        using var rig = new CliRig(controller.Host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        File.WriteAllText(controller.SettingsPath, UiHandEdit);
+
+        var result = await rig.RunAsync("config", "set", "DepartureReleaseTimeout=9");
+
+        // The controller refuses the same change for the hand edit first (409), not for where it may be changed (403).
+        using var client = rig.CreateContext().Connect();
+        var version = (await client.Settings.GetAsync()).Version;
+        var sent = async () => await client.Settings.UpdateAsync(
+            RoofSettingsContract.RoofGroup,
+            new RoofSettingsUpdateRequest
+            {
+                ExpectedVersion = version,
+                Values = new Dictionary<string, JsonElement> { [Departure] = JsonSerializer.SerializeToElement("00:00:09") }
+            });
+        var refusal = (await sent.Should().ThrowAsync<RoofApiException>()).Which;
+        refusal.StatusCode.Should().Be(System.Net.HttpStatusCode.Conflict);
+        refusal.Code.Should().Be(RoofControllerErrorCode.SettingsHandEditPending);
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        result.Error.Should().Contain("edited outside the API; an admin must reload or discard that edit first.");
+        controller.Roof.Applied.Should().BeEmpty();
     }
 
     // ---- set-secret ------------------------------------------------------------------------------------------------

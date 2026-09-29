@@ -178,7 +178,10 @@ public sealed class RoofCliRoofCommandTests
     [TestMethod]
     public async Task StatusWatch_Json_WritesAChangeThatTheTextLineDoesNotShow_ButNotTheSameStatusAgain()
     {
-        var first = RoofServiceMock.Snapshot() with { StatusVersion = 10, SnapshotUtc = ClientStart, LastSuccessfulInputReadUtc = ClientStart };
+        var first = RoofServiceMock.Snapshot() with
+        {
+            StatusVersion = 10, SnapshotUtc = ClientStart, LastSuccessfulInputReadUtc = ClientStart, LastSuccessfulRelayReadUtc = ClientStart
+        };
         var current = first;
         using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Volatile.Read(ref current)));
         using var rig = new CliRig(host);
@@ -186,11 +189,13 @@ public sealed class RoofCliRoofCommandTests
         await using var run = RunningCommand.Start(rig, "status", "--watch", "--json");
         await run.WaitForOutAsync("\"stale\":false", "the first snapshot");
 
-        // The same status again, as the hub repeats it: a new version and time, and a later read of the inputs.
+        // The same status again, as the hub repeats it: a new version and time, and a later read of the inputs; then
+        // again with only a later read of the relays, which the controller updates on every read.
         RaiseStatus(host, first with { StatusVersion = 11, SnapshotUtc = ClientStart.AddSeconds(1), LastSuccessfulInputReadUtc = ClientStart.AddSeconds(1) });
+        RaiseStatus(host, first with { StatusVersion = 12, SnapshotUtc = ClientStart.AddSeconds(2), LastSuccessfulRelayReadUtc = ClientStart.AddSeconds(2) });
 
         // The inputs can no longer be read: the text line reads the same, and a script watching the JSON must see it.
-        var failed = first with { StatusVersion = 12, SnapshotUtc = ClientStart.AddSeconds(2), InputsHealthy = false, ConsecutiveInputReadFailures = 3 };
+        var failed = first with { StatusVersion = 13, SnapshotUtc = ClientStart.AddSeconds(3), InputsHealthy = false, ConsecutiveInputReadFailures = 3 };
         RoofCliFormat.DescribeState(failed).Should().Be(RoofCliFormat.DescribeState(first), "the text line does not show the inputs' health");
         Volatile.Write(ref current, failed);
         RaiseStatus(host, failed);
@@ -911,6 +916,39 @@ public sealed class RoofCliRoofCommandTests
         result.Out.Should().Contain(RoofStopText.AcknowledgedVerified).And.NotContain("Open accepted");
         host.RoofService.Verify(service => service.Open(), Times.Once());
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
+    public async Task Open_WhoseAnswerDoesNotArriveInTime_SaysTheRoofMayBeMoving_AndHowToStopIt_AndExitsUnreachable()
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new CliRig(host) { Time = clock, WrapHandler = inner => new AnswerLostHandler(inner, "/Open", delivered) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        var run = rig.RunAsync("open");
+        await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The controller has the Open; the client gives up waiting for its answer.
+        await WaitUntilAsync(
+            () =>
+            {
+                if (run.IsCompleted)
+                {
+                    return true;
+                }
+
+                clock.Advance(TimeSpan.FromSeconds(5));
+                return false;
+            },
+            "the Open to time out");
+        var result = await run;
+
+        result.Code.Should().Be(RoofExitCode.Unreachable, result.ToString());
+        result.Error.Should().Be(
+            "The controller did not answer in time. The Open may have reached the controller, and the roof may be moving. To stop it, run 'hvo-roof stop', or use the stop control at the roof."
+            + Environment.NewLine);
+        host.RoofService.Verify(service => service.Open(), Times.Once());
     }
 
     [TestMethod]

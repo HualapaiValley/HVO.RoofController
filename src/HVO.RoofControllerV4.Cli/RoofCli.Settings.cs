@@ -515,13 +515,21 @@ public static partial class RoofCli
                 return null;
             }
 
-            var seen = form.Fields.Any(field => field.ReadOnlyCode == RoofControllerErrorCode.SettingsHandEditPending)
-                ? " A hand edit is pending: ask an admin to review it."
-                : string.Empty;
-            throw new RoofCliRefusedException(
-                $"Reviewing, applying or discarding a hand edit of the settings file needs the admin role.{seen}",
-                RoofExitCode.Forbidden);
+            throw new RoofCliRefusedException(HandEditNeedsAdmin(form), RoofExitCode.Forbidden);
         }
+
+        /// <summary>
+        /// Said to anyone without the admin role, who is not shown a pending hand edit: the fields still say when one is
+        /// pending.
+        /// </summary>
+        internal static string HandEditNeedsAdmin(RoofSettingsForm form)
+            => "Reviewing, applying or discarding a hand edit of the settings file needs the admin role."
+                + (HandEditSeen(form) ? " A hand edit is pending: ask an admin to review it." : string.Empty);
+
+        /// <summary>True when a field says a hand edit is pending, which anyone can see.</summary>
+        internal static bool HandEditSeen(RoofSettingsForm form)
+            => form.PendingHandEdit is not null
+                || form.Fields.Any(field => field.ReadOnlyCode == RoofControllerErrorCode.SettingsHandEditPending);
 
         private static int NoHandEdit(RoofCliContext context)
         {

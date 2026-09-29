@@ -132,6 +132,13 @@ includes an interruption before the controller's answer arrives, because the roo
 `--json`, an interrupted command writes `{"interrupted": true, "exitCode": 130, "stop": {...}}`, where `stop` is the
 `stop --json` document.
 
+An `open` or `close` whose answer never arrives may still have reached the controller. That covers no answer in time,
+the connection dropping after the command was sent, an answer that could not be read, and a proxy's 502 or 504. The
+command does not say "not sent". It says the roof may be moving and how to stop it, for example
+`The controller did not answer in time. The Open may have reached the controller, and the roof may be moving. To stop it, run 'hvo-roof stop', or use the stop control at the roof.`,
+and exits with the failure's code (4 when there was no answer). A connection that could not be made at all sent
+nothing, and is reported as unreachable.
+
 The status comes from the status hub. While the hub is not connected, the command says so on standard error
 (`Live status is not connected: reading the status every 2 s instead. Ctrl+C sends Stop.`) and reads the status over
 REST every 2 s. A read that gets no answer, or a server error (a proxy's 502, say), is not a status: the command keeps
@@ -162,11 +169,14 @@ would load one (`restart`).
 
 Operators may change only the UI group (for example the kiosk's screen timeout and the default camera). Every other
 group needs an admin. A setting you may not change is refused before anything is sent, with the exit code the
-controller's own refusal would give: 6 for the role or a local-only setting, and 7 while a hand edit is pending.
+controller's own refusal would give, in the controller's order. The code is 6 for the role. For a setting in a group
+you may change, it is 7 while a hand edit is pending (even for a local-only setting), and 6 for a local-only setting
+otherwise.
 
 `config diff`, `apply` and `discard` need the admin role (exit 6 otherwise), because the controller shows a pending
 hand edit only to admins. For anyone else "no hand edit is pending" would be a guess; the refusal says when the
-controller's answer shows that one is pending.
+controller's answer shows that one is pending. The interface's Hand edit does the same for anyone who is not an admin,
+and the Settings page's header then says the file was edited by hand.
 
 ## Scripts
 
@@ -239,11 +249,23 @@ controller's answer shows that one is pending.
   lease while the roof moves. When the controller holds motion on no lease, the interface says
   `Open accepted. F9 or quitting stops it.` Either way, quitting while the roof moves sends Stop first
   (`Stopping the roof, which moves on a command from this interface, before closing.`).
+- **Quitting while an Open or Close is on its way.** The controller may already have it, so quitting stops waiting
+  for its answer and then sends Stop
+  (`Stopping the roof, which may move on a command from this interface, before closing.`). The Stop is sent after
+  the command, never ahead of it.
+- **Stop wins.** A Stop sent while an Open or Close is on its way may reach the controller first. If the command is
+  then accepted and the roof moves, the interface sends Stop again
+  (`Open was accepted after Stop was sent from here, so Stop is sent again.`).
+- **An Open or Close whose answer is lost** is followed as if it had been accepted. The interface says the roof may
+  be moving and that F9 stops it, and quitting while a status shows it moving sends Stop.
 - **Quitting never cuts a Stop short.** While a Stop is on its way, quitting says
   `Waiting for Stop to be answered before closing.` and closes once the controller answers.
+- **The result shown is the newest Stop's.** An older Stop's late answer never replaces it. When the newest Stop
+  failed and the roof still moves on a command from here, quitting sends Stop again.
 - **Quitting does not hide a Stop that nothing confirmed.** When the Stop that quitting sent or waited for failed, or
   its relays could not be verified, F10 leaves the interface open with the result on screen
-  (`Nothing confirmed the Stop, so the interface stays open. F10 closes it.`). Whenever the last Stop sent from the
+  (`Nothing confirmed the Stop, so the interface stays open. F10 closes it.`). The next F10 closes it without
+  another Stop, unless an Open or Close was sent in between. Whenever the last Stop sent from the
   interface was not confirmed, `hvo-roof ui` repeats its result on the restored terminal and exits 9 (130 after a
   termination signal, which closes the interface anyway).
 - **A stale status.** When the status stops arriving, a banner says `STALE: no status since …`. When live status is not
@@ -303,7 +325,9 @@ Nothing here needs the Pi, the HAT or the roof.
 - **The terminal interface** is drawn on Terminal.Gui's in-memory driver with a virtual clock (`RoofTerminalUiTests`).
   The tests check:
   - Stop on every page and over a prompt;
-  - Esc and F10, including quitting while the roof moves or while a Stop is on its way, and a termination signal;
+  - Esc and F10, including quitting while the roof moves, while an Open or a Stop is on its way, and a termination
+    signal;
+  - Stops answered out of order, an Open accepted after a Stop, and an Open whose answer is lost;
   - the stale view, including a single read while live status is not connected;
   - the lease while the roof moves, and motion held on no lease;
   - the HVO Dark colours, and the interface with `NO_COLOR`;
