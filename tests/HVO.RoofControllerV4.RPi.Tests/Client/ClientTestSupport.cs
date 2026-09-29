@@ -68,6 +68,13 @@ internal static class ClientTestSupport
         }
     }
 
+    /// <summary>Opens the status hub's WebSocket on the test server running now.</summary>
+    public static RoofWebSocketFactory WebSocketFactory(Func<TestServer> server)
+        => (uri, headers, cancellationToken) => ConnectAsync(server, uri, headers, cancellationToken);
+
+    /// <summary>Sends each request to the test server running now.</summary>
+    public static HttpMessageHandler CreateHandler(Func<TestServer> server) => new CurrentServerHandler(server);
+
     private static async ValueTask<WebSocket> ConnectAsync(
         Func<TestServer> server,
         Uri uri,
