@@ -258,12 +258,38 @@ else
     }
 
     /// <summary>Reads the catalogue and the values again, and closes any editor.</summary>
-    private Task<bool> ReadAsync(string failed) => SendAsync(failed, async (session, cancellationToken) =>
+    private Task<bool> ReadAsync(string failed) => SendAsync(failed, ReadSettingsAsync);
+
+    private async Task ReadSettingsAsync(WebSession session, CancellationToken cancellationToken)
     {
         var catalogue = await session.Client.Settings.GetCatalogueAsync(cancellationToken);
         var settings = await session.Client.Settings.GetAsync(cancellationToken);
         Show(RoofSettingsForm.Create(catalogue, settings));
-    });
+    }
+
+    /// <summary>
+    /// After a change the controller made: shows the settings as they are now (<paramref name="read"/>) with
+    /// <paramref name="done"/>. When they cannot be read again, the change still stands: the page says so, and that it
+    /// shows the settings from before it.
+    /// </summary>
+    private async Task ShowChangeAsync(WebPageMessage done, Func<WebSession, CancellationToken, Task> read)
+    {
+        CloseEditor();
+        if (await SendAsync(ReadAgainFailed, read))
+        {
+            Message = done;
+            return;
+        }
+
+        if (LastFailure is { } failure)
+        {
+            Message = new WebPageMessage(
+                WebMessageLevel.Warning,
+                [.. done.Lines, $"{ReadAgainFailed} {RoofText.DescribeFailure(failure)} This page shows them from before the change: reload it to see them now."]);
+        }
+    }
+
+    private const string ReadAgainFailed = "The settings could not be read again.";
 
     private void Show(RoofSettingsForm form)
     {
@@ -357,12 +383,9 @@ else
         var request = edit.ToRequest(edit.NeedsConfirmation);
         var needsRestart = edit.NeedsRestart;
         RoofSettingsResponse? saved = null;
-        var sent = await SendAsync($"{edit.Group.Title} could not be saved.", async (session, cancellationToken) =>
-        {
-            saved = await session.Client.Settings.UpdateAsync(edit.Group.Name, request, cancellationToken);
-            var catalogue = await session.Client.Settings.GetCatalogueAsync(cancellationToken);
-            Show(RoofSettingsForm.Create(catalogue, await session.Client.Settings.GetAsync(cancellationToken)));
-        });
+        var sent = await SendAsync(
+            $"{edit.Group.Title} could not be saved.",
+            async (session, cancellationToken) => saved = await session.Client.Settings.UpdateAsync(edit.Group.Name, request, cancellationToken));
 
         if (sent && saved is not null)
         {
@@ -378,7 +401,9 @@ else
             }
 
             lines.AddRange(saved.Warnings.Select(warning => $"Warning: {warning}"));
-            Message = new WebPageMessage(saved.Warnings.Count > 0 || !saved.FileBacked ? WebMessageLevel.Warning : WebMessageLevel.Success, lines);
+            await ShowChangeAsync(
+                new WebPageMessage(saved.Warnings.Count > 0 || !saved.FileBacked ? WebMessageLevel.Warning : WebMessageLevel.Success, lines),
+                ReadSettingsAsync);
         }
         else if (FailedWith(RoofControllerErrorCode.ConfigurationVersionConflict) || FailedWith(RoofControllerErrorCode.SettingsHandEditPending))
         {
@@ -401,18 +426,15 @@ else
     private async Task HandEditAsync(string failed, string done, Func<RoofControllerClient, CancellationToken, Task<RoofSettingsResponse>> send)
     {
         RoofSettingsResponse? saved = null;
-        var sent = await SendAsync(failed, async (session, cancellationToken) =>
-        {
-            saved = await send(session.Client, cancellationToken);
-            var catalogue = await session.Client.Settings.GetCatalogueAsync(cancellationToken);
-            Show(RoofSettingsForm.Create(catalogue, saved));
-        });
+        var sent = await SendAsync(failed, async (session, cancellationToken) => saved = await send(session.Client, cancellationToken));
 
-        if (sent && saved is not null)
+        if (sent && saved is { } settings)
         {
-            Message = new WebPageMessage(
-                saved.Warnings.Count > 0 ? WebMessageLevel.Warning : WebMessageLevel.Success,
-                [$"{done} (settings version {saved.Version}).", .. saved.Warnings.Select(warning => $"Warning: {warning}")]);
+            await ShowChangeAsync(
+                new WebPageMessage(
+                    settings.Warnings.Count > 0 ? WebMessageLevel.Warning : WebMessageLevel.Success,
+                    [$"{done} (settings version {settings.Version}).", .. settings.Warnings.Select(warning => $"Warning: {warning}")]),
+                async (session, cancellationToken) => Show(RoofSettingsForm.Create(await session.Client.Settings.GetCatalogueAsync(cancellationToken), settings)));
         }
         else if (FailedWith(RoofControllerErrorCode.ConfigurationVersionConflict))
         {
@@ -428,7 +450,7 @@ else
     private async Task ReadAgainAfterRefusalAsync()
     {
         var refusal = Message;
-        if (await ReadAsync("The settings could not be read again.") && refusal is not null)
+        if (await ReadAsync(ReadAgainFailed) && refusal is not null)
         {
             Message = refusal with { Lines = [refusal.Lines[0], "The settings were read again: check them, then try again."] };
         }

@@ -74,6 +74,12 @@ internal sealed class WebAdminHarness : IDisposable
 
     public WebSessionStore Store { get; }
 
+    /// <summary>
+    /// Which of the pages' requests fail as if the controller's answer never came (an <see cref="HttpRequestException"/>),
+    /// after the controller has handled them. None by default.
+    /// </summary>
+    public Func<HttpRequestMessage, bool>? LoseAnswer { get; set; }
+
     /// <summary>Adds a person with <paramref name="role"/> and the test password, and signs them in to the web UI.</summary>
     public async Task<WebSession> SignInAsync(string name, string role)
     {
@@ -152,6 +158,26 @@ internal sealed class WebAdminHarness : IDisposable
         : RoofControllerConnector(Options.Create(new RoofWebOptions()), NullLoggerFactory.Instance, harness.Clock)
     {
         public override RoofControllerClient Create(RoofCredential? credential, TimeSpan requestTimeout)
-            => ClientTestSupport.CreateClient(harness.Host, credential, time: harness.Clock, requestTimeout: requestTimeout);
+            => ClientTestSupport.CreateClient(
+                harness.Host,
+                credential,
+                time: harness.Clock,
+                requestTimeout: requestTimeout,
+                handler: () => new LosingHandler(harness));
+    }
+
+    private sealed class LosingHandler(WebAdminHarness harness) : DelegatingHandler(harness.Host.Server.CreateHandler())
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await base.SendAsync(request, cancellationToken);
+            if (harness.LoseAnswer?.Invoke(request) == true)
+            {
+                response.Dispose();
+                throw new HttpRequestException("The answer was lost (test).");
+            }
+
+            return response;
+        }
     }
 }

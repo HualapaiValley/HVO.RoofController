@@ -313,6 +313,56 @@ public sealed class SettingsPageTests
     }
 
     [TestMethod]
+    public async Task ASave_WhoseReadAfterFails_SaysItWasSaved_AndThatThePageIsFromBefore()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("olga", RoofControllerApiContract.OperatorRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        var before = Version(cut);
+        harness.LoseAnswer = request => request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/Settings/Catalogue", StringComparison.Ordinal);
+
+        Change(cut, DefaultCamera, "Pier");
+
+        cut.WaitForAssertion(() => Lines(cut).Should().Equal(
+            $"Saved (settings version {before + 1}).",
+            "The settings could not be read again. The controller could not be reached. This page shows them from before the change: reload it to see them now."));
+        cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Warning));
+        cut.FindAll("[data-testid=setting-editor]").Should().BeEmpty("the change was made, so it is not offered again");
+        using var admin = harness.Admin();
+        (await admin.Settings.GetAsync()).Settings.Single(setting => setting.Key == DefaultCamera).Value!.Value.GetString().Should().Be("Pier");
+
+        harness.LoseAnswer = null;
+        cut.Find("[data-testid=settings-group][data-group=ui]").Click();
+        Change(cut, KioskScreenTimeout, "120");
+
+        cut.WaitForAssertion(() => Lines(cut).Should().EndWith("The settings were read again: check them, then try again."));
+        Version(cut).Should().Be(before + 1, "a change sent from the page from before is refused, and the settings are read again");
+        Value(cut, DefaultCamera).Should().Be("Pier");
+    }
+
+    [TestMethod]
+    public async Task AHandEdit_WhoseReadAfterFails_SaysItWasApplied()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        harness.EditSettingsFile("{ \"RoofControllerUi\": { \"DefaultCamera\": \"Yard\" } }");
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        var before = Version(cut);
+        harness.LoseAnswer = request => request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/Settings/Catalogue", StringComparison.Ordinal);
+
+        cut.Find("[data-testid=hand-edit-apply]").Click();
+
+        cut.WaitForAssertion(() => Lines(cut).Should().Equal(
+            $"Applied the hand edit (settings version {before + 1}).",
+            "The settings could not be read again. The controller could not be reached. This page shows them from before the change: reload it to see them now."));
+        cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Warning));
+        using var admin = harness.Admin();
+        (await admin.Settings.GetAsync()).Version.Should().Be(before + 1);
+    }
+
+    [TestMethod]
     public async Task AHandEdit_IsDiscarded_OnlyOnceConfirmed()
     {
         using var harness = new WebAdminHarness();
@@ -405,6 +455,9 @@ public sealed class SettingsPageTests
 
     private static List<string> Notes(IElement setting)
         => setting.QuerySelectorAll("[data-testid=setting-note]").Select(note => note.TextContent).ToList();
+
+    private static List<string> Lines(IRenderedComponent<SettingsPage> cut)
+        => cut.Find("[data-testid=page-message]").QuerySelectorAll("p").Select(line => line.TextContent).ToList();
 
     private static string Message(IRenderedComponent<SettingsPage> cut)
         => string.Join(' ', cut.Find("[data-testid=page-message]").QuerySelectorAll("p").Select(line => line.TextContent));

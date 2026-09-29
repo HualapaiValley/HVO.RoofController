@@ -85,6 +85,27 @@ public sealed class ChangePasswordPageTests
     }
 
     [TestMethod]
+    [DataRow(false, "The controller could not be reached.")]
+    [DataRow(true, "The controller did not answer in time.")]
+    public async Task AnAnswerThatNeverCame_SaysThePasswordMayHaveBeenChanged(bool timedOut, string reason)
+    {
+        using var fixture = new WebSessionStoreTests.Fixture();
+        fixture.Controller.PasswordAnswer = () => timedOut
+            ? throw new TimeoutException("The answer never came (test).")
+            : throw new HttpRequestException("The connection was reset (test).");
+        var session = fixture.Store.Open(WebSessionStoreTests.Credential("session-1", "ada"));
+        await using var context = Context(fixture, session);
+        var cut = context.Render<ChangePassword>();
+
+        Submit(cut, FakeController.AdaPassword, NewPassword, NewPassword);
+
+        cut.WaitForAssertion(() => Message(cut).Should().Be($"{reason} {ChangePassword.MayHaveChanged}"));
+        Message(cut).Should().NotContain("was not changed", "the controller may have changed it before the answer was lost");
+        cut.Find("[data-testid=password-message]").ClassList.Should().Contain("alert-warning");
+        FieldsAreEmpty(cut);
+    }
+
+    [TestMethod]
     public async Task AnEndedSession_AsksToSignInAgain()
     {
         using var fixture = new WebSessionStoreTests.Fixture();

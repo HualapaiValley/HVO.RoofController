@@ -41,7 +41,8 @@ for the first admin ([cli.md](cli.md#setup)).
   person's password being changed elsewhere, ends it as well: the next thing the page does sends it to the sign-in
   page, which says the session ended, and their Stop pass stays.
 - **Change password** (the person's name at the top of the page) changes it at the controller. The person's other
-  sessions end; this one stays open.
+  sessions end; this one stays open. When the controller's answer never comes (it did not answer in time, or could not
+  be reached), the page cannot tell whether the password changed, and says so: signing in with the new one finds out.
 - Only a signed-in person may open a live page. The sign-in page is a plain form that needs no live connection.
 - An address the web UI does not have shows a plain **Not found** page (404), to anyone, signed in or not.
 
@@ -132,6 +133,9 @@ A setting that cannot be changed here says why, as the controller gives it.
 - **When the controller refuses a change**, the page shows its reason, for example the camera server rule below. When
   another admin changed the settings in the meantime (a version conflict), the page reads them again and asks to check
   them before trying again.
+- **After a change** the page says `Saved (settings version N).` and reads the settings again. When that read fails,
+  the change still stands: the page says so, and that it shows the settings from before the change until it is
+  reloaded.
 - **Hand edits.** A change made to the settings file by hand is shown with its changes, to apply (or confirm and apply)
   or discard ([Hand edits](security.md#hand-edits)).
 
