@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Client library for the HVO roof controller: the REST API, the live status hub, credentials, Stop and the shared wording.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj" />
+    <InternalsVisibleTo Include="HVO.RoofControllerV4.RPi.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text;
 using System.Text.Json.Serialization;
 
 namespace HVO.RoofControllerV4.Common.Models;
@@ -160,7 +161,16 @@ public sealed record RoofSessionResponse(
     string Role,
     RoofCredentialKind Kind,
     DateTimeOffset ExpiresUtc,
-    double? IdleTimeoutSeconds);
+    double? IdleTimeoutSeconds)
+{
+    // The token is left out, so the record can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"SessionId = {SessionId}, Name = {Name}, Role = {Role}, Kind = {Kind}, ExpiresUtc = {ExpiresUtc:O}, ")
+            .Append($"IdleTimeoutSeconds = {IdleTimeoutSeconds}");
+        return true;
+    }
+}
 
 /// <summary>Who the caller is, from <c>GET Auth/Me</c>.</summary>
 /// <param name="Name">The person or the API key's name.</param>
@@ -273,7 +283,15 @@ public sealed record class RoofApiKeyUpdateRequest
 /// A managed API key that was just created or rotated, with its value. The value is shown only in this response and
 /// cannot be read again.
 /// </summary>
-public sealed record RoofApiKeySecretResponse(RoofApiKeyResponse Key, string Secret);
+public sealed record RoofApiKeySecretResponse(RoofApiKeyResponse Key, string Secret)
+{
+    // The secret is left out, so the record can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Key = {Key}");
+        return true;
+    }
+}
 
 /// <summary>An open session, as the admin endpoints show it. Never its token.</summary>
 public sealed record RoofSessionInfoResponse(
