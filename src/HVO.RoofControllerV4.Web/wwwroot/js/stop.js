@@ -88,6 +88,22 @@
         }
     }
 
+    // The page leaves room at its end for the Stop bar (app.css, --web-stop-bar-space). An answer can make the bar taller
+    // than the room the stylesheet leaves, so the room follows the bar's height.
+    function keepRoomForTheBar() {
+        const bar = document.querySelector(".web-stop-bar");
+        if (bar === null || typeof ResizeObserver !== "function") {
+            return;
+        }
+
+        new ResizeObserver(() => {
+            const height = Math.ceil(bar.getBoundingClientRect().height);
+            document.documentElement.style.setProperty("--web-stop-bar-space", `${height}px`);
+        }).observe(bar);
+    }
+
+    keepRoomForTheBar();
+
     document.addEventListener("submit", event => {
         const form = event.target;
         if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-web-stop")) {

@@ -19,7 +19,7 @@ assumption of its own; `SmVectorAssumptions` and `PlantDocumentedFiguresTests` h
 | Runs | Covers | Command (the `dotnet` commands run from `src/`) |
 |---|---|---|
 | `Scenario` tests | C1-C11 and C13, plus a 90 s C14 that does not assess resources. The production host and settings run in process against the emulated plant. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
-| `Browser` tests | C9 step 4 and C15, plus the console on phones and tablets in Chromium | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Browser`, after installing Chromium once with `pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium` (without `--with-deps` when its system libraries are installed) |
+| `Browser` tests | C9 step 4 and C15, plus the web UI in Chromium on phones, tablets and a desktop window | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Browser`, after installing Chromium once with `pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium` (without `--with-deps` when its system libraries are installed) |
 | [Container scenarios](emulator.md#container-scenarios) | C11 in a real container (with the container's supervisor), C12, and the move between Compose and the deploy script, on real Docker | `tests/emulator/deploy-scenarios.sh` (from the repository root) |
 | Nightly soak | C14 for two hours. Its invariant results go to the run summary and an artifact. | `HVO_SOAK_DURATION=02:00:00 HVO_SOAK_RESULTS_DIR="$PWD/soak" dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Soak` |
 
@@ -350,11 +350,11 @@ The lease applies only when `OperatorLeaseTimeout` is set (2-120 s); production 
 | 1 | With a 5 s lease, renewing every 2 s keeps the roof moving and refreshes `leaseSecondsRemaining` | `C9OperatorLeaseScenarios.RenewingKeepsTheRoofMoving_AndStoppingRenewals_StopsItWithOperatorLeaseExpired` |
 | 2 | When renewals stop, the roof stops with `OperatorLeaseExpired` within the lease plus one `PeriodicVerificationInterval` | `C9OperatorLeaseScenarios.RenewingKeepsTheRoofMoving_AndStoppingRenewals_StopsItWithOperatorLeaseExpired` |
 | 3 | `POST .../Lease` while idle returns 409 `LeaseNotActive` and starts nothing | `C9OperatorLeaseScenarios.ALeaseRenewal_WhileIdle_IsRefused_AndStartsNothing` |
-| 4 | Client loss. The console renews the lease only while its connection is up. When the connection is lost, the lease runs out and the roof stops with `OperatorLeaseExpired`. After a reconnect inside the lease, renewal does not resume, and the console shows a "Lease" warning. | `C9ConsoleLeaseBrowserTests.TheConsoleRenewsTheLeaseDuringAMove_AndClosingIt_LetsTheLeaseRunOut_AndStopsTheRoof`, `C9ConsoleLeaseBrowserTests.WhenTheConsoleLosesItsConnection_TheLeaseRunsOut_AndAfterAReconnect_RenewalDoesNotResume_AndTheConsoleWarns` |
+| 4 | Client loss. The web UI's roof page renews the lease only while its live connection is up. When the page is closed, or its connection is lost, the lease runs out and the roof stops with `OperatorLeaseExpired`. After a reconnect inside the lease, renewal does not resume, and the page warns that it stopped renewing the lease. | `C9WebLeaseBrowserTests.TheWebPageRenewsTheLeaseDuringAMove_AndClosingIt_LetsTheLeaseRunOut_AndStopsTheRoof`, `C9WebLeaseBrowserTests.WhenTheWebPageLosesItsConnection_TheLeaseRunsOut_AndAfterAReconnect_RenewalDoesNotResume_AndThePageWarns` |
 
 **Installation assumptions**
 
-- **Operators drive the roof from the console, or from a client that renews the lease.** The setting that depends on it
+- **Operators drive the roof from the web UI, the terminal interface, or another client that renews the lease.** The setting that depends on it
   is `OperatorLeaseTimeout`.
   - A silently dropped mobile connection is noticed within about 30 s (the SignalR client timeout). The roof then stops
     about 30 s plus the lease after the connection was lost.
@@ -534,23 +534,26 @@ The soak's checks:
   show disk growth. Container logs are in the container's folder:
   `sudo du -sb /var/lib/docker/containers/$(docker inspect --format '{{.Id}}' roof-controller)/local-logs`.
 
-### C15. Stop from the console's reconnect dialog
+### C15. Stop from the web UI's reconnect dialog
 
-The reconnect dialog's **Stop roof** button sends `POST /console/stop` without the console's live connection. The
-browser test runs the console in Chromium with phone emulation. The lease is unset and the watchdog is longer
-than the test, so only the dialog's Stop can end the move.
+The web UI's pages talk to it over a live connection. When that connection is lost, the reconnect dialog covers the
+page, and its **Stop roof** button posts `/stop` to the web UI without the live connection. The web UI sends Stop to
+the controller with the person's session, or with its own Stop key when that session has ended
+([web UI](web.md#stop)). The browser test runs the web UI in Chromium with phone emulation. The lease is unset and the
+watchdog is longer than the test, so only the dialog's Stop can end the move.
 
 | Step | Checked | Scenario |
 |---|---|---|
-| 1 | The console loses its connection during a move, and the reconnect dialog appears | `C15ReconnectDialogStopBrowserTests.WhileTheConsoleIsDisconnected_TheDialogsStop_SaysWhenItCannotReachTheController_AndStopsTheRoofWhenItCan` |
-| 2 | With the network still down, **Stop roof** says within about 5 s that Stop could not reach the controller, and points to the stop control at the roof | `C15ReconnectDialogStopBrowserTests.WhileTheConsoleIsDisconnected_TheDialogsStop_SaysWhenItCannotReachTheController_AndStopsTheRoofWhenItCan` |
-| 3 | With the network back but before the console reconnects, **Stop roof** reports the stop as acknowledged, and the roof stops with `NormalStop` | `C15ReconnectDialogStopBrowserTests.WhileTheConsoleIsDisconnected_TheDialogsStop_SaysWhenItCannotReachTheController_AndStopsTheRoofWhenItCan` |
+| 1 | The page loses its connection during a move, and the reconnect dialog appears with its Stop in view | `C15ReconnectDialogStopBrowserTests.WhileTheWebPageIsDisconnected_TheDialogsStop_SaysWhenItCannotReachTheWebUI_AndStopsTheRoofWhenItCan` |
+| 2 | With the network still down, **Stop roof** says that Stop failed because the web UI could not be reached, and points to the stop control at the roof | `C15ReconnectDialogStopBrowserTests.WhileTheWebPageIsDisconnected_TheDialogsStop_SaysWhenItCannotReachTheWebUI_AndStopsTheRoofWhenItCan` |
+| 3 | With the network back but before the page reconnects, **Stop roof** reports the stop as acknowledged, and the roof stops with `NormalStop` | `C15ReconnectDialogStopBrowserTests.WhileTheWebPageIsDisconnected_TheDialogsStop_SaysWhenItCannotReachTheWebUI_AndStopsTheRoofWhenItCan` |
 
 **Installation assumptions**
 
-- **Operators use the console from a phone or tablet browser that may lose its network.** No setting depends on it. If
-  the controller cannot be reached, the dialog says so within about 5 s and points to the stop control at the roof
-  (step 2). That control, and the independent stop (C1), do not depend on the network.
+- **Operators use the web UI from a phone or tablet browser that may lose its network.** No setting depends on it. If
+  the web UI cannot be reached, the dialog says so (at once when the phone has no network, and after 25 s when nothing
+  answers) and points to the stop control at the roof (step 2). That control, and the independent stop (C1), do not
+  depend on the network.
 
 ## Results
 

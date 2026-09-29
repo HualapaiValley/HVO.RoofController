@@ -344,7 +344,8 @@ public static partial class RoofCli
             }
 
             context.Out.WriteLine($"Saved (settings version {saved.Version}).");
-            if (!saved.FileBacked)
+            // The controller's warnings say why the settings are in memory; this line is for when it gives no reason.
+            if (!saved.FileBacked && saved.Warnings.Count == 0)
             {
                 context.Out.WriteLine("The controller keeps settings in memory only: this change is lost when it restarts.");
             }

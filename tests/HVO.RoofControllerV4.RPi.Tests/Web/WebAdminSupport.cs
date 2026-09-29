@@ -27,7 +27,9 @@ internal sealed class WebAdminHarness : IDisposable
 
     private readonly List<IDisposable> _owned = [];
 
-    public WebAdminHarness(IDictionary<string, string?>? settings = null)
+    /// <param name="settings">Settings for the controller.</param>
+    /// <param name="fileBacked">False: the controller has no settings file, so it keeps changes in memory only.</param>
+    public WebAdminHarness(IDictionary<string, string?>? settings = null, bool fileBacked = true)
     {
         Directory = new WebTestSupport.TempDirectory();
         Roof = new SettingsApiTests.RoofDouble();
@@ -40,7 +42,7 @@ internal sealed class WebAdminHarness : IDisposable
                 services.Configure<PasswordHasherOptions>(options => options.IterationCount = 1_000);
                 services.AddSingleton<TimeProvider>(ServerClock);
             },
-            settingsFilePath: SettingsPath,
+            settingsFilePath: fileBacked ? SettingsPath : null,
             secretsFilePath: Path.Combine(Directory.Path, "secrets", "managed-secrets.json"));
         Roof.StartFrom(Host);
         Logs = new RecordingLoggerProvider();

@@ -112,9 +112,11 @@
                     </div>
                     @if (status is not null)
                     {
+                        // While the inputs cannot be read, the controller reports the limits from the last read that worked.
+                        var lastRead = status.InputsHealthy ? string.Empty : " (last read)";
                         <div class="rc2-state-limits">
-                            <span class="@LimitChipClass(status.IsOpenLimitActive)" data-testid="open-limit">Open limit: @RoofStatusText.DescribeInput(status.IsOpenLimitActive)</span>
-                            <span class="@LimitChipClass(status.IsClosedLimitActive)" data-testid="closed-limit">Closed limit: @RoofStatusText.DescribeInput(status.IsClosedLimitActive)</span>
+                            <span class="@LimitChipClass(status.IsOpenLimitActive)" data-testid="open-limit">Open limit@(lastRead): @RoofStatusText.DescribeInput(status.IsOpenLimitActive)</span>
+                            <span class="@LimitChipClass(status.IsClosedLimitActive)" data-testid="closed-limit">Closed limit@(lastRead): @RoofStatusText.DescribeInput(status.IsClosedLimitActive)</span>
                             @if (status.IsWatchdogActive && status.WatchdogSecondsRemaining is { } watchdog)
                             {
                                 <span class="rc2-chip rc2-chip--on" data-testid="watchdog">Watchdog: @RoofStatusText.Seconds(watchdog) left</span>

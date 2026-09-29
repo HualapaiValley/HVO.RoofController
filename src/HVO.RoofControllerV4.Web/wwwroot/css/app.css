@@ -2,18 +2,31 @@
 body[data-theme="hvo-dark"] {
     background: var(--hvo-body-bg, #05070d);
     color: var(--hvo-body-color, #f8fafc);
-    /* Room for the Stop bar, so it never covers the end of a page. */
-    padding-bottom: calc(var(--web-stop-bar-height) + env(safe-area-inset-bottom, 0px));
+    /* Room for the Stop bar, so it never covers the end of a page. The theme fixes the body's height to the screen,
+       which puts that room at the end of the first screen instead of the page's. */
+    height: auto;
+    padding-bottom: var(--web-stop-bar-space);
+}
+
+/* The theme's frame fills the screen; here it fills the screen above the Stop bar's room, so a short page does not
+   scroll by that room. */
+body[data-theme="hvo-dark"] .app-frame {
+    min-height: calc(100vh - var(--web-stop-bar-space));
+    min-height: calc(100dvh - var(--web-stop-bar-space));
 }
 
 :root {
     --web-stop-bar-height: 4.5rem;
+    /* How tall the Stop bar is: js/stop.js sets it to the bar's height, which an answer to a Stop can make taller. */
+    --web-stop-bar-space: calc(var(--web-stop-bar-height) + env(safe-area-inset-bottom, 0px));
 }
 
+/* Long setting keys and names break rather than widen the page past a phone's screen. */
 .web-main {
     width: 100%;
     max-width: 72rem;
     margin: 0 auto;
+    overflow-wrap: anywhere;
     padding: 1rem;
 }
 
@@ -22,7 +35,9 @@ body[data-theme="hvo-dark"] {
     margin-bottom: 1rem;
 }
 
-.web-nav {
+/* Bootstrap's .navbar > .container-fluid keeps the bar on one line (nowrap), which on a phone pushes the signed-in user
+   off the side of the page; here it wraps instead. */
+.app-navbar > .web-nav {
     flex-wrap: wrap;
     gap: 0.5rem;
 }
@@ -72,9 +87,10 @@ body[data-theme="hvo-dark"] {
     color: var(--hvo-muted-strong, #cbd5e1);
 }
 
+/* The screen above the Stop bar, so the form is centred where it is not covered. */
 .web-signin-frame {
-    min-height: 100vh;
-    min-height: 100dvh;
+    min-height: calc(100vh - var(--web-stop-bar-space));
+    min-height: calc(100dvh - var(--web-stop-bar-space));
     display: flex;
     align-items: center;
     justify-content: center;

@@ -84,7 +84,7 @@ public abstract class WebClientPage : ComponentBase, IDisposable
         {
             LastFailure = ex;
             LoggerFactory.CreateLogger(GetType()).LogWarning("{Failed} {Reason}", failed, ex.Message);
-            Message = new WebPageMessage(WebMessageLevel.Danger, $"{failed} {RoofText.DescribeFailure(ex)}");
+            Message = new WebPageMessage(WebMessageLevel.Danger, [$"{failed} {RoofText.DescribeFailure(ex)}", .. Explain(ex)]);
             return false;
         }
         finally
@@ -93,6 +93,31 @@ public abstract class WebClientPage : ComponentBase, IDisposable
             if (!_disposed)
             {
                 StateHasChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// What the controller said about a refusal beyond its code, as the terminal UI and the CLI show it: why (a server
+    /// move that would take the camera's credentials with it, say), and each setting's problem.
+    /// </summary>
+    private static IEnumerable<string> Explain(Exception error)
+    {
+        if (error is not RoofApiException refusal)
+        {
+            yield break;
+        }
+
+        if (refusal.Detail is { Length: > 0 } detail && detail != refusal.Message)
+        {
+            yield return detail;
+        }
+
+        foreach (var (field, problems) in refusal.Errors)
+        {
+            foreach (var problem in problems)
+            {
+                yield return field.Length > 0 ? $"{field}: {problem}" : problem;
             }
         }
     }

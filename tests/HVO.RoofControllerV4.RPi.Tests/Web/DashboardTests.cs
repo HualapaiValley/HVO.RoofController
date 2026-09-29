@@ -184,11 +184,15 @@ public sealed class DashboardTests
 
         cut.WaitForAssertion(() => Text(cut.Find("[data-testid=relays-banner]")).Should().Be("Relays: UNVERIFIED: confirm at the roof that the motor has stopped."));
         Text(cut.Find("[data-testid=inputs-banner]")).Should().Be("Safety inputs: reads failing (2 in a row). Motion may be refused.");
+        var status = harness.Console.View.Status!;
+        Text(cut.Find("[data-testid=open-limit]")).Should().Be($"Open limit (last read): {RoofStatusText.DescribeInput(status.IsOpenLimitActive)}");
+        Text(cut.Find("[data-testid=closed-limit]")).Should().Be($"Closed limit (last read): {RoofStatusText.DescribeInput(status.IsClosedLimitActive)}");
 
         harness.Push(RoofServiceMock.Snapshot() with { RelayRegisterReadsHealthy = false });
 
         cut.WaitForAssertion(() => Text(cut.Find("[data-testid=relays-banner]")).Should().Be("Relays: register read-back matched; register reads failing."));
         cut.FindAll("[data-testid=inputs-banner]").Should().BeEmpty();
+        Text(cut.Find("[data-testid=open-limit]")).Should().StartWith("Open limit: ");
     }
 
     [TestMethod]

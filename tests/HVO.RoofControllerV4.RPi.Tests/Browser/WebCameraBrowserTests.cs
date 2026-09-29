@@ -1,28 +1,29 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using FluentAssertions;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 using HVO.RoofControllerV4.Simulation.Camera;
 using static Microsoft.Playwright.Assertions;
+using WebProgram = HVO.RoofControllerV4.Web.Program;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 
 /// <summary>
-/// The console's camera view against the emulated camera through the controller's camera proxy: a camera that stops
-/// sending frames or goes offline is shown as such over the last frame, the roof's controls keep working, and the view
-/// recovers by itself when the camera does.
+/// The roof page's camera view against the emulated camera, relayed by the web UI from the controller's camera proxy: a
+/// camera that stops sending frames or goes offline is shown as such over the last frame, the roof's controls keep
+/// working, and the view recovers by itself when the camera does.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
 [TestCategory(Scenario.BrowserCategory)]
-public sealed class ConsoleCameraBrowserTests
+public sealed class WebCameraBrowserTests
 {
     private static readonly Regex LastFrame = new(@"No live video — last frame \d\d:\d\d:\d\d");
 
-    private ConsoleBrowser? _browser;
+    private WebBrowser? _browser;
 
     public TestContext TestContext { get; set; } = null!;
 
@@ -36,12 +37,12 @@ public sealed class ConsoleCameraBrowserTests
     }
 
     [TestMethod]
-    public async Task WhenTheCameraStallsOrGoesOffline_TheConsoleSaysSo_StopStillWorks_AndTheViewRecoversByItself()
+    public async Task WhenTheCameraStallsOrGoesOffline_ThePageSaysSo_StopStillWorks_AndTheViewRecoversByItself()
     {
         var options = Scenario.Production(travelMeters: 2.0) with { Camera = true };
-        var browser = _browser = await ConsoleBrowser.StartAsync(TestContext, options, ConsoleDevices.TabletLandscape);
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, options, WebDevices.TabletLandscape);
         var rig = browser.Rig;
-        await browser.SignInAsync(TestApiKeys.Operator);
+        await browser.SignInAsync(WebBrowser.Operator);
         await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
         await Expect(browser.CameraOverlay).ToHaveCountAsync(0);
 
@@ -62,8 +63,8 @@ public sealed class ConsoleCameraBrowserTests
         await Expect(browser.Position).ToHaveTextAsync("Opening");
         await rig.WaitForControllerAsync(s => s.IsMoving, "the roof to open");
         await browser.Stop.ClickAsync();
-        await Expect(browser.StopOutcome).ToContainTextAsync("Stop acknowledged. Relay register verified de-energized.");
-        var stopped = await rig.WaitForRestAsync("the console's Stop with the camera offline");
+        await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
+        var stopped = await rig.WaitForRestAsync("the web UI's Stop with the camera offline");
         stopped.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
         stopped.ShouldBeDeenergized(rig);
 
@@ -71,7 +72,7 @@ public sealed class ConsoleCameraBrowserTests
         rig.Camera.Mode = EmulatedCameraMode.Live;
         await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 30_000 });
         await Expect(browser.CameraOverlay).ToHaveCountAsync(0);
-        await Expect(browser.Page.GetByText("The camera view failed")).ToHaveCountAsync(0);
+        await Expect(browser.Page.GetByTestId("camera-failed")).ToHaveCountAsync(0);
     }
 
     /// <summary>
@@ -84,8 +85,8 @@ public sealed class ConsoleCameraBrowserTests
     [DataRow(200, DisplayName = "A stream")]
     public async Task AResponseToACancelledAttempt_IsClosed_AndLeavesTheNewAttemptAlone(int status)
     {
-        var browser = _browser = await ConsoleBrowser.StartAsync(TestContext, Scenario.Production(), ConsoleDevices.Phone);
-        await browser.Page.GotoAsync("/health/ready");
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(), WebDevices.Phone);
+        await browser.Page.GotoAsync(WebProgram.HealthLivePath);
 
         var result = (await browser.Page.EvaluateAsync<JsonElement>(StaleResponseScript, status))
             .Deserialize<StaleResponseResult>(JsonSerializerOptions.Web)!;
@@ -99,7 +100,7 @@ public sealed class ConsoleCameraBrowserTests
 
     private const string StaleResponseScript = """
         async status => {
-          const { createPlayer } = await import('/Components/CameraStream.razor.js');
+          const { createPlayer } = await import('/Components/Roof/CameraStream.razor.js');
           const url = '/camera-under-test';
           const requests = [];
           const realFetch = window.fetch;

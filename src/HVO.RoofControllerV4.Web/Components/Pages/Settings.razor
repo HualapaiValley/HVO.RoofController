@@ -31,7 +31,8 @@ else
         {
             <p class="web-muted">File: <code>@path</code></p>
         }
-        @if (!form.Settings.FileBacked)
+        @* The controller's warnings say why the settings are in memory; this line is for when it gives no reason. *@
+        @if (!form.Settings.FileBacked && form.Settings.Warnings.Count == 0)
         {
             <p class="web-status web-status--warning" data-testid="settings-in-memory">@RoofSettingsText.InMemoryOnly</p>
         }
@@ -157,17 +158,26 @@ else
                             else if (_editKey == field.Key)
                             {
                                 <div class="web-editor" data-testid="setting-editor">
-                                    <label for="setting-input" class="form-label">@(field.Setting.Secret ? $"New {field.Label} (never shown)" : $"New {field.Label}")</label>
                                     @if (field.Setting.Secret)
                                     {
-                                        <input id="setting-input" type="password" autocomplete="new-password" class="form-control form-control-sm" data-testid="setting-input"
-                                               @bind="_editText" @bind:event="oninput" />
-                                        <label for="setting-input-again" class="form-label">Again</label>
-                                        <input id="setting-input-again" type="password" autocomplete="new-password" class="form-control form-control-sm" data-testid="setting-input-again"
-                                               @bind="_editAgain" @bind:event="oninput" />
+                                        if (RoofSettingsText.SecretsSetTogether(shown) is { } together)
+                                        {
+                                            <p class="web-muted web-editor-help" data-testid="setting-together">@together</p>
+                                        }
+                                        for (var i = 0; i < _secrets.Count; i++)
+                                        {
+                                            var secret = _secrets[i];
+                                            <label for="@($"setting-input-{i}")" class="form-label">New @secret.Label (never shown)</label>
+                                            <input id="@($"setting-input-{i}")" type="password" autocomplete="new-password" class="form-control form-control-sm"
+                                                   data-testid="setting-input" data-key="@secret.Key" @bind="secret.Value" @bind:event="oninput" />
+                                            <label for="@($"setting-input-{i}-again")" class="form-label">@secret.Label again</label>
+                                            <input id="@($"setting-input-{i}-again")" type="password" autocomplete="new-password" class="form-control form-control-sm"
+                                                   data-testid="setting-input-again" data-key="@secret.Key" @bind="secret.Again" @bind:event="oninput" />
+                                        }
                                     }
                                     else if (Choices(field.Setting) is { } choices)
                                     {
+                                        <label for="setting-input" class="form-label">New @field.Label</label>
                                         <select id="setting-input" class="form-select form-select-sm" data-testid="setting-input" @bind="_editText">
                                             @if (field.Setting.Nullable || _editText.Length == 0)
                                             {
@@ -181,6 +191,7 @@ else
                                     }
                                     else
                                     {
+                                        <label for="setting-input" class="form-label">New @field.Label</label>
                                         <input id="setting-input" type="text" autocomplete="off" class="form-control form-control-sm" data-testid="setting-input"
                                                @bind="_editText" @bind:event="oninput" />
                                         @if (EditorHelp(field.Setting) is { Length: > 0 } help)
@@ -202,7 +213,7 @@ else
                             {
                                 <div class="web-actions">
                                     <button type="button" class="btn btn-sm btn-outline-light" data-testid="setting-change" disabled="@Busy" @onclick="() => OpenEditor(field)">Change</button>
-                                    @if (field.Setting.Secret && field.State?.IsSet == true)
+                                    @if (field.Setting.Secret && shown.Secrets.Any(secret => secret.State?.IsSet == true))
                                     {
                                         <button type="button" class="btn btn-sm btn-outline-danger" data-testid="setting-clear" disabled="@Busy" @onclick="() => ClearSecret(form, field)">Clear secret</button>
                                     }
@@ -221,7 +232,7 @@ else
     private string? _group;
     private string? _editKey;
     private string _editText = string.Empty;
-    private string _editAgain = string.Empty;
+    private List<TypedSecret> _secrets = [];
     private string? _editError;
     private RoofSettingsEdit? _review;
     private string _reviewAction = "Send";
@@ -271,7 +282,9 @@ else
     {
         _editKey = field.Key;
         _editText = field.EditText;
-        _editAgain = string.Empty;
+        _secrets = field.Setting.Secret && _form?.FindGroup(field.Setting.Group) is { } group
+            ? group.Secrets.Select(secret => new TypedSecret(secret.Key, secret.Label)).ToList()
+            : [];
         _editError = null;
         _review = null;
     }
@@ -280,30 +293,19 @@ else
     {
         _editKey = null;
         _editText = string.Empty;
-        _editAgain = string.Empty;
+        _secrets = [];
         _editError = null;
         _review = null;
     }
 
     private async Task SaveAsync(RoofSettingsForm form, RoofSettingsFormField field)
     {
-        if (field.Setting.Secret)
-        {
-            if (string.IsNullOrWhiteSpace(_editText))
-            {
-                _editError = "Type the new value; to remove the secret, use Clear secret.";
-                return;
-            }
-
-            if (!string.Equals(_editText, _editAgain, StringComparison.Ordinal))
-            {
-                _editError = "The two values differ.";
-                return;
-            }
-        }
-
+        // A secret is sent with the group's other secrets, which the controller may take only together.
         var edit = form.Edit(field.Setting.Group);
-        if (!edit.TrySet(field.Key, _editText, out var error))
+        var set = field.Setting.Secret
+            ? edit.TrySetSecrets(_secrets.Select(secret => ((string?)secret.Value, (string?)secret.Again)).ToList(), out var error)
+            : edit.TrySet(field.Key, _editText, out error);
+        if (!set)
         {
             _editError = error;
             return;
@@ -317,7 +319,7 @@ else
         var edit = form.Edit(field.Setting.Group);
         try
         {
-            edit.ClearSecret(field.Key);
+            edit.ClearSecrets();
         }
         catch (ArgumentException error)
         {
@@ -327,7 +329,7 @@ else
 
         _editKey = field.Key;
         _review = edit;
-        _reviewAction = "Clear it";
+        _reviewAction = edit.Changes.Count > 1 ? "Clear them" : "Clear it";
     }
 
     /// <summary>Sends the edit, or first shows it for review when it is safety-critical.</summary>
@@ -365,7 +367,7 @@ else
         if (sent && saved is not null)
         {
             var lines = new List<string> { $"Saved (settings version {saved.Version})." };
-            if (!saved.FileBacked)
+            if (!saved.FileBacked && saved.Warnings.Count == 0)
             {
                 lines.Add(RoofSettingsText.InMemoryOnly);
             }
@@ -419,13 +421,16 @@ else
         }
     }
 
-    /// <summary>After a refusal the settings on the page are out of date: reads them again, keeping the refusal.</summary>
+    /// <summary>
+    /// After a refusal the settings on the page are out of date: reads them again, keeping the refusal (without the
+    /// controller's advice to read them again, which this does).
+    /// </summary>
     private async Task ReadAgainAfterRefusalAsync()
     {
         var refusal = Message;
         if (await ReadAsync("The settings could not be read again.") && refusal is not null)
         {
-            Message = refusal with { Lines = [.. refusal.Lines, "The settings were read again: check them, then try again."] };
+            Message = refusal with { Lines = [refusal.Lines[0], "The settings were read again: check them, then try again."] };
         }
     }
 
@@ -471,4 +476,16 @@ else
     }
 
     private static string Number(double value) => value.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>A secret as it is typed, twice, in the editor; never shown and never kept after the editor closes.</summary>
+    private sealed class TypedSecret(string key, string label)
+    {
+        public string Key { get; } = key;
+
+        public string Label { get; } = label;
+
+        public string Value { get; set; } = string.Empty;
+
+        public string Again { get; set; } = string.Empty;
+    }
 }

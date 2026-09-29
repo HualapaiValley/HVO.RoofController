@@ -43,7 +43,7 @@
 
 <section class="web-card" aria-labelledby="restart-title" data-testid="restart">
     <h2 id="restart-title">Restart</h2>
-    <p>The controller stops the roof and verifies the stop, then exits; the container's supervisor starts it again. It is refused while the roof moves.</p>
+    <p>The controller stops the roof and verifies the stop, then exits; the container's supervisor starts it again. A roof that is moving is stopped first. It is refused when the stop cannot be verified, or when a pending hand edit it would load cannot be used.</p>
     @if (_restartForm is { } form)
     {
         <div class="web-confirm" role="group" aria-label="Restart the controller" data-testid="restart-confirm">

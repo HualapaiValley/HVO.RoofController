@@ -176,6 +176,53 @@ public sealed class RoofSettingsClientTests
         JsonSerializer.Serialize(saved).Should().NotContain(password);
     }
 
+    /// <summary>
+    /// A group's secrets are typed and sent together, as the controller takes the camera's user and password only
+    /// together while the proxy is on; each must be typed, alike twice, and clearing them clears those that are set.
+    /// </summary>
+    [TestMethod]
+    public async Task AGroupsSecrets_AreSetAndClearedTogether()
+    {
+        const string user = "test-camera-user-not-real";
+        const string password = "test-camera-password-not-real-16";
+        using var host = StartHost(new Dictionary<string, string?> { [CameraServer] = "http://192.168.0.4:81" });
+        using var client = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        var form = await LoadFormAsync(client);
+        var camera = form.FindGroup(RoofSettingsContract.CameraGroup)!;
+        camera.Secrets.Select(secret => secret.Key).Should().Equal(CameraUser, CameraPassword);
+        RoofSettingsText.SecretsSetTogether(camera).Should().Be("User name and Password are set and cleared together.");
+        RoofSettingsText.SecretsSetTogether(form.FindGroup(RoofSettingsContract.RoofGroup)!).Should().BeNull("the roof group has no secrets");
+
+        var edit = form.Edit(RoofSettingsContract.CameraGroup);
+        edit.TrySetSecrets([(user, user), ("", "")], out var error).Should().BeFalse();
+        error.Should().Be("Type the new Password: User name and Password are set and cleared together. To remove them, use Clear secret.");
+        edit.TrySetSecrets([(user, user + "!"), (password, password)], out error).Should().BeFalse();
+        error.Should().Be("The two User name values differ.");
+        edit.HasChanges.Should().BeFalse("nothing is set until every secret is typed");
+        edit.Invoking(e => e.TrySetSecrets([(user, user)], out _)).Should().Throw<ArgumentException>();
+
+        edit.TrySetSecrets([(user, user), (password, password)], out error).Should().BeTrue(error);
+        edit.Changes.Keys.Should().BeEquivalentTo(CameraUser, CameraPassword);
+        var saved = RoofSettingsForm.Create(
+            await client.Settings.GetCatalogueAsync(),
+            await client.Settings.UpdateAsync(RoofSettingsContract.CameraGroup, edit.ToRequest()));
+        saved.FindField(CameraUser)!.DisplayValue.Should().Be(RoofSettingValues.SecretSet);
+        saved.FindField(CameraPassword)!.DisplayValue.Should().Be(RoofSettingValues.SecretSet);
+
+        var cleared = saved.Edit(RoofSettingsContract.CameraGroup);
+        cleared.ClearSecrets();
+        cleared.Changes.Keys.Should().BeEquivalentTo(CameraUser, CameraPassword);
+        var after = RoofSettingsForm.Create(
+            await client.Settings.GetCatalogueAsync(),
+            await client.Settings.UpdateAsync(RoofSettingsContract.CameraGroup, cleared.ToRequest()));
+        after.FindField(CameraUser)!.DisplayValue.Should().Be(RoofSettingValues.SecretNotSet);
+        after.FindField(CameraPassword)!.DisplayValue.Should().Be(RoofSettingValues.SecretNotSet);
+
+        var nothing = after.Edit(RoofSettingsContract.CameraGroup);
+        nothing.ClearSecrets();
+        nothing.HasChanges.Should().BeFalse("only the secrets that are set are cleared");
+    }
+
     [TestMethod]
     public async Task ASecretLeftEmpty_IsKept_AndIsClearedOnlyWhenAskedTo()
     {

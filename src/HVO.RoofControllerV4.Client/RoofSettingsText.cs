@@ -26,6 +26,45 @@ public static class RoofSettingsText
 
     public const string InMemoryOnly = "Kept in memory only: changes are lost when the controller restarts.";
 
+    /// <summary>What a secret editor says when a value is left empty: a secret is removed with Clear secret.</summary>
+    public const string TypeTheSecret = "Type the new value; to remove the secret, use Clear secret.";
+
+    /// <summary>Says which of a group's secrets are set and cleared together, or null for a group with one.</summary>
+    public static string? SecretsSetTogether(RoofSettingsFormGroup group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        return group.Secrets is { Count: > 1 } secrets
+            ? $"{string.Join(", ", secrets.Take(secrets.Count - 1).Select(secret => secret.Label))} and {secrets[^1].Label} are set and cleared together."
+            : null;
+    }
+
+    /// <summary>
+    /// Why the secrets typed for a group cannot be sent, or null: each of its <see cref="RoofSettingsFormGroup.Secrets"/>
+    /// must be typed, and typed alike twice. <paramref name="typed"/> holds each one's value and its repeat, in that order.
+    /// </summary>
+    public static string? CheckTypedSecrets(RoofSettingsFormGroup group, IReadOnlyList<(string? Value, string? Again)> typed)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        ArgumentNullException.ThrowIfNull(typed);
+        var secrets = group.Secrets;
+        var together = SecretsSetTogether(group);
+        for (var i = 0; i < secrets.Count && i < typed.Count; i++)
+        {
+            var (value, again) = typed[i];
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return together is null ? TypeTheSecret : $"Type the new {secrets[i].Label}: {together} To remove them, use Clear secret.";
+            }
+
+            if (!string.Equals(value, again, StringComparison.Ordinal))
+            {
+                return together is null ? "The two values differ." : $"The two {secrets[i].Label} values differ.";
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>True when a field says a hand edit is pending, which anyone can see.</summary>
     public static bool HandEditSeen(RoofSettingsForm form)
     {

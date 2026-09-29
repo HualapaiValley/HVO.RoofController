@@ -1550,6 +1550,70 @@ public sealed class RoofTerminalUiTests
         }
     }
 
+    /// <summary>
+    /// With the camera proxy on, the controller takes the Blue Iris user and password only together: the terminal UI
+    /// asks for both, each typed twice, and clears them together.
+    /// </summary>
+    [TestMethod]
+    public void Settings_TheCamerasUserAndPassword_AreSetAndClearedTogether()
+    {
+        const string user = "test-camera-user-not-real";
+        const string password = "test-camera-password-not-real-16";
+        var directory = Path.Combine(Path.GetTempPath(), "hvo-roof-tui-settings-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var roof = new SettingsApiTests.RoofDouble();
+            using var host = new RoofApiTestHost(
+                roof.Mock,
+                settings: new Dictionary<string, string?> { ["BlueIris:BaseUrl"] = "http://192.168.0.4:81" },
+                configureServices: services => services.Configure<Microsoft.AspNetCore.Identity.PasswordHasherOptions>(options => options.IterationCount = 1_000),
+                settingsFilePath: Path.Combine(directory, "config", "appsettings.Local.json"),
+                secretsFilePath: Path.Combine(directory, "secrets", "managed-secrets.json"));
+            roof.StartFrom(host);
+            using var rig = new CliRig(host);
+            rig.UseApiKey(TestApiKeys.Admin);
+            using var tui = Started(rig);
+            tui.Press(Key.F2);
+            tui.WaitIdle("the settings", () => ((RoofUiSettingsPage)tui.Ui.CurrentPage).Form is not null);
+            var settings = (RoofUiSettingsPage)tui.Ui.CurrentPage;
+
+            settings.Select("BlueIris:Password");
+            Click(tui, "Change");
+            tui.Ui.Panel!.Prompt.Title.Should().Be("Change User name and Password");
+            tui.Ui.Panel.Prompt.Message.Should().StartWith("User name and Password are set and cleared together.");
+            tui.Ui.Panel.Fields.Select(field => field.Secret).Should().AllBeEquivalentTo(true, "no secret is shown as it is typed");
+            Fill(tui, user, user, password, password + "!");
+            tui.Ui.Panel.Press("Save");
+            tui.Ui.Panel!.Error.Should().Be("The two Password values differ.");
+
+            Fill(tui, user, user, password, password);
+            tui.Ui.Panel.Press("Save");
+            tui.WaitIdle("the save", () => tui.Ui.Message.StartsWith("Saved", StringComparison.Ordinal));
+            settings.Form!.FindField("BlueIris:UserName")!.DisplayValue.Should().Be(RoofSettingValues.SecretSet);
+            settings.Form.FindField("BlueIris:Password")!.DisplayValue.Should().Be(RoofSettingValues.SecretSet);
+            tui.Screen.Should().NotContain(password).And.NotContain(user);
+
+            settings.Select("BlueIris:Password");
+            Click(tui, "Clear secret");
+            tui.Ui.Panel!.Prompt.Title.Should().Be("Clear User name and Password");
+            tui.Ui.Panel.Press("Clear them");
+            tui.WaitIdle("the clear", () => settings.Form!.FindField("BlueIris:Password")!.DisplayValue == RoofSettingValues.SecretNotSet);
+            settings.Form!.FindField("BlueIris:UserName")!.DisplayValue.Should().Be(RoofSettingValues.SecretNotSet);
+
+            settings.Select("BlueIris:Password");
+            Click(tui, "Clear secret");
+            tui.Ui.Panel.Should().BeNull();
+            tui.Ui.Message.Should().Be("Nothing to clear: Password is not set.");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     [TestMethod]
     [DataRow(true, DisplayName = "A hand edit is pending")]
     [DataRow(false, DisplayName = "None is pending")]

@@ -24,6 +24,16 @@ namespace HVO.RoofControllerV4.RPi.Tests.Web;
 public sealed class HealthPageTests
 {
     [TestMethod]
+    [DataRow("00:00:00.0001249", "0.1 ms")]
+    [DataRow("00:00:00.0120000", "12 ms")]
+    [DataRow("00:00:01.2500000", "1.3 s")]
+    [DataRow("not a duration", "not a duration")]
+    [DataRow("", null)]
+    [DataRow(null, null)]
+    public void HowLongTheChecksTook_IsShownInMillisecondsOrSeconds(string? duration, string? expected)
+        => Health.Took(duration).Should().Be(expected);
+
+    [TestMethod]
     public async Task Health_ChecksAgain_EveryRefreshInterval()
     {
         var answer = HttpStatusCode.ServiceUnavailable;
@@ -106,7 +116,7 @@ public sealed class HealthPageTests
         var cut = context.Render<Health>();
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=health-overall]").TextContent
-            .Should().Be("Overall: Unhealthy, in 00:00:00.0120000. Read at 2026-09-29 00:00:00Z."));
+            .Should().Be("Overall: Unhealthy, in 12 ms. Read at 2026-09-29 00:00:00Z."));
         cut.FindAll("[data-testid=health-check]").Select(Describe).ToList().Should().Equal(
             "Unhealthy | hat | The HAT does not answer.",
             "Degraded | inputs | ",

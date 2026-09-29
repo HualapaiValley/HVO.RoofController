@@ -21,8 +21,13 @@ public sealed class SettingsPageTests
     private const string DefaultCamera = "RoofControllerUi:DefaultCamera";
     private const string KioskScreenTimeout = "RoofControllerUi:KioskScreenTimeout";
     private const string AtSpeedTimeout = "RoofControllerOptionsV4:AtSpeedConfirmationTimeout";
+    private const string CameraServer = "BlueIris:BaseUrl";
+    private const string CameraUser = "BlueIris:UserName";
     private const string CameraPassword = "BlueIris:Password";
+    private const string CameraUserName = "test-camera-user-not-real";
     private const string NewCameraPassword = "test-camera-password-not-real";
+    private const string FirstCameraServer = "http://camera-one.test:81/";
+    private const string SecondCameraServer = "http://camera-two.test:81/";
 
     [TestMethod]
     public async Task AnAdmin_SeesEveryGroup_AndTheFirstGroupsSettings()
@@ -55,6 +60,28 @@ public sealed class SettingsPageTests
         cut.Find("[data-testid=settings-group][data-group=logging]").Click();
         cut.WaitForAssertion(() => cut.Find("[data-testid=settings-fields]").GetAttribute("data-group").Should().Be(RoofSettingsContract.LoggingGroup));
         Setting(cut, "Logging:LogLevel:Default").QuerySelector("[data-testid=setting-value]")!.TextContent.Should().Be("Information");
+    }
+
+    [TestMethod]
+    public async Task WithoutASettingsFile_ThePageSaysOnce_ThatChangesAreLostAtARestart_AndWhy()
+    {
+        using var harness = new WebAdminHarness(fileBacked: false);
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        var before = Version(cut);
+
+        cut.FindAll("[data-testid=settings-in-memory]").Should().BeEmpty("the controller's warning says it, and why");
+        var warning = cut.FindAll("[data-testid=settings-warning]").Should().ContainSingle().Subject.TextContent;
+        warning.Should().Contain("held in memory only").And.Contain("RoofControllerSettings:FilePath is not set");
+
+        cut.Find($"[data-testid=settings-group][data-group={RoofSettingsContract.UiGroup}]").Click();
+        cut.WaitForAssertion(() => cut.Find("[data-testid=settings-fields]").GetAttribute("data-group").Should().Be(RoofSettingsContract.UiGroup));
+        Change(cut, DefaultCamera, "Pier");
+
+        cut.WaitForAssertion(() => Message(cut).Should().StartWith($"Saved (settings version {before + 1})."));
+        Message(cut).Should().NotContain(RoofSettingsText.InMemoryOnly).And.Contain("held in memory only");
+        cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Warning));
     }
 
     [TestMethod]
@@ -170,41 +197,73 @@ public sealed class SettingsPageTests
         harness.Roof.Applied.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// With the camera proxy on, the controller takes the Blue Iris user and password only together, so the page sets and
+    /// clears them together; and moving the proxy to another server is done by clearing them, moving it, and setting them
+    /// again, as docs/web.md says.
+    /// </summary>
     [TestMethod]
-    public async Task ASecret_IsTypedTwice_NeverShown_AndCanBeCleared()
+    public async Task TheCamerasUserAndPassword_AreTypedTwice_NeverShown_AndSetAndClearedTogether()
     {
-        using var harness = new WebAdminHarness();
+        using var harness = new WebAdminHarness(new Dictionary<string, string?> { [CameraServer] = FirstCameraServer });
         var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
         await using var context = harness.Context(session);
         var cut = Loaded(context);
         cut.Find("[data-testid=settings-group][data-group=camera]").Click();
         cut.WaitForAssertion(() => Value(cut, CameraPassword).Should().Be(RoofSettingValues.SecretNotSet));
-        Setting(cut, CameraPassword).QuerySelector("[data-testid=setting-clear]").Should().BeNull("there is nothing to clear");
+        Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretNotSet);
+        cut.FindAll("[data-testid=setting-clear]").Should().BeEmpty("there is nothing to clear");
 
         Open(cut, CameraPassword);
-        cut.Find("[data-testid=setting-input]").GetAttribute("type").Should().Be("password");
+        cut.FindAll("[data-testid=setting-input]").Select(input => input.GetAttribute("data-key")).Should().Equal(CameraUser, CameraPassword);
+        cut.FindAll("[data-testid=setting-editor] input").Select(input => input.GetAttribute("type")).Should().AllBe("password");
+        cut.Find("[data-testid=setting-together]").TextContent.Should().Be("User name and Password are set and cleared together.");
         cut.Find("[data-testid=setting-save]").Click();
-        cut.WaitForAssertion(() => cut.Find("[data-testid=setting-error]").TextContent.Should().Be("Type the new value; to remove the secret, use Clear secret."));
+        cut.WaitForAssertion(() => cut.Find("[data-testid=setting-error]").TextContent.Should().Be(
+            "Type the new User name: User name and Password are set and cleared together. To remove them, use Clear secret."));
 
-        cut.Find("[data-testid=setting-input]").Input(NewCameraPassword);
-        cut.Find("[data-testid=setting-input-again]").Input(NewCameraPassword + "!");
+        Type(cut, CameraUser, CameraUserName);
+        Type(cut, CameraPassword, NewCameraPassword, again: NewCameraPassword + "!");
         cut.Find("[data-testid=setting-save]").Click();
-        cut.WaitForAssertion(() => cut.Find("[data-testid=setting-error]").TextContent.Should().Be("The two values differ."));
+        cut.WaitForAssertion(() => cut.Find("[data-testid=setting-error]").TextContent.Should().Be("The two Password values differ."));
 
-        cut.Find("[data-testid=setting-input-again]").Input(NewCameraPassword);
+        Type(cut, CameraPassword, NewCameraPassword);
         cut.Find("[data-testid=setting-save]").Click();
 
         cut.WaitForAssertion(() => Message(cut).Should().StartWith("Saved (settings version "));
+        Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretSet);
         Value(cut, CameraPassword).Should().Be(RoofSettingValues.SecretSet);
-        cut.Markup.Should().NotContain(NewCameraPassword);
+        cut.Markup.Should().NotContain(NewCameraPassword).And.NotContain(CameraUserName);
 
-        Setting(cut, CameraPassword).QuerySelector("[data-testid=setting-clear]")!.Click();
-        cut.WaitForAssertion(() => cut.Find("[data-testid=setting-review] li").TextContent
-            .Should().Be($"Password: {RoofSettingValues.SecretSet} -> {RoofSettingValues.SecretNotSet}"));
-        cut.Find("[data-testid=setting-send]").TextContent.Trim().Should().Be("Clear it");
+        // The controller keeps the credentials with their server: a move while they are set is refused.
+        Change(cut, CameraServer, SecondCameraServer);
+        cut.WaitForAssertion(() => Message(cut).Should().Contain("Moving the camera proxy to another server"));
+        Value(cut, CameraServer).Should().Be(FirstCameraServer);
+
+        cut.WaitForAssertion(() => Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.HasAttribute("disabled").Should().BeFalse());
+        Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.Click();
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid=setting-review] li").Select(change => change.TextContent).Should().Equal(
+            $"User name: {RoofSettingValues.SecretSet} -> {RoofSettingValues.SecretNotSet}",
+            $"Password: {RoofSettingValues.SecretSet} -> {RoofSettingValues.SecretNotSet}"));
+        cut.Find("[data-testid=setting-send]").TextContent.Trim().Should().Be("Clear them");
         cut.Find("[data-testid=setting-send]").Click();
-
         cut.WaitForAssertion(() => Value(cut, CameraPassword).Should().Be(RoofSettingValues.SecretNotSet));
+        Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretNotSet);
+
+        Change(cut, CameraServer, SecondCameraServer);
+        cut.WaitForAssertion(() => Value(cut, CameraServer).Should().Be(SecondCameraServer));
+
+        Open(cut, CameraUser);
+        Type(cut, CameraUser, CameraUserName);
+        Type(cut, CameraPassword, NewCameraPassword);
+        cut.Find("[data-testid=setting-save]").Click();
+        cut.WaitForAssertion(() => Value(cut, CameraPassword).Should().Be(RoofSettingValues.SecretSet));
+        Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretSet);
+
+        var settings = (await harness.Admin().Settings.GetAsync()).Settings.ToDictionary(setting => setting.Key);
+        settings[CameraServer].Value!.Value.GetString().Should().Be(SecondCameraServer);
+        settings[CameraUser].IsSet.Should().BeTrue();
+        settings[CameraPassword].IsSet.Should().BeTrue();
     }
 
     [TestMethod]
@@ -353,8 +412,17 @@ public sealed class SettingsPageTests
     /// <summary>Opens the setting's editor, and waits for it: a click is queued while the page still renders.</summary>
     private static void Open(IRenderedComponent<SettingsPage> cut, string key)
     {
+        // The buttons are disabled while a request is in flight, and drawn again when it ends.
+        cut.WaitForAssertion(() => Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.HasAttribute("disabled").Should().BeFalse());
         Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.Click();
         cut.WaitForElement("[data-testid=setting-editor]");
+    }
+
+    /// <summary>Types a secret in the open editor, and again (<paramref name="again"/>, or the same).</summary>
+    private static void Type(IRenderedComponent<SettingsPage> cut, string key, string value, string? again = null)
+    {
+        cut.Find($"[data-testid=setting-input][data-key='{key}']").Input(value);
+        cut.Find($"[data-testid=setting-input-again][data-key='{key}']").Input(again ?? value);
     }
 
     /// <summary>Opens the setting's editor, types <paramref name="text"/> and saves.</summary>

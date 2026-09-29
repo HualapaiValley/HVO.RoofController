@@ -79,6 +79,12 @@ public sealed class RoofSettingsFormGroup
 
     /// <summary>True when the caller may change at least one setting in the group.</summary>
     public bool CanWrite => Fields.Any(candidate => candidate.CanWrite);
+
+    /// <summary>
+    /// The group's secrets the caller may change. They are set together, in one change, as the controller takes some only
+    /// together: the camera's user and password.
+    /// </summary>
+    public IReadOnlyList<RoofSettingsFormField> Secrets => Fields.Where(candidate => candidate.Setting.Secret && candidate.CanWrite).ToArray();
 }
 
 /// <summary>One setting: what the catalogue says about it, and its current state.</summary>
@@ -216,6 +222,46 @@ public sealed class RoofSettingsEdit
 
         Apply(field, value);
         return true;
+    }
+
+    /// <summary>
+    /// Sets every one of the group's <see cref="RoofSettingsFormGroup.Secrets"/> from what was typed for it: its value and
+    /// the value typed again, in that order. Returns false with a message when one is not typed, or not typed alike twice.
+    /// </summary>
+    public bool TrySetSecrets(IReadOnlyList<(string? Value, string? Again)> typed, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(typed);
+        var secrets = Group.Secrets;
+        if (typed.Count != secrets.Count)
+        {
+            throw new ArgumentException($"{Group.Title} has {secrets.Count} secret(s) to type, not {typed.Count}.", nameof(typed));
+        }
+
+        error = RoofSettingsText.CheckTypedSecrets(Group, typed);
+        if (error is not null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < secrets.Count; i++)
+        {
+            if (!TrySet(secrets[i].Key, typed[i].Value, out error))
+            {
+                error = $"{secrets[i].Label}: {error}";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Clears every one of the group's <see cref="RoofSettingsFormGroup.Secrets"/> that is set, in this one change.</summary>
+    public void ClearSecrets()
+    {
+        foreach (var secret in Group.Secrets.Where(candidate => candidate.State?.IsSet == true))
+        {
+            ClearSecret(secret.Key);
+        }
     }
 
     /// <summary>Clears a secret (sends null). Throws <see cref="ArgumentException"/> when the setting is not a secret, or must have a value.</summary>

@@ -637,8 +637,8 @@ Pi:
 docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller
 ```
 
-The web UI's control for it, for admins only and after confirming what a kill means for the roof, comes with the web
-UI's sign-in (issue #46). The supervisor records what it did with the last request in its state
+The web UI's control for it is on the System page, for admins only, after confirming what a kill means for the roof
+([web.md](web.md#system)). The supervisor records what it did with the last request in its state
 (`lastForcedRestart`: `restarted`, or `ignored` within 10 s of a start).
 
 ### The web UI's user and settings

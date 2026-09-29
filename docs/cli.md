@@ -202,6 +202,17 @@ and the Settings page's header then says the file was edited by hand.
 - **Secrets in a change.** The change that `config set-secret` lists before it is sent (and its `changes` in JSON)
   shows a secret being set as `(new value)`. Setting a secret is always a change, even over one that is set, because
   its value is never shown. Clearing a secret that is not set is not a change.
+- **Moving the camera proxy to another server.** While the camera's user or password is set, the controller refuses a
+  change of `BlueIris:BaseUrl` to another server ([security.md](security.md#secrets)). Clear them, change the server,
+  then set them for the new server:
+
+  ```bash
+  hvo-roof config set-secret --clear BlueIris:UserName BlueIris:Password
+  hvo-roof config set BlueIris:BaseUrl=http://camera-two.example:81/
+  hvo-roof config set-secret BlueIris:UserName BlueIris:Password
+  ```
+
+  In the interface: Clear secret, Change on `BlueIris:BaseUrl`, then Change on the user name or password.
 
 ### Signals
 
@@ -244,7 +255,7 @@ and the Settings page's header then says the file was edited by hand.
 | Key | Page | What it has |
 |-----|------|-------------|
 | F1 | Roof | The status, with Open, Close, Clear fault and Refresh. Each button that cannot be used says why, for example "the roof is already closed". |
-| F2 | Settings | The settings by group, built from the controller's catalogue. Change, Clear secret, Reload, and review of a hand edit. |
+| F2 | Settings | The settings by group, built from the controller's catalogue. Change, Clear secret, Reload, and review of a hand edit. A group's secrets are set and cleared together: Change on the camera's user name or password asks for both, each typed twice, and Clear secret clears both. |
 | F3 | People | People, API keys and sessions (admin). |
 | F4 | System | Health, readiness, the version and resource use (admin), and Restart (admin). |
 | F5 | Setup | Connection, a connection check, Sign in, Sign out, and First admin. |

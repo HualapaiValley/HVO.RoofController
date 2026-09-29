@@ -187,26 +187,24 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
-        if (field.Setting.Secret)
+        if (field.Setting.Secret && form.FindGroup(field.Setting.Group) is { } group)
         {
+            // A secret is sent with the group's other secrets, which the controller may take only together.
+            var secrets = group.Secrets;
+            var together = RoofSettingsText.SecretsSetTogether(group);
             Ui.Ask(new RoofUiPrompt(
-                $"Change {field.Label}",
-                $"{field.Description}\nThe secret is never shown. Type the new value twice.",
-                [new RoofUiField("New value", Secret: true), new RoofUiField("Again", Secret: true)],
+                together is null ? $"Change {field.Label}" : $"Change {string.Join(" and ", secrets.Select(secret => secret.Label))}",
+                together is null
+                    ? $"{field.Description}\nThe secret is never shown. Type the new value twice."
+                    : $"{together}\nThe secrets are never shown. Type each new value twice.",
+                [.. secrets.SelectMany(secret => together is null
+                    ? new[] { new RoofUiField("New value", Secret: true), new RoofUiField("Again", Secret: true) }
+                    : [new RoofUiField($"New {secret.Label}", Secret: true), new RoofUiField($"{secret.Label} again", Secret: true)])],
                 [new RoofUiAction("Save", values =>
                 {
-                    if (string.IsNullOrWhiteSpace(values[0]))
-                    {
-                        return "Type the new value; to remove the secret, use Clear secret.";
-                    }
-
-                    if (values[0] != values[1])
-                    {
-                        return "The two values differ.";
-                    }
-
-                    var edit = form.Edit(field.Setting.Group);
-                    return edit.TrySet(field.Key, values[0], out var error) ? Review(form, edit) : error;
+                    var edit = form.Edit(group.Name);
+                    var typed = secrets.Select((_, i) => ((string?)values[2 * i], (string?)values[2 * i + 1])).ToList();
+                    return edit.TrySetSecrets(typed, out var error) ? Review(form, edit) : error;
                 })]));
             return;
         }
@@ -236,10 +234,11 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
+        // The group's secrets are cleared together, as they are set.
         var edit = form.Edit(field.Setting.Group);
         try
         {
-            edit.ClearSecret(field.Key);
+            edit.ClearSecrets();
         }
         catch (ArgumentException error)
         {
@@ -247,11 +246,19 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
+        var cleared = edit.Group.Fields.Where(candidate => edit.Changes.ContainsKey(candidate.Key)).ToList();
+        if (cleared.Count == 0)
+        {
+            Ui.Say($"Nothing to clear: {field.Label} is not set.");
+            return;
+        }
+
+        var names = string.Join(" and ", cleared.Select(secret => secret.Label));
         Ui.Ask(new RoofUiPrompt(
-            $"Clear {field.Label}",
-            $"Remove {field.Label}? {field.Description}",
+            $"Clear {names}",
+            cleared.Count == 1 ? $"Remove {names}? {cleared[0].Description}" : $"Remove {names}? {RoofSettingsText.SecretsSetTogether(edit.Group)}",
             [],
-            [new RoofUiAction("Clear it", _ => Review(form, edit))]));
+            [new RoofUiAction(cleared.Count == 1 ? "Clear it" : "Clear them", _ => Review(form, edit))]));
     }
 
     /// <summary>Sends the edit, or first asks to confirm it when it is safety-critical. Returns an error to show, or null.</summary>
@@ -297,7 +304,8 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
                 _form = reloaded;
                 Show();
                 var notes = new List<string> { $"Saved (settings version {saved.Version})." };
-                if (!saved.FileBacked)
+                // The controller's warnings say why the settings are in memory; this note is for when it gives no reason.
+                if (!saved.FileBacked && saved.Warnings.Count == 0)
                 {
                     notes.Add("Kept in memory only: it is lost when the controller restarts.");
                 }

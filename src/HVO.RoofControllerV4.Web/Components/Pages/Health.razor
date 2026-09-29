@@ -51,7 +51,7 @@ else
     }
     else
     {
-        <p data-testid="health-overall">Overall: <strong>@_report.Status</strong>@(_report.TotalDuration is { Length: > 0 } total ? $", in {total}" : string.Empty). Read at @RoofStatusText.Time(_reportAt).</p>
+        <p data-testid="health-overall">Overall: <strong>@_report.Status</strong>@(Took(_report.TotalDuration) is { } took ? $", in {took}" : string.Empty). Read at @RoofStatusText.Time(_reportAt).</p>
         @if (_report.Checks.Count == 0)
         {
             <p class="web-muted">The controller reported no checks.</p>
@@ -76,6 +76,20 @@ else
 </section>
 
 @code {
+    /// <summary>How long the checks took, from the controller's TimeSpan: "12 ms", "0.1 ms" or "1.2 s".</summary>
+    internal static string? Took(string? duration)
+    {
+        if (!TimeSpan.TryParse(duration, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            return string.IsNullOrWhiteSpace(duration) ? null : duration;
+        }
+
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        return value.TotalSeconds >= 1 ? $"{value.TotalSeconds.ToString("0.0", invariant)} s"
+            : value.TotalMilliseconds >= 1 ? $"{value.TotalMilliseconds.ToString("0", invariant)} ms"
+            : $"{value.TotalMilliseconds.ToString("0.0", invariant)} ms";
+    }
+
     private readonly CancellationTokenSource _stopping = new();
     private RoofWebStatus? _status;
     private HealthReportPayload? _report;

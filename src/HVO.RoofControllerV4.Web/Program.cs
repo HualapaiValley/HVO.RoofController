@@ -129,7 +129,8 @@ public class Program
             var headers = context.Response.Headers;
             headers.XContentTypeOptions = "nosniff";
             headers.XFrameOptions = "DENY";
-            headers["Referrer-Policy"] = "no-referrer";
+            // Not no-referrer: under it a browser sends "Origin: null" with a form post, which OriginCheck refuses.
+            headers["Referrer-Policy"] = "same-origin";
             await next(context);
         });
 
