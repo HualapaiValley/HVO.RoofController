@@ -490,8 +490,8 @@ A restart also loads a pending edit, so it is refused while the edit could not b
 3. writes an `AUDIT` entry, answers 202, then shuts down as on SIGTERM (running the verified stop again) and exits with
    code 75.
 
-The container's restart policy, `unless-stopped`, starts it again. A controller that no supervisor restarts stays
-stopped.
+In the container, the supervisor (`roof-supervisor`, see [deployment.md](deployment.md)) starts the controller again at
+once, and the web UI stays up. A controller that no supervisor restarts stays stopped.
 
 ## Web console
 

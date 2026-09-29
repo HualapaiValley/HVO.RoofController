@@ -88,7 +88,7 @@ Remote configuration goes through `/api/v4.0/Settings`; [docs/security.md](../..
 - Changes are saved atomically to the settings file (`RoofControllerSettings:FilePath`; on the Pi `/etc/hvo-roof/config/appsettings.Local.json`), which holds only the values that differ from the shipped defaults and the version. Environment variables, the command line and the secrets directory override it, and the API cannot change a setting set there. A save rewrites the file without its comments.
 - A hand edit to the file is shown as pending and blocks API changes until an admin reloads it (`POST Settings/Reload`, checked like an API change) or discards it (`POST Settings/Discard`). See [docs/commissioning.md](../../docs/commissioning.md#the-settings-file).
 - A file the controller cannot use stops startup with `The roof controller did not start: ...` on standard error and exit code 1.
-- `POST /api/v4.0/System/Restart` (`RoofAdmin`) stops the roof, verifies the stop (409 `RestartRefused` if it cannot), answers 202 and exits with code 75, so the container's restart policy starts it again. Every change and restart is logged as an `AUDIT` entry naming the caller.
+- `POST /api/v4.0/System/Restart` (`RoofAdmin`) stops the roof, verifies the stop (409 `RestartRefused` if it cannot), answers 202 and exits with code 75. In the container, the supervisor starts the controller again at once and leaves the web UI running (see [docs/deployment.md](../../docs/deployment.md)). Every change and restart is logged as an `AUDIT` entry naming the caller.
 
 ## Testing
 Run the dedicated test project to validate relay sequencing, watchdog behaviour, and idempotent command handling:
