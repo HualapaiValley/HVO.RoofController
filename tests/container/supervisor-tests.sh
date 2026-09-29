@@ -639,10 +639,11 @@ test_a_data_directory_of_the_operators_choosing_is_made_by_the_web_uis_user() {
 }
 
 # expect_the_default_keys_directory_made_by_the_supervisor: the supervisor itself (root, in the container) made
-# /var/lib/hvo-roof-web and a keys directory in it for the web UI's user, not through setpriv, and gave it to the web UI.
+# /var/lib/hvo-roof-web as root's (also when it was the web UI's user's) and a keys directory in it for the web UI's
+# user, not through setpriv, and gave it to the web UI.
 expect_the_default_keys_directory_made_by_the_supervisor() {
-  grep -qxF -- "-d -m 0755 /var/lib/hvo-roof-web" "${FAKE_DIR}/install.log" \
-    || fail_test "the data directory was not made: $(cat "${FAKE_DIR}/install.log")"
+  grep -qxF -- "-d -m 0755 -o root -g root /var/lib/hvo-roof-web" "${FAKE_DIR}/install.log" \
+    || fail_test "the data directory was not made root's: $(cat "${FAKE_DIR}/install.log")"
   grep -qxF -- "-d -m 0700 -o ${UI_USER} -g ${UI_GROUP} /var/lib/hvo-roof-web/keys" "${FAKE_DIR}/install.log" \
     || fail_test "the keys directory was not made for the web UI's user: $(cat "${FAKE_DIR}/install.log")"
   ! grep -qE -- '\| install .*/var/lib/hvo-roof-web' "${FAKE_DIR}/setpriv.log" \
@@ -669,6 +670,31 @@ test_the_default_keys_directory_named_as_the_data_directory_is_made_the_same_way
   start_supervisor_with_the_default_data_dir "HVO_SUPERVISOR_UI_DATA_DIR=/var/lib/hvo-roof-web"
   wait_both_running || return
   expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+# However it is written: repeated slashes and a trailing slash name the same directory.
+test_the_default_keys_directory_written_with_extra_slashes_is_made_the_same_way() {
+  start_supervisor_with_the_default_data_dir "RoofWeb__DataProtectionPath=/var/lib//hvo-roof-web/keys/"
+  wait_both_running || return
+  expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+test_the_default_data_directory_written_with_a_trailing_slash_is_made_the_same_way() {
+  start_supervisor_with_the_default_data_dir "HVO_SUPERVISOR_UI_DATA_DIR=/var/lib/hvo-roof-web/"
+  wait_both_running || return
+  expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+# Without a user of its own, the web UI runs as the supervisor does, so there is no one else to give the directories to.
+test_the_default_keys_directory_without_a_web_ui_user_is_left_to_the_supervisors_user() {
+  mkdir -p "${WORK}/install-bin"
+  ln -sf "${TESTS_DIR}/fake-install" "${WORK}/install-bin/install"
+  start_supervisor "HVO_SUPERVISOR_UI_DATA_DIR=" "PATH=${WORK}/install-bin:${PATH}"
+  wait_both_running || return
+  expect_equal "install calls" "$(grep -F /var/lib/hvo-roof-web "${FAKE_DIR}/install.log")" \
+    "$(printf '%s\n' "-d -m 0755 /var/lib/hvo-roof-web" "-d -m 0700 /var/lib/hvo-roof-web/keys")"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
+    "RoofWeb__DataProtectionPath=/var/lib/hvo-roof-web/keys"
 }
 
 test_the_web_ui_runs_as_its_own_user_without_new_privileges() {

@@ -288,21 +288,36 @@ prepare_ui_stop_key() {
   printf 'RoofWeb__StopKeyFile=%s\n' "${copy}"
 }
 
+# A path written plainly: repeated slashes made one and a trailing slash dropped, so the default is known however it is
+# written. ".." is left as it is: a symbolic link can make it name somewhere else.
+plain_path() {
+  local path=$1
+  while [[ "${path}" == *//* ]]; do
+    path=${path//\/\//\/}
+  done
+  [[ "${path}" == / ]] || path=${path%/}
+  printf '%s\n' "${path}"
+}
+
 # The directory for the keys that protect the web UI's sign-in cookie and forms (RoofWeb__DataProtectionPath, or
 # HVO_SUPERVISOR_UI_DATA_DIR/keys), owned by the web UI's user and private to it. The default is in the container, so
 # it lasts while the container does: a redeploy, which makes a new container, signs everyone out. Root makes the
-# default, /var/lib/hvo-roof-web/keys (also when a setting names it), in directories only root can change. Any other
-# directory may be anywhere, under a directory the web UI's user can write too, where that user could swap a part of the
-# path for a link to, say, the secrets directory; so it is made by the web UI's user, with that user's rights alone, and
-# a link gains nothing. Prints the RoofWeb__DataProtectionPath setting for the web UI; nothing when the directory
-# cannot be made (the keys are then kept in memory).
+# default, /var/lib/hvo-roof-web/keys (also when a setting names it, however written), and first gives its parent to
+# root (a volume there may have been given to the web UI's user), so only root can change what the keys directory is.
+# Any other directory may be anywhere, under a directory the web UI's user can write too, where that user could swap a
+# part of the path for a link to, say, the secrets directory; so it is made by the web UI's user, with that user's rights
+# alone, and a link gains nothing. Prints the RoofWeb__DataProtectionPath setting for the web UI; nothing when the
+# directory cannot be made (the keys are then kept in memory).
 prepare_ui_data_protection() {
-  local path=${RoofWeb__DataProtectionPath:-${UI_DATA_DIR}/keys}
-  local -a make=(install -d -m 0700)
+  local path
+  path=$(plain_path "${RoofWeb__DataProtectionPath:-${UI_DATA_DIR}/keys}")
+  local -a make=(install -d -m 0700) parent=(install -d -m 0755)
   if [[ "${path}" == "${DEFAULT_UI_DATA_DIR}/keys" ]]; then
-    install -d -m 0755 "${DEFAULT_UI_DATA_DIR}" \
-      || { log "WARNING: cannot create ${DEFAULT_UI_DATA_DIR}; the web UI keeps its keys in memory"; return 0; }
-    [[ -z "${UI_USER}" ]] || make+=(-o "${UI_USER}" -g "${UI_GROUP}")
+    [[ -z "${UI_USER}" ]] || { parent+=(-o root -g root); make+=(-o "${UI_USER}" -g "${UI_GROUP}"); }
+    if [[ -L "${DEFAULT_UI_DATA_DIR}" ]] || ! "${parent[@]}" "${DEFAULT_UI_DATA_DIR}"; then
+      log "WARNING: cannot use ${DEFAULT_UI_DATA_DIR} for the web UI's keys; the web UI keeps them in memory"
+      return 0
+    fi
   elif [[ -n "${UI_USER}" ]]; then
     make=(setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs "${make[@]}")
   fi

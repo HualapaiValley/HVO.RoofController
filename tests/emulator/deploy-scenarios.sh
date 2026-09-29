@@ -9,7 +9,7 @@
 #   supervisor The container's two processes (docs/deployment.md, "The container's two processes"): the controller
 #              killed during travel inside the container, a crash loop that leaves it stopped with the container
 #              unhealthy and the web UI saying why, a forced restart through the web UI's control file, and the web UI
-#              killed while the roof moves (C11 steps 6-9); and the web UI's user and environment.
+#              killed while the roof moves (C11 steps 6-9); and the web UI's user, environment and keys directory.
 #   c12        commissioning.md C12 with deploy-roofcontroller-rpi.sh: an idle deploy, a deploy while the roof moves,
 #              pre-flight failures, a remote-check failure that rolls back, --rollback twice, a Stop that cannot be
 #              verified, a new controller that never becomes ready, a new web UI that cannot start, and the relays off
@@ -962,6 +962,27 @@ scenario_supervisor() {
   assert_relays_off
   close_roof
   pass "the supervisor started only the web UI again (start ${ui_starts} -> $((ui_starts + 1))) and it is live; the controller (pid ${controller_pid}) kept running and the move went on; relays off after Stop"
+
+  # CommissioningCheck("C11")
+  current_check="Supervisor: the web UI's keys directory is in a directory only root can change"
+  local keys_dir=/var/lib/hvo-roof-web owners
+  owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ') \
+    || fail "no ${keys_dir}/keys"
+  [[ "${owners}" == "root:root 755 app:app 700" ]] || fail "${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
+  ! docker exec -u app "${controller}" ln -s /var/lib/hvo-roof/identity "${keys_dir}/probe" 2>/dev/null \
+    || fail "the web UI's user can create a link in ${keys_dir}"
+  # A volume there given to the web UI's user, as the docs once advised: at the web UI's next start, root takes it back
+  # before it makes the keys directory in it.
+  docker exec "${controller}" chown app:app "${keys_dir}"
+  ui_starts=$(supervised_value '.ui.starts')
+  kill_supervised ui
+  wait_for "the supervisor to start the web UI again" 30 \
+    supervised_is ".ui.state == \"running\" and .ui.starts == $((ui_starts + 1))"
+  wait_for "the web UI live again" 60 web_ui_live
+  owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ')
+  [[ "${owners}" == "root:root 755 app:app 700" ]] \
+    || fail "after the web UI's restart, ${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
+  pass "${keys_dir} is root:root 755 and its keys directory app:app 700; the web UI's user cannot make a link there, and a ${keys_dir} given to that user is root's again at the web UI's next start"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------

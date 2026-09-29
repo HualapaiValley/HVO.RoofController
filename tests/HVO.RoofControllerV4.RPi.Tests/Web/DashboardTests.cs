@@ -89,7 +89,7 @@ public sealed class DashboardTests
         cut.WaitForAssertion(() => cut.Find("[data-testid=open]").HasAttribute("disabled").Should().BeFalse());
 
         // Found and clicked on the renderer's thread, so a status that arrives in between cannot draw the button again.
-        await cut.InvokeAsync(() => cut.Find("[data-testid=open]").Click());
+        cut.Click("[data-testid=open]");
 
         cut.WaitForAssertion(() => Text(cut.Find("[data-testid=lease]")).Should().Be("Renewing lease (6 s left)"));
         var notice = cut.Find("[data-testid=notice]");
@@ -267,7 +267,7 @@ public sealed class DashboardTests
         cut.WaitForAssertion(() => cut.Find("[data-testid=dashboard]").GetAttribute("data-feed").Should().Be("live"));
         cut.Find("[data-testid=open]").HasAttribute("disabled").Should().BeFalse("the roof controls are unaffected");
 
-        cut.Find("[data-testid=camera-retry]").Click();
+        cut.Click("[data-testid=camera-retry]");
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=cameras] button[title=Pause]").HasAttribute("disabled").Should().BeFalse());
         cut.FindAll("[data-testid=camera-failed]").Should().BeEmpty();

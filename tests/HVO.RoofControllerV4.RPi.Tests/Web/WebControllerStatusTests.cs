@@ -4,6 +4,7 @@ using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Web;
 using HVO.RoofControllerV4.Web.Supervision;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -84,7 +85,18 @@ public sealed class WebControllerStatusTests
         (await Create(controller, clock, refreshSeconds: 2).ReadAsync()).Should().BeNull("the page claims nothing it was not told");
     }
 
-    private static WebControllerStatus Create(FakeController controller, TimeProvider clock, int refreshSeconds)
+    [TestMethod]
+    public async Task ACheckThatFailsUnexpectedly_ClaimsNothing_AndIsLogged_SoNoSignInPageFails()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero));
+        var controller = new FakeController(clock) { OtherAnswer = _ => throw new InvalidOperationException("unexpected (test)") };
+        var logger = new CapturingLogger<WebControllerStatus>();
+
+        (await Create(controller, clock, refreshSeconds: 2, logger).ReadAsync()).Should().BeNull("every sign-in page awaits this check");
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning && entry.Exception is InvalidOperationException);
+    }
+
+    private static WebControllerStatus Create(FakeController controller, TimeProvider clock, int refreshSeconds, ILogger<WebControllerStatus>? logger = null)
     {
         var client = new RoofControllerClient(new RoofConnectionOptions
         {
@@ -94,6 +106,6 @@ public sealed class WebControllerStatusTests
         });
         var options = new RoofWebOptions { StatusRefreshSeconds = refreshSeconds };
         var probe = new RoofWebStatusProbe(client, new SupervisorStateReader(WebTestSupport.Monitor(options)), clock);
-        return new WebControllerStatus(probe, Options.Create(options), clock, NullLogger<WebControllerStatus>.Instance);
+        return new WebControllerStatus(probe, Options.Create(options), clock, logger ?? NullLogger<WebControllerStatus>.Instance);
     }
 }

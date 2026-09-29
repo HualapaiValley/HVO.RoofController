@@ -47,7 +47,7 @@ public sealed class SystemPageTests
         using var admin = harness.Admin();
         var readiness = await admin.Health.GetReadinessAsync();
 
-        cut.Find("[data-testid=system-readiness]").Click();
+        cut.Click("[data-testid=system-readiness]");
 
         cut.WaitForAssertion(() => Message(cut).Should().Be($"{(readiness.IsHealthy ? "Ready" : "Not ready")}: {readiness.Status}."));
     }
@@ -61,16 +61,16 @@ public sealed class SystemPageTests
         var cut = Loaded(context);
         var signal = harness.Host.Services.GetRequiredService<RoofRestartSignal>();
 
-        cut.Find("[data-testid=restart-start]").Click();
+        cut.Click("[data-testid=restart-start]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=restart-confirm]").TextContent.Should().Contain(RoofSystemText.RestartQuestion));
         cut.FindAll("[data-testid=restart-hand-edit]").Should().BeEmpty();
-        cut.Find("[data-testid=panel-cancel]").Click();
+        cut.Click("[data-testid=panel-cancel]");
         cut.WaitForAssertion(() => cut.FindAll("[data-testid=restart-confirm]").Should().BeEmpty());
         signal.Requested.Should().BeFalse("a cancelled restart sends nothing");
 
-        cut.Find("[data-testid=restart-start]").Click();
+        cut.Click("[data-testid=restart-start]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=restart-send]").TextContent.Trim().Should().Be("Restart"));
-        cut.Find("[data-testid=restart-send]").Click();
+        cut.Click("[data-testid=restart-send]");
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Info)));
         Lines(cut).Last().Should().Be(RoofSystemText.RestartComingBack);
@@ -88,14 +88,14 @@ public sealed class SystemPageTests
         await using var context = harness.Context(session);
         var cut = Loaded(context);
 
-        cut.Find("[data-testid=restart-start]").Click();
+        cut.Click("[data-testid=restart-start]");
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=restart-hand-edit]").TextContent.Should().Be(RoofSystemText.RestartLoadsHandEdit));
         var changes = cut.FindAll("[data-testid=restart-confirm] li").Select(change => change.TextContent).ToList();
         changes.Should().Contain(change => change.StartsWith("RoofControllerOptionsV4:OpenRelayId: ", StringComparison.Ordinal)
             && change.EndsWith("  [SAFETY-CRITICAL]", StringComparison.Ordinal));
         cut.Find("[data-testid=restart-send]").TextContent.Trim().Should().Be("Confirm and restart");
-        cut.Find("[data-testid=restart-send]").Click();
+        cut.Click("[data-testid=restart-send]");
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Info)));
         harness.Host.Services.GetRequiredService<RoofRestartSignal>().Requested.Should().BeTrue("the confirmation was sent with the restart");
@@ -113,16 +113,16 @@ public sealed class SystemPageTests
         cut.Find("[data-testid=forced-restart-last]").TextContent.Should().Be(
             "The last forced restart, at 2026-09-29 05:45:58Z, was ignored: the controller had started less than 10 s before.");
 
-        cut.Find("[data-testid=forced-restart-start]").Click();
+        cut.Click("[data-testid=forced-restart-start]");
         cut.WaitForElement("[data-testid=forced-restart-warning]").TextContent.Should().Be(SystemPage.KillWarning);
         cut.Find("[data-testid=forced-restart-send]").HasAttribute("disabled").Should().BeTrue("the word is not typed yet");
-        cut.Find("[data-testid=forced-restart-word]").Input("restar");
+        cut.Input("[data-testid=forced-restart-word]", "restar");
         cut.WaitForAssertion(() => cut.Find("[data-testid=forced-restart-send]").HasAttribute("disabled").Should().BeTrue());
-        cut.Find("[data-testid=forced-restart-word]").Input(" Restart ");
+        cut.Input("[data-testid=forced-restart-word]", " Restart ");
         cut.WaitForAssertion(() => cut.Find("[data-testid=forced-restart-send]").HasAttribute("disabled").Should().BeFalse());
         File.Exists(request).Should().BeFalse();
 
-        cut.Find("[data-testid=forced-restart-send]").Click();
+        cut.Click("[data-testid=forced-restart-send]");
 
         var result = cut.WaitForElement("[data-testid=forced-restart-result]");
         File.Exists(request).Should().BeTrue();
@@ -149,9 +149,10 @@ public sealed class SystemPageTests
         await using var context = harness.Context(session);
         var cut = Loaded(context);
 
-        cut.Find("[data-testid=forced-restart-start]").Click();
-        cut.WaitForElement("[data-testid=forced-restart-word]").Input(SystemPage.ConfirmWord);
-        cut.Find("[data-testid=forced-restart-send]").Click();
+        cut.Click("[data-testid=forced-restart-start]");
+        cut.WaitForElement("[data-testid=forced-restart-word]");
+        cut.Input("[data-testid=forced-restart-word]", SystemPage.ConfirmWord);
+        cut.Click("[data-testid=forced-restart-send]");
 
         var result = cut.WaitForElement("[data-testid=forced-restart-result]");
         result.GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Danger));
@@ -167,9 +168,10 @@ public sealed class SystemPageTests
         var cut = Loaded(context);
         session.End();
 
-        cut.Find("[data-testid=forced-restart-start]").Click();
-        cut.WaitForElement("[data-testid=forced-restart-word]").Input(SystemPage.ConfirmWord);
-        cut.Find("[data-testid=forced-restart-send]").Click();
+        cut.Click("[data-testid=forced-restart-start]");
+        cut.WaitForElement("[data-testid=forced-restart-word]");
+        cut.Input("[data-testid=forced-restart-word]", SystemPage.ConfirmWord);
+        cut.Click("[data-testid=forced-restart-send]");
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=forced-restart-result]").TextContent.Should().Be(WebClientPage.SignedOut));
         File.Exists(Path.Combine(harness.ControlPath, ControllerForcedRestart.RequestFileName)).Should().BeFalse();

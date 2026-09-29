@@ -55,5 +55,12 @@ public sealed class WebControllerMode
             _logger.LogDebug("The controller did not say how it drives the roof ({Failure})", RoofText.DescribeFailure(ex));
             return null;
         }
+        catch (Exception ex)
+        {
+            // The mode is optional: every sign-in page awaits this shared read, so a failure it did not expect must not
+            // fail them all (and take Stop off them) until the next refresh.
+            _logger.LogWarning(ex, "The controller did not say how it drives the roof ({Failure})", RoofText.DescribeFailure(ex));
+            return null;
+        }
     }
 }

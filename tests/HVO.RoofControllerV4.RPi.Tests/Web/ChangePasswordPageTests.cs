@@ -150,10 +150,10 @@ public sealed class ChangePasswordPageTests
 
     private static void Submit(IRenderedComponent<ChangePassword> cut, string current, string newPassword, string again)
     {
-        cut.Find("#password-current").Change(current);
-        cut.Find("#password-new").Change(newPassword);
-        cut.Find("#password-again").Change(again);
-        cut.Find("form").Submit();
+        cut.Change("#password-current", current);
+        cut.Change("#password-new", newPassword);
+        cut.Change("#password-again", again);
+        cut.Submit("form");
     }
 
     private static string Message(IRenderedComponent<ChangePassword> cut) => cut.Find("[data-testid=password-message]").TextContent.Trim();

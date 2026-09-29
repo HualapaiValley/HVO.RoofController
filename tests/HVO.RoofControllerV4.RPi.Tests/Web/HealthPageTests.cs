@@ -144,7 +144,7 @@ public sealed class HealthPageTests
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=health-report-error]").TextContent.Should().StartWith("The health checks could not be read: "));
         refuse = false;
-        cut.Find("[data-testid=health-refresh]").Click();
+        cut.Click("[data-testid=health-refresh]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=health-overall]").TextContent.Should().StartWith("Overall: Healthy. Read at "));
         cut.FindAll("[data-testid=health-report-error]").Should().BeEmpty();
         cut.Markup.Should().Contain("The controller reported no checks.");

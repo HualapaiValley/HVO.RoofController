@@ -59,5 +59,12 @@ public sealed class WebControllerStatus
             _logger.LogDebug("The controller's status could not be checked ({Failure})", RoofText.DescribeFailure(ex));
             return null;
         }
+        catch (Exception ex)
+        {
+            // The headline is optional: every sign-in page awaits this shared check, so a failure it did not expect must
+            // not fail them all (and take Stop off them) until the next refresh.
+            _logger.LogWarning(ex, "The controller's status could not be checked ({Failure})", RoofText.DescribeFailure(ex));
+            return null;
+        }
     }
 }

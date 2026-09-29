@@ -240,8 +240,9 @@ the roof against this server; use the web UI (port 8088) for operator access.
   headline, without the details), so while nobody can sign in, for example after repeated crashes, it says why.
   Form posts and the live connection must come from the web UI or `RoofWeb:AllowedOrigins`.
   The supervisor gives the web UI a private copy of its Stop key and a directory for the keys
-  that protect its cookie (`/var/lib/hvo-roof-web/keys`, made by root; any other, set with
-  `RoofWeb__DataProtectionPath` or `HVO_SUPERVISOR_UI_DATA_DIR`, is made by the web UI's user).
+  that protect its cookie (`/var/lib/hvo-roof-web/keys`, made by root in a directory it keeps
+  root's; any other, set with `RoofWeb__DataProtectionPath` or `HVO_SUPERVISOR_UI_DATA_DIR`, is
+  made by the web UI's user).
   Every button a person taps is at
   least 44 x 44 CSS pixels and 8 CSS pixels from its neighbours on each screen tested. The
   pages are tested with bUnit against a fake controller, and in Chromium against the emulated

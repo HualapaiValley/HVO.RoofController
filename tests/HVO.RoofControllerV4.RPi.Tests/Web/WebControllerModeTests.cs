@@ -6,6 +6,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Web;
 using HVO.RoofControllerV4.Web.Roof;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -127,7 +128,18 @@ public sealed class WebControllerModeTests
         (await mode.ReadAsync()).Should().BeNull("the page claims nothing it was not told");
     }
 
-    private static WebControllerMode Create(FakeController controller, TimeProvider clock, int refreshSeconds)
+    [TestMethod]
+    public async Task AReadThatFailsUnexpectedly_ClaimsNothing_AndIsLogged_SoNoSignInPageFails()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero));
+        var controller = new FakeController(clock) { OtherAnswer = _ => throw new InvalidOperationException("unexpected (test)"), Mode = null };
+        var logger = new CapturingLogger<WebControllerMode>();
+
+        (await Create(controller, clock, refreshSeconds: 2, logger).ReadAsync()).Should().BeNull("every sign-in page awaits this read");
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning && entry.Exception is InvalidOperationException);
+    }
+
+    private static WebControllerMode Create(FakeController controller, TimeProvider clock, int refreshSeconds, ILogger<WebControllerMode>? logger = null)
     {
         var client = new RoofControllerClient(new RoofConnectionOptions
         {
@@ -135,6 +147,6 @@ public sealed class WebControllerModeTests
             CreateHandler = controller.CreateHandler,
             RequestTimeout = TimeSpan.FromSeconds(5),
         });
-        return new WebControllerMode(client, Options.Create(new RoofWebOptions { StatusRefreshSeconds = refreshSeconds }), clock, NullLogger<WebControllerMode>.Instance);
+        return new WebControllerMode(client, Options.Create(new RoofWebOptions { StatusRefreshSeconds = refreshSeconds }), clock, logger ?? NullLogger<WebControllerMode>.Instance);
     }
 }

@@ -57,7 +57,7 @@ public sealed class SettingsPageTests
         Setting(cut, "RoofControllerOptionsV4:AllowIgnoringLimitSwitchesOnPhysicalHardware").QuerySelector("[data-testid=setting-read-only]")!
             .TextContent.Should().StartWith("Read-only: ", "a session is not a local credential");
 
-        cut.Find("[data-testid=settings-group][data-group=logging]").Click();
+        cut.Click("[data-testid=settings-group][data-group=logging]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=settings-fields]").GetAttribute("data-group").Should().Be(RoofSettingsContract.LoggingGroup));
         Setting(cut, "Logging:LogLevel:Default").QuerySelector("[data-testid=setting-value]")!.TextContent.Should().Be("Information");
     }
@@ -75,7 +75,7 @@ public sealed class SettingsPageTests
         var warning = cut.FindAll("[data-testid=settings-warning]").Should().ContainSingle().Subject.TextContent;
         warning.Should().Contain("held in memory only").And.Contain("RoofControllerSettings:FilePath is not set");
 
-        cut.Find($"[data-testid=settings-group][data-group={RoofSettingsContract.UiGroup}]").Click();
+        cut.Click($"[data-testid=settings-group][data-group={RoofSettingsContract.UiGroup}]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=settings-fields]").GetAttribute("data-group").Should().Be(RoofSettingsContract.UiGroup));
         Change(cut, DefaultCamera, "Pier");
 
@@ -150,7 +150,7 @@ public sealed class SettingsPageTests
         var before = Version(cut);
 
         Open(cut, KioskScreenTimeout);
-        cut.Find("[data-testid=setting-save]").Click();
+        cut.Click("[data-testid=setting-save]");
 
         cut.WaitForAssertion(() => Message(cut).Should().Be(RoofSettingsText.NothingToChange));
         cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Info));
@@ -174,7 +174,7 @@ public sealed class SettingsPageTests
         cut.Find("[data-testid=setting-send]").TextContent.Trim().Should().Be("Confirm and send");
         harness.Roof.Applied.Should().BeEmpty("nothing is sent before it is confirmed");
 
-        cut.Find("[data-testid=setting-send]").Click();
+        cut.Click("[data-testid=setting-send]");
 
         cut.WaitForAssertion(() => Message(cut).Should().Be($"Saved (settings version {before + 1})."));
         Value(cut, AtSpeedTimeout).Should().Be(RoofSettingValues.None);
@@ -190,7 +190,8 @@ public sealed class SettingsPageTests
         var cut = Loaded(context);
 
         Change(cut, AtSpeedTimeout, string.Empty);
-        cut.WaitForElement("[data-testid=setting-review] button:not([data-testid])").Click();
+        cut.WaitForElement("[data-testid=setting-review] button:not([data-testid])");
+        cut.Click("[data-testid=setting-review] button:not([data-testid])");
 
         cut.WaitForAssertion(() => cut.FindAll("[data-testid=setting-review]").Should().BeEmpty());
         Setting(cut, AtSpeedTimeout).QuerySelector("[data-testid=setting-change]").Should().NotBeNull();
@@ -209,7 +210,7 @@ public sealed class SettingsPageTests
         var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
         await using var context = harness.Context(session);
         var cut = Loaded(context);
-        cut.Find("[data-testid=settings-group][data-group=camera]").Click();
+        cut.Click("[data-testid=settings-group][data-group=camera]");
         cut.WaitForAssertion(() => Value(cut, CameraPassword).Should().Be(RoofSettingValues.SecretNotSet));
         Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretNotSet);
         cut.FindAll("[data-testid=setting-clear]").Should().BeEmpty("there is nothing to clear");
@@ -218,17 +219,17 @@ public sealed class SettingsPageTests
         cut.FindAll("[data-testid=setting-input]").Select(input => input.GetAttribute("data-key")).Should().Equal(CameraUser, CameraPassword);
         cut.FindAll("[data-testid=setting-editor] input").Select(input => input.GetAttribute("type")).Should().AllBe("password");
         cut.Find("[data-testid=setting-together]").TextContent.Should().Be("User name and Password are set and cleared together.");
-        cut.Find("[data-testid=setting-save]").Click();
+        cut.Click("[data-testid=setting-save]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=setting-error]").TextContent.Should().Be(
             "Type the new User name: User name and Password are set and cleared together. To remove them, use Clear secret."));
 
         Type(cut, CameraUser, CameraUserName);
         Type(cut, CameraPassword, NewCameraPassword, again: NewCameraPassword + "!");
-        cut.Find("[data-testid=setting-save]").Click();
+        cut.Click("[data-testid=setting-save]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=setting-error]").TextContent.Should().Be("The two Password values differ."));
 
         Type(cut, CameraPassword, NewCameraPassword);
-        cut.Find("[data-testid=setting-save]").Click();
+        cut.Click("[data-testid=setting-save]");
 
         cut.WaitForAssertion(() => Message(cut).Should().StartWith("Saved (settings version "));
         Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretSet);
@@ -241,12 +242,12 @@ public sealed class SettingsPageTests
         Value(cut, CameraServer).Should().Be(FirstCameraServer);
 
         cut.WaitForAssertion(() => Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.HasAttribute("disabled").Should().BeFalse());
-        await cut.InvokeAsync(() => Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.Click());
+        cut.Fire(() => Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.Click());
         cut.WaitForAssertion(() => cut.FindAll("[data-testid=setting-review] li").Select(change => change.TextContent).Should().Equal(
             $"User name: {RoofSettingValues.SecretSet} -> {RoofSettingValues.SecretNotSet}",
             $"Password: {RoofSettingValues.SecretSet} -> {RoofSettingValues.SecretNotSet}"));
         cut.Find("[data-testid=setting-send]").TextContent.Trim().Should().Be("Clear them");
-        cut.Find("[data-testid=setting-send]").Click();
+        cut.Click("[data-testid=setting-send]");
         cut.WaitForAssertion(() => Value(cut, CameraPassword).Should().Be(RoofSettingValues.SecretNotSet));
         Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretNotSet);
 
@@ -256,7 +257,7 @@ public sealed class SettingsPageTests
         Open(cut, CameraUser);
         Type(cut, CameraUser, CameraUserName);
         Type(cut, CameraPassword, NewCameraPassword);
-        cut.Find("[data-testid=setting-save]").Click();
+        cut.Click("[data-testid=setting-save]");
         cut.WaitForAssertion(() => Value(cut, CameraPassword).Should().Be(RoofSettingValues.SecretSet));
         Value(cut, CameraUser).Should().Be(RoofSettingValues.SecretSet);
 
@@ -304,11 +305,11 @@ public sealed class SettingsPageTests
         cut.Find("[data-testid=hand-edit-changes] li").TextContent.Should().Be($"{DefaultCamera}: {RoofSettingValues.None} -> Yard");
         cut.Find("[data-testid=hand-edit-apply]").TextContent.Trim().Should().Be("Apply");
 
-        cut.Find("[data-testid=hand-edit-apply]").Click();
+        cut.Click("[data-testid=hand-edit-apply]");
 
         cut.WaitForAssertion(() => Message(cut).Should().Be($"Applied the hand edit (settings version {before + 1})."));
         cut.FindAll("[data-testid=hand-edit]").Should().BeEmpty();
-        cut.Find("[data-testid=settings-group][data-group=ui]").Click();
+        cut.Click("[data-testid=settings-group][data-group=ui]");
         cut.WaitForAssertion(() => Value(cut, DefaultCamera).Should().Be("Yard"));
     }
 
@@ -333,7 +334,7 @@ public sealed class SettingsPageTests
         (await admin.Settings.GetAsync()).Settings.Single(setting => setting.Key == DefaultCamera).Value!.Value.GetString().Should().Be("Pier");
 
         harness.LoseAnswer = null;
-        cut.Find("[data-testid=settings-group][data-group=ui]").Click();
+        cut.Click("[data-testid=settings-group][data-group=ui]");
         Change(cut, KioskScreenTimeout, "120");
 
         cut.WaitForAssertion(() => Lines(cut).Should().EndWith("The settings were read again: check them, then try again."));
@@ -352,7 +353,7 @@ public sealed class SettingsPageTests
         var before = Version(cut);
         harness.LoseAnswer = request => request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/Settings/Catalogue", StringComparison.Ordinal);
 
-        cut.Find("[data-testid=hand-edit-apply]").Click();
+        cut.Click("[data-testid=hand-edit-apply]");
 
         cut.WaitForAssertion(() => Lines(cut).Should().Equal(
             $"Applied the hand edit (settings version {before + 1}).",
@@ -371,10 +372,10 @@ public sealed class SettingsPageTests
         await using var context = harness.Context(session);
         var cut = Loaded(context);
 
-        cut.Find("[data-testid=hand-edit-discard]").Click();
+        cut.Click("[data-testid=hand-edit-discard]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=hand-edit-discard-confirm]").TextContent.Should().Contain(RoofSettingsText.DiscardHandEditQuestion));
         File.ReadAllText(harness.SettingsPath).Should().Contain("Yard", "nothing is discarded before it is confirmed");
-        cut.Find("[data-testid=hand-edit-discard-yes]").Click();
+        cut.Click("[data-testid=hand-edit-discard-yes]");
 
         cut.WaitForAssertion(() => Message(cut).Should().StartWith("Discarded the hand edit (settings version "));
         cut.FindAll("[data-testid=hand-edit]").Should().BeEmpty();
@@ -394,7 +395,7 @@ public sealed class SettingsPageTests
         cut.FindAll("[data-testid=hand-edit-note]").Select(note => note.TextContent).Should().Contain("Applying it is safety-critical and needs confirming.");
         cut.Find("[data-testid=hand-edit-apply]").TextContent.Trim().Should().Be("Confirm and apply");
 
-        cut.Find("[data-testid=hand-edit-apply]").Click();
+        cut.Click("[data-testid=hand-edit-apply]");
 
         cut.WaitForAssertion(() => Message(cut).Should().StartWith("Applied the hand edit"));
         using var admin = harness.Admin();
@@ -468,22 +469,22 @@ public sealed class SettingsPageTests
         // The buttons are disabled while a request is in flight, and drawn again when it ends, and once more when the
         // click that sent it is done: found and clicked on the renderer's thread, so no render comes between.
         cut.WaitForAssertion(() => Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.HasAttribute("disabled").Should().BeFalse());
-        cut.InvokeAsync(() => Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.Click()).GetAwaiter().GetResult();
+        cut.Fire(() => Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.Click());
         cut.WaitForElement("[data-testid=setting-editor]");
     }
 
     /// <summary>Types a secret in the open editor, and again (<paramref name="again"/>, or the same).</summary>
     private static void Type(IRenderedComponent<SettingsPage> cut, string key, string value, string? again = null)
     {
-        cut.Find($"[data-testid=setting-input][data-key='{key}']").Input(value);
-        cut.Find($"[data-testid=setting-input-again][data-key='{key}']").Input(again ?? value);
+        cut.Input($"[data-testid=setting-input][data-key='{key}']", value);
+        cut.Input($"[data-testid=setting-input-again][data-key='{key}']", again ?? value);
     }
 
     /// <summary>Opens the setting's editor, types <paramref name="text"/> and saves.</summary>
     private static void Change(IRenderedComponent<SettingsPage> cut, string key, string text)
     {
         Open(cut, key);
-        cut.Find("[data-testid=setting-input]").Input(text);
-        cut.Find("[data-testid=setting-save]").Click();
+        cut.Input("[data-testid=setting-input]", text);
+        cut.Click("[data-testid=setting-save]");
     }
 }
