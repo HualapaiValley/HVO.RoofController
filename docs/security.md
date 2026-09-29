@@ -186,7 +186,7 @@ Recommended keys:
 | Maintainer | `RoofAdmin` (configuration and OpenAPI) |
 
 Keys in the configuration are read-only through the API. An admin can
-also add keys through the API ([managed API keys](#managed-api-keys)); they need no restart and no file on the Pi.
+also add keys through the API ([managed API keys](#managing-people-keys-and-sessions)); they need no restart and no file on the Pi.
 
 ### Rotation
 
