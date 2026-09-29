@@ -50,7 +50,7 @@ internal abstract class RoofUiPage : View
 
     protected Button AddButton(string text, View? left, Action run, Pos? y = null)
     {
-        var button = new Button { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = y ?? Pos.AnchorEnd(1) };
+        var button = Ui.Theme.Styled(new Button { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = y ?? Pos.AnchorEnd(1) });
         button.Accepting += (_, e) =>
         {
             e.Handled = true;

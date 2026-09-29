@@ -62,11 +62,16 @@ internal sealed class RoofCliContext
         var fromEnvironment = environment?.ToCredential();
         var credential = fromEnvironment ?? file?.ToCredential();
         var source = fromEnvironment is not null ? "environment" : credential is not null ? CredentialsPath : "none";
-        return new RoofCliConnection(
-            controller,
-            credential,
-            environment?.CertificateSha256 ?? file?.CertificateSha256,
-            source);
+        var certificate = environment?.CertificateSha256 ?? file?.CertificateSha256;
+
+        // Checked here, so a pin that cannot be used is a configuration problem (exit 3), not a controller failure.
+        if (certificate is not null && !RoofCertificatePin.IsValid(certificate))
+        {
+            throw new RoofCredentialFileException(
+                $"The certificate pin in {CredentialsPath} is not a SHA-256 pin: 64 hex digits. Save it again with '{RoofCli.CommandName} setup'.");
+        }
+
+        return new RoofCliConnection(controller, credential, certificate, source);
     }
 
     public RoofControllerClient CreateClient(RoofCliConnection connection) => new(new RoofConnectionOptions
@@ -76,9 +81,12 @@ internal sealed class RoofCliContext
         ServerCertificateSha256 = connection.CertificateSha256,
         CreateHandler = Host.CreateHandler,
         WebSocketFactory = Host.WebSocketFactory,
-        StatusFeed = Host.StatusFeed ?? new RoofStatusFeedOptions(),
+        StatusFeed = StatusFeed,
         TimeProvider = Host.Time
     });
+
+    /// <summary>The status feed's timings: how soon a status that has stopped arriving is stale, among others.</summary>
+    public RoofStatusFeedOptions StatusFeed => Host.StatusFeed ?? new RoofStatusFeedOptions();
 
     /// <summary>Resolves the connection and creates a client for it.</summary>
     public RoofControllerClient Connect() => CreateClient(ResolveConnection());

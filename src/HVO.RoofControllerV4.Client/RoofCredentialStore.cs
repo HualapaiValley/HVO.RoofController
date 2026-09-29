@@ -104,6 +104,7 @@ public static class RoofCredentialStore
     }
 
     /// <summary>Credentials from the environment, or null when none of the variables is set.</summary>
+    /// <exception cref="RoofCredentialFileException">The controller address or the certificate pin is not valid.</exception>
     public static RoofStoredCredentials? FromEnvironment(Func<string, string?>? getEnvironmentVariable = null)
     {
         getEnvironmentVariable ??= Environment.GetEnvironmentVariable;
@@ -111,7 +112,10 @@ public static class RoofCredentialStore
         var apiKey = getEnvironmentVariable(ApiKeyVariable);
         var session = getEnvironmentVariable(SessionVariable);
         var certificate = getEnvironmentVariable(CertificateVariable);
-        if (string.IsNullOrWhiteSpace(controller) && string.IsNullOrWhiteSpace(apiKey) && string.IsNullOrWhiteSpace(session))
+        if (string.IsNullOrWhiteSpace(controller)
+            && string.IsNullOrWhiteSpace(apiKey)
+            && string.IsNullOrWhiteSpace(session)
+            && string.IsNullOrWhiteSpace(certificate))
         {
             return null;
         }
@@ -121,6 +125,11 @@ public static class RoofCredentialStore
             && (!Uri.TryCreate(controller.Trim(), UriKind.Absolute, out address) || address.Scheme is not ("http" or "https")))
         {
             throw new RoofCredentialFileException($"{ControllerVariable} is not an absolute http or https URL.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(certificate) && !RoofCertificatePin.IsValid(certificate))
+        {
+            throw new RoofCredentialFileException($"{CertificateVariable} is not a SHA-256 pin: 64 hex digits.");
         }
 
         return new RoofStoredCredentials

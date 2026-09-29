@@ -299,7 +299,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                     return error;
                 }
 
-                Update(user, new RoofUserUpdateRequest { Role = user.Role, Password = values[0] }, $"Set the password of {user.Name}.");
+                Update(user, new RoofUserUpdateRequest { Password = values[0] }, $"Set the password of {user.Name}.");
                 return null;
             })]));
     }
@@ -327,7 +327,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                     return error;
                 }
 
-                Update(user, new RoofUserUpdateRequest { Role = user.Role, Pin = values[0] }, $"Set the PIN of {user.Name}.");
+                Update(user, new RoofUserUpdateRequest { Pin = values[0] }, $"Set the PIN of {user.Name}.");
                 return null;
             })]));
     }
@@ -340,7 +340,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
         }
 
         Confirm($"Remove the PIN of {user.Name}? Their PIN sessions end.", "Remove PIN", ()
-            => Update(user, new RoofUserUpdateRequest { Role = user.Role, RemovePin = true }, $"Removed the PIN of {user.Name}."));
+            => Update(user, new RoofUserUpdateRequest { RemovePin = true }, $"Removed the PIN of {user.Name}."));
     }
 
     private void RemoveUser()
@@ -357,10 +357,16 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
         }));
     }
 
+    /// <summary>
+    /// Sends <paramref name="request"/>. The update always carries the role: a request that does not change it carries
+    /// the person's role as the controller has it now, because the one in the list may be out of date (another admin
+    /// may have changed it since).
+    /// </summary>
     private void Update(RoofUserResponse user, RoofUserUpdateRequest request, string done)
         => Send($"Changing {user.Name}…", async (client, cancellationToken) =>
         {
-            await client.Identity.UpdateUserAsync(user.Name, request, cancellationToken).ConfigureAwait(false);
+            var role = request.Role ?? (await client.Identity.GetUserAsync(user.Name, cancellationToken).ConfigureAwait(false)).Role;
+            await client.Identity.UpdateUserAsync(user.Name, request with { Role = role }, cancellationToken).ConfigureAwait(false);
             return done;
         });
 

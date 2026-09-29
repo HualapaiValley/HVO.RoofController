@@ -6,7 +6,11 @@ namespace HVO.RoofControllerV4.Cli;
 /// <summary>The <c>hvo-roof</c> process.</summary>
 public static class RoofCliProgram
 {
-    public static Task<int> Main(string[] args) => RoofCli.RunAsync(args, RoofCliHost.System(), handleTermination: true);
+    public static async Task<int> Main(string[] args)
+    {
+        using var termination = RoofCliTermination.Register();
+        return await RoofCli.RunAsync(args, RoofCliHost.System(termination), termination.Token).ConfigureAwait(false);
+    }
 }
 
 /// <summary>
@@ -16,14 +20,11 @@ public static class RoofCliProgram
 public static partial class RoofCli
 {
     /// <summary>
-    /// Runs one command line and returns its exit code (<see cref="RoofExitCode"/>). With
-    /// <paramref name="handleTermination"/>, Ctrl+C cancels the command instead of killing the process.
+    /// Runs one command line and returns its exit code (<see cref="RoofExitCode"/>). <paramref name="cancellationToken"/>
+    /// is the interrupt (<see cref="RoofCliTermination.Token"/> in the real process): a command that has the roof moving
+    /// sends Stop, and the command exits 130.
     /// </summary>
-    public static async Task<int> RunAsync(
-        string[] args,
-        RoofCliHost host,
-        bool handleTermination = false,
-        CancellationToken cancellationToken = default)
+    public static async Task<int> RunAsync(string[] args, RoofCliHost host, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(host);
@@ -47,7 +48,10 @@ public static partial class RoofCli
                 Output = host.Out,
                 Error = host.Error,
                 EnableDefaultExceptionHandler = false,
-                ProcessTerminationTimeout = handleTermination ? TimeSpan.FromSeconds(5) : null
+
+                // The signals are RoofCliTermination's: System.CommandLine's handler would end the process 5 s after
+                // Ctrl+C, before a Stop is sure to be answered, and it does not handle SIGHUP at all.
+                ProcessTerminationTimeout = null
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -161,8 +165,8 @@ public static partial class RoofCli
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                host.Error.WriteLine("Interrupted.");
-                return (int)RoofExitCode.Interrupted;
+                // Reported as any refusal is, so --json still writes its error document.
+                return context.Fail(new RoofCliRefusedException("Interrupted.", RoofExitCode.Interrupted));
             }
             catch (Exception error)
             {

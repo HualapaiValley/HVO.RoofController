@@ -24,6 +24,8 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         Add(_status, _blocked);
         OpenButton = AddButton("Open", null, () => Move(RoofMotionDirection.Opening));
         CloseButton = AddButton("Close", OpenButton, () => Move(RoofMotionDirection.Closing));
+        OpenButton.SetScheme(Ui.Theme.Open);
+        CloseButton.SetScheme(Ui.Theme.Close);
         ClearFaultButton = AddButton("Clear fault", CloseButton, ClearFault);
         AddButton("Refresh", ClearFaultButton, Refresh);
     }
@@ -170,9 +172,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             {
                 Ui.Apply(status);
                 Ui.HoldLease(status);
-                Ui.Say(status.IsMoving
-                    ? $"{verb} accepted. This interface renews the operator lease while the roof moves; F9 or quitting stops it."
-                    : $"{verb} accepted. Roof: {RoofCliFormat.DescribeRoof(status)}.");
+                Ui.Say(!status.IsMoving ? $"{verb} accepted. Roof: {RoofCliFormat.DescribeRoof(status)}."
+                    : Ui.HoldsLease ? $"{verb} accepted. This interface renews the operator lease while the roof moves; F9 or quitting stops it."
+                    : $"{verb} accepted. F9 or quitting stops it.");
             };
         });
     }

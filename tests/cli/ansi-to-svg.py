@@ -51,10 +51,24 @@ BLOCKS = {
 }
 
 SGR = re.compile(r"\x1b\[([0-9;:]*)m")
-OTHER_ESCAPE = re.compile(r"\x1b(?:\[[0-9;:?]*[A-Za-ln-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-Za-z])")
+
+# Every other escape sequence, which draws nothing: a control sequence that is not SGR (a truncated one too), an
+# operating system command such as an OSC 8 hyperlink (whose text stays), a device control string, and the two-character
+# escapes such as ESC = and ESC >.
+OTHER_ESCAPE = re.compile(
+    r"\x1b(?:\[(?![0-9;:]*m)[0-?]*[ -/]*(?:[@-~]|$)"
+    r"|\][^\x07\x1b]*(?:\x07|\x1b\\|$)"
+    r"|[P_^X][^\x1b]*(?:\x1b\\|$)"
+    r"|(?![\[\]])[ -/]*[0-~]"
+    r"|$)")
+
+
+def channel(value):
+    return max(0, min(255, value))
 
 
 def colour_256(n):
+    n = channel(n)
     if n < 16:
         return PALETTE[n]
     if n < 232:
@@ -83,56 +97,79 @@ class Style:
         return other
 
     def apply(self, codes):
-        params = [int(p) if p else 0 for p in re.split(r"[;:]", codes)] if codes else [0]
         i = 0
-        while i < len(params):
-            p = params[i]
-            if p == 0:
-                self.reset()
-            elif p == 1:
-                self.bold = True
-            elif p == 2:
-                self.dim = True
-            elif p == 3:
-                self.italic = True
-            elif p == 4:
-                self.underline = True
-            elif p == 7:
-                self.reverse = True
-            elif p == 22:
-                self.bold = self.dim = False
-            elif p == 23:
-                self.italic = False
-            elif p == 24:
-                self.underline = False
-            elif p == 27:
-                self.reverse = False
-            elif 30 <= p <= 37:
-                self.fg = PALETTE[p - 30]
-            elif 90 <= p <= 97:
-                self.fg = PALETTE[p - 90 + 8]
-            elif 40 <= p <= 47:
-                self.bg = PALETTE[p - 40]
-            elif 100 <= p <= 107:
-                self.bg = PALETTE[p - 100 + 8]
-            elif p == 39:
-                self.fg = None
-            elif p == 49:
-                self.bg = None
-            elif p in (38, 48) and i + 1 < len(params):
-                if params[i + 1] == 5 and i + 2 < len(params):
-                    colour = colour_256(params[i + 2])
-                    i += 2
-                elif params[i + 1] == 2 and i + 4 < len(params):
-                    colour = "#%02x%02x%02x" % tuple(params[i + 2:i + 5])
-                    i += 4
-                else:
-                    colour = None
-                if p == 38:
-                    self.fg = colour
-                else:
-                    self.bg = colour
-            i += 1
+        groups = codes.split(";") if codes else [""]
+        while i < len(groups):
+            if ":" in groups[i]:
+                # ITU T.416 form, one parameter with its parts: 38:2::r:g:b (or 38:2:r:g:b) and 38:5:n.
+                self.apply_extended([int(part) if part.isdigit() else 0 for part in groups[i].split(":")])
+                i += 1
+                continue
+            params = [int(group) if group.isdigit() else 0 for group in groups[i:]]
+            i += self.apply_one(params)
+
+    def apply_extended(self, parts):
+        if parts[0] in (38, 48) and len(parts) > 1:
+            if parts[1] == 2:
+                rgb = parts[-3:] if len(parts) >= 5 else []
+                self.set_colour(parts[0], "#%02x%02x%02x" % tuple(channel(v) for v in rgb) if len(rgb) == 3 else None)
+            elif parts[1] == 5 and len(parts) > 2:
+                self.set_colour(parts[0], colour_256(parts[2]))
+        else:
+            self.apply_one(parts[:1])
+
+    def set_colour(self, which, colour):
+        if which == 38:
+            self.fg = colour
+        else:
+            self.bg = colour
+
+    def apply_one(self, params):
+        """Applies the first parameter of params (with the ones it takes); returns how many it used."""
+        p, i = params[0], 0
+        if p == 0:
+            self.reset()
+        elif p == 1:
+            self.bold = True
+        elif p == 2:
+            self.dim = True
+        elif p == 3:
+            self.italic = True
+        elif p == 4:
+            self.underline = True
+        elif p == 7:
+            self.reverse = True
+        elif p == 22:
+            self.bold = self.dim = False
+        elif p == 23:
+            self.italic = False
+        elif p == 24:
+            self.underline = False
+        elif p == 27:
+            self.reverse = False
+        elif 30 <= p <= 37:
+            self.fg = PALETTE[p - 30]
+        elif 90 <= p <= 97:
+            self.fg = PALETTE[p - 90 + 8]
+        elif 40 <= p <= 47:
+            self.bg = PALETTE[p - 40]
+        elif 100 <= p <= 107:
+            self.bg = PALETTE[p - 100 + 8]
+        elif p == 39:
+            self.fg = None
+        elif p == 49:
+            self.bg = None
+        elif p in (38, 48) and i + 1 < len(params):
+            if params[i + 1] == 5 and i + 2 < len(params):
+                colour = colour_256(params[i + 2])
+                i += 2
+            elif params[i + 1] == 2 and i + 4 < len(params):
+                colour = "#%02x%02x%02x" % tuple(channel(v) for v in params[i + 2:i + 5])
+                i += 4
+            else:
+                colour = None
+            self.set_colour(p, colour)
+        return i + 1
 
     def colours(self):
         fg, bg = self.fg or DEFAULT_FG, self.bg or DEFAULT_BG
@@ -143,11 +180,14 @@ class Style:
 
 
 def parse(text):
-    """The screen as rows of (character, style) cells; a wide character's second cell is None."""
+    """
+    The screen as rows of (character, style) cells; a wide character's second cell is None. The style carries on from
+    one line to the next, as it does in a terminal: tmux writes a change of colour only where the colour changes.
+    """
     rows = []
+    style = Style()
     for line in text.rstrip("\n").split("\n"):
         line = OTHER_ESCAPE.sub("", line)
-        style = Style()
         cells = []
         position = 0
         for match in SGR.finditer(line):
@@ -159,16 +199,23 @@ def parse(text):
     return rows
 
 
+def is_wide(text):
+    """True when a cell's text (a character, with any combining marks after it) takes two columns."""
+    return unicodedata.east_asian_width(text[0]) in ("W", "F")
+
+
 def add_text(cells, text, style):
     for ch in text:
-        if ch in "\r\x07":
+        # Control characters draw nothing, and are not allowed in the SVG.
+        if ord(ch) < 0x20 or 0x7f <= ord(ch) < 0xa0:
             continue
         if unicodedata.combining(ch) and cells:
-            previous, previous_style = cells[-1] if cells[-1] is not None else cells[-2]
-            cells[-1 if cells[-1] is not None else -2] = (previous + ch, previous_style)
+            index = -1 if cells[-1] is not None else -2
+            previous, previous_style = cells[index]
+            cells[index] = (previous + ch, previous_style)
             continue
         cells.append((ch, style.copy()))
-        if unicodedata.east_asian_width(ch) in ("W", "F"):
+        if is_wide(ch):
             cells.append(None)
 
 
@@ -219,8 +266,20 @@ def merged_lines(segments):
     return lines
 
 
+def screen_background(rows):
+    """The background most of the screen has, which the margin around it takes: the terminal's own, for most screens."""
+    counts = {}
+    for row in rows:
+        for cell in row:
+            if cell is not None:
+                bg = cell[1].colours()[1]
+                counts[bg] = counts.get(bg, 0) + 1
+    return max(counts, key=counts.get) if counts else DEFAULT_BG
+
+
 def render(rows, title):
     columns = max((len(row) for row in rows), default=0)
+    screen = screen_background(rows)
     top = TITLE_HEIGHT if title else 0
     width = columns * CELL_WIDTH + 2 * PADDING
     height = len(rows) * LINE_HEIGHT + 2 * PADDING + top
@@ -239,7 +298,7 @@ def render(rows, title):
             start = c
             while c < len(row) and (row[c] is None or row[c][1].colours()[1] == bg):
                 c += 1
-            if bg != DEFAULT_BG:
+            if bg != screen:
                 background.append(
                     f'<rect x="{PADDING + start * CELL_WIDTH:.2f}" y="{y}" width="{(c - start) * CELL_WIDTH + 0.4:.2f}" '
                     f'height="{LINE_HEIGHT + 0.4}" fill="{bg}"/>')
@@ -275,20 +334,22 @@ def render(rows, title):
                 ch2, style2 = row[c]
                 if ch2 in BOX or ch2 in ROUNDED or ch2 in BLOCKS or style2.text_key() != key:
                     break
-                if c > start and unicodedata.east_asian_width(ch2) in ("W", "F"):
+                if c > start and is_wide(ch2):
                     break
                 # A gap of two spaces ends the run, so that columns line up whatever the font.
                 if ch2 == " " and c + 1 < len(row) and row[c + 1] is not None and row[c + 1][0] == " ":
                     break
                 run.append(ch2)
                 c += 1
-                if unicodedata.east_asian_width(ch2) in ("W", "F"):
+                if is_wide(ch2):
                     c += 1
                     break
-            text = "".join(run).rstrip(" ")
+            while run and run[-1] == " ":
+                run.pop()
+            text = "".join(run)
             if not text:
                 continue
-            cells = sum(2 if unicodedata.east_asian_width(t) in ("W", "F") else 1 for t in text)
+            cells = sum(2 if is_wide(t) else 1 for t in run)
             attributes = [f'x="{x:.2f}"', f'y="{y + LINE_HEIGHT * 0.75:.2f}"', f'fill="{fg}"']
             if cells > 1:
                 attributes.append(f'textLength="{cells * CELL_WIDTH:.2f}" lengthAdjust="spacingAndGlyphs"')
@@ -318,7 +379,7 @@ def render(rows, title):
         f'viewBox="0 0 {width:.2f} {height:.2f}" role="img" aria-label="{html.escape(title or "terminal screen")}">',
         '<g font-family="ui-monospace, SFMono-Regular, \'Cascadia Mono\', \'DejaVu Sans Mono\', Menlo, Consolas, '
         f'\'Liberation Mono\', monospace" font-size="{FONT_SIZE}" xml:space="preserve" style="white-space: pre">',
-        f'<rect x="0" y="0" width="{width:.2f}" height="{height:.2f}" rx="8" fill="{DEFAULT_BG}"/>',
+        f'<rect x="0" y="0" width="{width:.2f}" height="{height:.2f}" rx="8" fill="{screen}"/>',
         *heading,
         *background,
         *shapes,

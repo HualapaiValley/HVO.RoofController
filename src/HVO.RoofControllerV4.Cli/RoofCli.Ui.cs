@@ -28,21 +28,28 @@ public static partial class RoofCli
                 }
 
                 var app = context.Host.CreateApplication();
+                IDisposable? hold = null;
                 try
                 {
                     using var ui = new RoofTerminalUi(context, app);
                     ui.Start();
 
-                    // A termination signal closes the interface as F10 does: a motion held here is stopped first.
-                    using var interrupted = cancellationToken.Register(() => ui.Post(ui.Quit));
+                    // A termination signal closes the interface as F10 does: a motion started here is stopped first, and
+                    // a Stop on its way is answered. The process waits for that and for the terminal to be restored.
+                    using var interrupted = cancellationToken.Register(() =>
+                    {
+                        hold = context.Host.Termination?.Hold();
+                        ui.Post(ui.Quit);
+                    });
                     context.Host.RunApplication(app, ui.Window);
                 }
                 finally
                 {
                     app.Dispose();
+                    hold?.Dispose();
                 }
 
-                return Task.FromResult((int)RoofExitCode.Success);
+                return Task.FromResult((int)(cancellationToken.IsCancellationRequested ? RoofExitCode.Interrupted : RoofExitCode.Success));
             });
             return command;
         }

@@ -529,6 +529,36 @@ public sealed class RoofCliSystemCommandTests
             "Note: HVO_ROOF_API_KEY or HVO_ROOF_SESSION is set, and commands use it instead of the saved credential.");
     }
 
+    [TestMethod]
+    [DataRow(false, DisplayName = "text")]
+    [DataRow(true, DisplayName = "--json")]
+    public async Task Setup_WithABrokenVariableInTheEnvironment_IsNotConfigured_AndAsksAndSavesNothing(bool json)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.Environment[RoofCredentialStore.ControllerVariable] = "ftp://roof.invalid/";
+        rig.Input.Enqueue(TestApiKeys.Operator);
+        string[] args = ["setup", "--controller", ClientTestSupport.BaseAddress.ToString(), "--api-key"];
+
+        var result = json ? await rig.RunAsync([.. args, "--json"]) : await rig.RunAsync(args);
+
+        result.Code.Should().Be(RoofExitCode.NotConfigured, result.ToString());
+        if (json)
+        {
+            // One document: the error, and nothing written before it.
+            result.Json.GetProperty("error").GetProperty("message").GetString().Should().Be("HVO_ROOF_URL is not an absolute http or https URL.");
+            result.Error.Should().BeEmpty();
+        }
+        else
+        {
+            result.Error.Should().Be("HVO_ROOF_URL is not an absolute http or https URL." + Environment.NewLine);
+            result.Out.Should().BeEmpty();
+        }
+
+        rig.Prompts.Should().BeEmpty("the key is not asked for when it could not be used");
+        File.Exists(rig.CredentialsPath).Should().BeFalse();
+    }
+
     // ---- setup: in a terminal -----------------------------------------------------------------------------------------
 
     [TestMethod]

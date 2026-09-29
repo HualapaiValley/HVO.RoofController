@@ -166,7 +166,11 @@ the roof against this server; use the authenticated browser console for operator
   `hvo-roof setup` saves the address, a key and a certificate pin, and adds the first admin.
   `hvo-roof ui` is a Terminal.Gui interface with Roof, Settings, People, System and Setup
   pages, and Stop on F9 from every page, even over a prompt. It says plainly when the status is
-  stale, offers no motion then, and stops a roof it moved before it quits. Tests cover every
+  stale, offers no motion then, and stops a roof it moved before it quits; it never closes
+  while a Stop is on its way. It is drawn in HVO Dark, the web console's theme, and in the
+  terminal's own colours with `NO_COLOR`. SIGINT, SIGTERM and SIGHUP end a command that moves the
+  roof only after it sends Stop, and the process still ends within 5 s, or 15 s while a Stop is
+  on its way. A Stop that nothing confirms (a server error, no answer) exits 9. Tests cover every
   command, the interface on Terminal.Gui's in-memory driver, scenarios against the emulated
   roof with a lease shorter than the travel, and the published binary in a real terminal
   (tmux) against the compose emulator. That run also draws each screen as an SVG image

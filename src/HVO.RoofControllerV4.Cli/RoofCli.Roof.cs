@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.CommandLine;
 using System.Threading.Channels;
 using HVO.RoofControllerV4.Client;
@@ -43,7 +44,13 @@ public static partial class RoofCli
             using var client = context.Connect();
             await using var feed = client.CreateStatusFeed();
             var gate = new object();
-            var wasStale = false;
+            var started = context.Host.Time.GetUtcNow();
+            var received = false;
+            var saidStale = false;
+
+            // The last state written, without its time: the hub repeats an unchanged status every second, and the
+            // watch writes one line per change.
+            string? lastState = null;
 
             // Set once the watch has ended: disposing the feed disconnects it, which is not news to report.
             var ended = false;
@@ -58,14 +65,23 @@ public static partial class RoofCli
                         return;
                     }
 
-                    wasStale = false;
+                    received = true;
+                    var restarted = e.IsNewInstance && e.Previous is not null;
+                    var state = RoofCliFormat.DescribeState(e.Status);
+                    if (state == lastState && !saidStale && !restarted && e.SafetyAlert is null)
+                    {
+                        return;
+                    }
+
+                    lastState = state;
+                    saidStale = false;
                     if (context.Json)
                     {
                         context.WriteJsonLine(new { stale = false, e.Message.Sequence, e.Message.InstanceId, restarted = e.IsNewInstance, e.Status });
                         return;
                     }
 
-                    if (e.IsNewInstance && e.Previous is not null)
+                    if (restarted)
                     {
                         context.Out.WriteLine("The controller restarted.");
                     }
@@ -88,22 +104,28 @@ public static partial class RoofCli
                         return;
                     }
 
-                    if (ended || feed.StaleSince is not { } since || wasStale)
+                    if (!ended && !saidStale && feed.StaleSince is { } since)
                     {
-                        return;
-                    }
-
-                    wasStale = true;
-                    if (context.Json)
-                    {
-                        context.WriteJsonLine(new { stale = true, staleSince = since });
-                    }
-                    else
-                    {
-                        context.Out.WriteLine(DescribeStale(feed.Status, since));
+                        SayStale(feed.Status, since);
                     }
                 }
             };
+
+            // The feed goes stale only once it has had a status; a watch that never gets one says so too.
+            using var nothingYet = context.Host.Time.CreateTimer(
+                _ =>
+                {
+                    lock (gate)
+                    {
+                        if (!ended && !received && !saidStale)
+                        {
+                            SayStale(null, started);
+                        }
+                    }
+                },
+                null,
+                context.StatusFeed.StaleAfter,
+                Timeout.InfiniteTimeSpan);
 
             feed.Start();
             try
@@ -117,16 +139,30 @@ public static partial class RoofCli
                 lock (gate)
                 {
                     ended = true;
-                    return (int)(feed.IsStale ? RoofExitCode.Stale : RoofExitCode.Success);
+                    return (int)(received && !feed.IsStale ? RoofExitCode.Success : RoofExitCode.Stale);
+                }
+            }
+
+            void SayStale(RoofStatusResponse? last, DateTimeOffset since)
+            {
+                saidStale = true;
+                if (context.Json)
+                {
+                    context.WriteJsonLine(new { stale = true, staleSince = since });
+                }
+                else
+                {
+                    context.Out.WriteLine(DescribeStale(last, since));
                 }
             }
         }
 
         internal static string DescribeStale(RoofStatusResponse? last, DateTimeOffset since)
         {
-            var known = last is null ? "No status has been received." : $"Last known: {RoofCliFormat.DescribeRoof(last)}.";
-            return $"STALE: no status from the controller since {RoofCliFormat.Time(since)}. {known} "
-                + $"Stop still works: '{CommandName} stop'.";
+            var stale = last is null
+                ? $"STALE: no status has been received (waiting since {RoofCliFormat.Time(since)})."
+                : $"STALE: no status from the controller since {RoofCliFormat.Time(since)}. Last known: {RoofCliFormat.DescribeRoof(last)}.";
+            return $"{stale} Stop still works: '{CommandName} stop'.";
         }
 
         private Command CreateHealthCommand()
@@ -192,28 +228,10 @@ public static partial class RoofCli
         /// <summary>Writes a Stop result and returns its exit code. The message is the shared Stop wording.</summary>
         internal static int ReportStop(RoofCliContext context, RoofStopResult result)
         {
-            var code = result.Outcome switch
-            {
-                RoofStopOutcome.Acknowledged => RoofExitCode.Success,
-                RoofStopOutcome.RelayUnverified => RoofExitCode.StopNotVerified,
-
-                // Not delivered, or no answer: nothing confirms the stop, so the operator must go to the roof.
-                _ when result.Error is HttpRequestException or TimeoutException or OperationCanceledException => RoofExitCode.StopNotVerified,
-                _ when result.Error is { } error => RoofCliContext.Classify(error).Code,
-                _ => RoofExitCode.Failed
-            };
-
+            var code = StopExitCode(result);
             if (context.Json)
             {
-                var refusal = result.Error as RoofApiException;
-                context.WriteJson(new
-                {
-                    outcome = result.Outcome.ToString(),
-                    result.Message,
-                    exitCode = (int)code,
-                    code = refusal?.CodeText,
-                    result.Status
-                });
+                context.WriteJson(DescribeStop(result, code));
             }
             else
             {
@@ -222,6 +240,31 @@ public static partial class RoofCli
 
             return (int)code;
         }
+
+        /// <summary>
+        /// 0 when the controller acknowledged the Stop; 5, 6 or 7 when it refused it (a 4xx answer: signed out, not allowed,
+        /// or refused); otherwise 9, because nothing confirms that the roof stopped: the relays could not be verified, the
+        /// Stop was not delivered or not answered, or the answer was a server error (a 503 included: the controller could not
+        /// verify the stop, or its hardware is unavailable) or could not be read.
+        /// </summary>
+        internal static RoofExitCode StopExitCode(RoofStopResult result) => result.Outcome switch
+        {
+            RoofStopOutcome.Acknowledged => RoofExitCode.Success,
+            RoofStopOutcome.RelayUnverified => RoofExitCode.StopNotVerified,
+            _ when result.Error is RoofApiException { StatusCode: < System.Net.HttpStatusCode.InternalServerError } refusal
+                => RoofCliContext.Classify(refusal).Code,
+            _ => RoofExitCode.StopNotVerified
+        };
+
+        /// <summary>A Stop result as <c>stop --json</c> writes it, whatever the outcome (docs/cli.md).</summary>
+        private static object DescribeStop(RoofStopResult result, RoofExitCode code) => new
+        {
+            outcome = result.Outcome.ToString(),
+            result.Message,
+            exitCode = (int)code,
+            code = (result.Error as RoofApiException)?.CodeText,
+            result.Status
+        };
 
         private Command CreateOpenCommand() => CreateMotionCommand("open", "Open the roof.", RoofMotionDirection.Opening);
 
@@ -283,18 +326,40 @@ public static partial class RoofCli
             return await FollowMotionAsync(context, client, direction, status, cancellationToken).ConfigureAwait(false);
         }
 
-        /// <summary>Ctrl+C during a motion command: sends Stop, reports it, and exits as interrupted.</summary>
+        /// <summary>
+        /// Ctrl+C (or the terminal closing) during a motion command: sends Stop, reports it, and exits as interrupted.
+        /// The process waits for the Stop's answer before it ends.
+        /// </summary>
         private static async Task<int> StopOnInterruptAsync(RoofCliContext context, RoofControllerClient client)
         {
+            using var hold = context.Host.Termination?.Hold();
             var result = await client.StopAsync(CancellationToken.None).ConfigureAwait(false);
-            context.Host.Error.WriteLine("Interrupted: Stop sent.");
-            ReportStop(context, result);
+            var code = StopExitCode(result);
+            if (context.Json)
+            {
+                context.WriteJson(new { interrupted = true, exitCode = (int)RoofExitCode.Interrupted, stop = DescribeStop(result, code) });
+            }
+            else
+            {
+                context.Host.Error.WriteLine("Interrupted: Stop sent.");
+                (code == RoofExitCode.Success ? context.Out : context.Host.Error).WriteLine(result.Message);
+            }
+
             return (int)RoofExitCode.Interrupted;
         }
 
+        /// <summary>How often a motion command reads the status over REST while the status hub is not delivering it.</summary>
+        internal static readonly TimeSpan StatusPollInterval = TimeSpan.FromSeconds(2);
+
+        /// <summary>How long a motion command follows the roof with no status from the controller before it gives up.</summary>
+        internal static readonly TimeSpan NoStatusLimit = TimeSpan.FromSeconds(30);
+
         /// <summary>
-        /// Follows a motion on the status hub until it ends, renewing the operator lease over REST when one applies. Ctrl+C
-        /// sends Stop. A lease that cannot be renewed is reported: the controller stops the roof when it runs out.
+        /// Follows a motion until it ends, renewing the operator lease over REST when one applies. The status comes from
+        /// the status hub; while the hub is not delivering it, the command reads it over REST every
+        /// <see cref="StatusPollInterval"/>, and gives up (exit 4) after <see cref="NoStatusLimit"/> with no status at
+        /// all. Ctrl+C sends Stop. A lease that cannot be renewed is reported: the controller stops the roof when it
+        /// runs out.
         /// </summary>
         private static async Task<int> FollowMotionAsync(
             RoofCliContext context,
@@ -303,57 +368,102 @@ public static partial class RoofCli
             RoofStatusResponse accepted,
             CancellationToken cancellationToken)
         {
-            var updates = Channel.CreateUnbounded<RoofStatusResponse>(new UnboundedChannelOptions { SingleReader = true });
+            // Wakes the loop: a status from the hub, or a change of the hub's state (connected, stale, current again).
+            var wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true });
+            var updates = new ConcurrentQueue<RoofStatusResponse>();
             await using var feed = client.CreateStatusFeed();
-            feed.StatusReceived += (_, e) => updates.Writer.TryWrite(e.Status);
+            feed.StatusReceived += (_, e) =>
+            {
+                updates.Enqueue(e.Status);
+                wake.Writer.TryWrite(true);
+            };
+            feed.StateChanged += (_, _) => wake.Writer.TryWrite(true);
             feed.Start();
 
             var time = context.Host.Time;
             var status = accepted;
+            var lastStatusAt = time.GetUtcNow();
             var renewAt = NextRenewal(status);
             var lastLine = RoofCliFormat.DescribeRoof(status);
+
+            // When to read the status over REST; null while the hub delivers it. The hub has StaleAfter to deliver
+            // its first status.
+            DateTimeOffset? readAt = lastStatusAt + context.StatusFeed.StaleAfter;
+            var reading = false;
             try
             {
                 while (true)
                 {
-                    using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    var delay = renewAt is { } due ? Max(due - time.GetUtcNow(), TimeSpan.Zero) : Timeout.InfiniteTimeSpan;
-                    var timer = Task.Delay(delay, time, wait.Token);
-                    var next = updates.Reader.WaitToReadAsync(wait.Token).AsTask();
-                    var finished = await Task.WhenAny(timer, next).ConfigureAwait(false);
-                    await wait.CancelAsync().ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    if (finished == next)
+                    if (IsLive(feed))
                     {
-                        while (updates.Reader.TryRead(out var update))
+                        readAt = null;
+                        if (reading)
                         {
-                            if (RoofStatusRules.ShouldApply(status, update))
-                            {
-                                status = update;
-                            }
+                            reading = false;
+                            context.Host.Error.WriteLine("Live status is connected again.");
                         }
                     }
                     else
                     {
-                        try
+                        readAt ??= time.GetUtcNow();
+                    }
+
+                    using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    var due = Earliest(renewAt, readAt);
+                    var delay = due is { } at ? Max(at - time.GetUtcNow(), TimeSpan.Zero) : Timeout.InfiniteTimeSpan;
+                    var timer = Task.Delay(delay, time, wait.Token);
+                    var next = wake.Reader.WaitToReadAsync(wait.Token).AsTask();
+                    await Task.WhenAny(timer, next).ConfigureAwait(false);
+                    await wait.CancelAsync().ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    wake.Reader.TryRead(out _);
+
+                    while (updates.TryDequeue(out var update))
+                    {
+                        lastStatusAt = time.GetUtcNow();
+                        if (RoofStatusRules.ShouldApply(status, update))
                         {
-                            status = await client.Roof.RenewLeaseAsync(cancellationToken).ConfigureAwait(false);
-                        }
-                        catch (RoofApiException refusal) when (refusal.Code == RoofControllerErrorCode.LeaseNotActive)
-                        {
-                            status = refusal.RoofStatus ?? await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
-                        }
-                        catch (Exception error) when (error is HttpRequestException or TimeoutException
-                            || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested))
-                        {
-                            context.Host.Error.WriteLine(
-                                $"The lease could not be renewed: {RoofText.DescribeFailure(error)} If the controller is running, it stops the roof when the lease runs out.");
-                            return (int)RoofExitCode.Unreachable;
+                            status = update;
                         }
                     }
 
-                    renewAt = status.IsMoving ? NextRenewal(status) : null;
+                    if (renewAt is { } renew && time.GetUtcNow() >= renew)
+                    {
+                        status = await RenewLeaseAsync(context, client, cancellationToken).ConfigureAwait(false);
+                        lastStatusAt = time.GetUtcNow();
+                        renewAt = null;
+                    }
+                    else if (!IsLive(feed) && readAt is { } read && time.GetUtcNow() >= read)
+                    {
+                        if (!reading)
+                        {
+                            reading = true;
+                            context.Host.Error.WriteLine(
+                                $"Live status is not connected: reading the status every {StatusPollInterval.TotalSeconds:0} s instead. Ctrl+C sends Stop.");
+                        }
+
+                        if (await ReadStatusAsync(client, cancellationToken).ConfigureAwait(false) is { } current)
+                        {
+                            lastStatusAt = time.GetUtcNow();
+                            if (RoofStatusRules.ShouldApply(status, current))
+                            {
+                                status = current;
+                            }
+                        }
+                        else if (time.GetUtcNow() - lastStatusAt >= NoStatusLimit)
+                        {
+                            throw new RoofCliRefusedException(
+                                $"No status from the controller for {NoStatusLimit.TotalSeconds:0} s: the roof may still be moving. "
+                                + $"To stop it, run '{CommandName} stop', or use the stop control at the roof.",
+                                RoofExitCode.Unreachable);
+                        }
+
+                        readAt = time.GetUtcNow() + StatusPollInterval;
+                    }
+
+                    // A status can bring the renewal forward, never put it off: the loop wakes for each status and
+                    // each change of the hub's state, and a renewal put off at every wake would never be sent.
+                    renewAt = status.IsMoving ? Earliest(renewAt, NextRenewal(status)) : null;
                     var line = RoofCliFormat.DescribeRoof(status);
                     if (!context.Json && line != lastLine)
                     {
@@ -375,6 +485,50 @@ public static partial class RoofCli
             DateTimeOffset? NextRenewal(RoofStatusResponse current)
                 => RoofStatusRules.GetLeaseRenewalDelay(current.LeaseSecondsRemaining) is { } after ? time.GetUtcNow() + after : null;
         }
+
+        /// <summary>True while the hub delivers the status: connected, with a status that is not stale.</summary>
+        private static bool IsLive(RoofStatusFeed feed)
+            => feed.State == RoofStatusFeedState.Connected && feed.Status is not null && !feed.IsStale;
+
+        /// <summary>Renews the lease; a lease that has already ended gives the status instead.</summary>
+        private static async Task<RoofStatusResponse> RenewLeaseAsync(RoofCliContext context, RoofControllerClient client, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await client.Roof.RenewLeaseAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (RoofApiException refusal) when (refusal.Code == RoofControllerErrorCode.LeaseNotActive)
+            {
+                return refusal.RoofStatus ?? await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (IsUnreachable(error, cancellationToken))
+            {
+                throw new RoofCliRefusedException(
+                    $"The lease could not be renewed: {RoofText.DescribeFailure(error)} If the controller is running, it stops the roof when the lease runs out.",
+                    RoofExitCode.Unreachable,
+                    error);
+            }
+        }
+
+        /// <summary>Reads the status over REST; null when the controller could not be reached.</summary>
+        private static async Task<RoofStatusResponse?> ReadStatusAsync(RoofControllerClient client, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (IsUnreachable(error, cancellationToken))
+            {
+                return null;
+            }
+        }
+
+        private static bool IsUnreachable(Exception error, CancellationToken cancellationToken)
+            => error is HttpRequestException or TimeoutException
+                || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested);
+
+        private static DateTimeOffset? Earliest(DateTimeOffset? left, DateTimeOffset? right)
+            => left is null ? right : right is null ? left : left < right ? left : right;
 
         private static int ReportMotionEnd(RoofCliContext context, RoofMotionDirection direction, RoofStatusResponse status)
         {

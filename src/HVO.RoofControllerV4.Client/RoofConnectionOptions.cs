@@ -146,6 +146,21 @@ public static class RoofCertificatePin
         return Convert.ToHexString(SHA256.HashData(certificate.GetRawCertData()));
     }
 
+    /// <summary>
+    /// True when <paramref name="pin"/> is a SHA-256 pin: 64 hex digits, with colons, spaces or dashes allowed between
+    /// them.
+    /// </summary>
+    public static bool IsValid(string? pin)
+    {
+        if (pin is null)
+        {
+            return false;
+        }
+
+        var hex = pin.Where(c => c is not (':' or ' ' or '-')).ToArray();
+        return hex.Length == 64 && hex.All(char.IsAsciiHexDigit);
+    }
+
     internal static byte[] Parse(string pin)
     {
         var hex = new string(pin.Where(c => c is not (':' or ' ' or '-')).ToArray());

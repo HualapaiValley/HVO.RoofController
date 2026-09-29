@@ -122,6 +122,63 @@ public sealed class RoofCliGlobalTests
     }
 
     [TestMethod]
+    [DataRow(false, DisplayName = "text")]
+    [DataRow(true, DisplayName = "--json")]
+    public async Task EnvironmentCertificatePin_ThatIsNotAPin_IsNotConfigured(bool json)
+    {
+        using var rig = new CliRig();
+        rig.UseApiKey(TestApiKeys.Operator);
+        rig.Environment[RoofCredentialStore.CertificateVariable] = "not-a-pin";
+
+        var result = json ? await rig.RunAsync("status", "--json") : await rig.RunAsync("status");
+
+        result.Code.Should().Be(RoofExitCode.NotConfigured, result.ToString());
+        const string message = "HVO_ROOF_CERT_SHA256 is not a SHA-256 pin: 64 hex digits.";
+        if (json)
+        {
+            result.Json.GetProperty("error").GetProperty("message").GetString().Should().Be(message);
+        }
+        else
+        {
+            result.Error.Should().Be(message + Environment.NewLine);
+        }
+    }
+
+    [TestMethod]
+    public async Task CredentialsFile_WithACertificatePinThatIsNotAPin_IsNotConfigured()
+    {
+        using var rig = new CliRig();
+        RoofCredentialStore.Save(
+            rig.CredentialsPath,
+            new RoofStoredCredentials { Controller = Elsewhere, ApiKey = TestApiKeys.Operator, CertificateSha256 = "AB:CD" });
+
+        var result = await rig.RunAsync("status");
+
+        result.Code.Should().Be(RoofExitCode.NotConfigured, result.ToString());
+        result.Error.Should().Be(
+            $"The certificate pin in {rig.CredentialsPath} is not a SHA-256 pin: 64 hex digits. Save it again with 'hvo-roof setup'."
+            + Environment.NewLine);
+    }
+
+    [TestMethod]
+    public void EnvironmentCertificatePin_OnItsOwn_OverridesTheFile()
+    {
+        var saved = new string('A', 64);
+        var pinned = string.Join(':', Enumerable.Repeat("0B", 32));
+        using var rig = new CliRig();
+        RoofCredentialStore.Save(
+            rig.CredentialsPath,
+            new RoofStoredCredentials { Controller = Elsewhere, ApiKey = TestApiKeys.Operator, CertificateSha256 = saved });
+        rig.Environment[RoofCredentialStore.CertificateVariable] = pinned;
+
+        var connection = rig.CreateContext().ResolveConnection();
+
+        connection.CertificateSha256.Should().Be(pinned, "each variable overrides the file, the pin among them");
+        connection.Controller.Should().Be(Elsewhere, "the other values still come from the file");
+        connection.Source.Should().Be(rig.CredentialsPath);
+    }
+
+    [TestMethod]
     public async Task Environment_UrlAndKey_WinOverTheFile()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -235,7 +292,7 @@ public sealed class RoofCliGlobalTests
             StatusFeed = ClientTestSupport.FastFeed
         };
 
-        var run = RoofCli.RunAsync(["status", "--credentials-file", rig.CredentialsPath], host, handleTermination: false, interrupt.Token);
+        var run = RoofCli.RunAsync(["status", "--credentials-file", rig.CredentialsPath], host, interrupt.Token);
         await arrived.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await interrupt.CancelAsync();
         var result = new CliResult(await run.WaitAsync(TimeSpan.FromSeconds(10)), output.ToString(), error.ToString());
@@ -244,6 +301,43 @@ public sealed class RoofCliGlobalTests
         result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
         result.Error.Should().Be("Interrupted." + Environment.NewLine);
         result.Out.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task CtrlC_DuringARequest_Json_WritesTheInterruptedError()
+    {
+        using var rig = new CliRig();
+        rig.UseApiKey(TestApiKeys.Viewer);
+        var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        using var interrupt = new CancellationTokenSource();
+        var host = new RoofCliHost
+        {
+            Out = output,
+            Error = error,
+            GetEnvironmentVariable = _ => null,
+            ReadLine = (_, _) => null,
+            CreateHandler = () => new FailingHandler(async (_, cancellationToken) =>
+            {
+                arrived.TrySetResult();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                throw new InvalidOperationException("Unreachable.");
+            }),
+            StatusFeed = ClientTestSupport.FastFeed
+        };
+
+        var run = RoofCli.RunAsync(["status", "--json", "--credentials-file", rig.CredentialsPath], host, interrupt.Token);
+        await arrived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await interrupt.CancelAsync();
+        var result = new CliResult(await run.WaitAsync(TimeSpan.FromSeconds(10)), output.ToString(), error.ToString());
+
+        result.ExitCode.Should().Be(130, result.ToString());
+        var json = result.Json.GetProperty("error");
+        json.GetProperty("exitCode").GetInt32().Should().Be(130);
+        json.GetProperty("kind").GetString().Should().Be("Interrupted");
+        json.GetProperty("message").GetString().Should().Be("Interrupted.");
+        result.Error.Should().BeEmpty();
     }
 
     // ---- Exit codes ------------------------------------------------------------------------------------------------

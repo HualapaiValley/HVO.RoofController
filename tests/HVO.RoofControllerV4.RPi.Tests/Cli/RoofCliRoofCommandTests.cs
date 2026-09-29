@@ -208,6 +208,72 @@ public sealed class RoofCliRoofCommandTests
         result.Out.Should().BeEmpty();
     }
 
+    [TestMethod]
+    public async Task StatusWatch_WritesALinePerChange_NotForEachRepeat()
+    {
+        var current = RoofServiceMock.Snapshot();
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Volatile.Read(ref current)));
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+        await using var run = RunningCommand.Start(rig, "status", "--watch");
+        await run.WaitForOutAsync("Closed; last stop: Stopped by operator", "the first snapshot");
+
+        // The same state again, newer each time, as the heartbeat and a change the line does not show send it.
+        for (var version = 12; version < 15; version++)
+        {
+            Volatile.Write(ref current, RoofServiceMock.Snapshot() with { StatusVersion = version });
+            RaiseStatus(host, Volatile.Read(ref current));
+        }
+
+        Volatile.Write(ref current, Moving(RoofMotionDirection.Opening, leaseSeconds: null) with { StatusVersion = 15 });
+        RaiseStatus(host, Volatile.Read(ref current));
+        await run.WaitForOutAsync("Opening, commanded to open", "the change");
+        var result = await run.InterruptAsync();
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        var lines = result.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        lines.Should().HaveCount(2, result.ToString());
+        lines[0].Should().EndWith("Closed; last stop: Stopped by operator");
+        lines[1].Should().Contain("Opening, commanded to open");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task StatusWatch_WhenNoStatusEverArrives_SaysStale_AndExitsStale(bool json)
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        var tried = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host)
+        {
+            Time = clock,
+            WrapHandler = inner => new UnreachableHandler(inner, tried, RoofStatusHubContract.Path)
+        };
+        rig.UseApiKey(TestApiKeys.Viewer);
+        await using var run = RunningCommand.Start(rig, json ? ["status", "--watch", "--json"] : ["status", "--watch"]);
+        await tried.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        clock.Advance(FastFeed.StaleAfter);
+        await run.WaitForOutAsync(json ? "\"stale\":true" : "STALE:", "the stale line");
+        var result = await run.InterruptAsync();
+
+        result.Code.Should().Be(RoofExitCode.Stale, result.ToString());
+        if (json)
+        {
+            var line = JsonDocument.Parse(result.Out).RootElement;
+            line.GetProperty("stale").GetBoolean().Should().BeTrue();
+            line.GetProperty("staleSince").GetDateTimeOffset().Should().Be(ClientStart);
+        }
+        else
+        {
+            result.Out.Should().Be(
+                $"STALE: no status has been received (waiting since {Time(ClientStart)}). Stop still works: 'hvo-roof stop'." + Environment.NewLine);
+        }
+
+        result.Error.Should().BeEmpty();
+    }
+
     // ---- Health ----------------------------------------------------------------------------------------------------
 
     [TestMethod]
@@ -416,6 +482,66 @@ public sealed class RoofCliRoofCommandTests
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
     }
 
+    [TestMethod]
+    [DataRow(500, "application/problem+json", "{\"title\":\"An error occurred (test).\",\"status\":500}", DisplayName = "500")]
+    [DataRow(502, "text/html", "<html><body>Bad gateway</body></html>", DisplayName = "502 from a proxy")]
+    [DataRow(503, "application/problem+json", "{\"title\":\"The roof hardware is unavailable (test).\",\"status\":503}", DisplayName = "503")]
+    [DataRow(503, "text/plain", "", DisplayName = "503 with no body")]
+    public async Task Stop_AnsweredWithAServerError_SaysStopFailed_AndExitsStopNotVerified(int status, string mediaType, string body)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host) { WrapHandler = inner => new StubAnswerHandler(inner, "/RoofControl/Stop", (HttpStatusCode)status, mediaType, body) };
+        rig.UseApiKey(TestApiKeys.Operator);
+
+        var result = await rig.RunAsync("stop");
+
+        result.Code.Should().Be(RoofExitCode.StopNotVerified, result.ToString());
+        result.Error.Should().StartWith("Stop failed: ").And.EndWith("Use the stop control at the roof." + Environment.NewLine);
+        result.Out.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(403, RoofExitCode.Forbidden)]
+    [DataRow(409, RoofExitCode.Refused)]
+    public async Task Stop_RefusedByTheController_ExitsWithTheRefusal(int status, RoofExitCode expected)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host)
+        {
+            WrapHandler = inner => new StubAnswerHandler(
+                inner, "/RoofControl/Stop", (HttpStatusCode)status, "application/problem+json", $"{{\"title\":\"Refused (test).\",\"status\":{status}}}")
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+
+        var result = await rig.RunAsync("stop");
+
+        result.Code.Should().Be(expected, result.ToString());
+        result.Error.Should().StartWith("Stop failed: ").And.EndWith("Use the stop control at the roof." + Environment.NewLine);
+    }
+
+    [TestMethod]
+    public async Task Stop_Json_WhenItFails_WritesTheOutcomeWithItsExitCode()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host)
+        {
+            WrapHandler = inner => new StubAnswerHandler(
+                inner, "/RoofControl/Stop", HttpStatusCode.ServiceUnavailable, "application/problem+json",
+                "{\"title\":\"The roof hardware is unavailable (test).\",\"status\":503,\"code\":\"HardwareUnavailable\"}")
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+
+        var result = await rig.RunAsync("stop", "--json");
+
+        result.Code.Should().Be(RoofExitCode.StopNotVerified, result.ToString());
+        result.Json.GetProperty("outcome").GetString().Should().Be("Failed");
+        result.Json.GetProperty("message").GetString().Should().StartWith("Stop failed: ").And.EndWith("Use the stop control at the roof.");
+        result.Json.GetProperty("exitCode").GetInt32().Should().Be(9);
+        result.Json.GetProperty("code").GetString().Should().Be("HardwareUnavailable");
+        result.Json.GetProperty("status").ValueKind.Should().Be(JsonValueKind.Null);
+        result.Error.Should().BeEmpty("with --json the outcome is the document on standard output");
+    }
+
     // ---- Open and close --------------------------------------------------------------------------------------------
 
     [TestMethod]
@@ -561,6 +687,43 @@ public sealed class RoofCliRoofCommandTests
     }
 
     [TestMethod]
+    public async Task Open_Following_StatusesArrivingBeforeTheRenewal_DoNotPutItOff()
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        var current = Moving(RoofMotionDirection.Opening, leaseSeconds: 3);
+        var renewals = 0;
+        var roof = RoofShowing(() => Volatile.Read(ref current));
+        roof.Setup(service => service.RenewLease()).Returns(() =>
+        {
+            Interlocked.Increment(ref renewals);
+            return Result<RoofStatusResponse>.Success(Volatile.Read(ref current));
+        });
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host) { Time = clock };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open");
+        await run.WaitForOutAsync("Open accepted. Following the motion; Ctrl+C sends Stop.", "the motion to be followed");
+
+        // The renewal is due a third of the 3 s lease after it was granted. A status arrives every 0.25 s until then,
+        // each one read before the client's clock moves on, and none of them puts the renewal off.
+        for (var step = 0; step < 4; step++)
+        {
+            var next = Volatile.Read(ref current) with { StatusVersion = Volatile.Read(ref current).StatusVersion + 1 };
+            Volatile.Write(ref current, next);
+            RaiseStatus(host, next);
+            await Task.Delay(50);
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+        }
+
+        await WaitUntilAsync(() => Volatile.Read(ref renewals) > 0, "the lease renewal, a third of the lease after it was granted");
+        Volatile.Write(ref current, RoofServiceMock.Snapshot(RoofControllerStatus.Open) with { StatusVersion = 30 });
+        RaiseStatus(host, Volatile.Read(ref current));
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+    }
+
+    [TestMethod]
     public async Task Close_Following_StoppedBeforeTheEnd_ExitsFailed()
     {
         var current = Moving(RoofMotionDirection.Closing, leaseSeconds: null);
@@ -648,7 +811,7 @@ public sealed class RoofCliRoofCommandTests
                 GetEnvironmentVariable = _ => null,
                 ReadLine = (_, _) => null,
                 Time = clock,
-                CreateHandler = () => new LeaseUnreachableHandler(CreateHandler(() => host.Server)),
+                CreateHandler = () => new UnreachableHandler(CreateHandler(() => host.Server), null, "/RoofControl/Lease"),
                 WebSocketFactory = WebSocketFactory(() => host.Server),
                 StatusFeed = FastFeed
             },
@@ -675,6 +838,141 @@ public sealed class RoofCliRoofCommandTests
             + Environment.NewLine);
         host.RoofService.Verify(service => service.RenewLease(), Times.Never());
     }
+
+    [TestMethod]
+    public async Task Open_Following_Json_LeaseCannotBeRenewed_WritesTheError()
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: 1.5)));
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = new RunningCommand(
+            (output, error) => new RoofCliHost
+            {
+                Out = output,
+                Error = error,
+                GetEnvironmentVariable = _ => null,
+                ReadLine = (_, _) => null,
+                Time = clock,
+                CreateHandler = () => new UnreachableHandler(CreateHandler(() => host.Server), null, "/RoofControl/Lease"),
+                WebSocketFactory = WebSocketFactory(() => host.Server),
+                StatusFeed = FastFeed
+            },
+            "open", "--json", "--credentials-file", rig.CredentialsPath);
+        await WaitUntilAsync(() => host.RoofService.Invocations.Any(call => call.Method.Name == nameof(IRoofControllerServiceV4.Open)), "the Open");
+
+        await WaitUntilAsync(
+            () =>
+            {
+                if (run.Out.Contains("\"error\"", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                clock.Advance(TimeSpan.FromMilliseconds(500));
+                return false;
+            },
+            "the failed renewal");
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Unreachable, result.ToString());
+        var error = result.Json.GetProperty("error");
+        error.GetProperty("exitCode").GetInt32().Should().Be(4);
+        error.GetProperty("kind").GetString().Should().Be("Unreachable");
+        error.GetProperty("message").GetString().Should().Be(
+            "The lease could not be renewed: The controller could not be reached. If the controller is running, it stops the roof when the lease runs out.");
+        result.Error.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task OpenJson_CtrlC_SendsStop_AndWritesTheInterruptedDocument()
+    {
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open", "--json");
+        await WaitUntilAsync(() => host.RoofService.Invocations.Any(call => call.Method.Name == nameof(IRoofControllerServiceV4.Open)), "the Open");
+
+        var result = await run.InterruptAsync();
+
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        result.Json.GetProperty("interrupted").GetBoolean().Should().BeTrue();
+        result.Json.GetProperty("exitCode").GetInt32().Should().Be(130);
+        var stop = result.Json.GetProperty("stop");
+        stop.GetProperty("outcome").GetString().Should().Be("Acknowledged");
+        stop.GetProperty("message").GetString().Should().Be(RoofStopText.AcknowledgedVerified);
+        stop.GetProperty("exitCode").GetInt32().Should().Be(0);
+        result.Error.Should().BeEmpty();
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
+    public async Task Open_Following_WhenLiveStatusIsNotConnected_ReadsTheStatus_UntilTheRoofIsOpen()
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        var current = Moving(RoofMotionDirection.Opening, leaseSeconds: null);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Volatile.Read(ref current)));
+        using var rig = new CliRig(host)
+        {
+            Time = clock,
+            WrapHandler = inner => new UnreachableHandler(inner, null, RoofStatusHubContract.Path)
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open");
+        await run.WaitForOutAsync("Open accepted. Following the motion; Ctrl+C sends Stop.", "the motion to be followed");
+
+        await AdvanceUntilAsync(clock, () => run.Error.Contains("Live status is not connected", StringComparison.Ordinal), "the first read");
+        Volatile.Write(ref current, RoofServiceMock.Snapshot(RoofControllerStatus.Open) with { StatusVersion = 12 });
+        await AdvanceUntilAsync(clock, () => run.Out.Contains("Done.", StringComparison.Ordinal), "the read that finds the roof open");
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Out.Should().EndWith("Done. Roof: Open." + Environment.NewLine);
+        result.Error.Should().Be(
+            "Live status is not connected: reading the status every 2 s instead. Ctrl+C sends Stop." + Environment.NewLine);
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    [TestMethod]
+    public async Task Open_Following_WithNoStatusAtAll_GivesUp_AndExitsUnreachable()
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        using var rig = new CliRig(host)
+        {
+            Time = clock,
+            WrapHandler = inner => new UnreachableHandler(inner, null, RoofStatusHubContract.Path, "/RoofControl/Status")
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open");
+        await run.WaitForOutAsync("Open accepted. Following the motion; Ctrl+C sends Stop.", "the motion to be followed");
+
+        await AdvanceUntilAsync(clock, () => run.Error.Contains("No status from the controller", StringComparison.Ordinal), "the command to give up");
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Unreachable, result.ToString());
+        result.Error.Should().Be(
+            "Live status is not connected: reading the status every 2 s instead. Ctrl+C sends Stop." + Environment.NewLine
+            + "No status from the controller for 30 s: the roof may still be moving. To stop it, run 'hvo-roof stop', or use the stop control at the roof."
+            + Environment.NewLine);
+        clock.GetUtcNow().Should().BeOnOrAfter(ClientStart + TimeSpan.FromSeconds(30), "the command gives up only after 30 s with no status");
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    /// <summary>Moves <paramref name="clock"/> on in half-second steps until <paramref name="condition"/> holds.</summary>
+    private static Task AdvanceUntilAsync(ManualTimeProvider clock, Func<bool> condition, string what)
+        => WaitUntilAsync(
+            () =>
+            {
+                if (condition())
+                {
+                    return true;
+                }
+
+                clock.Advance(TimeSpan.FromMilliseconds(500));
+                return false;
+            },
+            what);
 
     // ---- Lease -----------------------------------------------------------------------------------------------------
 
@@ -1103,7 +1401,7 @@ file sealed class RunningCommand : IAsyncDisposable
     public RunningCommand(Func<TextWriter, TextWriter, RoofCliHost> createHost, params string[] args)
     {
         var host = createHost(_out, _error);
-        _run = Task.Run(() => RoofCli.RunAsync(args, host, handleTermination: false, _interrupt.Token));
+        _run = Task.Run(() => RoofCli.RunAsync(args, host, _interrupt.Token));
     }
 
     /// <summary>Runs <paramref name="args"/> with the rig's host and credentials file.</summary>
@@ -1234,11 +1532,11 @@ file sealed class LockedWriter : TextWriter
     }
 }
 
-/// <summary>Sends each request to the controller except the lease renewal, which cannot reach it.</summary>
-file sealed class LeaseUnreachableHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+/// <summary>Answers the request whose path ends in <paramref name="path"/> itself, as a failing server or proxy would.</summary>
+file sealed class StubAnswerHandler(HttpMessageHandler inner, string path, HttpStatusCode status, string mediaType, string body) : DelegatingHandler(inner)
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        => request.RequestUri!.AbsolutePath.EndsWith("/RoofControl/Lease", StringComparison.OrdinalIgnoreCase)
-            ? throw new HttpRequestException("Connection refused (test).")
+        => request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase)
+            ? Task.FromResult(new HttpResponseMessage(status) { RequestMessage = request, Content = new StringContent(body, Encoding.UTF8, mediaType) })
             : base.SendAsync(request, cancellationToken);
 }

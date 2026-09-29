@@ -287,7 +287,7 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
         {
             var value = edit.Changes[field.Key];
             var to = field.Setting.Secret
-                ? value.ValueKind == JsonValueKind.Null ? RoofSettingValues.SecretNotSet : RoofSettingValues.SecretSet
+                ? value.ValueKind == JsonValueKind.Null ? RoofSettingValues.SecretNotSet : RoofSettingValues.SecretNewValue
                 : RoofSettingValues.Describe(field.Setting, value);
             var notes = string.Join(", ", new[]
             {

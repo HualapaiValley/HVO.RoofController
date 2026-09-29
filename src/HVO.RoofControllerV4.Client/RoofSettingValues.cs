@@ -17,6 +17,9 @@ public static class RoofSettingValues
     /// <summary>Shown for a secret that is not set.</summary>
     public const string SecretNotSet = "(not set)";
 
+    /// <summary>Shown for a secret a change sets: always a change, even over a secret that is set.</summary>
+    public const string SecretNewValue = "(new value)";
+
     /// <summary>Shown for a null value.</summary>
     public const string None = "(none)";
 

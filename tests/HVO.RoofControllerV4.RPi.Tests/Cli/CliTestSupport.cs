@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
@@ -10,6 +11,7 @@ using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.Testing;
 using Terminal.Gui.Time;
+using Terminal.Gui.ViewBase;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
@@ -61,6 +63,12 @@ internal sealed class CliRig : IDisposable
 
     public TimeProvider Time { get; set; } = TimeProvider.System;
 
+    /// <summary>
+    /// Wraps the HTTP handler of every connection (to delay or fail some requests). The status hub then cannot be
+    /// reached over its WebSocket, so a hub request goes through the wrapped handler too, and can be failed there.
+    /// </summary>
+    public Func<HttpMessageHandler, HttpMessageHandler>? WrapHandler { get; set; }
+
     /// <summary>For <c>hvo-roof ui</c>: drives the interface in place of the real loop.</summary>
     public Action<IApplication, IRunnable>? RunApplication { get; set; }
 
@@ -81,8 +89,10 @@ internal sealed class CliRig : IDisposable
         },
         IsInteractive = Interactive,
         Time = Time,
-        CreateHandler = _server is null ? null : () => ClientTestSupport.CreateHandler(_server),
-        WebSocketFactory = _server is null ? null : ClientTestSupport.WebSocketFactory(_server),
+        CreateHandler = _server is null ? null : () => (WrapHandler ?? (handler => handler))(ClientTestSupport.CreateHandler(_server)),
+        WebSocketFactory = _server is null ? null
+            : WrapHandler is null ? ClientTestSupport.WebSocketFactory(_server)
+            : (_, _, _) => throw new HttpRequestException("The status hub's WebSocket is not offered (test)."),
         StatusFeed = ClientTestSupport.FastFeed,
         CreateApplication = CreateApplication ?? (() => throw new InvalidOperationException("This test gives no terminal application.")),
         RunApplication = RunApplication ?? ((_, _) => { })
@@ -166,6 +176,63 @@ internal sealed class TuiDriver : IDisposable
         }
     }
 
+    /// <summary>
+    /// The colours the screen shows <paramref name="text"/> in: the attribute of the cell with its first character, where
+    /// it first appears (reading from the top). Fails when the text is not on the screen.
+    /// </summary>
+    public Terminal.Gui.Drawing.Attribute ColoursOf(string text)
+    {
+        App.LayoutAndDraw(true);
+        var contents = App.Driver!.Contents!;
+        for (var row = 0; row < contents.GetLength(0); row++)
+        {
+            var line = new StringBuilder();
+            var columns = new List<int>();
+            for (var column = 0; column < contents.GetLength(1); column++)
+            {
+                var grapheme = contents[row, column].Grapheme is { Length: > 0 } drawn ? drawn : " ";
+                line.Append(grapheme);
+                columns.AddRange(Enumerable.Repeat(column, grapheme.Length));
+            }
+
+            var index = line.ToString().IndexOf(text, StringComparison.Ordinal);
+            if (index >= 0)
+            {
+                return contents[row, columns[index]].Attribute ?? throw new AssertFailedException($"'{text}' is drawn with no colours.");
+            }
+        }
+
+        throw new AssertFailedException($"'{text}' is not on the screen:\n{Screen}");
+    }
+
+    /// <summary>The attribute of every cell on the screen that was drawn.</summary>
+    public IReadOnlyList<Terminal.Gui.Drawing.Attribute> DrawnAttributes()
+    {
+        App.LayoutAndDraw(true);
+        var contents = App.Driver!.Contents!;
+        var drawn = new List<Terminal.Gui.Drawing.Attribute>();
+        for (var row = 0; row < contents.GetLength(0); row++)
+        {
+            for (var column = 0; column < contents.GetLength(1); column++)
+            {
+                if (contents[row, column].Attribute is { } attribute)
+                {
+                    drawn.Add(attribute);
+                }
+            }
+        }
+
+        return drawn;
+    }
+
+    /// <summary>The colours of the first cell of <paramref name="view"/> on the screen (a button's bracket, for one).</summary>
+    public Terminal.Gui.Drawing.Attribute ColoursAt(View view)
+    {
+        App.LayoutAndDraw(true);
+        var origin = view.FrameToScreen().Location;
+        return App.Driver!.Contents![origin.Y, origin.X].Attribute ?? throw new AssertFailedException($"{view} is drawn with no colours.");
+    }
+
     public void Press(Key key)
     {
         App.InjectKey(key);
@@ -229,5 +296,37 @@ internal sealed class TuiDriver : IDisposable
 
         Ui.Dispose();
         App.Dispose();
+    }
+}
+
+/// <summary>
+/// Sends each request to the controller except those whose path contains one of <paramref name="paths"/> (the status
+/// hub's, the lease renewal's), which cannot reach it; <paramref name="tried"/> is set when the first of them is tried.
+/// </summary>
+internal sealed class UnreachableHandler(HttpMessageHandler inner, TaskCompletionSource? tried, params string[] paths) : DelegatingHandler(inner)
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (!paths.Any(path => request.RequestUri!.AbsolutePath.Contains(path, StringComparison.OrdinalIgnoreCase)))
+        {
+            return base.SendAsync(request, cancellationToken);
+        }
+
+        tried?.TrySetResult();
+        throw new HttpRequestException("Connection refused (test).");
+    }
+}
+
+/// <summary>Holds the request whose path ends in <paramref name="path"/> until <paramref name="gate"/> opens, then sends it.</summary>
+internal sealed class GatedHandler(HttpMessageHandler inner, string path, Task gate) : DelegatingHandler(inner)
+{
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase))
+        {
+            await gate.WaitAsync(cancellationToken);
+        }
+
+        return await base.SendAsync(request, cancellationToken);
     }
 }

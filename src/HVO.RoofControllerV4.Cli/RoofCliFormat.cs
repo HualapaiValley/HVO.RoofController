@@ -112,8 +112,14 @@ internal static class RoofCliFormat
         null => "unknown"
     };
 
-    /// <summary>One line for <c>status --watch</c>.</summary>
-    public static string DescribeLine(RoofStatusResponse status)
+    /// <summary>One line for <c>status --watch</c>: the snapshot's time, then <see cref="DescribeState"/>.</summary>
+    public static string DescribeLine(RoofStatusResponse status) => $"{Time(status.SnapshotUtc)}  {DescribeState(status)}";
+
+    /// <summary>
+    /// The roof's state in one line, without the snapshot's time: the position and motion, a fault, relays that could
+    /// not be verified, the lease, and the last stop. <c>status --watch</c> writes a line when this changes.
+    /// </summary>
+    public static string DescribeState(RoofStatusResponse status)
     {
         var parts = new List<string> { DescribeRoof(status) };
         if (status.IsFaultLatched || status.IsClearFaultInProgress)
@@ -132,7 +138,7 @@ internal static class RoofCliFormat
         }
 
         parts.Add($"last stop: {RoofText.DescribeStopReason(status.LastStopReason)}");
-        return $"{Time(status.SnapshotUtc)}  {string.Join("; ", parts)}";
+        return string.Join("; ", parts);
     }
 
     /// <summary>A role as the CLI shows it: viewer, operator or admin; any other role as the controller named it.</summary>

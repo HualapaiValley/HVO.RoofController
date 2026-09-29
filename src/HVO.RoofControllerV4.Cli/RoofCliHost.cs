@@ -30,6 +30,12 @@ public sealed class RoofCliHost
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
+    /// <summary>
+    /// The process's termination signals, when this is the real process. A command holds it (<see cref="RoofCliTermination.Hold"/>)
+    /// while a Stop is on its way, so the process does not end before the answer.
+    /// </summary>
+    public RoofCliTermination? Termination { get; init; }
+
     /// <summary>For tests: the HTTP handler of every connection to the controller.</summary>
     public Func<HttpMessageHandler>? CreateHandler { get; init; }
 
@@ -55,13 +61,17 @@ public sealed class RoofCliHost
     /// </summary>
     public Action<IApplication, IRunnable> RunApplication { get; init; } = (app, window) => app.Run(window);
 
-    /// <summary>The console of this process.</summary>
-    public static RoofCliHost System() => new()
+    /// <summary>
+    /// The console of this process. Its output goes to the console until the console is gone (the terminal closed):
+    /// after that, output is dropped rather than failing the command, so a Stop on its way is still sent.
+    /// </summary>
+    public static RoofCliHost System(RoofCliTermination? termination = null) => new()
     {
-        Out = Console.Out,
-        Error = Console.Error,
+        Out = new RoofCliConsoleWriter(Console.Out),
+        Error = new RoofCliConsoleWriter(Console.Error),
         IsInteractive = !Console.IsInputRedirected,
-        ReadLine = ReadConsoleLine
+        ReadLine = ReadConsoleLine,
+        Termination = termination
     };
 
     private static string? ReadConsoleLine(string prompt, bool secret)

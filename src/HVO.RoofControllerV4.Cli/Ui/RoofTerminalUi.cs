@@ -14,7 +14,13 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// </summary>
 internal sealed class RoofTerminalUi : IDisposable
 {
-    internal const string KeyBar = "F1 Roof  F2 Settings  F3 People  F4 System  F5 Setup  F9 " + RoofStopText.ButtonLabel + "  F10 Quit";
+    /// <summary>The keys of the key bar, and what each does.</summary>
+    internal static readonly (string Key, string Name)[] Keys =
+    [
+        ("F1", "Roof"), ("F2", "Settings"), ("F3", "People"), ("F4", "System"), ("F5", "Setup"), ("F9", RoofStopText.ButtonLabel), ("F10", "Quit")
+    ];
+
+    internal static readonly string KeyBar = string.Join("  ", Keys.Select(key => $"{key.Key} {key.Name}"));
 
     private readonly RoofCliContext _context;
     private readonly IApplication _app;
@@ -35,29 +41,46 @@ internal sealed class RoofTerminalUi : IDisposable
     // Ticks of the one-second timer until the lease of a motion started here is renewed: -1 when this interface holds
     // no motion, 0 while a renewal is on its way.
     private int _leaseTicks = -1;
+
+    // True from Open or Close accepted here until the roof stops or Stop is sent, with or without a lease.
+    private bool _startedMotion;
+
+    // Every Stop sent from here that may still be on its way; the client is not disposed before they are answered.
+    private Task _stops = Task.CompletedTask;
+    private int _stopsInFlight;
+    private bool _quitAfterStop;
+
+    // When the status shown was taken; with no live status, a status read over REST is stale from then.
+    private DateTimeOffset? _statusTakenAt;
     private volatile bool _closed;
 
     public RoofTerminalUi(RoofCliContext context, IApplication app)
     {
         _context = context;
         _app = app;
+        Theme = RoofUiTheme.For(context.Host.GetEnvironmentVariable);
 
-        Window = new Window { Title = "HVO roof", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        Window = new Window { Title = WindowTitle(null), X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        Window.SetScheme(Theme.Base);
+        Theme.SetFrame(Window, Theme.WindowFrame);
 
         // Stop comes first, so it is also the first control that takes focus.
-        StopButton = new Button { Text = $"{RoofStopText.ButtonLabel} (F9)", X = 0, Y = 0 };
+        StopButton = Theme.Styled(new Button { Text = $"{RoofStopText.ButtonLabel} (F9)", X = 0, Y = 0 }, Theme.Stop);
         StopButton.Accepting += (_, e) =>
         {
             e.Handled = true;
             Stop();
         };
-        _stopResult = new Label { Text = RoofStopText.AlwaysAvailable, X = Pos.Right(StopButton) + 2, Y = 0, Width = Dim.Fill() };
-        _header = new Label { X = 0, Y = 1, Width = Dim.Fill() };
-        _banner = new Label { X = 0, Y = 2, Width = Dim.Fill() };
-        _content = new FrameView { X = 0, Y = 3, Width = Dim.Fill(), Height = Dim.Fill(2) };
-        _message = new Label { X = 0, Y = Pos.AnchorEnd(2), Width = Dim.Fill() };
-        var keys = new Label { Text = KeyBar, X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill() };
-        Window.Add(StopButton, _stopResult, _header, _banner, _content, _message, keys);
+        // The Stop result, the banner and the message wrap, so a narrow terminal still shows all of each: the page gets
+        // the rows they leave.
+        _stopResult = Wrapping(new Label { Text = RoofStopText.AlwaysAvailable, X = Pos.Right(StopButton) + 2, Y = 0 });
+        _header = new Label { X = 0, Y = Pos.Bottom(_stopResult), Width = Dim.Fill() };
+        _header.SetScheme(Theme.Header);
+        _banner = Wrapping(new Label { X = 0, Y = Pos.Bottom(_header) });
+        _message = Wrapping(new Label { X = 0, Y = Pos.AnchorEnd() - 1 });
+        _content = new FrameView { X = 0, Y = Pos.Bottom(_banner), Width = Dim.Fill(), Height = Dim.Fill(_message) };
+        Theme.SetFrame(_content);
+        Window.Add(StopButton, _stopResult, _header, _banner, _content, _message, CreateKeyBar());
 
         _pages =
         [
@@ -72,6 +95,36 @@ internal sealed class RoofTerminalUi : IDisposable
     }
 
     public Window Window { get; }
+
+    /// <summary>HVO Dark, or with <c>NO_COLOR</c> set, the same interface without colour.</summary>
+    public RoofUiTheme Theme { get; }
+
+    // A line of text as wide as the window, which takes as many rows as its text needs (at least one).
+    private static Label Wrapping(Label label)
+    {
+        label.Width = Dim.Fill();
+        label.Height = Dim.Auto(DimAutoStyle.Text, minimumContentDim: 1);
+        label.TextFormatter.WordWrap = true;
+        return label;
+    }
+
+    /// <summary>The key bar: each key in the accent colour, and what it does, on the navigation bar's grey.</summary>
+    private View CreateKeyBar()
+    {
+        var bar = new View { X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
+        bar.SetScheme(Theme.KeyName);
+        View? previous = null;
+        foreach (var (key, name) in Keys)
+        {
+            var keyLabel = new Label { Text = key, X = previous is null ? 0 : Pos.Right(previous) + 2, Y = 0 };
+            keyLabel.SetScheme(Theme.Key);
+            var nameLabel = new Label { Text = name, X = Pos.Right(keyLabel) + 1, Y = 0 };
+            bar.Add(keyLabel, nameLabel);
+            previous = nameLabel;
+        }
+
+        return bar;
+    }
 
     public Button StopButton { get; }
 
@@ -96,6 +149,12 @@ internal sealed class RoofTerminalUi : IDisposable
 
     /// <summary>True while this interface renews the lease of a motion it started.</summary>
     public bool HoldsLease => _leaseTicks >= 0;
+
+    /// <summary>True while a motion started here is under way: quitting sends Stop first.</summary>
+    public bool FollowsMotion => (_startedMotion || HoldsLease) && Status is { IsMoving: true };
+
+    /// <summary>True while a Stop sent from here has not been answered.</summary>
+    public bool StopInFlight => _stopsInFlight > 0;
 
     /// <summary>Requests still on their way (tests wait for none).</summary>
     public int PendingOperations => Volatile.Read(ref _pending);
@@ -198,22 +257,25 @@ internal sealed class RoofTerminalUi : IDisposable
     /// <summary>
     /// Sends Stop at once, on its own request: it never waits for another command, and nothing disables it.
     /// </summary>
-    public void Stop() => Stop(then: null);
-
-    private void Stop(Action? then)
+    public void Stop()
     {
         // Stop ends this interface's hold on a motion: the lease is no longer renewed.
         _leaseTicks = -1;
-        _stopResult.Text = RoofStopText.Sending;
+        _startedMotion = false;
+        ShowStopResult(RoofStopOutcome.Sent, RoofStopText.Sending);
         if (_client is not { } client)
         {
-            _stopResult.Text = RoofStopText.Failed("No controller address is configured.");
-            then?.Invoke();
+            ShowStopResult(RoofStopOutcome.Failed, RoofStopText.Failed("No controller address is configured."));
+            QuitIfAsked();
             return;
         }
 
+        // Until it is answered, a termination signal does not end the process (RoofCliTermination), closing the interface
+        // waits for it, and the client it uses is not disposed.
+        var hold = _context.Host.Termination?.Hold();
+        _stopsInFlight++;
         Interlocked.Increment(ref _pending);
-        _ = Task.Run(async () =>
+        var stop = Task.Run(async () =>
         {
             RoofStopResult result;
             try
@@ -229,35 +291,63 @@ internal sealed class RoofTerminalUi : IDisposable
             {
                 Post(() =>
                 {
-                    _stopResult.Text = result.Message;
+                    _stopsInFlight--;
+                    ShowStopResult(result.Outcome, result.Message);
                     if (result.Status is { } status)
                     {
                         Apply(status);
                     }
 
-                    then?.Invoke();
+                    QuitIfAsked();
                 });
             }
             finally
             {
+                hold?.Dispose();
                 Interlocked.Decrement(ref _pending);
             }
         });
+        _stops = Task.WhenAll(_stops, stop);
     }
 
-    /// <summary>Closes the interface. A motion this interface holds the lease for is stopped first, as Ctrl+C does for 'open'.</summary>
+    /// <summary>
+    /// Closes the interface. A motion started here is stopped first, as Ctrl+C does for 'open', and a Stop still on its
+    /// way is answered before the interface closes.
+    /// </summary>
     public void Quit()
     {
         QuitRequested = true;
-        if (HoldsLease && Status is { IsMoving: true })
+        if (FollowsMotion)
         {
-            Say("Stopping the roof, which moves on this interface's lease, before closing.");
-            Stop(then: () => _app.RequestStop());
+            Say("Stopping the roof, which moves on a command from this interface, before closing.");
+            _quitAfterStop = true;
+            Stop();
+            return;
+        }
+
+        if (StopInFlight)
+        {
+            Say("Waiting for Stop to be answered before closing.");
+            _quitAfterStop = true;
             return;
         }
 
         _app.RequestStop();
     }
+
+    /// <summary>Closes the interface when F10 (or a termination signal) waited for the Stops sent from here.</summary>
+    private void QuitIfAsked()
+    {
+        if (_quitAfterStop && _stopsInFlight == 0)
+        {
+            _app.RequestStop();
+        }
+    }
+
+    /// <summary>How long closing waits for a Stop still on its way: the Stop timeout and a margin.</summary>
+    private TimeSpan StopWait => (_client?.Options.StopTimeout ?? DefaultStopTimeout) + TimeSpan.FromSeconds(2);
+
+    private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Runs <paramref name="work"/> off the interface's thread with the current client. A failure is shown on the
@@ -326,7 +416,13 @@ internal sealed class RoofTerminalUi : IDisposable
     public void Say(string text, bool error = false)
     {
         _message.Text = text;
-        _message.SchemeName = error ? "Error" : null;
+        _message.SetScheme(error ? Theme.Danger : Theme.Base);
+    }
+
+    private void ShowStopResult(RoofStopOutcome outcome, string text)
+    {
+        _stopResult.Text = text;
+        _stopResult.SetScheme(Theme.ForStop(outcome));
     }
 
     public void ShowError(Exception error)
@@ -345,24 +441,33 @@ internal sealed class RoofTerminalUi : IDisposable
         }
 
         Status = status;
+        _statusTakenAt = _context.Host.Time.GetUtcNow();
         if (!status.IsMoving)
         {
             _leaseTicks = -1;
+            _startedMotion = false;
         }
 
+        // A status read over REST while the hub is not delivering is stale at once.
+        UpdateFeedState();
         _page?.StatusChanged();
     }
 
     /// <summary>
-    /// After Open or Close was accepted here: renews the operator lease while the roof moves, as 'hvo-roof open' does.
+    /// After Open or Close was accepted here: follows the motion, so quitting sends Stop first, and renews the operator
+    /// lease while the roof moves, as 'hvo-roof open' does.
     /// </summary>
-    public void HoldLease(RoofStatusResponse status) => _leaseTicks = NextRenewal(status);
+    public void HoldLease(RoofStatusResponse status)
+    {
+        _startedMotion = status.IsMoving;
+        _leaseTicks = NextRenewal(status);
+    }
 
     /// <summary>Shows a prompt over the page. Esc (or Cancel) closes it; F9 still sends Stop.</summary>
     public void Ask(RoofUiPrompt prompt)
     {
         ClosePanel();
-        var panel = new RoofUiPanel(prompt, closing =>
+        var panel = new RoofUiPanel(prompt, Theme, closing =>
         {
             // An action that opened another prompt has already replaced this one.
             if (ReferenceEquals(_panel, closing))
@@ -515,6 +620,10 @@ internal sealed class RoofTerminalUi : IDisposable
             ? Math.Max(1, (int)Math.Floor(delay.TotalSeconds))
             : -1;
 
+    // Spaced from the frame: Terminal.Gui makes a link of an address up to the next space, so the frame line after an
+    // address with no space would be part of its link.
+    internal static string WindowTitle(Uri? controller) => controller is null ? " HVO roof " : $" HVO roof: {controller} ";
+
     private void UpdateHeader()
     {
         if (Connection is not { } connection)
@@ -526,7 +635,7 @@ internal sealed class RoofTerminalUi : IDisposable
         var who = Caller is { } caller
             ? $"{caller.Name} ({RoofCliFormat.Role(caller.Role)}{(caller.Kind == RoofCredentialKind.ApiKey ? ", API key" : string.Empty)})"
             : connection.Credential is null ? "no credential: sign in on Setup (F5)" : "checking the credential…";
-        Window.Title = $"HVO roof: {connection.Controller}";
+        Window.Title = WindowTitle(connection.Controller);
         _header.Text = $"{who} · status {DescribeFeed()}";
     }
 
@@ -536,33 +645,50 @@ internal sealed class RoofTerminalUi : IDisposable
         {
             StaleSince = null;
             _banner.Text = Connection is null ? "No controller is configured: use Setup (F5)." : string.Empty;
+            _banner.SetScheme(Connection is null ? Theme.Warning : Theme.Base);
             return;
         }
 
         var wasStale = IsStale;
-        StaleSince = Status is null ? null : feed.StaleSince;
         if (Status is null)
         {
+            StaleSince = null;
             _banner.Text = feed.State == RoofStatusFeedState.Unauthorized
                 ? "No status: the controller refused the credential. Sign in on Setup (F5)."
                 : "No status from the controller yet.";
         }
-        else if (StaleSince is { } since)
+        else if (feed.StaleSince is { } since)
         {
+            StaleSince = since;
             _banner.Text = $"STALE: no status since {RoofCliFormat.Time(since)}. Showing the last known state; Stop still works.";
+        }
+        else if (!IsLive(feed))
+        {
+            // The hub has not delivered a status: the one shown is a single read over REST (Refresh, or the answer to a
+            // command), and nothing says it is still current.
+            var read = _statusTakenAt ?? _context.Host.Time.GetUtcNow();
+            StaleSince = read;
+            _banner.Text = $"STALE: status from a single read at {RoofCliFormat.Time(read)}; live status is not connected. Stop still works.";
         }
         else
         {
+            StaleSince = null;
             _banner.Text = string.Empty;
         }
 
-        _banner.SchemeName = IsStale ? "Error" : null;
+        _banner.SetScheme(_banner.Text.Length == 0 ? Theme.Base
+            : feed.State == RoofStatusFeedState.Unauthorized ? Theme.Danger
+            : Theme.Warning);
         UpdateHeader();
         if (wasStale != IsStale)
         {
             _page?.StatusChanged();
         }
     }
+
+    /// <summary>True while the hub delivers the status: connected, with a status that is not stale.</summary>
+    private static bool IsLive(RoofStatusFeed feed)
+        => feed.State == RoofStatusFeedState.Connected && feed.Status is not null && !feed.IsStale;
 
     private string DescribeFeed() => _feed?.State switch
     {
@@ -578,8 +704,11 @@ internal sealed class RoofTerminalUi : IDisposable
     private void Disconnect()
     {
         _leaseTicks = -1;
+        _startedMotion = false;
         var feed = _feed;
         var client = _client;
+        var stops = _stops;
+        var wait = StopWait;
         _feed = null;
         _client = null;
         if (feed is not null || client is not null)
@@ -591,6 +720,8 @@ internal sealed class RoofTerminalUi : IDisposable
                     await feed.DisposeAsync().ConfigureAwait(false);
                 }
 
+                // Disposing the client would cancel a Stop still on its way.
+                await Task.WhenAny(stops, Task.Delay(wait)).ConfigureAwait(false);
                 client?.Dispose();
             });
         }
@@ -611,6 +742,9 @@ internal sealed class RoofTerminalUi : IDisposable
         }
 
         _closing.Cancel();
+
+        // A Stop still on its way is answered first: disposing the client would cancel it.
+        Task.WaitAny([_stops], StopWait);
         var feed = _feed;
         var client = _client;
         _feed = null;

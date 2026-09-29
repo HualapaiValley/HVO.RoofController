@@ -9,12 +9,14 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// </summary>
 internal sealed class RoofUiPanel : FrameView
 {
+    private readonly RoofUiTheme _theme;
     private readonly Action<RoofUiPanel> _close;
     private readonly List<Button> _buttons = [];
     private readonly Label _error;
 
-    public RoofUiPanel(RoofUiPrompt prompt, Action<RoofUiPanel> close)
+    public RoofUiPanel(RoofUiPrompt prompt, RoofUiTheme theme, Action<RoofUiPanel> close)
     {
+        _theme = theme;
         _close = close;
         Prompt = prompt;
         Title = prompt.Title;
@@ -22,6 +24,8 @@ internal sealed class RoofUiPanel : FrameView
         Y = Pos.Center();
         Width = Dim.Percent(90);
         Height = Dim.Auto(DimAutoStyle.Content);
+        SetScheme(theme.Panel);
+        theme.SetFrame(this, theme.PanelFrame);
 
         var message = new Label { Text = prompt.Message, X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Text) };
         Add(message);
@@ -46,7 +50,8 @@ internal sealed class RoofUiPanel : FrameView
         }
 
         Fields = fields;
-        _error = new Label { X = 0, Y = Pos.Bottom(previous) + 1, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Text), SchemeName = "Error" };
+        _error = new Label { X = 0, Y = Pos.Bottom(previous) + 1, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Text) };
+        _error.SetScheme(theme.PanelError);
         Add(_error);
 
         View? left = null;
@@ -95,7 +100,7 @@ internal sealed class RoofUiPanel : FrameView
 
     private Button AddButton(string text, View? left, Action run)
     {
-        var button = new Button { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = Pos.Bottom(_error) + 1 };
+        var button = _theme.Styled(new Button { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = Pos.Bottom(_error) + 1 });
         button.Accepting += (_, e) =>
         {
             e.Handled = true;

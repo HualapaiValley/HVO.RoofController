@@ -138,6 +138,9 @@ public static partial class RoofCli
             };
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
+                // A broken HVO_ROOF_* variable would override what setup saves: it is refused (exit 3) before anything
+                // is asked or written.
+                _ = RoofCredentialStore.FromEnvironment(context.Host.GetEnvironmentVariable);
                 var setup = new RoofCliSetup(context);
                 var adminName = parseResult.GetValue(createAdmin) is { } requested ? RequireName(requested) : null;
                 var saved = setup.Prompt(parseResult.GetValue(pin), parseResult.GetValue(apiKey));
@@ -462,9 +465,22 @@ internal sealed class RoofCliSetup(RoofCliContext context)
 
     /// <summary>Says so when a credential in the environment is used instead of the saved one; null otherwise.</summary>
     public static string? EnvironmentNote(RoofCliContext context)
-        => RoofCredentialStore.FromEnvironment(context.Host.GetEnvironmentVariable)?.ToCredential() is not null
+    {
+        RoofStoredCredentials? environment;
+        try
+        {
+            environment = RoofCredentialStore.FromEnvironment(context.Host.GetEnvironmentVariable);
+        }
+        catch (RoofCredentialFileException)
+        {
+            // Reported by the command that uses the environment; a note never fails the command.
+            return null;
+        }
+
+        return environment?.ToCredential() is not null
             ? $"Note: {RoofCredentialStore.ApiKeyVariable} or {RoofCredentialStore.SessionVariable} is set, and commands use it instead of the saved credential."
             : null;
+    }
 
     /// <summary>An http or https address, as <c>--controller</c> takes it.</summary>
     internal static Uri ParseController(string text)

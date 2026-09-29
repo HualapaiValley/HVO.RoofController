@@ -273,13 +273,19 @@ public static partial class RoofCli
                     field.Label,
                     From = field.DisplayValue,
                     To = field.Setting.Secret
-                        ? (edit.Changes[field.Key].ValueKind == JsonValueKind.Null ? RoofSettingValues.SecretNotSet : RoofSettingValues.SecretSet)
+                        ? (edit.Changes[field.Key].ValueKind == JsonValueKind.Null ? RoofSettingValues.SecretNotSet : RoofSettingValues.SecretNewValue)
                         : RoofSettingValues.Describe(field.Setting, edit.Changes[field.Key]),
                     SafetyCritical = field.NeedsConfirmation(edit.Changes[field.Key]),
                     field.Setting.AppliesAfterRestart,
-                    LocalOnly = field.NeedsLocalCredential
+                    LocalOnly = field.NeedsLocalCredential,
+                    field.Setting.Secret
                 })
-                .Where(change => change.From != change.To || change.SafetyCritical)
+
+                // A secret sent is always a change, as the controller counts it (its value is never shown, so the text
+                // cannot tell), unless it clears a secret that is not set.
+                .Where(change => change.Secret
+                    ? change.From != RoofSettingValues.SecretNotSet || change.To != RoofSettingValues.SecretNotSet
+                    : change.From != change.To || change.SafetyCritical)
                 .ToArray();
 
             if (!edit.HasChanges || changes.Length == 0)

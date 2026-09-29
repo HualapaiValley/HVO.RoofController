@@ -167,10 +167,13 @@ jobs:
           bash -n tests/emulator/compose-smoke-test.sh
           bash -n tests/emulator/deploy-scenarios.sh
           bash -n tests/cli/terminal-smoke.sh
-          python3 -m py_compile tests/cli/ansi-to-svg.py
+          python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh
+
+      - name: Screenshot converter tests
+        run: python3 -m unittest discover -s tests/cli -p 'test_*.py' -v
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh

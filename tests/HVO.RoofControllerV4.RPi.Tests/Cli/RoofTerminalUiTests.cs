@@ -13,9 +13,13 @@ using HVO.Core.Results;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Terminal.Gui.App;
+using Terminal.Gui.Drawing;
+using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
+using Terminal.Gui.Time;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+using TuiAttribute = Terminal.Gui.Drawing.Attribute;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
@@ -104,6 +108,8 @@ public sealed class RoofTerminalUiTests
 
         tui.Ui.StopResult.Should().Be(RoofStopText.Failed("No controller address is configured."));
         tui.Ui.StopButton.Enabled.Should().BeTrue();
+        ShouldHaveColours(tui.ColoursOf("No controller is configured"), RoofUiPalette.WarningText, RoofUiPalette.WarningBackground);
+        ShouldHaveColours(tui.ColoursOf(tui.Ui.StopResult[..30]), RoofUiPalette.DangerText, RoofUiPalette.Background);
     }
 
     [TestMethod]
@@ -119,7 +125,145 @@ public sealed class RoofTerminalUiTests
         tui.WaitIdle("the Stop answer", () => tui.Ui.StopResult != RoofStopText.Sending);
 
         tui.Ui.StopResult.Should().Be(RoofStopText.KeyRefused);
+        ShouldHaveColours(tui.ColoursOf(RoofStopText.KeyRefused[..30]), RoofUiPalette.DangerText, RoofUiPalette.Background, "a refused Stop is an error");
+        ShouldHaveColours(tui.ColoursOf("No status: the controller refused"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    // ---- Colours -----------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void TheScreen_IsDrawnInTheWebConsolesColours()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+
+        ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop is the web console's yellow button");
+        tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Bold);
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open is green, as on the web console");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close is red, as on the web console (disabled while the roof is closed)");
+        ShouldHaveColours(tui.ColoursOf(RoofStopText.AlwaysAvailable), RoofUiPalette.Text, RoofUiPalette.Background);
+        ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Background, "the page is HVO Dark's");
+        ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web console's navigation bar");
+        ShouldHaveColours(tui.ColoursOf("F10"), RoofUiPalette.Accent, RoofUiPalette.Badge, "a key is in the accent colour");
+        ShouldHaveColours(tui.ColoursOf("Quit"), RoofUiPalette.Muted, RoofUiPalette.Badge);
+
+        // The address is readable: a window's title has its frame's colour.
+        tui.Ui.Window.Title.Should().Be(RoofTerminalUi.WindowTitle(tui.Ui.Connection!.Controller));
+        ShouldHaveColours(tui.ColoursOf($"HVO roof: {tui.Ui.Connection.Controller} "), RoofUiPalette.Muted, RoofUiPalette.Background);
+
+        tui.Press(Key.F9);
+        tui.WaitIdle("the Stop answer", () => tui.Ui.StopResult != RoofStopText.Sending);
+        ShouldHaveColours(tui.ColoursOf(RoofStopText.AcknowledgedVerified), RoofUiPalette.SuccessText, RoofUiPalette.Background);
+    }
+
+    [TestMethod]
+    public void OnAnEightyColumnTerminal_TheStopResultTheBannerAndTheMessage_AreShownInFull()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(WrongKey);
+        using var tui = new TuiDriver(rig, width: 80, height: 24);
+        tui.WaitIdle("the refusal", () => tui.Ui.IsStale && tui.Ui.PendingOperations == 0);
+
+        tui.Press(Key.F9);
+        tui.WaitIdle("the Stop answer", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Ui.Say("SAFETY: The roof stopped short of the open limit. Check the drive before you open it again.", error: true);
+
+        var screen = Unwrapped(tui.Screen);
+        screen.Should().Contain(RoofStopText.KeyRefused, "a Stop result is never cut short");
+        screen.Should().Contain("No status: the controller refused the credential. Sign in on Setup (F5).");
+        screen.Should().Contain("SAFETY: The roof stopped short of the open limit. Check the drive before you open it again.");
+        tui.Screen.TrimEnd('\n').Split('\n')[^2].Should().Contain(RoofTerminalUi.KeyBar, "the key bar is still on the last row");
+    }
+
+    [TestMethod]
+    public void TheWindowTitle_EndsTheAddressWithASpace()
+    {
+        // Terminal.Gui links an address up to the next space: the frame line after the title must not be part of it.
+        RoofTerminalUi.WindowTitle(new Uri("https://roof.example.org:5001/")).Should().Be(" HVO roof: https://roof.example.org:5001/ ");
+        RoofTerminalUi.WindowTitle(null).Should().Be(" HVO roof ");
+    }
+
+    [TestMethod]
+    [DataRow(RoofStopOutcome.Sent, RoofUiPalette.InfoText)]
+    [DataRow(RoofStopOutcome.Acknowledged, RoofUiPalette.SuccessText)]
+    [DataRow(RoofStopOutcome.RelayUnverified, RoofUiPalette.WarningText)]
+    [DataRow(RoofStopOutcome.Failed, RoofUiPalette.DangerText)]
+    public void EachStopResult_HasTheWebConsolesColourForIt(RoofStopOutcome outcome, string colour)
+        => ShouldHaveColours(RoofUiTheme.HvoDark.ForStop(outcome).Normal, colour, RoofUiPalette.Background);
+
+    [TestMethod]
+    public void WithNoColorSet_NothingIsDrawnInColour_AndStopAndTheFocusStillShow()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        rig.Environment["NO_COLOR"] = "1";
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+
+        tui.Ui.Theme.Should().BeSameAs(RoofUiTheme.NoColour);
+        tui.DrawnAttributes().Should().OnlyContain(drawn => drawn.Foreground == Color.None && drawn.Background == Color.None,
+            "NO_COLOR asks for the terminal's own colours: Terminal.Gui alone would draw 16");
+        tui.Ui.StopButton.ShadowStyle.Should().Be(ShadowStyles.None, "Terminal.Gui draws a shadow in black");
+        page.OpenButton.ShadowStyle.Should().Be(ShadowStyles.None);
+
+        tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Reverse, "Stop stands out without its yellow");
+        tui.ColoursOf(" Open ").Style.Should().HaveFlag(TextStyle.Bold).And.NotHaveFlag(TextStyle.Reverse);
+        tui.ColoursOf(" Close ").Style.Should().HaveFlag(TextStyle.Faint, "Close is disabled while the roof is closed");
+
+        var focused = tui.Ui.Window.MostFocused;
+        focused.Should().NotBeNull();
+        tui.ColoursAt(focused!).Style.Should().HaveFlag(TextStyle.Reverse, "the focus shows without the accent blue");
+        tui.Press(Key.Tab);
+        tui.Ui.Window.MostFocused.Should().NotBeSameAs(focused);
+        tui.ColoursAt(focused!).Style.Should().NotHaveFlag(TextStyle.Reverse);
+        tui.ColoursAt(tui.Ui.Window.MostFocused!).Style.Should().HaveFlag(TextStyle.Reverse);
+    }
+
+    [TestMethod]
+    [DataRow(null, false)]
+    [DataRow("", false)]
+    [DataRow("1", true)]
+    [DataRow("0", true)]
+    [DataRow("false", true)]
+    public void NoColor_TurnsTheColoursOff_WhenItIsSetAndNotEmpty(string? value, bool noColour)
+        => RoofUiTheme.For(name => name == "NO_COLOR" ? value : null).Should().BeSameAs(noColour ? RoofUiTheme.NoColour : RoofUiTheme.HvoDark,
+            "no-color.org: set to any value but the empty string");
+
+    [TestMethod]
+    public void TheNoColourTheme_HasNoColourInAnyScheme_AndStillMarksStopTheFocusAndTheWarnings()
+    {
+        var theme = RoofUiTheme.NoColour;
+        Scheme[] schemes =
+        [
+            theme.Base, theme.Frame, theme.WindowFrame, theme.Header, theme.Key, theme.KeyName, theme.Stop, theme.Open, theme.Close,
+            theme.Warning, theme.Danger, theme.Panel, theme.PanelFrame, theme.PanelError,
+            .. Enum.GetValues<RoofStopOutcome>().Select(theme.ForStop)
+        ];
+        VisualRole[] roles = [VisualRole.Normal, VisualRole.HotNormal, VisualRole.Focus, VisualRole.HotFocus, VisualRole.Active,
+            VisualRole.HotActive, VisualRole.Highlight, VisualRole.Editable, VisualRole.ReadOnly, VisualRole.Disabled];
+        foreach (var scheme in schemes)
+        {
+            foreach (var role in roles)
+            {
+                var drawn = scheme.GetAttributeForRole(role);
+                drawn.Foreground.Should().Be(Color.None, $"{role} has no colour");
+                drawn.Background.Should().Be(Color.None, $"{role} has no colour");
+            }
+        }
+
+        theme.Stop.Normal.Style.Should().HaveFlag(TextStyle.Reverse);
+        theme.Stop.Focus.Style.Should().NotBe(theme.Stop.Normal.Style, "the focus shows on Stop too");
+        theme.Base.Focus.Style.Should().HaveFlag(TextStyle.Reverse);
+        theme.Base.Editable.Style.Should().HaveFlag(TextStyle.Underline, "an input field shows where it is");
+        theme.Warning.Normal.Style.Should().HaveFlag(TextStyle.Reverse);
+        theme.Danger.Normal.Style.Should().HaveFlag(TextStyle.Reverse);
+        theme.ForStop(RoofStopOutcome.Failed).Normal.Style.Should().HaveFlag(TextStyle.Reverse);
     }
 
     // ---- Keys --------------------------------------------------------------------------------------------------------
@@ -159,6 +303,98 @@ public sealed class RoofTerminalUiTests
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
     }
 
+    [TestMethod]
+    public void F10_WhileAStopIsOnItsWay_WaitsForItsAnswer_ThenCloses()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host) { WrapHandler = inner => new GatedHandler(inner, "/RoofControl/Stop", answer.Task) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = new TuiDriver(rig);
+        tui.WaitIdle("the caller", () => tui.Ui.Caller is not null);
+
+        tui.Press(Key.F9);
+        tui.Press(Key.F10);
+
+        tui.Ui.QuitRequested.Should().BeTrue();
+        tui.Ui.Message.Should().Be("Waiting for Stop to be answered before closing.");
+        tui.Ui.StopInFlight.Should().BeTrue();
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeFalse("closing now would cancel the Stop");
+
+        answer.SetResult();
+        tui.WaitIdle("the Stop's answer", () => !tui.Ui.StopInFlight);
+
+        tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeTrue("the Stop was answered");
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
+    public void Closing_WithAStopOnItsWay_DeliversTheStopFirst()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host) { WrapHandler = inner => new GatedHandler(inner, "/RoofControl/Stop", answer.Task) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        var tui = new TuiDriver(rig);
+        try
+        {
+            tui.WaitIdle("the caller", () => tui.Ui.Caller is not null);
+            tui.Press(Key.F9);
+            tui.Ui.StopInFlight.Should().BeTrue();
+
+            // The Stop gets through while the interface closes.
+            _ = Task.Delay(TimeSpan.FromMilliseconds(200)).ContinueWith(_ => answer.TrySetResult(), TaskScheduler.Default);
+        }
+        finally
+        {
+            tui.Dispose();
+        }
+
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
+    public void Ui_OnATerminationSignal_ClosesTheInterface_AndExitsInterrupted()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var signal = new CancellationTokenSource();
+        var closed = false;
+        using var rig = new CliRig(host)
+        {
+            Interactive = true,
+            CreateApplication = () =>
+            {
+                var app = Application.Create(new VirtualTimeProvider());
+                app.Init(DriverRegistry.Names.ANSI);
+                app.Driver!.SetScreenSize(120, 36);
+                return app;
+            },
+            RunApplication = (app, window) =>
+            {
+                var session = app.Begin(window);
+                signal.Cancel();
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                while (!window.StopRequested && DateTime.UtcNow < deadline)
+                {
+                    app.TimedEvents!.RunTimers();
+                    Thread.Sleep(10);
+                }
+
+                closed = window.StopRequested;
+                app.End(session!);
+            }
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var code = RoofCli.RunAsync(["ui", "--credentials-file", rig.CredentialsPath], rig.CreateHost(output, error), signal.Token).GetAwaiter().GetResult();
+
+        code.Should().Be((int)RoofExitCode.Interrupted, error.ToString());
+        closed.Should().BeTrue("a termination signal closes the interface as F10 does");
+    }
+
     // ---- Staleness ---------------------------------------------------------------------------------------------------
 
     [TestMethod]
@@ -179,6 +415,7 @@ public sealed class RoofTerminalUiTests
 
         var screen = tui.Screen;
         screen.Should().Contain("STALE: no status since 2026-03-01");
+        ShouldHaveColours(tui.ColoursOf("STALE: no status since"), RoofUiPalette.WarningText, RoofUiPalette.WarningBackground, "a stale status is a warning");
         screen.Should().Contain("Showing the last known state; Stop still works.");
         screen.Should().Contain("status STALE");
         page.Describe().Should().StartWith("LAST KNOWN STATE, as of ");
@@ -195,6 +432,31 @@ public sealed class RoofTerminalUiTests
         tui.Screen.Should().NotContain("STALE");
         page.Describe().Should().StartWith("Status at ");
         page.OpenButton.Enabled.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void WithoutLiveStatus_ARefreshedStatus_IsStale_AndMotionIsNotOffered_ButStopIs()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host) { WrapHandler = inner => new UnreachableHandler(inner, null, RoofStatusHubContract.Path) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = new TuiDriver(rig);
+        tui.WaitIdle("the caller", () => tui.Ui.Caller is not null);
+        tui.Ui.Status.Should().BeNull("the status hub cannot be reached");
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+
+        Click(tui, "Refresh");
+        tui.WaitIdle("the status read", () => tui.Ui.Status is not null);
+
+        tui.Ui.IsStale.Should().BeTrue("a single read says nothing about the roof since");
+        tui.Ui.StaleSince.Should().NotBeNull();
+        Unwrapped(tui.Screen).Should().Contain("STALE: status from a single read at ")
+            .And.Contain("; live status is not connected. Stop still works.");
+        ShouldHaveColours(tui.ColoursOf("STALE: status from a single read"), RoofUiPalette.WarningText, RoofUiPalette.WarningBackground);
+        page.Describe().Should().StartWith("LAST KNOWN STATE, as of ");
+        page.OpenButton.Enabled.Should().BeFalse();
+        page.BlockReason(RoofMotionDirection.Opening).Should().Be("the status is stale, so the roof cannot be watched");
+        tui.Ui.StopButton.Enabled.Should().BeTrue();
     }
 
     [TestMethod]
@@ -275,7 +537,7 @@ public sealed class RoofTerminalUiTests
         tui.WaitIdle("Stop before quitting", () => tui.Ui.StopResult != RoofStopText.Sending);
 
         tui.Ui.QuitRequested.Should().BeTrue();
-        tui.Ui.Message.Should().Be("Stopping the roof, which moves on this interface's lease, before closing.");
+        tui.Ui.Message.Should().Be("Stopping the roof, which moves on a command from this interface, before closing.");
         tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
         roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
         tui.Ui.HoldsLease.Should().BeFalse();
@@ -305,6 +567,41 @@ public sealed class RoofTerminalUiTests
 
         tui.Ui.HoldsLease.Should().BeFalse();
         roof.Verify(service => service.RenewLease(), Times.Never());
+    }
+
+    [TestMethod]
+    public void Open_WithNoLease_SaysF9OrQuittingStopsIt_AndF10StopsTheRoofBeforeClosing()
+    {
+        var moving = false;
+        var roof = RoofServiceMock.Create();
+        roof.Setup(service => service.GetCurrentStatusSnapshot()).Returns(() => Volatile.Read(ref moving)
+            ? RoofServiceMock.Snapshot(RoofControllerStatus.Opening, RoofMotionDirection.Opening) with { LeaseSecondsRemaining = null }
+            : RoofServiceMock.Snapshot());
+        roof.Setup(service => service.Open()).Returns(() =>
+        {
+            Volatile.Write(ref moving, true);
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening);
+        });
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+
+        page.OpenButton.InvokeCommand(Command.Accept);
+        tui.WaitIdle("Open", () => tui.Ui.Message.StartsWith("Open accepted", StringComparison.Ordinal));
+
+        tui.Ui.Message.Should().Be("Open accepted. F9 or quitting stops it.");
+        tui.Ui.HoldsLease.Should().BeFalse("the controller holds this motion on no lease");
+        tui.Ui.FollowsMotion.Should().BeTrue();
+
+        tui.Press(Key.F10);
+        tui.WaitIdle("Stop before quitting", () => !tui.Ui.StopInFlight && tui.Ui.StopResult != RoofStopText.Sending);
+
+        tui.Ui.Message.Should().Be("Stopping the roof, which moves on a command from this interface, before closing.");
+        tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
+        roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeTrue("the interface closes once the Stop is answered");
     }
 
     [TestMethod]
@@ -456,6 +753,58 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void People_SettingAPassword_KeepsARoleChangedElsewhere()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        RoofClientApiTests.AddUserAsync(host, "grace", RoofControllerApiContract.OperatorRole).GetAwaiter().GetResult();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        tui.Press(Key.F3);
+        tui.WaitIdle("the lists");
+        var people = (RoofUiPeoplePage)tui.Ui.CurrentPage;
+        people.Describe().Should().MatchRegex("grace +operator");
+
+        // Another admin makes grace an admin after the list was read.
+        OffTheLoop(async () =>
+        {
+            using var other = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+            await other.Identity.UpdateUserAsync("grace", new RoofUserUpdateRequest { Role = RoofControllerApiContract.AdminRole });
+        });
+
+        people.Select("grace");
+        Click(tui, "Password");
+        Fill(tui, TestSecrets.OtherPassword, TestSecrets.OtherPassword);
+        tui.Ui.Panel!.Press("Set");
+        tui.WaitIdle("the change", () => tui.Ui.Message == "Set the password of grace.");
+
+        UserRole(host, "grace").Should().Be(RoofControllerApiContract.AdminRole, "the list's out-of-date role is not sent back");
+        people.Describe().Should().MatchRegex("grace +admin");
+    }
+
+    [TestMethod]
+    public void People_Role_ChangesTheRole()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        RoofClientApiTests.AddUserAsync(host, "grace", RoofControllerApiContract.OperatorRole).GetAwaiter().GetResult();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        tui.Press(Key.F3);
+        tui.WaitIdle("the lists");
+        var people = (RoofUiPeoplePage)tui.Ui.CurrentPage;
+
+        people.Select("grace");
+        Click(tui, "Role");
+        Fill(tui, "viewer");
+        tui.Ui.Panel!.Press("Change");
+        tui.WaitIdle("the change", () => tui.Ui.Message == "grace is now viewer.");
+
+        UserRole(host, "grace").Should().Be(RoofControllerApiContract.ViewerRole);
+        people.Describe().Should().MatchRegex("grace +viewer");
+    }
+
+    [TestMethod]
     public void People_ForAnOperator_SaysTheAdminRoleIsNeeded()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -590,6 +939,34 @@ public sealed class RoofTerminalUiTests
     }
 
     // ---- Helpers -----------------------------------------------------------------------------------------------------
+
+    // The screen's words in order, without frame lines, button shadows or line ends, so wrapped text reads as one line.
+    private static string Unwrapped(string screen)
+        => string.Join(' ', screen.Split([' ', '\n', '│', '▖', '▘', '▝', '▀'], StringSplitOptions.RemoveEmptyEntries));
+
+    private static void ShouldHaveColours(TuiAttribute drawn, string foreground, string background, string because = "")
+    {
+        drawn.Foreground.Should().Be(new Color(foreground), because);
+        drawn.Background.Should().Be(new Color(background), because);
+    }
+
+    /// <summary>The role the controller has for <paramref name="name"/>.</summary>
+    private static string UserRole(RoofApiTestHost host, string name)
+    {
+        string role = string.Empty;
+        OffTheLoop(async () =>
+        {
+            using var admin = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+            role = (await admin.Identity.GetUserAsync(name)).Role;
+        });
+        return role;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="call"/> to the end on the thread pool: the test's thread is the interface's loop, whose
+    /// synchronization context runs a continuation only when the loop is pumped, so waiting there would never end.
+    /// </summary>
+    private static void OffTheLoop(Func<Task> call) => Task.Run(call).GetAwaiter().GetResult();
 
     /// <summary>The interface with its first status and the caller known.</summary>
     private static TuiDriver Started(CliRig rig)

@@ -676,7 +676,7 @@ public sealed class RoofCliConfigCommandTests
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         rig.Prompts.Should().Equal([("Password: ", true)]);
-        result.Out.Should().Contain($"({CameraPassword}): (not set) -> (set)").And.Contain("Saved (settings version 2).");
+        result.Out.Should().Contain($"({CameraPassword}): (not set) -> (new value)").And.Contain("Saved (settings version 2).");
         result.ToString().Should().NotContain(CameraSecret);
         var after = await rig.RunAsync("config", "get", CameraPassword);
         Row(after.Out, "Value").Should().Be("(set)");
@@ -752,6 +752,41 @@ public sealed class RoofCliConfigCommandTests
     }
 
     [TestMethod]
+    [DataRow(false, DisplayName = "text")]
+    [DataRow(true, DisplayName = "--json")]
+    public async Task SetSecret_OverASecretThatIsSet_IsSentAndReplacesIt(bool json)
+    {
+        const string rotated = "test-camera-password-rotated-45";
+        using var controller = new ControllerWithFiles();
+        using var rig = new CliRig(controller.Host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Input.Enqueue(CameraSecret);
+        (await rig.RunAsync("config", "set-secret", CameraPassword)).Code.Should().Be(RoofExitCode.Success);
+        rig.Input.Enqueue(rotated);
+
+        var result = json
+            ? await rig.RunAsync("config", "set-secret", CameraPassword, "--json")
+            : await rig.RunAsync("config", "set-secret", CameraPassword);
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        if (json)
+        {
+            result.Json.GetProperty("sent").GetBoolean().Should().BeTrue();
+            result.Json.GetProperty("version").GetInt64().Should().Be(3);
+            var change = result.Json.GetProperty("changes").EnumerateArray().Should().ContainSingle().Which;
+            change.GetProperty("from").GetString().Should().Be("(set)");
+            change.GetProperty("to").GetString().Should().Be("(new value)");
+        }
+        else
+        {
+            result.Out.Should().Contain($"({CameraPassword}): (set) -> (new value)").And.Contain("Saved (settings version 3).");
+        }
+
+        result.ToString().Should().NotContain(rotated).And.NotContain(CameraSecret);
+        File.ReadAllText(controller.SecretsPath).Should().Contain(rotated).And.NotContain(CameraSecret, "the new secret replaced the old one");
+    }
+
+    [TestMethod]
     public async Task SetSecret_WithJson_ShowsOnlyThatItIsSet()
     {
         using var controller = new ControllerWithFiles();
@@ -764,7 +799,7 @@ public sealed class RoofCliConfigCommandTests
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         var change = result.Json.GetProperty("changes").EnumerateArray().Should().ContainSingle().Which;
         change.GetProperty("from").GetString().Should().Be("(not set)");
-        change.GetProperty("to").GetString().Should().Be("(set)");
+        change.GetProperty("to").GetString().Should().Be("(new value)");
         result.ToString().Should().NotContain(CameraSecret);
     }
 
@@ -797,7 +832,7 @@ public sealed class RoofCliConfigCommandTests
         var result = await rig.RunAsync("config", "set-secret", "UserName", "Password");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
-        result.Out.Should().Contain("(BlueIris:UserName): (not set) -> (set)").And.Contain($"({CameraPassword}): (not set) -> (set)");
+        result.Out.Should().Contain("(BlueIris:UserName): (not set) -> (new value)").And.Contain($"({CameraPassword}): (not set) -> (new value)");
         result.ToString().Should().NotContain(CameraSecret).And.NotContain("test-camera-user");
     }
 
@@ -1251,7 +1286,7 @@ public sealed class RoofCliConfigCommandTests
                 settings: settings,
                 configureServices: services => services.Configure<PasswordHasherOptions>(options => options.IterationCount = 1_000),
                 settingsFilePath: SettingsPath,
-                secretsFilePath: Path.Combine(Root, "secrets", "managed-secrets.json"),
+                secretsFilePath: SecretsPath,
                 hostSettings: hostSettings);
             Roof.StartFrom(Host);
         }
@@ -1259,6 +1294,8 @@ public sealed class RoofCliConfigCommandTests
         public string Root { get; }
 
         public string SettingsPath => Path.Combine(Root, "config", "appsettings.Local.json");
+
+        public string SecretsPath => Path.Combine(Root, "secrets", "managed-secrets.json");
 
         public SettingsApiTests.RoofDouble Roof { get; }
 
