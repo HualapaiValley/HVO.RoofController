@@ -53,6 +53,9 @@ public sealed class RoofWebHostTests
     [DataRow("/settings", "Settings · HVO Roof Controller")]
     [DataRow("/people", "People · HVO Roof Controller")]
     [DataRow("/system", "System · HVO Roof Controller")]
+    [DataRow("/account/password", "Change password · HVO Roof Controller")]
+    [DataRow("/denied", "Not permitted · HVO Roof Controller")]
+    [DataRow("/no-such-page", "Not found · HVO Roof Controller")]
     public async Task EveryPage_HasExactlyOneTitle_AndOneHeading(string page, string title)
     {
         await using var host = await WebHost.StartAsync();
@@ -141,8 +144,12 @@ public sealed class RoofWebHostTests
         using var client = app.GetTestClient();
 
         using var response = await client.GetAsync(new Uri("/no-such-page", UriKind.Relative));
+        var html = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Regex.Matches(html, "<title>").Should().ContainSingle();
+        html.Should().Contain("<title>Not found · HVO Roof Controller</title>").And.Contain("There is nothing at this address.");
+        html.Should().NotContain("\"type\":\"server\"", "the page needs no live connection, which a visitor who is not signed in could not open");
     }
 
     [TestMethod]

@@ -38,10 +38,50 @@ public sealed class WebCameraEndpointTests
         response.Headers.CacheControl!.NoStore.Should().BeTrue();
         response.Headers.CacheControl.NoCache.Should().BeTrue();
         response.Headers.GetValues("X-Accel-Buffering").Should().Equal("no");
+        response.Headers.GetValues("Content-Security-Policy").Should().Equal(WebCameraEndpoint.ContentSecurityPolicy);
         (await response.Content.ReadAsStringAsync()).Should().Be(Frame + Frame);
         var asked = host.Controller.Logged(HttpMethod.Get, RoofApiRoutesTest.Camera(2)).Should().ContainSingle().Subject;
         asked.Authorization.Should().Be("Bearer token-1-vic");
         asked.HasApiKey.Should().BeFalse("the page's camera is the person's, not the web UI's");
+    }
+
+    [TestMethod]
+    [DataRow("text/html; charset=utf-8")]
+    [DataRow("application/javascript")]
+    [DataRow("image/svg+xml")]
+    [DataRow("multipart/form-data; boundary=x")]
+    public async Task AnAnswerThatIsNotACameraStream_Is502_AndNotRelayed(string contentType)
+    {
+        await using var host = await StartAsync(_ =>
+        {
+            var content = new StringContent("<script>alert(1)</script>", Encoding.UTF8);
+            content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        using var browser = host.Browser();
+        await browser.SignInAsync("vic", FakeController.AdaPassword);
+
+        using var response = await browser.GetAsync(WebCameraEndpoint.StreamPath(RoofWebOptions.DefaultCameraId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain(WebCameraEndpoint.NotACameraStream).And.NotContain("<script>");
+    }
+
+    [TestMethod]
+    [DataRow(null, true)]
+    [DataRow("multipart/x-mixed-replace", true)]
+    [DataRow("Multipart/X-Mixed-Replace; boundary=--myboundary", true)]
+    [DataRow("image/jpeg", true)]
+    [DataRow("text/html", false)]
+    [DataRow("text/plain", false)]
+    [DataRow("image/svg+xml", false)]
+    [DataRow("", false)]
+    [DataRow("not a type", false)]
+    public void OnlyACamerasTypes_AreRelayed(string? contentType, bool relayed)
+    {
+        WebCameraEndpoint.IsCameraContentType(contentType).Should().Be(relayed);
     }
 
     [TestMethod]

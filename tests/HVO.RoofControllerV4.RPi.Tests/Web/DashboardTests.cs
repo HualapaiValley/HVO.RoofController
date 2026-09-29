@@ -118,15 +118,17 @@ public sealed class DashboardTests
     }
 
     [TestMethod]
-    public async Task SignedOut_ThePageSaysSo_AndOffersSignInAgain()
+    [DataRow(false, WebStopTexts.MayBeRefused)]
+    [DataRow(true, WebStopTexts.StillWorks)]
+    public async Task SignedOut_ThePageSaysSo_AndOffersSignInAgain(bool withStopKey, string stop)
     {
-        using var harness = await WebRoofHarness.CreateAsync(role: null);
+        using var harness = await WebRoofHarness.CreateAsync(role: null, stopKey: withStopKey ? WebTestSupport.StopKey() : null);
         await using var context = Context(harness);
 
         var cut = context.Render<Dashboard>();
 
         cut.WaitForAssertion(() => Text(cut.Find("[data-testid=signed-out]"))
-            .Should().Be($"You are signed out, so this page shows no status. Sign in again. {RoofStopText.AlwaysAvailable}"));
+            .Should().Be($"You are signed out, so this page shows no status. Sign in again. {stop}"));
         cut.Find("[data-testid=sign-in-again]").GetAttribute("href").Should().Be("signin");
         Text(cut.Find("[data-testid=feed-state]")).Should().Be("Status: not connected");
         cut.Find("[data-testid=open]").GetAttribute("title").Should().Be("You are signed out");

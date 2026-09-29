@@ -16,6 +16,7 @@ public sealed class WebAuthenticationStateProvider : RevalidatingServerAuthentic
     private readonly WebSessionStore _store;
     private readonly Lock _gate = new();
     private WebSession? _watched;
+    private int _personSignedOut;
 
     public WebAuthenticationStateProvider(ILoggerFactory loggerFactory, WebSessionStore store)
         : base(loggerFactory)
@@ -23,6 +24,12 @@ public sealed class WebAuthenticationStateProvider : RevalidatingServerAuthentic
         _store = store;
         AuthenticationStateChanged += OnAuthenticationStateChanged;
     }
+
+    /// <summary>
+    /// True when the page was signed out because the person signed out (on this page or another), so it sends them to the
+    /// sign-in page saying so, as the sign-out itself does, rather than saying their session ended.
+    /// </summary>
+    public bool PersonSignedOut => Volatile.Read(ref _personSignedOut) == 1;
 
     protected override TimeSpan RevalidationInterval => TimeSpan.FromSeconds(30);
 
@@ -93,5 +100,9 @@ public sealed class WebAuthenticationStateProvider : RevalidatingServerAuthentic
         }
     }
 
-    private void OnSessionEnded(object? sender, EventArgs e) => SetAuthenticationState(Task.FromResult(SignedOut));
+    private void OnSessionEnded(object? sender, EventArgs e)
+    {
+        Volatile.Write(ref _personSignedOut, (sender as WebSession)?.SignedOut == true ? 1 : 0);
+        SetAuthenticationState(Task.FromResult(SignedOut));
+    }
 }

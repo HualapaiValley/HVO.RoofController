@@ -16,6 +16,7 @@ public sealed class WebSession : IDisposable
     private RoofStatusFeed? _feed;
     private int _feedHolds;
     private long _endedAtTicks;
+    private int _signedOut;
     private long _stopsSent;
     private int _disposed;
 
@@ -79,8 +80,28 @@ public sealed class WebSession : IDisposable
     /// <summary>True while the session has neither ended nor expired.</summary>
     public bool IsOpen => !IsEnded && _time.GetUtcNow() < ExpiresUtc;
 
-    /// <summary>Marks the session ended (after sign-out).</summary>
+    /// <summary>True once the person signed out (<see cref="SignOutAsync"/>), rather than the session ending without them.</summary>
+    public bool SignedOut => Volatile.Read(ref _signedOut) == 1;
+
+    /// <summary>Marks the session ended.</summary>
     public void End() => Credential.Session.End();
+
+    /// <summary>
+    /// Signs the person out: ends the session at the controller, then here, whatever the controller answers. Their live
+    /// pages then say they signed out (<see cref="SignedOut"/>), not that their session ended.
+    /// </summary>
+    public async Task SignOutAsync(CancellationToken cancellationToken = default)
+    {
+        Volatile.Write(ref _signedOut, 1);
+        try
+        {
+            await Client.Auth.SignOutAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            End();
+        }
+    }
 
     /// <summary>
     /// Sends Stop for the person: with their session, and the web UI's Stop key when the controller refuses it, so Stop

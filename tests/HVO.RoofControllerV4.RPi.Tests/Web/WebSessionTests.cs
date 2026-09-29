@@ -434,6 +434,42 @@ public sealed class WebAuthenticationStateProviderTests
 
         (await IsSignedInAsync(provider)).Should().BeFalse();
         changes.Should().Equal(true, false);
+        provider.PersonSignedOut.Should().BeFalse("the session ended without the person signing out");
+    }
+
+    [TestMethod]
+    public async Task WhenThePersonSignsOut_ThePageIsSignedOut_AndKnowsTheyDid()
+    {
+        using var fixture = new WebSessionStoreTests.Fixture();
+        var session = fixture.Store.Open(WebSessionStoreTests.Credential("session-1", "ada"));
+        using var provider = new WebAuthenticationStateProvider(NullLoggerFactory.Instance, fixture.Store);
+        provider.SetAuthenticationState(SignedIn(session));
+
+        await session.SignOutAsync();
+
+        session.SignedOut.Should().BeTrue();
+        session.IsEnded.Should().BeTrue();
+        fixture.Controller.Logged(HttpMethod.Delete, RoofApiRoutesTest.Session).Should().ContainSingle("the controller ends the session too");
+        (await IsSignedInAsync(provider)).Should().BeFalse();
+        provider.PersonSignedOut.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task APersonWhoSignsOut_IsSignedOutHere_EvenWhenTheControllerDoesNotAnswer()
+    {
+        using var fixture = new WebSessionStoreTests.Fixture();
+        var session = fixture.Store.Open(WebSessionStoreTests.Credential("session-1", "ada"));
+        using var provider = new WebAuthenticationStateProvider(NullLoggerFactory.Instance, fixture.Store);
+        provider.SetAuthenticationState(SignedIn(session));
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        var signOut = () => session.SignOutAsync(cancelled.Token);
+
+        await signOut.Should().ThrowAsync<OperationCanceledException>();
+        session.IsEnded.Should().BeTrue();
+        provider.PersonSignedOut.Should().BeTrue();
+        (await IsSignedInAsync(provider)).Should().BeFalse();
     }
 
     [TestMethod]

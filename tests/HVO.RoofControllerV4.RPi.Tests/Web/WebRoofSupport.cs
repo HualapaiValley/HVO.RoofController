@@ -80,8 +80,11 @@ internal sealed class WebRoofHarness : IDisposable
 
     public WebRoofConsole Console { get; private set; } = default!;
 
-    /// <summary>A page of a person with <paramref name="role"/> (none: a signed-out page), not started yet.</summary>
-    public static async Task<WebRoofHarness> CreateAsync(string? role = RoofControllerApiContract.OperatorRole)
+    /// <summary>
+    /// A page of a person with <paramref name="role"/> (none: a signed-out page), not started yet, in a web UI with
+    /// <paramref name="stopKey"/> as its Stop key (none: no Stop key).
+    /// </summary>
+    public static async Task<WebRoofHarness> CreateAsync(string? role = RoofControllerApiContract.OperatorRole, WebStopKey? stopKey = null)
     {
         var harness = new WebRoofHarness();
         var user = new ClaimsPrincipal(new ClaimsIdentity());
@@ -95,7 +98,8 @@ internal sealed class WebRoofHarness : IDisposable
         }
 
         harness.Accessor = new WebSessionAccessor(new FixedAuthentication(user), harness.Store);
-        harness.Console = new WebRoofConsole(harness.Accessor, harness.Circuit, harness.Clock, harness.LoggerFactory.CreateLogger<WebRoofConsole>());
+        var stopPass = WebTestSupport.StopPass(stopKey, time: harness.Clock);
+        harness.Console = new WebRoofConsole(harness.Accessor, harness.Circuit, stopPass, harness.Clock, harness.LoggerFactory.CreateLogger<WebRoofConsole>());
         return harness;
     }
 

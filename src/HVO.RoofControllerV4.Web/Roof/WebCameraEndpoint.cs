@@ -121,6 +121,13 @@ public static class WebCameraEndpoint
 
             await using (stream)
             {
+                if (!IsCameraContentType(stream.ContentType))
+                {
+                    // Anything but a camera's stream (a page, a script) would run on the web UI's origin: refused.
+                    logger.LogWarning("Camera {CameraId} for {Name}: the camera server sent {ContentType}, which is not a camera stream", cameraId, session.Name, stream.ContentType);
+                    return Problem(StatusCodes.Status502BadGateway, "Camera unavailable", NotACameraStream);
+                }
+
                 await RelayAsync(http, cameraId, session, stream, ends.Token, logger);
             }
 
@@ -132,11 +139,38 @@ public static class WebCameraEndpoint
         }
     }
 
+    /// <summary>The Content-Security-Policy of a relayed stream: sandboxed, and nothing loaded from it.</summary>
+    public const string ContentSecurityPolicy = "sandbox; default-src 'none'";
+
+    /// <summary>The detail of the 502 for a camera server's answer that is not a camera stream.</summary>
+    public const string NotACameraStream = "The camera server did not send a camera stream.";
+
+    private const string MjpegType = "multipart/x-mixed-replace";
+
+    /// <summary>
+    /// True for a camera's stream, the only answers relayed: MJPEG (<c>multipart/x-mixed-replace</c>) or a single JPEG,
+    /// and no type at all (relayed as MJPEG).
+    /// </summary>
+    public static bool IsCameraContentType(string? contentType)
+    {
+        if (contentType is null)
+        {
+            return true;
+        }
+
+        return System.Net.Http.Headers.MediaTypeHeaderValue.TryParse(contentType, out var parsed)
+            && parsed.MediaType is { } mediaType
+            && (mediaType.Equals(MjpegType, StringComparison.OrdinalIgnoreCase) || mediaType.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static async Task RelayAsync(HttpContext http, int cameraId, WebSession session, RoofCameraStream stream, CancellationToken ends, ILogger logger)
     {
         var response = http.Response;
         response.StatusCode = StatusCodes.Status200OK;
-        response.ContentType = stream.ContentType ?? "multipart/x-mixed-replace";
+        response.ContentType = stream.ContentType ?? MjpegType;
+
+        // Should the stream ever be opened as a page, nothing in it runs, and not on the web UI's origin.
+        response.Headers.ContentSecurityPolicy = ContentSecurityPolicy;
         response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
         response.Headers.Pragma = "no-cache";
         response.Headers.Expires = "0";

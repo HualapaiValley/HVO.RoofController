@@ -6,6 +6,8 @@ using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Web.Sessions;
+using Microsoft.AspNetCore.Components.Server.Circuits;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Playwright;
 using static Microsoft.Playwright.Assertions;
 
@@ -173,6 +175,51 @@ public sealed class WebStopBrowserTests
     }
 
     /// <summary>
+    /// A page whose live connection ends on an error stops updating, so it must say so where the person sees it: the
+    /// error notice sits above the Stop bar, uncovered, and Stop (which does not need the live connection) is still in
+    /// view and still stops the roof. Here the connection fails as the roof starts to open.
+    /// </summary>
+    [TestMethod]
+    [DataRow(WebDevices.Phone)]
+    [DataRow(WebDevices.PhoneLandscape)]
+    [DataRow(WebDevices.SmallPhoneLandscape)]
+    [DataRow(WebDevices.Tablet)]
+    [DataRow(WebDevices.TabletLandscape)]
+    [DataRow(WebDevices.Desktop)]
+    public async Task APageThatHitAnError_SaysSoAboveTheStopBar_AndItsStopStillStopsTheRoof(string device)
+    {
+        var failing = new FailingCircuits();
+        var browser = _browser = await WebBrowser.StartAsync(
+            TestContext, Scenario.Production(travelMeters: 2.0), device, webServices: services => services.AddSingleton<CircuitHandler>(failing));
+        var rig = browser.Rig;
+        var page = browser.Page;
+        using var client = rig.CreateApiClient(TestApiKeys.Operator);
+        await browser.SignInAsync(WebBrowser.Operator);
+
+        failing.Fail();
+        await client.AcceptedAsync("Open");
+        var notice = page.Locator("#blazor-error-ui");
+        await Expect(notice).ToBeVisibleAsync();
+        await Expect(notice).ToContainTextAsync("This page hit an error and stopped updating. Stop still works.");
+        await browser.NextFrameAsync();
+
+        var placed = await browser.PlacementOfAsync(notice);
+        var bar = await browser.PlacementOfAsync(page.Locator("form.web-stop-bar"));
+        var stop = await browser.PlacementOfAsync(browser.Stop);
+        placed.Reachable.Should().BeTrue("the error notice must be in view and uncovered on the {0}: it is at {1}", device, placed);
+        placed.Bottom.Should().BeLessThanOrEqualTo(bar.Top + 0.5, "the notice must be above the Stop bar on the {0}: the bar is at {1}", device, bar);
+        stop.Reachable.Should().BeTrue("Stop must be in view with the error notice on the {0}: Stop is at {1}", device, stop);
+
+        await browser.TapAsync(stop);
+
+        await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
+        var stopped = await rig.WaitForRestAsync("the tap on Stop");
+        stopped.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
+        stopped.ShouldBeDeenergized(rig);
+        failing.Failed.Should().BeTrue("the page's live connection failed on the test's error, not on its own");
+    }
+
+    /// <summary>
     /// The Stop bar's room is kept at the end of the page, not added to a screen-high page: a page that fits above the
     /// bar on a desktop window does not scroll.
     /// </summary>
@@ -198,6 +245,29 @@ public sealed class WebStopBrowserTests
             var (height, screen) = (sizes[0], sizes[1]);
             height.Should().BeLessThanOrEqualTo(screen, "{0} fits above the Stop bar, so it must not scroll", path);
         }
+    }
+
+    /// <summary>Once told to, fails the next thing a page's live connection is sent (an event, or a render the page has drawn).</summary>
+    private sealed class FailingCircuits : CircuitHandler
+    {
+        private int _fail;
+        private int _failed;
+
+        public bool Failed => Volatile.Read(ref _failed) == 1;
+
+        public void Fail() => Volatile.Write(ref _fail, 1);
+
+        public override Func<CircuitInboundActivityContext, Task> CreateInboundActivityHandler(Func<CircuitInboundActivityContext, Task> next)
+            => context =>
+            {
+                if (Volatile.Read(ref _fail) == 1)
+                {
+                    Volatile.Write(ref _failed, 1);
+                    throw new InvalidOperationException("The test failed this page's live connection.");
+                }
+
+                return next(context);
+            };
     }
 
     private static async Task ExpectStopPlacedAsync(WebBrowser browser, string path, string answer)

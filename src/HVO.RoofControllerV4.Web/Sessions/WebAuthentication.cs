@@ -65,6 +65,8 @@ public static class WebAuthentication
 
         services.AddSingleton<WebSessionStore>();
         services.AddSingleton<WebSignInLimiter>();
+        services.AddSingleton<WebStopPass>();
+        services.AddSingleton<WebStopLimiter>();
         services.AddAuthentication(Scheme)
             .AddCookie(Scheme, cookie =>
             {
@@ -94,12 +96,27 @@ public static class WebAuthentication
     public static ClaimsPrincipal CreatePrincipal(WebSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
+        return CreatePrincipal(session.Name, session.Id, session.Role);
+    }
+
+    /// <summary>
+    /// The person a Stop pass names, as their pages saw them while they were signed in, so the antiforgery token rendered
+    /// into those pages is still accepted for Stop.
+    /// </summary>
+    public static ClaimsPrincipal CreatePrincipal(WebStopPassHolder holder)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        return CreatePrincipal(holder.Name, holder.SessionId, holder.Role);
+    }
+
+    private static ClaimsPrincipal CreatePrincipal(string name, string sessionId, string role)
+    {
         var claims = new List<Claim>
         {
-            new(ClaimTypes.Name, session.Name),
-            new(SessionIdClaimType, session.Id),
+            new(ClaimTypes.Name, name),
+            new(SessionIdClaimType, sessionId),
         };
-        claims.AddRange(WebRoles.Implied(session.Role).Select(role => new Claim(ClaimTypes.Role, role)));
+        claims.AddRange(WebRoles.Implied(role).Select(implied => new Claim(ClaimTypes.Role, implied)));
         return new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme, ClaimTypes.Name, ClaimTypes.Role));
     }
 
@@ -139,7 +156,8 @@ public static class WebAuthentication
     /// <summary>
     /// Every request with a cookie: the session it names must still be open (a restarted web UI picks it up again from
     /// the cookie). Otherwise the cookie is removed and the request goes on signed out. Stop is the exception: it goes
-    /// on with the cookie, so it can still be sent for the person with the web UI's Stop key.
+    /// on with the cookie, so it can still be sent for the person with the web UI's Stop key. Once the cookie is removed,
+    /// the person's Stop pass (<see cref="WebStopPass"/>) does that.
     /// </summary>
     private static async Task ValidatePrincipalAsync(CookieValidatePrincipalContext context)
     {

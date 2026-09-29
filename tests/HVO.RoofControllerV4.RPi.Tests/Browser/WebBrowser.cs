@@ -226,20 +226,22 @@ internal sealed class WebBrowser : IAsyncDisposable
     /// <summary>
     /// Starts the rig with <paramref name="options"/> and the web UI (with <paramref name="webSettings"/> as well), each
     /// on a loopback port, and opens a browser emulating <paramref name="device"/> on the web UI, not yet signed in; with
-    /// <paramref name="cuttableConnection"/>, a test can cut the page's live connection.
+    /// <paramref name="cuttableConnection"/>, a test can cut the page's live connection; <paramref name="webServices"/>
+    /// adds to the web UI's services.
     /// </summary>
     public static async Task<WebBrowser> StartAsync(
         TestContext testContext,
         EmulatedRoofRigOptions options,
         string device,
         IReadOnlyDictionary<string, string?>? webSettings = null,
-        bool cuttableConnection = false)
+        bool cuttableConnection = false,
+        Action<IServiceCollection>? webServices = null)
     {
         var rig = await EmulatedRoofRig.StartAsync(options with { Kestrel = true });
         var browser = new WebBrowser(testContext, rig, device, cuttableConnection);
         try
         {
-            await browser.StartWebAsync(webSettings);
+            await browser.StartWebAsync(webSettings, webServices);
             await browser.LaunchAsync();
         }
         catch
@@ -433,7 +435,7 @@ internal sealed class WebBrowser : IAsyncDisposable
     }
 
     // The web UI as the container's supervisor starts it (Production), with the people and the Stop key an admin sets up.
-    private async Task StartWebAsync(IReadOnlyDictionary<string, string?>? webSettings)
+    private async Task StartWebAsync(IReadOnlyDictionary<string, string?>? webSettings, Action<IServiceCollection>? webServices)
     {
         using (var admin = AdminClient())
         {
@@ -475,6 +477,7 @@ internal sealed class WebBrowser : IAsyncDisposable
             // Development (a published image has them in wwwroot).
             builder.WebHost.UseStaticWebAssets();
             builder.Logging.AddProvider(WebLogs);
+            webServices?.Invoke(builder.Services);
         });
         await _web.StartAsync();
         WebAddress = new Uri(_web.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single());

@@ -61,11 +61,11 @@ public sealed class WebSessionBrowserTests
 
     /// <summary>
     /// A session that expires while its page is open (here after 20 s) signs the page out within the web UI's 30 s check,
-    /// and the page says why. The cookie does not sign the person in again, a Stop from the signed-out page goes without
-    /// their session, and signing in again gives them the roof back.
+    /// and the page says why. The cookie does not sign the person in again, but their Stop still works: the web UI sends
+    /// it with its Stop key on their behalf (the Stop pass). Signing in again gives them the roof back.
     /// </summary>
     [TestMethod]
-    public async Task WhenTheSessionExpires_ThePageIsSignedOut_AndSaysWhy_AndSigningInAgainGivesTheRoofBack()
+    public async Task WhenTheSessionExpires_ThePageIsSignedOut_AndSaysWhy_StopStillWorks_AndSigningInAgainGivesTheRoofBack()
     {
         var options = Scenario.Production(settings: new Dictionary<string, string?>
         {
@@ -81,12 +81,37 @@ public sealed class WebSessionBrowserTests
         await page.GotoAsync("/");
         await Expect(page).ToHaveURLAsync(new Regex(@"/signin\?returnUrl=%2F$"));
         await browser.Stop.ClickAsync();
-        await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.SignedOut);
+        await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
+        await browser.WaitForWebLogAsync($"Web stop for {WebBrowser.Operator}: {RoofStopOutcome.Acknowledged}");
+        browser.WebLogs.Entries.Should().Contain(e => e.Message.StartsWith($"Web stop from {WebBrowser.Operator} at ", StringComparison.Ordinal)
+            && e.Message.EndsWith(", signed out: sent with the Stop key", StringComparison.Ordinal));
 
         await browser.SubmitSignInAsync(WebBrowser.Operator, TestSecrets.Password);
         await browser.ExpectLiveAsync();
         await browser.Stop.ClickAsync();
         await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
+    }
+
+    /// <summary>
+    /// Signing out ends Stop from that browser: the web UI removes its Stop pass, so a Stop from the sign-in page goes
+    /// without a credential, and the controller refuses it (it does not allow anonymous Stop).
+    /// </summary>
+    [TestMethod]
+    public async Task SigningOut_EndsStopFromThatBrowser()
+    {
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(), WebDevices.Desktop);
+        var page = browser.Page;
+        await browser.SignInAsync(WebBrowser.Operator);
+        (await browser.Context.CookiesAsync()).Should().Contain(c => c.Name == WebStopPass.CookieName && c.Path == WebAuthentication.StopPostPath);
+
+        await page.GetByTestId("sign-out").ClickAsync();
+        await Expect(page).ToHaveURLAsync(new Regex(@"/signin\?message=signed-out$"));
+        await browser.WaitForWebLogAsync($"Web sign-out for {WebBrowser.Operator} from 127.0.0.1");
+
+        (await browser.Context.CookiesAsync()).Should().NotContain(c => c.Name == WebStopPass.CookieName || c.Name == WebAuthentication.CookieName);
+        await browser.Stop.ClickAsync();
+        await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.SignedOut);
+        browser.WebLogs.Entries.Should().Contain(e => e.Message == "Web stop from a signed-out page at 127.0.0.1");
     }
 
     /// <summary>

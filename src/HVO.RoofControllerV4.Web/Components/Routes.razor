@@ -1,4 +1,4 @@
-<Router AppAssembly="typeof(Program).Assembly">
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
         <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
             <Authorizing>
@@ -16,11 +16,4 @@
             </NotAuthorized>
         </AuthorizeRouteView>
     </Found>
-    <NotFound>
-        <PageTitle>Not found · HVO Roof Controller</PageTitle>
-        <LayoutView Layout="typeof(MainLayout)">
-            <h1>Not found</h1>
-            <p role="alert">There is nothing at this address.</p>
-        </LayoutView>
-    </NotFound>
 </Router>

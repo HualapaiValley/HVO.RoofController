@@ -238,6 +238,13 @@ body[data-theme="hvo-dark"] .app-frame {
     }
 }
 
+/* The error notice (App.razor) sits just above the Stop bar and over its shadow: under the bar, a page whose live
+   connection ended on an error would still look live. Below the reconnect dialog. */
+body[data-theme="hvo-dark"] #blazor-error-ui {
+    bottom: var(--web-stop-bar-space);
+    z-index: 1060;
+}
+
 /* The reconnect dialog (App.razor): the theme styles it, and the states it leaves out. */
 body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-paused,
 body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-resume-failed {

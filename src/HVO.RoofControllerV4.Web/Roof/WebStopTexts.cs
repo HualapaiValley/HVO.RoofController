@@ -20,6 +20,24 @@ public static class WebStopTexts
     /// <summary>The page could not reach the web UI (a network error), so it cannot tell whether Stop was sent.</summary>
     public const string Unreachable = "The web UI could not be reached.";
 
+    /// <summary>What a page says of Stop once the person's session has ended, when the web UI's Stop pass keeps it working.</summary>
+    public const string StillWorks = "Stop still works.";
+
+    /// <summary>
+    /// What a page says of Stop once the person's session has ended, without the web UI's Stop key: Stop is then sent
+    /// with no credential, which the controller refuses unless <c>RoofControllerSecurity:AllowAnonymousStop</c> is set.
+    /// </summary>
+    public const string MayBeRefused = "Stop may be refused until you sign in again. " + RoofStopText.UseRoofStop;
+
+    /// <summary>
+    /// <see cref="StillWorks"/> when <paramref name="stopOutlastsSessions"/> (<see cref="Sessions.WebStopPass.OutlastsSessions"/>),
+    /// otherwise <see cref="MayBeRefused"/>.
+    /// </summary>
+    public static string AfterSessionEnds(bool stopOutlastsSessions) => stopOutlastsSessions ? StillWorks : MayBeRefused;
+
+    /// <summary>The web UI's own refusal when one address sends more Stops than <see cref="Sessions.WebStopLimiter"/> allows.</summary>
+    public const string TooMany = "Too many Stops were sent from this address. Wait a moment, then press Stop again.";
+
     /// <summary>The web UI did not answer within <see cref="PageTimeout"/>.</summary>
     public const string TimedOut = "The web UI did not answer in time.";
 

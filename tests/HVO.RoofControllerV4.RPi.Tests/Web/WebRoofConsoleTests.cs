@@ -158,6 +158,7 @@ public sealed class WebRoofConsoleTests
         view.Status.Should().BeNull();
         view.FeedLabel.Should().Be("not connected");
         view.FeedBanner.Should().BeNull();
+        view.StopAfterSessionEnds.Should().Be(WebStopTexts.MayBeRefused, "without the web UI's Stop key, a signed-out page's Stop has no credential");
         view.OpenBlock.Should().Be(WebRoofConsole.NoSession);
         view.CloseBlock.Should().Be(WebRoofConsole.NoSession);
         view.ClearFaultBlock.Should().Be(WebRoofConsole.NoSession);
@@ -273,6 +274,21 @@ public sealed class WebRoofConsoleTests
         harness.Circuit.SetConnected(true);
 
         harness.Console.View.Notices[0].Text.Should().Be(WebRoofConsole.LeaseDroppedOnDisconnect);
+    }
+
+    [TestMethod]
+    [DataRow(false, WebStopTexts.MayBeRefused)]
+    [DataRow(true, WebStopTexts.StillWorks)]
+    public async Task ASessionTheControllerRefuses_SaysSo_AndWhatStopDoesNow(bool withStopKey, string stop)
+    {
+        using var harness = await WebRoofHarness.CreateAsync(stopKey: withStopKey ? WebTestSupport.StopKey() : null);
+        await harness.Session!.Client.Auth.SignOutAsync();
+
+        await harness.Console.StartAsync();
+
+        await harness.WaitForAsync(view => view.FeedRefused, "the controller's refusal");
+        harness.Console.View.FeedBanner.Should().Be($"No status: the controller refused your session. Sign in again. {stop}");
+        harness.Console.View.StopAfterSessionEnds.Should().Be(stop);
     }
 
     [TestMethod]

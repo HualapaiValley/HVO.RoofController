@@ -103,11 +103,14 @@ public sealed class C15ReconnectDialogStopBrowserTests
         await browser.ExpectReconnectDialogAsync();
         using (var admin = browser.AdminClient())
         {
-            var sessions = await admin.Identity.GetSessionsAsync();
-            foreach (var session in sessions.Where(s => s.Name == WebBrowser.Operator).ToList())
+            var sessions = (await admin.Identity.GetSessionsAsync()).Where(s => s.Name == WebBrowser.Operator).ToList();
+            sessions.Should().NotBeEmpty("the person's page holds a controller session");
+            foreach (var session in sessions)
             {
                 await admin.Identity.EndSessionAsync(session.Id);
             }
+
+            (await admin.Identity.GetSessionsAsync()).Should().NotContain(s => s.Name == WebBrowser.Operator, "an admin ended them");
         }
 
         await client.AcceptedAsync("Open");
@@ -121,6 +124,9 @@ public sealed class C15ReconnectDialogStopBrowserTests
         stopped.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
         stopped.ShouldBeDeenergized(rig);
         browser.WebLogs.Entries.Should().Contain(e => e.Message == $"Web stop for {WebBrowser.Operator}: {RoofStopOutcome.Acknowledged}");
+        rig.Logs.Entries.Should().Contain(
+            e => e.Message.StartsWith($"Roof command stop requested by {WebBrowser.StopKeyName} for {WebBrowser.Operator} from ", StringComparison.Ordinal),
+            "the controller took Stop on the web UI's Stop key, on the person's behalf, not on their ended session");
     }
 
     /// <summary>

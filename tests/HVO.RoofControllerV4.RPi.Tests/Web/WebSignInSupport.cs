@@ -83,7 +83,8 @@ internal sealed class FakeController
         var body = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
         lock (Requests)
         {
-            Requests.Add(new FakeControllerRequest(request.Method, path, authorization, request.Headers.Contains("X-Api-Key"), body));
+            var onBehalfOf = request.Headers.TryGetValues(RoofIdentityContract.OnBehalfOfHeaderName, out var names) ? string.Join(",", names) : null;
+            Requests.Add(new FakeControllerRequest(request.Method, path, authorization, request.Headers.Contains("X-Api-Key"), body, onBehalfOf));
         }
 
         if (path == "/" + RoofApiRoutesTest.Session && request.Method == HttpMethod.Post)
@@ -160,7 +161,7 @@ internal sealed class FakeController
     }
 }
 
-internal sealed record FakeControllerRequest(HttpMethod Method, string Path, string? Authorization, bool HasApiKey, string? Body);
+internal sealed record FakeControllerRequest(HttpMethod Method, string Path, string? Authorization, bool HasApiKey, string? Body, string? OnBehalfOf = null);
 
 /// <summary>The controller's routes, as the client library sends them.</summary>
 internal static class RoofApiRoutesTest
@@ -256,7 +257,20 @@ internal sealed partial class WebBrowserClient : IDisposable
 
     public Uri BaseAddress => _client.BaseAddress!;
 
-    public string? Cookie(string name) => _cookies.GetCookies(BaseAddress).FirstOrDefault(cookie => cookie.Name == name)?.Value;
+    public string? Cookie(string name, string path = "/")
+        => _cookies.GetCookies(new Uri(BaseAddress, path)).FirstOrDefault(cookie => cookie.Name == name)?.Value;
+
+    /// <summary>Removes one cookie, as the browser does when the web UI deletes it.</summary>
+    public void RemoveCookie(string name, string path = "/")
+    {
+        foreach (System.Net.Cookie cookie in _cookies.GetCookies(new Uri(BaseAddress, path)))
+        {
+            if (cookie.Name == name)
+            {
+                cookie.Expired = true;
+            }
+        }
+    }
 
     public void ClearCookies()
     {

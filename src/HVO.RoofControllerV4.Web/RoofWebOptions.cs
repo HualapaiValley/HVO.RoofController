@@ -41,6 +41,17 @@ public sealed class RoofWebOptions
     /// </summary>
     public string? StopKeyFile { get; set; }
 
+    /// <summary>The most <see cref="StopAfterSessionHours"/> may be: a week.</summary>
+    public const int MaximumStopAfterSessionHours = 168;
+
+    /// <summary>
+    /// With <see cref="StopKeyFile"/>: how long, in hours after a person's session would have expired, their browser can
+    /// still send Stop with the Stop key (<see cref="Sessions.WebStopPass"/>). Until then, Stop works from any of their
+    /// pages, also after the controller ended their session. 0: only until the session would have expired. Signing out
+    /// ends it at once. Default 12.
+    /// </summary>
+    public int StopAfterSessionHours { get; set; } = 12;
+
     /// <summary>
     /// Origins, besides the web UI's own, that may post its forms and open its live connection: for example
     /// <c>https://roof.example.org</c> when a proxy serves the web UI under another name. Scheme, host and port only.
@@ -102,6 +113,11 @@ public sealed class RoofWebOptions
         if (SignInAttemptsPerMinute is < 1 or > 1000)
         {
             problems.Add($"{SectionName}:SignInAttemptsPerMinute must be between 1 and 1000, got {SignInAttemptsPerMinute}.");
+        }
+
+        if (StopAfterSessionHours is < 0 or > MaximumStopAfterSessionHours)
+        {
+            problems.Add($"{SectionName}:StopAfterSessionHours must be between 0 and {MaximumStopAfterSessionHours}, got {StopAfterSessionHours}.");
         }
 
         if (!string.IsNullOrWhiteSpace(StopKeyFile) && !File.Exists(StopKeyFile))

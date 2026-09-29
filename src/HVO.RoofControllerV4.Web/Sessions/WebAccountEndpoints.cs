@@ -1,6 +1,7 @@
 using System.Net;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Web.Roof;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.WebUtilities;
@@ -38,8 +39,8 @@ public static class WebAccountEndpoints
 
     /// <summary>
     /// <paramref name="returnUrl"/> when it is a page of this site ("/..."), otherwise "/". Refuses absolute and
-    /// protocol-relative addresses ("//host", "/\host"), control characters, backslashes, the account endpoints and the
-    /// sign-in page itself.
+    /// protocol-relative addresses ("//host", "/\host"), control characters, backslashes, the account endpoints, the
+    /// sign-in page itself, and the camera streams (never a page to go back to).
     /// </summary>
     public static string GetSafeReturnUrl(string? returnUrl)
     {
@@ -62,6 +63,8 @@ public static class WebAccountEndpoints
             || (path.StartsWith("/account/", StringComparison.OrdinalIgnoreCase) && !path.Equals(ChangePasswordPath, StringComparison.OrdinalIgnoreCase))
             || path.Equals(WebAuthentication.SignInPath, StringComparison.OrdinalIgnoreCase)
             || path.StartsWith(WebAuthentication.SignInPath + "/", StringComparison.OrdinalIgnoreCase)
+            || path.Equals(WebCameraEndpoint.PathPrefix, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(WebCameraEndpoint.PathPrefix + "/", StringComparison.OrdinalIgnoreCase)
             ? "/"
             : candidate;
     }
@@ -91,6 +94,7 @@ public static class WebAccountEndpoints
         IAntiforgery antiforgery,
         WebSignInLimiter limiter,
         WebSessionStore store,
+        WebStopPass stopPass,
         RoofControllerConnector connector,
         ILoggerFactory loggerFactory)
     {
@@ -163,11 +167,12 @@ public static class WebAccountEndpoints
         }
 
         await http.SignInAsync(WebAuthentication.Scheme, WebAuthentication.CreatePrincipal(session), WebAuthentication.CreateProperties(session));
+        stopPass.Issue(http, session);
         logger.LogInformation("Web sign-in for {Name} ({Role}) from {RemoteIp}", session.Name, session.Role, remote);
         return Results.LocalRedirect(returnUrl);
     }
 
-    private static async Task<IResult> SignOutAsync(HttpContext http, WebSessionStore store, ILoggerFactory loggerFactory)
+    private static async Task<IResult> SignOutAsync(HttpContext http, WebSessionStore store, WebStopPass stopPass, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger(typeof(WebAccountEndpoints).FullName!);
         var result = await http.AuthenticateAsync(WebAuthentication.Scheme);
@@ -175,7 +180,7 @@ public static class WebAccountEndpoints
         {
             try
             {
-                await session.Client.Auth.SignOutAsync(http.RequestAborted);
+                await session.SignOutAsync(http.RequestAborted);
             }
             catch (Exception ex) when (ex is RoofApiException or TimeoutException or HttpRequestException or RoofProtocolException or OperationCanceledException)
             {
@@ -183,11 +188,12 @@ public static class WebAccountEndpoints
                 logger.LogWarning("Web sign-out for {Name}: the controller did not end the session ({Failure})", session.Name, RoofText.DescribeFailure(ex));
             }
 
-            session.End();
             logger.LogInformation("Web sign-out for {Name} from {RemoteIp}", session.Name, http.Connection.RemoteIpAddress);
         }
 
+        // Signing out also ends Stop from this browser (the Stop pass); a session that ended by itself keeps it.
         await http.SignOutAsync(WebAuthentication.Scheme);
+        stopPass.Remove(http);
         return Results.Redirect(BuildSignInUrl(SignInMessages.SignedOut, "/"));
     }
 

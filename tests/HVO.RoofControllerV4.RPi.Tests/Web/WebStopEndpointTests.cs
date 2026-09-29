@@ -123,13 +123,9 @@ public sealed partial class WebStopEndpointTests
     public async Task WithAStopKey_StopIsSentForThePerson_EvenForASessionTheWebUiNoLongerHolds()
     {
         using var directory = new WebTestSupport.TempDirectory();
-        await File.WriteAllTextAsync(directory.File("stop-key"), "stop-key-0123456789abcdef\n");
-        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero));
+        var clock = new ManualTimeProvider(Start);
         var controller = new FakeController(clock) { OtherAnswer = request => IsStop(request) ? Stopped() : null };
-        await using var host = await WebHost.StartAsync(
-            [$"--RoofWeb:StopKeyFile={directory.File("stop-key")}"],
-            controller,
-            builder => builder.Services.AddSingleton<TimeProvider>(clock));
+        await using var host = await StartWithStopKeyAsync(directory, controller, clock);
         using var browser = host.Browser();
         await browser.SignInAsync("olga", FakeController.AdaPassword);
         var token = await browser.GetFormTokenAsync("/");
@@ -146,6 +142,130 @@ public sealed partial class WebStopEndpointTests
         var sent = controller.Logged(Post, RoofApiRoutesTest.Stop).Should().ContainSingle().Subject;
         sent.Authorization.Should().Be("Bearer token-1-olga");
         sent.HasApiKey.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task WithAStopKey_APersonWhoseSignInCookieWasRemoved_IsStillStopped_WithTheKey_OnTheirBehalf()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var clock = new ManualTimeProvider(Start);
+        var controller = new FakeController(clock) { OtherAnswer = request => IsStop(request) ? Stopped() : null };
+        await using var host = await StartWithStopKeyAsync(directory, controller, clock);
+        using var browser = host.Browser();
+        await browser.SignInAsync("olga", FakeController.AdaPassword);
+        var token = await browser.GetFormTokenAsync("/");
+        browser.Cookie(WebStopPass.CookieName).Should().BeNull("the browser sends the Stop pass only with Stop");
+        browser.Cookie(WebStopPass.CookieName, WebAuthentication.StopPostPath).Should().NotBeNull();
+
+        // An admin ends olga's session while the roof moves: her page hears of it and goes to the sign-in page, and that
+        // request removes her sign-in cookie.
+        controller.EndSession("token-1-olga");
+        host.Sessions.TryFind("session-1", out var session).Should().BeTrue();
+        session.End();
+        (await browser.GetAsync("signin?message=ended")).Dispose();
+        browser.Cookie(WebAuthentication.CookieName).Should().BeNull();
+
+        var (status, answer) = await StopAsync(browser, token);
+
+        status.Should().Be(HttpStatusCode.OK);
+        answer.Should().Be(new WebStopResponse(nameof(RoofStopOutcome.Acknowledged), RoofStopText.AcknowledgedVerified));
+        var sent = controller.Logged(Post, RoofApiRoutesTest.Stop).Should().ContainSingle().Subject;
+        sent.Authorization.Should().BeNull("her session is over");
+        sent.HasApiKey.Should().BeTrue();
+        sent.OnBehalfOf.Should().Be("olga");
+    }
+
+    [TestMethod]
+    public async Task WithAStopKey_APassThatRanOut_IsNotUsed()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var clock = new ManualTimeProvider(Start);
+        var controller = new FakeController(clock) { OtherAnswer = request => IsStop(request) ? Stopped() : null };
+        await using var host = await StartWithStopKeyAsync(directory, controller, clock, "--RoofWeb:StopAfterSessionHours=2");
+        using var browser = host.Browser();
+        await browser.SignInAsync("olga", FakeController.AdaPassword);
+        var token = await browser.GetFormTokenAsync("/");
+
+        // Her session expired an hour ago (and her sign-in cookie with it); her pass has an hour left.
+        clock.AdvanceWithoutTimers(TimeSpan.FromHours(13));
+        var inTime = await StopAsync(browser, token);
+        clock.AdvanceWithoutTimers(TimeSpan.FromHours(1));
+        var tooLate = await StopAsync(browser, token);
+
+        inTime.Status.Should().Be(HttpStatusCode.OK);
+        controller.Logged(Post, RoofApiRoutesTest.Stop).Should().ContainSingle().Which.OnBehalfOf.Should().Be("olga");
+        tooLate.Should().Be((HttpStatusCode.Unauthorized, new WebStopResponse(nameof(RoofStopOutcome.Failed), RoofStopText.PageSignedOut)));
+    }
+
+    [TestMethod]
+    public async Task WithAStopKey_SigningOut_EndsStopFromThatBrowser()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var clock = new ManualTimeProvider(Start);
+        var controller = new FakeController(clock) { OtherAnswer = request => IsStop(request) ? Stopped() : null };
+        await using var host = await StartWithStopKeyAsync(directory, controller, clock);
+        using var browser = host.Browser();
+        await browser.SignInAsync("olga", FakeController.AdaPassword);
+        var token = await browser.GetFormTokenAsync("/");
+
+        (await browser.PostFormAsync("/account/signout", new Dictionary<string, string>())).Dispose();
+        var (status, answer) = await StopAsync(browser, token);
+
+        browser.Cookie(WebStopPass.CookieName, WebAuthentication.StopPostPath).Should().BeNull();
+        status.Should().Be(HttpStatusCode.Unauthorized);
+        answer.Should().Be(new WebStopResponse(nameof(RoofStopOutcome.Failed), RoofStopText.PageSignedOut));
+        controller.Logged(Post, RoofApiRoutesTest.Stop).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task WithAStopKey_AControllerThatRefusesTheKey_IsNotCalledAStop()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var clock = new ManualTimeProvider(Start);
+        var controller = new FakeController(clock)
+        {
+            OtherAnswer = request => IsStop(request) ? FakeController.Problem(HttpStatusCode.Unauthorized, null) : null,
+        };
+        await using var host = await StartWithStopKeyAsync(directory, controller, clock);
+        using var browser = host.Browser();
+        await browser.SignInAsync("olga", FakeController.AdaPassword);
+        var token = await browser.GetFormTokenAsync("/");
+        browser.RemoveCookie(WebAuthentication.CookieName);
+
+        var (status, answer) = await StopAsync(browser, token);
+
+        status.Should().Be(HttpStatusCode.ServiceUnavailable);
+        answer.Should().Be(new WebStopResponse(nameof(RoofStopOutcome.Failed), RoofStopText.PageSignedOut));
+    }
+
+    [TestMethod]
+    public async Task WithoutAStopKey_NoStopPassIsIssued()
+    {
+        await using var host = await StartAsync(_ => Stopped());
+        using var browser = host.Browser();
+
+        await browser.SignInAsync("olga", FakeController.AdaPassword);
+
+        browser.Cookie(WebAuthentication.CookieName).Should().NotBeNull();
+        browser.Cookie(WebStopPass.CookieName, WebAuthentication.StopPostPath).Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task StopsFromOneAddress_BeyondTheLimit_AreRefused_WithoutReachingTheController()
+    {
+        await using var host = await StartAsync(_ => Stopped());
+        using var browser = host.Browser();
+        var token = await browser.GetFormTokenAsync("/signin");
+
+        var answers = new List<(HttpStatusCode Status, WebStopResponse Answer)>();
+        for (var stop = 0; stop <= WebStopLimiter.Burst; stop++)
+        {
+            answers.Add(await StopAsync(browser, token));
+        }
+
+        answers.Take(WebStopLimiter.Burst).Should().OnlyContain(answer => answer.Status == HttpStatusCode.OK);
+        answers[^1].Should().Be((HttpStatusCode.TooManyRequests, new WebStopResponse(nameof(RoofStopOutcome.Failed), RoofStopText.Failed(WebStopTexts.TooMany))));
+        host.Controller.Logged(Post, RoofApiRoutesTest.Stop).Should().HaveCount(WebStopLimiter.Burst);
     }
 
     [TestMethod]
@@ -295,6 +415,18 @@ public sealed partial class WebStopEndpointTests
 
         using var theme = await browser.GetAsync("/" + assets.Single(asset => asset.Contains("hvo-dark", StringComparison.Ordinal)));
         (await theme.Content.ReadAsStringAsync()).Should().Contain(":root[data-theme=\"hvo-dark\"]").And.Contain("--hvo-body-bg");
+    }
+
+    private static readonly DateTimeOffset Start = new(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
+
+    // A web UI with a Stop key, on the clock the controller's sessions expire by.
+    private static async Task<WebHost> StartWithStopKeyAsync(WebTestSupport.TempDirectory directory, FakeController controller, ManualTimeProvider clock, params string[] args)
+    {
+        await File.WriteAllTextAsync(directory.File("stop-key"), "stop-key-0123456789abcdef\n");
+        return await WebHost.StartAsync(
+            [$"--RoofWeb:StopKeyFile={directory.File("stop-key")}", .. args],
+            controller,
+            builder => builder.Services.AddSingleton<TimeProvider>(clock));
     }
 
     private static Task<WebHost> StartAsync(Func<HttpRequestMessage, HttpResponseMessage> stop)

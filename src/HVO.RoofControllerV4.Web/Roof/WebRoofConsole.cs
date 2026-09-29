@@ -32,6 +32,12 @@ public sealed record WebRoofView
     /// <summary>True while the page has the person's open session.</summary>
     public bool HasSession { get; init; }
 
+    /// <summary>
+    /// What Stop does once the person's session has ended (<see cref="WebStopTexts.AfterSessionEnds"/>): it still works
+    /// with the web UI's Stop key, and may be refused without it.
+    /// </summary>
+    public string StopAfterSessionEnds { get; init; } = WebStopTexts.AfterSessionEnds(stopOutlastsSessions: false);
+
     /// <summary>True when the person's role allows Open, Close and Clear fault (the controller still decides).</summary>
     public bool CanOperate { get; init; }
 
@@ -116,6 +122,7 @@ public sealed class WebRoofConsole : IDisposable
     private readonly WebCircuitMonitor _circuit;
     private readonly TimeProvider _time;
     private readonly ILogger<WebRoofConsole> _logger;
+    private readonly string _stopAfterSessionEnds;
     private readonly Lock _gate = new();
     private readonly CancellationTokenSource _closing = new();
     private readonly ITimer _leaseTimer;
@@ -135,8 +142,10 @@ public sealed class WebRoofConsole : IDisposable
     private bool _disposed;
     private WebRoofView _view = WebRoofView.NotStarted;
 
-    public WebRoofConsole(WebSessionAccessor sessions, WebCircuitMonitor circuit, TimeProvider time, ILogger<WebRoofConsole> logger)
+    public WebRoofConsole(WebSessionAccessor sessions, WebCircuitMonitor circuit, WebStopPass stopPass, TimeProvider time, ILogger<WebRoofConsole> logger)
     {
+        ArgumentNullException.ThrowIfNull(stopPass);
+        _stopAfterSessionEnds = WebStopTexts.AfterSessionEnds(stopPass.OutlastsSessions);
         _sessions = sessions;
         _circuit = circuit;
         _time = time;
@@ -781,7 +790,7 @@ public sealed class WebRoofConsole : IDisposable
         if (feed is not null)
         {
             banner = _status is null
-                ? refused ? "No status: the controller refused your session. Sign in again. Stop still works." : "No status from the controller yet."
+                ? refused ? $"No status: the controller refused your session. Sign in again. {_stopAfterSessionEnds}" : "No status from the controller yet."
                 : feed.StaleSince is { } since ? $"STALE: no status since {RoofStatusText.Time(since)}. Showing the last known state; Stop still works."
                 : staleSince is { } read ? $"STALE: status from a single read at {RoofStatusText.Time(read)}; live status is not connected. Stop still works."
                 : null;
@@ -793,6 +802,7 @@ public sealed class WebRoofConsole : IDisposable
         {
             IsStarted = _started,
             HasSession = _session is not null,
+            StopAfterSessionEnds = _stopAfterSessionEnds,
             CanOperate = command.CanOperate == true,
             Status = _status,
             FeedState = state,

@@ -318,6 +318,9 @@ public sealed class WebSignInTests
     [DataRow("/ACCOUNT", "/")]
     [DataRow("/signin?returnUrl=/x", "/")]
     [DataRow("relative", "/")]
+    [DataRow("/camera/2/mjpeg", "/")]
+    [DataRow("/Camera", "/")]
+    [DataRow("/cameras", "/cameras")]
     public void GetSafeReturnUrl_KeepsOnlyPagesOfThisSite(string? returnUrl, string expected)
     {
         WebAccountEndpoints.GetSafeReturnUrl(returnUrl).Should().Be(expected);
