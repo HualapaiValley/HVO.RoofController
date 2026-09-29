@@ -1,6 +1,7 @@
 // Stop from the reconnect dialog (App.razor). The form is posted with fetch, so Stop works while the Blazor circuit is
 // down, and the dialog shows what the controller answered. The console cookie and the form's antiforgery field
-// authenticate the request (POST /console/stop).
+// authenticate the request (POST /console/stop). The wording is RoofStopText's (HVO.RoofControllerV4.Client), which
+// a test pins, so every client says the same.
 (function () {
     "use strict";
 
@@ -14,7 +15,7 @@
 
     async function readResult(response) {
         if (response.status === 401) {
-            return ["failed", "Stop was not sent because the session has ended. Reload and sign in, or use the stop control at the roof."];
+            return ["failed", "Stop was not sent because the session is signed out. Sign in again, or use the stop control at the roof."];
         }
 
         let body = null;
@@ -29,7 +30,7 @@
             return [state, body.message];
         }
 
-        return ["failed", `Stop was refused (HTTP ${response.status}).${useRoofStop}`];
+        return ["failed", `Stop failed: The controller refused the request (HTTP ${response.status}).${useRoofStop}`];
     }
 
     async function sendStop(form) {
@@ -51,7 +52,8 @@
             const [state, text] = await readResult(response);
             show(output, state, text);
         } catch {
-            show(output, "failed", `Stop could not reach the controller.${useRoofStop}`);
+            const reason = abort.signal.aborted ? "The controller did not answer in time." : "The controller could not be reached.";
+            show(output, "failed", `Stop failed: ${reason}${useRoofStop}`);
         } finally {
             clearTimeout(timer);
             button.disabled = false;

@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Components.Pages;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
@@ -19,7 +20,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 [TestCategory(Scenario.BrowserCategory)]
 public sealed class C15ReconnectDialogStopBrowserTests
 {
-    private const string NotReached = "Stop could not reach the controller. Use the stop control at the roof.";
+    private const string NotReached = "Stop failed: The controller could not be reached. Use the stop control at the roof.";
 
     private ConsoleBrowser? _browser;
 
@@ -102,7 +103,7 @@ public sealed class C15ReconnectDialogStopBrowserTests
         await browser.DialogStop.ClickAsync();
         await Expect(browser.DialogStopResult).ToHaveAttributeAsync("data-state", "failed");
         await Expect(browser.DialogStopResult).ToHaveTextAsync(
-            "Stop was not sent because the session has ended. Reload and sign in, or use the stop control at the roof.");
+            RoofStopText.SignedOut);
         rig.Controller.GetCurrentStatusSnapshot().IsMoving.Should().BeTrue("a stop without a session is refused");
         rig.Logs.Entries.Should().NotContain(e => e.Message.StartsWith("Console stop (no circuit) from "));
 

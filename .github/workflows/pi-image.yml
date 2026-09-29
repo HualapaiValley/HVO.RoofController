@@ -9,6 +9,7 @@ on:
     paths:
       - 'src/HVO.RoofControllerV4.RPi/**'
       - 'src/HVO.RoofControllerV4.Common/**'
+      - 'src/HVO.RoofControllerV4.Client/**'
       - 'src/HVO.WebSite.Themes/**'
       - 'src/global.json'
       - 'src/NuGet.config'
@@ -21,6 +22,7 @@ on:
     paths:
       - 'src/HVO.RoofControllerV4.RPi/**'
       - 'src/HVO.RoofControllerV4.Common/**'
+      - 'src/HVO.RoofControllerV4.Client/**'
       - 'src/HVO.WebSite.Themes/**'
       - 'src/global.json'
       - 'src/NuGet.config'

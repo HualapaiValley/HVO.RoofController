@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.Core.Results;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Components.Pages;
 using HVO.RoofControllerV4.RPi.Logic;

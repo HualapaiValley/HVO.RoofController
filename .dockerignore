@@ -3,7 +3,7 @@
 # Docker only reads .dockerignore from the context root, so it lives here and serves both:
 #
 # - src/HVO.RoofControllerV4.RPi/Dockerfile (the controller) needs Directory.Build.props,
-#   Directory.Packages.props, src/global.json, src/NuGet.config and the Common, RPi and
+#   Directory.Packages.props, src/global.json, src/NuGet.config and the Common, Client, RPi and
 #   WebSite.Themes project folders under src/.
 # - src/HVO.RoofControllerV4.Emulator/Dockerfile (the HAT emulator) needs the same root files
 #   and the Common, Simulation and Emulator project folders under src/.

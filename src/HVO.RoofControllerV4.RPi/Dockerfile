@@ -29,6 +29,7 @@ WORKDIR /repo/src
 COPY ["Directory.Build.props", "Directory.Packages.props", "/repo/"]
 COPY ["src/global.json", "src/NuGet.config", "./"]
 COPY ["src/HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj", "HVO.RoofControllerV4.Common/"]
+COPY ["src/HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj", "HVO.RoofControllerV4.Client/"]
 COPY ["src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj", "HVO.RoofControllerV4.RPi/"]
 COPY ["src/HVO.WebSite.Themes/HVO.WebSite.Themes.csproj", "HVO.WebSite.Themes/"]
 
@@ -48,6 +49,7 @@ RUN dotnet restore "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
 
 # Copy the remainder of the needed sources and publish
 COPY ["src/HVO.RoofControllerV4.Common/", "HVO.RoofControllerV4.Common/"]
+COPY ["src/HVO.RoofControllerV4.Client/", "HVO.RoofControllerV4.Client/"]
 COPY ["src/HVO.WebSite.Themes/", "HVO.WebSite.Themes/"]
 COPY ["src/HVO.RoofControllerV4.RPi/", "HVO.RoofControllerV4.RPi/"]
 

@@ -1,5 +1,6 @@
 using System;
 using HVO.Core.Results;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Components.Pages;
 using HVO.RoofControllerV4.RPi.Logic;
@@ -74,7 +75,7 @@ public static class RoofConsoleEndpoints
             return Results.Json(
                 new ConsoleStopResponse(
                     nameof(RoofStopOutcome.Failed),
-                    $"Stop failed: {RoofConsoleRules.DescribeFailure(ex)} Use the stop control at the roof."),
+                    RoofStopText.Failed(RoofConsoleRules.DescribeFailure(ex))),
                 statusCode: StatusCodes.Status500InternalServerError);
         }
 

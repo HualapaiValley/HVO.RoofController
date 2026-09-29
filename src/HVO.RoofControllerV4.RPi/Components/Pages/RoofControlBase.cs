@@ -3,6 +3,7 @@ using System.Linq;
 using System.Security.Claims;
 using System.Text.Json;
 using HVO.Core.Results;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
@@ -512,12 +513,12 @@ public class RoofControlBase : ComponentBase, IDisposable
     protected async Task StopRoofAsync()
     {
         var sequence = ++_stopSequence;
-        SetStopOutcome(RoofStopOutcome.Sent, "Stop sent. Waiting for the controller…");
+        SetStopOutcome(RoofStopOutcome.Sent, RoofStopText.Sending);
 
         var user = await GetUserAsync();
         if (!await CanSendStopAsync(user))
         {
-            SetStopOutcome(RoofStopOutcome.Failed, "Stop was not sent because the session is signed out. Reload and sign in, or use the stop control at the roof.");
+            SetStopOutcome(RoofStopOutcome.Failed, RoofStopText.SignedOut);
             return;
         }
 
@@ -546,7 +547,7 @@ public class RoofControlBase : ComponentBase, IDisposable
             Logger.LogError(ex, "Stop command failed");
             if (sequence == _stopSequence)
             {
-                SetStopOutcome(RoofStopOutcome.Failed, $"Stop failed: {RoofConsoleRules.DescribeFailure(ex)} Use the stop control at the roof.");
+                SetStopOutcome(RoofStopOutcome.Failed, RoofStopText.Failed(RoofConsoleRules.DescribeFailure(ex)));
             }
 
             AddNotification("Stop failed", RoofConsoleRules.DescribeFailure(ex), NotificationType.Error);
