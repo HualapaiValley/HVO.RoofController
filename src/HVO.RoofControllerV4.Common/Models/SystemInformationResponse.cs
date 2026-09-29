@@ -1,6 +1,6 @@
 using System;
 
-namespace HVO.RoofControllerV4.RPi.Models.System;
+namespace HVO.RoofControllerV4.Common.Models;
 
 public sealed record SystemInformationResponse(
     string ApplicationName,

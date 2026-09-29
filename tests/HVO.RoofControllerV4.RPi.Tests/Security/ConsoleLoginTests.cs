@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.Core.Results;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Components.Pages;
 using HVO.RoofControllerV4.RPi.Logic;
@@ -307,7 +308,7 @@ public sealed class ConsoleLoginTests
         Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await ApiJson.ReadAsync<ConsoleStopResponse>(response);
         Assert.AreEqual(nameof(RoofStopOutcome.Failed), body.Outcome);
-        body.Message.Should().Contain("out of date");
+        body.Message.Should().Be(RoofStopText.PageOutOfDate);
         _host.RoofService.Verify(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>()), Moq.Times.Never);
     }
 

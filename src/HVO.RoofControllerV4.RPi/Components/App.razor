@@ -51,10 +51,11 @@
                 </div>
             </div>
             @* Stop without the circuit: js/console-stop.js posts this form with fetch and shows the controller's answer. *@
-            <form class="reconnect-stop" method="post" action="@RoofControllerSecurityDefaults.ConsoleStopPath" data-console-stop>
+            <form class="reconnect-stop" method="post" action="@RoofControllerSecurityDefaults.ConsoleStopPath" data-console-stop
+                  data-console-stop-texts="@RoofConsoleStopTexts.Json">
                 <AntiforgeryToken />
                 <p class="reconnect-copy">Stop still works while the console is disconnected.</p>
-                <button class="btn btn-danger" type="submit"><i class="bi bi-stop-circle"></i> Stop roof</button>
+                <button class="btn btn-danger" type="submit"><i class="bi bi-stop-circle"></i> @RoofStopText.ButtonLabel</button>
                 <p class="reconnect-stop-result" data-console-stop-result role="status" aria-live="assertive"></p>
             </form>
         </div>

@@ -151,6 +151,7 @@ models exactly that register.
 | `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API ([Commissioning scenarios](#commissioning-scenarios)) |
 | `Scenarios/CameraProxyScenarios` | The camera proxy against the emulated camera: frames relayed, a refusing camera, a frozen one, a camera server restart |
 | `Scenarios/ScenarioCoverageTests` | `docs/commissioning.md` and the scenarios agree: every check has a scenario that CI runs, and every step and assumption is listed |
+| `Client/…` | The client library (#44) against the controller in process: every endpoint's answer and refusal, sign-in, sessions and kiosks, Stop beside a stuck command, the status feed through restarts and silence, settings forms, credentials files, certificate pins over real HTTPS (`RoofCertificatePinTests`), the shared wording and the web console's Stop texts, and that every endpoint has a client call; `RoofClientScenarios` against the emulated roof |
 | `Browser/*BrowserTests` | The console in Chromium on a phone and a tablet, each upright and sideways, and a small phone sideways ([Browser tests](#browser-tests)) |
 
 ## Emulated plant

@@ -1,5 +1,6 @@
 using System;
 using HVO.Core.Results;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Components.Pages;
 using HVO.RoofControllerV4.RPi.Logic;
@@ -55,9 +56,7 @@ public static class RoofConsoleEndpoints
                 caller,
                 http.Connection.RemoteIpAddress);
             return Results.Json(
-                new ConsoleStopResponse(
-                    nameof(RoofStopOutcome.Failed),
-                    "Stop was not sent because this page is out of date. Reload the page, or use the stop control at the roof."),
+                new ConsoleStopResponse(nameof(RoofStopOutcome.Failed), RoofStopText.PageOutOfDate),
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -74,7 +73,7 @@ public static class RoofConsoleEndpoints
             return Results.Json(
                 new ConsoleStopResponse(
                     nameof(RoofStopOutcome.Failed),
-                    $"Stop failed: {RoofConsoleRules.DescribeFailure(ex)} Use the stop control at the roof."),
+                    RoofStopText.Failed(RoofConsoleRules.DescribeFailure(ex))),
                 statusCode: StatusCodes.Status500InternalServerError);
         }
 

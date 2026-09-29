@@ -7,7 +7,7 @@ using Asp.Versioning;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
-using HVO.RoofControllerV4.RPi.Models.System;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Security;
 using Microsoft.AspNetCore.Authorization;
 

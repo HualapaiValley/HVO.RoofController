@@ -1204,7 +1204,7 @@ public sealed class SettingsApiTests
     /// The roof service's configuration: keeps what it is given, refuses while the roof moves, and keeps its local-only
     /// settings unless the caller may change them, as <see cref="IRoofControllerServiceV4.ApplyConfiguration"/> does.
     /// </summary>
-    private sealed class RoofDouble
+    internal sealed class RoofDouble
     {
         private readonly object _gate = new();
         private readonly List<(RoofControllerOptionsV4 Options, bool IncludeLocalOnly)> _applied = [];

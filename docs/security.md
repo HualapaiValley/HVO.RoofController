@@ -268,7 +268,8 @@ Hashing is limited to a few at a time, so sign-in cannot starve the roof. A sign
 invalid values.
 
 A client that uses its own API key on a person's behalf (for example the web UI sending Stop) may add
-`X-On-Behalf-Of: <name>`. The audit log records it as `<key> for <name>`; it grants nothing.
+`X-On-Behalf-Of: <name>`. The audit log records it as `<key> for <name>`; it grants nothing. The name must be a user
+name: the controller ignores any other, and the client library refuses to send one.
 
 ### Managing people, keys and sessions
 
@@ -524,7 +525,10 @@ The console runs over a SignalR connection, so two things do not depend on it:
   `POST /console/stop` with `fetch`. The endpoint accepts only the console cookie, applies the Stop policy, and needs
   the antiforgery token rendered into the dialog. It answers with the same outcome the console's own Stop reports
   (`Acknowledged`, `RelayUnverified` or `Failed`, with a message). When the cookie is no longer accepted (it expired,
-  or its key was removed or rotated), the endpoint returns 401 and the dialog reports that the session has ended.
+  or its key was removed or rotated), the endpoint returns 401 and the dialog says the page is signed out: reload it,
+  or use the stop control at the roof. The dialog's texts are the client library's Stop wording, rendered into the
+  page by the server, so a proxy's error page, the origin check and no answer within 5 s read as they do in every
+  other client.
 - **Operator lease.** The console renews the lease on the server only while the browser connection is up. When the
   server sees the connection drop (at once for a closed tab, within about 30 s for a silent network loss) renewal
   stops, and it does not resume on reconnect, so the lease runs out and stops the roof.

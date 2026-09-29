@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text;
 using System.Text.Json.Serialization;
 
 namespace HVO.RoofControllerV4.Common.Models;
@@ -119,6 +120,13 @@ public sealed record class RoofSignInRequest
     [Required]
     [JsonRequired]
     public string? Password { get; init; }
+
+    // The password is left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Name = {Name}, Password = {(Password is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>Body of <c>POST Auth/Pin</c>, sent with a kiosk key in <c>X-Api-Key</c>.</summary>
@@ -131,6 +139,13 @@ public sealed record class RoofPinSignInRequest
     [Required]
     [JsonRequired]
     public string? Pin { get; init; }
+
+    // The PIN is left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Name = {Name}, Pin = {(Pin is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>Body of <c>POST Auth/Password</c>: a signed-in person changes their own password.</summary>
@@ -143,6 +158,13 @@ public sealed record class RoofPasswordChangeRequest
     [Required]
     [JsonRequired]
     public string? NewPassword { get; init; }
+
+    // The passwords are left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"CurrentPassword = {(CurrentPassword is null ? "(none)" : "(set)")}, NewPassword = {(NewPassword is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>A new session. The token is shown only here; send it as <c>Authorization: Bearer &lt;token&gt;</c>.</summary>
@@ -160,7 +182,16 @@ public sealed record RoofSessionResponse(
     string Role,
     RoofCredentialKind Kind,
     DateTimeOffset ExpiresUtc,
-    double? IdleTimeoutSeconds);
+    double? IdleTimeoutSeconds)
+{
+    // The token is left out, so the record can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"SessionId = {SessionId}, Name = {Name}, Role = {Role}, Kind = {Kind}, ExpiresUtc = {ExpiresUtc:O}, ")
+            .Append($"IdleTimeoutSeconds = {IdleTimeoutSeconds}");
+        return true;
+    }
+}
 
 /// <summary>Who the caller is, from <c>GET Auth/Me</c>.</summary>
 /// <param name="Name">The person or the API key's name.</param>
@@ -209,6 +240,13 @@ public sealed record class RoofUserCreateRequest
 
     /// <summary>For signing in at a kiosk. Operators and admins only.</summary>
     public string? Pin { get; init; }
+
+    // The password and PIN are left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Name = {Name}, Role = {Role}, Password = {(Password is null ? "(none)" : "(set)")}, Pin = {(Pin is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>
@@ -229,6 +267,14 @@ public sealed record class RoofUserUpdateRequest
     public bool RemovePassword { get; init; }
 
     public bool RemovePin { get; init; }
+
+    // The password and PIN are left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Role = {Role}, Password = {(Password is null ? "(none)" : "(set)")}, Pin = {(Pin is null ? "(none)" : "(set)")}, ")
+            .Append($"RemovePassword = {RemovePassword}, RemovePin = {RemovePin}");
+        return true;
+    }
 }
 
 /// <summary>An API key, as the admin endpoints show it. Never its value or hash.</summary>
@@ -273,7 +319,15 @@ public sealed record class RoofApiKeyUpdateRequest
 /// A managed API key that was just created or rotated, with its value. The value is shown only in this response and
 /// cannot be read again.
 /// </summary>
-public sealed record RoofApiKeySecretResponse(RoofApiKeyResponse Key, string Secret);
+public sealed record RoofApiKeySecretResponse(RoofApiKeyResponse Key, string Secret)
+{
+    // The secret is left out, so the record can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Key = {Key}");
+        return true;
+    }
+}
 
 /// <summary>An open session, as the admin endpoints show it. Never its token.</summary>
 public sealed record RoofSessionInfoResponse(

@@ -153,7 +153,7 @@
                 <div class="rc2-action-grid">
                     <button class="btn btn-warning btn-lg control-btn rc2-action rc2-action--stop" type="button" data-testid="stop"
                             title="Stop the roof" aria-describedby="rc2-stop-outcome" @onclick="StopRoofAsync">
-                        <i class="bi bi-stop-circle-fill me-2"></i>Stop
+                        <i class="bi bi-stop-circle-fill me-2"></i>@RoofStopText.ButtonLabel
                     </button>
                     <button class="btn btn-success btn-lg control-btn rc2-action rc2-action--open" type="button" data-testid="open"
                             disabled="@IsOpenDisabled" title="@GetOpenTitle()" @onclick="OpenRoofAsync">
@@ -182,7 +182,7 @@
                 {
                     <p class="rc2-role-hint" data-testid="role-hint">
                         <i class="bi bi-person-lock me-1"></i>
-                        Signed in as @RoleLabel. Open, Close and Clear Fault require the Operator role. Stop is always available.
+                        Signed in as @RoleLabel. Open, Close and Clear Fault require the Operator role. @RoofStopText.AlwaysAvailable
                     </p>
                 }
             </div>
@@ -264,7 +264,7 @@
 
     <div class="rc2-note">
         <i class="bi bi-info-circle me-2"></i>
-        Only one operation at a time. Stop is always available; safety stops are automatic on fault, lost inputs or watchdog timeout.
+        Only one operation at a time. @RoofStopText.AlwaysAvailable Safety stops are automatic on fault, lost inputs or watchdog timeout.
     </div>
 </div>
 
