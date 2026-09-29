@@ -549,8 +549,11 @@ test_a_warning_when_the_web_uis_user_can_read_a_secret() {
   chmod 000 "${WORK}/secrets/Alpha__Private"
   start_supervisor_as_ui_user
   wait_both_running || return
+  # The supervisor lists the files and the web UI's user tries each by name: it may be able to open a file in a
+  # directory it cannot list (not reproducible without root, so the call itself is checked).
   grep -F -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | bash -c" "${FAKE_DIR}/setpriv.log" \
-    | grep -q " ${WORK}/secrets\$" || fail_test "the secrets were not checked as the web UI's user"
+    | grep -qF " _ ${WORK}/secrets/Alpha__Private" \
+    || fail_test "the secrets were not tried by name as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
   ! grep -q "can read" "${WORK}/supervisor.log" || fail_test "a warning for private secrets"
 
   kill -KILL -- "-${SUPERVISOR_PID}" 2>/dev/null

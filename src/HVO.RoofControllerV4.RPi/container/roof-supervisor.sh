@@ -187,13 +187,19 @@ prepare_run_dir() {
 }
 
 # The controller's secrets are for the controller alone. Warns when the web UI's user could read one of them (for
-# example after a chown of the secrets directory to the image's app user).
+# example after a chown of the secrets directory to the image's app user). The files are listed here, as root, and
+# each is tried by name as the web UI's user, who may be able to open a file in a directory it cannot list.
 check_secrets_are_private() {
-  local readable
+  local readable file
+  local -a files=()
   [[ -n "${UI_USER}" && -d "${SECRETS_DIR}" ]] || return 0
+  for file in "${SECRETS_DIR}"/*; do
+    [[ -f "${file}" ]] && files+=("${file}")
+  done
+  (( ${#files[@]} > 0 )) || return 0
   # shellcheck disable=SC2016 # expanded by the inner bash
   readable=$(setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs \
-    bash -c 'for f in "$1"/*; do [[ -f "$f" && -r "$f" ]] && { printf "%s" "$f"; exit 0; }; done' _ "${SECRETS_DIR}" \
+    bash -c 'for f; do [[ -r "$f" ]] && { printf "%s" "$f"; exit 0; }; done' _ "${files[@]}" \
     2>/dev/null)
   if [[ -n "${readable}" ]]; then
     log "WARNING: the web UI's user ${UI_USER} can read ${readable}. The secrets are for the controller alone: keep" \

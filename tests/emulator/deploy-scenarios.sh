@@ -837,7 +837,14 @@ scenario_supervisor() {
     || fail "the controller's API key file is not at /run/secrets/RoofControllerSecurity__ApiKeys__0__Key"
   ! docker exec -u app "${controller}" cat /run/secrets/RoofControllerSecurity__ApiKeys__0__Key >/dev/null 2>&1 \
     || fail "the web UI's user can read the controller's API keys"
-  pass "the web UI (pid ${ui_pid}) runs as app with its RoofWeb__* settings and none of the controller's, and cannot read /run/secrets"
+  # The web UI's private directory (its certificate copies) is root's: the web UI reads it but cannot plant a link there
+  # for the supervisor, running as root, to write through.
+  local private
+  private=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/web) || fail "no /run/hvo-roof/web"
+  [[ "${private}" == "root:app 750" ]] || fail "/run/hvo-roof/web is ${private}, not root:app 750"
+  ! docker exec -u app "${controller}" ln -s /app/x /run/hvo-roof/web/probe 2>/dev/null \
+    || fail "the web UI's user can create a link in /run/hvo-roof/web"
+  pass "the web UI (pid ${ui_pid}) runs as app with its RoofWeb__* settings and none of the controller's, cannot read /run/secrets, and cannot write its private directory (root:app 750)"
 
   container=$(container_id "${controller}")
   restarts=$(docker inspect --format '{{.RestartCount}}' "${controller}")
