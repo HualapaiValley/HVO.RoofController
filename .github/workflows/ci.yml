@@ -122,6 +122,25 @@ jobs:
       - name: Build (Release, warnings as errors)
         run: dotnet build HVO.RoofController.sln -c Release -v minimal -p:ContinuousIntegrationBuild=true
 
+      # hvo-roof as one self-contained file: linux-arm64 for the Pi, linux-x64 for development (docs/cli.md).
+      - name: Publish hvo-roof
+        run: |
+          for rid in linux-arm64 linux-x64; do
+            dotnet publish HVO.RoofControllerV4.Cli -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof/$rid"
+            test -x "hvo-roof/$rid/hvo-roof"
+          done
+          file hvo-roof/linux-arm64/hvo-roof | grep -q 'ARM aarch64'
+          ./hvo-roof/linux-x64/hvo-roof --version
+
+      - name: Upload hvo-roof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hvo-roof-${{ github.run_id }}
+          path: |
+            src/hvo-roof/*/hvo-roof
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -147,9 +166,11 @@ jobs:
           bash -n tests/deploy/deploy-script-tests.sh
           bash -n tests/emulator/compose-smoke-test.sh
           bash -n tests/emulator/deploy-scenarios.sh
+          bash -n tests/cli/terminal-smoke.sh
+          python3 -m py_compile tests/cli/ansi-to-svg.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
-            tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh
+            tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
