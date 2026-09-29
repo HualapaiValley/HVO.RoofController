@@ -144,6 +144,7 @@ public class Program
         app.MapHealthChecks(HealthLivePath);
         app.MapWebAccountEndpoints();
         app.MapWebStopEndpoint();
+        app.MapWebCameraEndpoint();
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
     }
 

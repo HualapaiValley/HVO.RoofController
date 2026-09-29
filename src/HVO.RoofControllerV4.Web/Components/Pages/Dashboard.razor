@@ -1,5 +1,6 @@
 @page "/"
 @inherits WebRoofComponent
+@inject IOptions<RoofWebOptions> WebOptions
 
 <PageTitle>Roof · HVO Roof Controller</PageTitle>
 
@@ -178,6 +179,30 @@
             </div>
         </section>
 
+        <section class="rc2-card rc2-camera" aria-labelledby="rc2-camera-title" data-testid="cameras">
+            <div class="rc2-card-head">
+                <h2 class="rc2-card-title" id="rc2-camera-title"><i class="bi bi-camera-video me-2" aria-hidden="true"></i>@(Cameras.Count == 1 ? "Roof camera" : "Cameras")</h2>
+            </div>
+            <div class="rc2-card-body rc2-camera-body">
+                @* A camera that fails takes only its own view with it: the roof controls, and Stop, are unaffected. *@
+                <ErrorBoundary @ref="_cameraErrorBoundary">
+                    <ChildContent>
+                        @foreach (var camera in Cameras)
+                        {
+                            <CameraStream @key="camera" CameraId="camera" Label="@(Cameras.Count == 1 ? "Roof camera stream" : $"Camera {camera} stream")" />
+                        }
+                    </ChildContent>
+                    <ErrorContent>
+                        <div class="rc2-camera-error" role="alert" data-testid="camera-failed">
+                            <i class="bi bi-camera-video-off" aria-hidden="true"></i>
+                            <span>The camera view failed. The roof controls are unaffected.</span>
+                            <button type="button" class="btn btn-sm btn-outline-light" data-testid="camera-retry" @onclick="RecoverCamera">Retry</button>
+                        </div>
+                    </ErrorContent>
+                </ErrorBoundary>
+            </div>
+        </section>
+
         <section class="rc2-card rc2-details" aria-labelledby="rc2-details-title">
             <div class="rc2-card-head">
                 <h2 class="rc2-card-title" id="rc2-details-title"><i class="bi bi-activity me-2" aria-hidden="true"></i>Status</h2>
@@ -208,6 +233,12 @@
 </div>
 
 @code {
+    private ErrorBoundary? _cameraErrorBoundary;
+
+    private IReadOnlyList<int> Cameras => WebOptions.Value.Cameras;
+
+    private void RecoverCamera() => _cameraErrorBoundary?.Recover();
+
     private string FeedBadgeClass => View.FeedLabel switch
     {
         "live" => "bg-success",

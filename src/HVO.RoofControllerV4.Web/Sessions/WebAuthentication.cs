@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using HVO.RoofControllerV4.Web.Roof;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -159,13 +160,14 @@ public static class WebAuthentication
         await context.HttpContext.SignOutAsync(Scheme);
     }
 
-    // Pages (GET or HEAD) are sent to the sign-in page, which says so when the person's session had ended; a form post
-    // or the live connection gets the status code.
+    // Pages (GET or HEAD) are sent to the sign-in page, which says so when the person's session had ended; a form post,
+    // the live connection or a camera stream gets the status code.
     private static Task RedirectOrStatus(RedirectContext<CookieAuthenticationOptions> context, int statusCode)
     {
         var request = context.Request;
         if ((HttpMethods.IsGet(request.Method) || HttpMethods.IsHead(request.Method))
-            && !request.Path.StartsWithSegments("/_blazor", StringComparison.OrdinalIgnoreCase))
+            && !request.Path.StartsWithSegments("/_blazor", StringComparison.OrdinalIgnoreCase)
+            && !request.Path.StartsWithSegments(WebCameraEndpoint.PathPrefix, StringComparison.OrdinalIgnoreCase))
         {
             var target = context.RedirectUri;
             if (statusCode == StatusCodes.Status401Unauthorized && SessionEnded(context.HttpContext))

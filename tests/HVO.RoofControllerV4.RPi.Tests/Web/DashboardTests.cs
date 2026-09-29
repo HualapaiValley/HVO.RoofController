@@ -6,12 +6,16 @@ using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
+using HVO.RoofControllerV4.Web;
 using HVO.RoofControllerV4.Web.Components.Layout;
 using HVO.RoofControllerV4.Web.Components.Pages;
 using HVO.RoofControllerV4.Web.Roof;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.JSInterop;
+using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -204,15 +208,81 @@ public sealed class DashboardTests
         cut.WaitForAssertion(() => cut.FindAll("[data-testid=mode-banner]").Should().BeEmpty());
     }
 
+    [TestMethod]
+    public async Task TheRoofCamera_IsShownBesideTheControls()
+    {
+        using var harness = await WebRoofHarness.CreateAsync();
+        await using var context = Context(harness);
+
+        var cut = context.Render<Dashboard>();
+
+        cut.WaitForAssertion(() => cut.Find("[data-testid=dashboard]").GetAttribute("data-feed").Should().Be("live"));
+        Text(cut.Find("#rc2-camera-title")).Should().Be("Roof camera");
+        cut.FindAll("[data-testid=cameras] [data-testid=camera]").Select(camera => camera.GetAttribute("data-camera")).ToList()
+            .Should().Equal("2");
+        cut.Find("[data-testid=cameras] .player-frame").GetAttribute("aria-label").Should().Be("Roof camera stream");
+        cut.FindAll("[data-testid=camera-failed]").Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TheCamerasInTheSettings_AreShownEachUnderItsNumber()
+    {
+        using var harness = await WebRoofHarness.CreateAsync();
+        await using var context = Context(harness, new RoofWebOptions { CameraIds = [3, 5] });
+
+        var cut = context.Render<Dashboard>();
+
+        Text(cut.Find("#rc2-camera-title")).Should().Be("Cameras");
+        cut.FindAll("[data-testid=cameras] [data-testid=camera]").Select(camera => camera.GetAttribute("data-camera")).ToList()
+            .Should().Equal("3", "5");
+        cut.FindAll("[data-testid=cameras] .player-frame").Select(frame => frame.GetAttribute("aria-label")).ToList()
+            .Should().Equal("Camera 3 stream", "Camera 5 stream");
+    }
+
+    [TestMethod]
+    public async Task ACameraViewThatFails_LeavesTheRoofControls_AndCanBeRetried()
+    {
+        using var harness = await WebRoofHarness.CreateAsync();
+        await using var context = Context(harness, js: false);
+        var module = new Mock<IJSObjectReference>();
+        module.Setup(m => m.InvokeAsync<IJSObjectReference>("createPlayer", It.IsAny<object?[]?>()))
+            .ReturnsAsync(new Mock<IJSObjectReference>().Object);
+        var js = new Mock<IJSRuntime>();
+        js.SetupSequence(j => j.InvokeAsync<IJSObjectReference>("import", It.IsAny<object?[]?>()))
+            .Returns(ValueTask.FromException<IJSObjectReference>(new InvalidOperationException("the player broke")))
+            .ReturnsAsync(module.Object);
+        context.Services.AddSingleton(js.Object);
+
+        var cut = context.Render<Dashboard>();
+
+        cut.WaitForAssertion(() => Text(cut.Find("[data-testid=camera-failed]")).Should().StartWith("The camera view failed. The roof controls are unaffected."));
+        cut.FindAll("[data-testid=cameras] [data-testid=camera]").Should().BeEmpty();
+        cut.WaitForAssertion(() => cut.Find("[data-testid=dashboard]").GetAttribute("data-feed").Should().Be("live"));
+        cut.Find("[data-testid=open]").HasAttribute("disabled").Should().BeFalse("the roof controls are unaffected");
+
+        cut.Find("[data-testid=camera-retry]").Click();
+
+        cut.WaitForAssertion(() => cut.Find("[data-testid=cameras] button[title=Pause]").HasAttribute("disabled").Should().BeFalse());
+        cut.FindAll("[data-testid=camera-failed]").Should().BeEmpty();
+        js.Verify(j => j.InvokeAsync<IJSObjectReference>("import", It.IsAny<object?[]?>()), Times.Exactly(2));
+    }
+
     // The text as it reads: whitespace from the markup collapsed.
     private static string Text(IElement element) => Regex.Replace(element.TextContent, @"\s+", " ").Trim();
 
-    private static BunitContext Context(WebRoofHarness harness)
+    private static BunitContext Context(WebRoofHarness harness, RoofWebOptions? options = null, bool js = true)
     {
         var context = new BunitContext();
         context.Services.AddSingleton(harness.Console);
         context.Services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         context.Services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
+        context.Services.AddSingleton(Options.Create(options ?? new RoofWebOptions()));
+        if (js)
+        {
+            // The camera's player starts in the page's browser.
+            WebCameraStreamTests.SetUpThePlayer(context, out _, out _);
+        }
+
         return context;
     }
 }

@@ -170,6 +170,8 @@ internal static class RoofApiRoutesTest
     public const string Password = "api/v4.0/Auth/Password";
 
     public const string Stop = "api/v4.0/RoofControl/Stop";
+
+    public static string Camera(int cameraId) => $"api/v1.0/Camera/{cameraId}/mjpeg";
 }
 
 /// <summary>Reaches <see cref="FakeController"/> instead of a controller.</summary>
@@ -267,6 +269,10 @@ internal sealed partial class WebBrowserClient : IDisposable
     public Task<HttpResponseMessage> GetAsync(string path) => _client.GetAsync(new Uri(path, UriKind.Relative));
 
     public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request) => _client.SendAsync(request);
+
+    /// <summary>Gets a page's stream: answers once its headers arrive, and the body is read as it comes.</summary>
+    public Task<HttpResponseMessage> OpenStreamAsync(string path)
+        => _client.SendAsync(new HttpRequestMessage(HttpMethod.Get, new Uri(path, UriKind.Relative)), HttpCompletionOption.ResponseHeadersRead);
 
     /// <summary>Opens the sign-in page and posts its form.</summary>
     public async Task<HttpResponseMessage> SignInAsync(string name, string password, string? returnUrl = null)
