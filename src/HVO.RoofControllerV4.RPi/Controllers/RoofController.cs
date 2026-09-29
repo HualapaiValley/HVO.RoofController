@@ -66,6 +66,20 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         }
 
         /// <summary>
+        /// How the controller drives the roof (anonymous): the HAT mode and whether it ignores the limit switches, so a
+        /// sign-in page can warn that it is not the observatory roof in normal use. No position, state or name.
+        /// </summary>
+        /// <response code="200">The mode.</response>
+        [HttpGet("Mode", Name = nameof(GetRoofMode))]
+        [AllowAnonymous]
+        [ProducesResponseType(typeof(RoofModeResponse), StatusCodes.Status200OK)]
+        public ActionResult<RoofModeResponse> GetRoofMode()
+        {
+            var status = _roofController.GetCurrentStatusSnapshot();
+            return Ok(new RoofModeResponse(status.HatMode, status.IsIgnoringPhysicalLimitSwitches));
+        }
+
+        /// <summary>
         /// Starts opening the roof (Operator).
         /// </summary>
         /// <response code="200">Motion started; status snapshot after the command.</response>

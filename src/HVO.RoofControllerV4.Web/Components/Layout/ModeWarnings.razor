@@ -1,0 +1,17 @@
+@* The mode banner's look (ModeBanner, SignInLayout): the warnings of RoofStatusText.DescribeModeWarnings, nothing
+   when there are none. *@
+@if (Warnings is { Count: > 0 })
+{
+    <div class="alert alert-warning web-mode-banner @Class" role="alert" data-testid="mode-banner">
+        @foreach (var warning in Warnings)
+        {
+            <p><i class="bi bi-cpu me-1" aria-hidden="true"></i>@warning</p>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<string>? Warnings { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+}

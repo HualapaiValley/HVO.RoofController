@@ -90,6 +90,26 @@ public sealed class RoofClientApiTests
     }
 
     [TestMethod]
+    public async Task TheMode_IsReadWithoutTheCredential_AndGivesTheModeWarnings()
+    {
+        var roof = RoofServiceMock.Create();
+        roof.Setup(service => service.GetCurrentStatusSnapshot()).Returns(() => RoofServiceMock.Snapshot(RoofControllerStatus.Closed) with
+        {
+            HatMode = RoofHatMode.Emulated,
+            IsIgnoringPhysicalLimitSwitches = true,
+        });
+        using var host = CreateHost(roof);
+        var sent = new ConcurrentQueue<RecordedRequest>();
+        using var client = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Viewer), handler: () => new RecordingHandler(host.Server, sent));
+
+        var mode = await client.Roof.GetModeAsync();
+
+        mode.Should().Be(new RoofModeResponse(RoofHatMode.Emulated, true));
+        RoofStatusText.DescribeModeWarnings(mode).Should().Equal(RoofStatusText.EmulatedHat, RoofStatusText.LimitsIgnored);
+        sent.Should().ContainSingle().Which.Headers.Keys.Should().NotContain(["X-Api-Key", "Authorization"], "an anonymous read carries no credential");
+    }
+
+    [TestMethod]
     public async Task ARefusedCommand_CarriesTheCode_TheRoofStatus_AndTheSharedWording()
     {
         var roof = RoofServiceMock.Create();

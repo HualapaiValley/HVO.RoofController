@@ -35,11 +35,15 @@ for the first admin ([cli.md](cli.md#setup)).
 - A wrong name or password always says the same thing. After `SignInAttemptsPerMinute` attempts from one address in a
   minute (10 by default), the web UI refuses more before asking the controller; the controller's own lockout
   (`LockoutThreshold`) applies as well.
-- **Sign out** ends the session at the controller. So does an admin ending it on the People page, or the person's
-  password being changed elsewhere: the next thing the page does says they are signed out.
+- **Sign out** ends the session here at once, then at the controller (when the controller does not answer, its session
+  idles out there), and removes the person's Stop pass ([Stop](#stop)). The sign-in page then says
+  `You are signed out.`, in each of their open pages too. An admin ending the session on the People page, or the
+  person's password being changed elsewhere, ends it as well: the next thing the page does sends it to the sign-in
+  page, which says the session ended, and their Stop pass stays.
 - **Change password** (the person's name at the top of the page) changes it at the controller. The person's other
   sessions end; this one stays open.
 - Only a signed-in person may open a live page. The sign-in page is a plain form that needs no live connection.
+- An address the web UI does not have shows a plain **Not found** page (404), to anyone, signed in or not.
 
 ## Pages
 
@@ -53,9 +57,11 @@ for the first admin ([cli.md](cli.md#setup)).
 | Change password (`/account/password`) | everyone | The person's own password. |
 
 A Viewer and an Operator see Roof, Health and Settings in the navigation. Opening an admin page without the Admin role
-says so, and shows nothing of it. On every page, the **mode banner** says when the controller is not driving the
-observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never mistaken for
-the roof.
+says so, and shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
+not driving the observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never
+mistaken for the roof. Before sign-in the banner comes from the controller's anonymous `GET .../RoofControl/Mode`,
+which says only how the roof is driven. The pages share one read per `StatusRefreshSeconds`, and when the controller
+does not answer there is no banner rather than an old one.
 
 ### Roof
 
@@ -168,8 +174,23 @@ its end, so the bar never covers the end of a page.
   posts the form itself and shows the answer as a page.
 - The web UI sends Stop to the controller with the person's session. With `StopKeyFile`, it sends its own key as well,
   naming the person (`X-On-Behalf-Of`), so Stop still works when their session has ended at the controller (a Viewer
-  key is enough). A page that was signed out when it loaded sends no credential: the controller then decides, with
-  `RoofControllerSecurity:AllowAnonymousStop`.
+  key is enough).
+- **The Stop pass.** With `StopKeyFile`, signing in also gives the browser a Stop pass: a second cookie,
+  `hvo.roof.web.stop`, that the browser sends only with `POST /stop` (HttpOnly, `SameSite=Strict`, path `/stop`). It
+  holds the person's name, role and session, protected by the same keys as the sign-in cookie, and no controller token.
+  Once their session has ended and the sign-in cookie has gone (the page went to the sign-in page), Stop from any of
+  their pages, the sign-in page too, is sent with the Stop key on their behalf until the pass runs out:
+  `StopAfterSessionHours` (12 by default) after the session would have expired. Signing out removes it at once; signing
+  in again replaces it. While Stop outlasts the session, a page whose session has ended says `Stop still works.`;
+  otherwise it says Stop may be refused until the person signs in again. The pass cannot tell an expired session from
+  one an admin ended, so a removed person's browser can still send Stop until it runs out
+  ([security.md](security.md#web-ui) says how to end every pass at once).
+- A page that was signed out when it loaded, in a browser without a Stop pass, sends no credential: the controller then
+  decides, with `RoofControllerSecurity:AllowAnonymousStop`.
+- **Limit.** One address may send 30 Stops at once, then one more every 250 ms (four a second). A person pressing Stop
+  over and over never reaches it; past it, the answer is
+  `Stop failed: Too many Stops were sent from this address. Wait a moment, then press Stop again. Use the stop control at the roof.`
+  (429), and the web UI does not ask the controller. The controller itself never limits Stop.
 - The answer says what the controller verified, for example
   `Stop acknowledged. Relay register verified de-energized.`, or why Stop failed, with
   `Use the stop control at the roof.` The page waits up to 25 s for the answer.
@@ -193,6 +214,7 @@ passes the web UI these and nothing else of the controller's settings
 | `SupervisorControlPath` | none | The supervisor's control directory, where a forced restart is asked for. |
 | `StatusRefreshSeconds` | `2` | How often the pages check the controller's readiness and the supervisor's state, from 1 to 60. |
 | `StopKeyFile` | none | A file with the web UI's own API key for Stop (a Viewer key is enough). None: Stop uses the person's session alone. In the container, point it at a Viewer key's file in the secrets directory, such as `/run/secrets/RoofControllerSecurity__ApiKeys__2__Key`; the supervisor gives the web UI a private copy ([The web UI's user and settings](deployment.md#the-web-uis-user-and-settings)). |
+| `StopAfterSessionHours` | `12` | With `StopKeyFile`: how long, in hours after a person's session would have expired, their browser's Stop pass still sends Stop ([Stop](#stop)), from 0 to 168. 0: only until the session would have expired. |
 | `AllowedOrigins` | none | Origins, besides the web UI's own, that may post its forms and open its live connection, for example `https://roof.example.org` behind a proxy. Scheme, host and port only. |
 | `DataProtectionPath` | none; in the container `/var/lib/hvo-roof-web/keys` | A directory for the keys that protect the sign-in cookie and the forms, so they survive a restart. None: the keys are in memory, and everyone signs in again after the web UI restarts. In the container the supervisor gives it a directory only the web UI can read, which lasts as long as the container: a redeploy signs everyone out. |
 | `SignInAttemptsPerMinute` | `10` | Sign-in attempts accepted from one address a minute, from 1 to 1000. |

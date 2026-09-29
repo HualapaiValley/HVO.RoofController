@@ -114,6 +114,19 @@ public sealed class RoofStatusTextTests
     }
 
     [TestMethod]
+    [DataRow(RoofHatMode.Unknown, false)]
+    [DataRow(RoofHatMode.Physical, true)]
+    [DataRow(RoofHatMode.Emulated, false)]
+    [DataRow(RoofHatMode.Simulation, true)]
+    public void DescribeModeWarnings_FromTheAnonymousModeRead_MatchTheStatus(RoofHatMode hatMode, bool ignoringLimits)
+    {
+        var status = RoofServiceMock.Snapshot() with { HatMode = hatMode, IsIgnoringPhysicalLimitSwitches = ignoringLimits };
+
+        RoofStatusText.DescribeModeWarnings(new RoofModeResponse(hatMode, ignoringLimits))
+            .Should().Equal(RoofStatusText.DescribeModeWarnings(status));
+    }
+
+    [TestMethod]
     public void DescribeHat_NamesEveryMode()
     {
         foreach (var mode in Enum.GetValues<RoofHatMode>())

@@ -52,6 +52,9 @@ internal sealed class FakeController
     /// <summary>When set, answers any other request it does not return null for, before the default.</summary>
     public Func<HttpRequestMessage, HttpResponseMessage?>? OtherAnswer { get; set; }
 
+    /// <summary>When set, the controller's answer to the anonymous mode read; otherwise it answers as for anything else.</summary>
+    public RoofModeResponse? Mode { get; set; }
+
     /// <summary>The role the next sessions get, whatever the person's own.</summary>
     public string? RoleOverride { get; set; }
 
@@ -102,6 +105,11 @@ internal sealed class FakeController
         {
             EndSession(token!);
             return new HttpResponseMessage(HttpStatusCode.NoContent);
+        }
+
+        if (path == "/" + RoofApiRoutesTest.Mode && request.Method == HttpMethod.Get && Mode is { } mode)
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(mode, options: RoofClientJson.Options) };
         }
 
         if (path == "/" + RoofApiRoutesTest.Password && request.Method == HttpMethod.Post)
@@ -171,6 +179,8 @@ internal static class RoofApiRoutesTest
     public const string Password = "api/v4.0/Auth/Password";
 
     public const string Stop = "api/v4.0/RoofControl/Stop";
+
+    public const string Mode = "api/v4.0/RoofControl/Mode";
 
     public static string Camera(int cameraId) => $"api/v1.0/Camera/{cameraId}/mjpeg";
 }

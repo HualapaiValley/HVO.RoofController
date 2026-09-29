@@ -61,8 +61,15 @@ public static class RoofStatusText
     public static IReadOnlyList<string> DescribeModeWarnings(RoofStatusResponse status)
     {
         ArgumentNullException.ThrowIfNull(status);
+        return DescribeModeWarnings(new RoofModeResponse(status.HatMode, status.IsIgnoringPhysicalLimitSwitches));
+    }
+
+    /// <summary>The same warnings from the controller's anonymous mode read, for a page nobody has signed in to.</summary>
+    public static IReadOnlyList<string> DescribeModeWarnings(RoofModeResponse mode)
+    {
+        ArgumentNullException.ThrowIfNull(mode);
         var warnings = new List<string>();
-        switch (status.HatMode)
+        switch (mode.HatMode)
         {
             case RoofHatMode.Emulated:
                 warnings.Add(EmulatedHat);
@@ -72,7 +79,7 @@ public static class RoofStatusText
                 break;
         }
 
-        if (status.IsIgnoringPhysicalLimitSwitches)
+        if (mode.IsIgnoringPhysicalLimitSwitches)
         {
             warnings.Add(LimitsIgnored);
         }

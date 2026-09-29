@@ -308,6 +308,13 @@ body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[d
     margin: 0;
 }
 
+/* On the sign-in page the banner sits above the sign-in card, as a card of its own. */
+.web-signin-mode {
+    margin-bottom: 1rem;
+    border-width: 1px;
+    border-radius: var(--bs-border-radius);
+}
+
 .web-health {
     margin-top: 1rem;
 }

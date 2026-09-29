@@ -40,6 +40,7 @@ public sealed class RoofClientCoverageTests
     private static readonly (string Name, Func<RoofControllerClient, Task> Call)[] Calls =
     [
         ("Roof.GetStatus", client => client.Roof.GetStatusAsync()),
+        ("Roof.GetMode", client => client.Roof.GetModeAsync()),
         ("Roof.Open", client => client.Roof.OpenAsync()),
         ("Roof.Close", client => client.Roof.CloseAsync()),
         ("Roof.RenewLease", client => client.Roof.RenewLeaseAsync()),

@@ -1,7 +1,7 @@
 # Roof Controller V4 security
 
 The controller drives a real roof motor, so its HTTP surface is closed by default. Every roof command, status read,
-configuration change, health detail and camera stream needs an API key or a person's session. The anonymous endpoints are the liveness and readiness probes, and signing in with a name and password.
+configuration change, health detail and camera stream needs an API key or a person's session. The anonymous endpoints are the liveness and readiness probes, signing in with a name and password, and how the roof is driven (`GET /api/v4.0/RoofControl/Mode`, for the mode banner on the web UI's sign-in page).
 
 This page covers:
 
@@ -43,6 +43,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | Method and route                                         | Policy            | Success | Other responses |
 |----------------------------------------------------------|-------------------|---------|-----------------|
 | `GET  /api/v4.0/RoofControl/Status`                      | Viewer            | 200 `RoofStatusResponse` (after a forced hardware read) | 401, 403, 500 |
+| `GET  /api/v4.0/RoofControl/Mode`                        | anonymous         | 200 `RoofModeResponse` (the HAT mode and whether the limit switches are ignored, nothing else, from the last status, without a hardware read) | 403 (`https_required`, as on every route but the probes) |
 | `POST /api/v4.0/RoofControl/Open`                        | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
 | `POST /api/v4.0/RoofControl/Close`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
 | `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key or session) | 200 `RoofStatusResponse` | 401, 503, 500 |
@@ -511,6 +512,22 @@ a client of the API like any other:
   applies the person's role, lockouts and revocation as it does for any session.
 - The web UI's Stop is a `POST .../Stop` with the person's session. With `RoofWeb:StopKeyFile`, it also sends its own
   API key and `X-On-Behalf-Of` (see [Signing in](#signing-in)), so Stop still works after the session has ended.
+- With `RoofWeb:StopKeyFile`, signing in also gives the browser a **Stop pass** (the `hvo.roof.web.stop` cookie, sent
+  only with the web UI's `POST /stop`: [web.md](web.md#stop)). It names the person and holds no controller token. Once
+  the sign-in cookie has gone, the web UI sends that person's Stop with its own key until the pass runs out,
+  `RoofWeb:StopAfterSessionHours` (12 by default, at most 168) after the session would have expired. Signing out
+  removes it.
+- **What a pass still allows.** The controller answers 401 alike for a session that expired, idled out or was ended,
+  so the web UI cannot tell a person who was removed from one whose session ran out. Until their pass runs out, a
+  removed person's browser can still send Stop through the web UI, and nothing else; the controller logs each as the
+  web UI's key on behalf of that person. To end every pass at once, remove the web UI's data protection keys (`RoofWeb__DataProtectionPath`, by
+  default `/var/lib/hvo-roof-web/keys`) and restart the container (`docker exec roof-controller sh -c 'rm -f /var/lib/hvo-roof-web/keys/*'`, then
+  `docker restart roof-controller`), or redeploy it: every sign-in cookie and Stop pass is then unreadable, and everyone
+  signs in again. Without `RoofWeb:StopKeyFile` there are no passes; with `RoofWeb:StopAfterSessionHours` at 0 a pass
+  lasts only as long as the session would have. Replacing the Stop key does not end the passes: the web UI sends the
+  key it has now.
+- The web UI limits `POST /stop` from each address to 30 at once, then four a second, so a script cannot make it flood
+  the controller or its log. The controller itself never limits Stop.
 - The web UI's own sign-in rate limit, its origin check (403 `origin_not_allowed` for a form post or live connection
   from another site) and its headers are its settings, in [web.md](web.md#settings).
 

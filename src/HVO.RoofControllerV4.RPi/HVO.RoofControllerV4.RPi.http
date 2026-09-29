@@ -30,6 +30,10 @@ GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Status
 Accept: {{contentType}}
 X-Api-Key: {{apiKey}}
 
+### How the roof is driven (anonymous: the HAT mode and whether the limit switches are ignored)
+GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Mode
+Accept: {{contentType}}
+
 ### Stop roof (any key)
 POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/Stop
 Accept: {{contentType}}

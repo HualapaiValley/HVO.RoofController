@@ -1,7 +1,18 @@
 @inherits LayoutComponentBase
+@inject WebControllerMode ControllerMode
 
 <div class="web-signin-frame">
     <main class="web-signin-main">
+        <ModeWarnings Warnings="_warnings" Class="web-signin-mode" />
         @Body
     </main>
 </div>
+
+@code {
+    // The mode banner before signing in too, from the controller's anonymous mode read, so an emulator or simulation
+    // run is never mistaken for the roof. Nothing while the controller has not said.
+    private IReadOnlyList<string>? _warnings;
+
+    protected override async Task OnInitializedAsync()
+        => _warnings = await ControllerMode.ReadAsync() is { } mode ? RoofStatusText.DescribeModeWarnings(mode) : null;
+}

@@ -72,10 +72,10 @@ A controller in emulator mode cannot be mistaken for the roof:
 
 | Where | What |
 |-------|------|
-| Every page of the web UI once signed in | An `EMULATED HAT` banner, from the status: "the controller drives the HAT emulator, not the physical HAT. The observatory roof does not move." |
+| Every page of the web UI, the sign-in page too | An `EMULATED HAT` banner, from the status (on the sign-in page, from the anonymous `GET .../RoofControl/Mode`): "the controller drives the HAT emulator, not the physical HAT. The observatory roof does not move." |
 | The clients' controller line (the web UI's status, `hvo-roof status`, the terminal interface) | `emulated HAT` |
 | `/health` | `Degraded`, "Roof controller is running against the HAT emulator (*host:port*), not the physical HAT". A more serious result, such as a latched fault or failing reads, takes its place with " (HAT emulator at *host:port*)" at the end, so every description names the emulator. The data always has `HardwareMode` `Emulated` and `HatEmulatorEndpoint`. |
-| `GET .../RoofControl/Status` | `hatMode: "Emulated"` |
+| `GET .../RoofControl/Status`, `GET .../RoofControl/Mode` | `hatMode: "Emulated"` |
 | Startup log | Warnings from `HVO.RoofControllerV4.RPi.HatEmulation` and `RoofControllerServiceV4` naming the endpoint. The HAT library's own `Mode: Physical I²C` line is expected: the library takes its hardware path, and only the register accesses go to the emulator. |
 | Telemetry | Resource attributes `hvo.roof.hat.mode=emulated` and `hvo.roof.hat.emulator.endpoint` |
 

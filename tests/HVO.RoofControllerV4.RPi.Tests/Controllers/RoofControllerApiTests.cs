@@ -64,6 +64,31 @@ public sealed class RoofControllerApiTests
     }
 
     [TestMethod]
+    [DataRow(RoofHatMode.Physical, false)]
+    [DataRow(RoofHatMode.Emulated, false)]
+    [DataRow(RoofHatMode.Simulation, true)]
+    public async Task Mode_IsAnonymous_AndSaysOnlyHowTheRoofIsDriven(RoofHatMode hatMode, bool ignoringLimits)
+    {
+        _roof.Setup(s => s.GetCurrentStatusSnapshot()).Returns(RoofServiceMock.Snapshot(RoofControllerStatus.Open) with
+        {
+            HatMode = hatMode,
+            IsIgnoringPhysicalLimitSwitches = ignoringLimits,
+            ControllerName = "Observatory roof",
+            LastError = "a detail only a signed-in person may read",
+        });
+        using var client = _host.CreateApiClient();
+
+        var response = await client.GetAsync($"{BasePath}/Mode");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        var body = await ApiJson.ReadElementAsync(response);
+        body.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(["hatMode", "isIgnoringPhysicalLimitSwitches"], "an anonymous caller learns nothing of the roof's position, state or name");
+        var payload = JsonSerializer.Deserialize<RoofModeResponse>(body.GetRawText(), ApiJson.Options)!;
+        payload.Should().Be(new RoofModeResponse(hatMode, ignoringLimits));
+        _roof.Verify(s => s.RefreshStatus(It.IsAny<bool>()), Times.Never);
+    }
+
+    [TestMethod]
     public async Task Status_Viewer_ReturnsSnapshotAfterHardwareRead()
     {
         _roof.Setup(s => s.GetCurrentStatusSnapshot()).Returns(RoofServiceMock.Snapshot(RoofControllerStatus.Open));

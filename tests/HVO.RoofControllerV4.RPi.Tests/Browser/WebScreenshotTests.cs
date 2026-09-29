@@ -104,11 +104,9 @@ public sealed class WebScreenshotTests
         public async Task TakeAsync(string screen, bool wholePage = true, ILocator? mask = null)
         {
             var page = browser.Page;
-            if (!page.Url.Contains("/signin", StringComparison.Ordinal))
-            {
-                // The mode is told to the people signed in, not to a visitor on the sign-in page.
-                await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
-            }
+
+            // Every page says the roof is the emulator's, the sign-in page too.
+            await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
 
             await page.EvaluateAsync("() => document.fonts.ready");
 

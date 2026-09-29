@@ -40,6 +40,12 @@ public sealed class WebRolesBrowserTests
     {
         var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(), WebDevices.Desktop);
         var page = browser.Page;
+
+        // Before signing in too: the sign-in page asks the controller how it drives the roof.
+        await page.GotoAsync("/signin");
+        await Expect(page.GetByTestId("sign-in")).ToBeVisibleAsync();
+        await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
+
         await browser.SignInAsync(name);
         await Expect(page.GetByTestId("signed-in-role")).ToHaveTextAsync(role);
 

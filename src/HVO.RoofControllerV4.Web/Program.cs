@@ -105,6 +105,7 @@ public class Program
         services.AddSingleton<SupervisorStateReader>();
         services.AddSingleton<ControllerForcedRestart>();
         services.AddSingleton<RoofWebStatusProbe>();
+        services.AddSingleton<WebControllerMode>();
 
         // Each signed-in person has their own client of the controller, with their session.
         services.AddSingleton(stopKey);

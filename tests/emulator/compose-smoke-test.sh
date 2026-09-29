@@ -120,11 +120,16 @@ jq -e '.status == "Degraded" and any(.checks[]; .data.HardwareMode == "Emulated"
     || fail "health is not Degraded with HardwareMode Emulated: ${health}"
 echo "[smoke] Health is Degraded and names the emulated HAT"
 
-# The web UI, the container's second process: its sign-in page, with the Stop bar. (Its live pages carry the EMULATED
-# HAT banner: the web UI's tests check it.)
-curl -fsS --max-time 10 "${web}/signin" | grep -q 'data-testid="stop"' \
-    || fail "the web UI's sign-in page does not answer with its Stop bar"
-echo "[smoke] The web UI answers, with Stop on its sign-in page"
+# The controller's anonymous mode read, which the web UI's sign-in page shows; it says nothing else of the roof.
+mode=$(curl -fsS --max-time 10 "${roof}/api/v4.0/RoofControl/Mode")
+jq -e '.hatMode == "Emulated" and .isIgnoringPhysicalLimitSwitches == false and (keys | length) == 2' <<<"${mode}" >/dev/null \
+    || fail "the anonymous mode read does not report only an emulated HAT with the limit switches in use: ${mode}"
+
+# The web UI, the container's second process: its sign-in page, with the Stop bar and the EMULATED HAT banner.
+signin=$(curl -fsS --max-time 10 "${web}/signin")
+grep -q 'data-testid="stop"' <<<"${signin}" || fail "the web UI's sign-in page does not answer with its Stop bar"
+grep -q 'EMULATED HAT' <<<"${signin}" || fail "the web UI's sign-in page does not carry the EMULATED HAT banner"
+echo "[smoke] The web UI answers, with Stop and the EMULATED HAT banner on its sign-in page"
 
 # The camera proxy relays the emulator's MJPEG camera: three seconds of the stream hold JPEG parts. curl ends the
 # endless stream with its time limit (exit 28).
