@@ -288,8 +288,9 @@ prepare_ui_stop_key() {
   printf 'RoofWeb__StopKeyFile=%s\n' "${copy}"
 }
 
-# A path written plainly: repeated slashes made one and a trailing slash dropped, so the default is known however it is
-# written. ".." is left as it is: a symbolic link can make it name somewhere else.
+# A path written plainly: repeated slashes made one and a trailing slash dropped, so the default is known with either.
+# "." and ".." are left as they are, so a path with them is not the default: a symbolic link can make ".." name
+# somewhere else.
 plain_path() {
   local path=$1
   while [[ "${path}" == *//* ]]; do
@@ -302,8 +303,10 @@ plain_path() {
 # The directory for the keys that protect the web UI's sign-in cookie and forms (RoofWeb__DataProtectionPath, or
 # HVO_SUPERVISOR_UI_DATA_DIR/keys), owned by the web UI's user and private to it. The default is in the container, so
 # it lasts while the container does: a redeploy, which makes a new container, signs everyone out. Root makes the
-# default, /var/lib/hvo-roof-web/keys (also when a setting names it, however written), and first gives its parent to
-# root (a volume there may have been given to the web UI's user), so only root can change what the keys directory is.
+# default, /var/lib/hvo-roof-web/keys (also when a setting names it, with repeated or trailing slashes), and first
+# gives its parent to root (a volume there may have been given to the web UI's user), so only root can change what
+# the keys directory is; a parent root cannot change (a share that maps root to nobody) is logged, and the keys are
+# kept in memory.
 # Any other directory may be anywhere, under a directory the web UI's user can write too, where that user could swap a
 # part of the path for a link to, say, the secrets directory; so it is made by the web UI's user, with that user's rights
 # alone, and a link gains nothing. Prints the RoofWeb__DataProtectionPath setting for the web UI; nothing when the

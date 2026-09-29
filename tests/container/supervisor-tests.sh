@@ -639,13 +639,12 @@ test_a_data_directory_of_the_operators_choosing_is_made_by_the_web_uis_user() {
 }
 
 # expect_the_default_keys_directory_made_by_the_supervisor: the supervisor itself (root, in the container) made
-# /var/lib/hvo-roof-web as root's (also when it was the web UI's user's) and a keys directory in it for the web UI's
-# user, not through setpriv, and gave it to the web UI.
+# /var/lib/hvo-roof-web root's (also when it was the web UI's user's) before it made a keys directory in it for the web
+# UI's user, not through setpriv, and gave it to the web UI.
 expect_the_default_keys_directory_made_by_the_supervisor() {
-  grep -qxF -- "-d -m 0755 -o root -g root /var/lib/hvo-roof-web" "${FAKE_DIR}/install.log" \
-    || fail_test "the data directory was not made root's: $(cat "${FAKE_DIR}/install.log")"
-  grep -qxF -- "-d -m 0700 -o ${UI_USER} -g ${UI_GROUP} /var/lib/hvo-roof-web/keys" "${FAKE_DIR}/install.log" \
-    || fail_test "the keys directory was not made for the web UI's user: $(cat "${FAKE_DIR}/install.log")"
+  expect_equal "install calls, in order" "$(grep -F /var/lib/hvo-roof-web "${FAKE_DIR}/install.log")" \
+    "$(printf '%s\n' "-d -m 0755 -o root -g root /var/lib/hvo-roof-web" \
+      "-d -m 0700 -o ${UI_USER} -g ${UI_GROUP} /var/lib/hvo-roof-web/keys")"
   ! grep -qE -- '\| install .*/var/lib/hvo-roof-web' "${FAKE_DIR}/setpriv.log" \
     || fail_test "the keys directory was made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
   expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
@@ -672,7 +671,7 @@ test_the_default_keys_directory_named_as_the_data_directory_is_made_the_same_way
   expect_the_default_keys_directory_made_by_the_supervisor
 }
 
-# However it is written: repeated slashes and a trailing slash name the same directory.
+# Repeated slashes and a trailing slash name the same directory.
 test_the_default_keys_directory_written_with_extra_slashes_is_made_the_same_way() {
   start_supervisor_with_the_default_data_dir "RoofWeb__DataProtectionPath=/var/lib//hvo-roof-web/keys/"
   wait_both_running || return

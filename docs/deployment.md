@@ -675,10 +675,13 @@ cannot read is logged, and the web UI's Stop then uses the person's session alon
 The web UI keeps the keys that protect its sign-in cookie and its forms in a directory only its user can read (mode
 `0700`): `/var/lib/hvo-roof-web/keys` (`HVO_SUPERVISOR_UI_DATA_DIR`), or `RoofWeb__DataProtectionPath` when that is
 set. The default is in the container, so people stay signed in when the web UI or the container restarts, and sign in
-again after a redeploy. The supervisor makes the default as root, also when a setting names it (however written, such
-as with a trailing slash). It first gives `/var/lib/hvo-roof-web` to root (mode `0755`), so only root can change what
-its `keys` directory is; a volume mounted there needs nothing done to it, and one given to 1654 before is taken back at
-the web UI's next start. It makes any other directory (named in `RoofWeb__DataProtectionPath`, or the `keys` directory
+again after a redeploy. The supervisor makes the default as root, also when a setting names it (also with repeated
+slashes or a trailing slash; a path with `.` or `..` in it is not taken for the default). It first gives
+`/var/lib/hvo-roof-web` to root (mode `0755`), so only root can change what its `keys` directory is. A volume mounted
+there must be one root in the container can change the owner of (a Docker volume or a local bind mount); it needs
+nothing else done to it, and one given to 1654 before is taken back at the web UI's next start. A share that root
+cannot change (such as NFS with root squash) is logged, and the web UI keeps its keys in memory: mount it elsewhere,
+give it to 1654, and name it in `RoofWeb__DataProtectionPath`. It makes any other directory (named in `RoofWeb__DataProtectionPath`, or the `keys` directory
 under `HVO_SUPERVISOR_UI_DATA_DIR`) as the web UI's user, not as root, so a symbolic link along the path gains that
 user nothing: the directory must be where that user (the image's `app`, UID 1654) can make it, or already be one it
 owns (for a volume elsewhere, give it to 1654 once). A directory that cannot be made, or a symbolic link, is logged,

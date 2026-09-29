@@ -16,6 +16,11 @@ namespace HVO.RoofControllerV4.RPi.Tests.Web;
 /// there names a handler the renderer has dropped, and fails with <see cref="UnknownEventHandlerIdException"/> before
 /// any handler runs. The page is then rendered again, which makes bUnit read its markup afresh, and the event fired
 /// again. The pages have no <c>OnParametersSet</c>, so that render changes nothing else.
+/// <para>
+/// bUnit throws only for the first handler an event finds. A click on a submit button with no handler of its own is sent
+/// on to its form's <c>onsubmit</c> with an unknown handler skipped, so on old markup it would do nothing and throw
+/// nothing: send a form with <see cref="Submit{TComponent}"/> on the form itself, whose handler is the first.
+/// </para>
 /// </remarks>
 internal static class BunitEvents
 {
