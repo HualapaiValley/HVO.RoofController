@@ -1111,10 +1111,12 @@ public sealed class RoofTerminalUiTests
             closed.SetResult();
         };
 
+        // Released later as well, so a wait that lost its bound fails the assertion below instead of hanging the run.
+        using var releaseLater = new System.Threading.Timer(_ => release.TrySetResult(), null, TimeSpan.FromSeconds(5), System.Threading.Timeout.InfiniteTimeSpan);
         var watch = System.Diagnostics.Stopwatch.StartNew();
         tui.Dispose();
         watch.Stop();
-        release.SetResult();
+        release.TrySetResult();
         closed.Task.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue("the held live status closes once released");
 
         // The signal budget counts on this: a live status that does not close is dropped with the process.
