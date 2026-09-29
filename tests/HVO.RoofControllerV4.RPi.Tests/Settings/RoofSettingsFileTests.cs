@@ -31,13 +31,20 @@ public sealed class RoofSettingsFileTests
     {
         if (!OperatingSystem.IsWindows())
         {
-            foreach (var directory in Directory.GetDirectories(_directory, "*", SearchOption.AllDirectories).Prepend(_directory))
-            {
-                File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            }
+            Unlock(_directory);
         }
 
         Directory.Delete(_directory, recursive: true);
+
+        // Top down, so a directory a test locked can be searched before its children are listed.
+        static void Unlock(string directory)
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            foreach (var child in Directory.GetDirectories(directory))
+            {
+                Unlock(child);
+            }
+        }
     }
 
     [TestMethod]
@@ -101,6 +108,21 @@ public sealed class RoofSettingsFileTests
     }
 
     [TestMethod]
+    [DataRow("""{ "BlueIris": { "Password": "quoted-value" } }""", "BlueIris:Password",
+        "set it through the API (it is kept in the managed secrets file) or as a file in the secrets directory.")]
+    [DataRow("""{ "RoofControllerSecurity": { "ApiKeys": [ { "Name": "ops", "Role": "RoofOperator", "Key": "quoted-value" } ] } }""",
+        "RoofControllerSecurity:ApiKeys:0:Key", "set it as a file in the secrets directory.")]
+    [DataRow("""{ "Kestrel": { "Certificates": { "Default": { "Path": "/https/roof.pfx", "Password": "quoted-value" } } } }""",
+        "Kestrel:Certificates:Default:Password", "set it as a file in the secrets directory.")]
+    public void ASecret_IsRefusedInTheSettingsFile_NamingTheKeyButNeverTheValue(string content, string key, string where)
+    {
+        FluentActions.Invoking(() => Parse(content)).Should().Throw<RoofSettingsFileException>()
+            .Which.Message.Should().StartWith($"The settings file '{Path}' sets {key}, which is a secret.")
+            .And.EndWith(where)
+            .And.NotContain("quoted-value");
+    }
+
+    [TestMethod]
     public void ASecret_IsRefusedInTheSettingsFile_AndOnlySecretsAreAllowedInTheSecretsFile()
     {
         const string secret = """{ "BlueIris": { "Password": "quoted-value" } }""";
@@ -123,6 +145,49 @@ public sealed class RoofSettingsFileTests
         document.Hash.Should().Be(RoofSettingsDocument.AbsentHash);
         RoofSettingsFile.CurrentHash(System.IO.Path.Combine(_directory, "absent.json"), RoofSettingsFileKind.Settings)
             .Should().Be(RoofSettingsDocument.AbsentHash);
+    }
+
+    [TestMethod]
+    [DataRow(false, "settings file", "appsettings.Local.json")]
+    [DataRow(true, "managed secrets file", "secrets.json")]
+    public void ADirectoryAtThePath_IsRefused_NeverReadAsAMissingFile(bool secrets, string name, string file)
+    {
+        var kind = secrets ? RoofSettingsFileKind.Secrets : RoofSettingsFileKind.Settings;
+        var path = System.IO.Path.Combine(_directory, "mounted-as-a-directory");
+        Directory.CreateDirectory(path);
+        var expected = $"The {name} path '{path}' is a directory. It must name the file inside it, for example " +
+            $"'{System.IO.Path.Combine(path, file)}'.";
+
+        FluentActions.Invoking(() => RoofSettingsFile.Read(path, kind)).Should().Throw<RoofSettingsFileException>().WithMessage(expected);
+        FluentActions.Invoking(() => RoofSettingsFile.CurrentHash(path, kind)).Should().Throw<RoofSettingsFileException>().WithMessage(expected);
+        RoofSettingsFile.CheckWritable(path, kind).Should().Be(expected);
+        Directory.GetFileSystemEntries(_directory).Should().Equal([path], "the check leaves no probe");
+    }
+
+    [TestMethod]
+    public void AFileInADirectoryTheControllerCannotSearch_IsRefused_NeverReadAsAMissingFile()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("Unix file modes only.");
+            return;
+        }
+
+        var locked = System.IO.Path.Combine(_directory, "locked");
+        var path = System.IO.Path.Combine(locked, "appsettings.Local.json");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(path, """{ "RoofControllerOptionsV4": { "CloseRelayId": 2 } }""");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        if (File.Exists(path))
+        {
+            Assert.Inconclusive("The directory can still be searched (the tests run as root).");
+        }
+
+        var expected = $"The settings file '{path}' could not be read: UnauthorizedAccessException.";
+        FluentActions.Invoking(() => RoofSettingsFile.Read(path, RoofSettingsFileKind.Settings))
+            .Should().Throw<RoofSettingsFileException>().WithMessage(expected);
+        FluentActions.Invoking(() => RoofSettingsFile.CurrentHash(path, RoofSettingsFileKind.Settings))
+            .Should().Throw<RoofSettingsFileException>().WithMessage(expected);
     }
 
     [TestMethod]

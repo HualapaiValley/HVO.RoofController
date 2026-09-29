@@ -68,6 +68,12 @@ the roof against this server; use the authenticated browser console for operator
   that used `http://<pi>:8080` must move to `https://<pi>:8443`. The compose `pi` profile
   likewise needs a certificate and publishes only 8443; the new `pi-lan-http` profile is the
   explicit plain-HTTP opt-out. See [docs/deployment.md](docs/deployment.md).
+- **Settings directories (#42).** Before upgrading, create `/etc/hvo-roof/config` (mode 0755)
+  and `/var/lib/hvo-roof/settings-secrets` (mode 0700) on the Pi. The deploy script and both
+  Pi compose profiles mount them, and Docker refuses to start the controller while either is
+  missing. A version from before this change ignores the settings file, so after rolling back
+  to one, check `GET api/v4.0/RoofControl/Configuration` against the wiring. See
+  [docs/deployment.md](docs/deployment.md#upgrading-to-the-settings-file).
 
 ### Added
 

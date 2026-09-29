@@ -69,12 +69,19 @@ public class Program
         // The roof stop on shutdown is registered by RoofControllerServiceV4Host (ApplicationStopping -> ShutdownAsync).
         Configure(app);
 
-        app.Run();
+        return Run(app);
+    }
 
-        // POST System/Restart: ask whatever supervises the controller to start it again.
-        return app.Services.GetRequiredService<RoofRestartSignal>().Requested
-            ? RoofSettingsContract.RestartExitCode
-            : 0;
+    /// <summary>
+    /// Runs the host until it stops. Returns <see cref="RoofSettingsContract.RestartExitCode"/> after POST System/Restart,
+    /// which asks whatever supervises the controller to start it again, and 0 otherwise.
+    /// </summary>
+    internal static int Run(WebApplication app)
+    {
+        // Resolve the signal first: Run disposes the service provider when the host stops.
+        var restart = app.Services.GetRequiredService<RoofRestartSignal>();
+        app.Run();
+        return restart.Requested ? RoofSettingsContract.RestartExitCode : 0;
     }
 
     /// <summary>

@@ -207,16 +207,37 @@ public sealed class DeploymentValidatorTests
     }
 
     [TestMethod]
-    public void ASettingsFileInAMissingDirectory_Fails()
+    [DataRow("RoofControllerSettings:FilePath", "appsettings.Local.json", "settings file", "0755")]
+    [DataRow("RoofControllerSettings:SecretsFilePath", "secrets.json", "managed secrets file", "0700")]
+    public void ASettingsFileInAMissingDirectory_Fails_AndSaysHowToCreateIt(string key, string name, string kind, string mode)
     {
-        var path = Path.Combine(_directory, "not-mounted", "appsettings.Local.json");
+        var path = Path.Combine(_directory, "not-mounted", name);
         var configuration = OperatorKeys();
         configuration["RoofControllerSecurity:RequireHttps"] = "false";
-        configuration["RoofControllerSettings:FilePath"] = path;
+        configuration[key] = path;
 
         var result = Validate(configuration);
 
-        result.Problems.Should().ContainSingle(problem => problem.Contains("does not exist") && problem.Contains(Path.GetDirectoryName(path)!));
+        result.Problems.Should().ContainSingle(problem => problem.Contains("does not exist")).Which.Should()
+            .Contain($"The {kind} directory '{Path.GetDirectoryName(path)}' does not exist")
+            .And.Contain($"'sudo install -d -m {mode} <directory>' (docs/deployment.md, preparation step 4)")
+            .And.NotContain("the deploy script does");
+    }
+
+    [TestMethod]
+    [DataRow("RoofControllerSettings:FilePath", "settings file")]
+    [DataRow("RoofControllerSettings:SecretsFilePath", "managed secrets file")]
+    public void ASettingsFilePathThatIsADirectory_Fails(string key, string kind)
+    {
+        var path = Path.Combine(_directory, "config");
+        Directory.CreateDirectory(path);
+        var configuration = OperatorKeys();
+        configuration["RoofControllerSecurity:RequireHttps"] = "false";
+        configuration[key] = path;
+
+        var result = Validate(configuration);
+
+        result.Problems.Should().ContainSingle().Which.Should().StartWith($"The {kind} path '{path}' is a directory.");
     }
 
     [TestMethod]

@@ -385,7 +385,9 @@ settings: admins manage them under [`Identity`](#managing-people-keys-and-sessio
 - Roof settings do not change while the roof moves or a clear-fault pulse runs: 409 `OperationInProgress`. Stop first.
 - A setting that a layer above the settings file sets (the environment, the command line or the secrets directory)
   cannot be changed through the API: 403 `SettingNotPermitted`, and `source` names the layer. Change or remove it
-  there.
+  there. On the Pi, the deploy script and both compose profiles set `RoofControllerSecurity:RequireHttps` and
+  `RoofControllerOptionsV4:IgnorePhysicalLimitSwitches` in the environment, so those two are read-only there: change
+  them by redeploying (see [deployment.md](deployment.md#4-the-settings-directories)).
 - The change is applied and saved together. When the files cannot be saved, the roof settings are put back and the
   change fails with 503 `SettingsStoreUnavailable`: nothing changed.
 
@@ -604,7 +606,9 @@ neither. When both are empty, no `Authorization` header is sent. An empty `BaseU
 | `AllowedHosts` | `*` | Set it to the controller's host names (for example `roof-pi;roof-pi.local;localhost`) to refuse DNS-rebinding requests. The list must include `localhost`: the container health check and the deploy script's in-container calls use it, and the [deployment check](deployment.md#the-deployment-check) refuses a list without it. Production logs a warning while it is `*`. |
 
 The first three are the `security` [settings](#settings) group, so admins can change them through the API, each with
-`ConfirmSafetyCriticalChange` except `AllowedOrigins`. `AllowedHosts` is not in the catalogue.
+`ConfirmSafetyCriticalChange` except `AllowedOrigins`. On the Pi, `RequireHttps` is the exception: the deploy script
+(from `ALLOW_INSECURE_HTTP`) and both compose profiles set it in the environment, so the API shows it as read-only and a
+redeploy changes it. `AllowedHosts` is not in the catalogue.
 
 HSTS is sent only when an HTTPS endpoint is configured.
 

@@ -736,7 +736,7 @@ public sealed class RoofSettingsStore
         byte[]? previousSecrets = null;
         if (secretsBytes is not null && secrets.Path is not null)
         {
-            previousSecrets = ReadExisting(secrets.Path, RoofSettingsFileKind.Secrets);
+            previousSecrets = RoofSettingsFile.ReadBytes(secrets.Path, RoofSettingsFileKind.Secrets);
             Written(secrets.Path, RoofSettingsFile.Write(secrets.Path, RoofSettingsFileKind.Secrets, secretsBytes));
         }
 
@@ -765,18 +765,6 @@ public sealed class RoofSettingsStore
         settings.Replace(settingsDocument);
     }
 
-    /// <summary>The file's bytes, or null when it does not exist.</summary>
-    private static byte[]? ReadExisting(string path, RoofSettingsFileKind kind)
-    {
-        try
-        {
-            return File.Exists(path) ? File.ReadAllBytes(path) : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new RoofSettingsFileException($"The {RoofSettingsFile.Describe(kind)} '{path}' could not be read: {ex.GetType().Name}.", ex);
-        }
-    }
 
     private void RestoreSecrets(string path, byte[]? previous)
     {

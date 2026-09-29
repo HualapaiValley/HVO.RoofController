@@ -121,13 +121,30 @@ sudo install -d -m 0700 /var/lib/hvo-roof/settings-secrets
 ```
 
 The controller runs as root in its image, so root owning them is enough. It creates the files at the first save.
-Compose does not create the directories, and the [deployment check](#the-deployment-check) fails when either is
-missing or not writable. The secrets directory, `/etc/hvo-roof/secrets`, stays read-only.
+Neither the deploy script nor Compose creates them. Docker refuses to start the deployment check and the controller
+when either is missing, and the [deployment check](#the-deployment-check) fails when either is not writable. The secrets directory, `/etc/hvo-roof/secrets`, stays read-only.
 
 A setting given with `--env`, in `EXTRA_DOCKER_ARGS` or in the secrets directory overrides the settings file, and the
 API cannot change it (`GET /api/v4.0/Settings` names where it comes from). Keep settings that people should change
-through the API out of those places. Editing the file by hand, and backing it up, are covered in
+through the API out of those places. The deploy script and both Pi compose profiles set two such settings themselves,
+so they are read-only through the API on the Pi:
+
+- `RoofControllerSecurity__RequireHttps`, from `ALLOW_INSECURE_HTTP` or the profile (`pi` or `pi-lan-http`);
+- `RoofControllerOptionsV4__IgnorePhysicalLimitSwitches`, from `IGNORE_PHYSICAL_LIMIT_SWITCHES` (always `false` in
+  compose).
+
+Change either by redeploying. Editing the file by hand, and backing it up, are covered in
 [commissioning.md](commissioning.md#the-settings-file).
+
+#### Upgrading to the settings file
+
+A controller from before the settings file (#42) runs without these directories. Create both, as above, before the
+first deploy of this version: the deploy script and Compose mount them, and Docker refuses to start the controller while
+either is missing. The first deploy then starts with no settings file, so every setting is where it was.
+
+A version from before the settings file ignores it. After a [rollback](#rolling-back) to one, the settings changed
+through the API are no longer in effect: check `GET /api/v4.0/RoofControl/Configuration` against the wiring before
+moving the roof. The file stays in place, so rolling forward again restores them.
 
 ### 5. Operator key for the deploy script
 
@@ -397,6 +414,9 @@ the restored controller and runs the checks from step 7 against it. Nothing is b
 
 Set `HTTPS_CERT_DIR` or `ALLOW_INSECURE_HTTP=true` as for the version being restored, since that decides the URL of
 the remote check. Without either, `--rollback` stops before contacting Docker.
+
+A version from before the settings file ignores it, so the settings changed through the API are not in effect after a
+rollback to one. Check them as [Upgrading to the settings file](#upgrading-to-the-settings-file) describes.
 
 If the swap or the start fails, or the script is interrupted before the start, the swap is undone. The original
 controller is back as `<name>` and restarted if it was running, `<name>-previous` is unchanged, and the outcome starts

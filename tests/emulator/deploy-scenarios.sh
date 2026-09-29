@@ -13,7 +13,8 @@
 #              keep the two from managing the same controller. The script's --verify-remote checks each Compose
 #              controller from this machine without Docker, and rejects a key the controller does not know. A person
 #              added on the Compose controller, and the session they opened there, still work after each move: both
-#              mount the same identity directory.
+#              mount the same identity directory. So does a setting changed through the API on the Compose controller:
+#              both mount the same settings directory.
 #
 # Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It runs only against the local Docker daemon
 # (the default context, with DOCKER_HOST unset or a unix socket), not on a Raspberry Pi, and touches no hardware: the
@@ -177,9 +178,9 @@ roof_post() {
   sed '$d' <<<"${response}"
 }
 
-# identity_call <method> <path under api/v4.0> [JSON body file]: as the scenario's admin key, the key on stdin. Prints the
+# admin_call <method> <path under api/v4.0> [JSON body file]: as the scenario's admin key, the key on stdin. Prints the
 # body, then the HTTP status on the last line.
-identity_call() {
+admin_call() {
   local body=()
   [[ -n "${3:-}" ]] && body=(-H 'Content-Type: application/json' --data-binary "@$3")
   printf 'X-Api-Key: %s\n' "${admin_key}" \
@@ -195,6 +196,16 @@ person_signs_in() {
   [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || return 1
   token=$(sed '$d' <<<"${response}" | jq -r '.token')
   session_knows_person "${token}"
+}
+
+# default_camera_is <name>: GET Settings, as the scenario's admin, shows <name> as the clients' default camera, from the
+# settings file.
+default_camera_is() {
+  local response
+  response=$(admin_call GET Settings) || return 1
+  [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || return 1
+  sed '$d' <<<"${response}" | jq -e --arg name "$1" '[.settings[] | select(.key == "RoofControllerUi:DefaultCamera")]
+    | length == 1 and .[0].value == $name and .[0].source == "settings file"' >/dev/null
 }
 
 # session_knows_person <token>: GET Auth/Me with the session's bearer token (on stdin) answers as the scenario's person.
@@ -373,6 +384,7 @@ run_deploy() {
   env PI_HOST=127.0.0.1 DOCKER_CONTEXT=default IMAGE_TAG="${image}" BUILD_PLATFORM="${platform}" \
     HTTPS_HOST_PORT="${https_port}" HTTPS_CERT_DIR="${work}/certs" REMOTE_CA_CERT="${work}/ca.pem" \
     SECRETS_DIR="${work}/secrets" IDENTITY_DIR="${work}/identity" ROOF_OPERATOR_API_KEY="${operator_key}" \
+    CONFIG_DIR="${work}/config" MANAGED_SECRETS_DIR="${work}/settings-secrets" \
     HAT_EMULATOR_ENDPOINT="${emulator_name}:5291" ALLOW_EMULATED_HAT=true EXTRA_DOCKER_ARGS="--network ${network}" \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 POLL_INTERVAL_SECONDS=0.5 \
     ${env_pairs[@]+"${env_pairs[@]}"} \
@@ -459,6 +471,11 @@ setup() {
   # identity.json there.
   mkdir -p "${work}/identity"
   chmod 700 "${work}/identity"
+  # The settings directories, as docs/deployment.md has them created: the settings file (0755) and the managed secrets
+  # file (0700).
+  mkdir -p "${work}/config" "${work}/settings-secrets"
+  chmod 755 "${work}/config"
+  chmod 700 "${work}/settings-secrets"
   # The camera proxy reads the emulator's camera, as it reads Blue Iris on the Pi (C11).
   printf '%s' "http://${emulator_name}:5290" > "${work}/secrets/BlueIris__BaseUrl"
   chmod 600 "${work}/secrets/BlueIris__BaseUrl"
@@ -512,6 +529,12 @@ services:
       - type: bind
         source: ${work}/identity
         target: /var/lib/hvo-roof/identity
+      - type: bind
+        source: ${work}/config
+        target: /etc/hvo-roof/config
+      - type: bind
+        source: ${work}/settings-secrets
+        target: /var/lib/hvo-roof/settings-secrets
     networks:
       - hat
 networks:
@@ -523,6 +546,7 @@ YAML
 
 compose() {
   HVO_ROOF_SECRETS_DIR="${work}/secrets" HVO_ROOF_CERT_DIR="${work}/certs" HVO_ROOF_IDENTITY_DIR="${work}/identity" \
+    HVO_ROOF_CONFIG_DIR="${work}/config" HVO_ROOF_MANAGED_SECRETS_DIR="${work}/settings-secrets" \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 docker compose -f "${compose_file}" -f "${work}/compose.override.yaml" -p "${compose_project}" --profile pi "$@"
 }
 
@@ -928,7 +952,7 @@ scenario_migration() {
   password=$(openssl rand -hex 16)
   jq -n --arg password "${password}" '{name: "scenario-person", role: "RoofOperator", password: $password}' > "${work}/person.json"
   jq -n --arg password "${password}" '{name: "scenario-person", password: $password}' > "${work}/sign-in.json"
-  response=$(identity_call POST Identity/Users "${work}/person.json")
+  response=$(admin_call POST Identity/Users "${work}/person.json")
   [[ "$(tail -n 1 <<<"${response}")" == 201 ]] || fail "adding a person answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
   response=$(curl -sS --max-time 15 --cacert "${work}/ca.pem" -X POST -H 'Content-Type: application/json' \
     --data-binary "@${work}/sign-in.json" "${roof}/api/v4.0/Auth/Session")
@@ -939,6 +963,25 @@ scenario_migration() {
   [[ "$(stat -c %a "${work}/identity/identity.json")" == 600 ]] \
     || fail "identity.json is mode $(stat -c %a "${work}/identity/identity.json"), not 600"
   pass "an admin added a person, who signed in; identity.json is saved in the identity mount, mode 600"
+
+  current_check="Migration: a setting changed on the Compose controller"
+  local settings_file="${work}/config/appsettings.Local.json"
+  response=$(admin_call GET Settings)
+  [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || fail "GET Settings answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
+  sed '$d' <<<"${response}" | jq '{expectedVersion: .version, confirmSafetyCriticalChange: false,
+    values: {"RoofControllerUi:DefaultCamera": "scenario-camera", "RoofControllerUi:KioskScreenTimeout": 600}}' \
+    > "${work}/settings.json"
+  response=$(admin_call POST Settings/ui "${work}/settings.json")
+  [[ "$(tail -n 1 <<<"${response}")" == 200 ]] \
+    || fail "changing the ui settings answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
+  default_camera_is scenario-camera || fail "the Compose controller does not show the changed setting from the settings file"
+  [[ -f "${settings_file}" ]] || fail "the Compose controller did not save appsettings.Local.json in the settings mount"
+  [[ "$(stat -c %a "${settings_file}")" == 644 ]] \
+    || fail "appsettings.Local.json is mode $(stat -c %a "${settings_file}"), not 644"
+  jq -e '.HvoRoofSettings.Version == 2 and .RoofControllerUi.DefaultCamera == "scenario-camera"
+    and .RoofControllerUi.KioskScreenTimeout == "00:10:00"' "${settings_file}" >/dev/null \
+    || fail "appsettings.Local.json does not hold the change and version 2: $(cat "${settings_file}")"
+  pass "an admin changed the ui settings; appsettings.Local.json is saved in the settings mount, mode 644, at version 2"
 
   # The remote check of a Compose deployment. The Docker context does not exist, so any Docker call would fail.
   current_check="Migration: --verify-remote checks the Compose controller"
@@ -983,8 +1026,9 @@ scenario_migration() {
   [[ "$(container_image "${controller}")" != "${compose_image}" ]] || fail "the script's controller runs the Compose version"
   session_knows_person "${compose_session}" || fail "the session opened on the Compose controller does not work on the script's"
   person_signs_in || fail "the person added on the Compose controller cannot sign in on the script's"
+  default_camera_is scenario-camera || fail "the setting changed on the Compose controller is not in effect on the script's"
   assert_relays_off
-  pass "a verified Stop (--verify-remote), the Compose version tagged ${image}-compose, compose down, then the script deployed in ${DEPLOY_SECONDS} s; the person and their session carried over"
+  pass "a verified Stop (--verify-remote), the Compose version tagged ${image}-compose, compose down, then the script deployed in ${DEPLOY_SECONDS} s; the person, their session and the changed setting carried over"
 
   current_check="Migration: Compose refuses while the script's controller exists"
   if compose up -d --no-build roof-controller >/dev/null 2>"${work}/compose.err"; then
@@ -1013,8 +1057,9 @@ scenario_migration() {
   deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
   (( DEPLOY_STATUS == 0 )) || fail "--verify-remote failed on the Compose version (exit ${DEPLOY_STATUS})"
   person_signs_in || fail "the person cannot sign in on the Compose version again"
+  default_camera_is scenario-camera || fail "the changed setting is not in effect on the Compose version again"
   assert_relays_off
-  pass "a verified Stop (--verify-remote), docker stop and rm, the Compose version tagged back, then the check, compose up and --verify-remote: the Compose version runs again, and the person still signs in"
+  pass "a verified Stop (--verify-remote), docker stop and rm, the Compose version tagged back, then the check, compose up and --verify-remote: the Compose version runs again, the person still signs in, and the changed setting is still in effect"
 
   compose down >/dev/null 2>&1
   docker rmi "${image}-compose" >/dev/null 2>&1 || true

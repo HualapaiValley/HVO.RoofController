@@ -116,36 +116,42 @@ internal static class RoofSettingsFile
     public static RoofSettingsDocument Read(string path, RoofSettingsFileKind kind)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
-        byte[] bytes;
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return RoofSettingsDocument.Empty;
-            }
-
-            bytes = File.ReadAllBytes(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new RoofSettingsFileException($"The {Describe(kind)} '{path}' could not be read: {ex.GetType().Name}.", ex);
-        }
-
-        return Parse(bytes, path, kind);
+        return ReadBytes(path, kind) is { } bytes ? Parse(bytes, path, kind) : RoofSettingsDocument.Empty;
     }
 
     /// <summary>The hash of the file as it is now, or <see cref="RoofSettingsDocument.AbsentHash"/>.</summary>
     public static string CurrentHash(string path, RoofSettingsFileKind kind)
+        => ReadBytes(path, kind) is { } bytes ? Hash(bytes) : RoofSettingsDocument.AbsentHash;
+
+    /// <summary>
+    /// The file's bytes, or null when there is no file. Only a missing file or directory counts as absent: a path that
+    /// names a directory, or that cannot be searched or read, throws <see cref="RoofSettingsFileException"/>, so the
+    /// controller never starts on the defaults because it could not see the file.
+    /// </summary>
+    public static byte[]? ReadBytes(string path, RoofSettingsFileKind kind)
     {
+        if (Directory.Exists(path))
+        {
+            throw new RoofSettingsFileException(DirectoryMessage(path, kind));
+        }
+
         try
         {
-            return File.Exists(path) ? Hash(File.ReadAllBytes(path)) : RoofSettingsDocument.AbsentHash;
+            return File.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new RoofSettingsFileException($"The {Describe(kind)} '{path}' could not be read: {ex.GetType().Name}.", ex);
         }
     }
+
+    private static string DirectoryMessage(string path, RoofSettingsFileKind kind)
+        => $"The {Describe(kind)} path '{path}' is a directory. It must name the file inside it, for example " +
+            $"'{Path.Combine(path, kind == RoofSettingsFileKind.Settings ? "appsettings.Local.json" : "secrets.json")}'.";
 
     /// <summary>Parses a file's bytes. <paramref name="path"/> is used in messages only.</summary>
     public static RoofSettingsDocument Parse(byte[] bytes, string path, RoofSettingsFileKind kind)
@@ -217,9 +223,11 @@ internal static class RoofSettingsFile
         {
             if (kind == RoofSettingsFileKind.Settings && RoofSettingsCatalogue.IsSecretKey(key))
             {
-                throw new RoofSettingsFileException(
-                    $"{name} sets {key}, which is a secret. Secrets stay out of the settings file: set it through the API " +
-                    "(it is kept in the managed secrets file) or as a file in the secrets directory.");
+                // API keys and certificate passwords are not settings the API manages, so only the secrets directory takes them.
+                var where = RoofSettingsCatalogue.Find(key) is { Secret: true }
+                    ? "set it through the API (it is kept in the managed secrets file) or as a file in the secrets directory."
+                    : "set it as a file in the secrets directory.";
+                throw new RoofSettingsFileException($"{name} sets {key}, which is a secret. Secrets stay out of the settings file: {where}");
             }
 
             if (kind == RoofSettingsFileKind.Secrets && RoofSettingsCatalogue.Find(key) is not { Secret: true })
@@ -327,8 +335,15 @@ internal static class RoofSettingsFile
         var directory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path)) ?? ".";
         if (!System.IO.Directory.Exists(directory))
         {
+            var mode = kind == RoofSettingsFileKind.Settings ? "0755" : "0700";
             return $"The {Describe(kind)} directory '{directory}' does not exist, so settings changed through the API could " +
-                "not be saved. Create it (the deploy script does) and mount it read-write.";
+                $"not be saved. Create it on the host with 'sudo install -d -m {mode} <directory>' (docs/deployment.md, " +
+                "preparation step 4) and mount it read-write.";
+        }
+
+        if (Directory.Exists(path))
+        {
+            return DirectoryMessage(path, kind);
         }
 
         var probe = $"{path}.probe-{Guid.NewGuid():N}{TemporarySuffix}";
