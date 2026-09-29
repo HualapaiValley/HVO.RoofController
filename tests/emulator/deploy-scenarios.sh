@@ -312,6 +312,22 @@ expect_absent() {
   esac
 }
 
+# expect_refused <user> <message> <command...>: the command is refused (exit status 1, as cat and ln exit when they are
+# denied) as that user in the container. Fails with the message when it works, and says so when docker or the command
+# could not check. The answer is printed in the container, as in expect_absent.
+expect_refused() {
+  local user=$1 message=$2 answer
+  shift 2
+  answer=$(docker exec -u "${user}" "${controller}" sh -c \
+    '"$@" >/dev/null 2>&1; s=$?; case $s in 0) echo allowed ;; 1) echo refused ;; *) echo "exit $s" ;; esac' sh "$@") \
+    || fail "could not check whether ${user} can run: $* (docker exec failed)"
+  case ${answer} in
+    refused) ;;
+    allowed) fail "${message}" ;;
+    *) fail "could not check whether ${user} can run: $* (${answer:-no answer})" ;;
+  esac
+}
+
 # web_ui_keys_setting: the RoofWeb__DataProtectionPath setting the supervisor started the running web UI with; nothing
 # when it has none. Only that line of its environment is read, as the web UI's user: root in the container has no
 # CAP_SYS_PTRACE, so it cannot read another user's environment.
@@ -876,15 +892,14 @@ scenario_supervisor() {
   # The key file exists (root reads it), so a refusal to app is the permission, not a missing file.
   docker exec "${controller}" test -r /run/secrets/RoofControllerSecurity__ApiKeys__0__Key \
     || fail "the controller's API key file is not at /run/secrets/RoofControllerSecurity__ApiKeys__0__Key"
-  ! docker exec -u app "${controller}" cat /run/secrets/RoofControllerSecurity__ApiKeys__0__Key >/dev/null 2>&1 \
-    || fail "the web UI's user can read the controller's API keys"
+  expect_refused app "the web UI's user can read the controller's API keys" \
+    cat /run/secrets/RoofControllerSecurity__ApiKeys__0__Key
   # The web UI's private directory (its certificate copies) is root's: the web UI reads it but cannot plant a link there
   # for the supervisor, running as root, to write through.
   local private
   private=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/web) || fail "no /run/hvo-roof/web"
   [[ "${private}" == "root:app 750" ]] || fail "/run/hvo-roof/web is ${private}, not root:app 750"
-  ! docker exec -u app "${controller}" ln -s /app/x /run/hvo-roof/web/probe 2>/dev/null \
-    || fail "the web UI's user can create a link in /run/hvo-roof/web"
+  expect_refused app "the web UI's user can create a link in /run/hvo-roof/web" ln -s /app/x /run/hvo-roof/web/probe
   pass "the web UI (pid ${ui_pid}) runs as app with its RoofWeb__* settings and none of the controller's, cannot read /run/secrets, and cannot write its private directory (root:app 750)"
 
   container=$(container_id "${controller}")
@@ -1006,21 +1021,13 @@ scenario_supervisor() {
   current_check="Supervisor: the web UI's keys directory is in a directory only root can change"
   # What the links below name: a directory made for this step, which only root can change, so that a link followed by
   # mistake changes nothing outside the container.
-  local keys_dir=/var/lib/hvo-roof-web target=/var/lib/hvo-scenario-target owners target_was setting probe
+  local keys_dir=/var/lib/hvo-roof-web target=/var/lib/hvo-scenario-target owners target_was setting
   docker exec "${controller}" install -d -m 0750 -o root -g root "${target}" || fail "could not make ${target}"
   target_was=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target}"
   owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ') \
     || fail "no ${keys_dir}/keys"
   [[ "${owners}" == "root:root 755 app:app 700" ]] || fail "${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
-  # The answer is printed in the container, as in expect_absent.
-  probe=$(docker exec -u app "${controller}" \
-    sh -c 'if ln -s "$1" "$2" 2>/dev/null; then echo made; else echo refused; fi' sh "${target}" "${keys_dir}/probe") \
-    || fail "could not check whether the web UI's user can create a link in ${keys_dir} (docker exec failed)"
-  case ${probe} in
-    refused) ;;
-    made) fail "the web UI's user can create a link in ${keys_dir}" ;;
-    *) fail "could not check whether the web UI's user can create a link in ${keys_dir} (${probe:-no answer})" ;;
-  esac
+  expect_refused app "the web UI's user can create a link in ${keys_dir}" ln -s "${target}" "${keys_dir}/probe"
   # A volume there given to the web UI's user, as the docs once advised: at the web UI's next start, root takes it back
   # before it makes the keys directory in it.
   docker exec "${controller}" chown app:app "${keys_dir}" || fail "could not give ${keys_dir} to the web UI's user"

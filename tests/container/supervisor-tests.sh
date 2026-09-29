@@ -261,8 +261,8 @@ test_a_requested_restart_starts_only_the_controller_again_at_once() {
   first_controller=$(pid_of controller)
   ui=$(pid_of ui)
   echo 75 >"${FAKE_DIR}/controller.exit-now"
-  # No backoff for a requested restart (the backoff here would be at least 1 s): the gap below, from the supervisor's
-  # own event times, shows it. The wait only allows for a busy machine.
+  # No backoff for a requested restart (the backoff here would be at least 1 s): the gap below, between the exit and
+  # the next start as the stand-ins logged them (times.log), shows it. The wait only allows for a busy machine.
   wait_until 5 "a second controller start" state_is .controller.starts 2 || return
   wait_until 2 "the controller running again" state_is .controller.state running || return
   [[ "$(pid_of controller)" != "${first_controller}" ]] || fail_test "the controller was not started again"
