@@ -208,6 +208,21 @@ default_camera_is() {
     | length == 1 and .[0].value == $name and .[0].source == "settings file"' >/dev/null
 }
 
+# logging_is_writable: GET Settings, as the scenario's admin, shows both log levels in the logging group as writable,
+# from the shipped defaults. The image once pinned them in its environment, which made them read-only.
+logging_is_writable() {
+  local response
+  response=$(admin_call GET Settings) || return 1
+  [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || return 1
+  sed '$d' <<<"${response}" | jq -e '[.settings[] | select(.key == "Logging:LogLevel:Default" or .key == "Logging:LogLevel:Microsoft.AspNetCore")]
+    | length == 2 and all(.canWrite and .source == "shipped defaults")' >/dev/null
+}
+
+# restarted_since <count>: Docker has restarted the controller's container more than <count> times, and it runs.
+restarted_since() {
+  (( $(docker inspect --format '{{.RestartCount}}' "${controller}") > $1 )) && container_running "${controller}"
+}
+
 # session_knows_person <token>: GET Auth/Me with the session's bearer token (on stdin) answers as the scenario's person.
 session_knows_person() {
   printf 'Authorization: Bearer %s\n' "$1" \
@@ -619,6 +634,27 @@ scenario_lifecycle() {
   assert_relays_off
   pass "the restarted controller is ready, not moving, relays off"
 
+  current_check="Lifecycle: a restart through the API exits 75 and Docker starts the controller again"
+  local restarts container response exit_codes
+  restarts=$(docker inspect --format '{{.RestartCount}}' "${controller}")
+  container=$(container_id "${controller}")
+  start=$(date +%s)
+  response=$(admin_call POST System/Restart)
+  [[ "$(tail -n 1 <<<"${response}")" == 202 ]] \
+    || fail "POST System/Restart answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
+  sed '$d' <<<"${response}" | jq -e '.exitCode == 75' >/dev/null || fail "the restart answer does not name exit code 75: $(sed '$d' <<<"${response}")"
+  wait_for "Docker to start the controller again" 60 restarted_since "${restarts}"
+  exit_codes=$(docker events --since "${start}" --until "$(date +%s)" --filter "container=${container}" --filter event=die \
+    --format '{{index .Actor.Attributes "exitCode"}}' | paste -sd ' ')
+  [[ "${exit_codes}" == 75 ]] || fail "the controller exited with '${exit_codes}' after the restart request, not 75 once"
+  [[ "$(container_id "${controller}")" == "${container}" ]] || fail "the restart replaced the container"
+  wait_for "the controller ready" 120 controller_ready
+  wait_for "the controller initialized" 60 roof_is '.isInitialized and .isMoving == false'
+  container_log_has "${controller}" 'AUDIT controller restart requested by' "${start}" \
+    || fail "the controller's log has no AUDIT entry for the restart"
+  assert_relays_off
+  pass "POST System/Restart answered 202; the controller exited 75 and Docker restarted the same container (restart count ${restarts} -> $(docker inspect --format '{{.RestartCount}}' "${controller}")), ready with the relays off"
+
   # CommissioningCheck("C11")
   current_check="Lifecycle: process killed during travel, then restarted"
   start_travel Open
@@ -981,7 +1017,9 @@ scenario_migration() {
   jq -e '.HvoRoofSettings.Version == 2 and .RoofControllerUi.DefaultCamera == "scenario-camera"
     and .RoofControllerUi.KioskScreenTimeout == "00:10:00"' "${settings_file}" >/dev/null \
     || fail "appsettings.Local.json does not hold the change and version 2: $(cat "${settings_file}")"
-  pass "an admin changed the ui settings; appsettings.Local.json is saved in the settings mount, mode 644, at version 2"
+  logging_is_writable || fail "the Compose controller does not let the API change the log levels: $(admin_call GET Settings \
+    | sed '$d' | jq -c '[.settings[] | select(.group == "logging") | {key, canWrite, source}]')"
+  pass "an admin changed the ui settings; appsettings.Local.json is saved in the settings mount, mode 644, at version 2; the log levels are writable, from the shipped defaults"
 
   # The remote check of a Compose deployment. The Docker context does not exist, so any Docker call would fail.
   current_check="Migration: --verify-remote checks the Compose controller"
@@ -1027,6 +1065,7 @@ scenario_migration() {
   session_knows_person "${compose_session}" || fail "the session opened on the Compose controller does not work on the script's"
   person_signs_in || fail "the person added on the Compose controller cannot sign in on the script's"
   default_camera_is scenario-camera || fail "the setting changed on the Compose controller is not in effect on the script's"
+  logging_is_writable || fail "the script's controller does not let the API change the log levels"
   assert_relays_off
   pass "a verified Stop (--verify-remote), the Compose version tagged ${image}-compose, compose down, then the script deployed in ${DEPLOY_SECONDS} s; the person, their session and the changed setting carried over"
 
