@@ -97,6 +97,7 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 |---------|-------------|
 | `HVO.RoofControllerV4.RPi` | ASP.NET Core web app for Raspberry Pi (GPIO/I2C roof control) |
 | `HVO.RoofControllerV4.Common` | Shared models and options |
+| `HVO.RoofControllerV4.Client` | Client library for the REST API and the status hub, shared by every UI client ([its README](src/HVO.RoofControllerV4.Client/README.md)) |
 | `HVO.RoofControllerV4.Simulation` | Emulated roof plant: SMVector drive, ME-8108 limit switches, SM-I-010 HAT and the wiring |
 | `HVO.RoofControllerV4.Emulator` | HAT emulator: serves the emulated plant's HAT registers over TCP, with a fault-injection API ([docs/emulator.md](docs/emulator.md)) |
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |

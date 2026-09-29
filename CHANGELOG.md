@@ -134,6 +134,17 @@ the roof against this server; use the authenticated browser console for operator
   directories, and the deployment check fails when they cannot be written. See
   [docs/security.md](docs/security.md#settings) and
   [docs/commissioning.md](docs/commissioning.md#the-settings-file).
+- Client library (#44). `HVO.RoofControllerV4.Client` is what every UI client uses to reach the
+  controller: a typed call for every API endpoint (a test fails when an endpoint has none),
+  refusals as `RoofApiException` with the controller's `code`, its roof status and the shared
+  wording, and a status feed that reconnects with backoff, orders snapshots by `sequence` and
+  `instanceId`, and says since when its snapshot may be stale. Credentials are an API key, a
+  session, or a kiosk's device key with a PIN session; a command-line client reads them from
+  `HVO_ROOF_*` environment variables or a `0600` credentials file. Stop is sent at once on a
+  connection of its own, never queued, and every client uses the same Stop wording, pinned by a
+  test. Settings forms are built from the catalogue. The web console now takes its Stop wording
+  and status rules from the library. See
+  [src/HVO.RoofControllerV4.Client/README.md](src/HVO.RoofControllerV4.Client/README.md).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.

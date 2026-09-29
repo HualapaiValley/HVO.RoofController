@@ -97,6 +97,7 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 src/
   HVO.RoofControllerV4.RPi/         # Raspberry Pi server
   HVO.RoofControllerV4.Common/      # Shared models
+  HVO.RoofControllerV4.Client/      # Client library: REST API, status hub, credentials, Stop, shared wording
   HVO.RoofControllerV4.Simulation/  # Emulated drive, limit switches, HAT and wiring (tests and the emulator)
   HVO.RoofControllerV4.Emulator/    # HAT emulator: the emulated plant's HAT registers over TCP, control API
   HVO.WebSite.Themes/               # CSS theme RCL
