@@ -1,0 +1,74 @@
+/* The web UI's own styles, on top of the HVO dark theme (HVO.WebSite.Themes). */
+html,
+body {
+    margin: 0;
+    background: var(--hvo-body-bg, #05070d);
+    color: var(--hvo-body-color, #f8fafc);
+    font-family: var(--hvo-font-family, "Helvetica Neue", Helvetica, Arial, sans-serif);
+}
+
+.web-header {
+    padding: 0.75rem 1rem;
+    background: var(--hvo-navbar-bg, #020617);
+    border-bottom: 1px solid var(--hvo-border-muted, #334155);
+}
+
+.web-brand {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.web-main {
+    max-width: 48rem;
+    margin: 0 auto;
+    padding: 1rem;
+}
+
+.web-status {
+    margin: 1rem 0;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--hvo-border-strong, #334155);
+}
+
+.web-status h2 {
+    margin-top: 0;
+    font-size: 1.25rem;
+}
+
+.web-status--good {
+    background: var(--hvo-success-bg);
+    color: var(--hvo-success-fg);
+}
+
+.web-status--busy {
+    background: var(--hvo-info-bg);
+    color: var(--hvo-info-fg);
+}
+
+.web-status--warning {
+    background: var(--hvo-warning-bg);
+    color: var(--hvo-warning-fg);
+}
+
+.web-status--bad {
+    background: var(--hvo-danger-bg);
+    color: var(--hvo-danger-fg);
+}
+
+.web-supervisor h2 {
+    font-size: 1rem;
+}
+
+.web-checked,
+.web-notice {
+    color: var(--hvo-muted, #cbd5e1);
+    font-size: 0.9rem;
+}
+
+.web-notice {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--hvo-border-muted, #334155);
+}

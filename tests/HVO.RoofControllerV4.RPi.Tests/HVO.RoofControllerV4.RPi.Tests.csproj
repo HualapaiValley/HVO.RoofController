@@ -8,6 +8,12 @@
     <IsTestProject>true</IsTestProject>
     <NoWarn>$(NoWarn);CS1030</NoWarn>
     <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
+    <!--
+      The tests have no static web assets of their own. The controller and the web UI both carry the framework's
+      blazor.web.js, which the test project's own manifest would list twice (a build error); each app's host reads its
+      own manifest, copied here with it.
+    -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
 
   <ItemGroup>
@@ -35,6 +41,7 @@
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.RPi\HVO.RoofControllerV4.RPi.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Simulation\HVO.RoofControllerV4.Simulation.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Emulator\HVO.RoofControllerV4.Emulator.csproj" />
+    <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Web\HVO.RoofControllerV4.Web.csproj" />
     <PackageReference Include="HVO.Iot.Devices" />
   </ItemGroup>
 
