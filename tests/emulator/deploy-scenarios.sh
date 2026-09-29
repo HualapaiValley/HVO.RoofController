@@ -298,14 +298,17 @@ restart_web_ui() {
 }
 
 # expect_absent <user> <path> <message>: the path does not exist, as that user in the container sees it. Fails with the
-# message when it does, and says so when docker could not check.
+# message when it does, and says so when docker could not check. The answer is printed in the container, because
+# docker exec exits 1 for its own errors (a container that is not running, for example), as test -e does.
 expect_absent() {
-  local status=0
-  docker exec -u "$1" "${controller}" test -e "$2" || status=$?
-  case ${status} in
-    1) ;;
-    0) fail "$3" ;;
-    *) fail "could not check for $2 (docker exec exit ${status})" ;;
+  local answer
+  answer=$(docker exec -u "$1" "${controller}" \
+    sh -c 'if [ -e "$1" ]; then echo present; else echo absent; fi' sh "$2") \
+    || fail "could not check for $2 (docker exec failed)"
+  case ${answer} in
+    absent) ;;
+    present) fail "$3" ;;
+    *) fail "could not check for $2 (${answer:-no answer})" ;;
   esac
 }
 
@@ -1003,17 +1006,20 @@ scenario_supervisor() {
   current_check="Supervisor: the web UI's keys directory is in a directory only root can change"
   # What the links below name: a directory made for this step, which only root can change, so that a link followed by
   # mistake changes nothing outside the container.
-  local keys_dir=/var/lib/hvo-roof-web target=/var/lib/hvo-scenario-target owners target_was setting status=0
+  local keys_dir=/var/lib/hvo-roof-web target=/var/lib/hvo-scenario-target owners target_was setting probe
   docker exec "${controller}" install -d -m 0750 -o root -g root "${target}" || fail "could not make ${target}"
   target_was=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target}"
   owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ') \
     || fail "no ${keys_dir}/keys"
   [[ "${owners}" == "root:root 755 app:app 700" ]] || fail "${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
-  docker exec -u app "${controller}" ln -s "${target}" "${keys_dir}/probe" 2>/dev/null || status=$?
-  case ${status} in
-    1) ;;
-    0) fail "the web UI's user can create a link in ${keys_dir}" ;;
-    *) fail "could not check whether the web UI's user can create a link in ${keys_dir} (docker exec exit ${status})" ;;
+  # The answer is printed in the container, as in expect_absent.
+  probe=$(docker exec -u app "${controller}" \
+    sh -c 'if ln -s "$1" "$2" 2>/dev/null; then echo made; else echo refused; fi' sh "${target}" "${keys_dir}/probe") \
+    || fail "could not check whether the web UI's user can create a link in ${keys_dir} (docker exec failed)"
+  case ${probe} in
+    refused) ;;
+    made) fail "the web UI's user can create a link in ${keys_dir}" ;;
+    *) fail "could not check whether the web UI's user can create a link in ${keys_dir} (${probe:-no answer})" ;;
   esac
   # A volume there given to the web UI's user, as the docs once advised: at the web UI's next start, root takes it back
   # before it makes the keys directory in it.
