@@ -675,8 +675,11 @@ cannot read is logged, and the web UI's Stop then uses the person's session alon
 The web UI keeps the keys that protect its sign-in cookie and its forms in a directory only its user can read (mode
 `0700`): `/var/lib/hvo-roof-web/keys` (`HVO_SUPERVISOR_UI_DATA_DIR`), or `RoofWeb__DataProtectionPath` when that is
 set. The default is in the container, so people stay signed in when the web UI or the container restarts, and sign in
-again after a redeploy. A directory that cannot be made, or a symbolic link, is logged, and the web UI keeps the keys in
-memory, so everyone signs in again when it restarts.
+again after a redeploy. The supervisor makes a directory named in `RoofWeb__DataProtectionPath` as the web UI's user,
+not as root, so a symbolic link along the path gains that user nothing: the directory must be where that user (the
+image's `app`, UID 1654) can make it, or already be one it owns (for a volume, give it to 1654 once). A directory that
+cannot be made, or a symbolic link, is logged, and the web UI keeps the keys in memory, so everyone signs in again when
+it restarts.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -685,7 +688,7 @@ memory, so everyone signs in again when it restarts.
 | `RoofWeb__StatusRefreshSeconds` | `2` | How often the pages check the controller's readiness and the supervisor's state, from 1 to 60 |
 | `RoofWeb__Certificate__Path`, `RoofWeb__Certificate__PasswordFile` | the controller's | A certificate of the web UI's own (a `.pfx` file), and a file with its password (none when unset). A password file that cannot be read is logged, and no password is given. |
 | `RoofWeb__StopKeyFile` | none | A file with the web UI's own API key for Stop, such as a Viewer key's file in the secrets directory. The web UI gets a private copy. |
-| `RoofWeb__DataProtectionPath` | `/var/lib/hvo-roof-web/keys` | Where the web UI keeps the keys that protect its sign-in cookie and forms |
+| `RoofWeb__DataProtectionPath` | `/var/lib/hvo-roof-web/keys` | Where the web UI keeps the keys that protect its sign-in cookie and forms. Made by the web UI's user (UID 1654). |
 | `RoofWeb__AllowedOrigins__N`, `RoofWeb__SignInAttemptsPerMinute`, `RoofWeb__CameraIds__N` | none, `10`, camera 2 | Other origins that may post the web UI's forms, sign-in attempts from one address a minute, and the cameras the roof page shows ([web.md](web.md#settings)) |
 
 The web UI checks its settings at start. An invalid one stops it with

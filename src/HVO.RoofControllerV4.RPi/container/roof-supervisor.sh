@@ -288,18 +288,23 @@ prepare_ui_stop_key() {
 
 # The directory for the keys that protect the web UI's sign-in cookie and forms (RoofWeb__DataProtectionPath, or
 # HVO_SUPERVISOR_UI_DATA_DIR/keys), owned by the web UI's user and private to it. The default is in the container, so
-# it lasts while the container does: a redeploy, which makes a new container, signs everyone out. Prints the
-# RoofWeb__DataProtectionPath setting for the web UI; nothing when the directory cannot be made (the keys are then kept
-# in memory).
+# it lasts while the container does: a redeploy, which makes a new container, signs everyone out. Root makes the
+# default, in a directory only root can change. A directory named in RoofWeb__DataProtectionPath may be anywhere, under
+# a directory the web UI's user can write too, where that user could swap a part of the path for a link to, say, the
+# secrets directory; so it is made by the web UI's user, with that user's rights alone, and a link gains nothing. Prints
+# the RoofWeb__DataProtectionPath setting for the web UI; nothing when the directory cannot be made (the keys are then
+# kept in memory).
 prepare_ui_data_protection() {
   local path=${RoofWeb__DataProtectionPath:-}
-  local -a owner=()
-  [[ -n "${UI_USER}" ]] && owner=(-o "${UI_USER}" -g "${UI_GROUP}")
+  local -a make=(install -d -m 0700)
   if [[ -z "${path}" ]]; then
     path="${UI_DATA_DIR}/keys"
     install -d -m 0755 "${UI_DATA_DIR}" || { log "WARNING: cannot create ${UI_DATA_DIR}; the web UI keeps its keys in memory"; return 0; }
+    [[ -z "${UI_USER}" ]] || make+=(-o "${UI_USER}" -g "${UI_GROUP}")
+  elif [[ -n "${UI_USER}" ]]; then
+    make=(setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs "${make[@]}")
   fi
-  if [[ -L "${path}" ]] || ! install -d -m 0700 "${owner[@]}" "${path}"; then
+  if [[ -L "${path}" ]] || ! "${make[@]}" "${path}"; then
     log "WARNING: cannot use ${path} for the web UI's keys; the web UI keeps them in memory, so everyone signs in" \
       "again when it restarts"
     return 0

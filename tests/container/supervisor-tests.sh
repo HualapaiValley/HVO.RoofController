@@ -87,14 +87,14 @@ start_supervisor() {
   SUPERVISOR_PID=$!
 }
 
-# start_supervisor_as_ui_user: start_supervisor, with the web UI given its own user (the test's own) and a
-# stand-in setpriv that logs its options to setpriv.log, since changing user needs root. Sets UI_USER and UI_GROUP.
+# start_supervisor_as_ui_user [VAR=value ...]: start_supervisor, with the web UI given its own user (the test's own) and
+# a stand-in setpriv that logs its options to setpriv.log, since changing user needs root. Sets UI_USER and UI_GROUP.
 start_supervisor_as_ui_user() {
   mkdir -p "${WORK}/setpriv-bin"
   ln -sf "${TESTS_DIR}/fake-setpriv" "${WORK}/setpriv-bin/setpriv"
   UI_USER=$(id -un)
   UI_GROUP=$(id -gn)
-  start_supervisor "HVO_SUPERVISOR_UI_USER=${UI_USER}" "PATH=${WORK}/setpriv-bin:${PATH}"
+  start_supervisor "HVO_SUPERVISOR_UI_USER=${UI_USER}" "PATH=${WORK}/setpriv-bin:${PATH}" "$@"
 }
 
 # wait_until <seconds> <description> <command...>: polls the command every 0.1 s; fails the test at the deadline.
@@ -592,6 +592,23 @@ test_a_link_where_the_keys_go_is_not_used() {
   grep -qF "WARNING: cannot use ${WORK}/data/keys for the web UI's keys; the web UI keeps them in memory" \
     "${WORK}/supervisor.log" || fail_test "no warning for a link: $(cat "${WORK}/supervisor.log")"
   ! ui_env | grep -q '^RoofWeb__DataProtectionPath' || fail_test "the web UI was given a link for its keys"
+  expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
+}
+
+# A part of the path is a link, as the web UI's user could make one in a directory it can write: the directory is made
+# through it by the web UI's user, with that user's rights alone (setpriv), and not by the supervisor's user (root).
+test_a_keys_directory_of_the_operators_choosing_is_made_by_the_web_uis_user() {
+  local path="${WORK}/home/app/x/web-keys" before
+  mkdir -p "${WORK}/home/app" "${WORK}/elsewhere"
+  chmod 0755 "${WORK}/elsewhere"
+  before=$(stat -c %a "${WORK}/elsewhere")
+  ln -s "${WORK}/elsewhere" "${WORK}/home/app/x"
+  start_supervisor_as_ui_user "RoofWeb__DataProtectionPath=${path}"
+  wait_both_running || return
+  grep -qxF -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | install -d -m 0700 ${path}" \
+    "${FAKE_DIR}/setpriv.log" || fail_test "the keys directory was not made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" "RoofWeb__DataProtectionPath=${path}"
+  expect_equal "keys directory" "$(stat -c '%a %U' "${WORK}/elsewhere/web-keys")" "700 ${UI_USER}"
   expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
 }
 
