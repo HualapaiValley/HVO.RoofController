@@ -19,6 +19,12 @@ Container behaviour is chosen per container "kind" (old, current, new, ...) with
                                    (the last one given), otherwise Physical.
   FAKE_<KIND>_PHYSICAL=true|false  isUsingPhysicalHardware of the same responses (default false for hatMode Simulation,
                                    otherwise true)
+  FAKE_<KIND>_WEB_LIVE=false       the web UI's /health/live fails inside the container
+  FAKE_<KIND>_SUPERVISOR=<view>    what `exec <c> cat /run/hvo-roof/supervisor.json` finds (by default both processes
+                                   running, each started once): absent (no such file, as in an image from before the
+                                   supervisor), restarting (the controller waits to start again), crash-loop (the
+                                   controller is left stopped), restarted (each read finds the controller started once
+                                   more), ui-restarting, or ui-restarted (the same for the web UI)
 Other switches:
   FAKE_PREFLIGHT_EXIT=<code>       exit code of `run --rm ... --validate-deployment`
   FAKE_RUN_FAIL=true               `run -d` fails before creating the container
@@ -278,6 +284,32 @@ def cut_off_stop_requested():
     return True
 
 
+def supervisor_json(state, c):
+    """The container supervisor's state file (roof-supervisor.sh writes this format), as FAKE_<KIND>_SUPERVISOR says."""
+    view = behaviour(c["kind"], "SUPERVISOR", "")
+    if view == "absent":
+        die("cat: /run/hvo-roof/supervisor.json: No such file or directory")
+    processes = {"controller": ["running", 1], "ui": ["running", 1]}
+    name = "ui" if view.startswith("ui-") else "controller"
+    view = view.removeprefix("ui-")
+    if view == "restarting":
+        processes[name][0] = "restarting"
+    elif view == "crash-loop":
+        processes[name] = ["crash-loop", 5]
+    elif view == "restarted":
+        key = f"supervised_{name}_starts"
+        c[key] = c.get(key, 1) + 1
+        save(state)
+        processes[name][1] = c[key]
+    parts = []
+    for process, (process_state, starts) in processes.items():
+        pid = "null" if process_state != "running" else "42"
+        parts.append(f'"{process}":{{"state":"{process_state}","pid":{pid},"starts":{starts},"recentCrashes":0,'
+                     '"lastExitCode":null,"lastExitReason":null,"lastExitAt":null}')
+    out('{"supervisor":"running","updatedAt":"2026-01-01T00:00:00Z","crashLimit":5,"crashWindowSeconds":120,'
+        + ",".join(parts) + "}")
+
+
 def exec_curl(state, ref, curl_args, stdin_text):
     name, c = container(state, ref)
     current = docker_state(c)
@@ -288,11 +320,16 @@ def exec_curl(state, ref, curl_args, stdin_text):
     if not c["running"]:
         die(f"container {name} is not running")
     kind = c["kind"]
+    if curl_args == ["cat", "/run/hvo-roof/supervisor.json"]:
+        supervisor_json(state, c)
+        return
     url = curl_args[-1]
     method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"
 
     if url.endswith("/health/ready"):
         sys.exit(0 if behaviour(kind, "READY", "true") == "true" else 22)
+    if url.endswith("/health/live"):
+        sys.exit(0 if behaviour(kind, "WEB_LIVE", "true") == "true" else 22)
 
     if "@-" in curl_args and stdin_text.strip() != f"X-Api-Key: {os.environ['FAKE_EXPECTED_KEY']}":
         out('{"error":"unauthorized"}\n401', end="")

@@ -7,6 +7,8 @@ as curl would. The key (FAKE_EXPECTED_KEY) must arrive on stdin (-H @-), otherwi
 FAKE_REMOTE_STATUS_CODE overrides the Status response code, FAKE_REMOTE_STOP=unverified the Stop result, and
 FAKE_REQUIRE_CACERT=true fails HTTPS without --cacert. The Status and the Stop report the container's hatMode as the fake
 docker does (FAKE_<KIND>_HAT_MODE, otherwise from its HatEmulator__Enabled setting, and FAKE_<KIND>_PHYSICAL).
+The web UI's /health/live must hit container port 8088 with the scheme of the container's RoofWeb__Urls (the image's
+default is http); it needs no key, and FAKE_REMOTE_WEB_LIVE=false fails it (HTTP 503).
 """
 import json
 import os
@@ -53,6 +55,18 @@ def main():
                 target, container = int(container_port), c
     if target is None:
         fail(7, f"Failed to connect to {url.hostname} port {url.port}: Connection refused")
+    if url.path.endswith("/health/live"):
+        web_urls = [o for o in container.get("options", []) if o.startswith("RoofWeb__Urls=")]
+        scheme = (web_urls[-1].split("=", 1)[1] if web_urls else "http://+:8088").split("://")[0]
+        if target != 8088:
+            fail(22, "The requested URL returned error: 404")
+        if url.scheme != scheme:
+            fail(35 if url.scheme == "https" else 52, f"{url.scheme} to a web UI serving {scheme}")
+        if url.scheme == "https" and os.environ.get("FAKE_REQUIRE_CACERT") == "true" and "--cacert" not in args:
+            fail(60, "SSL certificate problem: self-signed certificate")
+        if os.environ.get("FAKE_REMOTE_WEB_LIVE") == "false":
+            fail(22, "The requested URL returned error: 503")
+        return
     if url.scheme == "https" and target != 8443:
         fail(35, "OpenSSL: error:0A00010B:SSL routines::wrong version number")
     if url.scheme == "https" and os.environ.get("FAKE_REQUIRE_CACERT") == "true" and "--cacert" not in args:

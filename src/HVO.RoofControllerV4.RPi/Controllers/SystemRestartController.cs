@@ -15,8 +15,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers;
 /// <summary>
 /// Restarts the controller (#42) so that settings read only at startup take effect. The roof is stopped and the stop
 /// verified first; the controller then shuts down as on SIGTERM and exits with
-/// <see cref="RoofSettingsContract.RestartExitCode"/>, and whatever supervises it (Docker's restart policy, systemd)
-/// starts it again.
+/// <see cref="RoofSettingsContract.RestartExitCode"/>, and whatever supervises it (the container's roof-supervisor,
+/// systemd) starts it again.
 /// </summary>
 [ApiController, ApiVersion("4.0")]
 [Route("api/v{version:apiVersion}/System")]

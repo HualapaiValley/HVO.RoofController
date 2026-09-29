@@ -2,9 +2,10 @@
 # ../.., src/docker-compose.yml uses .., deploy-roofcontroller-rpi.sh passes the repo root).
 # Docker only reads .dockerignore from the context root, so it lives here and serves both:
 #
-# - src/HVO.RoofControllerV4.RPi/Dockerfile (the controller) needs Directory.Build.props,
-#   Directory.Packages.props, src/global.json, src/NuGet.config and the Common, Client, RPi and
-#   WebSite.Themes project folders under src/.
+# - src/HVO.RoofControllerV4.RPi/Dockerfile (the controller and its web UI) needs Directory.Build.props,
+#   Directory.Packages.props, src/global.json, src/NuGet.config, the Common, Client, RPi, Web and
+#   WebSite.Themes project folders under src/, and the supervisor's scripts in
+#   src/HVO.RoofControllerV4.RPi/container/.
 # - src/HVO.RoofControllerV4.Emulator/Dockerfile (the HAT emulator) needs the same root files
 #   and the Common, Simulation and Emulator project folders under src/.
 #
@@ -54,6 +55,8 @@ src/HVO.RoofController.sln
 **/Dockerfile*
 **/docker-compose*
 **/*.sh
+# ...except the container's supervisor and health check, which the controller's image runs.
+!src/HVO.RoofControllerV4.RPi/container/*.sh
 
 # Miscellaneous
 **/node_modules
