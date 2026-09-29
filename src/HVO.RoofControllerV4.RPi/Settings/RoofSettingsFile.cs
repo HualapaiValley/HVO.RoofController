@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -219,22 +220,38 @@ internal static class RoofSettingsFile
             throw new RoofSettingsFileException($"{name} is not valid: {ex.Message}", ex);
         }
 
-        foreach (var key in data.Keys)
+        // A secret is named as such first, whatever else the file holds.
+        if (kind == RoofSettingsFileKind.Settings && data.Keys.FirstOrDefault(RoofSettingsCatalogue.IsSecretKey) is { } secret)
         {
-            if (kind == RoofSettingsFileKind.Settings && RoofSettingsCatalogue.IsSecretKey(key))
+            // API keys and certificate passwords are not settings the API manages, so only the secrets directory takes them.
+            var where = RoofSettingsCatalogue.Find(secret) is { Secret: true }
+                ? "set it through the API (it is kept in the managed secrets file) or as a file in the secrets directory."
+                : "set it as a file in the secrets directory.";
+            throw new RoofSettingsFileException($"{name} sets {secret}, which is a secret. Secrets stay out of the settings file: {where}");
+        }
+
+        foreach (var (key, value) in data)
+        {
+            // An empty object or array leaves its key with no value.
+            var owner = RoofSettingsCatalogue.Owner(key);
+            if (owner is null && value is null && RoofSettingsCatalogue.IsSection(key))
             {
-                // API keys and certificate passwords are not settings the API manages, so only the secrets directory takes them.
-                var where = RoofSettingsCatalogue.Find(key) is { Secret: true }
-                    ? "set it through the API (it is kept in the managed secrets file) or as a file in the secrets directory."
-                    : "set it as a file in the secrets directory.";
-                throw new RoofSettingsFileException($"{name} sets {key}, which is a secret. Secrets stay out of the settings file: {where}");
+                continue;
             }
 
-            if (kind == RoofSettingsFileKind.Secrets && RoofSettingsCatalogue.Find(key) is not { Secret: true })
+            if (kind == RoofSettingsFileKind.Secrets && owner is not { Secret: true })
             {
                 throw new RoofSettingsFileException(
                     $"{name} sets {key}, which is not a secret setting. The managed secrets file holds only the secret " +
                     "settings the API manages; put other settings in the settings file.");
+            }
+
+            if (owner is null)
+            {
+                // Only catalogue settings pass the checks of a change through the API, so nothing else may be loaded from here.
+                throw new RoofSettingsFileException(
+                    $"{name} sets {key}, which is not in the settings catalogue (GET api/v4.0/Settings/Catalogue). The settings " +
+                    "file holds only catalogue settings: set other configuration in the deployment's environment (docs/deployment.md).");
             }
         }
 

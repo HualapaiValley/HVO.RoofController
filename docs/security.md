@@ -422,10 +422,18 @@ Sending a secret always counts as a change, even with the value it already has, 
 shows whether a guess was right. The controller refuses to start with a settings file that holds a secret: any key whose
 last part is `Key` or `Password`, or a secret setting.
 
+The credentials stay with the server they were set for. Pointing `BlueIris:BaseUrl` at another server (another scheme,
+host or port) while a Blue Iris user or password is set gets 409 `ConfigurationRejected`, unless the same request sends
+both `BlueIris:UserName` and `BlueIris:Password` (null clears them). So a stolen admin credential cannot redirect the
+proxy to collect them. Credentials provisioned in the secrets directory cannot be sent through the API; with those,
+change the server where they are set. Turning the proxy off (null) is always allowed.
+
 ### The settings file
 
 `RoofControllerSettings:FilePath` names the settings file; on the Pi it is `/etc/hvo-roof/config/appsettings.Local.json`
 (see [commissioning.md](commissioning.md#the-settings-file)). It uses the section and key names of `appsettings.json`.
+It holds only settings in the catalogue, because only those pass the checks of a change through the API. Other
+configuration, such as Kestrel endpoints or API keys, belongs in the deployment's environment or the secrets directory.
 
 - The configuration layers, lowest first: `appsettings.json`, `appsettings.{Environment}.json`, the settings file, the
   managed secrets file, user secrets (Development only), environment variables, the command line and the secrets
@@ -437,8 +445,8 @@ last part is `Key` or `Password`, or a secret setting.
 - Each save writes a new file, flushes it, renames it over the old one and flushes the directory. A crash or power cut
   leaves the old file or the new one, never a torn one. The file is mode 0644: it holds no secrets.
 - The controller reads comments and trailing commas in the file, but a save through the API rewrites it without them.
-- A file that is not valid JSON, sets a secret, or holds a value the controller cannot use stops the start. The
-  controller writes `The roof controller did not start: ...` to standard error and exits with code 1. It never falls
+- A file that is not valid JSON, sets a secret or a key outside the catalogue, or holds a value the controller cannot
+  use stops the start. The error names the key but never its value. The controller writes `The roof controller did not start: ...` to standard error and exits with code 1. It never falls
   back to the defaults.
 - Without a `FilePath` (or a `SecretsFilePath`), changes are kept in memory and lost at a restart. `GET Settings`
   reports `fileBacked: false` with a warning, and the deployment check warns outside Development.
@@ -449,15 +457,15 @@ The file can be edited by hand while the controller runs. The controller compare
 loaded at every settings request. An edit it finds is **not** in effect:
 
 - `GET Settings` shows it to admins as `pendingHandEdit`: each changed setting, from and to (never a secret's value),
-  other changed keys, values that cannot be used, and whether reloading it needs confirmation or a local credential.
+  values that cannot be used, and whether reloading it needs confirmation or a local credential. An edit that sets a key
+  outside the catalogue shows as a file that cannot be used (`fileProblem`).
 - Every change through the API fails with 409 `SettingsHandEditPending`, so neither change silently overwrites the
   other. `GET Settings` reports every setting as read-only until then.
 - `POST Settings/Reload` with the edit's `token` applies it, with the rules of a change through the API: 400 for values
   that cannot be used, 409 `ConfigurationRejected` for a file that cannot be read, or for a safety-critical change
   without `confirmSafetyCriticalChange: true`, 403 `SettingNotPermitted` for a local-only setting without a local
-  credential, and 409 `OperationInProgress` for a roof setting while the roof moves. Keys outside the catalogue take
-  effect when the parts of the controller that read them do, which may be at the next restart. The reload saves the file
-  again, without its comments, and is audited.
+  credential, and 409 `OperationInProgress` for a roof setting while the roof moves. The reload saves the file again,
+  without its comments, and is audited.
 - `POST Settings/Discard` with the token overwrites the edit with the settings in effect. It also recovers from a file
   that can no longer be read. It is audited.
 - When the files change again after the edit was read, the token no longer matches: 409

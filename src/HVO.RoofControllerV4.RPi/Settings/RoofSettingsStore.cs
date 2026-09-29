@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
 using Microsoft.Extensions.Configuration;
@@ -73,6 +74,7 @@ public sealed class RoofSettingsOutcome
 public sealed class RoofSettingsStore
 {
     private const string DefaultSource = "default";
+    private const string CameraBaseUrlKey = BlueIrisOptions.SectionName + ":" + nameof(BlueIrisOptions.BaseUrl);
 
     private readonly object _gate = new();
     private readonly IConfigurationRoot _configuration;
@@ -295,6 +297,12 @@ public sealed class RoofSettingsStore
                 return RoofSettingsOutcome.Refused(RoofControllerErrorCode.ConfigurationRejected, lockout);
             }
 
+            if (CheckCameraServerChange(changes, view) is { } credentials)
+            {
+                _logger.LogWarning("Settings change by {Caller} rejected: {Problem}", caller, credentials);
+                return RoofSettingsOutcome.Refused(RoofControllerErrorCode.ConfigurationRejected, credentials);
+            }
+
             var outcome = Apply(layers, changes, local, caller, "changed", critical.Count > 0, audit: true,
                 previousVersion => WriteChanges(layers, changes, previousVersion + 1, caller));
             return outcome ?? RoofSettingsOutcome.Success(BuildResponse(GetLayers(), user, null), GetLayers().Settings!.Document.Version);
@@ -420,8 +428,7 @@ public sealed class RoofSettingsStore
                     var version = Math.Max(previousVersion, edit.Settings.Document!.Version) + 1;
                     WriteDocuments(layers, edit.Settings.Document.Body, edit.SecretsChanged ? edit.Secrets.Document!.Body : null, version, caller);
                     return version;
-                },
-                edit.OtherChangedKeys);
+                });
             return outcome ?? RoofSettingsOutcome.Success(BuildResponse(GetLayers(), user, null), GetLayers().Settings!.Document.Version);
         }
     }
@@ -468,7 +475,7 @@ public sealed class RoofSettingsStore
                 version,
                 edit.FileProblem is not null
                     ? "a file that could not be read"
-                    : Describe(edit.Changes, edit.OtherChangedKeys));
+                    : Describe(edit.Changes));
             return RoofSettingsOutcome.Success(BuildResponse(GetLayers(), user, null), version);
         }
     }
@@ -611,8 +618,7 @@ public sealed class RoofSettingsStore
         string action,
         bool safetyCritical,
         bool audit,
-        Func<long, long> persist,
-        IReadOnlyList<string>? otherKeys = null)
+        Func<long, long> persist)
     {
         var previousVersion = layers.Settings!.Document.Version;
         RoofControllerOptionsV4? previousRoof = null;
@@ -664,7 +670,7 @@ public sealed class RoofSettingsStore
                 previousVersion,
                 version,
                 safetyCritical,
-                Describe(changes, otherKeys));
+                Describe(changes));
         }
 
         return null;
@@ -822,7 +828,7 @@ public sealed class RoofSettingsStore
         var secretsChanged = secretsDisk.Hash != layers.Secrets.Document.Hash;
         if ((settingsDisk.Problem ?? secretsDisk.Problem) is { } fileProblem)
         {
-            return new HandEdit(token, settingsDisk, secretsDisk, secretsChanged, [], [], [], fileProblem);
+            return new HandEdit(token, settingsDisk, secretsDisk, secretsChanged, [], [], fileProblem);
         }
 
         var candidateProviders = layers.Providers
@@ -871,14 +877,7 @@ public sealed class RoofSettingsStore
             }
         }
 
-        var otherKeys = ChangedKeys(layers.Settings.Document.Data, settingsDisk.Document!.Data)
-            .Concat(ChangedKeys(layers.Secrets.Document.Data, secretsDisk.Document!.Data))
-            .Where(key => !RoofSettingsCatalogue.All.Any(definition => Covers(definition, key)))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return new HandEdit(token, settingsDisk, secretsDisk, secretsChanged, changes, otherKeys, problems, FileProblem: null);
+        return new HandEdit(token, settingsDisk, secretsDisk, secretsChanged, changes, problems, FileProblem: null);
     }
 
     private static DiskState ReadDisk(RoofSettingsFileProvider provider)
@@ -1086,24 +1085,9 @@ public sealed class RoofSettingsStore
         return data;
     }
 
-    private static bool Covers(RoofSettingDefinition definition, string key) => Covers(definition.Key, key);
-
     private static bool Covers(string settingKey, string key)
         => string.Equals(settingKey, key, StringComparison.OrdinalIgnoreCase)
             || key.StartsWith(settingKey + ConfigurationPath.KeyDelimiter, StringComparison.OrdinalIgnoreCase);
-
-    private static IEnumerable<string> ChangedKeys(IReadOnlyDictionary<string, string?> before, IReadOnlyDictionary<string, string?> after)
-    {
-        foreach (var key in before.Keys.Concat(after.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            var inBefore = before.TryGetValue(key, out var oldValue);
-            var inAfter = after.TryGetValue(key, out var newValue);
-            if (inBefore != inAfter || !string.Equals(oldValue, newValue, StringComparison.Ordinal))
-            {
-                yield return key;
-            }
-        }
-    }
 
     /// <summary>Removes the key's property from <paramref name="root"/>, and the objects left empty above it.</summary>
     private static void RemovePath(JsonObject root, string key)
@@ -1183,6 +1167,36 @@ public sealed class RoofSettingsStore
     private static string? FindName(JsonObject node, string name)
         => node.Select(property => property.Key).FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Refuses pointing the camera proxy at another server (scheme, host or port) while it holds a Blue Iris user or
+    /// password, unless the same change sends both: the proxy would otherwise hand them to a server they were not set for.
+    /// </summary>
+    private static string? CheckCameraServerChange(IReadOnlyList<Change> changes, RoofConfigurationView view)
+    {
+        if (changes.FirstOrDefault(change => change.Definition.Key == CameraBaseUrlKey) is not { } move
+            || move.To is not string to
+            || string.IsNullOrWhiteSpace(to)
+            || SameServer(move.From as string, to))
+        {
+            return null;
+        }
+
+        var credentials = RoofSettingsCatalogue.InGroup(RoofSettingsContract.CameraGroup).Where(definition => definition.Secret).ToList();
+        var sent = credentials.All(definition => changes.Any(change => change.Definition == definition));
+        var held = credentials.Any(definition => definition.TryRead(view, out var value, out _) && IsSet(value));
+        return sent || !held
+            ? null
+            : $"Moving the camera proxy to another server ({CameraBaseUrlKey}) would send it the Blue Iris user and password set " +
+                $"for the current one. Send {string.Join(" and ", credentials.Select(definition => definition.Key))} with it " +
+                "(null clears them). Credentials provisioned in the secrets directory cannot be sent through the API: change the " +
+                "server where they are set.";
+
+        static bool SameServer(string? from, string to)
+            => Uri.TryCreate(from, UriKind.Absolute, out var before)
+                && Uri.TryCreate(to, UriKind.Absolute, out var after)
+                && Uri.Compare(before, after, UriComponents.SchemeAndServer, UriFormat.UriEscaped, StringComparison.OrdinalIgnoreCase) == 0;
+    }
+
     private static bool IsSet(object? value) => value switch
     {
         null => false,
@@ -1191,16 +1205,11 @@ public sealed class RoofSettingsStore
         _ => true
     };
 
-    private static string Describe(IEnumerable<Change> changes, IReadOnlyList<string>? otherKeys = null)
+    private static string Describe(IEnumerable<Change> changes)
     {
         var parts = changes
             .Select(change => $"{change.Definition.Key}: {change.Definition.Describe(change.From)} -> {change.Definition.Describe(change.To)}")
             .ToList();
-        if (otherKeys is { Count: > 0 })
-        {
-            parts.Add("other keys changed: " + string.Join(", ", otherKeys));
-        }
-
         return parts.Count == 0 ? "none" : string.Join("; ", parts);
     }
 
@@ -1251,7 +1260,6 @@ public sealed class RoofSettingsStore
         DiskState Secrets,
         bool SecretsChanged,
         IReadOnlyList<Change> Changes,
-        IReadOnlyList<string> OtherChangedKeys,
         IReadOnlyList<RoofSettingProblem> Problems,
         string? FileProblem)
     {
@@ -1264,7 +1272,6 @@ public sealed class RoofSettingsStore
                     change.Definition.Secret ? null : change.Definition.ToJson(change.To),
                     change.Definition.Secret))
                 .ToList(),
-            OtherChangedKeys,
             Problems,
             FileProblem,
             Changes.Any(change => change.IsSafetyCritical),

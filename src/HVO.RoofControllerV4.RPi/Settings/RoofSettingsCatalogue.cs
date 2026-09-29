@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
@@ -47,6 +48,29 @@ internal static class RoofSettingsCatalogue
         => All.Where(definition => string.Equals(definition.Group, group, StringComparison.Ordinal)).ToList();
 
     public static bool IsGroup(string group) => Groups.Any(entry => string.Equals(entry.Name, group, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The setting a key read from a settings file belongs to: the setting itself, or the list setting an item such as
+    /// <c>RoofControllerSecurity:AllowedOrigins:0</c> belongs to. Null for a key outside the catalogue.
+    /// </summary>
+    public static RoofSettingDefinition? Owner(string key)
+    {
+        if (Find(key) is { } definition)
+        {
+            return definition;
+        }
+
+        var separator = key.LastIndexOf(':');
+        return separator > 0
+            && int.TryParse(key.AsSpan(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out _)
+            && Find(key[..separator]) is { IsList: true } list
+                ? list
+                : null;
+    }
+
+    /// <summary>True for a section above catalogue settings, such as <c>BlueIris</c>, which an empty object leaves.</summary>
+    public static bool IsSection(string key)
+        => All.Any(definition => definition.Key.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True for a key that holds a secret: a secret setting, an API key, or any key whose last segment is

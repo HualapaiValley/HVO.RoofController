@@ -42,6 +42,7 @@ public sealed class SettingsApiTests
     private const string Departure = "RoofControllerOptionsV4:DepartureReleaseTimeout";
     private const string AnonymousStop = "RoofControllerSecurity:AllowAnonymousStop";
     private const string LockoutThreshold = "RoofControllerSecurity:Identity:LockoutThreshold";
+    private const string CameraServer = "BlueIris:BaseUrl";
     private const string CameraUser = "BlueIris:UserName";
     private const string CameraPassword = "BlueIris:Password";
     private const string DefaultCamera = "RoofControllerUi:DefaultCamera";
@@ -461,6 +462,60 @@ public sealed class SettingsApiTests
     }
 
     [TestMethod]
+    public async Task MovingTheCameraToAnotherServer_NeedsTheCredentialsInTheSameRequest()
+    {
+        const string password = "test-camera-password-not-real-10";
+        var logs = new RecordingLoggerProvider();
+        using var host = StartHost(new RoofDouble(), logs, extraSettings: new Dictionary<string, string?> { [CameraServer] = "http://192.168.0.4:81" });
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        await ChangeCameraAsync(values => values[CameraServer] = Json("\"http://192.168.0.5:81\""), "no credentials are set");
+        await ChangeCameraAsync(values =>
+        {
+            values[CameraUser] = Json("\"test-camera-user\"");
+            values[CameraPassword] = Json(JsonSerializer.Serialize(password));
+        });
+        await ChangeCameraAsync(values => values[CameraServer] = Json("\"HTTP://192.168.0.5:81/\""), "the server stays the same");
+
+        foreach (var server in new[] { "http://camera.example.net:81", "http://192.168.0.5:82", "https://192.168.0.5:81" })
+        {
+            var version = (await GetAsync(admin)).Version;
+            var refused = await ProblemAsync(await PostGroupAsync(admin, RoofSettingsContract.CameraGroup,
+                await ReadGroupAsync(admin, RoofSettingsContract.CameraGroup, values => values[CameraServer] = Json(JsonSerializer.Serialize(server)))));
+
+            refused.Status.Should().Be(409, server);
+            refused.Code.Should().Be(nameof(RoofControllerErrorCode.ConfigurationRejected));
+            refused.Detail.Should().StartWith($"Moving the camera proxy to another server ({CameraServer}) would send it the Blue Iris user")
+                .And.Contain($"Send {CameraUser} and {CameraPassword} with it (null clears them).");
+            var after = await GetAsync(admin);
+            after.Version.Should().Be(version, "nothing is saved");
+            State(after, CameraServer).Value!.Value.GetString().Should().Be("HTTP://192.168.0.5:81/");
+        }
+
+        await ChangeCameraAsync(values => values[CameraUser] = Json("\"test-camera-user\""), "one credential alone does not move the server");
+        await ChangeCameraAsync(values =>
+        {
+            values[CameraServer] = Json("\"http://192.168.0.6:81\"");
+            values[CameraUser] = Json("\"test-camera-user-2\"");
+            values[CameraPassword] = Json("\"test-camera-password-not-real-11\"");
+        }, "new credentials are sent with the move");
+        await ChangeCameraAsync(values =>
+        {
+            values[CameraServer] = Json("\"http://192.168.0.7:81\"");
+            values[CameraUser] = Json("null");
+            values[CameraPassword] = Json("null");
+        }, "the move clears the credentials");
+        await ChangeCameraAsync(values => values[CameraServer] = Json("\"http://192.168.0.8:81\""), "no credentials are set any more");
+        logs.Entries.Should().NotContain(entry => entry.Message.Contains(password, StringComparison.Ordinal));
+
+        async Task ChangeCameraAsync(Action<Dictionary<string, JsonElement>> change, string because = "")
+        {
+            var request = await ReadGroupAsync(admin, RoofSettingsContract.CameraGroup, change);
+            var response = await PostGroupAsync(admin, RoofSettingsContract.CameraGroup, request);
+            response.StatusCode.Should().Be(HttpStatusCode.OK, $"{because}: {await response.Content.ReadAsStringAsync()}");
+        }
+    }
+
+    [TestMethod]
     public async Task AChange_WhileTheRoofMoves_IsRefused_AndNothingIsSaved()
     {
         var roof = new RoofDouble { Moving = true };
@@ -613,7 +668,6 @@ public sealed class SettingsApiTests
             // Edited by hand on the controller.
             {
               "RoofControllerUi": { "DefaultCamera": "Yard", "KioskScreenTimeout": "00:02:00", },
-              "Custom": { "Thing": "x" }
             }
             """);
 
@@ -621,7 +675,6 @@ public sealed class SettingsApiTests
         var edit = pending.PendingHandEdit!;
         edit.Should().NotBeNull();
         edit.Changes.Select(change => change.Key).Should().BeEquivalentTo(DefaultCamera, KioskTimeout);
-        edit.OtherChangedKeys.Should().Equal("Custom:Thing");
         edit.Problems.Should().BeEmpty();
         edit.FileProblem.Should().BeNull();
         edit.RequiresConfirmation.Should().BeFalse();
@@ -658,9 +711,8 @@ public sealed class SettingsApiTests
         file.Should().NotContain("Edited by hand", "comments are lost when the API saves the file");
         var saved = ReadFile(SettingsPath);
         saved[RoofSettingsFile.MetadataProperty]!["Version"]!.GetValue<long>().Should().Be(2);
-        saved["Custom"]!["Thing"]!.GetValue<string>().Should().Be("x", "keys the catalogue does not know are kept");
         logs.Entries.Should().Contain(entry => entry.Message.StartsWith("AUDIT settings hand edit reloaded by test-admin (version 1 -> 2", StringComparison.Ordinal)
-            && entry.Message.Contains("Custom:Thing", StringComparison.Ordinal));
+            && entry.Message.Contains($"{DefaultCamera}: \"Roof\" -> \"Yard\"", StringComparison.Ordinal));
 
         var next = await ReadGroupAsync(@operator, RoofSettingsContract.UiGroup, values => values[DefaultCamera] = Json("\"Pier\""));
         (await PostGroupAsync(@operator, RoofSettingsContract.UiGroup, next)).StatusCode.Should().Be(HttpStatusCode.OK, "the edit no longer blocks changes");
@@ -718,17 +770,21 @@ public sealed class SettingsApiTests
     }
 
     [TestMethod]
-    public async Task AnUnreadableHandEdit_CannotBeReloadedOrRestartedInto_AndCanBeDiscarded()
+    [DataRow("{ \"RoofControllerUi\": { \"DefaultCamera\": \"half-written", "is not valid JSON")]
+    [DataRow("""{ "RoofControllerUi": { "DefaultCamera": "half-written" }, "Kestrel": { "Endpoints": { "Http": { "Url": "http://0.0.0.0:80" } } } }""",
+        "sets Kestrel:Endpoints:Http:Url, which is not in the settings catalogue")]
+    public async Task AnUnreadableHandEdit_CannotBeReloadedOrRestartedInto_AndCanBeDiscarded(string content, string expected)
     {
         File.WriteAllText(SettingsPath, "{ \"RoofControllerUi\": { \"DefaultCamera\": \"Roof\" } }");
         var logs = new RecordingLoggerProvider();
         var roof = new RoofDouble();
         using var host = StartHost(roof, logs);
         using var admin = host.CreateApiClient(TestApiKeys.Admin);
-        File.WriteAllText(SettingsPath, "{ \"RoofControllerUi\": { \"DefaultCamera\": \"half-written");
+        File.WriteAllText(SettingsPath, content);
 
         var edit = (await GetAsync(admin)).PendingHandEdit!;
-        edit.FileProblem.Should().Contain("is not valid JSON").And.NotContain("half-written");
+        edit.FileProblem.Should().Contain(expected).And.NotContain("half-written").And.NotContain("0.0.0.0");
+        edit.Changes.Should().BeEmpty("nothing in a file that cannot be used is shown as a change");
         (await ProblemAsync(await ReloadAsync(admin, edit.Token))).Code.Should().Be(nameof(RoofControllerErrorCode.ConfigurationRejected));
         var restart = await ProblemAsync(await admin.PostAsync(Restart, content: null));
         restart.Code.Should().Be(nameof(RoofControllerErrorCode.RestartRefused));

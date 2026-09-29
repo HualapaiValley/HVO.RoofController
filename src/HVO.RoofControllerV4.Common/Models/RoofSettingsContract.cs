@@ -163,7 +163,6 @@ public sealed record RoofSettingProblem(string Key, string Message);
 /// </summary>
 /// <param name="Token">Identifies this edit; Reload and Discard must send it back.</param>
 /// <param name="Changes">Catalogue settings the edit changes.</param>
-/// <param name="OtherChangedKeys">Other keys the edit changes; they may take effect only after a restart.</param>
 /// <param name="Problems">Values that cannot be used; the edit cannot be reloaded until they are fixed.</param>
 /// <param name="FileProblem">Why the file cannot be read at all, for example invalid JSON.</param>
 /// <param name="RequiresConfirmation">True when reloading needs <c>ConfirmSafetyCriticalChange</c>.</param>
@@ -171,7 +170,6 @@ public sealed record RoofSettingProblem(string Key, string Message);
 public sealed record RoofSettingsHandEdit(
     string Token,
     IReadOnlyList<RoofSettingChange> Changes,
-    IReadOnlyList<string> OtherChangedKeys,
     IReadOnlyList<RoofSettingProblem> Problems,
     string? FileProblem,
     bool RequiresConfirmation,

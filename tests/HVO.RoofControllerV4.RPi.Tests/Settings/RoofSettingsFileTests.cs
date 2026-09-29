@@ -136,6 +136,36 @@ public sealed class RoofSettingsFileTests
     }
 
     [TestMethod]
+    [DataRow("""{ "Kestrel": { "Endpoints": { "Http": { "Url": "http://quoted-value:80" } } } }""", "Kestrel:Endpoints:Http:Url")]
+    [DataRow("""{ "RoofControllerSecurity": { "Identity": { "StorePath": "/quoted-value" } } }""", "RoofControllerSecurity:Identity:StorePath")]
+    [DataRow("""{ "RoofControllerSecurity": { "AllowedOrigins": [ { "Url": "quoted-value" } ] } }""", "RoofControllerSecurity:AllowedOrigins:0:Url")]
+    [DataRow("""{ "Logging": { "LogLevel": { "HVO": "quoted-value" } } }""", "Logging:LogLevel:HVO")]
+    [DataRow("""{ "BlueIris": "quoted-value" }""", "BlueIris")]
+    public void AKeyOutsideTheCatalogue_IsRefused_NamingTheKeyButNeverTheValue(string content, string key)
+        => FluentActions.Invoking(() => Parse(content)).Should().Throw<RoofSettingsFileException>()
+            .Which.Message.Should().StartWith($"The settings file '{Path}' sets {key}, which is not in the settings catalogue")
+            .And.EndWith("set other configuration in the deployment's environment (docs/deployment.md).")
+            .And.NotContain("quoted-value");
+
+    [TestMethod]
+    public void CatalogueSettings_ListItems_AndEmptySections_AreAccepted()
+    {
+        var document = Parse("""
+            {
+              "RoofControllerSecurity": { "AllowedOrigins": [ "https://a.example", "https://b.example" ], "Identity": {} },
+              "BlueIris": {},
+              "RoofControllerUi": { "DefaultCamera": "Yard" }
+            }
+            """);
+
+        document.Data.Should().Contain("RoofControllerSecurity:AllowedOrigins:1", "https://b.example")
+            .And.Contain("RoofControllerUi:DefaultCamera", "Yard");
+        Parse("""{ "RoofControllerSecurity": { "AllowedOrigins": [] } }""").Data.Should().ContainKey("RoofControllerSecurity:AllowedOrigins");
+        FluentActions.Invoking(() => Parse("""{ "BlueIris": { "BaseUrl": "http://192.168.0.4:80" } }""", RoofSettingsFileKind.Secrets))
+            .Should().Throw<RoofSettingsFileException>().WithMessage("*sets BlueIris:BaseUrl, which is not a secret setting.*");
+    }
+
+    [TestMethod]
     public void AMissingFile_IsEmpty()
     {
         var document = RoofSettingsFile.Read(System.IO.Path.Combine(_directory, "absent.json"), RoofSettingsFileKind.Settings);

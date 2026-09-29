@@ -100,6 +100,9 @@ Use the section and key names of `appsettings.json`, and durations as `hh:mm:ss`
 ```
 
 - Leave `HvoRoofSettings` as it is: the controller keeps the version there.
+- Use only the settings that `GET /api/v4.0/Settings/Catalogue` lists. The controller refuses to start with any other
+  key, because only catalogue settings are checked like a change through the API. Other configuration belongs in the
+  deployment's environment ([deployment.md](deployment.md)).
 - Never put a secret in this file (a key named `Key` or `Password`, or the Blue Iris user). The controller refuses to
   start with one. Set secrets through the API, or as files in the secrets directory.
 - Comments and trailing commas are allowed, but the next save through the API, or a reload, rewrites the file without
@@ -119,9 +122,9 @@ them.
 
 ### A file the controller cannot use
 
-A settings file that is not valid JSON, holds a secret, or holds a value outside its limits stops the controller at
-startup. It never falls back to the defaults. The container log (`docker logs roof-controller`) shows the reason, and
-never a value:
+A settings file that is not valid JSON, holds a secret or a key outside the catalogue, or holds a value outside its
+limits stops the controller at startup. It never falls back to the defaults. The container log
+(`docker logs roof-controller`) shows the reason, and never a value:
 
 ```
 The roof controller did not start: The settings file '/etc/hvo-roof/config/appsettings.Local.json' is not valid JSON (line 4, position 2). Fix it, or move it aside to start again from the shipped defaults.
