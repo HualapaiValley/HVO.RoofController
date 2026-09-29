@@ -1,0 +1,21 @@
+@* Picks one of the controller's roles. The option in effect is marked selected, so it shows before the page is interactive. *@
+<select id="@Id" class="form-select form-select-sm" data-testid="@TestId" @onchange="ChangeAsync">
+    @foreach (var role in Roles)
+    {
+        <option value="@role" selected="@(role == Value)">@WebRoles.Describe(role)</option>
+    }
+</select>
+
+@code {
+    private static readonly string[] Roles = [WebRoles.Viewer, WebRoles.Operator, WebRoles.Admin];
+
+    [Parameter, EditorRequired] public string Id { get; set; } = default!;
+
+    [Parameter] public string? TestId { get; set; }
+
+    [Parameter] public string Value { get; set; } = WebRoles.Viewer;
+
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private Task ChangeAsync(ChangeEventArgs e) => ValueChanged.InvokeAsync(WebRoles.Normalize(e.Value?.ToString()) ?? WebRoles.Viewer);
+}

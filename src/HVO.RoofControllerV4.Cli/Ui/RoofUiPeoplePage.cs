@@ -201,7 +201,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
     private void AddUser() => Ui.Ask(new RoofUiPrompt(
         "Add a person",
-        $"Name: {RoofCli.NameRule}\nRole: viewer, operator or admin. Give a password (web UI and CLI), a PIN (kiosk; operators and admins), or both.",
+        $"Name: {RoofIdentityText.NameRule}\nRole: viewer, operator or admin. Give a password (web UI and CLI), a PIN (kiosk; operators and admins), or both.",
         [
             new RoofUiField("Name"),
             new RoofUiField("Role", Initial: "viewer"),
@@ -215,7 +215,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
             var name = values[0].Trim();
             if (!RoofIdentityContract.IsValidName(name))
             {
-                return $"'{name}' is not a valid name: {RoofCli.NameRule}";
+                return $"'{name}' is not a valid name: {RoofIdentityText.NameRule}";
             }
 
             if (RoofCliFormat.ParseRole(values[1]) is not { } role)
@@ -228,12 +228,12 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                 return "Give a password, a PIN, or both.";
             }
 
-            if (NewSecret(values[2], values[3], RoofIdentityContract.IsValidPassword, RoofCli.PasswordRule, "passwords") is { } passwordError)
+            if (RoofIdentityText.CheckNewPassword(values[2], values[3]) is { } passwordError)
             {
                 return passwordError;
             }
 
-            if (NewSecret(values[4], values[5], RoofIdentityContract.IsValidPin, RoofCli.PinRule, "PINs") is { } pinError)
+            if (RoofIdentityText.CheckNewPin(values[4], values[5]) is { } pinError)
             {
                 return pinError;
             }
@@ -262,7 +262,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
         Ui.Ask(new RoofUiPrompt(
             $"Role of {user.Name}",
-            "viewer, operator or admin. Changing the role ends every session of the person.",
+            $"viewer, operator or admin. {RoofIdentityText.RoleChangeEndsSessions}",
             [new RoofUiField("Role", Initial: RoofCliFormat.Role(user.Role))],
             [new RoofUiAction("Change", values =>
             {
@@ -285,16 +285,16 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
         Ui.Ask(new RoofUiPrompt(
             $"Password of {user.Name}",
-            $"{RoofCli.PasswordRule} Setting it ends every session of the person.",
+            $"{RoofIdentityText.PasswordRule} {RoofIdentityText.PasswordChangeEndsSessions}",
             [new RoofUiField("Password", Secret: true), new RoofUiField("Again", Secret: true)],
             [new RoofUiAction("Set", values =>
             {
                 if (values[0].Length == 0)
                 {
-                    return RoofCli.PasswordRule;
+                    return RoofIdentityText.PasswordRule;
                 }
 
-                if (NewSecret(values[0], values[1], RoofIdentityContract.IsValidPassword, RoofCli.PasswordRule, "passwords") is { } error)
+                if (RoofIdentityText.CheckNewPassword(values[0], values[1]) is { } error)
                 {
                     return error;
                 }
@@ -313,16 +313,16 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
         Ui.Ask(new RoofUiPrompt(
             $"PIN of {user.Name}",
-            $"{RoofCli.PinRule} For a kiosk; operators and admins only. Setting it ends the person's PIN sessions.",
+            $"{RoofIdentityText.PinRule} {RoofIdentityText.PinChangeEndsSessions}",
             [new RoofUiField("PIN", Secret: true), new RoofUiField("Again", Secret: true)],
             [new RoofUiAction("Set", values =>
             {
                 if (values[0].Length == 0)
                 {
-                    return RoofCli.PinRule;
+                    return RoofIdentityText.PinRule;
                 }
 
-                if (NewSecret(values[0], values[1], RoofIdentityContract.IsValidPin, RoofCli.PinRule, "PINs") is { } error)
+                if (RoofIdentityText.CheckNewPin(values[0], values[1]) is { } error)
                 {
                     return error;
                 }
@@ -372,14 +372,14 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
     private void AddKey() => Ui.Ask(new RoofUiPrompt(
         "Add an API key",
-        $"Name: {RoofCli.NameRule}\nRole: viewer, operator or admin. Kiosk: yes for a kiosk's device key.",
+        $"Name: {RoofIdentityText.NameRule}\nRole: viewer, operator or admin. Kiosk: yes for a kiosk's device key.",
         [new RoofUiField("Name"), new RoofUiField("Role", Initial: "viewer"), new RoofUiField("Kiosk", Initial: "no")],
         [new RoofUiAction("Add", values =>
         {
             var name = values[0].Trim();
             if (!RoofIdentityContract.IsValidName(name))
             {
-                return $"'{name}' is not a valid name: {RoofCli.NameRule}";
+                return $"'{name}' is not a valid name: {RoofIdentityText.NameRule}";
             }
 
             if (RoofCliFormat.ParseRole(values[1]) is not { } role)
@@ -437,7 +437,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
             return;
         }
 
-        Confirm($"Rotate the key {key.Name}? The old secret stops working at once.", "Rotate", ()
+        Confirm($"Rotate the key {key.Name}? {RoofIdentityText.RotateEndsOldSecret}", "Rotate", ()
             => ShowSecret($"Rotating the key {key.Name}…", "Rotated API key", (client, cancellationToken) => client.Identity.RotateApiKeyAsync(key.Name, cancellationToken)));
     }
 
@@ -465,7 +465,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                 Reload($"The key {created.Key.Name} is ready ({RoofCliFormat.Role(created.Key.Role)}{(created.Key.Kiosk ? ", kiosk" : string.Empty)}).");
                 Ui.Ask(new RoofUiPrompt(
                     title,
-                    $"The secret of {created.Key.Name}. Copy it now: it is not shown again.",
+                    $"The secret of {created.Key.Name}. {RoofIdentityText.SecretShownOnce}",
                     [new RoofUiField("Secret", Initial: created.Secret, ReadOnly: true)],
                     [],
                     CloseLabel: "Done"));
@@ -525,13 +525,6 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
             run();
             return null;
         })]));
-
-    /// <summary>Checks a new password or PIN typed twice; empty means none. Returns an error, or null.</summary>
-    private static string? NewSecret(string value, string again, Func<string?, bool> isValid, string rule, string plural)
-        => value.Length == 0 ? again.Length == 0 ? null : $"The two {plural} differ."
-            : !isValid(value) ? rule
-            : value != again ? $"The two {plural} differ."
-            : null;
 
     private static bool? ParseYesNo(string text) => text.Trim().ToLowerInvariant() switch
     {

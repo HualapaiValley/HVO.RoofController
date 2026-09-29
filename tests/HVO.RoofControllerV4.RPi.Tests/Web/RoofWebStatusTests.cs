@@ -52,7 +52,7 @@ public sealed class RoofWebStatusTextTests
         view.Headline.Should().Be("The controller is not answering");
         view.Details.Should().Equal(
             "Connection refused (localhost:8080)",
-            "The supervisor reports it running. If it stays unanswered, force a restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller) or restart the container.");
+            "The supervisor reports it running. If it stays unanswered, an admin can force a restart on the System page (or docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or restart the container.");
     }
 
     [TestMethod]
@@ -88,7 +88,7 @@ public sealed class RoofWebStatusTextTests
         view.Details.Should().Equal(
             "It crashed 5 times within 120 s, so the supervisor left it stopped instead of starting it again while the roof may need attention. The container's health check fails; Docker marks it unhealthy after three failed checks.",
             "Last exit: crashed (exit code 1), at 2026-09-29 05:59:58 UTC.",
-            "Find the cause in the container's log. A forced restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or a restart of the container, starts the controller again.");
+            "Find the cause in the container's log. A forced restart (an admin, on the System page; or docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or a restart of the container, starts the controller again.");
     }
 
     [TestMethod]

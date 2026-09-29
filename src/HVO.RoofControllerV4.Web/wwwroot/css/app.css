@@ -327,3 +327,161 @@ body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[d
     color: var(--hvo-muted-strong, #cbd5e1);
     font-size: 0.9rem;
 }
+
+/* Settings, People and System (admin pages). */
+.web-card + .web-card,
+.web-pills + .web-card,
+.web-card + .web-pills,
+.web-status + .web-pills {
+    margin-top: 1rem;
+}
+
+.web-card > h2 {
+    font-size: 1.15rem;
+}
+
+.web-message p {
+    margin: 0;
+}
+
+.web-message p + p {
+    margin-top: 0.25rem;
+}
+
+.web-pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.web-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.web-settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.web-setting {
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-muted, #334155);
+    background: var(--hvo-card-glass, rgba(15, 23, 42, 0.6));
+}
+
+.web-setting p {
+    margin: 0.35rem 0;
+}
+
+.web-setting .web-status {
+    padding: 0.5rem 0.75rem;
+}
+
+.web-setting-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.6rem;
+}
+
+.web-setting-key {
+    font-size: 0.8rem;
+    color: var(--hvo-muted, #94a3b8);
+    overflow-wrap: anywhere;
+}
+
+.web-setting-value {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.web-setting-description {
+    color: var(--hvo-muted-strong, #cbd5e1);
+    font-size: 0.9rem;
+}
+
+.web-editor,
+.web-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    max-width: 36rem;
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-strong, #475569);
+    background: var(--hvo-card-bg, #0f172a);
+}
+
+.web-editor .form-label {
+    margin: 0.25rem 0 0;
+}
+
+.web-editor-help {
+    font-size: 0.85rem;
+}
+
+.web-change-list {
+    margin: 0.25rem 0;
+    padding-left: 1.25rem;
+}
+
+.web-change-list code {
+    color: inherit;
+    overflow-wrap: anywhere;
+}
+
+.web-table {
+    --bs-table-bg: transparent;
+    margin: 0;
+}
+
+.web-table th,
+.web-table td {
+    vertical-align: middle;
+}
+
+.web-row-actions td {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.web-secret-value {
+    font-family: var(--bs-font-monospace);
+}
+
+.web-facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 1rem;
+    margin: 0 0 0.5rem;
+}
+
+.web-facts dt {
+    color: var(--hvo-muted-strong, #cbd5e1);
+    font-weight: 400;
+}
+
+.web-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 575.98px) {
+    .web-facts {
+        grid-template-columns: 1fr;
+    }
+
+    .web-facts dd {
+        margin-bottom: 0.35rem;
+    }
+}

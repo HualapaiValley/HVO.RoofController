@@ -22,23 +22,12 @@ public static partial class RoofCli
                 }
                 else
                 {
-                    RoofCliFormat.WriteRows(context.Out, DescribeInformation(information, metrics));
+                    RoofCliFormat.WriteRows(context.Out, RoofSystemText.DescribeInformation(information, metrics));
                 }
 
                 return (int)RoofExitCode.Success;
             });
             return command;
-        }
-
-        internal static IEnumerable<(string, string)> DescribeInformation(SystemInformationResponse information, SystemRuntimeMetricsResponse metrics)
-        {
-            yield return ("Application", $"{information.ApplicationName} {information.ApplicationVersion} ({information.EnvironmentName})");
-            yield return ("Host", information.MachineName);
-            yield return ("System", information.OperatingSystemDescription);
-            yield return ("Runtime", information.FrameworkDescription);
-            yield return ("Started", $"{RoofCliFormat.Time(information.ProcessStartTimeUtc)} (up {RoofCliFormat.Duration(TimeSpan.FromSeconds(information.UptimeSeconds))})");
-            yield return ("Memory", $"{RoofCliFormat.Bytes(metrics.WorkingSetBytes)} working set, {RoofCliFormat.Bytes(metrics.ManagedMemoryBytes)} managed");
-            yield return ("CPU", $"{metrics.CpuUsagePercent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} %, {metrics.ThreadCount} threads");
         }
 
         private Command CreateRestartCommand()
@@ -55,7 +44,7 @@ public static partial class RoofCli
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
                 if (!parseResult.GetValue(force)
-                    && !Confirm(context, "Restart the controller? It stops the roof first, and does not answer until it has started again."))
+                    && !Confirm(context, RoofSystemText.RestartQuestion))
                 {
                     return (int)RoofExitCode.ConfirmationRequired;
                 }
@@ -395,7 +384,7 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         var name = context.Host.ReadLine("Name: ", false)?.Trim();
         return RoofIdentityContract.IsValidName(name)
             ? name
-            : throw new RoofCliUsageException($"'{name}' is not a valid name: {RoofCli.NameRule}");
+            : throw new RoofCliUsageException($"'{name}' is not a valid name: {RoofIdentityText.NameRule}");
     }
 
     /// <summary>Adds <paramref name="name"/> as an admin person with <paramref name="password"/>.</summary>
@@ -403,7 +392,7 @@ internal sealed class RoofCliSetup(RoofCliContext context)
     {
         if (!RoofIdentityContract.IsValidPassword(password))
         {
-            throw new RoofCliUsageException(RoofCli.PasswordRule);
+            throw new RoofCliUsageException(RoofIdentityText.PasswordRule);
         }
 
         using var client = context.CreateClient(connection);

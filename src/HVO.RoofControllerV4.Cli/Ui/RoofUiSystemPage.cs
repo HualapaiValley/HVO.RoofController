@@ -11,7 +11,7 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// </summary>
 internal sealed class RoofUiSystemPage : RoofUiPage
 {
-    internal const string RestartQuestion = "Restart the controller? It stops the roof first, and does not answer until it has started again.";
+    internal const string RestartQuestion = RoofSystemText.RestartQuestion;
 
     private readonly ListView _lines;
     private string[] _information = [];
@@ -63,7 +63,7 @@ internal sealed class RoofUiSystemPage : RoofUiPage
             {
                 var info = await client.System.GetInformationAsync(cancellationToken).ConfigureAwait(false);
                 var metrics = await client.System.GetMetricsAsync(cancellationToken).ConfigureAwait(false);
-                information = Rows(RoofCli.CommandBuilder.DescribeInformation(info, metrics)).Split('\n');
+                information = Rows(RoofSystemText.DescribeInformation(info, metrics)).Split('\n');
             }
             else
             {
@@ -127,8 +127,8 @@ internal sealed class RoofUiSystemPage : RoofUiPage
         var message = RestartQuestion;
         if (form.PendingHandEdit is { } pending)
         {
-            message += "\n\nThe restart loads the settings file as it is now:\n"
-                + string.Join('\n', RoofCli.CommandBuilder.DescribeHandEdit(form, pending));
+            message += $"\n\n{RoofSystemText.RestartLoadsHandEdit}\n"
+                + string.Join('\n', RoofSettingsText.DescribeHandEdit(form, pending));
         }
 
         var confirm = form.PendingHandEdit?.RequiresConfirmation == true;
@@ -141,7 +141,7 @@ internal sealed class RoofUiSystemPage : RoofUiPage
         _ = Ui.Run("Restarting: stopping the roof and verifying the stop…", async (client, cancellationToken) =>
         {
             var restart = await client.System.RestartAsync(confirm, cancellationToken).ConfigureAwait(false);
-            Ui.Post(() => Ui.Say($"{restart.Message} Readiness says when it is back; the status comes back by itself."));
+            Ui.Post(() => Ui.Say($"{restart.Message} {RoofSystemText.RestartComingBack}"));
         });
         return null;
     }

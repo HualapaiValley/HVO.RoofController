@@ -76,14 +76,6 @@ internal static class RoofCliFormat
 
     public static string Seconds(double seconds) => RoofStatusText.Seconds(seconds);
 
-    public static string Duration(TimeSpan value) => value.TotalDays >= 1
-        ? $"{(int)value.TotalDays}d {value.Hours}h {value.Minutes}m"
-        : value.TotalHours >= 1 ? $"{(int)value.TotalHours}h {value.Minutes}m" : $"{value.Minutes}m {value.Seconds}s";
-
-    public static string Bytes(long bytes) => bytes >= 1 << 20
-        ? $"{(bytes / (double)(1 << 20)).ToString("0.0", CultureInfo.InvariantCulture)} MiB"
-        : $"{(bytes / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)} KiB";
-
     /// <summary>Writes rows as <c>Label: value</c>, aligned.</summary>
     public static void WriteRows(TextWriter output, IEnumerable<(string Label, string Value)> rows)
     {

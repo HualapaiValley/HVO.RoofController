@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Web;
+using HVO.RoofControllerV4.Web.Sessions;
 using HVO.RoofControllerV4.Web.Supervision;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -49,6 +50,9 @@ public sealed class RoofWebHostTests
     [TestMethod]
     [DataRow("/", "Roof · HVO Roof Controller")]
     [DataRow("/health", "Health · HVO Roof Controller")]
+    [DataRow("/settings", "Settings · HVO Roof Controller")]
+    [DataRow("/people", "People · HVO Roof Controller")]
+    [DataRow("/system", "System · HVO Roof Controller")]
     public async Task EveryPage_HasExactlyOneTitle_AndOneHeading(string page, string title)
     {
         await using var host = await WebHost.StartAsync();
@@ -60,6 +64,42 @@ public sealed class RoofWebHostTests
         Regex.Matches(html, "<title>").Should().ContainSingle();
         html.Should().Contain($"<title>{title}</title>");
         Regex.Matches(html, "<h1[ >]").Should().ContainSingle();
+    }
+
+    [TestMethod]
+    [DataRow("/people")]
+    [DataRow("/system")]
+    public async Task TheAdminPages_AreDeniedToAViewer(string page)
+    {
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        await browser.SignInAsync("vic", FakeController.AdaPassword);
+
+        using var response = await browser.GetAsync(page);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.PathAndQuery.Should().StartWith(WebAuthentication.AccessDeniedPath + "?");
+        var denied = await (await browser.GetAsync(response.Headers.Location.PathAndQuery)).Content.ReadAsStringAsync();
+        denied.Should().Contain("data-testid=\"role-denied\"");
+    }
+
+    [TestMethod]
+    [DataRow("vic", false)]
+    [DataRow("olga", false)]
+    [DataRow("ada", true)]
+    public async Task TheMenu_OffersTheAdminPages_OnlyToAnAdmin(string name, bool admin)
+    {
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        await browser.SignInAsync(name, FakeController.AdaPassword);
+
+        using var response = await browser.GetAsync("/settings");
+        var html = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "everyone may read the settings their role allows");
+        html.Should().Contain("href=\"settings\"");
+        html.Contains("href=\"people\"", StringComparison.Ordinal).Should().Be(admin);
+        html.Contains("href=\"system\"", StringComparison.Ordinal).Should().Be(admin);
     }
 
     [TestMethod]

@@ -1,0 +1,541 @@
+@page "/people"
+@attribute [Authorize(Roles = WebRoles.Admin)]
+@inherits WebClientPage
+
+<PageTitle>People · HVO Roof Controller</PageTitle>
+
+<h1>People</h1>
+
+<PageMessage Message="Message" />
+
+@if (_secret is { } secret)
+{
+    <section class="web-card web-secret" aria-labelledby="key-secret-title" data-testid="key-secret">
+        <h2 id="key-secret-title">The secret of @secret.Key.Name</h2>
+        <p class="web-status web-status--warning">@RoofIdentityText.SecretShownOnce</p>
+        <label for="key-secret-value" class="form-label">Secret</label>
+        <input id="key-secret-value" class="form-control form-control-sm web-secret-value" readonly value="@secret.Secret" data-testid="key-secret-value" />
+        <div class="web-actions">
+            <button type="button" class="btn btn-sm btn-primary" data-testid="key-secret-done" @onclick="() => _secret = null">Done</button>
+        </div>
+    </section>
+}
+
+<nav class="web-pills" aria-label="People, API keys and sessions">
+    @foreach (var (tab, title) in Tabs)
+    {
+        var selected = tab == _tab;
+        <button type="button" class="btn btn-sm @(selected ? "btn-primary" : "btn-outline-light")" aria-pressed="@(selected ? "true" : "false")"
+                data-testid="people-tab" data-tab="@tab" @onclick="() => SelectTab(tab)">
+            @title
+        </button>
+    }
+    <button type="button" class="btn btn-sm btn-outline-light ms-auto" data-testid="people-reload" disabled="@Busy" @onclick="ReloadAsync">
+        <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Reload
+    </button>
+</nav>
+
+@if (!_loaded)
+{
+    <p class="web-muted" role="status" data-testid="people-loading">@(Busy || Message is null ? "Reading people, API keys and sessions…" : "People, API keys and sessions are not read.")</p>
+}
+else if (_tab == UsersTab)
+{
+    <section class="web-card" aria-labelledby="users-title" data-testid="users">
+        <div class="web-health-head">
+            <h2 id="users-title">People</h2>
+            <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-add" disabled="@Busy" @onclick="() => Open(AddUserPanel)">
+                <i class="bi bi-person-plus" aria-hidden="true"></i> Add a person
+            </button>
+        </div>
+        @if (_panel == AddUserPanel)
+        {
+            <div class="web-editor" data-testid="user-add-form">
+                <p class="web-muted">Name: @RoofIdentityText.NameRule Give a password (web UI and command line), a PIN (kiosk; operators and admins), or both.</p>
+                <label for="user-name" class="form-label">Name</label>
+                <input id="user-name" class="form-control form-control-sm" autocomplete="off" data-testid="user-name" @bind="_name" @bind:event="oninput" />
+                <label for="user-role" class="form-label">Role</label>
+                <RoleSelect Id="user-role" TestId="user-role" @bind-Value="_role" />
+                <label for="user-password" class="form-label">Password</label>
+                <input id="user-password" type="password" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-password" @bind="_password" @bind:event="oninput" />
+                <label for="user-password-again" class="form-label">Password again</label>
+                <input id="user-password-again" type="password" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-password-again" @bind="_passwordAgain" @bind:event="oninput" />
+                <label for="user-pin" class="form-label">PIN</label>
+                <input id="user-pin" type="password" inputmode="numeric" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-pin" @bind="_pin" @bind:event="oninput" />
+                <label for="user-pin-again" class="form-label">PIN again</label>
+                <input id="user-pin-again" type="password" inputmode="numeric" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-pin-again" @bind="_pinAgain" @bind:event="oninput" />
+                <PanelActions Error="@_panelError" Action="Add" TestId="user-add-send" Busy="Busy" OnAction="AddUserAsync" OnCancel="Close" />
+            </div>
+        }
+        @if (_users.Length == 0)
+        {
+            <p class="web-muted">No people yet: add one.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-dark table-sm web-table">
+                    <thead>
+                        <tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Password</th><th scope="col">PIN</th><th scope="col">Sessions</th><th scope="col">Changed</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var user in _users)
+                        {
+                            <tr data-testid="user" data-name="@user.Name">
+                                <th scope="row">@user.Name</th>
+                                <td>@WebRoles.Describe(user.Role)</td>
+                                <td>@YesNo(user.HasPassword)</td>
+                                <td>@YesNo(user.HasPin)</td>
+                                <td>@user.ActiveSessions</td>
+                                <td>@RoofStatusText.Time(user.UpdatedUtc)</td>
+                            </tr>
+                            <tr class="web-row-actions">
+                                <td colspan="6">
+                                    @if (_target == user.Name && _panel is { } panel && panel != AddUserPanel)
+                                    {
+                                        <div class="web-editor" data-testid="user-panel" data-panel="@panel">
+                                            @switch (panel)
+                                            {
+                                                case RolePanel:
+                                                    <p class="web-muted">@RoofIdentityText.RoleChangeEndsSessions</p>
+                                                    <label for="user-new-role" class="form-label">Role of @user.Name</label>
+                                                    <RoleSelect Id="user-new-role" TestId="user-new-role" @bind-Value="_role" />
+                                                    <PanelActions Error="@_panelError" Action="Change" TestId="user-panel-send" Busy="Busy" OnAction="() => ChangeRoleAsync(user)" OnCancel="Close" />
+                                                    break;
+                                                case PasswordPanel:
+                                                    <p class="web-muted">@RoofIdentityText.PasswordRule @RoofIdentityText.PasswordChangeEndsSessions</p>
+                                                    <label for="user-new-password" class="form-label">New password of @user.Name</label>
+                                                    <input id="user-new-password" type="password" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-new-password" @bind="_password" @bind:event="oninput" />
+                                                    <label for="user-new-password-again" class="form-label">Again</label>
+                                                    <input id="user-new-password-again" type="password" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-new-password-again" @bind="_passwordAgain" @bind:event="oninput" />
+                                                    <PanelActions Error="@_panelError" Action="Set" TestId="user-panel-send" Busy="Busy" OnAction="() => SetPasswordAsync(user)" OnCancel="Close" />
+                                                    break;
+                                                case PinPanel:
+                                                    <p class="web-muted">@RoofIdentityText.PinRule @RoofIdentityText.PinChangeEndsSessions</p>
+                                                    <label for="user-new-pin" class="form-label">New PIN of @user.Name</label>
+                                                    <input id="user-new-pin" type="password" inputmode="numeric" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-new-pin" @bind="_pin" @bind:event="oninput" />
+                                                    <label for="user-new-pin-again" class="form-label">Again</label>
+                                                    <input id="user-new-pin-again" type="password" inputmode="numeric" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-new-pin-again" @bind="_pinAgain" @bind:event="oninput" />
+                                                    <PanelActions Error="@_panelError" Action="Set" TestId="user-panel-send" Busy="Busy" OnAction="() => SetPinAsync(user)" OnCancel="Close" />
+                                                    break;
+                                                case RemovePinPanel:
+                                                    <p>Remove the PIN of @user.Name? Their PIN sessions end.</p>
+                                                    <PanelActions Error="@_panelError" Action="Remove PIN" Danger="true" TestId="user-panel-send" Busy="Busy" OnAction="() => RemovePinAsync(user)" OnCancel="Close" />
+                                                    break;
+                                                default:
+                                                    <p>Remove @user.Name? Their sessions end at once.</p>
+                                                    <PanelActions Error="@_panelError" Action="Remove" Danger="true" TestId="user-panel-send" Busy="Busy" OnAction="() => RemoveUserAsync(user)" OnCancel="Close" />
+                                                    break;
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="web-actions">
+                                            <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-role-change" disabled="@Busy" @onclick="() => Open(RolePanel, user.Name, user.Role)">Role</button>
+                                            <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-password-set" disabled="@Busy" @onclick="() => Open(PasswordPanel, user.Name)">Password</button>
+                                            <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-pin-set" disabled="@Busy" @onclick="() => Open(PinPanel, user.Name)">PIN</button>
+                                            @if (user.HasPin)
+                                            {
+                                                <button type="button" class="btn btn-sm btn-outline-danger" data-testid="user-pin-remove" disabled="@Busy" @onclick="() => Open(RemovePinPanel, user.Name)">Remove PIN</button>
+                                            }
+                                            <button type="button" class="btn btn-sm btn-outline-danger" data-testid="user-remove" disabled="@Busy" @onclick="() => Open(RemoveUserPanel, user.Name)">Remove</button>
+                                        </div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
+else if (_tab == KeysTab)
+{
+    <section class="web-card" aria-labelledby="keys-title" data-testid="keys">
+        <div class="web-health-head">
+            <h2 id="keys-title">API keys</h2>
+            <button type="button" class="btn btn-sm btn-outline-light" data-testid="key-add" disabled="@Busy" @onclick="() => Open(AddKeyPanel)">
+                <i class="bi bi-key" aria-hidden="true"></i> Add a key
+            </button>
+        </div>
+        <p class="web-muted">A key from the controller's configuration is read-only here.</p>
+        @if (_panel == AddKeyPanel)
+        {
+            <div class="web-editor" data-testid="key-add-form">
+                <p class="web-muted">Name: @RoofIdentityText.NameRule @KioskHelp</p>
+                <label for="key-name" class="form-label">Name</label>
+                <input id="key-name" class="form-control form-control-sm" autocomplete="off" data-testid="key-name" @bind="_name" @bind:event="oninput" />
+                <label for="key-role" class="form-label">Role</label>
+                <RoleSelect Id="key-role" TestId="key-role" @bind-Value="_role" />
+                <div class="form-check">
+                    <input id="key-kiosk" type="checkbox" class="form-check-input" data-testid="key-kiosk" @bind="_kiosk" />
+                    <label for="key-kiosk" class="form-check-label">A kiosk's key</label>
+                </div>
+                <PanelActions Error="@_panelError" Action="Add" TestId="key-add-send" Busy="Busy" OnAction="AddKeyAsync" OnCancel="Close" />
+            </div>
+        }
+        @if (_keys.Length == 0)
+        {
+            <p class="web-muted">No API keys.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-dark table-sm web-table">
+                    <thead>
+                        <tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Kiosk</th><th scope="col">Source</th><th scope="col">Changed</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var key in _keys)
+                        {
+                            var managed = key.Source == RoofApiKeySource.Managed;
+                            <tr data-testid="key" data-name="@key.Name">
+                                <th scope="row">@key.Name</th>
+                                <td>@WebRoles.Describe(key.Role)</td>
+                                <td>@YesNo(key.Kiosk)</td>
+                                <td>@(managed ? "managed" : "configuration (read-only)")</td>
+                                <td>@(key.UpdatedUtc is { } updated ? RoofStatusText.Time(updated) : string.Empty)</td>
+                            </tr>
+                            @if (managed)
+                            {
+                                <tr class="web-row-actions">
+                                    <td colspan="5">
+                                        @if (_target == key.Name && _panel is { } panel && panel != AddKeyPanel)
+                                        {
+                                            <div class="web-editor" data-testid="key-panel" data-panel="@panel">
+                                                @switch (panel)
+                                                {
+                                                    case ChangeKeyPanel:
+                                                        <p class="web-muted">@KioskHelp</p>
+                                                        <label for="key-new-role" class="form-label">Role of @key.Name</label>
+                                                        <RoleSelect Id="key-new-role" TestId="key-new-role" @bind-Value="_role" />
+                                                        <div class="form-check">
+                                                            <input id="key-new-kiosk" type="checkbox" class="form-check-input" data-testid="key-new-kiosk" @bind="_kiosk" />
+                                                            <label for="key-new-kiosk" class="form-check-label">A kiosk's key</label>
+                                                        </div>
+                                                        <PanelActions Error="@_panelError" Action="Change" TestId="key-panel-send" Busy="Busy" OnAction="() => ChangeKeyAsync(key)" OnCancel="Close" />
+                                                        break;
+                                                    case RotateKeyPanel:
+                                                        <p>Rotate the key @key.Name? @RoofIdentityText.RotateEndsOldSecret</p>
+                                                        <PanelActions Error="@_panelError" Action="Rotate" Danger="true" TestId="key-panel-send" Busy="Busy" OnAction="() => RotateKeyAsync(key)" OnCancel="Close" />
+                                                        break;
+                                                    default:
+                                                        <p>Remove the key @key.Name? It stops working at once.</p>
+                                                        <PanelActions Error="@_panelError" Action="Remove" Danger="true" TestId="key-panel-send" Busy="Busy" OnAction="() => RemoveKeyAsync(key)" OnCancel="Close" />
+                                                        break;
+                                                }
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <div class="web-actions">
+                                                <button type="button" class="btn btn-sm btn-outline-light" data-testid="key-change" disabled="@Busy" @onclick="() => Open(ChangeKeyPanel, key.Name, key.Role, key.Kiosk)">Change</button>
+                                                <button type="button" class="btn btn-sm btn-outline-danger" data-testid="key-rotate" disabled="@Busy" @onclick="() => Open(RotateKeyPanel, key.Name)">Rotate</button>
+                                                <button type="button" class="btn btn-sm btn-outline-danger" data-testid="key-remove" disabled="@Busy" @onclick="() => Open(RemoveKeyPanel, key.Name)">Remove</button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
+else
+{
+    <section class="web-card" aria-labelledby="sessions-title" data-testid="sessions">
+        <h2 id="sessions-title">Sessions</h2>
+        <p class="web-muted">Ending a session signs its holder out at once.</p>
+        @if (_sessions.Length == 0)
+        {
+            <p class="web-muted">No open sessions.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-dark table-sm web-table">
+                    <thead>
+                        <tr><th scope="col">Person</th><th scope="col">Role</th><th scope="col">Signed in with</th><th scope="col">Device</th><th scope="col">Started</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var session in _sessions)
+                        {
+                            var own = session.Id == _ownSessionId;
+                            <tr data-testid="session" data-id="@session.Id">
+                                <th scope="row">@session.Name@(own ? " (this page)" : string.Empty)</th>
+                                <td>@WebRoles.Describe(session.Role)</td>
+                                <td>@RoofIdentityText.DescribeKind(session.Kind)</td>
+                                <td>@session.Device</td>
+                                <td>@RoofStatusText.Time(session.CreatedUtc)</td>
+                                <td>@RoofStatusText.Time(session.ExpiresUtc)</td>
+                                <td>
+                                    @if (_target == session.Id && _panel == EndSessionPanel)
+                                    {
+                                        <div class="web-editor" data-testid="session-panel">
+                                            <p>End the session of @session.Name?@(own ? " It is this page's own session: you will need to sign in again." : string.Empty)</p>
+                                            <PanelActions Error="@_panelError" Action="End" Danger="true" TestId="session-end-send" Busy="Busy" OnAction="() => EndSessionAsync(session, own)" OnCancel="Close" />
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-danger" data-testid="session-end" disabled="@Busy" @onclick="() => Open(EndSessionPanel, session.Id)">End</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
+
+@code {
+    private const string UsersTab = "users";
+    private const string KeysTab = "keys";
+    private const string SessionsTab = "sessions";
+    private const string AddUserPanel = "add-user";
+    private const string RolePanel = "role";
+    private const string PasswordPanel = "password";
+    private const string PinPanel = "pin";
+    private const string RemovePinPanel = "remove-pin";
+    private const string RemoveUserPanel = "remove-user";
+    private const string AddKeyPanel = "add-key";
+    private const string ChangeKeyPanel = "change-key";
+    private const string RotateKeyPanel = "rotate-key";
+    private const string RemoveKeyPanel = "remove-key";
+    private const string EndSessionPanel = "end-session";
+    private const string KioskHelp = "A kiosk's key must have the viewer role: people sign in at the kiosk with a PIN for more.";
+
+    private static readonly (string Tab, string Title)[] Tabs = [(UsersTab, "People"), (KeysTab, "API keys"), (SessionsTab, "Sessions")];
+
+    private string _tab = UsersTab;
+    private bool _loaded;
+    private RoofUserResponse[] _users = [];
+    private RoofApiKeyResponse[] _keys = [];
+    private RoofSessionInfoResponse[] _sessions = [];
+    private string? _ownSessionId;
+    private RoofApiKeySecretResponse? _secret;
+
+    private string? _panel;
+    private string? _target;
+    private string? _panelError;
+    private string _name = string.Empty;
+    private string _role = WebRoles.Viewer;
+    private string _password = string.Empty;
+    private string _passwordAgain = string.Empty;
+    private string _pin = string.Empty;
+    private string _pinAgain = string.Empty;
+    private bool _kiosk;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await ReloadAsync();
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (await ReadAsync("People, API keys and sessions could not be read."))
+        {
+            Message = null;
+        }
+    }
+
+    private Task<bool> ReadAsync(string failed) => SendAsync(failed, async (session, cancellationToken) =>
+    {
+        var users = await session.Client.Identity.GetUsersAsync(cancellationToken);
+        var keys = await session.Client.Identity.GetApiKeysAsync(cancellationToken);
+        var sessions = await session.Client.Identity.GetSessionsAsync(cancellationToken);
+        _users = [.. users.OrderBy(user => user.Name, StringComparer.OrdinalIgnoreCase)];
+        _keys = [.. keys.OrderBy(key => key.Name, StringComparer.OrdinalIgnoreCase)];
+        _sessions = [.. sessions.OrderBy(open => open.Name, StringComparer.OrdinalIgnoreCase).ThenBy(open => open.CreatedUtc)];
+        _ownSessionId = session.Id;
+        _loaded = true;
+    });
+
+    private void SelectTab(string tab)
+    {
+        _tab = tab;
+        Close();
+    }
+
+    private void Open(string panel, string? target = null, string? role = null, bool kiosk = false)
+    {
+        _panel = panel;
+        _target = target;
+        _panelError = null;
+        _name = string.Empty;
+        _role = WebRoles.Normalize(role) ?? WebRoles.Viewer;
+        _password = _passwordAgain = _pin = _pinAgain = string.Empty;
+        _kiosk = kiosk;
+    }
+
+    private void Close()
+    {
+        _panel = null;
+        _target = null;
+        _panelError = null;
+        _password = _passwordAgain = _pin = _pinAgain = string.Empty;
+    }
+
+    /// <summary>
+    /// Sends a change, then reads the lists again. A refusal is said in the panel, which stays open to correct it.
+    /// </summary>
+    private async Task ChangeAsync(string failed, Func<RoofControllerClient, CancellationToken, Task<string>> send, bool readAgain = true)
+    {
+        string? done = null;
+        var previous = Message;
+        Message = null;
+        if (!await SendAsync(failed, async (session, cancellationToken) => done = await send(session.Client, cancellationToken)))
+        {
+            _panelError = Message?.Text ?? failed;
+            Message = previous;
+            return;
+        }
+
+        Close();
+        if (readAgain && !await ReadAsync("The lists could not be read again."))
+        {
+            Message = Warning([done!, .. Message?.Lines ?? []]);
+            return;
+        }
+
+        Message = Success(done!);
+    }
+
+    private Task AddUserAsync()
+    {
+        var name = _name.Trim();
+        _panelError = !RoofIdentityContract.IsValidName(name) ? $"'{name}' is not a valid name: {RoofIdentityText.NameRule}"
+            : _password.Length == 0 && _pin.Length == 0 ? "Give a password, a PIN, or both."
+            : RoofIdentityText.CheckNewPassword(_password, _passwordAgain) ?? RoofIdentityText.CheckNewPin(_pin, _pinAgain);
+        if (_panelError is not null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var request = new RoofUserCreateRequest
+        {
+            Name = name,
+            Role = _role,
+            Password = _password.Length > 0 ? _password : null,
+            Pin = _pin.Length > 0 ? _pin : null
+        };
+        return ChangeAsync($"{name} could not be added.", async (client, cancellationToken) =>
+        {
+            var user = await client.Identity.AddUserAsync(request, cancellationToken);
+            return $"Added {user.Name} ({WebRoles.Describe(user.Role)}).";
+        });
+    }
+
+    private Task ChangeRoleAsync(RoofUserResponse user)
+        => UpdateAsync(user, new RoofUserUpdateRequest { Role = _role }, $"{user.Name} is now {WebRoles.Describe(_role)}.");
+
+    private Task SetPasswordAsync(RoofUserResponse user)
+    {
+        _panelError = _password.Length == 0 ? RoofIdentityText.PasswordRule : RoofIdentityText.CheckNewPassword(_password, _passwordAgain);
+        return _panelError is not null
+            ? Task.CompletedTask
+            : UpdateAsync(user, new RoofUserUpdateRequest { Password = _password }, $"Set the password of {user.Name}.");
+    }
+
+    private Task SetPinAsync(RoofUserResponse user)
+    {
+        _panelError = _pin.Length == 0 ? RoofIdentityText.PinRule : RoofIdentityText.CheckNewPin(_pin, _pinAgain);
+        return _panelError is not null
+            ? Task.CompletedTask
+            : UpdateAsync(user, new RoofUserUpdateRequest { Pin = _pin }, $"Set the PIN of {user.Name}.");
+    }
+
+    private Task RemovePinAsync(RoofUserResponse user)
+        => UpdateAsync(user, new RoofUserUpdateRequest { RemovePin = true }, $"Removed the PIN of {user.Name}.");
+
+    /// <summary>
+    /// Sends <paramref name="request"/>. The update always carries the role: a request that does not change it carries
+    /// the person's role as the controller has it now, because the one in the list may be out of date (another admin
+    /// may have changed it since).
+    /// </summary>
+    private Task UpdateAsync(RoofUserResponse user, RoofUserUpdateRequest request, string done)
+        => ChangeAsync($"{user.Name} could not be changed.", async (client, cancellationToken) =>
+        {
+            var role = request.Role ?? (await client.Identity.GetUserAsync(user.Name, cancellationToken)).Role;
+            await client.Identity.UpdateUserAsync(user.Name, request with { Role = role }, cancellationToken);
+            return done;
+        });
+
+    private Task RemoveUserAsync(RoofUserResponse user)
+        => ChangeAsync($"{user.Name} could not be removed.", async (client, cancellationToken) =>
+        {
+            await client.Identity.RemoveUserAsync(user.Name, cancellationToken);
+            return $"Removed {user.Name}.";
+        });
+
+    private Task AddKeyAsync()
+    {
+        var name = _name.Trim();
+        if (!RoofIdentityContract.IsValidName(name))
+        {
+            _panelError = $"'{name}' is not a valid name: {RoofIdentityText.NameRule}";
+            return Task.CompletedTask;
+        }
+
+        var request = new RoofApiKeyCreateRequest { Name = name, Role = _role, Kiosk = _kiosk };
+        return ShowSecretAsync($"The key {name} could not be added.", (client, cancellationToken) => client.Identity.AddApiKeyAsync(request, cancellationToken));
+    }
+
+    private Task ChangeKeyAsync(RoofApiKeyResponse key)
+    {
+        var request = new RoofApiKeyUpdateRequest { Role = _role, Kiosk = _kiosk };
+        return ChangeAsync($"The key {key.Name} could not be changed.", async (client, cancellationToken) =>
+        {
+            var changed = await client.Identity.UpdateApiKeyAsync(key.Name, request, cancellationToken);
+            return $"The key {changed.Name} is now {WebRoles.Describe(changed.Role)}{(changed.Kiosk ? ", kiosk" : string.Empty)}.";
+        });
+    }
+
+    private Task RotateKeyAsync(RoofApiKeyResponse key)
+        => ShowSecretAsync($"The key {key.Name} could not be rotated.", (client, cancellationToken) => client.Identity.RotateApiKeyAsync(key.Name, cancellationToken));
+
+    private Task RemoveKeyAsync(RoofApiKeyResponse key)
+        => ChangeAsync($"The key {key.Name} could not be removed.", async (client, cancellationToken) =>
+        {
+            await client.Identity.RemoveApiKeyAsync(key.Name, cancellationToken);
+            return $"Removed the key {key.Name}.";
+        });
+
+    /// <summary>Sends a request that returns a key's secret, and shows the secret once.</summary>
+    private Task ShowSecretAsync(string failed, Func<RoofControllerClient, CancellationToken, Task<RoofApiKeySecretResponse>> send)
+        => ChangeAsync(failed, async (client, cancellationToken) =>
+        {
+            var created = await send(client, cancellationToken);
+            _secret = created;
+            return $"The key {created.Key.Name} is ready ({WebRoles.Describe(created.Key.Role)}{(created.Key.Kiosk ? ", kiosk" : string.Empty)}).";
+        });
+
+    private Task EndSessionAsync(RoofSessionInfoResponse session, bool own)
+        => ChangeAsync(
+            $"The session of {session.Name} could not be ended.",
+            async (client, cancellationToken) =>
+            {
+                await client.Identity.EndSessionAsync(session.Id, cancellationToken);
+                return own ? "Ended this page's own session: sign in again to go on." : $"Ended the session of {session.Name}.";
+            },
+            readAgain: !own);
+
+    private static string YesNo(bool value) => value ? "yes" : "no";
+
+    protected override void Dispose(bool disposing)
+    {
+        // The secret of a new or rotated key is not kept once the page closes.
+        _secret = null;
+        base.Dispose(disposing);
+    }
+}

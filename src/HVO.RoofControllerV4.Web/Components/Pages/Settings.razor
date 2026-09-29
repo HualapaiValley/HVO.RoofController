@@ -1,0 +1,474 @@
+@page "/settings"
+@inherits WebClientPage
+
+<PageTitle>Settings · HVO Roof Controller</PageTitle>
+
+<h1>Settings</h1>
+
+<PageMessage Message="Message" />
+
+@if (_form is not { } form)
+{
+    <p class="web-muted" role="status" data-testid="settings-loading">@(Busy || Message is null ? "Reading the settings…" : "The settings are not read.")</p>
+    @if (!Busy && Message is not null)
+    {
+        <button type="button" class="btn btn-sm btn-outline-light" data-testid="settings-reload" @onclick="ReloadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Try again
+        </button>
+    }
+}
+else
+{
+    <section class="web-card" aria-labelledby="settings-summary-title" data-testid="settings-summary">
+        <div class="web-health-head">
+            <h2 id="settings-summary-title">Settings version @form.Version</h2>
+            <button type="button" class="btn btn-sm btn-outline-light" data-testid="settings-reload" disabled="@Busy" @onclick="ReloadAsync">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Reload
+            </button>
+        </div>
+        <p>@DescribeSaved(form.Settings)</p>
+        @if (form.Settings.FilePath is { Length: > 0 } path)
+        {
+            <p class="web-muted">File: <code>@path</code></p>
+        }
+        @if (!form.Settings.FileBacked)
+        {
+            <p class="web-status web-status--warning" data-testid="settings-in-memory">@RoofSettingsText.InMemoryOnly</p>
+        }
+        @foreach (var warning in form.Settings.Warnings)
+        {
+            <p class="web-status web-status--warning" data-testid="settings-warning">Warning: @warning</p>
+        }
+    </section>
+
+    @if (form.PendingHandEdit is { } pending)
+    {
+        <section class="web-card web-hand-edit" aria-labelledby="hand-edit-title" data-testid="hand-edit">
+            <h2 id="hand-edit-title">Hand edit</h2>
+            <p class="web-status web-status--warning">@RoofSettingsText.HandEditPending</p>
+            @if (RoofSettingsText.DescribeHandEditChanges(form, pending) is { Count: > 0 } changes)
+            {
+                <ul class="web-change-list" data-testid="hand-edit-changes">
+                    @foreach (var change in changes)
+                    {
+                        <li><code>@change</code></li>
+                    }
+                </ul>
+            }
+            @foreach (var note in RoofSettingsText.DescribeHandEditNotes(pending))
+            {
+                <p data-testid="hand-edit-note">@note</p>
+            }
+            @if (_discarding)
+            {
+                <div class="web-confirm" role="group" aria-label="Discard the hand edit" data-testid="hand-edit-discard-confirm">
+                    <p>@RoofSettingsText.DiscardHandEditQuestion</p>
+                    <button type="button" class="btn btn-sm btn-danger" data-testid="hand-edit-discard-yes" disabled="@Busy" @onclick="() => DiscardHandEditAsync(pending)">Discard it</button>
+                    <button type="button" class="btn btn-sm btn-outline-light" disabled="@Busy" @onclick="() => _discarding = false">Cancel</button>
+                </div>
+            }
+            else
+            {
+                <div class="web-actions">
+                    <button type="button" class="btn btn-sm @(pending.RequiresConfirmation ? "btn-warning" : "btn-primary")" data-testid="hand-edit-apply"
+                            disabled="@Busy" @onclick="() => ApplyHandEditAsync(pending)">
+                        @(pending.RequiresConfirmation ? "Confirm and apply" : "Apply")
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" data-testid="hand-edit-discard" disabled="@Busy" @onclick="() => _discarding = true">Discard</button>
+                </div>
+            }
+        </section>
+    }
+    else if (RoofSettingsText.HandEditSeen(form))
+    {
+        <p class="web-status web-status--warning" data-testid="hand-edit-seen">@RoofSettingsText.HandEditSeenByOthers</p>
+    }
+
+    @if (form.Groups.Count == 0)
+    {
+        <p class="web-muted">The controller shows no settings to this role.</p>
+    }
+    else
+    {
+        <nav class="web-pills" aria-label="Settings groups">
+            @foreach (var group in form.Groups)
+            {
+                var selected = group.Name == SelectedGroup?.Name;
+                <button type="button" class="btn btn-sm @(selected ? "btn-primary" : "btn-outline-light")" aria-pressed="@(selected ? "true" : "false")"
+                        data-testid="settings-group" data-group="@group.Name" @onclick="() => SelectGroup(group.Name)">
+                    @group.Title
+                </button>
+            }
+        </nav>
+
+        @if (SelectedGroup is { } shown)
+        {
+            <section class="web-card" aria-labelledby="settings-group-title" data-testid="settings-fields" data-group="@shown.Name">
+                <h2 id="settings-group-title">@shown.Title</h2>
+                <p class="web-muted">@shown.Description</p>
+                <ul class="web-settings-list">
+                    @foreach (var field in shown.Fields)
+                    {
+                        <li class="web-setting" data-testid="setting" data-key="@field.Key">
+                            <div class="web-setting-head">
+                                <strong>@field.Label</strong>
+                                <code class="web-setting-key">@field.Key</code>
+                                @foreach (var note in Notes(field))
+                                {
+                                    <span class="badge @NoteClass(note)" data-testid="setting-note">@note</span>
+                                }
+                            </div>
+                            <p class="web-setting-value">
+                                <span data-testid="setting-value">@field.DisplayValue</span>
+                                @if (!field.Setting.Secret)
+                                {
+                                    <span class="web-muted"> · default @field.DefaultValue</span>
+                                }
+                            </p>
+                            <p class="web-setting-description">@field.Description</p>
+                            @if (field.State?.Problem is { } problem)
+                            {
+                                <p class="web-status web-status--bad" data-testid="setting-problem">Problem: @problem</p>
+                            }
+                            @if (!field.CanWrite)
+                            {
+                                <p class="web-muted" data-testid="setting-read-only">Read-only: @field.ReadOnlyReason</p>
+                            }
+                            else if (_review is { } review && _editKey == field.Key)
+                            {
+                                <div class="web-confirm" role="group" aria-label="Review the change" data-testid="setting-review">
+                                    <ul class="web-change-list">
+                                        @foreach (var change in RoofSettingsText.DescribeChanges(review))
+                                        {
+                                            <li><code>@change</code></li>
+                                        }
+                                    </ul>
+                                    @if (review.NeedsConfirmation)
+                                    {
+                                        <p class="web-status web-status--warning">@RoofSettingsText.SafetyCriticalChange</p>
+                                    }
+                                    <button type="button" class="btn btn-sm @(review.NeedsConfirmation ? "btn-warning" : "btn-primary")" data-testid="setting-send"
+                                            disabled="@Busy" @onclick="() => SaveEditAsync(review)">
+                                        @(review.NeedsConfirmation ? "Confirm and send" : _reviewAction)
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-light" disabled="@Busy" @onclick="CloseEditor">Cancel</button>
+                                </div>
+                            }
+                            else if (_editKey == field.Key)
+                            {
+                                <div class="web-editor" data-testid="setting-editor">
+                                    <label for="setting-input" class="form-label">@(field.Setting.Secret ? $"New {field.Label} (never shown)" : $"New {field.Label}")</label>
+                                    @if (field.Setting.Secret)
+                                    {
+                                        <input id="setting-input" type="password" autocomplete="new-password" class="form-control form-control-sm" data-testid="setting-input"
+                                               @bind="_editText" @bind:event="oninput" />
+                                        <label for="setting-input-again" class="form-label">Again</label>
+                                        <input id="setting-input-again" type="password" autocomplete="new-password" class="form-control form-control-sm" data-testid="setting-input-again"
+                                               @bind="_editAgain" @bind:event="oninput" />
+                                    }
+                                    else if (Choices(field.Setting) is { } choices)
+                                    {
+                                        <select id="setting-input" class="form-select form-select-sm" data-testid="setting-input" @bind="_editText">
+                                            @if (field.Setting.Nullable || _editText.Length == 0)
+                                            {
+                                                <option value="">@RoofSettingValues.None</option>
+                                            }
+                                            @foreach (var choice in choices)
+                                            {
+                                                <option value="@choice">@choice</option>
+                                            }
+                                        </select>
+                                    }
+                                    else
+                                    {
+                                        <input id="setting-input" type="text" autocomplete="off" class="form-control form-control-sm" data-testid="setting-input"
+                                               @bind="_editText" @bind:event="oninput" />
+                                        @if (EditorHelp(field.Setting) is { Length: > 0 } help)
+                                        {
+                                            <p class="web-muted web-editor-help">@help</p>
+                                        }
+                                    }
+                                    @if (_editError is not null)
+                                    {
+                                        <p class="web-status web-status--bad" role="alert" data-testid="setting-error">@_editError</p>
+                                    }
+                                    <div class="web-actions">
+                                        <button type="button" class="btn btn-sm btn-primary" data-testid="setting-save" disabled="@Busy" @onclick="() => SaveAsync(form, field)">Save</button>
+                                        <button type="button" class="btn btn-sm btn-outline-light" disabled="@Busy" @onclick="CloseEditor">Cancel</button>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="web-actions">
+                                    <button type="button" class="btn btn-sm btn-outline-light" data-testid="setting-change" disabled="@Busy" @onclick="() => OpenEditor(field)">Change</button>
+                                    @if (field.Setting.Secret && field.State?.IsSet == true)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-danger" data-testid="setting-clear" disabled="@Busy" @onclick="() => ClearSecret(form, field)">Clear secret</button>
+                                    }
+                                </div>
+                            }
+                        </li>
+                    }
+                </ul>
+            </section>
+        }
+    }
+}
+
+@code {
+    private RoofSettingsForm? _form;
+    private string? _group;
+    private string? _editKey;
+    private string _editText = string.Empty;
+    private string _editAgain = string.Empty;
+    private string? _editError;
+    private RoofSettingsEdit? _review;
+    private string _reviewAction = "Send";
+    private bool _discarding;
+
+    private RoofSettingsFormGroup? SelectedGroup => _form is not { } form ? null
+        : form.FindGroup(_group ?? string.Empty) ?? form.Groups.FirstOrDefault();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await ReloadAsync();
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (await ReadAsync("The settings could not be read."))
+        {
+            Message = null;
+        }
+    }
+
+    /// <summary>Reads the catalogue and the values again, and closes any editor.</summary>
+    private Task<bool> ReadAsync(string failed) => SendAsync(failed, async (session, cancellationToken) =>
+    {
+        var catalogue = await session.Client.Settings.GetCatalogueAsync(cancellationToken);
+        var settings = await session.Client.Settings.GetAsync(cancellationToken);
+        Show(RoofSettingsForm.Create(catalogue, settings));
+    });
+
+    private void Show(RoofSettingsForm form)
+    {
+        _form = form;
+        _discarding = false;
+        CloseEditor();
+    }
+
+    private void SelectGroup(string name)
+    {
+        _group = name;
+        CloseEditor();
+    }
+
+    private void OpenEditor(RoofSettingsFormField field)
+    {
+        _editKey = field.Key;
+        _editText = field.EditText;
+        _editAgain = string.Empty;
+        _editError = null;
+        _review = null;
+    }
+
+    private void CloseEditor()
+    {
+        _editKey = null;
+        _editText = string.Empty;
+        _editAgain = string.Empty;
+        _editError = null;
+        _review = null;
+    }
+
+    private async Task SaveAsync(RoofSettingsForm form, RoofSettingsFormField field)
+    {
+        if (field.Setting.Secret)
+        {
+            if (string.IsNullOrWhiteSpace(_editText))
+            {
+                _editError = "Type the new value; to remove the secret, use Clear secret.";
+                return;
+            }
+
+            if (!string.Equals(_editText, _editAgain, StringComparison.Ordinal))
+            {
+                _editError = "The two values differ.";
+                return;
+            }
+        }
+
+        var edit = form.Edit(field.Setting.Group);
+        if (!edit.TrySet(field.Key, _editText, out var error))
+        {
+            _editError = error;
+            return;
+        }
+
+        await Review(edit, "Send");
+    }
+
+    private void ClearSecret(RoofSettingsForm form, RoofSettingsFormField field)
+    {
+        var edit = form.Edit(field.Setting.Group);
+        try
+        {
+            edit.ClearSecret(field.Key);
+        }
+        catch (ArgumentException error)
+        {
+            Message = Danger(error.Message.Split(" (Parameter")[0]);
+            return;
+        }
+
+        _editKey = field.Key;
+        _review = edit;
+        _reviewAction = "Clear it";
+    }
+
+    /// <summary>Sends the edit, or first shows it for review when it is safety-critical.</summary>
+    private Task Review(RoofSettingsEdit edit, string action)
+    {
+        if (RoofSettingsText.DescribeChanges(edit).Count == 0)
+        {
+            CloseEditor();
+            Message = Info(RoofSettingsText.NothingToChange);
+            return Task.CompletedTask;
+        }
+
+        if (edit.NeedsConfirmation)
+        {
+            _review = edit;
+            _reviewAction = action;
+            return Task.CompletedTask;
+        }
+
+        return SaveEditAsync(edit);
+    }
+
+    private async Task SaveEditAsync(RoofSettingsEdit edit)
+    {
+        var request = edit.ToRequest(edit.NeedsConfirmation);
+        var needsRestart = edit.NeedsRestart;
+        RoofSettingsResponse? saved = null;
+        var sent = await SendAsync($"{edit.Group.Title} could not be saved.", async (session, cancellationToken) =>
+        {
+            saved = await session.Client.Settings.UpdateAsync(edit.Group.Name, request, cancellationToken);
+            var catalogue = await session.Client.Settings.GetCatalogueAsync(cancellationToken);
+            Show(RoofSettingsForm.Create(catalogue, await session.Client.Settings.GetAsync(cancellationToken)));
+        });
+
+        if (sent && saved is not null)
+        {
+            var lines = new List<string> { $"Saved (settings version {saved.Version})." };
+            if (!saved.FileBacked)
+            {
+                lines.Add(RoofSettingsText.InMemoryOnly);
+            }
+
+            if (needsRestart)
+            {
+                lines.Add("Part of it applies after a restart (System page).");
+            }
+
+            lines.AddRange(saved.Warnings.Select(warning => $"Warning: {warning}"));
+            Message = new WebPageMessage(saved.Warnings.Count > 0 || !saved.FileBacked ? WebMessageLevel.Warning : WebMessageLevel.Success, lines);
+        }
+        else if (FailedWith(RoofControllerErrorCode.ConfigurationVersionConflict) || FailedWith(RoofControllerErrorCode.SettingsHandEditPending))
+        {
+            await ReadAgainAfterRefusalAsync();
+        }
+    }
+
+    private Task ApplyHandEditAsync(RoofSettingsHandEdit pending) => HandEditAsync(
+        "The hand edit could not be applied.",
+        "Applied the hand edit",
+        (client, cancellationToken) => client.Settings.ApplyHandEditAsync(
+            new RoofSettingsHandEditRequest { Token = pending.Token, ConfirmSafetyCriticalChange = pending.RequiresConfirmation },
+            cancellationToken));
+
+    private Task DiscardHandEditAsync(RoofSettingsHandEdit pending) => HandEditAsync(
+        "The hand edit could not be discarded.",
+        "Discarded the hand edit",
+        (client, cancellationToken) => client.Settings.DiscardHandEditAsync(new RoofSettingsHandEditRequest { Token = pending.Token }, cancellationToken));
+
+    private async Task HandEditAsync(string failed, string done, Func<RoofControllerClient, CancellationToken, Task<RoofSettingsResponse>> send)
+    {
+        RoofSettingsResponse? saved = null;
+        var sent = await SendAsync(failed, async (session, cancellationToken) =>
+        {
+            saved = await send(session.Client, cancellationToken);
+            var catalogue = await session.Client.Settings.GetCatalogueAsync(cancellationToken);
+            Show(RoofSettingsForm.Create(catalogue, saved));
+        });
+
+        if (sent && saved is not null)
+        {
+            Message = new WebPageMessage(
+                saved.Warnings.Count > 0 ? WebMessageLevel.Warning : WebMessageLevel.Success,
+                [$"{done} (settings version {saved.Version}).", .. saved.Warnings.Select(warning => $"Warning: {warning}")]);
+        }
+        else if (FailedWith(RoofControllerErrorCode.ConfigurationVersionConflict))
+        {
+            // Another edit of the file since this one was read: show the one pending now.
+            await ReadAgainAfterRefusalAsync();
+        }
+    }
+
+    /// <summary>After a refusal the settings on the page are out of date: reads them again, keeping the refusal.</summary>
+    private async Task ReadAgainAfterRefusalAsync()
+    {
+        var refusal = Message;
+        if (await ReadAsync("The settings could not be read again.") && refusal is not null)
+        {
+            Message = refusal with { Lines = [.. refusal.Lines, "The settings were read again: check them, then try again."] };
+        }
+    }
+
+    private static string DescribeSaved(RoofSettingsResponse settings)
+        => settings.SavedAtUtc is { } savedAt
+            ? $"Saved {RoofStatusText.Time(savedAt)}{(settings.SavedBy is { Length: > 0 } by ? $" by {by}" : string.Empty)}."
+            : "Not changed through the controller yet.";
+
+    private static IEnumerable<string> Notes(RoofSettingsFormField field)
+        => RoofSettingsText.DescribeNotes(field).Split(", ", StringSplitOptions.RemoveEmptyEntries).Where(note => note != "read-only");
+
+    private static string NoteClass(string note) => note switch
+    {
+        "PROBLEM" or "RESTART PENDING" => "bg-danger",
+        "safety-critical" or "safety-critical to turn off" => "bg-warning text-dark",
+        _ => "bg-secondary"
+    };
+
+    /// <summary>The values to pick from, for a yes/no or a list setting; null for one that is typed.</summary>
+    private static IReadOnlyList<string>? Choices(RoofSettingDescriptor setting) => setting.Type switch
+    {
+        RoofSettingType.Boolean => ["true", "false"],
+        RoofSettingType.Enum => setting.AllowedValues ?? [],
+        _ => null
+    };
+
+    private static string EditorHelp(RoofSettingDescriptor setting)
+    {
+        var unit = setting.Type switch
+        {
+            RoofSettingType.Duration => "In seconds.",
+            RoofSettingType.StringList => "Separate the items with commas.",
+            _ => setting.Unit is { Length: > 0 } name && setting.Type != RoofSettingType.String ? $"In {name}." : null
+        };
+        var limits = (setting.Minimum, setting.Maximum) switch
+        {
+            ({ } minimum, { } maximum) => $"From {Number(minimum)} to {Number(maximum)}.",
+            ({ } minimum, null) => $"At least {Number(minimum)}.",
+            (null, { } maximum) => $"At most {Number(maximum)}.",
+            _ => null
+        };
+        return string.Join(' ', new[] { unit, limits, setting.Nullable ? "Leave it empty for none." : null }.OfType<string>());
+    }
+
+    private static string Number(double value) => value.ToString(CultureInfo.InvariantCulture);
+}
