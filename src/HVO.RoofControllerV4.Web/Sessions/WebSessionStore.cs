@@ -92,6 +92,16 @@ public sealed class WebSessionStore : IDisposable
         return sessionId is not null && _sessions.TryGetValue(sessionId, out session!) && session.IsOpen;
     }
 
+    /// <summary>
+    /// The session with this identifier, open or ended, while the web UI remembers it (Stop is still sent for a session
+    /// that ended).
+    /// </summary>
+    public bool TryFind(string? sessionId, out WebSession session)
+    {
+        session = null!;
+        return sessionId is not null && _sessions.TryGetValue(sessionId, out session!);
+    }
+
     /// <summary>Closes the clients of sessions that ended a while ago, and forgets sessions that have expired.</summary>
     internal void Sweep()
     {

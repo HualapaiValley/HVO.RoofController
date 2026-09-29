@@ -16,7 +16,7 @@ using WebProgram = HVO.RoofControllerV4.Web.Program;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
-/// <summary>The web UI's host: its settings, liveness, the status page and HTTPS.</summary>
+/// <summary>The web UI's host: its settings, liveness, its pages and HTTPS.</summary>
 [TestClass]
 public sealed class RoofWebHostTests
 {
@@ -47,23 +47,36 @@ public sealed class RoofWebHostTests
     }
 
     [TestMethod]
-    public async Task Home_ShowsTheControllerStatus_WithExactlyOneTitle()
+    [DataRow("/", "Roof · HVO Roof Controller")]
+    [DataRow("/health", "Health · HVO Roof Controller")]
+    public async Task EveryPage_HasExactlyOneTitle_AndOneHeading(string page, string title)
     {
         await using var host = await WebHost.StartAsync();
         using var browser = host.Browser();
         (await browser.SignInAsync("ada", FakeController.AdaPassword)).StatusCode.Should().Be(HttpStatusCode.Redirect);
 
-        var html = await (await browser.GetAsync("/")).Content.ReadAsStringAsync();
+        var html = await (await browser.GetAsync(page)).Content.ReadAsStringAsync();
 
         Regex.Matches(html, "<title>").Should().ContainSingle();
-        html.Should().Contain("<title>Roof controller</title>");
+        html.Should().Contain($"<title>{title}</title>");
         Regex.Matches(html, "<h1[ >]").Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task Health_ShowsTheControllerStatus()
+    {
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        await browser.SignInAsync("ada", FakeController.AdaPassword);
+
+        var html = await (await browser.GetAsync("/health")).Content.ReadAsStringAsync();
+
         html.Should().Contain("The controller is ready")
             .And.Contain("The web UI is not running under the container&#x27;s supervisor.");
     }
 
     [TestMethod]
-    public async Task Home_UnderTheSupervisor_ShowsACrashLoop()
+    public async Task Health_UnderTheSupervisor_ShowsACrashLoop()
     {
         using var directory = new WebTestSupport.TempDirectory();
         var path = directory.File("supervisor.json");
@@ -74,7 +87,7 @@ public sealed class RoofWebHostTests
         using var browser = host.Browser();
         await browser.SignInAsync("ada", FakeController.AdaPassword);
 
-        var html = await (await browser.GetAsync("/")).Content.ReadAsStringAsync();
+        var html = await (await browser.GetAsync("/health")).Content.ReadAsStringAsync();
 
         html.Should().Contain("The controller is stopped after repeated crashes")
             .And.Contain("It crashed 5 times within 120 s")

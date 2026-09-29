@@ -1,0 +1,390 @@
+/* The roof page, on the HVO dark theme's tokens: the layout of the controller's own dashboard (RPi RoofControlV2), with
+   Stop in the bar at the bottom of every page (App.razor) instead of on this page. */
+
+.rc2-shell {
+    max-width: 1280px;
+    margin: 0 auto;
+    color: var(--hvo-body-color);
+}
+
+.rc2-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    padding: 0.9rem 1.25rem;
+    background: var(--hvo-card-bg);
+    border: 1px solid var(--hvo-border-muted);
+    border-radius: 16px;
+    box-shadow: var(--hvo-panel-shadow);
+}
+
+.rc2-header-text {
+    flex: 1 1 320px;
+    min-width: 0;
+}
+
+.rc2-title {
+    margin: 0 0 0.25rem;
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    overflow-wrap: anywhere;
+}
+
+.rc2-intro-text {
+    margin: 0;
+    color: var(--hvo-muted-strong);
+}
+
+.rc2-status-pill {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.rc2-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    min-height: 34px;
+    padding: 0.4rem 0.9rem;
+    border-radius: 0.6rem;
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.rc2-banners {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.rc2-banners:empty {
+    display: none;
+}
+
+.rc2-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0;
+    padding: 0.6rem 0.9rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-muted);
+    background: var(--hvo-card-glass);
+    box-shadow: inset 0 1px 0 var(--hvo-border-stronger);
+}
+
+.rc2-banner > .bi {
+    flex-shrink: 0;
+    font-size: 1.2rem;
+}
+
+.rc2-banner a {
+    color: inherit;
+    font-weight: 600;
+}
+
+.rc2-banner-info { border-left: 4px solid var(--hvo-info-strong); }
+.rc2-banner-warn { border-left: 4px solid var(--hvo-warning-strong); }
+.rc2-banner-danger { border-left: 4px solid var(--hvo-danger-strong); }
+
+.rc2-alert-danger {
+    border-color: var(--hvo-danger-strong);
+    border-left-width: 4px;
+    background: var(--hvo-danger-bg);
+    color: var(--hvo-danger-fg);
+}
+
+.rc2-main {
+    display: grid;
+    grid-template-columns: minmax(340px, 5fr) minmax(0, 7fr);
+    grid-template-areas: "controls details";
+    gap: 1rem;
+    margin-top: 1rem;
+    align-items: start;
+}
+
+.rc2-controls { grid-area: controls; }
+.rc2-details { grid-area: details; }
+
+.rc2-card {
+    overflow: hidden;
+    border-radius: 16px;
+    border: 1px solid var(--hvo-border-muted);
+    background: var(--hvo-card-bg);
+    box-shadow: var(--hvo-panel-shadow);
+    color: var(--hvo-body-color);
+}
+
+.rc2-card-head {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--hvo-border-muted);
+    background: var(--hvo-card-glass);
+}
+
+.rc2-card-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.rc2-card-body { padding: 1rem; }
+
+.rc2-state {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.rc2-state-item {
+    min-width: 0;
+    padding: 0.6rem 0.8rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-muted);
+    background: var(--hvo-card-glass);
+}
+
+/* A last known state is not the roof's state now: dashed, and dimmed. */
+.rc2-state--stale .rc2-state-item {
+    border-style: dashed;
+    border-color: var(--hvo-warning-strong);
+}
+
+.rc2-state--stale .rc2-state-value {
+    color: var(--hvo-muted-strong);
+}
+
+.rc2-state-label {
+    font-size: 0.8rem;
+    color: var(--hvo-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.rc2-state-value {
+    display: flex;
+    align-items: center;
+    font-size: 1.3rem;
+    font-weight: 700;
+}
+
+.rc2-state-value--position {
+    font-size: 1.6rem;
+}
+
+.rc2-state-limits {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.rc2-chip {
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--hvo-border-muted);
+    background: var(--hvo-card-glass);
+    color: var(--hvo-muted-strong);
+    font-size: 0.8rem;
+}
+
+.rc2-chip--on {
+    border-color: var(--hvo-warning-strong);
+    background: var(--hvo-warning-bg);
+    color: var(--hvo-warning-fg);
+}
+
+.rc2-chip--unknown {
+    font-style: italic;
+}
+
+.rc2-action-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.rc2-action {
+    width: 100%;
+    min-height: 72px;
+}
+
+.rc2-action--small {
+    min-height: 48px;
+}
+
+.rc2-blocked {
+    min-height: 1.5rem;
+    margin: 0.75rem 0 0;
+    color: var(--hvo-muted-strong);
+    font-size: 0.95rem;
+}
+
+.rc2-role-hint {
+    margin: 0.75rem 0 0;
+    color: var(--hvo-muted-strong);
+    font-size: 0.9rem;
+}
+
+.rc2-notices {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.rc2-notice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem 0.6rem;
+    padding: 0.45rem 0.7rem;
+    border-radius: 10px;
+    border: 1px solid var(--hvo-border-muted);
+    border-left-width: 4px;
+    background: var(--hvo-card-glass);
+    font-size: 0.9rem;
+}
+
+.rc2-notice--info { border-left-color: var(--hvo-info-strong); }
+.rc2-notice--warning { border-left-color: var(--hvo-warning-strong); }
+
+.rc2-notice--danger {
+    border-left-color: var(--hvo-danger-strong);
+    background: var(--hvo-danger-bg);
+    color: var(--hvo-danger-fg);
+}
+
+.rc2-notice-time {
+    color: var(--hvo-muted);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.rc2-status-time {
+    margin: 0 0 0.75rem;
+    color: var(--hvo-muted-strong);
+    font-size: 0.9rem;
+}
+
+.rc2-status-time--stale {
+    color: var(--hvo-warning-strong);
+    font-weight: 600;
+}
+
+.rc2-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0;
+}
+
+.rc2-row {
+    display: grid;
+    grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr);
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--hvo-border-muted);
+}
+
+.rc2-row:last-child {
+    border-bottom: 0;
+}
+
+.rc2-row dt {
+    color: var(--hvo-muted);
+    font-weight: 600;
+}
+
+.rc2-row dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+    .rc2-header { padding: 0.6rem 0.9rem; }
+    .rc2-title { margin: 0; font-size: 1.3rem; }
+    .rc2-intro-text { display: none; }
+    .rc2-banners { margin-top: 0.5rem; }
+
+    .rc2-main {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "controls"
+            "details";
+        gap: 0.75rem;
+        margin-top: 0.5rem;
+    }
+}
+
+@media (max-width: 992px) {
+    .rc2-action { min-height: 60px; }
+    .rc2-action--small { min-height: 44px; }
+    .rc2-state-value--position { font-size: 1.4rem; }
+}
+
+@media (max-width: 576px) {
+    .rc2-state { grid-template-columns: minmax(0, 1fr); }
+    .rc2-row { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
+}
+
+/* Short screens, such as a phone held sideways: the roof state sits beside the buttons, and the Controls heading is kept
+   for screen readers only. */
+@media (max-height: 500px) and (min-width: 560px) {
+    .rc2-header { align-items: center; padding: 0.35rem 0.75rem; }
+    .rc2-header-text { flex: 0 1 auto; }
+    .rc2-title { font-size: 1.1rem; }
+
+    .rc2-badge {
+        min-height: 28px;
+        padding: 0.25rem 0.6rem;
+        font-size: 0.8rem;
+    }
+
+    .rc2-controls .rc2-card-head {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+
+    .rc2-controls .rc2-card-body {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+        gap: 0.5rem 0.75rem;
+        padding: 0.75rem;
+    }
+
+    .rc2-state {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 0;
+        align-content: start;
+    }
+
+    .rc2-state-item { padding: 0.4rem 0.6rem; }
+    .rc2-state-value { font-size: 1.1rem; }
+    .rc2-state-value--position { font-size: 1.2rem; }
+    .rc2-action-grid { gap: 0.5rem; }
+    .rc2-action { min-height: 48px; }
+    .rc2-action--small { min-height: 40px; }
+
+    .rc2-blocked,
+    .rc2-role-hint,
+    .rc2-notices {
+        grid-column: 1 / -1;
+        margin: 0;
+    }
+}

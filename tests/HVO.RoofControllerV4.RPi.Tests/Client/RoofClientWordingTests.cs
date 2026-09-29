@@ -178,6 +178,7 @@ public sealed class RoofClientWordingTests
         RoofText.DescribeFailure(new HttpRequestException("socket 10.0.0.5:443 reset")).Should().Be(RoofText.Unreachable);
         RoofText.DescribeFailure(new TimeoutException("internal")).Should().Be(RoofText.TimedOut);
         RoofText.DescribeFailure(new TaskCanceledException("t", new TimeoutException())).Should().Be(RoofText.TimedOut);
+        RoofText.DescribeFailure(new RoofProtocolException("unexpected token '<' at 0")).Should().Be(RoofText.AnswerUnreadable);
         RoofText.DescribeFailure(new InvalidOperationException("stack detail")).Should().Be(Unexpected);
         RoofText.DescribeFailure(null).Should().Be(Unexpected);
     }

@@ -44,11 +44,11 @@ public static class RoofStopText
     /// <summary>A 401 for an API key or a kiosk's device key: there is nothing to sign in to.</summary>
     public const string KeyRefused = "Stop was not sent because the controller did not accept the key. Use the stop control at the roof.";
 
-    /// <summary>A 401 in the browser console's reconnect dialog, which has no sign-in of its own.</summary>
+    /// <summary>A 401 for a web page's Stop form (the Stop bar, or the reconnect dialog), which has no sign-in of its own.</summary>
     public const string PageSignedOut =
         "Stop was not sent because this page is signed out. Reload the page to sign in again, or use the stop control at the roof.";
 
-    /// <summary>The browser console's Stop with a missing or old antiforgery token.</summary>
+    /// <summary>A web page's Stop form with a missing or old antiforgery token.</summary>
     public const string PageOutOfDate = "Stop was not sent because this page is out of date. Reload the page, or use the stop control at the roof.";
 
     /// <summary>A failed stop, with the reason, sending the operator to the roof.</summary>

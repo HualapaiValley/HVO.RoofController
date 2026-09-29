@@ -2,6 +2,12 @@
 body[data-theme="hvo-dark"] {
     background: var(--hvo-body-bg, #05070d);
     color: var(--hvo-body-color, #f8fafc);
+    /* Room for the Stop bar, so it never covers the end of a page. */
+    padding-bottom: calc(var(--web-stop-bar-height) + env(safe-area-inset-bottom, 0px));
+}
+
+:root {
+    --web-stop-bar-height: 4.5rem;
 }
 
 .web-main {
@@ -133,5 +139,191 @@ body[data-theme="hvo-dark"] {
 
 .web-checked {
     color: var(--hvo-muted, #cbd5e1);
+    font-size: 0.9rem;
+}
+
+.web-status--info {
+    background: var(--hvo-info-bg);
+    color: var(--hvo-info-fg);
+}
+
+/* Stop, fixed at the bottom of every page (App.razor, js/stop.js). Above the page, below the reconnect dialog. Stop,
+   Open and Close have the colours every client uses (RoofUiPalette): warning, success and danger. */
+.web-stop-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1050;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: var(--web-stop-bar-height);
+    margin: 0;
+    padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--hvo-warning-strong, #facc15);
+    background: color-mix(in srgb, var(--hvo-card-bg, #0f172a) 94%, transparent);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 -8px 24px rgba(2, 6, 23, 0.55);
+}
+
+.web-stop-button {
+    flex: 0 0 auto;
+    min-width: 12rem;
+    min-height: 3.25rem;
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+.web-stop-result {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.web-stop-result[data-state="sent"] {
+    color: var(--hvo-info-fg);
+}
+
+.web-stop-result[data-state="ok"] {
+    color: var(--hvo-success-strong);
+}
+
+.web-stop-result[data-state="warn"] {
+    color: var(--hvo-warning-strong);
+    font-weight: 600;
+}
+
+.web-stop-result[data-state="failed"] {
+    color: var(--hvo-danger-strong);
+    font-weight: 600;
+}
+
+@media (max-width: 576px) {
+    :root {
+        --web-stop-bar-height: 6.5rem;
+    }
+
+    .web-stop-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.35rem;
+    }
+
+    .web-stop-button {
+        width: 100%;
+    }
+
+    .web-stop-result:empty {
+        display: none;
+    }
+}
+
+/* The reconnect dialog (App.razor): the theme styles it, and the states it leaves out. */
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-paused,
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-resume-failed {
+    display: flex;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-paused .components-reconnect-paused,
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-resume-failed .components-reconnect-resume-failed {
+    display: block;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop .btn {
+    min-width: 12rem;
+    min-height: 3rem;
+    font-weight: 700;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result:empty {
+    display: none;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="ok"] {
+    color: var(--hvo-success-strong);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="warn"] {
+    color: var(--hvo-warning-strong);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="failed"] {
+    color: var(--hvo-danger-strong);
+}
+
+/* The mode banner (Layout/ModeBanner.razor): on every page while the roof does not move, or ignores its limits. */
+.web-mode-banner {
+    margin: 0;
+    padding: 0.5rem 1rem;
+    border-radius: 0;
+    border-width: 0 0 1px;
+    text-align: center;
+    font-size: 0.95rem;
+}
+
+.web-mode-banner p {
+    margin: 0;
+}
+
+.web-health {
+    margin-top: 1rem;
+}
+
+.web-health-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.web-health-head h2 {
+    margin: 0;
+    font-size: 1.15rem;
+}
+
+.web-health-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.web-health-check {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.6rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-muted, #334155);
+    background: var(--hvo-card-glass, rgba(15, 23, 42, 0.6));
+}
+
+.web-health-description {
+    flex: 1 1 100%;
+    color: var(--hvo-muted-strong, #cbd5e1);
     font-size: 0.9rem;
 }

@@ -2,9 +2,11 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Web.Components;
+using HVO.RoofControllerV4.Web.Roof;
 using HVO.RoofControllerV4.Web.Security;
 using HVO.RoofControllerV4.Web.Sessions;
 using HVO.RoofControllerV4.Web.Supervision;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.Extensions.Configuration.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -109,6 +111,12 @@ public class Program
         services.AddSingleton<RoofControllerConnector>();
         services.AddRoofWebAuthentication(options);
 
+        // One console per live page (circuit), shared by its layout and page; it drops the lease when the page's
+        // connection goes down.
+        services.AddScoped<WebCircuitMonitor>();
+        services.AddScoped<CircuitHandler>(provider => provider.GetRequiredService<WebCircuitMonitor>());
+        services.AddScoped<WebRoofConsole>();
+
         services.AddProblemDetails();
         services.AddRazorComponents().AddInteractiveServerComponents();
         services.AddHealthChecks();
@@ -135,6 +143,7 @@ public class Program
         app.MapStaticAssets();
         app.MapHealthChecks(HealthLivePath);
         app.MapWebAccountEndpoints();
+        app.MapWebStopEndpoint();
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
     }
 

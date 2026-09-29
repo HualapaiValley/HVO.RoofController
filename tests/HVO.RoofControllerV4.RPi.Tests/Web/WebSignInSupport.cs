@@ -49,6 +49,9 @@ internal sealed class FakeController
     /// <summary>When set, answers every password change instead.</summary>
     public Func<HttpResponseMessage>? PasswordAnswer { get; set; }
 
+    /// <summary>When set, answers any other request it does not return null for, before the default.</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage?>? OtherAnswer { get; set; }
+
     /// <summary>The role the next sessions get, whatever the person's own.</summary>
     public string? RoleOverride { get; set; }
 
@@ -108,7 +111,7 @@ internal sealed class FakeController
                 : Problem(HttpStatusCode.Unauthorized, RoofControllerErrorCode.SignInFailed));
         }
 
-        return WebTestSupport.Text(HttpStatusCode.OK, "Healthy");
+        return OtherAnswer?.Invoke(request) ?? WebTestSupport.Text(HttpStatusCode.OK, "Healthy");
     }
 
     public static HttpResponseMessage Problem(HttpStatusCode status, RoofControllerErrorCode? code, TimeSpan? retryAfter = null)
@@ -165,6 +168,8 @@ internal static class RoofApiRoutesTest
     public const string Session = "api/v4.0/Auth/Session";
 
     public const string Password = "api/v4.0/Auth/Password";
+
+    public const string Stop = "api/v4.0/RoofControl/Stop";
 }
 
 /// <summary>Reaches <see cref="FakeController"/> instead of a controller.</summary>

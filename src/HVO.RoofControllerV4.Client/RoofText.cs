@@ -14,6 +14,9 @@ public static class RoofText
     /// <summary>Shown when the controller did not answer before the request timed out.</summary>
     public const string TimedOut = "The controller did not answer in time.";
 
+    /// <summary>Shown when the controller answered with something the client could not read.</summary>
+    public const string AnswerUnreadable = "The controller's answer could not be read. It may be a different version.";
+
     public static string DescribePosition(RoofControllerStatus status) => status switch
     {
         RoofControllerStatus.Open => "Open",
@@ -136,6 +139,7 @@ public static class RoofText
         TimeoutException => TimedOut,
         TaskCanceledException { InnerException: TimeoutException } => TimedOut,
         HttpRequestException => Unreachable,
+        RoofProtocolException => AnswerUnreadable,
         _ => DescribeErrorCode(RoofControllerErrorCode.Unknown)
     };
 }
