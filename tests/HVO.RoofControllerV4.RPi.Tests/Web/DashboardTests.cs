@@ -88,7 +88,8 @@ public sealed class DashboardTests
         var cut = context.Render<Dashboard>();
         cut.WaitForAssertion(() => cut.Find("[data-testid=open]").HasAttribute("disabled").Should().BeFalse());
 
-        cut.Find("[data-testid=open]").Click();
+        // Found and clicked on the renderer's thread, so a status that arrives in between cannot draw the button again.
+        await cut.InvokeAsync(() => cut.Find("[data-testid=open]").Click());
 
         cut.WaitForAssertion(() => Text(cut.Find("[data-testid=lease]")).Should().Be("Renewing lease (6 s left)"));
         var notice = cut.Find("[data-testid=notice]");

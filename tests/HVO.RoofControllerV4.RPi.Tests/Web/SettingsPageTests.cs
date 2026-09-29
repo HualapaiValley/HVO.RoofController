@@ -241,7 +241,7 @@ public sealed class SettingsPageTests
         Value(cut, CameraServer).Should().Be(FirstCameraServer);
 
         cut.WaitForAssertion(() => Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.HasAttribute("disabled").Should().BeFalse());
-        Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.Click();
+        await cut.InvokeAsync(() => Setting(cut, CameraUser).QuerySelector("[data-testid=setting-clear]")!.Click());
         cut.WaitForAssertion(() => cut.FindAll("[data-testid=setting-review] li").Select(change => change.TextContent).Should().Equal(
             $"User name: {RoofSettingValues.SecretSet} -> {RoofSettingValues.SecretNotSet}",
             $"Password: {RoofSettingValues.SecretSet} -> {RoofSettingValues.SecretNotSet}"));
@@ -465,9 +465,10 @@ public sealed class SettingsPageTests
     /// <summary>Opens the setting's editor, and waits for it: a click is queued while the page still renders.</summary>
     private static void Open(IRenderedComponent<SettingsPage> cut, string key)
     {
-        // The buttons are disabled while a request is in flight, and drawn again when it ends.
+        // The buttons are disabled while a request is in flight, and drawn again when it ends, and once more when the
+        // click that sent it is done: found and clicked on the renderer's thread, so no render comes between.
         cut.WaitForAssertion(() => Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.HasAttribute("disabled").Should().BeFalse());
-        Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.Click();
+        cut.InvokeAsync(() => Setting(cut, key).QuerySelector("[data-testid=setting-change]")!.Click()).GetAwaiter().GetResult();
         cut.WaitForElement("[data-testid=setting-editor]");
     }
 
