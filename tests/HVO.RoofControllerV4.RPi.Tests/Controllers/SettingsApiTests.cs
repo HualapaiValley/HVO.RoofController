@@ -35,6 +35,8 @@ public sealed class SettingsApiTests
     private const string Restart = "/api/v4.0/System/Restart";
     private const string Auth = "/api/v4.0/Auth";
     private const string Identity = "/api/v4.0/Identity";
+    private const string Status = "/api/v4.0/RoofControl/Status";
+    private const string Stop = "/api/v4.0/RoofControl/Stop";
 
     private const string Watchdog = "RoofControllerOptionsV4:SafetyWatchdogTimeout";
     private const string AtSpeed = "RoofControllerOptionsV4:AtSpeedConfirmationTimeout";
@@ -42,6 +44,7 @@ public sealed class SettingsApiTests
     private const string CloseRelay = "RoofControllerOptionsV4:CloseRelayId";
     private const string Departure = "RoofControllerOptionsV4:DepartureReleaseTimeout";
     private const string AnonymousStop = "RoofControllerSecurity:AllowAnonymousStop";
+    private const string RequireHttps = "RoofControllerSecurity:RequireHttps";
     private const string AllowedOrigins = "RoofControllerSecurity:AllowedOrigins";
     private const string LockoutThreshold = "RoofControllerSecurity:Identity:LockoutThreshold";
     private const string CameraServer = "BlueIris:BaseUrl";
@@ -53,6 +56,8 @@ public sealed class SettingsApiTests
     private const string LocalAdminKey = "test-local-admin-key-not-a-real-secret-06";
     private const string LocalKioskKey = "test-local-kiosk-key-not-a-real-secret-07";
     private const string RemoteKioskKey = "test-remote-kiosk-key-not-a-real-secret-08";
+
+    private static readonly IPAddress LanClient = IPAddress.Parse("192.168.1.50");
 
     private string _directory = null!;
 
@@ -623,6 +628,95 @@ public sealed class SettingsApiTests
     }
 
     [TestMethod]
+    public async Task TheSecuritySettings_TakeEffectAsSoonAsTheyAreSaved_AndHttpsCannotBeTurnedOnWithoutAListener()
+    {
+        const string proxy = "https://proxy.example";
+        var roof = new RoofDouble();
+        using var host = StartHost(roof, environment: "Production", remoteIp: LanClient);
+        using var admin = host.CreateApiClient(TestApiKeys.Admin, https: true);
+        using var plain = host.CreateApiClient(TestApiKeys.Viewer);
+        using var anonymous = host.CreateApiClient(https: true);
+
+        (await plain.GetAsync(Status)).StatusCode.Should().Be(HttpStatusCode.Forbidden, "Production refuses plain HTTP from another host");
+        (await anonymous.PostAsync(Stop, content: null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await LogoutFromAsync(proxy)).Should().Be(HttpStatusCode.Forbidden, "the proxy's origin is not allowed yet");
+
+        await ChangeSecurityAsync(values => values[RequireHttps] = Json("false"));
+        (await plain.GetAsync(Status)).StatusCode.Should().Be(HttpStatusCode.OK, "plain HTTP is accepted as soon as RequireHttps is off");
+
+        foreach (var on in new[] { "true", "null" })
+        {
+            var version = (await GetAsync(admin)).Version;
+            var request = await ReadGroupAsync(admin, RoofSettingsContract.SecurityGroup, values => values[RequireHttps] = Json(on), confirm: true);
+
+            var refused = await ProblemAsync(await PostGroupAsync(admin, RoofSettingsContract.SecurityGroup, request));
+
+            refused.Status.Should().Be(409, on);
+            refused.Code.Should().Be(nameof(RoofControllerErrorCode.ConfigurationRejected));
+            refused.Detail.Should().StartWith($"{RequireHttps} cannot be turned on: the controller has no HTTPS listener");
+            (await GetAsync(admin)).Version.Should().Be(version, "nothing is saved");
+            (await plain.GetAsync(Status)).StatusCode.Should().Be(HttpStatusCode.OK, "no client is locked out");
+        }
+
+        await ChangeSecurityAsync(values => values[AnonymousStop] = Json("true"));
+        (await anonymous.PostAsync(Stop, content: null)).StatusCode.Should().Be(HttpStatusCode.OK, "anonymous Stop is open as soon as it is saved");
+        roof.Mock.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+        await ChangeSecurityAsync(values => values[AnonymousStop] = Json("false"));
+        (await anonymous.PostAsync(Stop, content: null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "and closed again as soon as it is saved");
+
+        var invalid = await PostGroupAsync(admin, RoofSettingsContract.SecurityGroup, await ReadGroupAsync(admin, RoofSettingsContract.SecurityGroup,
+            values => values[AllowedOrigins] = Json($$"""["{{proxy}}", "{{proxy}}/kiosk"]""")));
+        (await ErrorsAsync(invalid)).Should().ContainSingle().Which.Should().StartWith($"{AllowedOrigins} entry 2 is not an origin");
+        (await LogoutFromAsync(proxy)).Should().Be(HttpStatusCode.Forbidden, "nothing is saved");
+
+        await ChangeSecurityAsync(values => values[AllowedOrigins] = Json($$"""["{{proxy}}"]"""));
+        (await LogoutFromAsync(proxy)).Should().NotBe(HttpStatusCode.Forbidden, "the proxy's origin is allowed as soon as it is saved");
+        (await LogoutFromAsync("https://evil.example")).Should().Be(HttpStatusCode.Forbidden);
+
+        async Task ChangeSecurityAsync(Action<Dictionary<string, JsonElement>> change)
+        {
+            var request = await ReadGroupAsync(admin, RoofSettingsContract.SecurityGroup, change, confirm: true);
+            var response = await PostGroupAsync(admin, RoofSettingsContract.SecurityGroup, request);
+            response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        }
+
+        async Task<HttpStatusCode> LogoutFromAsync(string origin)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, RoofControllerSecurityDefaults.LogoutPostPath);
+            request.Headers.Add("Origin", origin);
+            return (await anonymous.SendAsync(request)).StatusCode;
+        }
+    }
+
+    [TestMethod]
+    public async Task AHandEditThatTurnsOnHttpsWithoutAListener_IsRefusedWhenReloaded_OrAtARestart()
+    {
+        const string Lockout = $"{RequireHttps} cannot be turned on: the controller has no HTTPS listener";
+        File.WriteAllText(SettingsPath, """{ "RoofControllerSecurity": { "RequireHttps": false } }""");
+        using var host = StartHost(new RoofDouble(), environment: "Production", remoteIp: LanClient);
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        (await GetAsync(admin)).PendingHandEdit.Should().BeNull();
+
+        foreach (var content in new[] { """{ "RoofControllerSecurity": { "RequireHttps": true } }""", "{ }" })
+        {
+            File.WriteAllText(SettingsPath, content);
+            var edit = (await GetAsync(admin)).PendingHandEdit!;
+            edit.Should().NotBeNull(content);
+            var problem = edit.Problems.Should().ContainSingle(content).Which;
+            problem.Key.Should().Be(RequireHttps);
+            problem.Message.Should().StartWith(Lockout, "the edit shows why it cannot be reloaded");
+
+            var refused = await ReloadAsync(admin, edit.Token, confirm: true);
+
+            (await ErrorsAsync(refused)).Should().ContainSingle(content).Which.Should().StartWith(Lockout);
+            (await ProblemAsync(await admin.PostAsync(Restart, content: null))).Detail.Should()
+                .StartWith("A pending hand edit, which a restart would load, has settings that cannot be used: " + Lockout);
+            (await admin.GetAsync(Status)).StatusCode.Should().Be(HttpStatusCode.OK, "plain HTTP from another host still works");
+            host.Services.GetRequiredService<IOptionsMonitor<RoofControllerSecurityOptions>>().CurrentValue.RequireHttps.Should().BeFalse();
+        }
+    }
+
+    [TestMethod]
     public async Task AnAllowedOriginsList_ReplacesTheListBelowTheSettingsFile_AndAnEmptyListClearsIt()
     {
         var shipped = new Dictionary<string, string?>
@@ -982,11 +1076,15 @@ public sealed class SettingsApiTests
         RecordingLoggerProvider? logs = null,
         bool files = true,
         IReadOnlyDictionary<string, string?>? hostSettings = null,
-        IDictionary<string, string?>? extraSettings = null)
+        IDictionary<string, string?>? extraSettings = null,
+        string environment = "Development",
+        IPAddress? remoteIp = null)
     {
         var host = new RoofApiTestHost(
             roof.Mock,
             settings: extraSettings,
+            environment: environment,
+            remoteIp: remoteIp,
             configureServices: services =>
             {
                 // A cheap hash so the tests run quickly; production uses the ASP.NET Core default.

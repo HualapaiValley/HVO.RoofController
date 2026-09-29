@@ -112,7 +112,7 @@ public sealed class RoofSettingsValidator
         }
     }
 
-    private const string RequireHttpsKey = RoofControllerSecurityOptions.SectionName + ":" + nameof(RoofControllerSecurityOptions.RequireHttps);
+    internal const string RequireHttpsKey = RoofControllerSecurityOptions.SectionName + ":" + nameof(RoofControllerSecurityOptions.RequireHttps);
 
     private IEnumerable<RoofSettingProblem> ValidateGroup(string group, RoofConfigurationView view, IConfiguration candidate, Func<RoofControllerOptionsV4> roof)
     {

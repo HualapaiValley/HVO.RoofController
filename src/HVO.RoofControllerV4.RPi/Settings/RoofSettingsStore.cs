@@ -873,7 +873,7 @@ public sealed class RoofSettingsStore
                 changes.Where(change => change.Definition.RoofProperty is not null).ToList())));
             if (_validator.CheckHttpsLockout(before, after, _configuration) is { } lockout)
             {
-                problems.Add(new RoofSettingProblem(RoofSettingsContract.SecurityGroup, lockout));
+                problems.Add(new RoofSettingProblem(RoofSettingsValidator.RequireHttpsKey, lockout));
             }
         }
 

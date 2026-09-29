@@ -461,7 +461,8 @@ loaded at every settings request. An edit it finds is **not** in effect:
 
 - `GET Settings` shows it to admins as `pendingHandEdit`: each changed setting, from and to (never a secret's value),
   values that cannot be used, and whether reloading it needs confirmation or a local credential. An edit that sets a key
-  outside the catalogue shows as a file that cannot be used (`fileProblem`).
+  outside the catalogue shows as a file that cannot be used (`fileProblem`). An edit that turns `RequireHttps` on
+  without an HTTPS listener is listed with the values that cannot be used, because a restart would load it.
 - Every change through the API fails with 409 `SettingsHandEditPending`, so neither change silently overwrites the
   other. `GET Settings` reports every setting as read-only until then.
 - `POST Settings/Reload` with the edit's `token` applies it, with the rules of a change through the API: 400 for values
