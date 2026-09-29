@@ -367,9 +367,10 @@ internal sealed class RoofTerminalUi : IDisposable
     /// still on its way, Stop is sent once it is answered, since the controller may have acted on it, or after
     /// <see cref="MotionAnswerWait"/> without an answer. A Stop still on its way is answered before the interface closes.
     /// When quitting waited for a Stop that nothing then confirmed, or for an answer that did not come, F10 leaves the
-    /// interface open with that on screen, and the next F10 closes it (sending Stop again while the roof moves); a
-    /// termination signal (<paramref name="interrupted"/>) sends Stop again while the roof moves and closes it anyway,
-    /// and 'hvo-roof ui' says so on the restored terminal.
+    /// interface open with that on screen, and the next F10 closes it, sending Stop again first while the roof moves.
+    /// After a Stop that nothing confirmed it sends none, unless the Open or Close's answer was also lost: that command
+    /// may have set the roof moving after the Stop. A termination signal (<paramref name="interrupted"/>) sends Stop
+    /// again while the roof moves and closes it anyway, and 'hvo-roof ui' says so on the restored terminal.
     /// </summary>
     public void Quit(bool interrupted = false)
     {
@@ -383,8 +384,9 @@ internal sealed class RoofTerminalUi : IDisposable
             return;
         }
 
-        // After a Stop that nothing confirmed, F10 closes without another; a signal sends one while the roof moves.
-        if (FollowsMotion && (!_closeWithoutStop || interrupted))
+        // After a Stop that nothing confirmed, F10 closes without another; a signal sends one while the roof moves, and
+        // so does F10 when an Open or Close's answer was lost, since that command may have set the roof moving after it.
+        if (FollowsMotion && (!_closeWithoutStop || interrupted || _motionAnswerLost))
         {
             Say("Stopping the roof, which moves on a command from this interface, before closing.");
             _quitAfterStop = true;
@@ -414,6 +416,13 @@ internal sealed class RoofTerminalUi : IDisposable
         "The Open or Close sent from here was not answered, so it may still reach the controller after the Stop. "
         + "The interface stays open to show the roof: F9 stops it, F10 closes the interface.";
 
+    internal const string UnconfirmedStopText = "Nothing confirmed the Stop, so the interface stays open. F10 closes it.";
+
+    internal const string UnconfirmedStopAndAnswerLostText =
+        "Nothing confirmed the Stop, and the Open or Close sent from here was not answered, so it may still reach the "
+        + "controller after the Stop. The interface stays open to show the roof: F9 stops it, F10 closes the interface, "
+        + "sending Stop again if the roof moves.";
+
     /// <summary>Closes the interface when F10 (or a termination signal) waited for the Stops sent from here.</summary>
     private void QuitIfAsked()
     {
@@ -425,10 +434,12 @@ internal sealed class RoofTerminalUi : IDisposable
         _quitAfterStop = false;
         if (UnconfirmedStop is not null && !_quitInterrupted && !_closeWithoutStop)
         {
-            // Quitting said it stops the roof first; it does not close on a Stop that nothing confirmed.
+            // Quitting said it stops the roof first; it does not close on a Stop that nothing confirmed. A lost answer is
+            // said with it: that command may still set the roof moving after this Stop.
             QuitRequested = false;
             _closeWithoutStop = true;
-            Say("Nothing confirmed the Stop, so the interface stays open. F10 closes it.", error: true);
+            _answerLostShown |= _motionAnswerLost;
+            Say(_motionAnswerLost ? UnconfirmedStopAndAnswerLostText : UnconfirmedStopText, error: true);
             return;
         }
 
@@ -448,6 +459,9 @@ internal sealed class RoofTerminalUi : IDisposable
     private TimeSpan StopWait => (_client?.Options.StopTimeout ?? DefaultStopTimeout) + TimeSpan.FromSeconds(2);
 
     private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long closing waits for the live status to close.</summary>
+    internal static readonly TimeSpan FeedCloseWait = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Runs <paramref name="work"/> off the interface's thread with the current client. A failure is shown on the
@@ -927,8 +941,10 @@ internal sealed class RoofTerminalUi : IDisposable
         _client = null;
         if (feed is not null)
         {
-            // Off the interface's thread: the feed's handlers only post to it, and posting stops once closed.
-            Task.Run(async () => await feed.DisposeAsync().ConfigureAwait(false)).Wait(TimeSpan.FromSeconds(5));
+            // Off the interface's thread: the feed's handlers only post to it, and posting stops once closed. Not waited
+            // for long: after a signal, the process has StopGrace for the answer wait, the Stop, this, and the restored
+            // terminal's messages, and a feed that does not close in time is dropped with the process.
+            Task.Run(async () => await feed.DisposeAsync().ConfigureAwait(false)).Wait(FeedCloseWait);
         }
 
         client?.Dispose();

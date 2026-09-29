@@ -301,6 +301,13 @@ public static partial class RoofCli
             using var client = context.Connect();
             var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
 
+            // Ctrl+C before the command is sent ends it with nothing sent. No Stop follows: nothing from here moves the
+            // roof, and a Stop could end a motion that someone else started.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw new RoofCliRefusedException($"Interrupted before {verb} was sent: nothing was sent.", RoofExitCode.Interrupted);
+            }
+
             // Ctrl+C does not cancel the command at once: the controller may already have it, and a Stop sent sooner
             // could reach it first. Stop is sent once the command is answered, or after MotionAnswerWait without an
             // answer, when the command is cancelled; it may then still reach the controller after the Stop.

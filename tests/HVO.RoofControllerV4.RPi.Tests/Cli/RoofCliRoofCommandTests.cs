@@ -933,6 +933,31 @@ public sealed class RoofCliRoofCommandTests
     }
 
     [TestMethod]
+    [DataRow("open", "Open")]
+    [DataRow("close", "Close")]
+    public async Task CtrlC_BeforeTheCommandIsSent_SendsNothing_NotEvenStop_AndExits130(string name, string verb)
+    {
+        var roof = RoofShowing(() => RoofServiceMock.Snapshot());
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        using var interrupt = new CancellationTokenSource();
+        await interrupt.CancelAsync();
+
+        var code = await RoofCli.RunAsync([name, "--credentials-file", rig.CredentialsPath], rig.CreateHost(output, error), interrupt.Token);
+        var result = new CliResult(code, output.ToString(), error.ToString());
+
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        result.Error.Should().Be($"Interrupted before {verb} was sent: nothing was sent." + Environment.NewLine);
+        result.Out.Should().BeEmpty();
+        roof.Verify(service => service.Open(), Times.Never());
+        roof.Verify(service => service.Close(), Times.Never());
+        roof.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never(), "nothing from here moves the roof, and a Stop could end someone else's motion");
+    }
+
+    [TestMethod]
     public async Task Open_CtrlC_WhileTheOpenIsOnItsWay_WaitsForItsAnswer_SoTheStopReachesTheControllerAfterIt()
     {
         var moving = false;

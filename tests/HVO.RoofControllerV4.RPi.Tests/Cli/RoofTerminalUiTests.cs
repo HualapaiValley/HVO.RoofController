@@ -1015,6 +1015,63 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void F10_WhileItsOpenIsOnItsWay_WithNoAnswerInTime_AndTheStopUnconfirmed_SaysBoth_ThenF10StopsTheRoofAgainIfTheOpenArrivedLate()
+    {
+        var (roof, moving) = MovingRoof();
+        roof.Setup(service => service.Stop(It.IsAny<RoofControllerStopReason>())).Returns(Result<RoofControllerStatus>.Failure(
+            new RoofControllerException(RoofControllerErrorCode.RelayStateUnverified, "The relays could not be read back (test).")));
+        var onItsWay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host) { WrapHandler = inner => new InFlightRequestHandler(inner, "/RoofControl/Open", onItsWay, gate.Task) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        page.OpenButton.InvokeCommand(Command.Accept);
+        tui.WaitFor("the Open to be on its way", () => onItsWay.Task.IsCompleted);
+
+        // No answer within the wait, and nothing confirms the Stop sent after it.
+        tui.Press(Key.F10);
+        tui.Tick(3);
+        tui.WaitIdle("the Stop after the wait", () => !tui.Ui.MotionInFlight && !tui.Ui.StopInFlight && tui.Ui.StopResult != RoofStopText.Sending);
+
+        tui.Ui.StopResult.Should().Be(RoofStopText.SentUnverified);
+        tui.Ui.MotionAnswerLost.Should().BeTrue();
+        tui.Ui.Message.Should().Be(
+            "Nothing confirmed the Stop, and the Open or Close sent from here was not answered, so it may still reach the "
+            + "controller after the Stop. The interface stays open to show the roof: F9 stops it, F10 closes the interface, "
+            + "sending Stop again if the roof moves.");
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeFalse();
+        roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
+
+        // The Open reaches the controller after the Stop, and the status shows the roof moving.
+        gate.SetResult();
+        tui.WaitFor("the late Open", moving);
+        roof.Raise(service => service.StatusChanged += null, new RoofStatusChangedEventArgs(roof.Object.GetCurrentStatusSnapshot()));
+        tui.WaitIdle("the moving roof", () => tui.Ui.Status!.IsMoving);
+        tui.Ui.FollowsMotion.Should().BeTrue("the late Open set the roof moving");
+
+        tui.Press(Key.F10);
+
+        tui.Ui.Message.Should().Be("Stopping the roof, which moves on a command from this interface, before closing.");
+        tui.WaitIdle("Stop before quitting", () => ((IRunnable)tui.Ui.Window).StopRequested);
+        roof.Verify(
+            service => service.Stop(RoofControllerStopReason.NormalStop),
+            Times.Exactly(2),
+            "the only Stop went out before the Open arrived; F10 sends another before it closes, and has said both results");
+    }
+
+    [TestMethod]
+    public void ClosingOnASignal_FitsInTheStopGrace_WithASecondToRestoreTheTerminal()
+    {
+        // After a signal: the wait for an Open or Close's answer, the Stop, then the live status closing. The terminal is
+        // restored, and the Stop's result said on it, in what is left.
+        var longest = RoofCli.CommandBuilder.MotionAnswerWait + new RoofConnectionOptions { BaseAddress = ClientTestSupport.BaseAddress }.StopTimeout + RoofTerminalUi.FeedCloseWait;
+
+        (RoofCliTermination.StopGrace - longest).Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(1));
+    }
+
+    [TestMethod]
     public void F10_WhileItsOpenIsOnItsWay_WhoseAnswerIsLost_StopsTheRoofAfterTheWait_ThenF10ClosesTheStoppedRoof()
     {
         var (roof, moving) = MovingRoof();

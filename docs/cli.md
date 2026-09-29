@@ -207,10 +207,11 @@ and the Settings page's header then says the file was edited by hand.
 
 - **The first signal** ends the command, not the process. A command that has the roof moving (`open`, `close`, or
   `ui`) sends Stop first, after the answer to an Open or Close still on its way (it waits up to 3 s for that answer).
-  The command exits 130.
+  The command exits 130. When the signal comes before `open` or `close` has sent its command, nothing is sent, not
+  even Stop, which could end a motion that someone else started (`Interrupted before Open was sent: nothing was sent.`).
 - **The process still ends.** 5 s after the first signal it exits 130. `open`, `close`, `stop` and `ui` have up to
-  15 s, for the wait for an Open or Close's answer (3 s), the Stop timeout (10 s), and a margin to print the Stop's
-  answer and restore the terminal.
+  15 s, for the wait for an Open or Close's answer (3 s), the Stop timeout (10 s), closing the live status in `ui`
+  (up to 1 s), and a margin to print the Stop's answer and restore the terminal.
 - **A second signal** ends the process at once, except in `open`, `close`, `stop` and `ui`: nothing cuts their Stop
   short. Closing a terminal sends SIGHUP twice (the kernel's and the shell's, well under a millisecond apart), before a
   command can have seen the first.
@@ -278,7 +279,9 @@ and the Settings page's header then says the file was edited by hand.
 - **Quitting does not hide a Stop that nothing confirmed.** When the Stop that quitting sent or waited for failed, or
   its relays could not be verified, F10 leaves the interface open with the result on screen
   (`Nothing confirmed the Stop, so the interface stays open. F10 closes it.`). The next F10 closes it without
-  another Stop, unless an Open or Close was sent in between. A termination signal still sends Stop while the roof
+  another Stop, unless an Open or Close was sent in between. When the answer to the Open or Close sent from here was
+  lost as well, the message says so too: that command may have reached the controller after the Stop, so while the
+  roof moves the next F10 sends Stop again before closing. A termination signal still sends Stop while the roof
   moves on a command from here. Whenever the last Stop sent from the
   interface was not confirmed, `hvo-roof ui` repeats its result on the restored terminal and exits 9 (130 after a
   termination signal, which closes the interface anyway).
