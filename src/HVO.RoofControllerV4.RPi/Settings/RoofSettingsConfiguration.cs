@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.Json;
+using Microsoft.Extensions.Logging;
 
 namespace HVO.RoofControllerV4.RPi.Settings;
 
@@ -53,6 +55,19 @@ internal static class RoofSettingsConfiguration
         // Each insert rebuilds the providers, so the secrets file goes in first and the settings file below it.
         sources.Insert(index + 1, new RoofSettingsFileSource(RoofSettingsFileKind.Secrets, secretsPath));
         sources.Insert(index + 1, new RoofSettingsFileSource(RoofSettingsFileKind.Settings, settingsPath));
+    }
+
+    /// <summary>Warns at start when the settings file sets settings this version no longer uses.</summary>
+    public static void ReportRetiredSettings(IConfiguration configuration, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(logger);
+        if (configuration is IConfigurationRoot root
+            && root.Providers.OfType<RoofSettingsFileProvider>().FirstOrDefault(file => file.Kind == RoofSettingsFileKind.Settings) is { } settings
+            && RoofSettingsCatalogue.DescribeRetired(settings.Document.Retired) is { } warning)
+        {
+            logger.LogWarning("{Path}: {Warning}", settings.Path, warning);
+        }
     }
 
     private static bool IsShippedFile(string path, string environmentName)

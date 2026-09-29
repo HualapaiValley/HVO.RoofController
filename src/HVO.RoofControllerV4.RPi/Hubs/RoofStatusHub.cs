@@ -9,8 +9,8 @@ namespace HVO.RoofControllerV4.RPi.Hubs;
 /// <see cref="RoofStatusBroadcaster"/>. The hub has no methods a client can call; every command stays on REST.
 /// </summary>
 /// <remarks>
-/// Mapped in <c>Program</c> with the Viewer policy on the API key scheme only, as <c>api/*</c> is: the console cookie is
-/// not accepted, so a browser page on another site cannot open a connection with it.
+/// Mapped in <c>Program</c> with the Viewer policy on the API scheme (an API key or a session), as <c>api/*</c> is: no
+/// cookie is accepted, so a browser page on another site cannot open a connection.
 /// </remarks>
 public sealed class RoofStatusHub(RoofStatusBroadcaster broadcaster) : Hub
 {

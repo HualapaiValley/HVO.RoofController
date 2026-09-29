@@ -42,16 +42,16 @@ public sealed class CameraController : ControllerBase
     }
 
     /// <summary>
-    /// Streams the camera's MJPEG feed. Accepts a Viewer API key or a signed-in console cookie.
+    /// Streams the camera's MJPEG feed. Accepts a Viewer API key or session.
     /// </summary>
     /// <param name="cameraId">Camera number (1-99).</param>
     /// <response code="200">multipart/x-mixed-replace MJPEG stream.</response>
-    /// <response code="401">No valid API key or console sign-in.</response>
+    /// <response code="401">No valid API key or session.</response>
     /// <response code="502">Blue Iris failed or answered with an error.</response>
     /// <response code="503">The proxy is not configured, or too many streams are open.</response>
     /// <response code="504">Blue Iris did not answer in time.</response>
     [HttpGet("{cameraId:int:range(1, 99)}/mjpeg", Name = nameof(CameraMotionJpeg))]
-    [Authorize(AuthenticationSchemes = RoofSecurityServiceCollectionExtensions.ApiKeyOrCookieSchemes, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
+    [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status502BadGateway)]

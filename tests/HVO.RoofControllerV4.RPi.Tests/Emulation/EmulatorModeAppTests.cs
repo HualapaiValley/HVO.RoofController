@@ -9,7 +9,6 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
-using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
@@ -208,7 +207,6 @@ public sealed class EmulatorModeAppTests
 
         var providers = quiet.App.Services.GetServices<ILoggerProvider>().ToArray();
         providers.Should().NotContain(p => p is ConsoleLoggerProvider, "the test framework would keep the console output in memory");
-        providers.Should().ContainSingle(p => p is ConsoleLogLoggerProvider, "the controller's own console log (the web page's) stays");
         providers.Should().Contain(quiet.Logs);
         quiet.Logs.Entries.Should().Contain(e => e.Category == RoofSecurityStartup.LoggerCategory && e.Message.Contains("API key(s) configured", StringComparison.Ordinal));
     }
@@ -240,32 +238,6 @@ public sealed class EmulatorModeAppTests
         written.Should().Contain(
             $"Error Microsoft.Extensions.Hosting.Internal.Host: Hosting failed to start{Environment.NewLine}{typeof(OptionsValidationException).FullName}: SafetyWatchdogTimeout",
             "each entry is followed by its exception");
-    }
-
-    [TestMethod]
-    public async Task TheSignInPage_CarriesTheEmulatedHatBanner()
-    {
-        // The sign-in page has its own layout; EmulatedHatDisplayTests covers the main layout, which serves the console.
-        await using var rig = await EmulatedRoofRig.StartAsync();
-        using var client = rig.CreateApiClient();
-
-        var login = await client.GetStringAsync("/login");
-
-        login.Should().Contain("data-testid=\"emulated-hat-banner\"")
-            .And.Contain("EMULATED HAT")
-            .And.Contain($"<code>{rig.Endpoint}</code>")
-            .And.Contain("The observatory roof does not move.");
-    }
-
-    [TestMethod]
-    public async Task ThePhysicalHat_HasNoBannerOnTheSignInPage()
-    {
-        await using var host = new RoofApiTestHost();
-        using var client = host.CreateApiClient();
-
-        var login = await client.GetStringAsync("/login");
-
-        login.Should().NotContain("emulated-hat-banner").And.NotContain("EMULATED HAT");
     }
 
     [TestMethod]

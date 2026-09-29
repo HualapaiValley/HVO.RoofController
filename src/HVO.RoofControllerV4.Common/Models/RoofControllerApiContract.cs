@@ -1,7 +1,7 @@
 namespace HVO.RoofControllerV4.Common.Models;
 
 /// <summary>
-/// Wire-level constants shared by the Pi web host, the Blazor console, API clients and the request samples.
+/// Wire-level constants shared by the controller, its clients and the request samples.
 /// </summary>
 public static class RoofControllerApiContract
 {

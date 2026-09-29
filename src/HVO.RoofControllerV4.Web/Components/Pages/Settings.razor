@@ -462,7 +462,6 @@ else
         var unit = setting.Type switch
         {
             RoofSettingType.Duration => "In seconds.",
-            RoofSettingType.StringList => "Separate the items with commas.",
             _ => setting.Unit is { Length: > 0 } name && setting.Type != RoofSettingType.String ? $"In {name}." : null
         };
         var limits = (setting.Minimum, setting.Maximum) switch

@@ -3,17 +3,27 @@
 ## Project Overview
 
 HVO.RoofController is the observatory roof automation system for HVO. It
-consists of a Raspberry Pi server application with a browser-based operator console
-and an authenticated HTTP API.
+consists of a Raspberry Pi controller with an authenticated HTTP API and a live status
+hub, and clients of that API: a browser-based web UI and a command line with a terminal
+interface.
 
 ### Architecture
 
-- **RPi Server** — ASP.NET Core + Blazor Server (SSR) application that manages
+- **RPi Server** (`HVO.RoofControllerV4.RPi`) — ASP.NET Core application that manages
   GPIO and I2C hardware for roof motor control, limit switches, and relay
-  management. Deployed via Docker to a Raspberry Pi (linux-arm64).
-- **Web Console** — responsive Blazor interface for desktop, tablet and phone.
+  management, and serves the HTTP API and the SignalR status hub. It serves no pages.
+  Deployed via Docker to a Raspberry Pi (linux-arm64).
+- **Web UI** (`HVO.RoofControllerV4.Web`) — responsive Blazor Server interface for
+  desktop, tablet and phone, a separate process in the same container. It is a client of
+  the controller's REST API and hub, like every other UI; no UI drives the HAT in process.
+- **Client Library** (`HVO.RoofControllerV4.Client`) — the API and hub client, and the
+  wording and palette every UI shares.
+- **CLI** (`HVO.RoofControllerV4.Cli`) — `hvo-roof`, the commands and the Terminal.Gui
+  interface.
 - **Common Library** — Shared server and HTTP API models, options and DTOs.
-- **WebSite.Themes** — Razor Class Library providing shared CSS themes.
+- **Simulation and Emulator** — the emulated HAT, roof, VFD and camera used by every
+  test; no test relies on physical hardware.
+- **WebSite.Themes** — Razor Class Library providing the HVO Dark theme to the web UI.
 
 ### Key Safety Systems
 
@@ -70,7 +80,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 - Routes are under `api/v4.0/RoofControl`. Commands (`Open`, `Close`, `Stop`,
   `ClearFault`, `Lease`) are `POST`; `GET Status` and `GET`/`POST Configuration` complete
   the surface. There are no GET command routes.
-- Every protected request needs an `X-Api-Key` header. Roles are `RoofViewer`,
+- Every protected request needs an `X-Api-Key` header or a person's session
+  (`Authorization: Bearer`). Roles are `RoofViewer`,
   `RoofOperator` and `RoofAdmin` (Admin includes Operator includes Viewer); Stop accepts
   any authenticated role. Failures are RFC 7807 ProblemDetails with `code` and
   `roofStatus` extensions.
@@ -81,7 +92,7 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 ### Technology Stack
 
 - .NET 10 (RPi server and shared libraries)
-- ASP.NET Core + Blazor Server (SSR)
+- ASP.NET Core (the controller) and Blazor Server (the web UI)
 - GPIO / I2C hardware interfaces
 - Docker (RPi deployment)
 

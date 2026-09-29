@@ -9,8 +9,8 @@ namespace HVO.RoofControllerV4.RPi.Security;
 /// <summary>
 /// Checks that the credential behind a principal still stands: the API key still exists with the same name and role,
 /// or the session is still open with the same person and role (and, for a PIN session, the kiosk key it was opened at
-/// is still a kiosk key). Long-lived connections (the status hub, the console's Blazor circuit and cookie) use it to
-/// end access when a key is removed or rotated, or a session ends.
+/// is still a kiosk key). Long-lived connections (the status hub) use it to end access when a key is removed or rotated,
+/// or a session ends.
 /// </summary>
 public sealed class RoofCredentialValidator
 {

@@ -7,9 +7,9 @@ using HVO.RoofControllerV4.RPi.Security;
 namespace HVO.RoofControllerV4.RPi.Tests.Security;
 
 [TestClass]
-public sealed class RoofPrincipalAndAccountTests
+public sealed class RoofPrincipalTests
 {
-    private const string ConsoleKey = "test-console-key-for-principal-tests-01";
+    private const string OperatorKey = "test-operator-key-for-principal-tests-1";
 
     [TestMethod]
     [DataRow("RoofAdmin", true, true, true)]
@@ -55,56 +55,19 @@ public sealed class RoofPrincipalAndAccountTests
     }
 
     [TestMethod]
-    [DataRow(null, "/")]
-    [DataRow("", "/")]
-    [DataRow("   ", "/")]
-    [DataRow("/", "/")]
-    [DataRow("/roof", "/roof")]
-    [DataRow("/roof?tab=camera", "/roof?tab=camera")]
-    [DataRow("roof", "/")]
-    [DataRow("//evil.example", "/")]
-    [DataRow("/\\evil.example", "/")]
-    [DataRow("https://evil.example/", "/")]
-    [DataRow("javascript:alert(1)", "/")]
-    [DataRow("/roof\\..\\x", "/")]
-    [DataRow("/roof\r\nSet-Cookie: x=1", "/")]
-    [DataRow("/account/logout", "/")]
-    [DataRow("/Account/Login", "/")]
-    [DataRow("/account", "/")]
-    public void GetSafeReturnUrl_AllowsOnlyLocalPaths(string? input, string expected)
-    {
-        Assert.AreEqual(expected, RoofAccountEndpoints.GetSafeReturnUrl(input));
-    }
-
-    [TestMethod]
-    public void GetSafeReturnUrl_OverlongUrl_FallsBackToRoot()
-    {
-        Assert.AreEqual("/", RoofAccountEndpoints.GetSafeReturnUrl("/" + new string('a', 5000)));
-    }
-
-    [TestMethod]
-    [DataRow("1", "/", "/login?error=1")]
-    [DataRow("2", "/roof", "/login?error=2&returnUrl=%2Froof")]
-    [DataRow("1", "/roof?a=1&b=2", "/login?error=1&returnUrl=%2Froof%3Fa%3D1%26b%3D2")]
-    public void BuildLoginRedirect_EscapesReturnUrl(string error, string returnUrl, string expected)
-    {
-        Assert.AreEqual(expected, RoofAccountEndpoints.BuildLoginRedirect(error, returnUrl));
-    }
-
-    [TestMethod]
     public void IsStillValid_TracksKeyRemovalAndRoleChanges()
     {
-        var monitor = KeyStoreFactory.Monitor(KeyStoreFactory.Key("console", "RoofOperator", ConsoleKey));
+        var monitor = KeyStoreFactory.Monitor(KeyStoreFactory.Key("operator", "RoofOperator", OperatorKey));
         using var store = KeyStoreFactory.Create(monitor);
-        store.TryValidate(ConsoleKey, out var identity);
-        var principal = RoofPrincipalFactory.Create(identity!, RoofControllerSecurityDefaults.CookieScheme);
+        store.TryValidate(OperatorKey, out var identity);
+        var principal = RoofPrincipalFactory.Create(identity!, RoofControllerSecurityDefaults.ApiKeyScheme);
 
         Assert.IsTrue(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(principal));
 
-        monitor.Set(new RoofControllerSecurityOptions { ApiKeys = [KeyStoreFactory.Key("console", "RoofViewer", ConsoleKey)] });
+        monitor.Set(new RoofControllerSecurityOptions { ApiKeys = [KeyStoreFactory.Key("operator", "RoofViewer", OperatorKey)] });
         Assert.IsFalse(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(principal), "a demoted key ends the session");
 
-        monitor.Set(new RoofControllerSecurityOptions { ApiKeys = [KeyStoreFactory.Key("renamed", "RoofOperator", ConsoleKey)] });
+        monitor.Set(new RoofControllerSecurityOptions { ApiKeys = [KeyStoreFactory.Key("renamed", "RoofOperator", OperatorKey)] });
         Assert.IsFalse(RoofCredentialValidator.ForKeysOnly(store).IsStillValid(principal), "a renamed key ends the session");
 
         monitor.Set(new RoofControllerSecurityOptions());

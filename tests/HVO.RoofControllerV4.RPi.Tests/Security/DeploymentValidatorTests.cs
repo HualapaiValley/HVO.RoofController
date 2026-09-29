@@ -677,7 +677,6 @@ public sealed class DeploymentValidatorTests
     [TestMethod]
     [DataRow("RoofControllerOptionsV4", "SafetyWatchdogTimeout")]
     [DataRow("RoofControllerHostOptionsV4", "RestartOnFailureWaitTime")]
-    [DataRow("ConsoleLogBuffer", "Capacity")]
     [DataRow("BlueIris", "ConnectTimeout")]
     [DataRow("Telemetry", "DefaultSamplingRate")]
     [DataRow("RoofControllerSecurity", "AllowAnonymousStop")]

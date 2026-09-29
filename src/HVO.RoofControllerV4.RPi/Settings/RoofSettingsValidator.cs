@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
-using HVO.RoofControllerV4.RPi.Middleware;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Security.Identity;
 using Microsoft.Extensions.Configuration;
@@ -60,7 +59,7 @@ public sealed class RoofSettingsValidator
             }
 
             candidate ??= new ConfigurationBuilder().AddInMemoryCollection(view.Flatten()).Build();
-            problems.AddRange(ValidateGroup(group, view, candidate, roof));
+            problems.AddRange(ValidateGroup(group, candidate, roof));
         }
 
         return problems;
@@ -94,7 +93,7 @@ public sealed class RoofSettingsValidator
         ArgumentNullException.ThrowIfNull(configuration);
         var files = configuration.Providers.OfType<RoofSettingsFileProvider>().ToList();
         var groups = RoofSettingsCatalogue.All
-            .Where(definition => files.Any(file => RoofConfigurationView.Sets(file, definition.Key, includeChildren: true)))
+            .Where(definition => files.Any(file => RoofConfigurationView.Sets(file, definition.Key)))
             .Select(definition => definition.Group)
             .ToList();
         if (groups.Count == 0)
@@ -114,7 +113,7 @@ public sealed class RoofSettingsValidator
 
     internal const string RequireHttpsKey = RoofControllerSecurityOptions.SectionName + ":" + nameof(RoofControllerSecurityOptions.RequireHttps);
 
-    private IEnumerable<RoofSettingProblem> ValidateGroup(string group, RoofConfigurationView view, IConfiguration candidate, Func<RoofControllerOptionsV4> roof)
+    private IEnumerable<RoofSettingProblem> ValidateGroup(string group, IConfiguration candidate, Func<RoofControllerOptionsV4> roof)
     {
         switch (group)
         {
@@ -150,19 +149,8 @@ public sealed class RoofSettingsValidator
                 return !string.IsNullOrWhiteSpace(camera.BaseUrl) && camera.GetConfigurationProblem() is { } problem
                     ? [new RoofSettingProblem(BlueIrisOptions.SectionName, problem)]
                     : [];
-            case RoofSettingsContract.SecurityGroup:
-                var originsKey = RoofControllerSecurityOptions.SectionName + ":" + nameof(RoofControllerSecurityOptions.AllowedOrigins);
-                var origins = view.GetListItems(originsKey) ?? [];
-                return origins
-                    .Select((origin, index) => (origin, index))
-                    .Where(entry => !OriginCheckMiddleware.IsValidAllowedOrigin(entry.origin))
-                    .Select(entry => new RoofSettingProblem(
-                        originsKey,
-                        $"{originsKey} entry {entry.index + 1} is not an origin: write scheme://host[:port], for example " +
-                        "https://roof.example.org, with nothing after it."))
-                    .ToList();
             default:
-                // Controller, logging and client settings have no rules between them.
+                // Controller, security, logging and client settings have no rules between them.
                 return [];
         }
     }

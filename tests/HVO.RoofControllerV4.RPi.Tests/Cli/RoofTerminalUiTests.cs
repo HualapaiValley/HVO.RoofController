@@ -137,7 +137,7 @@ public sealed class RoofTerminalUiTests
     // ---- Colours -----------------------------------------------------------------------------------------------------
 
     [TestMethod]
-    public void TheScreen_IsDrawnInTheWebConsolesColours()
+    public void TheScreen_IsDrawnInTheWebUisColours()
     {
         using var host = RoofClientApiTests.CreateHost();
         using var rig = new CliRig(host);
@@ -145,13 +145,13 @@ public sealed class RoofTerminalUiTests
         using var tui = Started(rig);
         var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
 
-        ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop is the web console's yellow button");
+        ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop is the web UI's yellow button");
         tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Bold);
-        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open is green, as on the web console");
-        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close is red, as on the web console (disabled while the roof is closed)");
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open is green, as on the web UI");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close is red, as on the web UI (disabled while the roof is closed)");
         ShouldHaveColours(tui.ColoursOf(RoofStopText.AlwaysAvailable), RoofUiPalette.Text, RoofUiPalette.Background);
         ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Background, "the page is HVO Dark's");
-        ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web console's navigation bar");
+        ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web UI's navigation bar");
         ShouldHaveColours(tui.ColoursOf("F10"), RoofUiPalette.Accent, RoofUiPalette.Badge, "a key is in the accent colour");
         ShouldHaveColours(tui.ColoursOf("Quit"), RoofUiPalette.Muted, RoofUiPalette.Badge);
 
@@ -200,7 +200,7 @@ public sealed class RoofTerminalUiTests
     [DataRow(RoofStopOutcome.Acknowledged, RoofUiPalette.SuccessText)]
     [DataRow(RoofStopOutcome.RelayUnverified, RoofUiPalette.WarningText)]
     [DataRow(RoofStopOutcome.Failed, RoofUiPalette.DangerText)]
-    public void EachStopResult_HasTheWebConsolesColourForIt(RoofStopOutcome outcome, string colour)
+    public void EachStopResult_HasTheWebUisColourForIt(RoofStopOutcome outcome, string colour)
         => ShouldHaveColours(RoofUiTheme.HvoDark.ForStop(outcome).Normal, colour, RoofUiPalette.Background);
 
     [TestMethod]

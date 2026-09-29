@@ -145,14 +145,14 @@ models exactly that register.
 | `Emulation/HatEmulatorProtocolTests`, `HatEmulatorServerTests`, `HatEmulatorParityTests` | The emulator's wire format; its TCP server (Hello, accesses, refusals, outage, delay, disconnect); register accesses over TCP answer exactly as the in-process emulated client |
 | `Emulation/HatEmulatorSessionTests`, `EmulatorApiTests` | The emulator session (start state, scaled clock, reset) and host: the control API and the register port |
 | `Emulation/SocketI2cRegisterClientTests`, `RoofHatConnectionTests` | The controller's socket register client (Hello check, time bounds, reconnects, disposal, `Host` rules) and emulator mode selection, refusal, warning and telemetry |
-| `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, a start before the emulator, the sign-in page banner and the Degraded health |
-| `Components/EmulatedHatDisplayTests` | The emulated-HAT banner in the main layout and on its own, the console's HAT badge and the footer |
+| `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, a start before the emulator, the start's warning, the telemetry marks and the Degraded health |
 | `Emulation/DevelopmentConfigurationTests` | `appsettings.Development.json`: the HAT emulator, with the limit switches in force and the production wiring |
 | `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API ([Commissioning scenarios](#commissioning-scenarios)) |
 | `Scenarios/CameraProxyScenarios` | The camera proxy against the emulated camera: frames relayed, a refusing camera, a frozen one, a camera server restart |
 | `Scenarios/ScenarioCoverageTests` | `docs/commissioning.md` and the scenarios agree: every check has a scenario that CI runs, and every step and assumption is listed |
-| `Client/…` | The client library (#44) against the controller in process: every endpoint's answer and refusal, sign-in, sessions and kiosks, Stop beside a stuck command, the status feed through restarts and silence, settings forms, credentials files, certificate pins over real HTTPS (`RoofCertificatePinTests`), the shared wording and the web console's Stop texts, and that every endpoint has a client call; `RoofClientScenarios` against the emulated roof |
-| `Browser/*BrowserTests` | The console in Chromium on a phone and a tablet, each upright and sideways, and a small phone sideways ([Browser tests](#browser-tests)) |
+| `Client/…` | The client library (#44) against the controller in process: every endpoint's answer and refusal, sign-in, sessions and kiosks, Stop beside a stuck command, the status feed through restarts and silence, settings forms, credentials files, certificate pins over real HTTPS (`RoofCertificatePinTests`), the shared wording and the web UI's Stop texts, and that every endpoint has a client call; `RoofClientScenarios` against the emulated roof |
+| `Web/…` | The web UI (#46) in bUnit and in process against the controller's API: each page and what each role is offered, the mode banners, sign-in, sessions and their end, Stop with the person's session and the web UI's own key, the camera relay, its settings, headers and origin checks, and the supervisor's state |
+| `Browser/*BrowserTests` | The web UI in Chromium on phones and tablets, each upright and sideways, and a desktop window, and the screenshots in `docs/web.md` ([Browser tests](#browser-tests)) |
 
 ## Emulated plant
 
@@ -216,10 +216,11 @@ scenario job, and for `HVO_SOAK_DURATION` (two hours nightly), with its results 
 
 ## Browser tests
 
-`Browser/` runs the console in a headless Chromium through Playwright, with the phone and tablet device descriptors
-(iPhone 13 and iPad (gen 7), each upright and sideways, and iPhone SE sideways), against an `EmulatedRoofRig` served on
-a loopback port. `ConsoleBrowser` signs in, measures where Stop is without scrolling, and cuts and restores the
-console's connection through Playwright's WebSocket route. After a failed test it attaches a screenshot, the Playwright
+`Browser/` runs the web UI in a headless Chromium through Playwright, with the phone and tablet device descriptors
+(iPhone 13 and iPad (gen 7), each upright and sideways, and iPhone SE sideways) and a 1440 x 900 desktop window. The
+web UI runs as deployed: its own host on a loopback port, reaching an `EmulatedRoofRig` (the controller against the
+emulated plant) on another over HTTP. `WebBrowser` signs in, measures where Stop is without scrolling, and cuts and
+restores the page's live connection through Playwright's WebSocket route. After a failed test it attaches a screenshot, the Playwright
 trace and the browser log to the test's results. The tests are `[TestCategory("Browser")]` and `[DoNotParallelize]`, and
 C9 step 4 and C15 are among them. They need Chromium, installed once after a build, with its system libraries (leave out
 `--with-deps` when they are already installed):

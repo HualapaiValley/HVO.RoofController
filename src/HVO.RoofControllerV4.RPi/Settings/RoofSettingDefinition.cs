@@ -13,16 +13,10 @@ namespace HVO.RoofControllerV4.RPi.Settings;
 /// <summary>
 /// One setting the API can read and change: its key, rules and value conversions. Values are held as
 /// <see cref="bool"/>, <see cref="int"/>, <see cref="double"/>, <see cref="TimeSpan"/>, <see cref="string"/> (also an
-/// enum's canonical name), a read-only list of strings, or null.
+/// enum's canonical name), or null.
 /// </summary>
 internal sealed class RoofSettingDefinition
 {
-    /// <summary>Most items in a list setting.</summary>
-    public const int MaximumListItems = 32;
-
-    /// <summary>Longest item in a list setting.</summary>
-    public const int MaximumListItemLength = 256;
-
     /// <summary>Longest string setting without its own maximum.</summary>
     public const int DefaultMaximumStringLength = 256;
 
@@ -67,8 +61,6 @@ internal sealed class RoofSettingDefinition
     /// <summary>The last segment of the key.</summary>
     public string Name => Key[(Key.LastIndexOf(':') + 1)..];
 
-    public bool IsList => Type == RoofSettingType.StringList;
-
     /// <summary>The value the running roof service uses (roof group only).</summary>
     public object? GetRoofValue(RoofControllerOptionsV4 options)
         => RoofProperty is null ? throw new InvalidOperationException($"{Key} is not a roof setting.") : RoofProperty.GetValue(options);
@@ -93,19 +85,6 @@ internal sealed class RoofSettingDefinition
         ArgumentNullException.ThrowIfNull(view);
         value = CodeDefault;
         problem = null;
-        if (IsList)
-        {
-            var items = view.GetListItems(Key);
-            if (items is null)
-            {
-                return true;
-            }
-
-            value = items;
-            problem = Check(items);
-            return problem is null;
-        }
-
         if (!view.TryGet(Key, out var raw) || raw is null)
         {
             return true;
@@ -172,21 +151,6 @@ internal sealed class RoofSettingDefinition
                 }
 
                 break;
-            case RoofSettingType.StringList when element.ValueKind == JsonValueKind.Array:
-                var items = new List<string>();
-                foreach (var item in element.EnumerateArray())
-                {
-                    if (item.ValueKind != JsonValueKind.String)
-                    {
-                        problem = $"{Key} must be an array of strings.";
-                        return false;
-                    }
-
-                    items.Add(item.GetString() ?? string.Empty);
-                }
-
-                value = items;
-                break;
             default:
                 problem = $"{Key} must be {DescribeType()}.";
                 return false;
@@ -220,23 +184,6 @@ internal sealed class RoofSettingDefinition
                 }
 
                 return text.Any(char.IsControl) ? $"{Key} cannot contain control characters." : null;
-            case IReadOnlyList<string> items:
-                if (items.Count > MaximumListItems)
-                {
-                    return $"{Key} can have at most {MaximumListItems} entries.";
-                }
-
-                if (items.Any(string.IsNullOrWhiteSpace))
-                {
-                    return $"{Key} cannot have blank entries.";
-                }
-
-                if (items.Any(item => item.Length > MaximumListItemLength || item.Any(char.IsControl)))
-                {
-                    return $"{Key} entries must be at most {MaximumListItemLength} characters long, without control characters.";
-                }
-
-                return null;
             default:
                 return null;
         }
@@ -247,14 +194,10 @@ internal sealed class RoofSettingDefinition
     {
         null => null,
         TimeSpan duration => JsonSerializer.SerializeToElement(duration.TotalSeconds),
-        IReadOnlyList<string> items => JsonSerializer.SerializeToElement(items),
         _ => JsonSerializer.SerializeToElement(value, value.GetType())
     };
 
-    /// <summary>
-    /// The value as the settings file holds it. A list is written as it is: the settings file's list replaces the list
-    /// below it (<see cref="RoofSettingsFileProvider.GetChildKeys"/>).
-    /// </summary>
+    /// <summary>The value as the settings file holds it.</summary>
     public JsonNode? ToNode(object? value) => value switch
     {
         null => null,
@@ -263,26 +206,8 @@ internal sealed class RoofSettingDefinition
         double number => JsonValue.Create(number),
         TimeSpan duration => JsonValue.Create(duration.ToString("c", CultureInfo.InvariantCulture)),
         string text => JsonValue.Create(text),
-        IReadOnlyList<string> items => new JsonArray(items.Select(item => (JsonNode?)JsonValue.Create(item)).ToArray()),
         _ => throw new InvalidOperationException($"{Key} has an unexpected value type {value.GetType().Name}.")
     };
-
-    /// <summary>The configuration entries that give this value (keys under the setting are replaced by them).</summary>
-    public IEnumerable<KeyValuePair<string, string?>> ToConfigurationEntries(object? value)
-    {
-        if (value is IReadOnlyList<string> items)
-        {
-            yield return new(Key, null);
-            for (var index = 0; index < items.Count; index++)
-            {
-                yield return new($"{Key}{ConfigurationPath.KeyDelimiter}{index.ToString(CultureInfo.InvariantCulture)}", items[index]);
-            }
-
-            yield break;
-        }
-
-        yield return new(Key, Format(value));
-    }
 
     /// <summary>Configuration text of a value ("" for null).</summary>
     public static string Format(object? value) => value switch
@@ -299,7 +224,6 @@ internal sealed class RoofSettingDefinition
     public static bool ValuesEqual(object? a, object? b) => (a, b) switch
     {
         (null, null) => true,
-        (IReadOnlyList<string> x, IReadOnlyList<string> y) => x.SequenceEqual(y, StringComparer.Ordinal),
         (null, _) or (_, null) => false,
         _ => a.Equals(b)
     };
@@ -419,7 +343,6 @@ internal sealed class RoofSettingDefinition
         RoofSettingType.Duration => "a duration in seconds",
         RoofSettingType.String => "a string",
         RoofSettingType.Enum => "one of " + string.Join(", ", AllowedValues ?? []),
-        RoofSettingType.StringList => "an array of strings",
         _ => Type.ToString()
     };
 }
@@ -456,30 +379,6 @@ internal sealed class RoofConfigurationView
     }
 
     /// <summary>
-    /// The non-blank values under <paramref name="key"/> in index order, or null when no layer sets the key or any
-    /// entry under it.
-    /// </summary>
-    public IReadOnlyList<string>? GetListItems(string key)
-    {
-        var childKeys = ChildKeys(key).Order(ConfigurationKeyComparer.Instance).ToList();
-        if (childKeys.Count == 0)
-        {
-            return TryGet(key, out _) ? Array.Empty<string>() : null;
-        }
-
-        var items = new List<string>();
-        foreach (var child in childKeys)
-        {
-            if (TryGet(ConfigurationPath.Combine(key, child), out var value) && !string.IsNullOrWhiteSpace(value))
-            {
-                items.Add(value);
-            }
-        }
-
-        return items;
-    }
-
-    /// <summary>
     /// Every key the layers set and its effective value, as <c>IConfiguration.AsEnumerable()</c> would list them. Used
     /// to build a candidate configuration without touching the live providers.
     /// </summary>
@@ -506,7 +405,7 @@ internal sealed class RoofConfigurationView
 
     /// <summary>
     /// The keys directly under <paramref name="parent"/>, gathered in configuration order as <c>IConfiguration</c>
-    /// does, so a layer can hide the entries below it (a list in the settings file replaces the list below).
+    /// does.
     /// </summary>
     private List<string> ChildKeys(string? parent)
         => _bottomUp
@@ -514,7 +413,6 @@ internal sealed class RoofConfigurationView
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    /// <summary>True when a layer sets <paramref name="key"/>, or (for a list) any entry under it.</summary>
-    public static bool Sets(IConfigurationProvider provider, string key, bool includeChildren)
-        => provider.TryGet(key, out _) || (includeChildren && provider.GetChildKeys([], key).Any());
+    /// <summary>True when a layer sets <paramref name="key"/>.</summary>
+    public static bool Sets(IConfigurationProvider provider, string key) => provider.TryGet(key, out _);
 }

@@ -371,14 +371,13 @@ public sealed class IdentityApiTests
     }
 
     [TestMethod]
-    public async Task APasswordChange_IsCountedByThePerson_AndACookieNeverGivesAnAnonymousSignInItsOwnBudget()
+    public async Task APasswordChange_IsCountedByThePerson_AndAKeyNeverGivesAnAnonymousSignInItsOwnBudget()
     {
         using var host = CreateHost(extraSettings: new Dictionary<string, string?>
         {
             ["RoofControllerSecurity:Identity:SignInAttemptsPerMinute"] = "3"
         });
         await AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole);
-        var cookie = await RoofStatusHubTests.ConsoleSignInAsync(host, TestApiKeys.Viewer);
         using var anonymous = host.CreateApiClient();
         var signIn = await anonymous.PostAsJsonAsync($"{Auth}/Session", new RoofSignInRequest { Name = "olive", Password = TestSecrets.Password });
         signIn.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -388,13 +387,13 @@ public sealed class IdentityApiTests
                 .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
 
-        using var withCookie = new HttpRequestMessage(HttpMethod.Post, $"{Auth}/Session")
+        using var withKey = new HttpRequestMessage(HttpMethod.Post, $"{Auth}/Session")
         {
             Content = JsonContent.Create(new RoofSignInRequest { Name = "guess", Password = TestSecrets.OtherPassword })
         };
-        withCookie.Headers.Add("Cookie", cookie);
-        (await ProblemAsync(await anonymous.SendAsync(withCookie)))
-            .Code.Should().Be("SignInBusy", "an anonymous sign-in is counted by its address, whatever cookie comes with it");
+        withKey.Headers.Add(RoofControllerApiContract.ApiKeyHeaderName, TestApiKeys.Viewer);
+        (await ProblemAsync(await anonymous.SendAsync(withKey)))
+            .Code.Should().Be("SignInBusy", "an anonymous sign-in is counted by its address, whatever key comes with it");
 
         using var olive = Bearer(host, (await ApiJson.ReadAsync<RoofSessionResponse>(signIn)).Token);
         var change = new RoofPasswordChangeRequest { CurrentPassword = TestSecrets.OtherPassword, NewPassword = TestSecrets.OtherPassword + "-new" };

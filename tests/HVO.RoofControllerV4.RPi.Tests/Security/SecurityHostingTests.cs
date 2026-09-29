@@ -32,16 +32,6 @@ public sealed class SecurityHostingTests
     [
         "GET /health/live",
         "GET /health/ready",
-        "POST /account/login",
-        "POST /account/logout",
-        "GET /login",
-        "POST /login",
-        "GET /access-denied",
-        "POST /access-denied",
-        // The Blazor boot script fetches its JS initializers before anyone signs in; BlazorHubAuthorizationMiddleware exempts it.
-        "GET /_blazor/initializers",
-        // Framework helper that turns an interactive navigation into a redirect; it serves no content of its own.
-        "GET /_framework/opaque-redirect",
         // Signing in with a name and password is how a person without a key gets a session token.
         "POST /api/v4.0/Auth/Session"
     ];
@@ -56,11 +46,10 @@ public sealed class SecurityHostingTests
         "GET /scalar/v4"
     ];
 
-    /// <summary>AllowAnonymousStop opens Stop, and only Stop, to anyone on the network, from the API and the console.</summary>
+    /// <summary>AllowAnonymousStop opens Stop, and only Stop, to anyone on the network.</summary>
     private static readonly string[] AnonymousStopRoutes =
     [
-        "POST /api/v4.0/RoofControl/Stop",
-        "POST /console/stop"
+        "POST /api/v4.0/RoofControl/Stop"
     ];
 
     [TestMethod]
@@ -188,7 +177,7 @@ public sealed class SecurityHostingTests
             using var request = new HttpRequestMessage(new HttpMethod(probe.Method), probe.Path);
             var response = await anonymous.SendAsync(request);
 
-            var refused = response.StatusCode == HttpStatusCode.Unauthorized || IsSignInRedirect(probe.Method, response);
+            var refused = response.StatusCode == HttpStatusCode.Unauthorized;
             if (allowed.Contains(probe.Key) == refused)
             {
                 failures.Add($"{probe.Key} [{probe.Route}] answered {(int)response.StatusCode} {response.Headers.Location} but is "
@@ -197,7 +186,7 @@ public sealed class SecurityHostingTests
         }
 
         string.Join(Environment.NewLine, failures).Should().BeEmpty(
-            "an anonymous caller gets 401 (or the sign-in page) everywhere but the allow-list");
+            "an anonymous caller gets 401 everywhere but the allow-list");
         var probed = probes.Select(p => p.Key).ToList();
         probed.Should().Contain(allowed, "the allow-list must not name a route the app no longer maps");
         probed.Should().Contain(
@@ -286,16 +275,4 @@ public sealed class SecurityHostingTests
         "group" => "roof",
         _ => throw new AssertFailedException($"No sample value for '{{{parameter}}}' in '{route.RoutePattern.RawText}'; add one.")
     };
-
-    /// <summary>A browser navigation to a console page is refused by sending it to the sign-in page rather than a 401.</summary>
-    private static bool IsSignInRedirect(string method, HttpResponseMessage response)
-    {
-        if (method != HttpMethods.Get || response.StatusCode != HttpStatusCode.Redirect || response.Headers.Location is not { } location)
-        {
-            return false;
-        }
-
-        var path = location.IsAbsoluteUri ? location.AbsolutePath : location.OriginalString.Split('?')[0];
-        return path == RoofControllerSecurityDefaults.LoginPath;
-    }
 }

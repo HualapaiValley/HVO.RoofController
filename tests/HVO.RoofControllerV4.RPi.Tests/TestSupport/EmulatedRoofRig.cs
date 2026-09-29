@@ -84,7 +84,7 @@ internal sealed record EmulatedRoofRigOptions
 }
 
 /// <summary>
-/// The whole controller in HAT emulator mode: the production host (controller, HAT library, health check, console, API)
+/// The whole controller in HAT emulator mode: the production host (controller, HAT library, health check, API, status hub)
 /// with <c>HatEmulator:Enabled</c>, its socket client talking over TCP to an emulator session and register server in
 /// the test process. Nothing is mocked between the API and the emulated plant.
 /// </summary>
@@ -379,13 +379,6 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
 
         builder.UseEnvironment(environment);
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(values));
-
-        // The console's scripts and styles are the build's static web assets, which the host serves by itself only in
-        // Development (a published image has them in wwwroot). The browser tests run the console in Production.
-        if (!string.Equals(environment, Environments.Development, StringComparison.Ordinal))
-        {
-            builder.UseStaticWebAssets();
-        }
 
         // Program reads the exporter endpoint while it adds services, before the configuration above applies.
         if (values.TryGetValue("OTEL_EXPORTER_OTLP_ENDPOINT", out var otlpEndpoint))

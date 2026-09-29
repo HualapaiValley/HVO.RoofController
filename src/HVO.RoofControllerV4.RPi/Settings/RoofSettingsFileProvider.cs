@@ -91,19 +91,6 @@ internal sealed class RoofSettingsFileProvider : ConfigurationProvider
         }
     }
 
-    /// <summary>
-    /// A list setting the file sets (<c>[]</c> included) replaces the list below it. The configuration would otherwise
-    /// merge the two by index, so a shorter list here would keep the lower layers' extra entries. Layers above still add
-    /// theirs.
-    /// </summary>
-    public override IEnumerable<string> GetChildKeys(IEnumerable<string> earlierKeys, string? parentPath)
-        => parentPath is not null && RoofSettingsCatalogue.Find(parentPath) is { IsList: true } && SetsList(parentPath)
-            ? base.GetChildKeys([], parentPath)
-            : base.GetChildKeys(earlierKeys, parentPath);
-
-    private bool SetsList(string key)
-        => Data.ContainsKey(key) || Data.Keys.Any(entry => entry.StartsWith(key + ConfigurationPath.KeyDelimiter, StringComparison.OrdinalIgnoreCase));
-
     private void SetDocument(RoofSettingsDocument document)
     {
         Document = document;

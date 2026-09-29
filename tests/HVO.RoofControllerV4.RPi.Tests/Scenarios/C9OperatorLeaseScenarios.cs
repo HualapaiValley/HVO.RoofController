@@ -13,7 +13,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
 /// <summary>
 /// C9: the operator lease, set to 5 s through the configuration API on the documented 2 m roof (about 21 s from limit
 /// to limit), so only the lease can end the move inside the test. The browser's part (a closed tab, a lost network,
-/// a reconnect inside the lease) is in the console's browser tests.
+/// a reconnect inside the lease) is in the web UI's browser tests.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

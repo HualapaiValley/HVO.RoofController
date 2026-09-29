@@ -28,8 +28,6 @@
     <PackageReference Include="HVO.Iot.Devices" />
     <PackageReference Include="HVO.Core" />
     <ProjectReference Include="../HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj" />
-    <ProjectReference Include="../HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj" />
-    <ProjectReference Include="../HVO.WebSite.Themes/HVO.WebSite.Themes.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,7 +36,6 @@
 
   <ItemGroup>
     <Folder Include="Services/" />
-    <Folder Include="wwwroot/css/" />
   </ItemGroup>
 
 </Project>

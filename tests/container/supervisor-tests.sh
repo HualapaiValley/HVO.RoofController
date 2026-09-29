@@ -39,6 +39,7 @@ setup() {
     "HVO_SUPERVISOR_CONTROLLER_EXEC=${WORK}/bin/controller"
     "HVO_SUPERVISOR_UI_EXEC=${WORK}/bin/ui"
     "HVO_SUPERVISOR_UI_USER="
+    "HVO_SUPERVISOR_UI_DATA_DIR=${WORK}/data"
     "HVO_SUPERVISOR_TICK_SECONDS=0.1"
     "HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=5"
     "HVO_SUPERVISOR_UI_STOP_SECONDS=2"
@@ -194,7 +195,7 @@ test_the_defaults_are_the_documented_ones() {
   for entry in "${SUPERVISOR_ENV[@]}"; do
     case "${entry%%=*}" in
       HVO_SUPERVISOR_APP_DIR|HVO_SUPERVISOR_RUN_DIR|HVO_SUPERVISOR_SECRETS_DIR|HVO_SUPERVISOR_CONTROLLER_EXEC|\
-      HVO_SUPERVISOR_UI_EXEC|HVO_SUPERVISOR_UI_USER) paths+=("${entry}") ;;
+      HVO_SUPERVISOR_UI_EXEC|HVO_SUPERVISOR_UI_USER|HVO_SUPERVISOR_UI_DATA_DIR) paths+=("${entry}") ;;
     esac
   done
   SUPERVISOR_ENV=("${paths[@]}")
@@ -530,6 +531,70 @@ test_the_web_uis_own_certificate_gets_its_own_password_file() {
   [[ ! -e "${WORK}/run/web/certificate-password" ]] || fail_test "a password copy is left from the first start"
 }
 
+test_the_web_ui_gets_a_private_copy_of_its_stop_key() {
+  # The Stop key is a Viewer key the controller reads from the secrets directory; the web UI cannot read that directory.
+  local key="${WORK}/secrets/RoofControllerSecurity__ApiKeys__3__Key"
+  printf 'stop-key-value-for-the-web-ui' >"${key}"
+  start_supervisor "RoofWeb__StopKeyFile=${key}"
+  wait_both_running || return
+  expect_equal "Stop key setting" "$(ui_env | grep '^RoofWeb__StopKeyFile=')" "RoofWeb__StopKeyFile=${WORK}/run/web/stop-key"
+  expect_equal "Stop key contents" "$(cat "${WORK}/run/web/stop-key")" "stop-key-value-for-the-web-ui"
+  expect_equal "Stop key mode" "$(stat -c %a "${WORK}/run/web/stop-key")" 400
+  [[ "$(ui_env)" != *stop-key-value-for-the-web-ui* ]] || fail_test "the Stop key is in the web UI's environment"
+
+  # A rotated key is copied again when the web UI starts again.
+  printf 'rotated-stop-key-for-the-web-ui' >"${key}"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 2 || return
+  expect_equal "rotated Stop key" "$(cat "${WORK}/run/web/stop-key")" "rotated-stop-key-for-the-web-ui"
+  if (( EUID == 0 )); then
+    return # root reads any file: the unreadable case cannot be made
+  fi
+  # A key the supervisor cannot read: a warning, and no Stop key (Stop uses the person's session).
+  chmod 000 "${key}"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 3 || return
+  grep -qF "WARNING: the web UI's Stop key ${key} cannot be read" "${WORK}/supervisor.log" \
+    || fail_test "no warning for the unreadable Stop key"
+  ! ui_env | grep -q '^RoofWeb__StopKeyFile' || fail_test "the web UI was given a Stop key it cannot have"
+  [[ ! -e "${WORK}/run/web/stop-key" ]] || fail_test "a Stop key copy is left from the last start"
+}
+
+test_the_web_ui_keeps_its_keys_across_its_restarts() {
+  start_supervisor
+  wait_both_running || return
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
+    "RoofWeb__DataProtectionPath=${WORK}/data/keys"
+  expect_equal "keys directory mode" "$(stat -c %a "${WORK}/data/keys")" 700
+  printf 'key ring' >"${WORK}/data/keys/key-1.xml"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 2 || return
+  expect_equal "keys kept" "$(cat "${WORK}/data/keys/key-1.xml")" "key ring"
+}
+
+test_the_web_ui_keeps_its_keys_where_it_is_told() {
+  start_supervisor "RoofWeb__DataProtectionPath=${WORK}/volume/web-keys"
+  wait_both_running || return
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
+    "RoofWeb__DataProtectionPath=${WORK}/volume/web-keys"
+  expect_equal "keys directory mode" "$(stat -c %a "${WORK}/volume/web-keys")" 700
+  [[ ! -e "${WORK}/data/keys" ]] || fail_test "the default keys directory was made as well"
+}
+
+test_a_link_where_the_keys_go_is_not_used() {
+  local before
+  mkdir -p "${WORK}/data" "${WORK}/elsewhere"
+  chmod 0755 "${WORK}/elsewhere"
+  before=$(stat -c %a "${WORK}/elsewhere")
+  ln -s "${WORK}/elsewhere" "${WORK}/data/keys"
+  start_supervisor
+  wait_both_running || return
+  grep -qF "WARNING: cannot use ${WORK}/data/keys for the web UI's keys; the web UI keeps them in memory" \
+    "${WORK}/supervisor.log" || fail_test "no warning for a link: $(cat "${WORK}/supervisor.log")"
+  ! ui_env | grep -q '^RoofWeb__DataProtectionPath' || fail_test "the web UI was given a link for its keys"
+  expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
+}
+
 test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
   start_supervisor_as_ui_user
   wait_both_running || return
@@ -538,6 +603,7 @@ test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
   grep -qxF "USER=${UI_USER}" <(ui_env) || fail_test "the web UI's environment does not name its user"
   expect_equal "control directory" "$(stat -c '%a %U %G' "${WORK}/run/control")" "700 ${UI_USER} ${UI_GROUP}"
   expect_equal "private directory" "$(stat -c '%a %G' "${WORK}/run/web")" "750 ${UI_GROUP}"
+  expect_equal "keys directory" "$(stat -c '%a %U %G' "${WORK}/data/keys")" "700 ${UI_USER} ${UI_GROUP}"
   ! grep -q "can read" "${WORK}/supervisor.log" || fail_test "a warning without secrets: $(grep "can read" "${WORK}/supervisor.log")"
 }
 

@@ -35,7 +35,7 @@ internal sealed class HubRoofStatusSender(IHubContext<RoofStatusHub> hub) : IRoo
 /// heartbeat or a connection that read the snapshot first) is an older copy of it.</para>
 /// <para>A hub connection authenticates once, when it opens. Once every heartbeat interval, whether or not anything
 /// was published, every connection's key is checked again and the connection is closed when that key was removed,
-/// rotated or re-roled, as the console does with its sign-in cookie.</para>
+/// rotated or re-roled.</para>
 /// </remarks>
 public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
 {

@@ -14,7 +14,7 @@ namespace HVO.RoofControllerV4.Common.Models;
 /// <para>Values travel as JSON in the setting's type: <see cref="RoofSettingType.Boolean"/> as true or false,
 /// <see cref="RoofSettingType.Integer"/> and <see cref="RoofSettingType.Number"/> as numbers,
 /// <see cref="RoofSettingType.Duration"/> as a number of seconds, <see cref="RoofSettingType.String"/> and
-/// <see cref="RoofSettingType.Enum"/> as strings, and <see cref="RoofSettingType.StringList"/> as an array of strings.
+/// <see cref="RoofSettingType.Enum"/> as strings.
 /// A nullable setting accepts null, which turns it off or leaves it unset.</para>
 /// <para>Secret settings are write-only: they are never returned, only whether they are set.</para>
 /// </remarks>
@@ -38,7 +38,7 @@ public static class RoofSettingsContract
     /// <summary>The Blue Iris camera proxy (<c>BlueIris</c>). Admin.</summary>
     public const string CameraGroup = "camera";
 
-    /// <summary>Transport and browser rules (<c>RoofControllerSecurity</c>). Admin.</summary>
+    /// <summary>Transport and Stop rules (<c>RoofControllerSecurity</c>). Admin.</summary>
     public const string SecurityGroup = "security";
 
     /// <summary>Session lifetimes and sign-in limits (<c>RoofControllerSecurity:Identity</c>). Admin.</summary>
@@ -63,10 +63,7 @@ public enum RoofSettingType
     Duration = 4,
 
     /// <summary>One of <see cref="RoofSettingDescriptor.AllowedValues"/>.</summary>
-    Enum = 5,
-
-    /// <summary>An array of strings.</summary>
-    StringList = 6
+    Enum = 5
 }
 
 /// <summary>When a change to a setting is safety-critical and needs <c>ConfirmSafetyCriticalChange</c>.</summary>

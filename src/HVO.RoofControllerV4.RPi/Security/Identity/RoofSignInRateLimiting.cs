@@ -60,7 +60,7 @@ public static class RoofSignInRateLimiting
     /// <summary>
     /// Who a sign-in attempt is counted against: <c>key:&lt;id&gt;</c> for an API key, <c>person:&lt;name&gt;</c> for a
     /// session, otherwise <c>address:&lt;address&gt;</c> (<see cref="AddressOf"/>). An anonymous endpoint
-    /// (<c>Auth/Session</c>) is always counted by address: a console cookie sent with it must not buy its own budget.
+    /// (<c>Auth/Session</c>) is always counted by address: a credential sent with it must not buy its own budget.
     /// </summary>
     internal static string PartitionFor(HttpContext context)
     {

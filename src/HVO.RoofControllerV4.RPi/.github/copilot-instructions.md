@@ -1,7 +1,7 @@
 # Copilot Instructions for HVO.RoofControllerV4.RPi
 
 ## Project Overview
-The Roof Controller V4 project automates the observatory roof using Blazor Server, ASP.NET Core APIs, and a Sequent Microsystems relay/input HAT on the Raspberry Pi (I2C, via `HVO.Iot.Devices`). Safety-first operation is paramount. The repository-wide rules are in `/.github/copilot-instructions.md`; this file adds project-specific points.
+The Roof Controller V4 project automates the observatory roof using ASP.NET Core APIs, a SignalR status hub, and a Sequent Microsystems relay/input HAT on the Raspberry Pi (I2C, via `HVO.Iot.Devices`). It has no UI of its own: the web UI (`HVO.RoofControllerV4.Web`) and the terminal UI and CLI (`HVO.RoofControllerV4.Cli`) are separate clients of its API and hub. Safety-first operation is paramount. The repository-wide rules are in `/.github/copilot-instructions.md`; this file adds project-specific points.
 
 ## Critical Reminders
 - Use structured logging with named parameters (message templates, not interpolation) for every relay change, input transition, watchdog/lease event and fault latch/clear. Follow the patterns already in `Logic/RoofControllerServiceV4.cs`.
@@ -16,8 +16,8 @@ The Roof Controller V4 project automates the observatory roof using Blazor Serve
 - When changing API behavior, update the controller tests (`Controllers/`) and the project README so device operators know what to expect.
 - Run tests from `src/` so `src/global.json` applies: `cd src && dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj`. Release builds treat warnings as errors.
 
-## UI & Theme
-- Components under `Components/` should keep logic in `.razor.cs` files and use scoped CSS. Ensure the layout applies `data-theme="hvo-dark"` and uses the shared theme tokens.
+## UI
+- The controller serves no pages. A UI change belongs in a client (`HVO.RoofControllerV4.Web`, `HVO.RoofControllerV4.Cli`), which reaches the controller only through `HVO.RoofControllerV4.Client` (REST and the status hub).
 
 ## Deployment Notes
 - Docker artifacts (`Dockerfile`, `docker-compose.yaml`, `deploy-roofcontroller-rpi.sh`) target the Raspberry Pi (`linux/arm64`); the build context is the repository root and `/.dockerignore` applies. The Dockerfile's SDK tag must match `src/global.json`. Validate native library dependencies before introducing changes that require additional packages. Deployment procedure: `docs/deployment.md`.

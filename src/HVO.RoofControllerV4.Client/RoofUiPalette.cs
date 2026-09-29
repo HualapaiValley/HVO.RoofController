@@ -1,10 +1,10 @@
 namespace HVO.RoofControllerV4.Client;
 
 /// <summary>
-/// The colours of HVO Dark, the web console's theme (<c>hvo-dark.css</c> in HVO.WebSite.Themes, from HVO.SkyMonitor), as
+/// The colours of HVO Dark, the web UI's theme (<c>hvo-dark.css</c> in HVO.WebSite.Themes, from HVO.SkyMonitor), as
 /// <c>#rrggbb</c> values for the interfaces that are not web pages: the terminal interface of <c>hvo-roof</c>, the kiosk
 /// and the Mac app. Each one names the stylesheet's token; a token given with transparency is here as it looks over the
-/// page background. Stop, Open and Close have the colours of the web console's buttons (Bootstrap's warning, success and
+/// page background. Stop, Open and Close have the colours of the web UI's buttons (Bootstrap's warning, success and
 /// danger buttons), so each looks the same in every interface.
 /// </summary>
 public static class RoofUiPalette
@@ -75,19 +75,19 @@ public static class RoofUiPalette
     /// <summary><c>--hvo-info-bg</c>.</summary>
     public const string InfoBackground = "#123548";
 
-    /// <summary>The Stop button (the web console's <c>btn-warning</c>).</summary>
+    /// <summary>The Stop button (the web UI's <c>btn-warning</c>).</summary>
     public const string StopButton = "#ffc107";
 
     /// <summary>The Stop button's text.</summary>
     public const string StopButtonText = "#000000";
 
-    /// <summary>The Open button (the web console's <c>btn-success</c>).</summary>
+    /// <summary>The Open button (the web UI's <c>btn-success</c>).</summary>
     public const string OpenButton = "#198754";
 
     /// <summary>The Open button's text.</summary>
     public const string OpenButtonText = "#ffffff";
 
-    /// <summary>The Close button (the web console's <c>btn-danger</c>).</summary>
+    /// <summary>The Close button (the web UI's <c>btn-danger</c>).</summary>
     public const string CloseButton = "#dc3545";
 
     /// <summary>The Close button's text.</summary>

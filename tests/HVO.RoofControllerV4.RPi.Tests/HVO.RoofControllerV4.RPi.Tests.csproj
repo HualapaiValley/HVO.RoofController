@@ -9,9 +9,8 @@
     <NoWarn>$(NoWarn);CS1030</NoWarn>
     <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
     <!--
-      The tests have no static web assets of their own. The controller and the web UI both carry the framework's
-      blazor.web.js, which the test project's own manifest would list twice (a build error); each app's host reads its
-      own manifest, copied here with it.
+      The tests have no static web assets of their own. The web UI's host reads the web UI's own manifest, copied here
+      with it.
     -->
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>

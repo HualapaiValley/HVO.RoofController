@@ -6,7 +6,7 @@
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 
 Roof Controller V4 for the HVO observatory: a Raspberry Pi controller with an
-authenticated web console and HTTP API.
+authenticated HTTP API, and its clients: a web UI, a command line and a terminal interface.
 
 ## Features
 
@@ -26,9 +26,11 @@ authenticated web console and HTTP API.
   stop ([Settings](docs/security.md#settings))
 - **Live status hub** — UI clients receive every status change, and a heartbeat each second,
   from the SignalR hub at `/hubs/roof` ([Status hub](docs/security.md#status-hub))
-- **Web Console** — browser-based roof control for desktop, tablet and phone; browser tests
-  run it in Chromium with phone and tablet emulation, upright and sideways, against the
-  emulated roof, including Stop from the reconnect dialog (commissioning C15)
+- **Web UI** — browser-based roof control for desktop, tablet and phone, a client of the
+  controller's API and status hub in a process of its own
+  ([docs/web.md](docs/web.md)); browser tests run it in Chromium with phone, tablet and
+  desktop emulation against the emulated roof, including Stop from the reconnect dialog
+  (commissioning C15)
 - **Command line and terminal interface** — `hvo-roof`, one self-contained file for the Pi or
   a workstation: every API operation as a command with `--json` and documented exit codes,
   and `hvo-roof ui`, a full-screen terminal interface with Stop on F9 from every page
@@ -43,13 +45,13 @@ authenticated web console and HTTP API.
   not extend it. Expiry stops the roof and latches a fault. This is not a dead-man control.
 - **Operator lease** (optional, `OperatorLeaseTimeout`, 2–120 s, off when unset): Open and
   Close start a lease that the client renews (`POST .../Lease`) while the roof moves. If the
-  client stops renewing, the roof stops with `OperatorLeaseExpired`. The web console renews
+  client stops renewing, the roof stops with `OperatorLeaseExpired`. The web UI renews
   only while its browser connection is up: a closed tab stops renewal at once, a silent drop
   such as lost Wi-Fi within about 30 s, and renewal does not resume on reconnect. Without a
   lease, losing the client does not stop motion; the watchdog and limit switches still do.
-- **Stop without the connection**: the console's reconnect dialog has a Stop button that
-  posts to the controller directly (`POST /console/stop`), so Stop works while the console
-  is disconnected as long as the controller is reachable.
+- **Stop without the connection**: the web UI's Stop bar and its reconnect dialog's Stop
+  post a plain request (`POST /stop`), not through the page's live connection, so Stop works
+  while the page is disconnected as long as the web UI and the controller are reachable.
 - **Fault latch**: watchdog expiry, a VFD fault (IN3), a relay verification failure, repeated
   input read failures, contradictory limit inputs, a reasserted start limit, a failed
   drive-running check (IN4) and an unreleased start limit latch the fault. Open and Close are refused until an explicit `ClearFault` succeeds with healthy
@@ -178,7 +180,8 @@ with the roof mechanism isolated.
 |----------|-------------|
 | [Roof controller hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md) | Canonical SMVector, relay, limit-switch, monitoring, and safety wiring reference |
 | [Commissioning](docs/commissioning.md) | Checks C1-C15 as automated scenarios against the emulated plant, the installation assumptions each depends on, and the settings file on the Pi (hand edits, backup) |
-| [Security](docs/security.md) | API keys, roles, people and sessions, remote settings and restart, HTTPS and console sign-in |
+| [Security](docs/security.md) | API keys, roles, people and sessions, remote settings and restart, HTTPS and the web UI's sign-in |
+| [Web UI](docs/web.md) | The browser interface: signing in, the pages, Stop, its settings and screenshots |
 | [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
 | [Command line](docs/cli.md) | `hvo-roof`: install, setup and credentials, the commands, exit codes and the terminal interface |
 | [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |

@@ -3,7 +3,7 @@ name: Scenarios
 # The commissioning checks (docs/commissioning.md) as automated scenarios against the emulated HAT, roof and VFD. No
 # hardware is involved, and nothing is pushed or deployed.
 #   scenarios            every [TestCategory("Scenario")] test, the short C14 soak included
-#   browser              the console in Chromium with phone and tablet emulation ([TestCategory("Browser")])
+#   browser              the web UI in Chromium with phone, tablet and desktop emulation ([TestCategory("Browser")])
 #   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
 #                        rollback, and the Compose migration (tests/emulator/deploy-scenarios.sh)
 #   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results

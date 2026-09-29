@@ -309,8 +309,8 @@ and the Settings page's header then says the file was edited by hand.
 
 ### Colours
 
-The interface uses HVO Dark, the web console's theme (`RoofUiPalette` in the client library), so it looks like the
-web console: light text on the dark page background, the focused control in the accent blue, **Stop yellow**, Open
+The interface uses HVO Dark, the web UI's theme (`RoofUiPalette` in the client library), so it looks like the
+[web UI](web.md): light text on the dark page background, the focused control in the accent blue, **Stop yellow**, Open
 green and Close red, a stale status in the theme's warning colours, and an error in its danger colours. Terminal.Gui
 draws the theme's colours in true colour, or as the nearest of 256 or 16 colours when that is all the terminal has.
 

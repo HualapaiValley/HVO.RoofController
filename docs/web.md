@@ -192,9 +192,9 @@ passes the web UI these and nothing else of the controller's settings
 | `SupervisorStatePath` | none | The supervisor's state file (`supervisor.json`). Without it, the pages say there is no supervisor. |
 | `SupervisorControlPath` | none | The supervisor's control directory, where a forced restart is asked for. |
 | `StatusRefreshSeconds` | `2` | How often the pages check the controller's readiness and the supervisor's state, from 1 to 60. |
-| `StopKeyFile` | none | A file with the web UI's own API key for Stop (a Viewer key is enough). None: Stop uses the person's session alone. |
+| `StopKeyFile` | none | A file with the web UI's own API key for Stop (a Viewer key is enough). None: Stop uses the person's session alone. In the container, point it at a Viewer key's file in the secrets directory, such as `/run/secrets/RoofControllerSecurity__ApiKeys__2__Key`; the supervisor gives the web UI a private copy ([The web UI's user and settings](deployment.md#the-web-uis-user-and-settings)). |
 | `AllowedOrigins` | none | Origins, besides the web UI's own, that may post its forms and open its live connection, for example `https://roof.example.org` behind a proxy. Scheme, host and port only. |
-| `DataProtectionPath` | none | A directory for the keys that protect the sign-in cookie and the forms, so they survive a restart. None: the keys are in memory, and everyone signs in again after the web UI restarts. |
+| `DataProtectionPath` | none; in the container `/var/lib/hvo-roof-web/keys` | A directory for the keys that protect the sign-in cookie and the forms, so they survive a restart. None: the keys are in memory, and everyone signs in again after the web UI restarts. In the container the supervisor gives it a directory only the web UI can read, which lasts as long as the container: a redeploy signs everyone out. |
 | `SignInAttemptsPerMinute` | `10` | Sign-in attempts accepted from one address a minute, from 1 to 1000. |
 | `CameraIds` | camera 2 | The cameras the roof page shows, by their number on the camera server (1 to 99), at most 4: for example `RoofWeb__CameraIds__0=2`. |
 

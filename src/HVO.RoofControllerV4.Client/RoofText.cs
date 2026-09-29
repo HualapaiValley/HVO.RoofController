@@ -101,7 +101,7 @@ public static class RoofText
 
     /// <summary>
     /// Text for a refused request: the shared wording for its code, followed by the code in brackets. Requests refused
-    /// before they reach the roof (HTTPS, origin, sign-in, permissions) fall back to wording by HTTP status.
+    /// before they reach the roof (HTTPS, sign-in, permissions) fall back to wording by HTTP status.
     /// </summary>
     public static string DescribeRefusal(int statusCode, RoofControllerErrorCode? code, string? codeText)
     {
@@ -113,7 +113,6 @@ public static class RoofText
         return codeText switch
         {
             "https_required" => "The controller requires HTTPS from this network. [https_required]",
-            "origin_not_allowed" => "The controller refused a request from this page's origin. [origin_not_allowed]",
             _ => statusCode switch
             {
                 400 => "The request was invalid.",

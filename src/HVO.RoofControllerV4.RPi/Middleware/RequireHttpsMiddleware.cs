@@ -13,7 +13,7 @@ namespace HVO.RoofControllerV4.RPi.Middleware;
 /// <summary>
 /// Refuses plain-HTTP requests with 403 ProblemDetails (<c>https_required</c>) when
 /// <see cref="RoofControllerSecurityOptions.RequireHttps"/> is in effect (default: true outside Development). This is
-/// deliberately not a redirect: a redirect would already have sent the API key or console access key in clear text.
+/// deliberately not a redirect: a redirect would already have sent the API key or session token in clear text.
 /// Exempt: loopback connections (the Docker healthcheck and the deploy script's in-container Stop) and the anonymous
 /// <c>/health/live</c> and <c>/health/ready</c> probes.
 /// </summary>

@@ -27,7 +27,9 @@
 # unprivileged app user), with only the RoofWeb__* settings and a few general variables (PATH, TZ, the locale,
 # DOTNET_* and ASPNETCORE_ENVIRONMENT), so it never sees the controller's keys or reads its secrets. For HTTPS the
 # supervisor gives it a private copy of the certificate it serves and that certificate's password (by default the
-# controller's; see prepare_ui_certificate).
+# controller's; see prepare_ui_certificate), and a private copy of its Stop key (RoofWeb__StopKeyFile). It keeps the keys
+# that protect its sign-in cookie in HVO_SUPERVISOR_UI_DATA_DIR/keys, or in RoofWeb__DataProtectionPath when that is set,
+# so the people signed in stay signed in when the web UI or the container restarts.
 #
 # Times are kept in microseconds (EPOCHREALTIME), so every wait is as long as configured, not up to a second shorter.
 #
@@ -42,6 +44,7 @@ APP_DIR=${HVO_SUPERVISOR_APP_DIR:-/app}
 RUN_DIR=${HVO_SUPERVISOR_RUN_DIR:-/run/hvo-roof}
 SECRETS_DIR=${HVO_SUPERVISOR_SECRETS_DIR:-/run/secrets}
 UI_USER=${HVO_SUPERVISOR_UI_USER-app}
+UI_DATA_DIR=${HVO_SUPERVISOR_UI_DATA_DIR:-/var/lib/hvo-roof-web}
 CONTROLLER_STOP_SECONDS=${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-25}
 UI_STOP_SECONDS=${HVO_SUPERVISOR_UI_STOP_SECONDS:-2}
 CRASH_LIMIT=${HVO_SUPERVISOR_CRASH_LIMIT:-5}
@@ -266,6 +269,44 @@ prepare_ui_certificate() {
   printf 'RoofWeb__Certificate__PasswordFile=%s\n' "${password_copy}"
 }
 
+# The web UI's own API key for Stop (RoofWeb__StopKeyFile): a file only root may read, such as a Viewer key's file in
+# the secrets directory. The web UI gets its own copy (owner-only) in its private directory, taken again at each start
+# so a rotated key is used. Prints the RoofWeb__StopKeyFile setting for the web UI; nothing without a key.
+prepare_ui_stop_key() {
+  local source=${RoofWeb__StopKeyFile:-} copy="${UI_PRIVATE_DIR}/stop-key"
+  local -a owner=()
+  [[ -n "${source}" ]] || return 0
+  rm -f "${copy}"
+  if [[ ! -r "${source}" ]]; then
+    log "WARNING: the web UI's Stop key ${source} cannot be read; the web UI's Stop uses the person's session alone"
+    return 0
+  fi
+  [[ -z "${UI_USER}" ]] || owner=(-o "${UI_USER}" -g "${UI_GROUP}")
+  install -m 0400 "${owner[@]}" "${source}" "${copy}" || return 0
+  printf 'RoofWeb__StopKeyFile=%s\n' "${copy}"
+}
+
+# The directory for the keys that protect the web UI's sign-in cookie and forms (RoofWeb__DataProtectionPath, or
+# HVO_SUPERVISOR_UI_DATA_DIR/keys), owned by the web UI's user and private to it. The default is in the container, so
+# it lasts while the container does: a redeploy, which makes a new container, signs everyone out. Prints the
+# RoofWeb__DataProtectionPath setting for the web UI; nothing when the directory cannot be made (the keys are then kept
+# in memory).
+prepare_ui_data_protection() {
+  local path=${RoofWeb__DataProtectionPath:-}
+  local -a owner=()
+  [[ -n "${UI_USER}" ]] && owner=(-o "${UI_USER}" -g "${UI_GROUP}")
+  if [[ -z "${path}" ]]; then
+    path="${UI_DATA_DIR}/keys"
+    install -d -m 0755 "${UI_DATA_DIR}" || { log "WARNING: cannot create ${UI_DATA_DIR}; the web UI keeps its keys in memory"; return 0; }
+  fi
+  if [[ -L "${path}" ]] || ! install -d -m 0700 "${owner[@]}" "${path}"; then
+    log "WARNING: cannot use ${path} for the web UI's keys; the web UI keeps them in memory, so everyone signs in" \
+      "again when it restarts"
+    return 0
+  fi
+  printf 'RoofWeb__DataProtectionPath=%s\n' "${path}"
+}
+
 start_ui() {
   local -a ui_env=("PATH=${PATH}" "TZ=${TZ:-UTC}")
   local entry name home
@@ -273,13 +314,13 @@ start_ui() {
   while IFS= read -r -d '' entry; do
     name=${entry%%=*}
     case "${name}" in
-      RoofWeb__Certificate__Path|RoofWeb__Certificate__PasswordFile) ;;
+      RoofWeb__Certificate__Path|RoofWeb__Certificate__PasswordFile|RoofWeb__StopKeyFile|RoofWeb__DataProtectionPath) ;;
       RoofWeb__*|DOTNET_*|ASPNETCORE_ENVIRONMENT|LANG|LC_*) ui_env+=("${entry}") ;;
     esac
   done < <(env -0)
   while IFS= read -r entry; do
     [[ -n "${entry}" ]] && ui_env+=("${entry}")
-  done < <(prepare_ui_certificate)
+  done < <(prepare_ui_certificate; prepare_ui_stop_key; prepare_ui_data_protection)
   ui_env+=("RoofWeb__SupervisorStatePath=${STATE_FILE}" "RoofWeb__SupervisorControlPath=${CONTROL_DIR}")
 
   if [[ -n "${UI_USER}" ]]; then

@@ -12,8 +12,8 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Tests.Controllers;
 
 /// <summary>
-/// Camera proxy: credentials come from configuration and are only sent upstream, callers need a Viewer key or the console
-/// cookie, and upstream failures map to 502/503/504 instead of hanging.
+/// Camera proxy: credentials come from configuration and are only sent upstream, callers need a Viewer key or session,
+/// and upstream failures map to 502/503/504 instead of hanging.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

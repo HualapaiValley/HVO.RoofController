@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using FluentAssertions;
-using HVO.RoofControllerV4.RPi.Middleware;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.Extensions.Configuration;
@@ -55,7 +54,7 @@ public sealed class RoofSettingsFileTests
             // Comments and trailing commas are allowed, as in appsettings.json.
             {
               "RoofControllerUi": { "DefaultCamera": "Roof", },
-              "RoofControllerSecurity": { "AllowedOrigins": [ "https://roof.example", "https://kiosk.example" ] }
+              "BlueIris": { "BaseUrl": "http://cameras.example:81" }
             }
             """);
 
@@ -66,8 +65,7 @@ public sealed class RoofSettingsFileTests
         document.Data.Should().BeEquivalentTo(new Dictionary<string, string?>
         {
             ["RoofControllerUi:DefaultCamera"] = "Roof",
-            ["RoofControllerSecurity:AllowedOrigins:0"] = "https://roof.example",
-            ["RoofControllerSecurity:AllowedOrigins:1"] = "https://kiosk.example"
+            ["BlueIris:BaseUrl"] = "http://cameras.example:81"
         });
         document.Data.Should().ContainKey("roofcontrollerui:defaultcamera", "configuration keys are case-insensitive");
     }
@@ -139,7 +137,7 @@ public sealed class RoofSettingsFileTests
     [TestMethod]
     [DataRow("""{ "Kestrel": { "Endpoints": { "Http": { "Url": "http://quoted-value:80" } } } }""", "Kestrel:Endpoints:Http:Url")]
     [DataRow("""{ "RoofControllerSecurity": { "Identity": { "StorePath": "/quoted-value" } } }""", "RoofControllerSecurity:Identity:StorePath")]
-    [DataRow("""{ "RoofControllerSecurity": { "AllowedOrigins": [ { "Url": "quoted-value" } ] } }""", "RoofControllerSecurity:AllowedOrigins:0:Url")]
+    [DataRow("""{ "RoofControllerUi": { "DefaultCamera": [ "quoted-value" ] } }""", "RoofControllerUi:DefaultCamera:0")]
     [DataRow("""{ "Logging": { "LogLevel": { "HVO": "quoted-value" } } }""", "Logging:LogLevel:HVO")]
     [DataRow("""{ "BlueIris": "quoted-value" }""", "BlueIris")]
     public void AKeyOutsideTheCatalogue_IsRefused_NamingTheKeyButNeverTheValue(string content, string key)
@@ -149,21 +147,68 @@ public sealed class RoofSettingsFileTests
             .And.NotContain("quoted-value");
 
     [TestMethod]
-    public void CatalogueSettings_ListItems_AndEmptySections_AreAccepted()
+    public void CatalogueSettings_AndEmptySections_AreAccepted()
     {
         var document = Parse("""
             {
-              "RoofControllerSecurity": { "AllowedOrigins": [ "https://a.example", "https://b.example" ], "Identity": {} },
+              "RoofControllerSecurity": { "AllowAnonymousStop": false, "Identity": {} },
               "BlueIris": {},
               "RoofControllerUi": { "DefaultCamera": "Yard" }
             }
             """);
 
-        document.Data.Should().Contain("RoofControllerSecurity:AllowedOrigins:1", "https://b.example")
+        document.Data.Should().ContainKey("RoofControllerSecurity:AllowAnonymousStop")
             .And.Contain("RoofControllerUi:DefaultCamera", "Yard");
-        Parse("""{ "RoofControllerSecurity": { "AllowedOrigins": [] } }""").Data.Should().ContainKey("RoofControllerSecurity:AllowedOrigins");
         FluentActions.Invoking(() => Parse("""{ "BlueIris": { "BaseUrl": "http://192.168.0.4:80" } }""", RoofSettingsFileKind.Secrets))
             .Should().Throw<RoofSettingsFileException>().WithMessage("*sets BlueIris:BaseUrl, which is not a secret setting.*");
+    }
+
+    [TestMethod]
+    public void RetiredSettings_AreReadWithout_AndLeftOutOfTheBody()
+    {
+        var document = Parse("""
+            {
+              "RoofControllerSecurity": { "AllowedOrigins": [ "https://roof.example" ], "RequireHttps": true },
+              "consolelogbuffer": { "minimumlevel": "Debug" },
+              "RoofControllerUi": { "DefaultCamera": "Yard" }
+            }
+            """);
+
+        document.Retired.Should().Equal("RoofControllerSecurity:AllowedOrigins", "ConsoleLogBuffer:MinimumLevel");
+        document.Data.Should().BeEquivalentTo(new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:RequireHttps"] = "True",
+            ["RoofControllerUi:DefaultCamera"] = "Yard"
+        });
+        document.Body.Select(property => property.Key).Should().Equal("RoofControllerSecurity", "RoofControllerUi");
+        document.Body["RoofControllerSecurity"]!.AsObject().Select(property => property.Key).Should().Equal("RequireHttps");
+        RoofSettingsCatalogue.DescribeRetired(document.Retired).Should()
+            .StartWith("The settings file sets RoofControllerSecurity:AllowedOrigins (the controller serves no pages")
+            .And.Contain(" and ConsoleLogBuffer:MinimumLevel (the controller keeps no log view")
+            .And.EndWith("which this version no longer uses: ignored, and left out of the file at the next change through the API.");
+    }
+
+    [TestMethod]
+    [DataRow("""{ "RoofControllerSecurity": { "AllowedOrigins": [] } }""", "RoofControllerSecurity:AllowedOrigins", "")]
+    [DataRow("""{ "ConsoleLogBuffer": {}, "BlueIris": {} }""", "ConsoleLogBuffer:MinimumLevel", "BlueIris")]
+    public void AnEmptyRetiredSetting_IsRetired_WithTheSectionItLeavesEmpty(string content, string retired, string kept)
+    {
+        var document = Parse(content);
+
+        document.Retired.Should().Equal(retired);
+        document.Data.Keys.Should().NotContain(key => key.StartsWith(retired.Split(':')[0], StringComparison.OrdinalIgnoreCase));
+        document.Body.Select(property => property.Key).Should().Equal(kept.Split(',', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [TestMethod]
+    public void NoSettingsAreRetired_InTheSecretsFile_OrForAnyOtherKey()
+    {
+        RoofSettingsCatalogue.DescribeRetired([]).Should().BeNull();
+        RoofSettingsCatalogue.FindRetired("RoofControllerSecurity").Should().BeNull("the section holds current settings");
+        RoofSettingsCatalogue.FindRetired("RoofControllerSecurity:AllowedOriginsExtra").Should().BeNull();
+        RoofSettingsCatalogue.FindRetired("RoofControllerSecurity:AllowedOrigins:0").Should().Be("RoofControllerSecurity:AllowedOrigins");
+        FluentActions.Invoking(() => Parse("""{ "ConsoleLogBuffer": { "MinimumLevel": "Debug" } }""", RoofSettingsFileKind.Secrets))
+            .Should().Throw<RoofSettingsFileException>().WithMessage("*sets ConsoleLogBuffer:MinimumLevel, which is not a secret setting.*");
     }
 
     [TestMethod]
@@ -323,78 +368,21 @@ public sealed class RoofSettingsFileTests
             Layer(new()
             {
                 ["RoofControllerUi:DefaultCamera"] = "Shipped",
-                ["RoofControllerSecurity:AllowedOrigins:0"] = "https://a.example",
-                ["RoofControllerSecurity:AllowedOrigins:1"] = "https://b.example",
-                ["RoofControllerSecurity:AllowedOrigins:2"] = "https://c.example"
+                ["BlueIris:BaseUrl"] = "http://cameras.example:81"
             }),
             Layer(new()
             {
-                ["RoofControllerUi:DefaultCamera"] = "Mine",
-                ["RoofControllerSecurity:AllowedOrigins:0"] = "https://mine.example",
-                ["RoofControllerSecurity:AllowedOrigins:1"] = " "
+                ["RoofControllerUi:DefaultCamera"] = "Mine"
             })
         ]);
 
         view.TryGet("roofcontrollerui:defaultcamera", out var camera).Should().BeTrue();
         camera.Should().Be("Mine");
         view.TryGet("RoofControllerUi:Nothing", out _).Should().BeFalse();
-        view.GetListItems("RoofControllerSecurity:AllowedOrigins").Should().Equal(
-            ["https://mine.example", "https://c.example"], "a blank entry is no entry, and a plain layer merges lists by index");
-        view.GetListItems("RoofControllerSecurity:Nothing").Should().BeNull();
         view.Flatten().Should().Contain("RoofControllerUi:DefaultCamera", "Mine")
-            .And.Contain("RoofControllerSecurity:AllowedOrigins:2", "https://c.example")
+            .And.Contain("BlueIris:BaseUrl", "http://cameras.example:81")
             .And.NotContainKey("RoofControllerUi");
     }
-
-    [TestMethod]
-    public void AListTheSettingsFileSets_ReplacesTheListBelow_AndAnEmptyListClearsIt()
-    {
-        const string key = "RoofControllerSecurity:AllowedOrigins";
-        var below = Layer(new()
-        {
-            [key + ":0"] = "https://a.example",
-            [key + ":1"] = "https://b.example",
-            [key + ":2"] = "https://c.example"
-        });
-
-        Origins("""{ "RoofControllerSecurity": { "AllowedOrigins": [ "https://x.example" ] } }""")
-            .Should().Equal(["https://x.example"], "the entries below the file's shorter list are gone");
-        Origins("""{ "RoofControllerSecurity": { "AllowedOrigins": [] } }""").Should().BeEmpty();
-        Origins("""{ "RoofControllerUi": { "DefaultCamera": "Roof" } }""")
-            .Should().Equal(["https://a.example", "https://b.example", "https://c.example"], "a file without the list leaves the list below");
-        Origins("""{ "RoofControllerSecurity": { "AllowedOrigins": [ "https://x.example" ] } }""", new() { [key + ":1"] = "https://env.example" })
-            .Should().Equal(["https://x.example", "https://env.example"], "a layer above the file still adds its entries");
-
-        List<string> Origins(string content, Dictionary<string, string?>? above = null)
-        {
-            var file = RoofSettingsFileProvider.Detached(RoofSettingsFileKind.Settings, Parse(content));
-            IConfigurationProvider[] providers = above is null ? [below, file] : [below, file, Layer(above)];
-            using var configuration = new ConfigurationRoot(providers);
-            var options = new RoofControllerSecurityOptions();
-            configuration.GetSection(RoofControllerSecurityOptions.SectionName).Bind(options);
-
-            var view = new RoofConfigurationView(providers);
-            (view.GetListItems(key) ?? []).Should().Equal(options.AllowedOrigins, "the view reads what the options bind");
-            view.Flatten().Where(entry => entry.Key.StartsWith(key + ":", StringComparison.Ordinal))
-                .OrderBy(entry => entry.Key, StringComparer.Ordinal).Select(entry => entry.Value)
-                .Should().Equal(options.AllowedOrigins);
-            return options.AllowedOrigins;
-        }
-    }
-
-    [TestMethod]
-    [DataRow("https://roof.example", true)]
-    [DataRow("http://roof.example:8080", true)]
-    [DataRow("https://roof.example/", true)]
-    [DataRow("https://roof.example/kiosk", false)]
-    [DataRow("https://roof.example?x=1", false)]
-    [DataRow("https://user@roof.example", false)]
-    [DataRow("ftp://roof.example", false)]
-    [DataRow("roof.example", false)]
-    [DataRow("", false)]
-    [DataRow(null, false)]
-    public void AnAllowedOrigin_IsAnHttpUrlWithNothingAfterTheHost(string? origin, bool valid)
-        => OriginCheckMiddleware.IsValidAllowedOrigin(origin).Should().Be(valid);
 
     private static RoofSettingsDocument Parse(string content, RoofSettingsFileKind kind = RoofSettingsFileKind.Settings)
         => RoofSettingsFile.Parse(Encoding.UTF8.GetBytes(content), kind == RoofSettingsFileKind.Settings ? Path : "/managed/secrets.json", kind);

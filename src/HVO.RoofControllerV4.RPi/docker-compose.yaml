@@ -10,7 +10,7 @@
 #                The web UI serves the same certificate (the supervisor gives it a private copy).
 #                  docker compose --profile pi up -d
 #   pi-lan-http  Plain HTTP on 8080 (the API) and 8088 (the web UI) with RequireHttps off. For an isolated LAN only:
-#                API keys and the console access key cross the network in clear text.
+#                API keys, passwords and PINs cross the network in clear text.
 #                  docker compose --profile pi-lan-http up -d
 #
 # Each controller container runs two processes under a supervisor (docs/deployment.md, "The container's two
@@ -24,9 +24,9 @@
 #                (src/HVO.RoofControllerV4.Emulator: an emulated roof, SMVector drive, ME-8108 limit switches and
 #                SM-I-010 HAT). The emulator's control API has no authentication and is
 #                published on 127.0.0.1 port HVO_EMULATOR_CONTROL_PORT (default 5290); its register port stays on the
-#                compose network. Both images build for this machine (amd64 or arm64). The controller shows an EMULATED
-#                HAT banner, reports Degraded health and does not operate the roof. Give it an admin key of at least 24
-#                characters in HVO_EMULATED_ROOF_API_KEY, or its API and console answer 401:
+#                compose network. Both images build for this machine (amd64 or arm64). The clients show an EMULATED
+#                HAT banner, the controller reports Degraded health and does not operate the roof. Give it an admin key of at least 24
+#                characters in HVO_EMULATED_ROOF_API_KEY, or its API answers 401:
 #                  HVO_EMULATED_ROOF_API_KEY=$(openssl rand -hex 24) docker compose --profile emulator up -d --build
 #                tests/emulator/compose-smoke-test.sh opens and closes the emulated roof through this profile.
 #
@@ -54,6 +54,10 @@ x-roof-environment: &roof-environment
   # managed-secrets-mount). A setting given here in the environment overrides both and cannot be changed through the API.
   RoofControllerSettings__FilePath: /etc/hvo-roof/config/appsettings.Local.json
   RoofControllerSettings__SecretsFilePath: /var/lib/hvo-roof/settings-secrets/secrets.json
+  # The web UI's own key for Stop (docs/web.md#stop): a file in the container, such as a Viewer key's file in the
+  # secrets directory (/run/secrets/RoofControllerSecurity__ApiKeys__N__Key). The supervisor gives the web UI a private
+  # copy. Empty: the web UI's Stop uses the person's session alone.
+  RoofWeb__StopKeyFile: ${HVO_ROOF_WEB_STOP_KEY_FILE:-}
   # Host names/IPs clients use to reach the controller (semicolon-separated). A list must include localhost (the
   # health check calls it); "*" logs a startup warning.
   AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}

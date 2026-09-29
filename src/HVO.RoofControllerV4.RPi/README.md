@@ -1,6 +1,6 @@
 # HVO Roof Controller V4
 
-A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai Valley Observatory roof. It drives a Lenze SMVector VFD through the Sequent Microsystems 4-Relay/4-Input HAT, exposing a safety-focused REST API, background watchdog service, and modern control UI.
+A .NET 10 ASP.NET Core service that automates the Hualapai Valley Observatory roof. It drives a Lenze SMVector VFD through the Sequent Microsystems 4-Relay/4-Input HAT, exposing a safety-focused REST API, a live status hub and a background watchdog service. People use it through separate clients of that API: the web UI ([docs/web.md](../../docs/web.md)) and the terminal UI and CLI ([docs/cli.md](../../docs/cli.md)).
 
 ## Highlights
 - Safety-first motion sequencing: STOP-first relay logic with relay register read-back, an
@@ -8,7 +8,7 @@ A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai V
   handling (including departure from the start limit) and a fault latch that only
   `ClearFault` resets. See the root [README](../../README.md#safety-behavior) for the exact
   behavior and its limits.
-- Blazor Server UI with real-time status pill, notifications, and watchdog visuals
+- A SignalR status hub (`/hubs/roof`) that pushes the controller's full status to every client as it changes
 - Authenticated REST API with versioned routing (`/api/v4.0/RoofControl`): `X-Api-Key`
   header, role-based access, `POST` for every command
 - Structured logging and health checks for observability and rapid diagnostics
@@ -35,8 +35,9 @@ A .NET 10 Blazor Server + ASP.NET Core application that automates the Hualapai V
    dotnet run --project HVO.RoofControllerV4.Emulator
    dotnet run --project HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj
    ```
-5. Browse to `http://localhost:5195` and sign in to the Blazor console, or call the API
-   under `/api/v4.0/RoofControl` with an `X-Api-Key` header.
+5. Call the API under `/api/v4.0/RoofControl` with an `X-Api-Key` header, or run the web UI
+   (`dotnet run --project HVO.RoofControllerV4.Web`, [docs/web.md](../../docs/web.md)) and
+   browse to `http://localhost:5188`.
 
 Deploy to the Pi with `deploy-roofcontroller-rpi.sh` (or a `docker-compose.yaml` profile); see
 [docs/deployment.md](../../docs/deployment.md). Both first run the image with
@@ -52,7 +53,8 @@ starting the host or touching the HAT.
 - [Hardware Overview](../../docs/projects/roof-controller-v4-rpi/hardware-overview.md) – wiring, relay/limit mappings, safety philosophy
 - [Wiring diagrams](../../docs/projects/roof-controller-v4-rpi/diagrams/) – source Graphviz DOT files, SVG diagrams, and PNG renderings for the hardware overview
 - [Commissioning](../../docs/commissioning.md) – checks C1-C15 as automated scenarios against the emulated plant, with the installation assumptions each depends on
-- [Security](../../docs/security.md) – API keys, roles, HTTPS, console sign-in
+- [Security](../../docs/security.md) – API keys, roles, sign-in, HTTPS
+- [Web UI](../../docs/web.md) – the browser client, with its screenshots
 - [Deployment](../../docs/deployment.md) – deployment script, compose profiles, deployment check, verified stop and rollback
 - [HAT emulator](../../docs/emulator.md) – running without hardware: the emulator, `HatEmulator` settings, fault injection, containers
 - [Logging and telemetry](../../docs/telemetry.md) – log levels, OTLP export, roof metrics and the motion timing histograms
