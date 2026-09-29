@@ -238,9 +238,10 @@ the roof against this server; use the web UI (port 8088) for operator access.
   `GET /api/v4.0/RoofControl/Mode` (only the HAT mode and whether the limit switches are
   ignored). Form posts and the live connection must come from the web UI or `RoofWeb:AllowedOrigins`.
   The supervisor gives the web UI a private copy of its Stop key and a directory for the keys
-  that protect its cookie (`/var/lib/hvo-roof-web/keys`). The pages are tested with bUnit
-  against a fake controller, and in Chromium against the emulated roof, which also takes the
-  screenshots in [docs/web.md](docs/web.md).
+  that protect its cookie (`/var/lib/hvo-roof-web/keys`). Every button a person taps is at
+  least 44 x 44 CSS pixels and 8 CSS pixels from its neighbours on each screen tested. The
+  pages are tested with bUnit against a fake controller, and in Chromium against the emulated
+  roof, which also takes the screenshots in [docs/web.md](docs/web.md).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.

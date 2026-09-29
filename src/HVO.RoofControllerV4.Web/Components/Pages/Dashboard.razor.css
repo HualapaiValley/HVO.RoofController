@@ -405,7 +405,7 @@
     .rc2-state-value--position { font-size: 1.2rem; }
     .rc2-action-grid { gap: 0.5rem; }
     .rc2-action { min-height: 48px; }
-    .rc2-action--small { min-height: 40px; }
+    .rc2-action--small { min-height: 44px; }
 
     .rc2-blocked,
     .rc2-role-hint,

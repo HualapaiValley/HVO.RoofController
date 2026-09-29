@@ -243,13 +243,16 @@ Nothing here needs the Pi, the HAT or the roof.
   sideways) and a desktop window over HTTP: sign-in, the session cookie, a session that expires while its page is open,
   another origin's form posts and live connection refused, Stop in view and uncovered on every page and stopping the
   roof, what each role is offered, the stale status, the camera stalling and going offline, the lease when the page
-  closes or loses its connection (commissioning C9), and the reconnect dialog's Stop (commissioning C15). CI keeps the
-  screenshots and a failed test's trace with the results. Install Chromium once with
-  `pwsh tests/HVO.RoofControllerV4.RPi.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium`, then,
-  from `src/`:
+  closes or loses its connection (commissioning C9), the reconnect dialog's Stop (commissioning C15), and that every
+  button a person taps is at least 44 x 44 CSS pixels and 8 CSS pixels from its neighbours (`WebTouchTargetBrowserTests`).
+  CI keeps the screenshots and a failed test's trace with the results. From `src/`, build the tests, install Chromium
+  once from the same build (`playwright.ps1` is in the output of the configuration built, here `Release`; leave out
+  `--with-deps` when its system libraries are installed), and run them:
 
   ```bash
-  dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --filter TestCategory=Browser
+  dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
+  pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+  dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter TestCategory=Browser
   ```
 
 - **The screenshots** above come from `WebScreenshotTests`, which signs in as an admin against the emulated roof and

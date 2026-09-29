@@ -183,6 +183,13 @@ body[data-theme="hvo-dark"] .app-frame {
     box-shadow: 0 -8px 24px rgba(2, 6, 23, 0.55);
 }
 
+/* A button a person taps is at least 44 x 44 CSS pixels (WebTouchTargetBrowserTests). */
+.web-tap,
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-actions .btn {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+}
+
 .web-stop-button {
     flex: 0 0 auto;
     min-width: 12rem;

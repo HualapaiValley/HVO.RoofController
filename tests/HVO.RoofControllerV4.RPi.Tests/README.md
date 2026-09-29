@@ -223,10 +223,13 @@ emulated plant) on another over HTTP. The phones reach the web UI over HTTPS, wi
 (the browser accepts it, as a phone told to trust the Pi's certificate does); the tablets and the desktop over HTTP. `WebBrowser` signs in, measures where Stop is without scrolling, and cuts and
 restores the page's live connection through Playwright's WebSocket route. After a failed test it attaches a screenshot, the Playwright
 trace and the browser log to the test's results. The tests are `[TestCategory("Browser")]` and `[DoNotParallelize]`, and
-C9 step 4 and C15 are among them. They need Chromium, installed once after a build, with its system libraries (leave out
-`--with-deps` when they are already installed):
+C9 step 4 and C15 are among them. They need Chromium, installed once with its system libraries (leave out
+`--with-deps` when they are already installed) by the `playwright.ps1` that a build of this project writes to its
+output. Build first, and use the path of the configuration built (`bin/Debug` for a plain `dotnet build`, `bin/Release`
+with `-c Release`):
 
 ```
+dotnet build tests/HVO.RoofControllerV4.RPi.Tests
 pwsh tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
 ```
 
