@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # A stand-in for curl, for the health check tests in supervisor-tests.sh. It answers with the HTTP status in
-# FAKE_DIR/curl-<port>.code (000, a failed connection, when there is none) and records its arguments in curl.log.
+# FAKE_DIR/curl-<port>.code (000, a failed connection, when there is none), after the seconds in
+# FAKE_DIR/curl-<port>.delay if there is one (a slow or hung server; the delay should be below --max-time), and records
+# its arguments in curl.log.
 set -uo pipefail
 url=""
 for arg in "$@"; do
@@ -11,5 +13,6 @@ address=${url#*://}
 address=${address%%/*}
 port=${address##*:}
 code=$(cat "${FAKE_DIR}/curl-${port}.code" 2>/dev/null || echo 000)
+[[ ! -f "${FAKE_DIR}/curl-${port}.delay" ]] || sleep "$(<"${FAKE_DIR}/curl-${port}.delay")"
 printf '%s' "${code}"
 [[ "${code}" != 000 ]] || exit 7

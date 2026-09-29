@@ -21,11 +21,39 @@ public sealed record SupervisorSnapshot
     [JsonPropertyName("crashWindowSeconds")]
     public int CrashWindowSeconds { get; init; }
 
+    /// <summary>A forced restart requested within this many seconds of the controller's start is ignored.</summary>
+    [JsonPropertyName("forceRestartMinSeconds")]
+    public int ForceRestartMinSeconds { get; init; }
+
+    /// <summary>What the supervisor did with the last forced restart request, or null when there has been none.</summary>
+    [JsonPropertyName("lastForcedRestart")]
+    public ForcedRestartRecord? LastForcedRestart { get; init; }
+
     [JsonPropertyName("controller")]
     public SupervisedProcess Controller { get; init; } = new();
 
     [JsonPropertyName("ui")]
     public SupervisedProcess Ui { get; init; } = new();
+}
+
+/// <summary>The last forced restart request the supervisor read, and what it did with it.</summary>
+public sealed record ForcedRestartRecord
+{
+    /// <summary>The outcomes the supervisor writes.</summary>
+    public static class Outcomes
+    {
+        /// <summary>It killed the controller and started it again.</summary>
+        public const string Restarted = "restarted";
+        /// <summary>The controller had started too recently (<see cref="SupervisorSnapshot.ForceRestartMinSeconds"/>).</summary>
+        public const string Ignored = "ignored";
+    }
+
+    /// <summary>When the supervisor read the request.</summary>
+    [JsonPropertyName("at")]
+    public DateTimeOffset At { get; init; }
+
+    [JsonPropertyName("outcome")]
+    public string Outcome { get; init; } = string.Empty;
 }
 
 /// <summary>One supervised process: the controller or the web UI.</summary>

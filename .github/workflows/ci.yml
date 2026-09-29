@@ -241,11 +241,32 @@ jobs:
               exit 1
             }
           done
+          # The supervisor's default stop waits, from the script: the controller's must exceed the controller's own
+          # ShutdownTimeout (Program.cs), and both, with a second for the supervisor's tick and a 2 s margin, must fit in
+          # the containers' stop grace period and the deploy script's smallest stop timeout, or Docker kills the
+          # container before the web UI has stopped.
+          controller_stop=$(sed -n 's/^CONTROLLER_STOP_SECONDS=\${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
+          ui_stop=$(sed -n 's/^UI_STOP_SECONDS=\${HVO_SUPERVISOR_UI_STOP_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
+          shutdown=$(sed -n 's/.*options\.ShutdownTimeout = TimeSpan\.FromSeconds(\([0-9]*\)).*/\1/p' Program.cs)
+          deploy_stop=$(sed -n 's/^ *require_number STOP_TIMEOUT_SECONDS \([0-9]*\) .*/\1/p' deploy-roofcontroller-rpi.sh)
+          if [[ -z "${controller_stop}" || -z "${ui_stop}" || -z "${shutdown}" || -z "${deploy_stop}" ]]; then
+            echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::cannot read the stop times (controller ${controller_stop:-?} s, web UI ${ui_stop:-?} s, ShutdownTimeout ${shutdown:-?} s, deploy minimum ${deploy_stop:-?} s)"
+            exit 1
+          fi
+          if (( controller_stop <= shutdown )); then
+            echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::the supervisor waits ${controller_stop} s for the controller, not more than its ShutdownTimeout (${shutdown} s)"
+            exit 1
+          fi
+          grace=$(( controller_stop + ui_stop + 1 + 2 ))
+          if (( deploy_stop < grace )); then
+            echo "::error file=src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh::STOP_TIMEOUT_SECONDS may be ${deploy_stop} s, less than the supervisor's waits need (${grace} s)"
+            exit 1
+          fi
           # Every controller runs its web UI under the supervisor: container port 8088 published, with the API's scheme
           # (HTTPS where the API is HTTPS), the supervisor-aware health check, and a stop grace period that covers the
-          # supervisor's waits (25 s for the controller, then 2 s for the web UI).
+          # supervisor's waits (above).
           for profile in pi pi-lan-http emulator; do
-            docker compose --profile "${profile}" config --format json | jq -e '
+            docker compose --profile "${profile}" config --format json | jq -e --argjson grace "${grace}" '
               [.services[] | select(.image | test("roof-controller"))
                 | select(.command == null or (.command | index("--validate-deployment") | not))]
               | length == 1 and all(
@@ -253,8 +274,8 @@ jobs:
                   | ([.ports[] | select(.target == 8088)] | length) == 1
                     and .environment.RoofWeb__Urls == ($scheme + "://+:8088")
                     and .healthcheck.test == ["CMD", "/usr/local/bin/roof-healthcheck"]
-                    and (.stop_grace_period | rtrimstr("s") | tonumber) >= 30)' >/dev/null || {
-              echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the ${profile} controller does not publish its web UI on 8088 with the API's scheme, the supervisor's health check and a 30 s stop grace period"
+                    and (.stop_grace_period | rtrimstr("s") | tonumber) >= $grace)' >/dev/null || {
+              echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the ${profile} controller does not publish its web UI on 8088 with the API's scheme, the supervisor's health check and a stop grace period of at least ${grace} s"
               exit 1
             }
           done

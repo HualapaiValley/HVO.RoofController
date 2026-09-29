@@ -142,7 +142,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Lifecycle, C12 deploy and rollback, Compose migration
+      - name: Lifecycle, supervisor, C12 deploy and rollback, Compose migration
         run: tests/emulator/deploy-scenarios.sh
 
       - name: Summary

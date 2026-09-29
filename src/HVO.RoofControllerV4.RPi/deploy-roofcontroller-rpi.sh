@@ -127,7 +127,7 @@ ALLOW_INSECURE_HTTP=${ALLOW_INSECURE_HTTP:-false}
 # in-container calls use it). Empty keeps the image default.
 ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
 # docker stop's grace period. The supervisor waits up to 25 s for the controller's shutdown (itself up to 20 s), then
-# 2 s for the web UI, so keep this at 30 or more: a shorter one lets Docker kill the controller before its shutdown
+# 2 s for the web UI, so it must be 30 or more: a shorter one would let Docker kill the controller before its shutdown
 # ends.
 STOP_TIMEOUT_SECONDS=${STOP_TIMEOUT_SECONDS:-30}
 READY_TIMEOUT_SECONDS=${READY_TIMEOUT_SECONDS:-120}
@@ -207,7 +207,8 @@ require_number() {
 }
 
 require_number READY_TIMEOUT_SECONDS 1 86400
-require_number STOP_TIMEOUT_SECONDS 1 86400
+# At least the supervisor's 25 s for the controller and 2 s for the web UI, with a margin.
+require_number STOP_TIMEOUT_SECONDS 30 86400
 require_number HOST_PORT 1 65535
 require_number HTTPS_HOST_PORT 1 65535
 require_number WEB_HOST_PORT 1 65535

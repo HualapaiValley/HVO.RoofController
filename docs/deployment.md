@@ -272,9 +272,9 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `HAT_EMULATOR_ENDPOINT` | (empty) | Test rigs only: `<host>:<port>` of a HAT emulator the container can reach. The controller uses it in place of the physical HAT. See [HAT emulator mode (test rigs)](#hat-emulator-mode-test-rigs). |
 | `ALLOW_EMULATED_HAT` | `false` | Must be `true` for `HAT_EMULATOR_ENDPOINT` to be accepted, and for `--rollback` to restore a version that uses the HAT emulator |
 
-`STOP_TIMEOUT_SECONDS` and `READY_TIMEOUT_SECONDS` must be whole numbers from 1 to 86400, and the ports whole numbers
-from 1 to 65535. They are read as decimal, so `010` means 10. `POLL_INTERVAL_SECONDS` may have a fraction, such as
-`0.5`.
+`READY_TIMEOUT_SECONDS` must be a whole number from 1 to 86400, `STOP_TIMEOUT_SECONDS` one from 30 to 86400 (the
+supervisor's 25 s and 2 s, with a margin), and the ports whole numbers from 1 to 65535. They are read as decimal, so
+`045` means 45. `POLL_INTERVAL_SECONDS` may have a fraction, such as `0.5`.
 
 The machine that runs the script needs Docker CLI 20.10 or later (the script reads container state with
 `docker ps --format '{{.State}}'`), and `jq` or `python3` to parse the Stop response. Without either, the stop is
@@ -614,22 +614,32 @@ both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals t
 
 | Event | What the supervisor does |
 |-------|--------------------------|
-| `docker stop` (SIGTERM) | Stops the controller first and waits up to 25 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it stops the web UI, waiting up to 2 s (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL). |
+| `docker stop` (SIGTERM) | Stops the controller first and waits up to 25 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it stops the web UI, waiting up to 2 s (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL). The two waits, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. |
 | The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Starts it again at once. The web UI and the container keep running, and Docker's restart count does not change. |
-| The controller exits otherwise (a crash) | Starts it again after 1, 2, 4, 8 and 16 s for successive crashes (at most 30 s, `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`). After 5 crashes within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) it leaves the controller stopped (`crash-loop`) instead of looping while the roof may need attention. The container then reports unhealthy, keeps running, and the web UI says why. |
+| The controller exits otherwise (a crash) | Starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`). The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`) instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
 | The web UI exits | Starts only the web UI again, with the same backoff, and never gives up. The controller is not touched. |
-| A forced restart from the web UI | Kills the controller (SIGKILL) and starts it again at once, even from `crash-loop`. Earlier crashes stop counting. A request within 10 s of the controller's start (`HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS`) is ignored, so repeated requests cannot kill a controller that is still starting. |
+| A forced restart (`/run/hvo-roof/control/force-restart-controller` appears) | Kills the controller (SIGKILL) and starts it again at once, even from `crash-loop`. Earlier crashes stop counting. A request within 10 s of the controller's start (`HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS`) is ignored, so repeated requests cannot kill a controller that is still starting. |
 
-The container's own restart policy (`unless-stopped`) now applies only when the supervisor itself exits, which it does
-only on `docker stop`. A controller in `crash-loop` is not restarted by Docker: a forced restart from the web UI, or
-`docker restart roof-controller`, starts it again once the cause is found in its log.
+The container's own restart policy (`unless-stopped`) now applies only when the supervisor itself exits: on
+`docker stop`, or at its start when a `HVO_SUPERVISOR_*` setting is invalid (exit code 2) or its run directory cannot be
+created (exit code 1). Docker then starts the container again, and the supervisor's log line says why. A controller in
+`crash-loop` is not restarted by Docker: a forced restart, or `docker restart roof-controller`, starts it again once the
+cause is found in its log.
 
 A forced restart kills the controller as `docker kill` would, so it carries the same guarantees
 ([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)):
 the relays are held as they were until the new controller starts, which turns them all off before anything else. It is
-for a controller that does not answer. Only an admin can ask for it in the web UI, after confirming what a kill means
-for the roof. The web UI asks by creating `/run/hvo-roof/control/force-restart-controller`; the control directory is
-writable only by the web UI's user (and root), and the supervisor checks it every second.
+for a controller that does not answer. It is asked for by creating `/run/hvo-roof/control/force-restart-controller`; the
+control directory is writable only by the web UI's user (and root), and the supervisor checks it every second. From the
+Pi:
+
+```bash
+docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller
+```
+
+The web UI's control for it, for admins only and after confirming what a kill means for the roof, comes with the web
+UI's sign-in (issue #46). The supervisor records what it did with the last request in its state
+(`lastForcedRestart`: `restarted`, or `ignored` within 10 s of a start).
 
 ### The web UI's user and settings
 
@@ -640,17 +650,27 @@ runs as the image's unprivileged `app` user, with a new environment that has onl
 - `PATH`, `TZ`, `HOME`, `USER`, the locale (`LANG`, `LC_*`), `DOTNET_*` and `ASPNETCORE_ENVIRONMENT`
 
 So it never sees the controller's API keys, the Blue Iris credentials or any other setting, and the `app` user cannot
-read the secrets directory. For HTTPS, the supervisor gives the web UI private copies (mode `0400`, owned by `app`) of
-the certificate named in `RoofWeb__Certificate__Path`, or else the controller's (`Kestrel__Certificates__Default__Path`),
-and of its password from the secrets directory. It takes them again at each start of the web UI, so a renewed
-certificate is used after a restart of the web UI or the container.
+read the secrets directory (keep it `root:root`, mode `0700`:
+[security.md](security.md#on-the-pi-docker-secrets-directory); the supervisor warns at start when `app` can read a file
+there). For HTTPS, the supervisor gives the web UI private copies (mode `0400`, owned by `app`, in a directory only
+root can write) of the certificate it serves and of that certificate's password:
+
+- by default the controller's certificate (`Kestrel__Certificates__Default__Path`) and the controller's certificate
+  password, from the secrets directory or the environment. The web UI then holds the controller's TLS private key: a
+  compromised web UI could impersonate the controller to its clients.
+- with `RoofWeb__Certificate__Path`, a certificate of the web UI's own, with the password in
+  `RoofWeb__Certificate__PasswordFile` (or none). The controller's password is never given with it. Use this to keep the
+  controller's key out of the web UI.
+
+It takes them again at each start of the web UI, so a renewed certificate is used after a restart of the web UI or the
+container.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `RoofWeb__Urls` | `http://+:8088` | Where the web UI listens. The deploy script and the `pi` profile set `https://+:8088`, and `ALLOW_INSECURE_HTTP=true` and `pi-lan-http` set `http://+:8088`. |
 | `RoofWeb__ControllerUrl` | `http://localhost:8080` | The controller's API, over loopback |
 | `RoofWeb__StatusRefreshSeconds` | `2` | How often the pages check the controller's readiness and the supervisor's state, from 1 to 60 |
-| `RoofWeb__Certificate__Path`, `RoofWeb__Certificate__PasswordFile` | the controller's | A certificate of the web UI's own (a `.pfx` file), and a file with its password |
+| `RoofWeb__Certificate__Path`, `RoofWeb__Certificate__PasswordFile` | the controller's | A certificate of the web UI's own (a `.pfx` file), and a file with its password (none when unset). A password file that cannot be read is logged, and no password is given. |
 
 The web UI checks its settings at start. An invalid one stops it with
 `The roof controller's web UI did not start: ...`, and the supervisor starts it again with the backoff, so a deploy
@@ -663,6 +683,7 @@ health check and the deploy script read it:
 
 ```json
 {"supervisor":"running","updatedAt":"2026-09-29T12:00:00Z","crashLimit":5,"crashWindowSeconds":120,
+ "forceRestartMinSeconds":10,"lastForcedRestart":{"at":"2026-09-29T11:40:12Z","outcome":"restarted"},
  "controller":{"state":"running","pid":7,"starts":2,"recentCrashes":0,"lastExitCode":75,
                "lastExitReason":"restart requested","lastExitAt":"2026-09-29T11:59:58Z"},
  "ui":{"state":"running","pid":8,"starts":1,"recentCrashes":0,"lastExitCode":null,"lastExitReason":null,"lastExitAt":null}}
@@ -670,12 +691,14 @@ health check and the deploy script read it:
 
 Each process is `running`, `restarting` (waiting to start again), `crash-loop` (the controller only: left stopped),
 `stopping` or `stopped`. The last exit reason is `restart requested`, `crashed (exit code N)`,
-`crashed (killed by signal N)`, `forced restart` or `stopped with the container`.
+`crashed (killed by signal N)`, `forced restart` or `stopped with the container`. `lastForcedRestart` is `null` until a
+forced restart is asked for; its outcome is `restarted` or `ignored` (within `forceRestartMinSeconds` of the
+controller's start).
 
 Its log lines, in `docker logs`, start with `[supervisor]`:
 
 ```text
-[supervisor] Starting the controller and the web UI (crash limit 5 within 120s; stop waits 25s for the controller, then 2s for the web UI)
+[supervisor] Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; stop waits 25s for the controller, then 2s for the web UI)
 [supervisor] Started the controller (pid 7, start 1)
 [supervisor] Started the web UI (pid 8, start 1)
 [supervisor] The controller asked to be restarted (exit code 75); starting it again

@@ -190,11 +190,14 @@ the roof against this server; use the authenticated browser console for operator
   waits for its verified safe stop (up to 25 s), then the web UI (up to 2 s), within the
   container's 30 s grace period. A controller that exits with 75 (`POST System/Restart`) is
   started again at once in the same container; a crash is restarted with a backoff (1 s,
-  doubling, at most 30 s), and after 5 crashes within 120 s the controller is left stopped and
-  the container reports unhealthy instead of looping. A web UI that exits is restarted on its
-  own, and the controller is not touched. An admin can force a restart of a controller that
-  does not answer (a kill, with the guarantees of `docker kill`). The web UI runs as the
-  unprivileged `app` user with only its `RoofWeb__*` settings and cannot read the secrets. It
+  doubling, at most 30 s), and the fifth crash within 120 s leaves the controller stopped, with
+  the container's health check failing, instead of looping. A web UI that exits is restarted on
+  its own, and the controller is not touched. A controller that does not answer can be restarted
+  by force (a kill, with the guarantees of `docker kill`): for now with `docker exec` and the
+  supervisor's control file; the web UI's admin control for it comes with its sign-in (#46). The
+  web UI runs as the unprivileged `app` user with only its `RoofWeb__*` settings, and cannot read
+  the secrets directory; for HTTPS it holds a copy of the certificate it serves and its password
+  (by default the controller's; `RoofWeb__Certificate__Path` gives it its own). It
   listens on port 8088 (`WEB_HOST_PORT`; HTTPS with the controller's certificate, or plain HTTP
   with `ALLOW_INSECURE_HTTP=true`), which the deploy script and the Compose profiles publish.
   The controller keeps 8080 and 8443, so existing clients do not change. The health check stays

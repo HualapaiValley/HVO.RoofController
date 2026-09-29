@@ -284,8 +284,13 @@ def cut_off_stop_requested():
     return True
 
 
+# The supervisor's state file as it writes it (tests/container/supervisor-tests.sh checks the sample against its output).
+SUPERVISOR_SAMPLE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "container",
+                                 "supervisor-state.sample.json")
+
+
 def supervisor_json(state, c):
-    """The container supervisor's state file (roof-supervisor.sh writes this format), as FAKE_<KIND>_SUPERVISOR says."""
+    """The container supervisor's state file (the sample's format), as FAKE_<KIND>_SUPERVISOR says."""
     view = behaviour(c["kind"], "SUPERVISOR", "")
     if view == "absent":
         die("cat: /run/hvo-roof/supervisor.json: No such file or directory")
@@ -301,13 +306,13 @@ def supervisor_json(state, c):
         c[key] = c.get(key, 1) + 1
         save(state)
         processes[name][1] = c[key]
-    parts = []
+    with open(SUPERVISOR_SAMPLE, encoding="utf-8") as sample:
+        document = json.load(sample)
+    document["lastForcedRestart"] = None
     for process, (process_state, starts) in processes.items():
-        pid = "null" if process_state != "running" else "42"
-        parts.append(f'"{process}":{{"state":"{process_state}","pid":{pid},"starts":{starts},"recentCrashes":0,'
-                     '"lastExitCode":null,"lastExitReason":null,"lastExitAt":null}')
-    out('{"supervisor":"running","updatedAt":"2026-01-01T00:00:00Z","crashLimit":5,"crashWindowSeconds":120,'
-        + ",".join(parts) + "}")
+        document[process].update(state=process_state, pid=42 if process_state == "running" else None, starts=starts,
+                                 recentCrashes=0, lastExitCode=None, lastExitReason=None, lastExitAt=None)
+    out(json.dumps(document, separators=(",", ":")))
 
 
 def exec_curl(state, ref, curl_args, stdin_text):

@@ -10,13 +10,12 @@ namespace HVO.RoofControllerV4.RPi.Tests.Web;
 /// <summary>Helpers for the web UI's tests: a stand-in controller, supervisor state files and options.</summary>
 internal static class WebTestSupport
 {
-    /// <summary>A state file exactly as container/roof-supervisor.sh writes it (captured from a run).</summary>
-    public const string SupervisorStateSample =
-        "{\"supervisor\":\"running\",\"updatedAt\":\"2026-09-29T05:45:56Z\",\"crashLimit\":5,\"crashWindowSeconds\":120," +
-        "\"controller\":{\"state\":\"running\",\"pid\":974360,\"starts\":2,\"recentCrashes\":1,\"lastExitCode\":1," +
-        "\"lastExitReason\":\"crashed (exit code 1)\",\"lastExitAt\":\"2026-09-29T05:45:54Z\"}," +
-        "\"ui\":{\"state\":\"running\",\"pid\":974380,\"starts\":1,\"recentCrashes\":0,\"lastExitCode\":null," +
-        "\"lastExitReason\":null,\"lastExitAt\":null}}\n";
+    /// <summary>
+    /// A state file exactly as container/roof-supervisor.sh writes it: tests/container/supervisor-state.sample.json,
+    /// which tests/container/supervisor-tests.sh checks against the supervisor's own output (pids and times aside).
+    /// </summary>
+    public static string SupervisorStateSample { get; } = File.ReadAllText(
+        Path.Combine(ControllerForcedRestartTests.RepositoryRoot(), "tests", "container", "supervisor-state.sample.json"));
 
     /// <summary>The sample with the controller in <paramref name="state"/>.</summary>
     public static string SupervisorState(string state, int recentCrashes = 1, string? lastExitReason = "crashed (exit code 1)")

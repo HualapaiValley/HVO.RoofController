@@ -3,6 +3,8 @@
 # controller reports ready (/health/ready). The web UI's liveness and the supervisor's view of both processes are
 # printed on the same line (docker inspect shows the output of the last checks), but they never change the result: a
 # web UI failure never hides the controller's state, and a web UI that is down does not make the container unhealthy.
+# The two requests run at once, so the check takes at most 4 s: within the Compose files' 5 s timeout (the image's is
+# 10 s), even when both hang.
 set -uo pipefail
 
 CONTROLLER_URL=${HVO_HEALTH_CONTROLLER_URL:-http://localhost:8080/health/ready}
@@ -34,8 +36,11 @@ supervised_state() {
   [[ -n "${found}" ]] || printf 'unknown'
 }
 
+# The web UI's request runs in the background while the controller's runs; reading its answer waits for it.
+exec 3< <(curl -sk -o /dev/null -w '%{http_code}' --max-time 3 "$(ui_live_url)" 2>/dev/null)
 controller_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "${CONTROLLER_URL}" 2>/dev/null)
-ui_code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 3 "$(ui_live_url)" 2>/dev/null)
+ui_code=$(cat <&3)
+exec 3<&-
 
 if [[ "${controller_code}" == 200 ]]; then
   controller="ready"

@@ -873,7 +873,7 @@ scenario_supervisor() {
     starts=$(supervised_value '.controller.starts')
     kill_supervised controller
     kills=$((kills + 1))
-    # Started again after its backoff (16 s at most here), or left stopped.
+    # Started again after its backoff (1, 2, 4 or 8 s with the defaults), or left stopped.
     wait_for "the supervisor to start the controller again or leave it stopped" 60 supervised_is \
       ".controller.state == \"crash-loop\" or (.controller.state == \"running\" and .controller.starts == $((starts + 1)))"
   done

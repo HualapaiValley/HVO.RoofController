@@ -86,9 +86,9 @@ public sealed class RoofWebStatusTextTests
         view.Level.Should().Be(RoofWebStatusLevel.Bad);
         view.Headline.Should().Be("The controller is stopped after repeated crashes");
         view.Details.Should().Equal(
-            "It crashed 5 times within 120 s, so the supervisor left it stopped instead of starting it again while the roof may need attention. The container reports unhealthy.",
+            "It crashed 5 times within 120 s, so the supervisor left it stopped instead of starting it again while the roof may need attention. The container's health check fails; Docker marks it unhealthy after three failed checks.",
             "Last exit: crashed (exit code 1), at 2026-09-29 05:59:58 UTC.",
-            "Find the cause in the container's log. A forced restart, or a restart of the container, starts the controller again.");
+            "Find the cause in the container's log. A forced restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or a restart of the container, starts the controller again.");
     }
 
     [TestMethod]

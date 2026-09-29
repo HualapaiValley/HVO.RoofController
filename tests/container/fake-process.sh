@@ -7,6 +7,7 @@
 #   <role>.exit-now        exit with the code in the file within 0.1 s, once (the file is removed)
 # and writes:
 #   events.log             "<role> start <pid>", "<role> term", "<role> exit <code>", one line each, in order
+#   times.log              the same lines, each preceded by the time it happened (EPOCHREALTIME: seconds, microseconds)
 #   <role>.pid             its pid
 #   <role>.env             its environment (NUL-separated)
 #   <role>.args            its arguments, one per line
@@ -15,6 +16,7 @@ set -uo pipefail
 role=$(basename "$0")
 dir=${FAKE_DIR:-${RoofWeb__FakeDir:?}}
 event() {
+  printf '%s %s %s\n' "${EPOCHREALTIME}" "${role}" "$*" >>"${dir}/times.log"
   printf '%s %s\n' "${role}" "$*" >>"${dir}/events.log"
 }
 

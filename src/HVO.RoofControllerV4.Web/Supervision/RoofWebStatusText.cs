@@ -36,8 +36,8 @@ public static class RoofWebStatusText
             case SupervisedProcess.States.CrashLoop:
                 details.Insert(0, string.Create(
                     CultureInfo.InvariantCulture,
-                    $"It crashed {controller.RecentCrashes} times within {snapshot!.CrashWindowSeconds} s, so the supervisor left it stopped instead of starting it again while the roof may need attention. The container reports unhealthy."));
-                details.Add("Find the cause in the container's log. A forced restart, or a restart of the container, starts the controller again.");
+                    $"It crashed {controller.RecentCrashes} times within {snapshot!.CrashWindowSeconds} s, so the supervisor left it stopped instead of starting it again while the roof may need attention. The container's health check fails; Docker marks it unhealthy after three failed checks."));
+                details.Add("Find the cause in the container's log. A forced restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or a restart of the container, starts the controller again.");
                 return new RoofWebStatusView(RoofWebStatusLevel.Bad, "The controller is stopped after repeated crashes", details);
 
             case SupervisedProcess.States.Restarting:

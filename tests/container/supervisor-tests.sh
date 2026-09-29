@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Tests for src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh, the container's supervisor of the controller and
 # the web UI, and for healthcheck.sh, the container's health check. Both processes are stand-ins (fake-process.sh), and so
-# is curl (fake-curl), so no Docker, .NET or hardware is needed; the timings are shortened. The container scenarios
+# is curl (fake-curl) and, for the tests that give the web UI its own user, setpriv (fake-setpriv), so no Docker, .NET,
+# root or hardware is needed; the timings are shortened. They also check supervisor-state.sample.json, which the web
+# UI's and the deploy script's tests read, against the supervisor's own output. The container scenarios
 # (tests/emulator/deploy-scenarios.sh, group supervisor) run the real image.
 # Requires bash 5, jq and setsid.
 # Run: tests/container/supervisor-tests.sh [test-name ...]
@@ -10,6 +12,8 @@ set -uo pipefail
 TESTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUPERVISOR="${TESTS_DIR}/../../src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh"
 HEALTHCHECK="${TESTS_DIR}/../../src/HVO.RoofControllerV4.RPi/container/healthcheck.sh"
+DEPLOY_SCRIPT="${TESTS_DIR}/../../src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh"
+SAMPLE="${TESTS_DIR}/supervisor-state.sample.json"
 
 PASSED=0
 FAILED=0
@@ -82,6 +86,16 @@ start_supervisor() {
   SUPERVISOR_PID=$!
 }
 
+# start_supervisor_as_ui_user: start_supervisor, with the web UI given its own user (the test's own) and a
+# stand-in setpriv that logs its options to setpriv.log, since changing user needs root. Sets UI_USER and UI_GROUP.
+start_supervisor_as_ui_user() {
+  mkdir -p "${WORK}/setpriv-bin"
+  ln -sf "${TESTS_DIR}/fake-setpriv" "${WORK}/setpriv-bin/setpriv"
+  UI_USER=$(id -un)
+  UI_GROUP=$(id -gn)
+  start_supervisor "HVO_SUPERVISOR_UI_USER=${UI_USER}" "PATH=${WORK}/setpriv-bin:${PATH}"
+}
+
 # wait_until <seconds> <description> <command...>: polls the command every 0.1 s; fails the test at the deadline.
 wait_until() {
   local seconds=$1 description=$2 deadline
@@ -116,6 +130,25 @@ event_count() {
   grep -c "^$1 $2" "${FAKE_DIR}/events.log"
 }
 
+# event_times <role> <event>: when the stand-in logged the event (say "start" or "exit 75"), in seconds, one a line.
+event_times() {
+  grep -E "^[0-9.]+ $1 $2( |\$)" "${FAKE_DIR}/times.log" | cut -d' ' -f1
+}
+
+# started <role> <n>: the stand-in has started at least n times (and written its pid, settings and arguments).
+started() {
+  (( $(event_count "$1" start) >= $2 ))
+}
+
+ui_env() {
+  tr '\0' '\n' <"${FAKE_DIR}/ui.env"
+}
+
+# The state file with what changes from run to run (pids and times) made the same.
+normalized_state() {
+  sed -E 's/"pid":[0-9]+/"pid":1/g; s/"(updatedAt|lastExitAt|at)":"[^"]+"/"\1":"T"/g' "$1"
+}
+
 # Both stand-ins started, and the state file says so.
 wait_both_running() {
   wait_until 10 "both processes running" state_is '.controller.state + " " + .ui.state' "running running" &&
@@ -123,11 +156,11 @@ wait_both_running() {
 }
 
 stop_supervisor() {
-  kill -TERM "${SUPERVISOR_PID}"
   local started=${EPOCHREALTIME}
+  kill -TERM "${SUPERVISOR_PID}"
   wait "${SUPERVISOR_PID}"
   STOP_STATUS=$?
-  STOP_SECONDS=$(awk -v a="${started}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.1f", b - a }')
+  STOP_SECONDS=$(awk -v a="${started}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.3f", b - a }')
   SUPERVISOR_PID=""
 }
 
@@ -150,6 +183,27 @@ test_starts_the_controller_and_the_web_ui() {
   expect_equal "state file mode" "${mode}" 644
   mode=$(stat -c %a "${WORK}/run/control")
   expect_equal "control directory mode" "${mode}" 700
+  expect_equal "forced restart settings" "$(state '[.forceRestartMinSeconds, .lastForcedRestart] | tojson')" "[0,null]"
+}
+
+test_the_defaults_are_the_documented_ones() {
+  # Only where things are; every timing and limit is the supervisor's own (docs/deployment.md, and CI checks the
+  # container's stop_grace_period against the stop times).
+  local -a paths=()
+  local entry
+  for entry in "${SUPERVISOR_ENV[@]}"; do
+    case "${entry%%=*}" in
+      HVO_SUPERVISOR_APP_DIR|HVO_SUPERVISOR_RUN_DIR|HVO_SUPERVISOR_SECRETS_DIR|HVO_SUPERVISOR_CONTROLLER_EXEC|\
+      HVO_SUPERVISOR_UI_EXEC|HVO_SUPERVISOR_UI_USER) paths+=("${entry}") ;;
+    esac
+  done
+  SUPERVISOR_ENV=("${paths[@]}")
+  start_supervisor
+  wait_both_running || return
+  grep -qF "Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; stop waits 25s for the controller, then 2s for the web UI)" \
+    "${WORK}/supervisor.log" || fail_test "the defaults are not the documented ones: $(head -n 1 "${WORK}/supervisor.log")"
+  expect_equal "state file settings" "$(state '[.crashLimit, .crashWindowSeconds, .forceRestartMinSeconds] | tojson')" \
+    "[5,120,10]"
 }
 
 test_docker_stop_stops_the_controller_first_and_waits_for_it() {
@@ -172,9 +226,9 @@ test_docker_stop_kills_a_controller_that_outlasts_its_stop_time() {
   wait_both_running || return
   stop_supervisor
   expect_equal "supervisor exit status" "${STOP_STATUS}" 0
-  # 2 s for the controller, then the web UI (which stops at once): within the two stop times, which the container's
-  # stop timeout must exceed.
-  awk -v s="${STOP_SECONDS}" 'BEGIN { exit !(s >= 1.9 && s < 3.5) }' || fail_test "stop took ${STOP_SECONDS}s, expected 2-3.5s"
+  # The full 2 s for the controller, then the web UI (which stops at once): within the two stop times, which the
+  # container's stop timeout must exceed.
+  awk -v s="${STOP_SECONDS}" 'BEGIN { exit !(s >= 2.0 && s < 3.5) }' || fail_test "stop took ${STOP_SECONDS}s, expected 2-3.5s"
   expect_equal "controller exit code" "$(state .controller.lastExitCode)" 137
   grep -q "did not stop within 2s; killing it" "${WORK}/supervisor.log" || fail_test "the kill is not logged"
   [[ "$(events)" == *"ui term"* ]] || fail_test "the web UI was not stopped after the controller was killed"
@@ -206,6 +260,11 @@ test_a_requested_restart_starts_only_the_controller_again_at_once() {
   expect_equal "exit reason" "$(state .controller.lastExitReason)" "restart requested"
   expect_equal "recent crashes" "$(state .controller.recentCrashes)" 0
   [[ "$(events)" != *"ui term"* ]] || fail_test "the web UI was stopped"
+  local gap
+  gap=$(paste -d' ' <(event_times controller "exit 75") <(event_times controller start | sed -n 2p) \
+    | awk 'NF == 2 { printf "%.3f", $2 - $1 }')
+  awk -v g="${gap}" 'BEGIN { exit !(g != "" && g < 0.5) }' \
+    || fail_test "the controller started again ${gap:-(never)}s after its exit, expected under 0.5s (no backoff)"
 }
 
 test_a_controller_crash_restarts_only_the_controller_after_a_backoff() {
@@ -230,6 +289,13 @@ test_the_backoff_doubles_up_to_its_maximum() {
     | tr '\n' ',' >"${WORK}/delays"
   expect_equal "backoff delays" "$(cat "${WORK}/delays")" \
     "starting it again in 1s,starting it again in 2s,starting it again in 4s,starting it again in 4s,"
+  # And it waits that long: each start comes at least its backoff after the crash before it, and within a few ticks of
+  # it.
+  paste -d' ' <(event_times controller "exit 1" | head -n 4) <(event_times controller start | sed -n 2,5p) \
+    | awk 'BEGIN { split("1 2 4 4", delay) }
+      NF == 2 { n++; gap = $2 - $1; if (gap < delay[n] || gap > delay[n] + 0.8) printf "backoff %d took %.3fs, expected %d-%.1fs; ", n, gap, delay[n], delay[n] + 0.8 }
+      END { if (n != 4) printf "%d backoffs timed, expected 4", n }' >"${WORK}/gap-problems"
+  [[ ! -s "${WORK}/gap-problems" ]] || fail_test "$(cat "${WORK}/gap-problems")"
 }
 
 test_a_crash_loop_leaves_the_controller_stopped_and_the_web_ui_up() {
@@ -243,8 +309,14 @@ test_a_crash_loop_leaves_the_controller_stopped_and_the_web_ui_up() {
   # It stays stopped.
   sleep 2.5
   expect_equal "controller starts after the crash loop" "$(event_count controller start)" 3
-  grep -q "It is left stopped and the container reports unhealthy" "${WORK}/supervisor.log" \
+  grep -q "It is left stopped, and the container's health check fails" "${WORK}/supervisor.log" \
     || fail_test "the crash loop is not logged"
+  # The health check reads the supervisor's own state file.
+  echo 200 >"${FAKE_DIR}/curl-8088.code"
+  run_healthcheck
+  expect_equal "health check status" "${STATUS}" 1
+  expect_equal "health check output" "${OUTPUT}" \
+    "controller: NOT READY (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running"
   # And docker stop still stops the web UI.
   stop_supervisor
   expect_equal "supervisor exit status" "${STOP_STATUS}" 0
@@ -303,6 +375,8 @@ test_a_forced_restart_kills_the_controller_and_starts_it_again() {
   expect_equal "exit code" "$(state .controller.lastExitCode)" 137
   expect_equal "web UI pid" "$(pid_of ui)" "${ui}"
   [[ ! -e "${WORK}/run/control/force-restart-controller" ]] || fail_test "the request was not removed"
+  expect_equal "recorded outcome" "$(state .lastForcedRestart.outcome)" restarted
+  [[ "$(state .lastForcedRestart.at)" == 20*Z ]] || fail_test "no time recorded: $(state .lastForcedRestart)"
 }
 
 test_a_forced_restart_starts_a_controller_left_stopped_by_a_crash_loop() {
@@ -315,6 +389,7 @@ test_a_forced_restart_starts_a_controller_left_stopped_by_a_crash_loop() {
   wait_until 3 "the controller running" state_is .controller.state running || return
   expect_equal "recent crashes" "$(state .controller.recentCrashes)" 0
   expect_equal "controller starts" "$(state .controller.starts)" 4
+  expect_equal "recorded outcome" "$(state .lastForcedRestart.outcome)" restarted
 }
 
 test_a_forced_restart_just_after_a_start_is_ignored() {
@@ -326,6 +401,7 @@ test_a_forced_restart_just_after_a_start_is_ignored() {
   expect_equal "controller starts" "$(state .controller.starts)" 1
   grep -q "Ignored a forced restart request: the controller started" "${WORK}/supervisor.log" \
     || fail_test "the ignored request is not logged"
+  expect_equal "recorded outcome" "$(state .lastForcedRestart.outcome)" ignored
 }
 
 test_a_request_left_from_before_the_start_is_discarded() {
@@ -335,6 +411,7 @@ test_a_request_left_from_before_the_start_is_discarded() {
   wait_both_running || return
   sleep 0.5
   expect_equal "controller starts" "$(state .controller.starts)" 1
+  expect_equal "recorded request" "$(state .lastForcedRestart)" null
 }
 
 test_arguments_run_only_the_controller_with_them() {
@@ -397,6 +474,133 @@ test_plain_http_gives_the_web_ui_no_certificate() {
   [[ ! -e "${WORK}/run/web/certificate.pfx" ]] || fail_test "the certificate was copied"
 }
 
+test_a_link_left_where_the_copies_go_is_replaced_not_written_through() {
+  printf 'certificate bytes' >"${WORK}/certificate.pfx"
+  printf 'untouched' >"${WORK}/target"
+  start_supervisor RoofWeb__Urls=https://+:8088 "Kestrel__Certificates__Default__Path=${WORK}/certificate.pfx" \
+    Kestrel__Certificates__Default__Password=certificate-password-value
+  wait_both_running || return
+  # Links where the copies go (in the container the web UI's user cannot write there; the supervisor must not rely on
+  # it), then a restart of the web UI, which takes the copies again.
+  ln -sf "${WORK}/target" "${WORK}/run/web/certificate.pfx"
+  ln -sf "${WORK}/target" "${WORK}/run/web/certificate-password"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 2 || return
+  expect_equal "the links' target" "$(cat "${WORK}/target")" untouched
+  [[ ! -L "${WORK}/run/web/certificate.pfx" && ! -L "${WORK}/run/web/certificate-password" ]] \
+    || fail_test "a link is still there"
+  expect_equal "certificate contents" "$(cat "${WORK}/run/web/certificate.pfx")" "certificate bytes"
+  expect_equal "password contents" "$(cat "${WORK}/run/web/certificate-password")" "certificate-password-value"
+  expect_equal "password mode" "$(stat -c %a "${WORK}/run/web/certificate-password")" 400
+}
+
+test_the_web_uis_own_certificate_never_gets_the_controllers_password() {
+  printf 'web certificate' >"${WORK}/web.pfx"
+  printf 'controller certificate' >"${WORK}/certificate.pfx"
+  printf 'certificate-password-value' >"${WORK}/secrets/Kestrel__Certificates__Default__Password"
+  start_supervisor RoofWeb__Urls=https://+:8088 "RoofWeb__Certificate__Path=${WORK}/web.pfx" \
+    "Kestrel__Certificates__Default__Path=${WORK}/certificate.pfx" Kestrel__Certificates__Default__Password=env-password
+  wait_both_running || return
+  expect_equal "certificate setting" "$(ui_env | grep '^RoofWeb__Certificate__')" \
+    "RoofWeb__Certificate__Path=${WORK}/run/web/certificate.pfx"
+  expect_equal "certificate contents" "$(cat "${WORK}/run/web/certificate.pfx")" "web certificate"
+  [[ ! -e "${WORK}/run/web/certificate-password" ]] || fail_test "the web UI got the controller's password"
+}
+
+test_the_web_uis_own_certificate_gets_its_own_password_file() {
+  printf 'web certificate' >"${WORK}/web.pfx"
+  printf 'web-password-value' >"${WORK}/web-password"
+  start_supervisor RoofWeb__Urls=https://+:8088 "RoofWeb__Certificate__Path=${WORK}/web.pfx" \
+    "RoofWeb__Certificate__PasswordFile=${WORK}/web-password"
+  wait_both_running || return
+  expect_equal "password setting" "$(ui_env | grep '^RoofWeb__Certificate__PasswordFile=')" \
+    "RoofWeb__Certificate__PasswordFile=${WORK}/run/web/certificate-password"
+  expect_equal "password contents" "$(cat "${WORK}/run/web/certificate-password")" "web-password-value"
+  if (( EUID == 0 )); then
+    return # root reads any file: the unreadable case cannot be made
+  fi
+  # A password file the supervisor cannot read: a warning, and the certificate without a password.
+  chmod 000 "${WORK}/web-password"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 2 || return
+  grep -qF "WARNING: the web UI's certificate password file ${WORK}/web-password cannot be read" "${WORK}/supervisor.log" \
+    || fail_test "no warning for the unreadable password file"
+  expect_equal "certificate setting" "$(ui_env | grep '^RoofWeb__Certificate__')" \
+    "RoofWeb__Certificate__Path=${WORK}/run/web/certificate.pfx"
+  [[ ! -e "${WORK}/run/web/certificate-password" ]] || fail_test "a password copy is left from the first start"
+}
+
+test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
+  start_supervisor_as_ui_user
+  wait_both_running || return
+  grep -F -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | env -i " "${FAKE_DIR}/setpriv.log" \
+    | grep -q " ${WORK}/bin/ui\$" || fail_test "the web UI was not started with setpriv: $(cat "${FAKE_DIR}/setpriv.log")"
+  grep -qxF "USER=${UI_USER}" <(ui_env) || fail_test "the web UI's environment does not name its user"
+  expect_equal "control directory" "$(stat -c '%a %U %G' "${WORK}/run/control")" "700 ${UI_USER} ${UI_GROUP}"
+  expect_equal "private directory" "$(stat -c '%a %G' "${WORK}/run/web")" "750 ${UI_GROUP}"
+  ! grep -q "can read" "${WORK}/supervisor.log" || fail_test "a warning without secrets: $(grep "can read" "${WORK}/supervisor.log")"
+}
+
+test_a_warning_when_the_web_uis_user_can_read_a_secret() {
+  if (( EUID == 0 )); then
+    return # root reads any file: private secrets cannot be made
+  fi
+  printf 'value' >"${WORK}/secrets/Alpha__Private"
+  chmod 000 "${WORK}/secrets/Alpha__Private"
+  start_supervisor_as_ui_user
+  wait_both_running || return
+  grep -F -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | bash -c" "${FAKE_DIR}/setpriv.log" \
+    | grep -q " ${WORK}/secrets\$" || fail_test "the secrets were not checked as the web UI's user"
+  ! grep -q "can read" "${WORK}/supervisor.log" || fail_test "a warning for private secrets"
+
+  kill -KILL -- "-${SUPERVISOR_PID}" 2>/dev/null
+  wait "${SUPERVISOR_PID}" 2>/dev/null
+  printf 'value' >"${WORK}/secrets/Bravo__Readable"
+  start_supervisor_as_ui_user
+  wait_until 10 "the supervisor started again" grep -q "Started the web UI" "${WORK}/supervisor.log" || return
+  grep -qF "WARNING: the web UI's user ${UI_USER} can read ${WORK}/secrets/Bravo__Readable. The secrets are for the controller alone" \
+    "${WORK}/supervisor.log" || fail_test "no warning for a readable secret: $(cat "${WORK}/supervisor.log")"
+}
+
+test_the_sample_state_file_is_the_supervisors_own_output() {
+  # The web UI's tests and the deploy script's fake docker read supervisor-state.sample.json: it must be what the
+  # supervisor writes, pids and times aside. It shows a controller that crashed once and was started again, and a
+  # forced restart ignored just after.
+  start_supervisor HVO_SUPERVISOR_CRASH_LIMIT=5 HVO_SUPERVISOR_CRASH_WINDOW_SECONDS=120 \
+    HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS=10
+  wait_both_running || return
+  echo 1 >"${FAKE_DIR}/controller.exit-now"
+  wait_until 5 "the controller started again" state_is '.controller.state + " " + (.controller.starts | tostring)' \
+    "running 2" || return
+  touch "${WORK}/run/control/force-restart-controller"
+  wait_until 3 "the request ignored" state_is .lastForcedRestart.outcome ignored || return
+  diff -u <(normalized_state "${SAMPLE}") <(normalized_state "${WORK}/run/supervisor.json") >"${WORK}/sample.diff" \
+    || fail_test "the sample is not the supervisor's output (update ${SAMPLE}):
+$(cat "${WORK}/sample.diff")"
+}
+
+test_the_deploy_script_reads_the_supervisors_state_file() {
+  local reader
+  reader=$(sed -n '/^supervised_process() {$/,/^}$/p' "${DEPLOY_SCRIPT}")
+  [[ -n "${reader}" ]] || { fail_test "supervised_process() is not in ${DEPLOY_SCRIPT}"; return; }
+  eval "${reader}"
+  # What the deploy script runs (dockerc exec <container> cat <file>), answered with the supervisor's own file.
+  # shellcheck disable=SC2317 # called by supervised_process, which eval defines
+  dockerc() {
+    [[ "$1 $3 $4" == "exec cat /run/hvo-roof/supervisor.json" ]] && cat "${WORK}/run/supervisor.json"
+  }
+  start_supervisor
+  wait_both_running || return
+  expect_equal "controller" "$(supervised_process roof-controller controller)" "running 1"
+  expect_equal "web UI" "$(supervised_process roof-controller ui)" "running 1"
+  echo 1 >"${FAKE_DIR}/controller.exit-now"
+  wait_until 3 "the controller restarting" state_is .controller.state restarting || return
+  expect_equal "controller restarting" "$(supervised_process roof-controller controller)" "restarting 1"
+  wait_until 3 "the controller running again" state_is .controller.state running || return
+  expect_equal "controller started again" "$(supervised_process roof-controller controller)" "running 2"
+  unset -f dockerc supervised_process
+}
+
 test_a_signal_during_a_backoff_stops_at_once() {
   start_supervisor HVO_SUPERVISOR_BACKOFF_MAX_SECONDS=30 HVO_SUPERVISOR_CRASH_LIMIT=10
   wait_both_running || return
@@ -429,11 +633,12 @@ run_healthcheck() {
   STATUS=$?
 }
 
-# A state file as the supervisor writes it, with the controller in state $1 and the web UI in state $2.
+# A state file as the supervisor writes it (the sample, which test_the_sample_state_file_is_the_supervisors_own_output
+# checks), with the controller in state $1 and the web UI in state $2.
 write_supervisor_state() {
   mkdir -p "${WORK}/run"
-  printf '{"supervisor":"running","updatedAt":"2026-01-01T00:00:00Z","crashLimit":5,"crashWindowSeconds":120,"controller":{"state":"%s","pid":null,"starts":5,"recentCrashes":5,"lastExitCode":1,"lastExitReason":"crashed (exit code 1)","lastExitAt":"2026-01-01T00:00:00Z"},"ui":{"state":"%s","pid":12,"starts":1,"recentCrashes":0,"lastExitCode":null,"lastExitReason":null,"lastExitAt":null}}\n' \
-    "$1" "$2" >"${WORK}/run/supervisor.json"
+  jq -c --arg controller "$1" --arg ui "$2" '.controller.state = $controller | .ui.state = $ui' "${SAMPLE}" \
+    >"${WORK}/run/supervisor.json"
 }
 
 test_health_is_the_controllers_readiness_with_the_web_ui_alongside() {
@@ -480,13 +685,29 @@ test_health_checks_the_web_ui_on_its_own_https_port() {
     || fail_test "the web UI's HTTPS liveness was not asked on loopback without certificate checks"
 }
 
+test_health_asks_both_at_once() {
+  # Two slow answers (2 s each) take 2 s, not 4: the check stays within the Compose files' 5 s timeout even when both
+  # servers hang up to their limits (4 s and 3 s).
+  write_supervisor_state running running
+  echo 200 >"${FAKE_DIR}/curl-8080.code"
+  echo 200 >"${FAKE_DIR}/curl-8088.code"
+  echo 2 >"${FAKE_DIR}/curl-8080.delay"
+  echo 2 >"${FAKE_DIR}/curl-8088.delay"
+  local started=${EPOCHREALTIME} seconds
+  run_healthcheck
+  seconds=$(awk -v a="${started}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.3f", b - a }')
+  expect_equal "status" "${STATUS}" 0
+  expect_equal "output" "${OUTPUT}" "controller: ready; web UI: live; supervisor: controller running, web UI running"
+  awk -v s="${seconds}" 'BEGIN { exit !(s >= 2 && s < 3.5) }' || fail_test "the check took ${seconds}s, expected 2-3.5s"
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 
 for tool in jq setsid; do
   command -v "${tool}" >/dev/null 2>&1 || { echo "supervisor-tests: ${tool} is required" >&2; exit 2; }
 done
 if (( BASH_VERSINFO[0] < 5 )); then
-  echo "supervisor-tests: bash 5 or later is required (the supervisor uses EPOCHSECONDS)" >&2
+  echo "supervisor-tests: bash 5 or later is required (the supervisor uses EPOCHREALTIME)" >&2
   exit 2
 fi
 

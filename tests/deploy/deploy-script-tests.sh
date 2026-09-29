@@ -87,7 +87,7 @@ build_command() {
   RUN_CMD=(env -i
     PATH="${WORK}/bin:${PATH}" HOME="${WORK}/home" TMPDIR="${WORK}" FAKE_STATE_DIR="${FAKE_STATE_DIR}"
     FAKE_EXPECTED_KEY="${KEY}" PI_HOST=pi.test DOCKER_CONTEXT=test-context IMAGE_TAG="${IMAGE}" ROOF_OPERATOR_API_KEY="${KEY}"
-    READY_TIMEOUT_SECONDS=1 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=5
+    READY_TIMEOUT_SECONDS=1 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=30
     ${env_pairs[@]+"${env_pairs[@]}"}
     bash -c 'cd "$1" && echo "$$" > "${FAKE_STATE_DIR}/script.pid" && shift && exec bash "$@"'
     deploy-test "${WORK}" "${SCRIPT}" "$@")
@@ -613,8 +613,8 @@ test_confirmed_unverified_stop_replaces_the_controller_gracefully() {
   assert_container roof-controller-previous old false no
   # The old controller still gets the graceful stop (SIGTERM and the grace period, so its shutdown stops the roof
   # again), after the Stop request, and is kept.
-  jq -e -s 'length == 1 and .[0][1] == "-t" and .[0][2] == "5"' <<<"$(docker_calls stop)" >/dev/null \
-    || fail_test "expected one graceful docker stop -t 5: $(docker_calls stop)"
+  jq -e -s 'length == 1 and .[0][1] == "-t" and .[0][2] == "30"' <<<"$(docker_calls stop)" >/dev/null \
+    || fail_test "expected one graceful docker stop -t 30: $(docker_calls stop)"
   [[ -z "$(docker_calls kill)$(docker_calls rm)" ]] || fail_test "a container was killed or removed"
   local i_stop_request i_stop
   i_stop_request=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')
@@ -1112,7 +1112,7 @@ test_malformed_numeric_settings_fail_before_any_docker_call() {
   seed_container roof-controller old true 8443:8443
   local setting
   for setting in READY_TIMEOUT_SECONDS=90.5 READY_TIMEOUT_SECONDS=0 READY_TIMEOUT_SECONDS=1234567890123 \
-      STOP_TIMEOUT_SECONDS=120s STOP_TIMEOUT_SECONDS=-5 HOST_PORT=http HTTPS_HOST_PORT=70000 WEB_HOST_PORT=0 WEB_HOST_PORT=web \
+      STOP_TIMEOUT_SECONDS=120s STOP_TIMEOUT_SECONDS=-5 STOP_TIMEOUT_SECONDS=29 HOST_PORT=http HTTPS_HOST_PORT=70000 WEB_HOST_PORT=0 WEB_HOST_PORT=web \
       POLL_INTERVAL_SECONDS=1.2.3 POLL_INTERVAL_SECONDS=. POLL_INTERVAL_SECONDS=1s; do
     : > "${FAKE_STATE_DIR}/calls.log"
     deploy "${HTTPS_ENV[@]}" "${setting}"
@@ -1137,14 +1137,14 @@ test_malformed_setting_with_rollback_does_not_build() {
 
 test_numbers_with_leading_zeros_are_decimal() {
   seed_container roof-controller old true 8443:8443
-  deploy "${HTTPS_ENV[@]}" STOP_TIMEOUT_SECONDS=010 READY_TIMEOUT_SECONDS=09 HTTPS_HOST_PORT=08443
+  deploy "${HTTPS_ENV[@]}" STOP_TIMEOUT_SECONDS=045 READY_TIMEOUT_SECONDS=09 HTTPS_HOST_PORT=08443
 
   assert_status 0
   assert_output_contains "Waiting up to 9s"
   assert_output_contains "verified at https://pi.test:8443"
-  docker_calls stop | jq -e -s '.[0] | .[index("-t") + 1] == "10"' >/dev/null \
-    || fail_test "docker stop was not given -t 10: $(docker_calls stop)"
-  controller_run_args | jq -e '.[index("--stop-timeout") + 1] == "10" and index("8443:8443")' >/dev/null \
+  docker_calls stop | jq -e -s '.[0] | .[index("-t") + 1] == "45"' >/dev/null \
+    || fail_test "docker stop was not given -t 45: $(docker_calls stop)"
+  controller_run_args | jq -e '.[index("--stop-timeout") + 1] == "45" and index("8443:8443")' >/dev/null \
     || fail_test "unexpected run arguments: $(controller_run_args)"
 }
 
