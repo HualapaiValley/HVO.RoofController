@@ -77,9 +77,11 @@ public sealed class RoofSettingsClientTests
         watchdog.DefaultValue.Should().Be("120 s (00:02:00)");
         watchdog.CanWrite.Should().BeTrue();
         watchdog.ReadOnlyReason.Should().BeNull();
+        watchdog.ReadOnlyCode.Should().BeNull();
         form.FindField(Departure)!.NeedsLocalCredential.Should().BeTrue();
         form.FindField(Departure)!.CanWrite.Should().BeFalse("an admin API key is not a local credential");
         form.FindField(Departure)!.ReadOnlyReason.Should().NotBeNullOrWhiteSpace();
+        form.FindField(Departure)!.ReadOnlyCode.Should().Be(RoofControllerErrorCode.SettingNotPermitted);
         form.FindField("roofcontrolleroptionsv4:safetywatchdogtimeout").Should().BeSameAs(watchdog, "keys are matched ignoring case");
         form.FindGroup("ROOF")!.Name.Should().Be(RoofSettingsContract.RoofGroup);
 

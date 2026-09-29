@@ -18,6 +18,9 @@
     <!-- Web and API -->
     <PackageVersion Include="Asp.Versioning.Mvc.ApiExplorer" Version="10.0.1" />
     <PackageVersion Include="Scalar.AspNetCore" Version="2.16.17" />
+    <!-- Command line and terminal UI -->
+    <PackageVersion Include="System.CommandLine" Version="2.0.12" />
+    <PackageVersion Include="Terminal.Gui" Version="2.5.0" />
     <!-- IoT and Hardware -->
     <PackageVersion Include="System.Device.Gpio" Version="4.2.0" />
     <!-- HVO SDK -->

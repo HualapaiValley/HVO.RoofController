@@ -180,7 +180,9 @@ public sealed class RoofClientUnitTests
 
         RoofCredentialStore.FromEnvironment(Get).Should().BeNull("no variable is set");
         environment[RoofCredentialStore.CertificateVariable] = new string('a', 64);
-        RoofCredentialStore.FromEnvironment(Get).Should().BeNull("a certificate pin alone is not a credential");
+        var pinOnly = RoofCredentialStore.FromEnvironment(Get)!;
+        pinOnly.CertificateSha256.Should().Be(new string('a', 64), "a pin on its own overrides the file's pin");
+        pinOnly.ToCredential().Should().BeNull("a certificate pin alone is not a credential");
 
         environment[RoofCredentialStore.ControllerVariable] = " https://roof.local:5001 ";
         environment[RoofCredentialStore.ApiKeyVariable] = $" {ApiKey} ";

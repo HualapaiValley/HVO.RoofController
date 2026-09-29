@@ -124,3 +124,10 @@ the `POST Settings/{group}` body with the version the form was read at.
 `RoofText` describes the roof's position, stop reasons and every error code, so every client shows the same words.
 `RoofStatusRules` holds the rules the web console used before this library: which of two snapshots is newer, the safety
 alerts a change raises, the motion the controller has commanded, and when to renew the operator lease.
+
+## Colours
+
+`RoofUiPalette` holds HVO Dark, the web console's theme (`hvo-dark.css` in `HVO.WebSite.Themes`), as `#rrggbb` values
+for the clients that are not web pages: the terminal interface, the kiosk and the Mac app. Each value names the
+stylesheet's token. Stop, Open and Close have the colours of the web console's buttons, so they look the same in every
+client. `RoofUiPaletteTests` checks each value against the stylesheet.

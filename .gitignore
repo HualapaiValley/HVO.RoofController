@@ -24,3 +24,6 @@ Thumbs.db
 ## Test results
 TestResults/
 coverage/
+
+# Python bytecode (tests/cli/ansi-to-svg.py)
+__pycache__/

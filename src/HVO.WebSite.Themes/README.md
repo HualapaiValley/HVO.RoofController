@@ -2,6 +2,18 @@
 
 Razor Class Library providing the **HVO Dark** design system, shared web assets, and reusable UI primitives for all HVOv9 Blazor applications.
 
+## Source
+
+`wwwroot/css/themes/hvo-dark.css` is a copy of the HVO Dark theme on the `main` branch of
+[HVO.SkyMonitor](https://github.com/HualapaiValley/HVO.SkyMonitor) (`src/HVO.SkyMonitor.CameraAgent/wwwroot/css/themes/hvo-dark.css`,
+taken at 4c02052). Change the theme there, then copy it here; do not edit this copy on its own. Take it from GitHub
+`main`, not from a local checkout, which may be out of date.
+
+The roof controller's interfaces that are not web pages use the same colours: `RoofUiPalette` in the client library
+has them as `#rrggbb` values, for the terminal interface of `hvo-roof`, the kiosk and the Mac app. A test
+(`RoofUiPaletteTests`) reads this stylesheet and checks every value, so after copying a new theme here, update the
+palette to match.
+
 ## 📦 Package Information
 
 - **Target Framework**: .NET 10.0
@@ -25,7 +37,7 @@ HVO.WebSite.Themes/
 ├── wwwroot/
 │   ├── css/
 │   │   └── themes/
-│   │       └── hvo-dark.css          # HVO Dark design system (1638 lines)
+│   │       └── hvo-dark.css          # HVO Dark design system
 │   └── fonts/
 │       └── [custom-fonts]            # Self-hosted web fonts
 └── HVO.WebSite.Themes.csproj

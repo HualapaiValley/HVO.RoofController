@@ -2,7 +2,8 @@ name: Emulator image
 
 # Builds the HAT emulator image (src/HVO.RoofControllerV4.Emulator/Dockerfile) for linux/amd64 and linux/arm64, and
 # runs the controller against it through the compose emulator profile (tests/emulator/compose-smoke-test.sh): the
-# emulated roof opens and closes through the containerized controller. No hardware is involved, and nothing is pushed
+# emulated roof opens and closes through the containerized controller, and the published hvo-roof command line and its
+# terminal interface (in tmux) drive it (tests/cli/terminal-smoke.sh). No hardware is involved, and nothing is pushed
 # or deployed.
 on:
   push:
@@ -12,6 +13,8 @@ on:
       - 'src/HVO.RoofControllerV4.Simulation/**'
       - 'src/HVO.RoofControllerV4.Common/**'
       - 'src/HVO.RoofControllerV4.RPi/**'
+      - 'src/HVO.RoofControllerV4.Client/**'
+      - 'src/HVO.RoofControllerV4.Cli/**'
       - 'src/HVO.WebSite.Themes/**'
       - 'src/global.json'
       - 'src/NuGet.config'
@@ -19,6 +22,7 @@ on:
       - 'Directory.Packages.props'
       - '.dockerignore'
       - 'tests/emulator/**'
+      - 'tests/cli/**'
       - '.github/workflows/emulator-image.yml'
   pull_request:
     branches: [ main, feature/** ]
@@ -27,6 +31,8 @@ on:
       - 'src/HVO.RoofControllerV4.Simulation/**'
       - 'src/HVO.RoofControllerV4.Common/**'
       - 'src/HVO.RoofControllerV4.RPi/**'
+      - 'src/HVO.RoofControllerV4.Client/**'
+      - 'src/HVO.RoofControllerV4.Cli/**'
       - 'src/HVO.WebSite.Themes/**'
       - 'src/global.json'
       - 'src/NuGet.config'
@@ -34,6 +40,7 @@ on:
       - 'Directory.Packages.props'
       - '.dockerignore'
       - 'tests/emulator/**'
+      - 'tests/cli/**'
       - '.github/workflows/emulator-image.yml'
   schedule:
     # Weekly, with the Pi image, to catch base-image and apt repository drift between code changes.
@@ -107,5 +114,29 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Open and close the emulated roof through the containerized controller
-        run: tests/emulator/compose-smoke-test.sh
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Publish hvo-roof and install tmux
+        working-directory: src
+        run: |
+          dotnet publish HVO.RoofControllerV4.Cli -c Release -r linux-x64 -o "${RUNNER_TEMP}/hvo-roof" -v minimal -p:ContinuousIntegrationBuild=true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux
+
+      - name: Open and close the emulated roof through the containerized controller, and with hvo-roof
+        env:
+          TERMINAL_SMOKE_OUT: ${{ runner.temp }}/terminal-screens
+        run: HVO_ROOF_CLI="${RUNNER_TEMP}/hvo-roof/hvo-roof" tests/emulator/compose-smoke-test.sh
+
+      # What each command wrote, and each screen of the terminal interface as text and as an SVG image.
+      - name: Upload the terminal screens
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: terminal-screens-${{ github.run_id }}
+          path: ${{ runner.temp }}/terminal-screens
+          if-no-files-found: warn
+          retention-days: 7

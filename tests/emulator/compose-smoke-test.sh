@@ -12,7 +12,9 @@
 #
 # Settings (environment): SMOKE_PROJECT (compose project, default hvo-roof-emulator-smoke), HVO_EMULATED_ROOF_PORT
 # (default 15195), HVO_EMULATOR_CONTROL_PORT (default 15290), HVO_EMULATOR_TIME_SCALE (default 4), SMOKE_NO_BUILD=1 to
-# reuse images already built.
+# reuse images already built. With HVO_ROOF_CLI naming a published hvo-roof, it also runs tests/cli/terminal-smoke.sh
+# against the controller (the command line and its terminal interface in tmux), saving the screens in
+# TERMINAL_SMOKE_OUT.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -134,6 +136,11 @@ camera_status=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -H "X-Api-
 [ "${camera_status}" = 502 ] || fail "the camera proxy answered ${camera_status}, not 502, for an unavailable camera"
 curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' -d '{"mode":"Live"}' "${emulator_api}/camera" >/dev/null
 echo "[smoke] The camera proxy relays the emulated camera, and answers 502 when it is unavailable"
+
+if [ -n "${HVO_ROOF_CLI:-}" ]; then
+    HVO_ROOF_URL="${roof}/" HVO_ROOF_API_KEY="${HVO_EMULATED_ROOF_API_KEY}" "${repo_root}/tests/cli/terminal-smoke.sh"
+    wait_for "the roof is closed again after the terminal check" 90 roof_is Closed
+fi
 
 roof_post Open
 wait_for "the roof opened to the open limit" 90 roof_is Open

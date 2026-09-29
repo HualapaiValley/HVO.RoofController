@@ -152,6 +152,38 @@ the roof against this server; use the authenticated browser console for operator
   status rules from the library: the reconnect dialog's texts, for every answer and for none,
   are rendered by the server. See
   [src/HVO.RoofControllerV4.Client/README.md](src/HVO.RoofControllerV4.Client/README.md).
+- Command line and terminal interface (#45). `hvo-roof` (`HVO.RoofControllerV4.Cli`) reaches the
+  controller only through the client library. It is published as one self-contained file for
+  `linux-arm64` and `linux-x64`, and CI keeps both as an artifact. It has a command for every
+  operation: status (with `--watch` over the status hub), health, Stop, open and close, the
+  operator lease, clearing a fault, settings, people, PINs, API keys, sessions, the
+  controller's information and restart. Every command takes `--json`, and the exit codes are
+  documented and pinned by a test. Stop never needs more than the credential in use and uses
+  the shared wording. Open and close follow the motion and renew the operator lease, and Ctrl+C
+  sends Stop, after the command's answer (waiting up to 3 s for it); before the command is
+  sent, Ctrl+C sends nothing. When their answer never arrives, they say that the roof may be
+  moving and how to stop it. A safety-critical settings change, or a restart that would load
+  one, is shown and not sent until it is confirmed (exit 10). Credentials come from
+  `HVO_ROOF_*` variables or a `0600` file under `~/.config/hvo-roof/`, and a secret is never
+  taken from the command line.
+  `hvo-roof setup` saves the address, a key and a certificate pin, and adds the first admin.
+  `hvo-roof ui` is a Terminal.Gui interface with Roof, Settings, People, System and Setup
+  pages, and Stop on F9 from every page, even over a prompt. It says plainly when the status is
+  stale, offers no motion then, and stops a roof it moved, or may have moved, before it quits.
+  That Stop waits up to 3 s for the answer to an Open or Close still on its way, says so when the
+  command may still reach the controller after it, and the interface sends Stop again when an
+  Open or Close overtakes one. It never closes while a Stop is on its way, and it
+  shows the newest Stop's result. It is drawn in HVO Dark, the web console's theme, and in the
+  terminal's own colours with `NO_COLOR`. SIGINT, SIGTERM and SIGHUP end a command that moves the
+  roof only after it sends Stop, even when a closing terminal sends SIGHUP twice; nothing cuts
+  `stop` short; and the process still ends within 5 s, or 15 s for `open`, `close`, `stop` and
+  `ui`. A Stop that nothing confirms (a server error, no answer) exits 9, and the interface does
+  not close on one without saying so. Tests cover every
+  command, the interface on Terminal.Gui's in-memory driver, scenarios against the emulated
+  roof with a lease shorter than the travel, and the published binary in a real terminal
+  (tmux) against the compose emulator. That run also draws each screen as an SVG image
+  (`tests/cli/ansi-to-svg.py`), and those images are the screenshots in
+  [docs/cli.md](docs/cli.md).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.
