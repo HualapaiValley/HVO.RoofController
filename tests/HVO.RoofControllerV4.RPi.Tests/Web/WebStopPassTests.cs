@@ -199,14 +199,24 @@ public sealed class WebStopLimiterTests
     public void APerson_ASignedOutAddress_AndRefusals_AreCountedApart()
     {
         var address = IPAddress.Parse("192.168.1.20");
-        string[] senders = [WebStopLimiter.ForSession("session-1"), WebStopLimiter.ForAddress(address, null), WebStopLimiter.ForRefusals(address, null)];
-        var limiter = new WebStopLimiter(new ManualTimeProvider(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero)));
+        var person = WebStopLimiter.ForSession("session-1");
+        var signedOut = WebStopLimiter.ForAddress(address, null);
+        string[] senders =
+        [
+            person, signedOut, WebStopLimiter.ForRefusals(address, null), WebStopLimiter.ForTooMany(person), WebStopLimiter.ForTooMany(signedOut),
+        ];
 
         senders.Should().OnlyHaveUniqueItems();
-        Enumerable.Range(0, WebStopLimiter.Burst).Should().OnlyContain(_ => limiter.TryAcquire(senders[1]));
-        limiter.TryAcquire(senders[1]).Should().BeFalse();
-        limiter.TryAcquire(senders[0]).Should().BeTrue("the person's Stops are their own");
-        limiter.TryAcquire(senders[2]).Should().BeTrue();
+        foreach (var spent in senders)
+        {
+            var limiter = new WebStopLimiter(new ManualTimeProvider(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero)));
+            Enumerable.Range(0, WebStopLimiter.Burst).Should().OnlyContain(_ => limiter.TryAcquire(spent));
+            limiter.TryAcquire(spent).Should().BeFalse();
+            foreach (var other in senders.Where(sender => sender != spent))
+            {
+                limiter.TryAcquire(other).Should().BeTrue($"{spent} uses up nothing of {other}");
+            }
+        }
     }
 
     [TestMethod]

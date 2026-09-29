@@ -675,12 +675,12 @@ cannot read is logged, and the web UI's Stop then uses the person's session alon
 The web UI keeps the keys that protect its sign-in cookie and its forms in a directory only its user can read (mode
 `0700`): `/var/lib/hvo-roof-web/keys` (`HVO_SUPERVISOR_UI_DATA_DIR`), or `RoofWeb__DataProtectionPath` when that is
 set. The default is in the container, so people stay signed in when the web UI or the container restarts, and sign in
-again after a redeploy. The supervisor makes a directory of the operator's choosing (named in
-`RoofWeb__DataProtectionPath`, or the `keys` directory under `HVO_SUPERVISOR_UI_DATA_DIR`) as the web UI's user,
-not as root, so a symbolic link along the path gains that user nothing: the directory must be where that user (the
-image's `app`, UID 1654) can make it, or already be one it owns (for a volume, give it to 1654 once). A directory that
-cannot be made, or a symbolic link, is logged, and the web UI keeps the keys in memory, so everyone signs in again when
-it restarts.
+again after a redeploy. The supervisor makes the default as root, also when a setting names it. It makes any other
+directory (named in `RoofWeb__DataProtectionPath`, or the `keys` directory under `HVO_SUPERVISOR_UI_DATA_DIR`) as the
+web UI's user, not as root, so a symbolic link along the path gains that user nothing: the directory must be where
+that user (the image's `app`, UID 1654) can make it, or already be one it owns (for a volume, give it to 1654 once). A
+directory that cannot be made, or a symbolic link, is logged, and the web UI keeps the keys in memory, so everyone signs
+in again when it restarts.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|

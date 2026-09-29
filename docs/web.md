@@ -22,11 +22,15 @@ to the page after signing in.
 
 People sign in with their name and password, which the web UI checks at the controller (`POST Auth/Session`: see
 [Signing in](security.md#signing-in)). An admin adds people on the People page, or with `hvo-roof setup --create-admin`
-for the first admin ([cli.md](cli.md#setup)).
+for the first admin ([cli.md](cli.md#setup)). Nobody can sign in while the controller is stopped or not answering, so
+above the form the sign-in page says whether it is running and ready: the [Health](#health) page's headline (for
+example "The controller is stopped after repeated crashes"), from the same anonymous readiness check and the
+supervisor's state, without the details. It is checked at most once per `StatusRefreshSeconds`, whatever the number of
+pages, and when the check itself fails the page says nothing rather than something old.
 
 <p>
-  <img src="images/web/01-signin-phone.jpg" alt="The sign-in page on a phone: the name and password fields, Sign in, and the Stop bar" width="240">
-  <img src="images/web/01-signin-desktop.jpg" alt="The sign-in page on a desktop" width="520">
+  <img src="images/web/01-signin-phone.jpg" alt="The sign-in page on a phone: the mode banner, the controller's status, the name and password fields, Sign in, and the Stop bar" width="240">
+  <img src="images/web/01-signin-desktop.jpg" alt="The sign-in page on a desktop: the mode banner, the controller's status and the sign-in form" width="520">
 </p>
 
 - The web UI keeps the controller's session in the `hvo.roof.web` cookie: HttpOnly, `SameSite=Strict`, sent over HTTPS
@@ -61,8 +65,10 @@ A Viewer and an Operator see Roof, Health and Settings in the navigation. Openin
 says so, and shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
 not driving the observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never
 mistaken for the roof. Before sign-in the banner comes from the controller's anonymous `GET .../RoofControl/Mode`,
-which says only how the roof is driven. The pages share one read per `StatusRefreshSeconds`, and when the controller
-does not answer there is no banner rather than an old one.
+which says only how the roof is driven. The sign-in page, with its Stop, is sent at once, and the banner and the
+controller's status follow when the controller answers; as on every other page, the browser needs JavaScript to show
+them. The pages share one read per `StatusRefreshSeconds`, and when the controller does not answer there is no banner
+rather than an old one.
 
 ### Roof
 

@@ -39,12 +39,14 @@
 set -uo pipefail
 
 readonly RESTART_EXIT_CODE=75
+# The web UI's data directory when none is set, in directories only root can change (see prepare_ui_data_protection).
+readonly DEFAULT_UI_DATA_DIR=/var/lib/hvo-roof-web
 
 APP_DIR=${HVO_SUPERVISOR_APP_DIR:-/app}
 RUN_DIR=${HVO_SUPERVISOR_RUN_DIR:-/run/hvo-roof}
 SECRETS_DIR=${HVO_SUPERVISOR_SECRETS_DIR:-/run/secrets}
 UI_USER=${HVO_SUPERVISOR_UI_USER-app}
-UI_DATA_DIR=${HVO_SUPERVISOR_UI_DATA_DIR:-/var/lib/hvo-roof-web}
+UI_DATA_DIR=${HVO_SUPERVISOR_UI_DATA_DIR:-${DEFAULT_UI_DATA_DIR}}
 CONTROLLER_STOP_SECONDS=${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-25}
 UI_STOP_SECONDS=${HVO_SUPERVISOR_UI_STOP_SECONDS:-2}
 CRASH_LIMIT=${HVO_SUPERVISOR_CRASH_LIMIT:-5}
@@ -289,21 +291,20 @@ prepare_ui_stop_key() {
 # The directory for the keys that protect the web UI's sign-in cookie and forms (RoofWeb__DataProtectionPath, or
 # HVO_SUPERVISOR_UI_DATA_DIR/keys), owned by the web UI's user and private to it. The default is in the container, so
 # it lasts while the container does: a redeploy, which makes a new container, signs everyone out. Root makes the
-# default, /var/lib/hvo-roof-web/keys, in a directory only root can change. A directory of the operator's choosing
-# (RoofWeb__DataProtectionPath or HVO_SUPERVISOR_UI_DATA_DIR) may be anywhere, under a directory the web UI's user can
-# write too, where that user could swap a part of the path for a link to, say, the secrets directory; so it is made by
-# the web UI's user, with that user's rights alone, and a link gains nothing. Prints the RoofWeb__DataProtectionPath
-# setting for the web UI; nothing when the directory cannot be made (the keys are then kept in memory).
+# default, /var/lib/hvo-roof-web/keys (also when a setting names it), in directories only root can change. Any other
+# directory may be anywhere, under a directory the web UI's user can write too, where that user could swap a part of the
+# path for a link to, say, the secrets directory; so it is made by the web UI's user, with that user's rights alone, and
+# a link gains nothing. Prints the RoofWeb__DataProtectionPath setting for the web UI; nothing when the directory
+# cannot be made (the keys are then kept in memory).
 prepare_ui_data_protection() {
-  local path=${RoofWeb__DataProtectionPath:-}
+  local path=${RoofWeb__DataProtectionPath:-${UI_DATA_DIR}/keys}
   local -a make=(install -d -m 0700)
-  if [[ -z "${path}" && -z "${HVO_SUPERVISOR_UI_DATA_DIR:-}" ]]; then
-    path="${UI_DATA_DIR}/keys"
-    install -d -m 0755 "${UI_DATA_DIR}" || { log "WARNING: cannot create ${UI_DATA_DIR}; the web UI keeps its keys in memory"; return 0; }
+  if [[ "${path}" == "${DEFAULT_UI_DATA_DIR}/keys" ]]; then
+    install -d -m 0755 "${DEFAULT_UI_DATA_DIR}" \
+      || { log "WARNING: cannot create ${DEFAULT_UI_DATA_DIR}; the web UI keeps its keys in memory"; return 0; }
     [[ -z "${UI_USER}" ]] || make+=(-o "${UI_USER}" -g "${UI_GROUP}")
-  else
-    path=${path:-${UI_DATA_DIR}/keys}
-    [[ -z "${UI_USER}" ]] || make=(setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs "${make[@]}")
+  elif [[ -n "${UI_USER}" ]]; then
+    make=(setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs "${make[@]}")
   fi
   if [[ -L "${path}" ]] || ! "${make[@]}" "${path}"; then
     log "WARNING: cannot use ${path} for the web UI's keys; the web UI keeps them in memory, so everyone signs in" \

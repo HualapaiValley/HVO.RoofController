@@ -12,6 +12,7 @@ using HVO.RoofControllerV4.Web.Security;
 using HVO.RoofControllerV4.Web.Sessions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -338,6 +339,34 @@ public sealed partial class WebStopEndpointTests
     }
 
     [TestMethod]
+    public async Task APersonsRefusedStops_AreLogged_WhateverOthersAtTheirAddressPost()
+    {
+        var logs = new RecordingLoggerProvider();
+        await using var host = await StartOnAStillClockAsync(_ => Stopped(), logs);
+        using var person = host.Browser();
+        await person.SignInAsync("olga", FakeController.AdaPassword);
+        var token = await person.GetFormTokenAsync("/");
+        using var other = host.Browser();
+
+        // Posts without a token, more than are logged, from the person's address; then the person goes past their limit.
+        for (var stop = 0; stop < WebStopLimiter.Burst * 2; stop++)
+        {
+            (await StopAsync(other, token: null)).Status.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        for (var stop = 0; stop <= WebStopLimiter.Burst; stop++)
+        {
+            await StopAsync(person, token);
+        }
+
+        logs.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning
+            && entry.Message.StartsWith("Web stop refused for olga ", StringComparison.Ordinal)
+            && entry.Message.EndsWith(": more than the allowed Stops", StringComparison.Ordinal));
+        logs.Entries.Count(entry => entry.Message.EndsWith(": missing or stale antiforgery token", StringComparison.Ordinal))
+            .Should().Be(WebStopLimiter.Burst, "how often those are logged is limited");
+    }
+
+    [TestMethod]
     public async Task APersonsStops_BeyondTheLimit_AreRefused_WithoutReachingTheController()
     {
         await using var host = await StartOnAStillClockAsync(_ => Stopped());
@@ -521,12 +550,19 @@ public sealed partial class WebStopEndpointTests
         => WebHost.StartAsync(controller: new FakeController { OtherAnswer = request => IsStop(request) ? stop(request) : null });
 
     // On a clock that stands still, so no Stop is earned back while a test sends a burst.
-    private static Task<WebHost> StartOnAStillClockAsync(Func<HttpRequestMessage, HttpResponseMessage> stop)
+    private static Task<WebHost> StartOnAStillClockAsync(Func<HttpRequestMessage, HttpResponseMessage> stop, RecordingLoggerProvider? logs = null)
     {
         var clock = new ManualTimeProvider(Start);
         return WebHost.StartAsync(
             controller: new FakeController(clock) { OtherAnswer = request => IsStop(request) ? stop(request) : null },
-            customize: builder => builder.Services.AddSingleton<TimeProvider>(clock));
+            customize: builder =>
+            {
+                builder.Services.AddSingleton<TimeProvider>(clock);
+                if (logs is not null)
+                {
+                    builder.Logging.AddProvider(logs);
+                }
+            });
     }
 
     private static bool IsStop(HttpRequestMessage request) => request.RequestUri!.AbsolutePath == "/" + RoofApiRoutesTest.Stop;

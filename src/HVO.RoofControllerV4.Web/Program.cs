@@ -106,6 +106,7 @@ public class Program
         services.AddSingleton<ControllerForcedRestart>();
         services.AddSingleton<RoofWebStatusProbe>();
         services.AddSingleton<WebControllerMode>();
+        services.AddSingleton<WebControllerStatus>();
 
         // Each signed-in person has their own client of the controller, with their session.
         services.AddSingleton(stopKey);

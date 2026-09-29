@@ -322,6 +322,14 @@ body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[d
     border-radius: var(--bs-border-radius);
 }
 
+/* The controller's status on the sign-in page: the Health page's headline, one line above the sign-in card. */
+.web-signin-status {
+    margin: 0 0 1rem;
+    padding: 0.75rem 1rem;
+    text-align: center;
+    font-weight: 600;
+}
+
 .web-health {
     margin-top: 1rem;
 }

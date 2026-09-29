@@ -1,7 +1,7 @@
 # Roof Controller V4 security
 
 The controller drives a real roof motor, so its HTTP surface is closed by default. Every roof command, status read,
-configuration change, health detail and camera stream needs an API key or a person's session. The anonymous endpoints are the liveness and readiness probes, signing in with a name and password, and how the roof is driven (`GET /api/v4.0/RoofControl/Mode`, for the mode banner on the web UI's sign-in page).
+configuration change, health detail and camera stream needs an API key or a person's session. The anonymous endpoints are the liveness and readiness probes (the readiness, with the container supervisor's state, also gives the web UI's sign-in page its one-line controller status), signing in with a name and password, and how the roof is driven (`GET /api/v4.0/RoofControl/Mode`, for the mode banner on the web UI's sign-in page).
 
 This page covers:
 

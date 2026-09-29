@@ -266,10 +266,12 @@ web_ui_live() {
   curl -fsS --max-time 5 --cacert "${work}/ca.pem" "${web}/health/live" >/dev/null
 }
 
-# web_page_has <text>: the web UI's home page, as the server renders it, has the text.
+# web_page_has <text>: the web UI's home page, as the server renders it for someone not signed in, has the text: the
+# sign-in page it redirects to, which says whether the controller is running and ready (nobody can sign in while the
+# controller is stopped).
 web_page_has() {
   local page
-  page=$(curl -fsS --max-time 10 --cacert "${work}/ca.pem" "${web}/") || return 1
+  page=$(curl -fsSL --max-time 10 --cacert "${work}/ca.pem" "${web}/") || return 1
   grep -qF -- "$1" <<<"${page}"
 }
 

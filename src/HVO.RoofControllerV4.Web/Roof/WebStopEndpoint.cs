@@ -73,7 +73,7 @@ public static class WebStopEndpoint
             : WebStopLimiter.ForAddress(remote, local);
         if (!limiter.TryAcquire(sender))
         {
-            if (limiter.TryAcquire(WebStopLimiter.ForRefusals(remote, local)))
+            if (limiter.TryAcquire(WebStopLimiter.ForTooMany(sender)))
             {
                 logger.LogWarning("Web stop refused for {Name} from {RemoteIp}: more than the allowed Stops", name, remote);
             }

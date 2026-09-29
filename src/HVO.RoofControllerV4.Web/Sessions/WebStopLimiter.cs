@@ -11,7 +11,8 @@ namespace HVO.RoofControllerV4.Web.Sessions;
 /// Stop pass, is counted by their session (<see cref="ForSession"/>); only a signed-out page is counted by its address
 /// (<see cref="ForAddress"/>). Stops are counted after the page's token is checked, so posts from others at the same
 /// address (behind a proxy or NAT) never use up a signed-in person's Stops. A post without a valid token reaches nothing,
-/// and is counted apart (<see cref="ForRefusals"/>) only to limit how often it is logged.
+/// and is counted apart (<see cref="ForRefusals"/>) only to limit how often it is logged; so are a sender's Stops beyond
+/// their limit, by that sender (<see cref="ForTooMany"/>).
 /// </summary>
 public sealed class WebStopLimiter
 {
@@ -39,8 +40,17 @@ public sealed class WebStopLimiter
     /// </summary>
     public static string ForAddress(IPAddress? address, IPAddress? local) => "address:" + RoofCallerAddress.Of(address, local);
 
-    /// <summary>Posts refused without reaching the controller: counted by address, apart from the Stops sent.</summary>
+    /// <summary>
+    /// Posts refused for their token, which reach nothing: counted by address, apart from the Stops sent, only to limit how
+    /// often they are logged.
+    /// </summary>
     public static string ForRefusals(IPAddress? address, IPAddress? local) => "refused:" + RoofCallerAddress.Of(address, local);
+
+    /// <summary>
+    /// <paramref name="sender"/>'s Stops beyond their limit (<see cref="ForSession"/> or <see cref="ForAddress"/>), counted
+    /// only to limit how often they are logged: by that sender, so others' refused posts cannot keep them out of the log.
+    /// </summary>
+    public static string ForTooMany(string sender) => "too-many:" + sender;
 
     /// <summary>True when another Stop from <paramref name="sender"/> may be sent now (and counts it).</summary>
     public bool TryAcquire(string sender)

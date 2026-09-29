@@ -56,6 +56,8 @@ public sealed class WebScreenshotTests
 
         await page.GotoAsync("/signin");
         await Expect(page.GetByTestId("sign-in")).ToBeVisibleAsync();
+        // The controller's status, and the mode banner with it, follow the streamed page.
+        await Expect(page.GetByTestId("controller-status")).ToBeVisibleAsync();
         await shots.TakeAsync("01-signin");
 
         await browser.SignInAsync(WebBrowser.Admin);
