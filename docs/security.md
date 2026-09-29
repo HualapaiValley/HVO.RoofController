@@ -164,8 +164,16 @@ printf '%s' "$KEY"         | sudo tee RoofControllerSecurity__ApiKeys__0__Key  >
 sudo chmod 600 /etc/hvo-roof/secrets/*
 ```
 
-If the image runs as a non-root user (the .NET images define `APP_UID`, 1654), that UID must be able to read the files.
-Use `sudo chown -R 1654 /etc/hvo-roof/secrets`. Do not make the files world-readable.
+The controller runs as root in the container, so keep the directory `root:root`, mode `0700`, and the files `0600`, as
+above. Never give them to UID 1654: that is the image's `app` user, which runs the web UI, and the web UI must not read
+the controller's secrets (the supervisor warns at start when it can). If the directory was given to 1654 before, give it
+back with `sudo chown -R root:root /etc/hvo-roof/secrets`. Do not make the files world-readable.
+
+The web UI, in the same container, can read neither this directory nor the controller's environment. For HTTPS it gets
+a private copy of the certificate it serves and of that certificate's password: by default the controller's, so a
+compromised web UI could impersonate the controller to its clients. To keep the controller's key out of the web UI,
+give the web UI a certificate of its own (`RoofWeb__Certificate__Path` and `RoofWeb__Certificate__PasswordFile`; see
+[deployment.md](deployment.md#the-web-uis-user-and-settings)).
 
 Environment variables with the same names (`RoofControllerSecurity__ApiKeys__0__Key=...`) also work. However, they
 are visible to `docker inspect`, so prefer the secrets directory.
@@ -490,8 +498,8 @@ A restart also loads a pending edit, so it is refused while the edit could not b
 3. writes an `AUDIT` entry, answers 202, then shuts down as on SIGTERM (running the verified stop again) and exits with
    code 75.
 
-The container's restart policy, `unless-stopped`, starts it again. A controller that no supervisor restarts stays
-stopped.
+In the container, the supervisor (`roof-supervisor`, see [deployment.md](deployment.md)) starts the controller again at
+once, and the web UI stays up. A controller that no supervisor restarts stays stopped.
 
 ## Web console
 

@@ -31,6 +31,7 @@ COPY ["src/global.json", "src/NuGet.config", "./"]
 COPY ["src/HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj", "HVO.RoofControllerV4.Common/"]
 COPY ["src/HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj", "HVO.RoofControllerV4.Client/"]
 COPY ["src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj", "HVO.RoofControllerV4.RPi/"]
+COPY ["src/HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj", "HVO.RoofControllerV4.Web/"]
 COPY ["src/HVO.WebSite.Themes/HVO.WebSite.Themes.csproj", "HVO.WebSite.Themes/"]
 
 # Map the target platform to a .NET runtime identifier (linux-arm64 for the Raspberry Pi 5).
@@ -42,23 +43,33 @@ RUN case "$TARGETARCH" in \
     echo "SDK $(dotnet --version); target RID $(cat /tmp/rid)"
 
 # Restore with the Release configuration so the ReadyToRun (crossgen) packs are restored too.
-RUN dotnet restore "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
-    --configfile NuGet.config \
-    --runtime "$(cat /tmp/rid)" \
-    -p:Configuration=Release
+RUN for project in HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Web; do \
+      dotnet restore "$project/$project.csproj" \
+        --configfile NuGet.config \
+        --runtime "$(cat /tmp/rid)" \
+        -p:Configuration=Release || exit 1; \
+    done
 
 # Copy the remainder of the needed sources and publish
 COPY ["src/HVO.RoofControllerV4.Common/", "HVO.RoofControllerV4.Common/"]
 COPY ["src/HVO.RoofControllerV4.Client/", "HVO.RoofControllerV4.Client/"]
 COPY ["src/HVO.WebSite.Themes/", "HVO.WebSite.Themes/"]
 COPY ["src/HVO.RoofControllerV4.RPi/", "HVO.RoofControllerV4.RPi/"]
+COPY ["src/HVO.RoofControllerV4.Web/", "HVO.RoofControllerV4.Web/"]
 
+# The controller in /app and its web UI in /app/web: two processes, each with its own dependencies.
 RUN dotnet publish "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
     --no-restore \
     --configuration Release \
     --runtime "$(cat /tmp/rid)" \
     --self-contained false \
-    --output /app/publish
+    --output /app/publish && \
+    dotnet publish "HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj" \
+    --no-restore \
+    --configuration Release \
+    --runtime "$(cat /tmp/rid)" \
+    --self-contained false \
+    --output /app/publish/web
 
 # -------------------------
 # Runtime image
@@ -68,11 +79,12 @@ ARG HVO_FORCE_RASPBERRY_PI=false
 ARG HVO_CONTAINER_RPI_HINT=""
 WORKDIR /app
 
-# Install the minimal native dependencies needed for GPIO/I2C access and health checks
+# Install the minimal native dependencies needed for GPIO/I2C access, health checks and the supervisor (tini)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    tini \
     fontconfig \
     fonts-dejavu-core \
     fonts-liberation2 \
@@ -86,8 +98,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     fc-cache -f
 
-# Copy the published binaries from the build stage
+# Copy the published binaries from the build stage, and the supervisor and health check
+# (docs/deployment.md, "The container's two processes")
 COPY --from=build /app/publish .
+COPY --chmod=0755 ["src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh", "/usr/local/bin/roof-supervisor"]
+COPY --chmod=0755 ["src/HVO.RoofControllerV4.RPi/container/healthcheck.sh", "/usr/local/bin/roof-healthcheck"]
 
 # Configure ASP.NET Core. The log levels come from appsettings.json, not the environment, so that the settings API
 # can change them (an environment variable is a layer above the settings file, which would make them read-only).
@@ -95,14 +110,17 @@ ENV ASPNETCORE_URLS=http://+:8080 \
     ASPNETCORE_ENVIRONMENT=Production \
     TZ=UTC \
     HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI} \
-    HVO_CONTAINER_RPI_HINT=${HVO_CONTAINER_RPI_HINT}
+    HVO_CONTAINER_RPI_HINT=${HVO_CONTAINER_RPI_HINT} \
+    RoofWeb__Urls=http://+:8088
 
-# Expose the HTTP port used by the site
-EXPOSE 8080
+# The controller's API, hub, health and OpenAPI (8080, and 8443 for HTTPS), and the web UI (8088)
+EXPOSE 8080 8088
 
-# Hardware-aware readiness check (anonymous endpoint; loopback is exempt from RequireHttps)
+# Healthy exactly when the controller reports ready (anonymous endpoint; loopback is exempt from RequireHttps). The web
+# UI's liveness and the supervisor's view are printed alongside and never change the result.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8080/health/ready || exit 1
+    CMD ["/usr/local/bin/roof-healthcheck"]
 
-# Run the web site
-ENTRYPOINT ["dotnet", "HVO.RoofControllerV4.RPi.dll"]
+# tini is PID 1 and passes docker stop's SIGTERM to the supervisor, which stops the controller first (its shutdown stops
+# the roof), then the web UI. Arguments (--validate-deployment) run the controller alone with them.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/roof-supervisor"]

@@ -87,7 +87,7 @@ build_command() {
   RUN_CMD=(env -i
     PATH="${WORK}/bin:${PATH}" HOME="${WORK}/home" TMPDIR="${WORK}" FAKE_STATE_DIR="${FAKE_STATE_DIR}"
     FAKE_EXPECTED_KEY="${KEY}" PI_HOST=pi.test DOCKER_CONTEXT=test-context IMAGE_TAG="${IMAGE}" ROOF_OPERATOR_API_KEY="${KEY}"
-    READY_TIMEOUT_SECONDS=1 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=5
+    READY_TIMEOUT_SECONDS=1 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=30
     ${env_pairs[@]+"${env_pairs[@]}"}
     bash -c 'cd "$1" && echo "$$" > "${FAKE_STATE_DIR}/script.pid" && shift && exec bash "$@"'
     deploy-test "${WORK}" "${SCRIPT}" "$@")
@@ -342,9 +342,10 @@ test_https_deploy_validates_first_publishes_only_https_and_keeps_previous() {
     fail_test "unexpected order: preflight=${i_preflight} stop-request=${i_stop_request} stop=${i_stop} rename=${i_rename} run=${i_run}"
   fi
 
-  # Remote check from this machine: HTTPS with the CA, authenticated Status then Stop.
+  # Remote check from this machine: HTTPS with the CA, authenticated Status then Stop, then the web UI's liveness.
   jq -e -s --arg ca "${WORK}/ca.pem" \
-    '(map(.[-1]) == ["https://pi.test:8443/api/v4.0/RoofControl/Status", "https://pi.test:8443/api/v4.0/RoofControl/Stop"])
+    '(map(.[-1]) == ["https://pi.test:8443/api/v4.0/RoofControl/Status", "https://pi.test:8443/api/v4.0/RoofControl/Stop",
+                     "https://pi.test:8088/health/live"])
      and all(.[]; index("--cacert") != null and .[index("--cacert") + 1] == $ca)' \
     "${FAKE_STATE_DIR}/remote.log" >/dev/null || fail_test "unexpected remote calls: $(cat "${FAKE_STATE_DIR}/remote.log")"
 
@@ -439,7 +440,8 @@ test_insecure_http_mode_publishes_8080_with_https_disabled() {
   jq -e 'index("8080:8080") and (index("8443:8443") | not)
          and index("ASPNETCORE_URLS=http://+:8080") and index("RoofControllerSecurity__RequireHttps=false")' <<<"${run}" >/dev/null \
     || fail_test "unexpected insecure run arguments: ${run}"
-  jq -e -s 'map(.[-1]) == ["http://pi.test:8080/api/v4.0/RoofControl/Status", "http://pi.test:8080/api/v4.0/RoofControl/Stop"]
+  jq -e -s 'map(.[-1]) == ["http://pi.test:8080/api/v4.0/RoofControl/Status", "http://pi.test:8080/api/v4.0/RoofControl/Stop",
+                           "http://pi.test:8088/health/live"]
             and all(.[]; index("--cacert") == null)' "${FAKE_STATE_DIR}/remote.log" >/dev/null \
     || fail_test "unexpected remote calls: $(cat "${FAKE_STATE_DIR}/remote.log")"
   assert_container roof-controller new true
@@ -611,8 +613,8 @@ test_confirmed_unverified_stop_replaces_the_controller_gracefully() {
   assert_container roof-controller-previous old false no
   # The old controller still gets the graceful stop (SIGTERM and the grace period, so its shutdown stops the roof
   # again), after the Stop request, and is kept.
-  jq -e -s 'length == 1 and .[0][1] == "-t" and .[0][2] == "5"' <<<"$(docker_calls stop)" >/dev/null \
-    || fail_test "expected one graceful docker stop -t 5: $(docker_calls stop)"
+  jq -e -s 'length == 1 and .[0][1] == "-t" and .[0][2] == "30"' <<<"$(docker_calls stop)" >/dev/null \
+    || fail_test "expected one graceful docker stop -t 30: $(docker_calls stop)"
   [[ -z "$(docker_calls kill)$(docker_calls rm)" ]] || fail_test "a container was killed or removed"
   local i_stop_request i_stop
   i_stop_request=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')
@@ -905,13 +907,212 @@ test_key_file_is_used_and_never_passed_as_argument() {
   assert_key_never_in_argv
 }
 
+# --- The web UI and the container's supervisor ------------------------------------------------------------------------
+
+test_web_ui_is_published_on_its_own_port_with_the_controllers_scheme() {
+  seed_container roof-controller old true 8080:8080
+  deploy "${HTTPS_ENV[@]}" REMOTE_CA_CERT="${WORK}/ca.pem" FAKE_REQUIRE_CACERT=true WEB_HOST_PORT=9443
+
+  assert_status 0
+  local run
+  run=$(controller_run_args)
+  jq -e 'index("9443:8088") and index("RoofWeb__Urls=https://+:8088") and (index("8088:8088") | not)' <<<"${run}" >/dev/null \
+    || fail_test "the web UI is not published on WEB_HOST_PORT over HTTPS: ${run}"
+  docker_calls exec | jq -e -s 'map(select(index("https://localhost:8088/health/live"))) | length > 0' >/dev/null \
+    || fail_test "the web UI was not checked over HTTPS inside the container"
+  jq -e -s --arg ca "${WORK}/ca.pem" \
+    'map(select(.[-1] == "https://pi.test:9443/health/live" and .[index("--cacert") + 1] == $ca)) | length == 1' \
+    "${FAKE_STATE_DIR}/remote.log" >/dev/null || fail_test "unexpected remote calls: $(cat "${FAKE_STATE_DIR}/remote.log")"
+  assert_output_contains "[verify] Web UI live inside the container (https)"
+  assert_output_contains "[verify] Web UI live at https://pi.test:9443: OK"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy ALLOW_INSECURE_HTTP=true
+  assert_status 0
+  run=$(controller_run_args)
+  jq -e 'index("8088:8088") and index("RoofWeb__Urls=http://+:8088") and (index("RoofWeb__Urls=https://+:8088") | not)' \
+    <<<"${run}" >/dev/null || fail_test "the web UI is not published on 8088 over HTTP: ${run}"
+  assert_output_contains "[verify] Web UI live inside the container (http)"
+  assert_output_contains "[verify] Web UI live at http://pi.test:8088: OK"
+}
+
+test_web_host_port_on_the_controllers_published_port_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" WEB_HOST_PORT=8443
+  assert_status 1
+  assert_output_contains "WEB_HOST_PORT (8443) is the controller's published port too: give the web UI a port of its own. Nothing was changed."
+  assert_no_docker_calls "HTTPS"
+
+  deploy ALLOW_INSECURE_HTTP=true HOST_PORT=8090 WEB_HOST_PORT=8090
+  assert_status 1
+  assert_output_contains "WEB_HOST_PORT (8090) is the controller's published port too"
+  assert_no_docker_calls "HTTP"
+  assert_container roof-controller old true unless-stopped
+
+  # Over HTTPS the controller's plain HTTP port is not published, so the web UI may take it.
+  deploy "${HTTPS_ENV[@]}" WEB_HOST_PORT=8080
+  assert_status 0
+  jq -e 'index("8080:8088")' <<<"$(controller_run_args)" >/dev/null || fail_test "the web UI is not published on 8080"
+}
+
+test_web_ui_that_never_answers_inside_the_container_rolls_back() {
+  seed_container roof-controller old true 8080:8080
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_WEB_LIVE=false
+
+  assert_status_is 1
+  assert_output_contains "the web UI in roof-controller did not answer https://localhost:8088/health/live within 1s"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+  [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller was not removed"
+  [[ ! -s "${FAKE_STATE_DIR}/remote.log" ]] || fail_test "the remote check ran after the in-container check failed"
+}
+
+# A web UI that cannot start exits, and its supervisor starts it again with a backoff for ever: that fails at once.
+web_ui_that_the_supervisor_restarts_rolls_back_without_waiting() {
+  seed_container roof-controller old true 8080:8080
+  local started=${SECONDS}
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_SUPERVISOR="$1" FAKE_NEW_WEB_LIVE=false READY_TIMEOUT_SECONDS=60
+
+  assert_status_is 1
+  assert_output_contains "the web UI in roof-controller exited and its supervisor is starting it again: it cannot start (see its log lines below)"
+  assert_output_contains "fake controller log line"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller was not removed"
+  (( SECONDS - started < 30 )) || fail_test "the deploy waited for the web UI ($((SECONDS - started))s)"
+}
+
+test_web_ui_waiting_to_start_again_rolls_back_without_waiting() {
+  web_ui_that_the_supervisor_restarts_rolls_back_without_waiting ui-restarting
+}
+
+test_web_ui_started_again_rolls_back_without_waiting() {
+  web_ui_that_the_supervisor_restarts_rolls_back_without_waiting ui-restarted
+}
+
+# The supervisor restarts a controller that exits, and leaves it stopped after repeated crashes, all inside a container
+# Docker sees running: its state file tells the deploy the controller exited.
+controller_that_the_supervisor_restarts_rolls_back_without_waiting() {
+  seed_container roof-controller old true 8080:8080
+  local started=${SECONDS}
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_SUPERVISOR="$1" FAKE_NEW_READY=false READY_TIMEOUT_SECONDS=60
+
+  assert_status_is 1
+  assert_output_contains "roof-controller exited before it became ready (it stopped, or Docker restarted it): the container's supervisor reports the controller $2"
+  assert_output_not_contains "did not become ready within"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller was not removed"
+  (( SECONDS - started < 30 )) || fail_test "the deploy waited for the exited controller ($((SECONDS - started))s)"
+}
+
+test_controller_waiting_for_the_supervisor_to_start_it_again_rolls_back_without_waiting() {
+  controller_that_the_supervisor_restarts_rolls_back_without_waiting restarting "restarting after 1 start(s)"
+}
+
+test_controller_the_supervisor_left_stopped_rolls_back_without_waiting() {
+  controller_that_the_supervisor_restarts_rolls_back_without_waiting crash-loop "crash-loop after 5 start(s)"
+}
+
+test_controller_the_supervisor_started_again_rolls_back_without_waiting() {
+  controller_that_the_supervisor_restarts_rolls_back_without_waiting restarted "running after 3 start(s)"
+}
+
+# An image from before the supervisor has no state file: readiness alone decides, as before.
+test_controller_without_a_supervisor_state_file_is_checked_by_readiness_alone() {
+  seed_container roof-controller old true 8080:8080
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_SUPERVISOR=absent
+
+  assert_status 0
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443"
+  assert_container roof-controller new true unless-stopped
+}
+
+test_web_ui_unreachable_from_this_machine_rolls_back() {
+  seed_container roof-controller old true 8080:8080
+  deploy "${HTTPS_ENV[@]}" FAKE_REMOTE_WEB_LIVE=false
+
+  assert_status_is 1
+  assert_output_contains "[verify] Remote Status and verified Stop at https://pi.test:8443: OK"
+  assert_output_contains "the web UI did not answer at https://pi.test:8088/health/live from this machine (network, port or TLS; set REMOTE_CA_CERT for a certificate this machine does not trust)"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous missing false
+}
+
+test_web_ui_whose_environment_docker_cannot_report_rolls_back() {
+  seed_container roof-controller old true 8080:8080
+  deploy "${HTTPS_ENV[@]}" FAKE_FAIL=.Config.Env
+
+  assert_status_is 1
+  assert_output_contains "could not read the environment of roof-controller from Docker to find its web UI"
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_container roof-controller old true unless-stopped
+}
+
+# The scheme is the first URL's, as the web UI listens on each and the check needs one.
+test_web_ui_with_several_urls_is_checked_on_the_first() {
+  seed_container roof-controller old true 8080:8080
+  deploy ALLOW_INSECURE_HTTP=true EXTRA_DOCKER_ARGS="--env RoofWeb__Urls=http://+:8088;https://+:8089"
+
+  assert_status 0
+  assert_output_contains "[verify] Web UI live inside the container (http)"
+}
+
+# EXTRA_DOCKER_ARGS come last, so a RoofWeb__Urls there wins inside the container; a scheme that is not the one this
+# machine is told to use fails the check from this machine, and the deploy rolls back.
+test_web_ui_serving_another_scheme_than_the_deploy_expects_rolls_back() {
+  seed_container roof-controller old true 8080:8080
+  deploy "${HTTPS_ENV[@]}" EXTRA_DOCKER_ARGS="--env RoofWeb__Urls=http://+:8088"
+
+  assert_status_is 1
+  assert_output_contains "[verify] Web UI live inside the container (http)"
+  assert_output_contains "the web UI did not answer at https://pi.test:8088/health/live from this machine"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_rollback_to_a_version_from_before_the_web_ui_skips_its_checks() {
+  seed_container roof-controller current true 8443:8443 8088:8088
+  seed_env roof-controller current RoofWeb__Urls=https://+:8088
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_SUPERVISOR=absent FAKE_OLD_WEB_LIVE=false -- --rollback
+
+  assert_status 0
+  assert_output_contains "[verify] roof-controller has no web UI (a version from before it): not checked"
+  assert_output_contains "Rolled back. roof-controller is verified at https://pi.test:8443."
+  assert_container roof-controller old true unless-stopped
+  jq -e -s 'map(select(.[-1] | endswith("/health/live"))) | length == 0' "${FAKE_STATE_DIR}/remote.log" >/dev/null \
+    || fail_test "the web UI of a version without one was checked: $(cat "${FAKE_STATE_DIR}/remote.log")"
+
+  # Swapping back to the version with the web UI checks it again.
+  : > "${FAKE_STATE_DIR}/remote.log"
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 0
+  assert_output_contains "[verify] Web UI live at https://pi.test:8088: OK"
+  assert_container roof-controller current true unless-stopped
+}
+
+test_rollback_to_a_version_whose_web_ui_fails_is_left_running() {
+  seed_container roof-controller current true 8443:8443 8088:8088
+  seed_env roof-controller current RoofWeb__Urls=https://+:8088
+  seed_container roof-controller-previous old false 8443:8443 8088:8088
+  seed_env roof-controller-previous RoofWeb__Urls=https://+:8088
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_WEB_LIVE=false -- --rollback
+
+  assert_status_is 1
+  assert_output_contains "the web UI in roof-controller did not answer https://localhost:8088/health/live within 1s. It is left running. Run --rollback again to swap back."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous current false no
+}
+
 # --- Settings (validated before any Docker call) ---------------------------------------------------------------------
 
 test_malformed_numeric_settings_fail_before_any_docker_call() {
   seed_container roof-controller old true 8443:8443
   local setting
   for setting in READY_TIMEOUT_SECONDS=90.5 READY_TIMEOUT_SECONDS=0 READY_TIMEOUT_SECONDS=1234567890123 \
-      STOP_TIMEOUT_SECONDS=120s STOP_TIMEOUT_SECONDS=-5 HOST_PORT=http HTTPS_HOST_PORT=70000 \
+      STOP_TIMEOUT_SECONDS=120s STOP_TIMEOUT_SECONDS=-5 STOP_TIMEOUT_SECONDS=29 HOST_PORT=http HTTPS_HOST_PORT=70000 WEB_HOST_PORT=0 WEB_HOST_PORT=web \
       POLL_INTERVAL_SECONDS=1.2.3 POLL_INTERVAL_SECONDS=. POLL_INTERVAL_SECONDS=1s; do
     : > "${FAKE_STATE_DIR}/calls.log"
     deploy "${HTTPS_ENV[@]}" "${setting}"
@@ -936,14 +1137,14 @@ test_malformed_setting_with_rollback_does_not_build() {
 
 test_numbers_with_leading_zeros_are_decimal() {
   seed_container roof-controller old true 8443:8443
-  deploy "${HTTPS_ENV[@]}" STOP_TIMEOUT_SECONDS=010 READY_TIMEOUT_SECONDS=09 HTTPS_HOST_PORT=08443
+  deploy "${HTTPS_ENV[@]}" STOP_TIMEOUT_SECONDS=045 READY_TIMEOUT_SECONDS=09 HTTPS_HOST_PORT=08443
 
   assert_status 0
   assert_output_contains "Waiting up to 9s"
   assert_output_contains "verified at https://pi.test:8443"
-  docker_calls stop | jq -e -s '.[0] | .[index("-t") + 1] == "10"' >/dev/null \
-    || fail_test "docker stop was not given -t 10: $(docker_calls stop)"
-  controller_run_args | jq -e '.[index("--stop-timeout") + 1] == "10" and index("8443:8443")' >/dev/null \
+  docker_calls stop | jq -e -s '.[0] | .[index("-t") + 1] == "45"' >/dev/null \
+    || fail_test "docker stop was not given -t 45: $(docker_calls stop)"
+  controller_run_args | jq -e '.[index("--stop-timeout") + 1] == "45" and index("8443:8443")' >/dev/null \
     || fail_test "unexpected run arguments: $(controller_run_args)"
 }
 

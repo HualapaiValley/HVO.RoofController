@@ -3,21 +3,26 @@
 # Two mutually exclusive profiles (both name the container roof-controller, so they cannot run together and they
 # collide with a controller started by deploy-roofcontroller-rpi.sh instead of driving the HAT twice):
 #
-#   pi           HTTPS (default). Publishes only 8443; plain HTTP listens on loopback inside the container for the
-#                health check. Needs the certificate directory (HVO_ROOF_CERT_DIR, default /etc/hvo-roof/https) with
-#                HVO_ROOF_CERT_FILE (default roof-controller.pfx); its password goes in the secrets directory as a file
-#                named Kestrel__Certificates__Default__Password.
+#   pi           HTTPS (default). Publishes 8443 (the API) and 8088 (the web UI), both HTTPS; plain HTTP listens on
+#                loopback inside the container for the health check and the web UI. Needs the certificate directory
+#                (HVO_ROOF_CERT_DIR, default /etc/hvo-roof/https) with HVO_ROOF_CERT_FILE (default roof-controller.pfx);
+#                its password goes in the secrets directory as a file named Kestrel__Certificates__Default__Password.
+#                The web UI serves the same certificate (the supervisor gives it a private copy).
 #                  docker compose --profile pi up -d
-#   pi-lan-http  Plain HTTP on 8080 with RequireHttps off. For an isolated LAN only: API keys and the console access
-#                key cross the network in clear text.
+#   pi-lan-http  Plain HTTP on 8080 (the API) and 8088 (the web UI) with RequireHttps off. For an isolated LAN only:
+#                API keys and the console access key cross the network in clear text.
 #                  docker compose --profile pi-lan-http up -d
+#
+# Each controller container runs two processes under a supervisor (docs/deployment.md, "The container's two
+# processes"): the controller and the web UI. docker stop stops the controller first, so its shutdown stops the roof.
 #
 # A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
 # container and image names and its own network, so it does not collide with either profile above:
 #
 #   emulator     The controller (Production settings, plain HTTP, published on 127.0.0.1 port HVO_EMULATED_ROOF_PORT,
-#                default 5195) and the HAT emulator (src/HVO.RoofControllerV4.Emulator: an emulated roof, SMVector drive,
-#                ME-8108 limit switches and SM-I-010 HAT). The emulator's control API has no authentication and is
+#                default 5195; its web UI on 127.0.0.1 port HVO_EMULATED_WEB_PORT, default 5196) and the HAT emulator
+#                (src/HVO.RoofControllerV4.Emulator: an emulated roof, SMVector drive, ME-8108 limit switches and
+#                SM-I-010 HAT). The emulator's control API has no authentication and is
 #                published on 127.0.0.1 port HVO_EMULATOR_CONTROL_PORT (default 5290); its register port stays on the
 #                compose network. Both images build for this machine (amd64 or arm64). The controller shows an EMULATED
 #                HAT banner, reports Degraded health and does not operate the roof. Give it an admin key of at least 24
@@ -60,16 +65,19 @@ x-roof-environment: &roof-environment
 
 x-https-environment: &https-environment
   <<: *roof-environment
-  # HTTP on loopback only (health check, in-container calls); remote clients use HTTPS.
+  # HTTP on loopback only (health check, the web UI, in-container calls); remote clients use HTTPS.
   ASPNETCORE_URLS: "http://localhost:8080;https://+:8443"
   RoofControllerSecurity__RequireHttps: "true"
   Kestrel__Certificates__Default__Path: /https/${HVO_ROOF_CERT_FILE:-roof-controller.pfx}
+  # The web UI, with the controller's certificate.
+  RoofWeb__Urls: "https://+:8088"
 
 x-lan-http-environment: &lan-http-environment
   <<: *roof-environment
   ASPNETCORE_URLS: "http://+:8080"
   # Explicit opt-out: accept plain HTTP from the LAN (a warning is logged at startup).
   RoofControllerSecurity__RequireHttps: "false"
+  RoofWeb__Urls: "http://+:8088"
 
 # One file per secret setting, named after its configuration key (API keys, BlueIris__Password, certificate
 # password). Read by the app through AddKeyPerFile("/run/secrets"). Never commit these files. The directory must
@@ -141,14 +149,16 @@ x-roof-controller: &roof-controller
       - linux/arm64
   container_name: roof-controller
   restart: unless-stopped
-  # SIGTERM first: the host stops the roof (verified all-off) and ends camera streams before exiting.
-  # Must stay above the app's HostOptions.ShutdownTimeout (20 s).
+  # SIGTERM first: the supervisor passes it to the controller, which stops the roof (verified all-off) and ends camera
+  # streams before exiting, then stops the web UI. Must stay above the supervisor's waits (25 s for the controller,
+  # itself above the app's HostOptions.ShutdownTimeout of 20 s, then 2 s for the web UI).
   stop_grace_period: 30s
   devices:
     - "/dev/gpiomem:/dev/gpiomem"
     - "/dev/i2c-1:/dev/i2c-1"
+  # Healthy exactly when the controller is ready; the web UI's liveness is reported alongside (docker inspect).
   healthcheck:
-    test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
+    test: [ "CMD", "/usr/local/bin/roof-healthcheck" ]
     interval: 30s
     timeout: 5s
     retries: 3
@@ -176,6 +186,7 @@ x-emulated-environment: &emulated-environment
   ASPNETCORE_URLS: "http://+:8080"
   # Plain HTTP, published on loopback only (a warning is logged at startup).
   RoofControllerSecurity__RequireHttps: "false"
+  RoofWeb__Urls: "http://+:8088"
   RoofControllerSecurity__ApiKeys__0__Name: emulator-admin
   RoofControllerSecurity__ApiKeys__0__Role: RoofAdmin
   RoofControllerSecurity__ApiKeys__0__Key: ${HVO_EMULATED_ROOF_API_KEY:-}
@@ -217,6 +228,7 @@ services:
         condition: service_completed_successfully
     ports:
       - "8443:8443"
+      - "8088:8088"
     environment: *https-environment
     volumes:
       - *thermal-mount
@@ -246,6 +258,7 @@ services:
         condition: service_completed_successfully
     ports:
       - "8080:8080"
+      - "8088:8088"
     environment: *lan-http-environment
     volumes:
       - *thermal-mount
@@ -285,13 +298,14 @@ services:
     environment: *emulated-environment
     ports:
       - "127.0.0.1:${HVO_EMULATED_ROOF_PORT:-5195}:8080"
+      - "127.0.0.1:${HVO_EMULATED_WEB_PORT:-5196}:8088"
     restart: "no"
     stop_grace_period: 30s
     logging: *logging
     networks:
       - emulator
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/health/ready" ]
+      test: [ "CMD", "/usr/local/bin/roof-healthcheck" ]
       interval: 10s
       timeout: 5s
       retries: 3

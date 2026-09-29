@@ -6,6 +6,7 @@ This page covers:
 - deploying with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` or `docker-compose.yaml`
 - the deployment check (`--validate-deployment`) both of them run first
 - how the controller is stopped safely during a deploy, verified afterwards and rolled back
+- the container's two processes, the controller and the web UI, and the supervisor that runs them
 
 For API keys, roles and the Blue Iris credentials, see [security.md](security.md).
 
@@ -60,7 +61,10 @@ printf '%s' "$PFX_PASSWORD" | sudo tee /etc/hvo-roof/secrets/Kestrel__Certificat
 shred -u roof.key
 ```
 
-Install `roof.crt`, or your CA certificate, as trusted on browsers that use the console. Keep a copy on the machine
+The web UI serves the same certificate on its own port (8088): the container's supervisor gives it a private copy of
+the certificate and its password (see [The container's two processes](#the-containers-two-processes)).
+
+Install `roof.crt`, or your CA certificate, as trusted on browsers that use the console or the web UI. Keep a copy on the machine
 that runs the deploy script too: pass it as `REMOTE_CA_CERT` so the script can check the HTTPS endpoint after a deploy
 (not needed when that machine already trusts the CA).
 
@@ -230,8 +234,8 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   ALLOWED_HOSTS="roof-pi;roof-pi.local;localhost" ./deploy-roofcontroller-rpi.sh
 ```
 
-`PI_HOST` must be a name in the certificate: the script connects to `https://$PI_HOST:$HTTPS_HOST_PORT` after the
-deploy.
+`PI_HOST` must be a name in the certificate: the script connects to `https://$PI_HOST:$HTTPS_HOST_PORT` and to the
+web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 
 | Flag | Effect |
 |------|--------|
@@ -247,8 +251,9 @@ deploy.
 | `IMAGE_TAG` | `hvov9/roof-controller:v4` | Image tag |
 | `BUILD_PLATFORM` | `linux/arm64` | Platform the image is built for: the Pi's. `linux/amd64` is accepted only in [HAT emulator mode](#hat-emulator-mode-test-rigs), for a test rig on a PC. |
 | `CONTAINER_NAME` | `roof-controller` | Container name. The previous version is kept as `<name>-previous`. |
-| `HTTPS_HOST_PORT` | `8443` | Published HTTPS port (the only published port in HTTPS mode) |
+| `HTTPS_HOST_PORT` | `8443` | Published HTTPS port of the controller's API (with `WEB_HOST_PORT`, the only published ports in HTTPS mode) |
 | `HOST_PORT` | `8080` | Published HTTP port, only with `ALLOW_INSECURE_HTTP=true` |
+| `WEB_HOST_PORT` | `8088` | Published port of the [web UI](#the-containers-two-processes): HTTPS with the controller's certificate, or plain HTTP with `ALLOW_INSECURE_HTTP=true`. It must differ from the controller's published port. |
 | `SECRETS_DIR` | `/etc/hvo-roof/secrets` | Secrets directory on the Pi |
 | `HTTPS_CERT_DIR` | (empty) | Certificate directory on the Pi. Required unless `ALLOW_INSECURE_HTTP=true`. |
 | `HTTPS_CERT_FILE` | `roof-controller.pfx` | PFX file name inside `HTTPS_CERT_DIR` |
@@ -259,17 +264,17 @@ deploy.
 | `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts`. A list must include `localhost`: the health check and the script's in-container calls use it. |
 | `REMOTE_CA_CERT` | (empty) | PEM file on this machine that verifies the Pi's certificate, for the remote check |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
-| `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them, and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device`, `--privileged` and a mount of the host's `/` or `/dev` are refused as well. |
-| `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout` |
+| `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them (use `HTTPS_HOST_PORT`, `HOST_PORT` and `WEB_HOST_PORT` for the ports), and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device`, `--privileged` and a mount of the host's `/` or `/dev` are refused as well. |
+| `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 25 s for the controller's shutdown, then 2 s for the web UI ([Shutdown timing](#shutdown-timing)). |
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
 | `ROOF_OPERATOR_API_KEY` / `OPERATOR_KEY_FILE` | / `~/.config/hvo-roof/operator.key` | Key for the Stop and Status checks |
 | `HAT_EMULATOR_ENDPOINT` | (empty) | Test rigs only: `<host>:<port>` of a HAT emulator the container can reach. The controller uses it in place of the physical HAT. See [HAT emulator mode (test rigs)](#hat-emulator-mode-test-rigs). |
 | `ALLOW_EMULATED_HAT` | `false` | Must be `true` for `HAT_EMULATOR_ENDPOINT` to be accepted, and for `--rollback` to restore a version that uses the HAT emulator |
 
-`STOP_TIMEOUT_SECONDS` and `READY_TIMEOUT_SECONDS` must be whole numbers from 1 to 86400, and the ports whole numbers
-from 1 to 65535. They are read as decimal, so `010` means 10. `POLL_INTERVAL_SECONDS` may have a fraction, such as
-`0.5`.
+`READY_TIMEOUT_SECONDS` must be a whole number from 1 to 86400, `STOP_TIMEOUT_SECONDS` one from 30 to 86400 (the
+supervisor's 25 s and 2 s, with a margin), and the ports whole numbers from 1 to 65535. They are read as decimal, so
+`045` means 45. `POLL_INTERVAL_SECONDS` may have a fraction, such as `0.5`.
 
 The machine that runs the script needs Docker CLI 20.10 or later (the script reads container state with
 `docker ps --format '{{.State}}'`), and `jq` or `python3` to parse the Stop response. Without either, the stop is
@@ -311,26 +316,33 @@ anything.
    you can see the roof and that it is not moving, or that the drive is isolated. The script reads the confirmation
    from the terminal (`/dev/tty`), not from standard input. Without a terminal, or with any other answer, the deploy
    aborts and the old controller keeps running.
-5. **Stops the old container gracefully** with `docker stop -t 30` (SIGTERM). The app's shutdown path stops the roof
-   again and ends camera streams. The old container is renamed `<name>-previous` with restart policy `no`, so it can
+5. **Stops the old container gracefully** with `docker stop -t 30` (SIGTERM). The container's supervisor stops the
+   controller first, whose shutdown path stops the roof again and ends camera streams, then the web UI. The old container is renamed `<name>-previous` with restart policy `no`, so it can
    be restored but never starts by itself. An older, stopped `<name>-previous` is removed only after this stop has
    succeeded, just before the rename, so an aborted deploy keeps it. The script reads the container states again
    after the pre-flight, and a `<name>-previous` that is running by then still aborts before anything is stopped.
-6. **Starts the new container** with `--restart unless-stopped` and `--stop-timeout 30`. The restart policy also
-   starts the controller again after `POST /api/v4.0/System/Restart`, which exits with code 75. In HTTPS mode only
-   `HTTPS_HOST_PORT` is published; plain HTTP listens on loopback inside the container, for the health check and the
-   script's `docker exec` calls.
+6. **Starts the new container** with `--restart unless-stopped` and `--stop-timeout 30`. Inside it, the supervisor
+   starts the controller and the web UI, and starts the controller again at once after
+   `POST /api/v4.0/System/Restart`, which exits with code 75 ([The container's two processes](#the-containers-two-processes)).
+   In HTTPS mode only `HTTPS_HOST_PORT` and `WEB_HOST_PORT` are published; plain HTTP listens on loopback inside the
+   container, for the health check, the web UI's calls to the controller and the script's `docker exec` calls.
 7. **Verifies the new controller:**
    - `/health/ready` within `READY_TIMEOUT_SECONDS` (from inside the container). A new controller that exits before
-     it is ready fails this check at once, without waiting for the timeout, whether its container stopped or Docker
-     restarted it (`--restart unless-stopped` restarts a controller that exits). One that Docker restarted before the
-     first check is caught when it exits again.
+     it is ready fails this check at once, without waiting for the timeout: whether its container stopped or Docker
+     restarted it (`--restart unless-stopped` restarts a container that exits), or the container's supervisor is
+     starting it again or has left it stopped after repeated crashes (its `supervisor.json` says so). One that was
+     restarted before the first check is caught when it exits again.
    - an authenticated `GET Status` inside the container returns 200 and reports the HAT this run deploys: `hatMode`
      `Physical`, or `Emulated` in [HAT emulator mode](#hat-emulator-mode-test-rigs). The secrets directory is read
      after the script's `--env` settings, so a `HatEmulator` file there could switch the HAT; this check catches it.
    - from the machine running the script, at `https://$PI_HOST:$HTTPS_HOST_PORT` (or `http://$PI_HOST:$HOST_PORT` in
      insecure mode): an authenticated `GET Status` returns 200 and `POST Stop` returns a verified stop. This proves the
      published port, the certificate, `AllowedHosts` and the key from a real client's point of view.
+   - the web UI answers `/health/live` inside the container (`[verify] Web UI live inside the container (https)`),
+     then from the machine running the script at `https://$PI_HOST:$WEB_HOST_PORT`, verified with `REMOTE_CA_CERT`
+     (`[verify] Web UI live at ...: OK`). A web UI that cannot start fails this at once: the supervisor starts it
+     again, which the script reads as an exit. A version from before the web UI (which a rollback can restore) is
+     not checked for one.
 8. **Restores the old controller on failure.** Once the old controller's stop begins in step 5, any failure restores
    it. That includes a failed `docker stop` and an interruption: Ctrl-C, SIGTERM, or a closed terminal or SSH
    session. The script:
@@ -465,8 +477,8 @@ they share the container name `roof-controller` (which also collides with a cont
 
 | Profile | Transport | Needs |
 |---------|-----------|-------|
-| `pi` | HTTPS on `8443` only. Plain HTTP listens on loopback inside the container for the health check. | The certificate directory (`HVO_ROOF_CERT_DIR`, default `/etc/hvo-roof/https`) with `HVO_ROOF_CERT_FILE` (default `roof-controller.pfx`), and its password in the secrets directory |
-| `pi-lan-http` | Plain HTTP on `8080` with `RoofControllerSecurity__RequireHttps=false` | An isolated, trusted LAN: keys cross it in clear text |
+| `pi` | HTTPS on `8443` (the API) and `8088` (the web UI) only. Plain HTTP listens on loopback inside the container for the health check and the web UI. | The certificate directory (`HVO_ROOF_CERT_DIR`, default `/etc/hvo-roof/https`) with `HVO_ROOF_CERT_FILE` (default `roof-controller.pfx`), and its password in the secrets directory |
+| `pi-lan-http` | Plain HTTP on `8080` (the API) and `8088` (the web UI) with `RoofControllerSecurity__RequireHttps=false` | An isolated, trusted LAN: keys cross it in clear text |
 
 ```bash
 cd src/HVO.RoofControllerV4.RPi
@@ -486,7 +498,8 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./d
 Both Pi profiles mirror the script: the secrets directory at `/run/secrets` (`HVO_ROOF_SECRETS_DIR`, default
 `/etc/hvo-roof/secrets`), the identity store directory (`HVO_ROOF_IDENTITY_DIR`, default `/var/lib/hvo-roof/identity`),
 the [settings directories](#4-the-settings-directories) (`HVO_ROOF_CONFIG_DIR` and `HVO_ROOF_MANAGED_SECRETS_DIR`),
-`stop_grace_period: 30s`, `restart: unless-stopped`, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets,
+`stop_grace_period: 30s`, `restart: unless-stopped`, the [supervisor](#the-containers-two-processes) with the
+controller and the web UI, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets,
 certificate, identity and settings
 directories must exist; compose does not create them.
 
@@ -497,7 +510,7 @@ leaves **no** controller running. That is why the commands above run the check o
 `HVO_ROOF_*` variables, and run `up` only if it passes. Read the report of the check that `up` ran with
 `docker compose --profile pi logs roof-controller-check`.
 
-Compose does **not** perform the verified stop, keep the previous container, check the published URL or roll back.
+Compose does **not** perform the verified stop, keep the previous container, check the published URLs or roll back.
 Prefer the script. With Compose, the script's `--verify-remote` does the stop and the URL check, as described below.
 Nothing keeps the previous version or rolls back.
 
@@ -532,7 +545,8 @@ not in `HVO_ROOF_ALLOWED_HOSTS`. A connection or TLS failure points to the port,
 a deploy's pre-flight refuses a key that cannot operate the roof; `--rollback` and `--verify-remote` run no pre-flight.
 
 A third profile, `emulator`, runs the production settings against the [HAT emulator](emulator.md) on any machine,
-with no devices, on `http://127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). It builds both images, maps no devices,
+with no devices, on `http://127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`), with its web UI on `http://127.0.0.1:5196`
+(`HVO_EMULATED_WEB_PORT`). It builds both images, maps no devices,
 publishes on loopback only and uses a network of its own, so it can run next to a Pi profile and a Pi-profile
 controller cannot reach its emulator. It does not run the deployment check. It is for
 testing, not for the observatory:
@@ -588,6 +602,117 @@ carry over in both directions.
 `tests/emulator/deploy-scenarios.sh migration` runs both moves against the HAT emulator, with the refusals on each
 side and a person whose session carries over (see [Container scenarios](emulator.md#container-scenarios)).
 
+## The container's two processes
+
+The container runs two processes: the controller (`HVO.RoofControllerV4.RPi`: the API, the hub, the console and the
+roof itself) and the web UI (`HVO.RoofControllerV4.Web`, on port 8088). The web UI is a client of the controller: it
+calls the controller's API over the container's loopback (`RoofWeb__ControllerUrl`, default `http://localhost:8080`),
+as any other client does, and never drives the HAT itself.
+
+A small supervisor, `/usr/local/bin/roof-supervisor` (`container/roof-supervisor.sh` in the source), starts and stops
+both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals to the supervisor.
+
+| Event | What the supervisor does |
+|-------|--------------------------|
+| `docker stop` (SIGTERM) | Stops the controller first and waits up to 25 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it stops the web UI, waiting up to 2 s (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL). The two waits, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. |
+| The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Starts it again at once. The web UI and the container keep running, and Docker's restart count does not change. |
+| The controller exits otherwise (a crash) | Starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`). The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`) instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
+| The web UI exits | Starts only the web UI again, with the same backoff, and never gives up. The controller is not touched. |
+| A forced restart (`/run/hvo-roof/control/force-restart-controller` appears) | Kills the controller (SIGKILL) and starts it again at once, even from `crash-loop`. Earlier crashes stop counting. A request within 10 s of the controller's start (`HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS`) is ignored, so repeated requests cannot kill a controller that is still starting. |
+
+The container's own restart policy (`unless-stopped`) now applies only when the supervisor itself exits: on
+`docker stop`, or at its start when a `HVO_SUPERVISOR_*` setting is invalid (exit code 2) or its run directory cannot be
+created (exit code 1). Docker then starts the container again, and the supervisor's log line says why. A controller in
+`crash-loop` is not restarted by Docker: a forced restart, or `docker restart roof-controller`, starts it again once the
+cause is found in its log.
+
+A forced restart kills the controller as `docker kill` would, so it carries the same guarantees
+([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)):
+the relays are held as they were until the new controller starts, which turns them all off before anything else. It is
+for a controller that does not answer. It is asked for by creating `/run/hvo-roof/control/force-restart-controller`; the
+control directory is writable only by the web UI's user (and root), and the supervisor checks it every second. From the
+Pi:
+
+```bash
+docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller
+```
+
+The web UI's control for it, for admins only and after confirming what a kill means for the roof, comes with the web
+UI's sign-in (issue #46). The supervisor records what it did with the last request in its state
+(`lastForcedRestart`: `restarted`, or `ignored` within 10 s of a start).
+
+### The web UI's user and settings
+
+The controller runs with the container's environment and the secrets directory, as before. The web UI does not: it
+runs as the image's unprivileged `app` user, with a new environment that has only:
+
+- its own settings, `RoofWeb__*`
+- `PATH`, `TZ`, `HOME`, `USER`, the locale (`LANG`, `LC_*`), `DOTNET_*` and `ASPNETCORE_ENVIRONMENT`
+
+So it never sees the controller's API keys, the Blue Iris credentials or any other setting, and the `app` user cannot
+read the secrets directory (keep it `root:root`, mode `0700`:
+[security.md](security.md#on-the-pi-docker-secrets-directory); the supervisor warns at start when `app` can read a file
+there). For HTTPS, the supervisor gives the web UI private copies (mode `0400`, owned by `app`, in a directory only
+root can write) of the certificate it serves and of that certificate's password:
+
+- by default the controller's certificate (`Kestrel__Certificates__Default__Path`) and the controller's certificate
+  password, from the secrets directory or the environment. The web UI then holds the controller's TLS private key: a
+  compromised web UI could impersonate the controller to its clients.
+- with `RoofWeb__Certificate__Path`, a certificate of the web UI's own, with the password in
+  `RoofWeb__Certificate__PasswordFile` (or none). The controller's password is never given with it. Use this to keep the
+  controller's key out of the web UI.
+
+It takes them again at each start of the web UI, so a renewed certificate is used after a restart of the web UI or the
+container.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `RoofWeb__Urls` | `http://+:8088` | Where the web UI listens. The deploy script and the `pi` profile set `https://+:8088`, and `ALLOW_INSECURE_HTTP=true` and `pi-lan-http` set `http://+:8088`. |
+| `RoofWeb__ControllerUrl` | `http://localhost:8080` | The controller's API, over loopback |
+| `RoofWeb__StatusRefreshSeconds` | `2` | How often the pages check the controller's readiness and the supervisor's state, from 1 to 60 |
+| `RoofWeb__Certificate__Path`, `RoofWeb__Certificate__PasswordFile` | the controller's | A certificate of the web UI's own (a `.pfx` file), and a file with its password (none when unset). A password file that cannot be read is logged, and no password is given. |
+
+The web UI checks its settings at start. An invalid one stops it with
+`The roof controller's web UI did not start: ...`, and the supervisor starts it again with the backoff, so a deploy
+whose web UI cannot start fails its verification and rolls back.
+
+### The supervisor's state
+
+The supervisor writes what it is doing to `/run/hvo-roof/supervisor.json` at each change. The web UI shows it, and the
+health check and the deploy script read it:
+
+```json
+{"supervisor":"running","updatedAt":"2026-09-29T12:00:00Z","crashLimit":5,"crashWindowSeconds":120,
+ "forceRestartMinSeconds":10,"lastForcedRestart":{"at":"2026-09-29T11:40:12Z","outcome":"restarted"},
+ "controller":{"state":"running","pid":7,"starts":2,"recentCrashes":0,"lastExitCode":75,
+               "lastExitReason":"restart requested","lastExitAt":"2026-09-29T11:59:58Z"},
+ "ui":{"state":"running","pid":8,"starts":1,"recentCrashes":0,"lastExitCode":null,"lastExitReason":null,"lastExitAt":null}}
+```
+
+Each process is `running`, `restarting` (waiting to start again), `crash-loop` (the controller only: left stopped),
+`stopping` or `stopped`. The last exit reason is `restart requested`, `crashed (exit code N)`,
+`crashed (killed by signal N)`, `forced restart` or `stopped with the container`. `lastForcedRestart` is `null` until a
+forced restart is asked for; its outcome is `restarted` or `ignored` (within `forceRestartMinSeconds` of the
+controller's start).
+
+Its log lines, in `docker logs`, start with `[supervisor]`:
+
+```text
+[supervisor] Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; stop waits 25s for the controller, then 2s for the web UI)
+[supervisor] Started the controller (pid 7, start 1)
+[supervisor] Started the web UI (pid 8, start 1)
+[supervisor] The controller asked to be restarted (exit code 75); starting it again
+[supervisor] Stopping: the controller first, then the web UI
+[supervisor] Stopping the controller (SIGTERM, up to 25s)
+[supervisor] The controller stopped (exit code 0)
+[supervisor] Stopping the web UI (SIGTERM, up to 2s)
+[supervisor] The web UI stopped (exit code 0)
+[supervisor] Stopped
+```
+
+With arguments, such as the [deployment check](#the-deployment-check)'s `--validate-deployment`, the image runs only
+the controller with them, in the supervisor's place, and exits with its exit code.
+
 ## Health and readiness
 
 One health check, `roof_controller`, backs three endpoints:
@@ -595,7 +720,7 @@ One health check, `roof_controller`, backs three endpoints:
 | Endpoint | Access | Answers |
 |----------|--------|---------|
 | `/health/live` | anonymous | 200 whenever the process answers. No check runs. |
-| `/health/ready` | anonymous, status text only | 200 for Healthy or Degraded, 503 for Unhealthy. The Docker `HEALTHCHECK` and the deploy script's readiness wait use it, from inside the container. |
+| `/health/ready` | anonymous, status text only | 200 for Healthy or Degraded, 503 for Unhealthy. The container's health check and the deploy script's readiness wait use it, from inside the container. |
 | `/health` | Viewer key or signed-in console | The same result with its description and data (`HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 for Unhealthy. |
 
 The check reports the first of these that applies:
@@ -616,6 +741,23 @@ What each deployment should report:
 | Test rig with the HAT emulator (script with `HAT_EMULATOR_ENDPOINT`, or the compose `emulator` profile) | Degraded, naming the emulator | 200 | `hatMode` `Emulated` and the `EMULATED HAT` banner ([HAT emulator mode](#hat-emulator-mode-test-rigs)) |
 | No I²C bus and emulator mode off (a development machine) | Degraded, "simulation mode" | 200 | `hatMode` `Simulation`. Not a deployment: the deploy script and `--verify-remote` refuse it. |
 
+The container's health check, `/usr/local/bin/roof-healthcheck` (the image's `HEALTHCHECK` and the Compose health
+checks), is healthy exactly when the controller's `/health/ready` answers 200. It also reports the web UI's
+`/health/live` (port 8088) and the [supervisor's](#the-containers-two-processes) view of both processes on the same
+line, which `docker inspect` shows:
+
+```text
+controller: ready; web UI: live; supervisor: controller running, web UI running
+controller: NOT READY (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running
+```
+
+The web UI never changes the result: a web UI that is down does not make the container unhealthy, and it never hides
+the controller's state. Read the output with
+`docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' roof-controller`.
+
+The web UI has its own anonymous `/health/live` on its port, which answers 200 whenever the web UI runs. It says
+nothing about the controller: the web UI's pages show the controller's readiness and the supervisor's state.
+
 Readiness does not prove that the controller is usable remotely. `/health/ready` needs no key and is exempt from
 `RequireHttps`, and the deploy script polls it inside the container. The port, the certificate, `AllowedHosts` and a
 key the controller accepts are proven only by the authenticated remote check: step 7 of the script, or
@@ -635,10 +777,14 @@ read `/health` with a Viewer key and expect Healthy.
 | Unverified shutdown retry | every 500 ms | Re-runs the all-off sequence until it verifies, the controller is disposed or 15 s pass. Each unverified shutdown call waits up to 5 s on it. Disposal usually ends it, about 10 s after SIGTERM plus the web server's stop time; when all three calls run, the 15 s limit ends it first. |
 | Controller disposal | 2 s | Waits for the controller lock and then for its background tasks. If blocked HAT I/O holds the lock, disposal stops waiting (Critical: relay state unknown) rather than block the exit, and runs its all-off stop if the call returns before the process ends. |
 | Camera streams | end at `ApplicationStopping` | An open viewer never holds up shutdown |
-| Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the app's timeout. Docker sends SIGKILL after this. |
+| Supervisor, the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`) | 25 s | The [supervisor](#the-containers-two-processes) passes SIGTERM to the controller first and waits this long for it, above the app's 20 s. Then it kills it (SIGKILL). |
+| Supervisor, the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`) | 2 s | Only once the controller has exited: SIGTERM to the web UI, then SIGKILL. |
+| Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the supervisor's two waits together (27 s). Docker sends SIGKILL to everything in the container after this. |
 
-Keep the Docker value above the app value. If Docker kills the process first, the controller cannot confirm that the
-relays are off.
+Keep each layer above the one inside it: the app's 20 s inside the supervisor's 25 s, and the supervisor's 25 s + 2 s
+inside Docker's 30 s. If Docker or the supervisor kills the controller first, the controller cannot confirm that the
+relays are off; they stay as they were until the next start turns them all off
+([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)).
 
 ## After deploying: checks on the device
 
@@ -649,6 +795,8 @@ is read from this machine:
 # Container healthy and listening
 docker ps --filter name=roof-controller
 docker logs --tail 50 roof-controller      # look for "N API key(s) configured" and no Critical/Error security lines
+docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' roof-controller   # controller: ready; web UI: live; ...
+docker exec roof-controller cat /run/hvo-roof/supervisor.json   # both processes running, no recent crashes
 
 # Loopback API call from inside the container (key on stdin, never on the command line)
 printf 'X-Api-Key: %s\n' "$(cat ~/.config/hvo-roof/operator.key)" \
@@ -658,6 +806,7 @@ printf 'X-Api-Key: %s\n' "$(cat ~/.config/hvo-roof/operator.key)" \
 curl -sS https://roof-pi:8443/health/ready
 curl -sS -o /dev/null -w '%{http_code}\n' https://roof-pi:8443/api/v4.0/RoofControl/Status      # expect 401
 curl -sS -o /dev/null -w '%{http_code}\n' http://roof-pi:8080/api/v4.0/RoofControl/Status       # expect a connection error: 8080 is not published in HTTPS mode
+curl -sS https://roof-pi:8088/health/live                                                     # the web UI, with the same certificate
 
 # The previous version, kept for --rollback (stopped, restart policy "no")
 docker ps -a --filter name=roof-controller-previous
@@ -666,3 +815,4 @@ docker ps -a --filter name=roof-controller-previous
 The deploy script already made the authenticated remote Status and Stop calls unless `SKIP_REMOTE_CHECK=true` was set.
 For a Compose controller, or once the port is reachable after a deploy with `SKIP_REMOTE_CHECK=true`, make them with
 `--verify-remote` ([Checking a Compose controller](#checking-a-compose-controller-from-another-machine)).
+`--verify-remote` does not check the web UI: open `https://roof-pi:8088/` in a browser, or use the `curl` line above.

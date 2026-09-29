@@ -1,7 +1,8 @@
 # Local development only. Builds the Pi image and the HAT emulator image for the local machine and runs the controller
 # with the Development environment against the HAT emulator (an emulated roof, drive, limit switches and HAT); no
-# hardware devices are mapped. Browse to http://localhost:5200 (HVO_DEV_ROOF_PORT moves it). API keys still apply: give
-# an admin key of at least 24 characters in HVO_DEV_ROOF_API_KEY (docs/security.md), for example
+# hardware devices are mapped. Browse to http://localhost:5200 (HVO_DEV_ROOF_PORT moves it) for the controller's
+# console, and to http://localhost:5288 (HVO_DEV_WEB_PORT moves it) for the web UI. API keys still apply: give an admin
+# key of at least 24 characters in HVO_DEV_ROOF_API_KEY (docs/security.md), for example
 #   HVO_DEV_ROOF_API_KEY=$(openssl rand -hex 24) docker compose up --build
 # The emulator's control API (fault injection, docs/emulator.md) is on http://127.0.0.1:5290 (HVO_EMULATOR_CONTROL_PORT
 # moves it); it has no authentication, so it is published on loopback only.
@@ -45,6 +46,9 @@ services:
       - RoofControllerSecurity__ApiKeys__0__Key=${HVO_DEV_ROOF_API_KEY:-}
     ports:
       - "${HVO_DEV_ROOF_PORT:-5200}:8080"
+      - "${HVO_DEV_WEB_PORT:-5288}:8088"
+    # docker stop: the supervisor stops the controller (up to 25 s), then the web UI (2 s).
+    stop_grace_period: 30s
     networks:
       - hvo-network
 

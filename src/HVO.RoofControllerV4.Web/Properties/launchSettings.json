@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "Debug": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RoofWeb__Urls": "http://localhost:5188",
+        "RoofWeb__ControllerUrl": "http://localhost:5195"
+      }
+    }
+  }
+}

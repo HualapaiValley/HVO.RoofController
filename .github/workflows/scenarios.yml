@@ -4,8 +4,8 @@ name: Scenarios
 # hardware is involved, and nothing is pushed or deployed.
 #   scenarios            every [TestCategory("Scenario")] test, the short C14 soak included
 #   browser              the console in Chromium with phone and tablet emulation ([TestCategory("Browser")])
-#   container-scenarios  the Docker lifecycle, the C12 deploy and rollback, and the Compose migration
-#                        (tests/emulator/deploy-scenarios.sh)
+#   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
+#                        rollback, and the Compose migration (tests/emulator/deploy-scenarios.sh)
 #   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results
 on:
   push:
@@ -142,7 +142,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Lifecycle, C12 deploy and rollback, Compose migration
+      - name: Lifecycle, supervisor, C12 deploy and rollback, Compose migration
         run: tests/emulator/deploy-scenarios.sh
 
       - name: Summary

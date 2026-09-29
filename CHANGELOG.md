@@ -184,6 +184,27 @@ the roof against this server; use the authenticated browser console for operator
   (tmux) against the compose emulator. That run also draws each screen as an SVG image
   (`tests/cli/ansi-to-svg.py`), and those images are the screenshots in
   [docs/cli.md](docs/cli.md).
+- Two processes in one container (#43). The image runs the controller and a new web UI
+  (`HVO.RoofControllerV4.Web`, a client of the controller's API over the container's loopback)
+  under `roof-supervisor`, with `tini` as PID 1. `docker stop` stops the controller first and
+  waits for its verified safe stop (up to 25 s), then the web UI (up to 2 s), within the
+  container's 30 s grace period. A controller that exits with 75 (`POST System/Restart`) is
+  started again at once in the same container; a crash is restarted with a backoff (1 s,
+  doubling, at most 30 s), and the fifth crash within 120 s leaves the controller stopped, with
+  the container's health check failing, instead of looping. A web UI that exits is restarted on
+  its own, and the controller is not touched. A controller that does not answer can be restarted
+  by force (a kill, with the guarantees of `docker kill`): for now with `docker exec` and the
+  supervisor's control file; the web UI's admin control for it comes with its sign-in (#46). The
+  web UI runs as the unprivileged `app` user with only its `RoofWeb__*` settings, and cannot read
+  the secrets directory; for HTTPS it holds a copy of the certificate it serves and its password
+  (by default the controller's; `RoofWeb__Certificate__Path` gives it its own). It
+  listens on port 8088 (`WEB_HOST_PORT`; HTTPS with the controller's certificate, or plain HTTP
+  with `ALLOW_INSECURE_HTTP=true`), which the deploy script and the Compose profiles publish.
+  The controller keeps 8080 and 8443, so existing clients do not change. The health check stays
+  the controller's readiness. The deploy script checks the web UI after a deploy and rolls back
+  when it cannot start. `tests/container/supervisor-tests.sh` tests the supervisor with fake
+  processes, and the `supervisor` container scenarios run it on real Docker (C11 steps 5-9). See
+  [docs/deployment.md](docs/deployment.md#the-containers-two-processes).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.

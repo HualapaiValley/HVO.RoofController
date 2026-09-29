@@ -4,10 +4,16 @@
 #   lifecycle  The deployed container stopped (docker stop, as the script and Compose stop it) with a camera stream
 #              open, and killed (the process dies with the relays held), while the roof travels, then started again
 #              (C11 steps 2-3 in a container). Then docker stop while relay writes fail: once until a shutdown retry
-#              verifies the relays off, and once for good (C11 step 4).
+#              verifies the relays off, and once for good (C11 step 4). A restart through the API, which the container's
+#              supervisor handles in the same container (C11 step 5).
+#   supervisor The container's two processes (docs/deployment.md, "The container's two processes"): the controller
+#              killed during travel inside the container, a crash loop that leaves it stopped with the container
+#              unhealthy and the web UI saying why, a forced restart through the web UI's control file, and the web UI
+#              killed while the roof moves (C11 steps 6-9); and the web UI's user and environment.
 #   c12        commissioning.md C12 with deploy-roofcontroller-rpi.sh: an idle deploy, a deploy while the roof moves,
 #              pre-flight failures, a remote-check failure that rolls back, --rollback twice, a Stop that cannot be
-#              verified, a new controller that never becomes ready, and the relays off throughout.
+#              verified, a new controller that never becomes ready, a new web UI that cannot start, and the relays off
+#              throughout.
 #   migration  A controller moved from the Compose `pi` profile to the deploy script and back to the Compose version,
 #              following "Moving between Compose and the deploy script" in docs/deployment.md, and the refusals that
 #              keep the two from managing the same controller. The script's --verify-remote checks each Compose
@@ -23,10 +29,11 @@
 # start while a roof-controller container, or this run's emulator container or network, exists. Only a run that got
 # past that check removes them on exit; the images stay (the build cache).
 #
-#   tests/emulator/deploy-scenarios.sh [lifecycle] [c12] [migration]     (all three by default, in that order)
+#   tests/emulator/deploy-scenarios.sh [lifecycle] [supervisor] [c12] [migration]    (all four by default, in that order)
 #
-# Settings (environment): SCN_HTTPS_PORT (the controller's published HTTPS port, default 18443), SCN_EMULATOR_PORT (the
-# emulator's control API on loopback, default 15390), SCN_RESULTS_DIR (writes deploy-scenarios.md there: each check
+# Settings (environment): SCN_HTTPS_PORT (the controller's published HTTPS port, default 18443), SCN_WEB_PORT (the web
+# UI's published HTTPS port, default 18088), SCN_EMULATOR_PORT (the emulator's control API on loopback, default 15390),
+# SCN_RESULTS_DIR (writes deploy-scenarios.md there: each check
 # with its result and timings), SCN_NO_BUILD=1 (reuse the HAT emulator image; the deploy script always builds the
 # controller, from the build cache after the first time).
 #
@@ -51,6 +58,7 @@ if [[ -e /dev/gpiomem ]] || grep -qs 'Raspberry Pi' /proc/device-tree/model; the
   exit 1
 fi
 https_port=${SCN_HTTPS_PORT:-18443}
+web_port=${SCN_WEB_PORT:-18088}
 emulator_port=${SCN_EMULATOR_PORT:-15390}
 network=hvo-deploy-scenarios
 emulator_name=hvo-deploy-scenarios-hat
@@ -66,6 +74,7 @@ esac
 
 roof="https://127.0.0.1:${https_port}"
 roof_api="${roof}/api/v4.0/RoofControl"
+web="https://127.0.0.1:${web_port}"
 emulator_api="http://127.0.0.1:${emulator_port}/api/emulator"
 
 work=$(mktemp -d)
@@ -234,6 +243,59 @@ controller_ready() {
   curl -fsS --max-time 5 --cacert "${work}/ca.pem" "${roof}/health/ready" >/dev/null
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# The container's supervisor and web UI (docs/deployment.md, "The container's two processes").
+
+# supervisor_state: the supervisor's state file in the controller's container (supervisor.json), on one line.
+supervisor_state() {
+  docker exec "${controller}" cat /run/hvo-roof/supervisor.json | jq -c .
+}
+
+# supervised_is <jq filter>: the supervisor's state file matches the filter.
+supervised_is() {
+  supervisor_state | jq -e "$1" >/dev/null
+}
+
+# supervised_value <jq filter>: a value from the supervisor's state file.
+supervised_value() {
+  supervisor_state | jq -r "$1"
+}
+
+# web_ui_live: the web UI answers its liveness check at its published port, over HTTPS with the scenario's CA.
+web_ui_live() {
+  curl -fsS --max-time 5 --cacert "${work}/ca.pem" "${web}/health/live" >/dev/null
+}
+
+# web_page_has <text>: the web UI's home page, as the server renders it, has the text.
+web_page_has() {
+  local page
+  page=$(curl -fsS --max-time 10 --cacert "${work}/ca.pem" "${web}/") || return 1
+  grep -qF -- "$1" <<<"${page}"
+}
+
+# kill_supervised <controller|ui>: kills that process inside the container (SIGKILL), as a crash ends it. The supervisor
+# and the other process stay.
+kill_supervised() {
+  local pid
+  pid=$(supervised_value ".$1.pid // empty")
+  [[ "${pid}" =~ ^[0-9]+$ ]] || fail "the supervisor reports no running $1 to kill: $(supervisor_state)"
+  docker exec "${controller}" bash -c "kill -KILL ${pid}"
+}
+
+# request_forced_restart: what the web UI does for a forced restart, as the web UI's user: it creates the request file
+# in the supervisor's control directory.
+request_forced_restart() {
+  docker exec -u app "${controller}" touch /run/hvo-roof/control/force-restart-controller
+}
+
+# supervisor_log_line <text> [since]: the number of the first line of the container's log (since a `now` value) that has
+# the text, or nothing.
+supervisor_log_line() {
+  local log
+  log=$(docker logs ${2:+--since "$2"} "${controller}" 2>&1)
+  grep -n -m 1 -F -- "$1" <<<"${log}" | cut -d: -f1 || true
+}
+
 plant() {
   curl -fsS --max-time 10 "${emulator_api}/status" | jq -c '.plant'
 }
@@ -312,7 +374,7 @@ assert_relays_off() {
   no_violations
 }
 
-# The relay register sampled every 0.1 s while a check runs (C12 step 9).
+# The relay register sampled every 0.1 s while a check runs (C12 step 10).
 relay_monitor_pid=""
 start_relay_monitor() {
   : > "${work}/relays.log"
@@ -397,7 +459,7 @@ run_deploy() {
   start=$(date +%s.%N)
   set +e
   env PI_HOST=127.0.0.1 DOCKER_CONTEXT=default IMAGE_TAG="${image}" BUILD_PLATFORM="${platform}" \
-    HTTPS_HOST_PORT="${https_port}" HTTPS_CERT_DIR="${work}/certs" REMOTE_CA_CERT="${work}/ca.pem" \
+    HTTPS_HOST_PORT="${https_port}" WEB_HOST_PORT="${web_port}" HTTPS_CERT_DIR="${work}/certs" REMOTE_CA_CERT="${work}/ca.pem" \
     SECRETS_DIR="${work}/secrets" IDENTITY_DIR="${work}/identity" ROOF_OPERATOR_API_KEY="${operator_key}" \
     CONFIG_DIR="${work}/config" MANAGED_SECRETS_DIR="${work}/settings-secrets" \
     HAT_EMULATOR_ENDPOINT="${emulator_name}:5291" ALLOW_EMULATED_HAT=true EXTRA_DOCKER_ARGS="--network ${network}" \
@@ -531,6 +593,7 @@ services:
     devices: !reset []
     ports: !override
       - "${https_port}:8443"
+      - "${web_port}:8088"
     environment: *emulated-hat
     volumes: !override
       - type: bind
@@ -614,10 +677,20 @@ scenario_lifecycle() {
   stop_seconds=$(seconds_since "${start}")
   exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${controller}")
   (( exit_code != 137 )) || fail "the container was killed after the grace period (exit 137)"
-  (( exit_code == 0 )) || fail "the controller exited ${exit_code} after docker stop (expected 0)"
+  (( exit_code == 0 )) || fail "the container exited ${exit_code} after docker stop (expected 0)"
   plant_is '.relayRegister == 0' || fail "the relays are still energized after the container stopped: $(plant)"
   assert_relays_off
   container_log_has "${controller}" 'stopped: HostShutdown' "${start}" || fail "the controller's log has no HostShutdown stop"
+  # The supervisor stops the controller first and waits for it (its shutdown stops the roof), then the web UI.
+  local controller_stopping controller_stopped ui_stopping
+  controller_stopping=$(supervisor_log_line '[supervisor] Stopping the controller (SIGTERM' "${start}")
+  controller_stopped=$(supervisor_log_line '[supervisor] The controller stopped (exit code 0)' "${start}")
+  ui_stopping=$(supervisor_log_line '[supervisor] Stopping the web UI (SIGTERM' "${start}")
+  if [[ -z "${controller_stopping}" || -z "${controller_stopped}" || -z "${ui_stopping}" ]] \
+    || (( controller_stopping > controller_stopped || controller_stopped > ui_stopping )); then
+    fail "the supervisor did not stop the controller (exit code 0) before the web UI: lines ${controller_stopping:-none}, ${controller_stopped:-none}, ${ui_stopping:-none}"
+  fi
+  ! container_log_has "${controller}" 'did not stop within' "${start}" || fail "the supervisor killed a process at the end of its wait"
   wait_for "the camera stream to end" 5 camera_stream_ended
   stream_seconds=$(awk -v s="${start}" -v e="$(cat "${work}/camera.ended")" 'BEGIN { printf "%.1f", e - s }')
   stop_camera_stream
@@ -625,36 +698,44 @@ scenario_lifecycle() {
   awk -v t="${stream_seconds}" 'BEGIN { exit !(t < 5) }' || fail "the camera stream ended ${stream_seconds} s after docker stop"
   awk -v t="${stop_seconds}" 'BEGIN { exit !(t < 5) }' || fail "docker stop took ${stop_seconds} s with a camera stream open"
   wait_for "the emulated camera's stream closed" 5 camera_is '.openStreams == 0'
-  pass "the controller stopped the roof (relays off, HostShutdown) and exited ${exit_code} in ${stop_seconds} s; the camera stream ended ${stream_seconds} s after docker stop"
+  pass "the controller stopped the roof (relays off, HostShutdown) and exited 0 before the supervisor stopped the web UI; the container exited ${exit_code} in ${stop_seconds} s; the camera stream ended ${stream_seconds} s after docker stop"
 
   current_check="Lifecycle: restart after a stop"
   docker start "${controller}" >/dev/null
   wait_for "the controller ready" 120 controller_ready
   wait_for "the controller initialized" 60 roof_is '.isInitialized and .isMoving == false'
   assert_relays_off
-  pass "the restarted controller is ready, not moving, relays off"
+  wait_for "the web UI live" 60 web_ui_live
+  pass "the restarted controller is ready, not moving, relays off, and the web UI is live"
 
-  current_check="Lifecycle: a restart through the API exits 75 and Docker starts the controller again"
-  local restarts container response exit_codes
+  # CommissioningCheck("C11", "5")
+  current_check="Lifecycle: a restart through the API exits 75, and the supervisor starts the controller again (C11 5)"
+  local restarts container response starts ui_pid
   restarts=$(docker inspect --format '{{.RestartCount}}' "${controller}")
   container=$(container_id "${controller}")
-  start=$(date +%s)
+  starts=$(supervised_value '.controller.starts')
+  ui_pid=$(supervised_value '.ui.pid')
+  start=$(now)
   response=$(admin_call POST System/Restart)
   [[ "$(tail -n 1 <<<"${response}")" == 202 ]] \
     || fail "POST System/Restart answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
   sed '$d' <<<"${response}" | jq -e '.exitCode == 75' >/dev/null || fail "the restart answer does not name exit code 75: $(sed '$d' <<<"${response}")"
-  wait_for "Docker to start the controller again" 60 restarted_since "${restarts}"
-  # A whole-second --until leaves out the events of the current second, so give it the fraction.
-  exit_codes=$(docker events --since "${start}" --until "$(date +%s.%N)" --filter "container=${container}" --filter event=die \
-    --format '{{index .Actor.Attributes "exitCode"}}' | paste -sd ' ')
-  [[ "${exit_codes}" == 75 ]] || fail "the controller exited with '${exit_codes}' after the restart request, not 75 once"
+  wait_for "the supervisor to start the controller again" 60 \
+    supervised_is ".controller.state == \"running\" and .controller.starts == $((starts + 1))"
+  supervised_is '.controller.lastExitCode == 75 and .controller.lastExitReason == "restart requested"' \
+    || fail "the supervisor does not report the controller's exit 75 as a requested restart: $(supervisor_state)"
+  supervised_is ".ui.state == \"running\" and .ui.pid == ${ui_pid}" || fail "the web UI did not keep running: $(supervisor_state)"
   [[ "$(container_id "${controller}")" == "${container}" ]] || fail "the restart replaced the container"
+  container_running "${controller}" || fail "the container stopped"
+  (( $(docker inspect --format '{{.RestartCount}}' "${controller}") == restarts )) \
+    || fail "Docker restarted the container; the supervisor restarts the controller inside it"
   wait_for "the controller ready" 120 controller_ready
   wait_for "the controller initialized" 60 roof_is '.isInitialized and .isMoving == false'
   container_log_has "${controller}" 'AUDIT controller restart requested by' "${start}" \
     || fail "the controller's log has no AUDIT entry for the restart"
+  web_ui_live || fail "the web UI is not live"
   assert_relays_off
-  pass "POST System/Restart answered 202; the controller exited 75 and Docker restarted the same container (restart count ${restarts} -> $(docker inspect --format '{{.RestartCount}}' "${controller}")), ready with the relays off"
+  pass "POST System/Restart answered 202; the controller exited 75 and the supervisor started it again in the same container (start ${starts} -> $((starts + 1)), Docker restart count still ${restarts}), ready with the relays off; the web UI kept running (pid ${ui_pid})"
 
   # CommissioningCheck("C11")
   current_check="Lifecycle: process killed during travel, then restarted"
@@ -687,7 +768,9 @@ scenario_lifecycle() {
   wait "${docker_stop}" || fail "docker stop failed"
   stop_seconds=$(seconds_since "${start}")
   exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${controller}")
-  (( exit_code == 0 )) || fail "the controller exited ${exit_code} after docker stop (expected 0)"
+  (( exit_code == 0 )) || fail "the container exited ${exit_code} after docker stop (expected 0)"
+  container_log_has "${controller}" '[supervisor] The controller stopped (exit code 0)' "${start}" \
+    || fail "the supervisor's log does not show the controller exited 0"
   container_log_has "${controller}" 'verified the relay register all-off' "${start}" \
     || fail "the controller's log has no shutdown retry that verified the relays off"
   container_log_has "${controller}" 'Roof controller shutdown stop completed' "${start}" \
@@ -712,6 +795,8 @@ scenario_lifecycle() {
     || fail "the controller's log does not report its shutdown stop unverified"
   container_log_has "${controller}" 'Roof controller shutdown stop FAILED' "${start}" \
     || fail "the controller's log does not report its shutdown stop failed"
+  ! container_log_has "${controller}" 'did not stop within' "${start}" \
+    || fail "the supervisor killed the controller at the end of its wait"
   held=$(plant | jq '.relayRegister')
   (( held != 0 )) || fail "the relays are off although no relay write reached the HAT"
   emulator_post bus '{"failWrites": false}'
@@ -722,6 +807,159 @@ scenario_lifecycle() {
   wait_for "the controller ready" 120 controller_ready
   assert_relays_off
   pass "the controller logged the failed stop and exited ${exit_code} in ${stop_seconds} s with the relays held (register ${held}); once the writes worked, the restarted controller turned them off ${off_seconds} s after docker start"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# supervisor
+
+# The container's two processes, each ended inside the deployed container as a crash ends it. Docker never restarts the
+# container: the supervisor restarts the process, or leaves a crash-looping controller stopped.
+scenario_supervisor() {
+  ensure_deployed
+  close_roof
+  wait_for "the web UI live" 60 web_ui_live
+  local container restarts starts ui_pid ui_starts held start off_seconds
+
+  # CommissioningCheck("C11")
+  current_check="Supervisor: the web UI runs as the app user, without the controller's settings or secrets"
+  local names leaked
+  ui_pid=$(supervised_value '.ui.pid')
+  [[ "$(docker exec "${controller}" stat -c %U "/proc/${ui_pid}")" == app ]] || fail "the web UI does not run as the app user"
+  # Only the names: the values are not printed. Read as app, the process's own user: root in the container has no
+  # CAP_SYS_PTRACE, so it cannot read another user's environment.
+  names=$(docker exec -u app "${controller}" bash -c "set -o pipefail; tr '\\0' '\\n' < /proc/${ui_pid}/environ | cut -d= -f1") \
+    || fail "could not read the web UI's environment (pid ${ui_pid})"
+  leaked=$(grep -E '^(RoofControllerSecurity__|Kestrel__|BlueIris__|HatEmulator__|ASPNETCORE_URLS$)' <<<"${names}" | paste -sd ' ' || true)
+  [[ -z "${leaked}" ]] || fail "the web UI's environment has the controller's settings: ${leaked}"
+  grep -qx 'RoofWeb__Urls' <<<"${names}" || fail "the web UI's environment has no RoofWeb__Urls"
+  # The key file exists (root reads it), so a refusal to app is the permission, not a missing file.
+  docker exec "${controller}" test -r /run/secrets/RoofControllerSecurity__ApiKeys__0__Key \
+    || fail "the controller's API key file is not at /run/secrets/RoofControllerSecurity__ApiKeys__0__Key"
+  ! docker exec -u app "${controller}" cat /run/secrets/RoofControllerSecurity__ApiKeys__0__Key >/dev/null 2>&1 \
+    || fail "the web UI's user can read the controller's API keys"
+  # The web UI's private directory (its certificate copies) is root's: the web UI reads it but cannot plant a link there
+  # for the supervisor, running as root, to write through.
+  local private
+  private=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/web) || fail "no /run/hvo-roof/web"
+  [[ "${private}" == "root:app 750" ]] || fail "/run/hvo-roof/web is ${private}, not root:app 750"
+  ! docker exec -u app "${controller}" ln -s /app/x /run/hvo-roof/web/probe 2>/dev/null \
+    || fail "the web UI's user can create a link in /run/hvo-roof/web"
+  pass "the web UI (pid ${ui_pid}) runs as app with its RoofWeb__* settings and none of the controller's, cannot read /run/secrets, and cannot write its private directory (root:app 750)"
+
+  container=$(container_id "${controller}")
+  restarts=$(docker inspect --format '{{.RestartCount}}' "${controller}")
+
+  # CommissioningCheck("C11", "6")
+  current_check="Supervisor: the controller killed during travel inside the container (C11 6)"
+  starts=$(supervised_value '.controller.starts')
+  start_travel Open
+  kill_supervised controller
+  start=$(now)
+  held=$(plant | jq '.relayRegister')
+  (( held != 0 )) || fail "the relays were released when the controller died; the HAT holds them until something writes the register"
+  wait_for "the supervisor to start the controller again" 30 \
+    supervised_is ".controller.state == \"running\" and .controller.starts == $((starts + 1))"
+  supervised_is '.controller.lastExitReason == "crashed (killed by signal 9)" and .controller.recentCrashes == 1' \
+    || fail "the supervisor does not report one crash: $(supervisor_state)"
+  wait_for "the restarted controller to turn the relays off" 60 plant_is '.relayRegister == 0'
+  off_seconds=$(seconds_since "${start}")
+  wait_for "the controller ready" 120 controller_ready
+  supervised_is ".ui.state == \"running\" and .ui.pid == ${ui_pid}" || fail "the web UI did not keep running: $(supervisor_state)"
+  [[ "$(container_id "${controller}")" == "${container}" ]] || fail "the container was replaced"
+  (( $(docker inspect --format '{{.RestartCount}}' "${controller}") == restarts )) || fail "Docker restarted the container"
+  assert_relays_off
+  pass "the relays were held (register ${held}) after the kill; the supervisor started the controller again after its backoff, and it turned the relays off ${off_seconds} s after the kill; the web UI kept running and Docker did not restart the container"
+
+  # CommissioningCheck("C11", "7")
+  current_check="Supervisor: a crash loop leaves the controller stopped and the container unhealthy (C11 7)"
+  local limit kills=0 health health_status
+  limit=$(supervised_value '.crashLimit')
+  # Each start is killed at once, until the supervisor stops starting it. The step 6 crash counts too.
+  while ! supervised_is '.controller.state == "crash-loop"'; do
+    (( kills < limit )) || fail "the supervisor still starts the controller after ${kills} more crashes: $(supervisor_state)"
+    starts=$(supervised_value '.controller.starts')
+    kill_supervised controller
+    kills=$((kills + 1))
+    # Started again after its backoff (1, 2, 4 or 8 s with the defaults), or left stopped.
+    wait_for "the supervisor to start the controller again or leave it stopped" 60 supervised_is \
+      ".controller.state == \"crash-loop\" or (.controller.state == \"running\" and .controller.starts == $((starts + 1)))"
+  done
+  supervised_is ".controller.pid == null and .controller.recentCrashes == ${limit}" \
+    || fail "the crash-looping controller is not left stopped after ${limit} crashes: $(supervisor_state)"
+  sleep 3
+  supervised_is '.controller.state == "crash-loop"' || fail "the supervisor started the crash-looping controller again: $(supervisor_state)"
+  ! controller_ready || fail "the controller answers although it is stopped"
+  # The image's health check, as Docker runs it (Docker reports unhealthy after its retries, 90 s at the image's interval).
+  health_status=0
+  health=$(docker exec "${controller}" /usr/local/bin/roof-healthcheck) || health_status=$?
+  (( health_status != 0 )) || fail "the health check passes with the controller stopped: ${health}"
+  grep -qF 'controller: NOT READY' <<<"${health}" || fail "the health check does not report the controller not ready: ${health}"
+  grep -qF 'supervisor: controller crash-loop, web UI running' <<<"${health}" \
+    || fail "the health check does not report the crash loop: ${health}"
+  container_running "${controller}" || fail "the container stopped"
+  (( $(docker inspect --format '{{.RestartCount}}' "${controller}") == restarts )) || fail "Docker restarted the container"
+  web_ui_live || fail "the web UI is not live"
+  wait_for "the web UI to say the controller is stopped after repeated crashes" 15 \
+    web_page_has 'The controller is stopped after repeated crashes'
+  plant_is '.relayRegister == 0 and .velocityMetersPerSecond == 0' || fail "the relays are energized: $(plant)"
+  no_violations
+  pass "after ${limit} crashes within $(supervised_value '.crashWindowSeconds') s the controller is left stopped; the health check fails (${health}); the web UI is live and says why; relays off"
+
+  # CommissioningCheck("C11", "8")
+  current_check="Supervisor: a forced restart through the web UI's control file (C11 8)"
+  starts=$(supervised_value '.controller.starts')
+  request_forced_restart
+  wait_for "the forced restart to start the controller" 15 \
+    supervised_is ".controller.state == \"running\" and .controller.starts == $((starts + 1))"
+  start=$(now)
+  supervised_is '.controller.lastExitReason == "forced restart" and .controller.recentCrashes == 0' \
+    || fail "the supervisor does not report a forced restart that clears the crashes: $(supervisor_state)"
+  # A second request while the controller starts is ignored, so a repeated one cannot kill a controller still starting.
+  request_forced_restart
+  wait_for "the supervisor to ignore the early request" 10 \
+    container_log_has "${controller}" '[supervisor] Ignored a forced restart request' "${start}"
+  supervised_is ".controller.state == \"running\" and .controller.starts == $((starts + 1))" \
+    || fail "a forced restart right after the start killed the controller: $(supervisor_state)"
+  wait_for "the controller ready" 120 controller_ready
+  wait_for "the controller initialized" 60 roof_is '.isInitialized and .isMoving == false'
+  wait_for "the web UI to say the controller is ready" 15 web_page_has 'The controller is ready'
+  # Past the supervisor's 10 s guard, a request kills the running controller and starts it again at once.
+  while awk -v t="$(seconds_since "${start}")" 'BEGIN { exit !(t < 11) }'; do sleep 0.5; done
+  starts=$((starts + 1))
+  request_forced_restart
+  wait_for "the forced restart to start the controller again" 15 \
+    supervised_is ".controller.state == \"running\" and .controller.starts == $((starts + 1))"
+  supervised_is '.controller.lastExitCode == 137 and .controller.lastExitReason == "forced restart"' \
+    || fail "the supervisor does not report the running controller killed for a forced restart: $(supervisor_state)"
+  wait_for "the controller ready" 120 controller_ready
+  wait_for "the controller initialized" 60 roof_is '.isInitialized and .isMoving == false'
+  supervised_is ".ui.state == \"running\" and .ui.pid == ${ui_pid}" || fail "the web UI did not keep running: $(supervisor_state)"
+  (( $(docker inspect --format '{{.RestartCount}}' "${controller}") == restarts )) || fail "Docker restarted the container"
+  assert_relays_off
+  pass "a forced restart started the crash-looping controller (crashes cleared), a second request within 10 s of its start was ignored, and a later one killed the running controller and started it again; ready each time, relays off, the web UI running throughout"
+
+  # CommissioningCheck("C11", "9")
+  current_check="Supervisor: the web UI killed while the roof moves (C11 9)"
+  local controller_pid controller_starts
+  close_roof
+  controller_pid=$(supervised_value '.controller.pid')
+  controller_starts=$(supervised_value '.controller.starts')
+  ui_starts=$(supervised_value '.ui.starts')
+  start_travel Open
+  kill_supervised ui
+  wait_for "the supervisor to start the web UI again" 30 \
+    supervised_is ".ui.state == \"running\" and .ui.starts == $((ui_starts + 1))"
+  supervised_is '.ui.lastExitReason == "crashed (killed by signal 9)"' || fail "the supervisor does not report the web UI's crash: $(supervisor_state)"
+  roof_is '.isMoving or .status == "Open"' || fail "the roof stopped when the web UI died: $(roof_get Status)"
+  wait_for "the web UI live again" 60 web_ui_live
+  supervised_is ".controller.state == \"running\" and .controller.pid == ${controller_pid} and .controller.starts == ${controller_starts}" \
+    || fail "the controller was touched when the web UI died: $(supervisor_state)"
+  controller_ready || fail "the controller is not ready"
+  (( $(docker inspect --format '{{.RestartCount}}' "${controller}") == restarts )) || fail "Docker restarted the container"
+  roof_post Stop >/dev/null
+  assert_relays_off
+  close_roof
+  pass "the supervisor started only the web UI again (start ${ui_starts} -> $((ui_starts + 1))) and it is live; the controller (pid ${controller_pid}) kept running and the move went on; relays off after Stop"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -740,14 +978,17 @@ scenario_c12() {
   (( DEPLOY_STATUS == 0 )) || fail "the deploy failed (exit ${DEPLOY_STATUS})"
   expect_deploy_log "[deploy] Roof stop verified (relay register all off)."
   expect_deploy_log "[verify] Remote Status and verified Stop at ${roof}: OK"
+  expect_deploy_log "[verify] Web UI live inside the container (https)"
+  expect_deploy_log "[verify] Web UI live at ${web}: OK"
   expect_deploy_log "[done] Deployment complete and verified at ${roof}"
   new_id=$(container_id "${controller}")
   [[ "${new_id}" != "${old_id}" ]] || fail "the controller was not replaced"
   [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "the old controller is not kept as ${previous}"
   ! container_running "${previous}" || fail "${previous} is running"
+  web_ui_live || fail "the web UI is not live at ${web}"
   relays_stayed_off
   assert_relays_off
-  pass "deployed in ${DEPLOY_SECONDS} s; the old controller is kept stopped as ${previous}; relays 0 in ${RELAY_SAMPLES} samples"
+  pass "deployed in ${DEPLOY_SECONDS} s; the web UI is live at its published port over HTTPS; the old controller is kept stopped as ${previous}; relays 0 in ${RELAY_SAMPLES} samples"
 
   # CommissioningCheck("C12", "2")
   current_check="C12 step 2: deploy while the roof moves"
@@ -913,9 +1154,30 @@ scenario_c12() {
   pass "the new controller was not ready within 45 s; exit ${DEPLOY_STATUS} after ${DEPLOY_SECONDS} s with the previous controller running and ready again; relays 0 in ${RELAY_SAMPLES} samples"
 
   # CommissioningCheck("C12", "9")
-  current_check="C12 step 9: the roof de-energized throughout steps 3-8"
+  current_check="C12 step 9: a new version whose web UI cannot start rolls back"
+  # A web UI setting out of range passes the pre-flight, which runs only the controller. The new controller becomes ready,
+  # but its web UI exits at each start and the supervisor keeps starting it again.
+  start_relay_monitor
+  deploy "EXTRA_DOCKER_ARGS=--network ${network} --env RoofWeb__StatusRefreshSeconds=0"
+  (( DEPLOY_STATUS != 0 )) || fail "the deploy succeeded although the new web UI cannot start"
+  expect_deploy_log "[deploy] Roof stop verified (relay register all off)."
+  expect_deploy_log "the web UI in ${controller} exited and its supervisor is starting it again"
+  expect_deploy_log "Rolled back: the previous controller is running and ready."
+  [[ "$(container_id "${controller}")" == "${current_id}" ]] || fail "the old controller is not back as ${controller}"
+  container_running "${controller}" || fail "the old controller is not running"
+  wait_for "the old controller ready" 120 controller_ready
+  roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
+  wait_for "the old version's web UI live" 60 web_ui_live
+  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
+  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  relays_stayed_off
+  assert_relays_off
+  pass "the new web UI could not start; exit ${DEPLOY_STATUS} after ${DEPLOY_SECONDS} s with the previous controller and its web UI running again; relays 0 in ${RELAY_SAMPLES} samples"
+
+  # CommissioningCheck("C12", "10")
+  current_check="C12 step 10: the roof de-energized throughout steps 3-9"
   no_violations
-  pass "every relay-register sample in steps 3-8 was 0 (in step 7, until the monitor stopped before ClearFault), and the emulator recorded no violations"
+  pass "every relay-register sample in steps 3-9 was 0 (in step 7, until the monitor stopped before ClearFault), and the emulator recorded no violations"
 }
 
 # The deploy runs in a process group of its own (job control on for the fork), so a failed run can stop all of it.
@@ -1108,11 +1370,11 @@ scenario_migration() {
 # ---------------------------------------------------------------------------------------------------------------------
 
 scenarios=("$@")
-(( ${#scenarios[@]} > 0 )) || scenarios=(lifecycle c12 migration)
+(( ${#scenarios[@]} > 0 )) || scenarios=(lifecycle supervisor c12 migration)
 for scenario in "${scenarios[@]}"; do
   case "${scenario}" in
-    lifecycle|c12|migration) ;;
-    *) echo "Unknown scenario: ${scenario} (lifecycle, c12 or migration)" >&2; exit 2 ;;
+    lifecycle|supervisor|c12|migration) ;;
+    *) echo "Unknown scenario: ${scenario} (lifecycle, supervisor, c12 or migration)" >&2; exit 2 ;;
   esac
 done
 

@@ -17,7 +17,10 @@ set -euo pipefail
 # 3. The new controller must become ready, answer an authenticated Status inside the container, and answer an
 #    authenticated Status and a verified Stop from this machine at the published URL (HTTPS unless
 #    ALLOW_INSECURE_HTTP=true), and report the HAT this run deploys (hatMode Physical, or Emulated in HAT emulator
-#    mode). Otherwise it is stopped and removed, and <name>-previous is restored as <name> and
+#    mode). The container runs the controller and the web UI under a supervisor (docs/deployment.md, "The container's
+#    two processes"): a controller the supervisor had to start again, or left stopped after repeated crashes, has
+#    exited, and the web UI must answer its liveness check inside the container and from this machine on
+#    WEB_HOST_PORT. Otherwise it is stopped and removed, and <name>-previous is restored as <name> and
 #    started again if it was running. A failure or an interrupt (Ctrl-C, SIGTERM, a lost terminal) anywhere after the
 #    old controller's stop began restores it the same way. Only the container this run created is ever removed.
 #    From that stop on, docker runs in its own session (setsid, or perl on macOS), so an interrupt cannot cut a docker
@@ -81,9 +84,11 @@ PREVIOUS_CONTAINER_NAME="${CONTAINER_NAME}-previous"
 SWAP_CONTAINER_NAME="${CONTAINER_NAME}-swap"
 HOST_PORT=${HOST_PORT:-8080}
 HTTPS_HOST_PORT=${HTTPS_HOST_PORT:-8443}
+# The web UI's published port: HTTPS with the controller's certificate, or plain HTTP with ALLOW_INSECURE_HTTP=true.
+WEB_HOST_PORT=${WEB_HOST_PORT:-8088}
 # Extra `docker run` options for the controller, split on whitespace (no quoting). Also applied to the pre-flight
 # container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports, graceful
-# stop) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT and STOP_TIMEOUT_SECONDS.
+# stop) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT and STOP_TIMEOUT_SECONDS.
 EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
 HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
 IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-false}
@@ -121,6 +126,9 @@ ALLOW_INSECURE_HTTP=${ALLOW_INSECURE_HTTP:-false}
 # Semicolon-separated host names/IPs clients use (AllowedHosts); include localhost (the health check and this script's
 # in-container calls use it). Empty keeps the image default.
 ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
+# docker stop's grace period. The supervisor waits up to 25 s for the controller's shutdown (itself up to 20 s), then
+# 2 s for the web UI, so it must be 30 or more: a shorter one would let Docker kill the controller before its shutdown
+# ends.
 STOP_TIMEOUT_SECONDS=${STOP_TIMEOUT_SECONDS:-30}
 READY_TIMEOUT_SECONDS=${READY_TIMEOUT_SECONDS:-120}
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-3}
@@ -155,6 +163,8 @@ RESTORE_OUTCOME=""
 FAILURE=""
 # The hatMode verify_controller found (check_hat_mode).
 VERIFIED_HAT_MODE=""
+# Why wait_ready found the controller exited, when the container's supervisor said so.
+EXIT_DETAIL=""
 WORK_DIR=""
 
 # From the first change of the switch on (and during the restore), docker runs in its own session, outside the
@@ -197,9 +207,11 @@ require_number() {
 }
 
 require_number READY_TIMEOUT_SECONDS 1 86400
-require_number STOP_TIMEOUT_SECONDS 1 86400
+# At least the supervisor's 25 s for the controller and 2 s for the web UI, with a margin.
+require_number STOP_TIMEOUT_SECONDS 30 86400
 require_number HOST_PORT 1 65535
 require_number HTTPS_HOST_PORT 1 65535
+require_number WEB_HOST_PORT 1 65535
 case "${POLL_INTERVAL_SECONDS}" in
   ''|.|*[!0-9.]*|*.*.*) fail "POLL_INTERVAL_SECONDS must be a number of seconds such as 3 or 0.5, got '${POLL_INTERVAL_SECONDS}'." ;;
 esac
@@ -328,7 +340,7 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
       ;;
   esac
   if [[ "${reserved}" == "true" ]]; then
-    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout and --stop-signal itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT and STOP_TIMEOUT_SECONDS)."
+    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout and --stop-signal itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT and STOP_TIMEOUT_SECONDS)."
   fi
   refuse_emulator_setting "${arg}"
 done
@@ -365,8 +377,15 @@ fi
 
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
   REMOTE_BASE_URL="https://${PI_HOST}:${HTTPS_HOST_PORT}"
+  REMOTE_WEB_URL="https://${PI_HOST}:${WEB_HOST_PORT}"
+  controller_host_port=${HTTPS_HOST_PORT}
 else
   REMOTE_BASE_URL="http://${PI_HOST}:${HOST_PORT}"
+  REMOTE_WEB_URL="http://${PI_HOST}:${WEB_HOST_PORT}"
+  controller_host_port=${HOST_PORT}
+fi
+if (( WEB_HOST_PORT == controller_host_port )); then
+  fail "WEB_HOST_PORT (${WEB_HOST_PORT}) is the controller's published port too: give the web UI a port of its own. Nothing was changed."
 fi
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -584,13 +603,26 @@ container_restarts() {
   dockerc inspect --format '{{.State.Status}} {{.RestartCount}}' "$1" 2>/dev/null
 }
 
+# The container supervisor's view of $2 (controller or ui) in container $1, as "<state> <starts>" (running 1,
+# restarting 3, crash-loop 5, ...). Returns 1 when there is none: an image from before the supervisor, or a supervisor
+# that has not written its state yet. The supervisor writes one fixed format, so a pattern reads it.
+supervised_process() {
+  local json pattern="\"$2\":\\{\"state\":\"([a-z-]+)\",\"pid\":[0-9a-z]+,\"starts\":([0-9]+)"
+  json=$(dockerc exec "$1" cat /run/hvo-roof/supervisor.json 2>/dev/null) || return 1
+  [[ "${json}" =~ ${pattern} ]] || return 1
+  printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+
 # Returns 0 once the container reports ready, 2 as soon as it has exited (it will not become ready), 1 at the deadline.
 # With --restart unless-stopped, Docker restarts a controller that exits instead of leaving it stopped, so a wait for a
 # restart, or a restart count above its first reading, means it exited. The count is compared with that first reading,
 # not with 0: a docker start of a container that is still running (a rollback whose stop failed) does not reset it. A
-# controller that exits and is restarted before the first reading is caught at its next restart.
+# controller that exits and is restarted before the first reading is caught at its next restart. Inside the container
+# the supervisor restarts a controller that exits, and leaves it stopped after repeated crashes: a controller waiting to
+# start again, left stopped, or started more often than at the first reading has exited in the same way.
 wait_ready() {
-  local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) state raw restarts first_restarts=""
+  local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) state raw restarts first_restarts="" supervised starts
+  local first_starts=""
   while (( SECONDS < deadline )); do
     # If Docker cannot be asked, keep polling until the deadline.
     state=$(container_state "${name}") || state=unknown
@@ -603,12 +635,62 @@ wait_ready() {
         return 2
       fi
     fi
+    if read -r supervised starts < <(supervised_process "${name}" controller); then
+      first_starts=${first_starts:-${starts}}
+      if [[ "${supervised}" == "restarting" || "${supervised}" == "crash-loop" ]] || (( starts > first_starts )); then
+        EXIT_DETAIL="the container's supervisor reports the controller ${supervised} after ${starts} start(s)"
+        return 2
+      fi
+    fi
     if dockerc exec "${name}" curl -fsS --max-time 5 http://localhost:8080/health/ready >/dev/null 2>&1; then
       return 0
     fi
     sleep "${POLL_INTERVAL_SECONDS}"
   done
   return 1
+}
+
+# The web UI's scheme in container $1 (http or https), from the first of its URLs (RoofWeb__Urls, the last one given,
+# as in .NET). Returns 1 when the container has no web UI: a version from before the web UI, whose image does not set
+# RoofWeb__Urls; or 2 when Docker cannot be asked.
+web_ui_scheme() {
+  local env line urls=""
+  env=$(dockerc inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1") || return 2
+  while IFS= read -r line; do
+    [[ "${line}" != RoofWeb__Urls=* ]] || urls=${line#*=}
+  done <<<"${env}"
+  [[ -n "${urls}" ]] || return 1
+  printf '%s\n' "${urls%%://*}"
+}
+
+# Returns 0 once the web UI in container $1 answers its liveness check over the container's loopback (scheme $2), 2 as
+# soon as the supervisor has had to start it again (it exits: a web UI that cannot start is restarted with a backoff,
+# for ever), 1 at the deadline. It starts next to the controller, so it is normally live by the time the controller is
+# ready. The certificate names the Pi, not localhost, so it is not verified on loopback.
+wait_web_ui() {
+  local name=$1 scheme=$2 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) supervised starts first_starts=""
+  while (( SECONDS < deadline )); do
+    if read -r supervised starts < <(supervised_process "${name}" ui); then
+      first_starts=${first_starts:-${starts}}
+      if [[ "${supervised}" == "restarting" ]] || (( starts > first_starts )); then
+        return 2
+      fi
+    fi
+    if dockerc exec "${name}" curl -fsSk --max-time 5 "${scheme}://localhost:8088/health/live" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+  return 1
+}
+
+# The web UI's liveness from this machine at REMOTE_WEB_URL, as a browser would reach it (anonymous).
+remote_web_ui_live() {
+  local tls_args=()
+  if [[ -n "${REMOTE_CA_CERT}" ]]; then
+    tls_args=(--cacert "${REMOTE_CA_CERT}")
+  fi
+  curl -fsS --max-time 15 ${tls_args[@]+"${tls_args[@]}"} -o /dev/null "${REMOTE_WEB_URL}/health/live"
 }
 
 # The HAT a Status body on $2 reports, against the one this run deploys: Physical, or Emulated in HAT emulator mode.
@@ -661,11 +743,13 @@ check_hat_mode() {
 # Readiness, an authenticated Status inside the container and its HAT, then an authenticated Status and a verified Stop
 # from this machine. Sets FAILURE and returns 1 on the first check that fails.
 verify_controller() {
-  local name=$1 response http_status ready=0
+  local name=$1 response http_status ready=0 web_scheme web=0
   echo "[verify] Waiting up to ${READY_TIMEOUT_SECONDS}s for ${name} to report /health/ready"
+  EXIT_DETAIL=""
   wait_ready "${name}" || ready=$?
   if (( ready == 2 )); then
     FAILURE="${name} exited before it became ready (it stopped, or Docker restarted it)"
+    [[ -z "${EXIT_DETAIL}" ]] || FAILURE+=": ${EXIT_DETAIL}"
     return 1
   elif (( ready != 0 )); then
     FAILURE="${name} did not become ready within ${READY_TIMEOUT_SECONDS}s"
@@ -684,12 +768,38 @@ verify_controller() {
   check_hat_mode "${name}" "$(sed '$d' <<<"${response}")" || return 1
   echo "[verify] Ready; authenticated Status inside the container: HTTP 200, hatMode ${VERIFIED_HAT_MODE}"
 
+  # The web UI, in a version that has one (a rollback can restore a version from before it).
+  web_scheme=$(web_ui_scheme "${name}") || web=$?
+  if (( web == 2 )); then
+    FAILURE="could not read the environment of ${name} from Docker to find its web UI"
+    return 1
+  elif (( web == 0 )); then
+    wait_web_ui "${name}" "${web_scheme}" || web=$?
+    if (( web == 2 )); then
+      FAILURE="the web UI in ${name} exited and its supervisor is starting it again: it cannot start (see its log lines below)"
+      return 1
+    elif (( web != 0 )); then
+      FAILURE="the web UI in ${name} did not answer ${web_scheme}://localhost:8088/health/live within ${READY_TIMEOUT_SECONDS}s"
+      return 1
+    fi
+    echo "[verify] Web UI live inside the container (${web_scheme})"
+  else
+    echo "[verify] ${name} has no web UI (a version from before it): not checked"
+  fi
+
   if [[ "${SKIP_REMOTE_CHECK}" == "true" ]]; then
     log_err "[verify] WARNING: SKIP_REMOTE_CHECK=true: ${REMOTE_BASE_URL} was not checked from this machine. Check it from a client before relying on remote control."
     return 0
   fi
 
-  verify_remote false
+  verify_remote false || return 1
+  if (( web == 0 )); then
+    if ! remote_web_ui_live; then
+      FAILURE="the web UI did not answer at ${REMOTE_WEB_URL}/health/live from this machine (network, port or TLS; set REMOTE_CA_CERT for a certificate this machine does not trust)"
+      return 1
+    fi
+    echo "[verify] Web UI live at ${REMOTE_WEB_URL}: OK"
+  fi
 }
 
 # An authenticated Status, then a verified Stop, from this machine at the published URL. With check_hat=true the
@@ -1149,19 +1259,22 @@ else
 fi
 
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
-  # Remote clients use HTTPS only; plain HTTP listens on loopback inside the container (health check, Stop calls).
-  publish_args=(-p "${HTTPS_HOST_PORT}:8443")
+  # Remote clients use HTTPS only; plain HTTP listens on loopback inside the container (health check, Stop calls, the
+  # web UI). The web UI serves the controller's certificate (its supervisor gives it a private copy).
+  publish_args=(-p "${HTTPS_HOST_PORT}:8443" -p "${WEB_HOST_PORT}:8088")
   container_args+=(
     --mount "type=bind,src=${HTTPS_CERT_DIR},dst=/https,readonly"
     --env "ASPNETCORE_URLS=http://localhost:8080;https://+:8443"
     --env "Kestrel__Certificates__Default__Path=/https/${HTTPS_CERT_FILE}"
     --env "RoofControllerSecurity__RequireHttps=true"
+    --env "RoofWeb__Urls=https://+:8088"
   )
 else
-  publish_args=(-p "${HOST_PORT}:8080")
+  publish_args=(-p "${HOST_PORT}:8080" -p "${WEB_HOST_PORT}:8088")
   container_args+=(
     --env "ASPNETCORE_URLS=http://+:8080"
     --env "RoofControllerSecurity__RequireHttps=false"
+    --env "RoofWeb__Urls=http://+:8088"
   )
 fi
 

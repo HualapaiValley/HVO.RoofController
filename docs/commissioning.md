@@ -20,7 +20,7 @@ assumption of its own; `SmVectorAssumptions` and `PlantDocumentedFiguresTests` h
 |---|---|---|
 | `Scenario` tests | C1-C11 and C13, plus a 90 s C14 that does not assess resources. The production host and settings run in process against the emulated plant. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
 | `Browser` tests | C9 step 4 and C15, plus the console on phones and tablets in Chromium | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Browser`, after installing Chromium once with `pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium` (without `--with-deps` when its system libraries are installed) |
-| [Container scenarios](emulator.md#container-scenarios) | C11 in a real container, C12, and the move between Compose and the deploy script, on real Docker | `tests/emulator/deploy-scenarios.sh` (from the repository root) |
+| [Container scenarios](emulator.md#container-scenarios) | C11 in a real container (with the container's supervisor), C12, and the move between Compose and the deploy script, on real Docker | `tests/emulator/deploy-scenarios.sh` (from the repository root) |
 | Nightly soak | C14 for two hours. Its invariant results go to the run summary and an artifact. | `HVO_SOAK_DURATION=02:00:00 HVO_SOAK_RESULTS_DIR="$PWD/soak" dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Soak` |
 
 The unit test job leaves these categories out. `ScenarioCoverageTests` keeps this document and the scenarios in step:
@@ -384,15 +384,24 @@ The lease applies only when `OperatorLeaseTimeout` is set (2-120 s); production 
   overview, section 11), so keep the coast stop unless the installed ramp is known to stop well inside the ME-8108
   overtravel.
 
-### C11. Container stop with an active camera stream
+### C11. Container stop with an active camera stream, and the container's supervisor
+
+The container runs two processes under a supervisor: the controller and the web UI
+([deployment](deployment.md#the-containers-two-processes)). Steps 5-9 check how the supervisor handles each of them.
 
 | Step | Checked | Scenario |
 |---|---|---|
 | 1 | A camera stream is open through the proxy while a move is commanded | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
 | 2 | The host is stopped as `docker stop -t 30` stops it: in process, and as a real container | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
-| 3 | The roof stops with `HostShutdown` and verified relays, and the stream ends within 5 s. The container exits within the grace period, and is not killed at its end (status 137). | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
+| 3 | The roof stops with `HostShutdown` and verified relays, and the stream ends within 5 s. The supervisor stops the controller first and waits for it to exit (code 0), then stops the web UI. The container exits within the grace period, and is not killed at its end (status 137). | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
 | 4 | Relay writes fail when the host stops the moving roof, so the shutdown cannot verify the relays off. If the writes work again while the host waits, a retry verifies the relays off and the shutdown completes. If they never do, the host logs the stop `FAILED` and the container still exits within the grace period, with the relays held; the restarted controller turns them off. | `deploy-scenarios.sh lifecycle` |
+| 5 | A restart through the API (`POST System/Restart`) exits the controller with code 75. The supervisor starts it again at once in the same container: Docker does not restart the container, and the web UI keeps running. The controller is ready again with the relays off. | `deploy-scenarios.sh lifecycle` |
+| 6 | The controller is killed during travel inside the container, as a crash ends it. The relays stay held. The supervisor starts it again after its backoff, and the restarted controller turns them off. The web UI keeps running, and Docker does not restart the container. | `deploy-scenarios.sh supervisor` |
+| 7 | The controller crashes five times within 120 s. The supervisor leaves it stopped instead of starting it again, the container's health check fails (Docker marks the container unhealthy after three failed checks), and the web UI stays live and says the controller is stopped after repeated crashes. The relays are off. | `deploy-scenarios.sh supervisor` |
+| 8 | A forced restart, requested as the web UI requests it, starts the controller left stopped by step 7. A second request within 10 s of that start is ignored. A later one kills the running controller and starts it again at once. Each time it is ready again with the relays off, and the web UI keeps running. | `deploy-scenarios.sh supervisor` |
+| 9 | The web UI is killed while the roof moves. The supervisor starts only the web UI again, and it is live again. The controller keeps running and the move goes on. | `deploy-scenarios.sh supervisor` |
 | — | A crash during travel leaves the relays held. The restarted controller turns them off; if the crash outlasts the travel, the open limit's contact stops the drive first. A killed container stays down until it is started again. | `LifecycleScenarios.ACrash_DuringTravel_LeavesTheRelaysHeld_AndTheRestartedControllerTurnsThemOff`, `LifecycleScenarios.ACrash_ThatOutlastsTheTravel_LeavesTheOpenLimitToStopTheDrive_AndTheRestartedControllerReportsOpen`, `deploy-scenarios.sh lifecycle` |
+| — | The web UI runs as the image's unprivileged `app` user with only its own `RoofWeb__*` settings: none of the controller's settings are in its environment, and it cannot read the controller's secrets directory. For HTTPS it holds a copy of the certificate it serves and of that certificate's password, by default the controller's ([deployment.md](deployment.md#the-web-uis-user-and-settings)). | `deploy-scenarios.sh supervisor` |
 
 **Installation assumptions**
 
@@ -400,6 +409,11 @@ The lease applies only when `OperatorLeaseTimeout` is set (2-120 s); production 
   holds them, as the #29 plant assumes. The settings that depend on it are the deploy script's `docker stop -t 30` and
   the host's shutdown timeout. The fail-safe result is that the roof keeps moving until the limit's run-circuit contact
   stops it (C1 step 4), and the restarted controller turns the relays off.
+- **Docker gives the container at least 30 s to stop.** The supervisor waits up to 25 s for the controller's shutdown,
+  then 2 s for the web UI. The settings that depend on it are the deploy script's `STOP_TIMEOUT_SECONDS`, Compose's
+  `stop_grace_period` and the supervisor's `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`. The fail-safe result of a shorter
+  grace period is that Docker kills the controller during its shutdown: the relays stay held, as after a crash, until
+  the restarted controller turns them off.
 
 If a shutdown log shows `Shutdown could not verify the relay register all-off state`, the controller re-runs the all-off
 sequence every 500 ms. It stops when the register verifies, when the controller is disposed, or after 15 s. Disposal
@@ -424,7 +438,7 @@ register every 0.1 s.
 
 | Step | Checked | Scenario |
 |---|---|---|
-| 1 | A deploy with the roof idle. The pre-flight passes, the Stop returns a verified all-off, and the deploy ends with `Deployment complete and verified`. The old controller is kept stopped as `roof-controller-previous`. | `deploy-scenarios.sh c12` |
+| 1 | A deploy with the roof idle. The pre-flight passes, the Stop returns a verified all-off, the web UI answers inside the container and at its published port, and the deploy ends with `Deployment complete and verified`. The old controller is kept stopped as `roof-controller-previous`. | `deploy-scenarios.sh c12` |
 | 2 | A deploy while the roof moves. The script stops the roof first (a verified all-off) and only then replaces the controller. | `deploy-scenarios.sh c12` |
 | 3 | An operator key that is not configured fails the pre-flight, and the running controller is untouched | `deploy-scenarios.sh c12` |
 | 4 | A renamed certificate file, a wrong certificate password and no `RoofOperator` key each fail the pre-flight, and the running controller is untouched | `deploy-scenarios.sh c12` |
@@ -432,7 +446,8 @@ register every 0.1 s.
 | 6 | `--rollback` twice: the versions swap and swap back, and each is verified from the deploying machine | `deploy-scenarios.sh c12` |
 | 7 | Relay-register reads fail, so the Stop cannot be verified. The deploy aborts before it stops or replaces the controller, and the controller latches `RelayVerificationFailed` until `ClearFault`. | `deploy-scenarios.sh c12` |
 | 8 | A new controller that cannot reach the HAT passes the pre-flight but never becomes ready. After `READY_TIMEOUT_SECONDS` the script rolls back, and the previous controller is running and ready again. | `deploy-scenarios.sh c12` |
-| 9 | Throughout steps 3-8, every relay-register sample is 0 and the emulator records no violation. In step 7 the samples end before `ClearFault`, whose pulse energizes RLY3. | `deploy-scenarios.sh c12` |
+| 9 | A new version whose web UI cannot start (a setting out of range) passes the pre-flight, which runs only the controller, and its controller becomes ready. Its web UI exits at each start, so the script rolls back, and the previous controller and its web UI are running again. | `deploy-scenarios.sh c12` |
+| 10 | Throughout steps 3-9, every relay-register sample is 0 and the emulator records no violation. In step 7 the samples end before `ClearFault`, whose pulse energizes RLY3. | `deploy-scenarios.sh c12` |
 | — | The move from the Compose `pi` profile to the deploy script and back ([deployment](deployment.md#moving-between-compose-and-the-deploy-script)). The script refuses a Compose container, and Compose refuses while the script's container exists. `--verify-remote` checks each Compose controller from the deploying machine, with no Docker context: an authenticated Status and a verified Stop at the published URL. It rejects a key the controller does not know. | `deploy-scenarios.sh migration` |
 
 **Installation assumptions**

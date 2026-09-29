@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# A stand-in for setpriv, for the supervisor tests that give the web UI its own user: it cannot change user without
+# root, so it appends its options to FAKE_DIR/setpriv.log (one call a line) and runs the command after them as is.
+set -uo pipefail
+
+options=()
+while [[ $# -gt 0 && "$1" == --* ]]; do
+  options+=("$1")
+  shift
+done
+printf '%s | %s\n' "${options[*]}" "$*" >>"${FAKE_DIR}/setpriv.log"
+exec "$@"
