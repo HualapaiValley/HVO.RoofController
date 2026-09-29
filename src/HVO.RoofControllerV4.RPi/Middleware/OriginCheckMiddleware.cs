@@ -124,6 +124,17 @@ public sealed class OriginCheckMiddleware
         return false;
     }
 
+    /// <summary>
+    /// True when <paramref name="value"/> is usable as an allowed origin: an absolute http(s) URL with a host and
+    /// nothing after it (no path, query, fragment or user information).
+    /// </summary>
+    internal static bool IsValidAllowedOrigin(string? value)
+        => TryParseOrigin(value, out var origin)
+            && origin.AbsolutePath == "/"
+            && origin.Query.Length == 0
+            && origin.Fragment.Length == 0
+            && origin.UserInfo.Length == 0;
+
     private static bool TryParseOrigin(string? value, out Uri origin)
     {
         origin = null!;

@@ -81,7 +81,8 @@ public record class RoofControllerOptionsV4
 
     /// <summary>
     /// Local-configuration-only safeguard. <see cref="IgnorePhysicalLimitSwitches"/> is refused on physical hardware
-    /// unless this is true. The remote configuration API never changes this value.
+    /// unless this is true. Local-only: the configuration endpoint never changes it, and the settings API changes it
+    /// only for a caller with a local credential (the kiosk admin PIN or a local admin API key).
     /// </summary>
     public bool AllowIgnoringLimitSwitchesOnPhysicalHardware { get; set; }
 
@@ -127,8 +128,8 @@ public record class RoofControllerOptionsV4
     /// hardware stop can act on it. With a ramped stop (SMVector P111 = 2 or 3) the run output stays on while the drive
     /// decelerates, so set this longer than the P105 deceleration time, plus P175 with a DC brake (P111 = 1 or 3), since
     /// the run output may stay on while braking. Null (default) uses
-    /// <see cref="AtSpeedConfirmationTimeout"/>; with both null the check is off. Local configuration only: the remote
-    /// configuration API reports it but never changes it.
+    /// <see cref="AtSpeedConfirmationTimeout"/>; with both null the check is off. Local-only: the configuration endpoint
+    /// reports it but never changes it, and the settings API changes it only for a caller with a local credential.
     /// </summary>
     public TimeSpan? DriveStopConfirmationTimeout { get; set; }
 
@@ -138,8 +139,8 @@ public record class RoofControllerOptionsV4
     /// <see cref="RoofControllerStopReason.DepartureLimitNotReleased"/>: the roof is jammed, stalled or moving the wrong
     /// way (for example swapped motor leads pushing it into the stop behind the limit). Null (default) disables it. It
     /// must be at least <see cref="LimitSwitchDebounce"/> plus 0.5 s. Set it from the release time with the installed
-    /// acceleration (P104) plus the debounce. Local configuration only: the remote configuration API reports it but
-    /// never changes it.
+    /// acceleration (P104) plus the debounce. Local-only: the configuration endpoint reports it but never changes it,
+    /// and the settings API changes it only for a caller with a local credential.
     /// </summary>
     public TimeSpan? DepartureReleaseTimeout { get; set; }
 }

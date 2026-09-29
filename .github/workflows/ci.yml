@@ -190,6 +190,24 @@ jobs:
               exit 1
             }
           done
+          # And the settings file and the managed secrets file in their writable mounts: the check probes both.
+          for profile in pi pi-lan-http; do
+            docker compose --profile "${profile}" config --format json | jq -e '
+              [.services[]
+                | .environment as $env
+                | .volumes as $volumes
+                | [["RoofControllerSettings__FilePath", "/etc/hvo-roof/config"],
+                   ["RoofControllerSettings__SecretsFilePath", "/var/lib/hvo-roof/settings-secrets"]]
+                | map(. as [$key, $dir]
+                    | ($env[$key] | type) == "string"
+                      and ($env[$key] | startswith($dir + "/"))
+                      and ([$volumes[] | select(.target == $dir and (.read_only // false | not))] | length) == 1)
+                | all]
+              | length == 2 and all' >/dev/null || {
+              echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the ${profile} services do not all keep the settings files in writable mounts"
+              exit 1
+            }
+          done
           # Both profiles at once must be rejected: they would drive the HAT twice.
           if docker compose --profile pi --profile pi-lan-http config --quiet 2>/dev/null; then
             echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the pi and pi-lan-http profiles can be enabled together"

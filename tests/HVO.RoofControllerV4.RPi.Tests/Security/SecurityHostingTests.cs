@@ -283,6 +283,7 @@ public sealed class SecurityHostingTests
         "documentName" => "v4",
         "name" => "sample-name",
         "id" => "sample-id",
+        "group" => "roof",
         _ => throw new AssertFailedException($"No sample value for '{{{parameter}}}' in '{route.RoutePattern.RawText}'; add one.")
     };
 

@@ -2,7 +2,7 @@
 
 This page covers:
 
-- preparing the Pi (secrets, TLS certificate, identity store)
+- preparing the Pi (secrets, TLS certificate, identity store, settings directories)
 - deploying with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` or `docker-compose.yaml`
 - the deployment check (`--validate-deployment`) both of them run first
 - how the controller is stopped safely during a deploy, verified afterwards and rolled back
@@ -101,7 +101,35 @@ secrets directory: without it, every person, session and managed key is gone. To
 `IDENTITY_DIR` for the script or `HVO_ROOF_IDENTITY_DIR` for compose. The script and Compose use the same default, so
 people and sessions carry over when you [move between them](#moving-between-compose-and-the-deploy-script).
 
-### 4. Operator key for the deploy script
+### 4. The settings directories
+
+Settings changed through the API are saved in the settings file, and secrets set through the API (the Blue Iris user and
+password) in the managed secrets file (see [security.md](security.md#settings)). The deploy script and both Pi compose
+profiles mount two directories read-write, at the same paths in the container:
+
+| Directory on the Pi | File | Script / compose variable |
+|---------------------|------|---------------------------|
+| `/etc/hvo-roof/config` | `appsettings.Local.json` (`RoofControllerSettings__FilePath`) | `CONFIG_DIR` / `HVO_ROOF_CONFIG_DIR` |
+| `/var/lib/hvo-roof/settings-secrets` | `secrets.json` (`RoofControllerSettings__SecretsFilePath`) | `MANAGED_SECRETS_DIR` / `HVO_ROOF_MANAGED_SECRETS_DIR` |
+
+The directory is mounted, not the file, so the controller can write a new file and rename it over the old one. Create
+both once:
+
+```bash
+sudo install -d -m 0755 /etc/hvo-roof/config
+sudo install -d -m 0700 /var/lib/hvo-roof/settings-secrets
+```
+
+The controller runs as root in its image, so root owning them is enough. It creates the files at the first save.
+Compose does not create the directories, and the [deployment check](#the-deployment-check) fails when either is
+missing or not writable. The secrets directory, `/etc/hvo-roof/secrets`, stays read-only.
+
+A setting given with `--env`, in `EXTRA_DOCKER_ARGS` or in the secrets directory overrides the settings file, and the
+API cannot change it (`GET /api/v4.0/Settings` names where it comes from). Keep settings that people should change
+through the API out of those places. Editing the file by hand, and backing it up, are covered in
+[commissioning.md](commissioning.md#the-settings-file).
+
+### 5. Operator key for the deploy script
 
 The deploy script sends a Stop before replacing the running controller, and afterwards checks the new one with an
 authenticated Status and Stop. It uses an operator key, which must also be one of the keys in the secrets directory.
@@ -144,6 +172,9 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - `RoofControllerSecurity:Identity` settings that the controller would refuse, or an identity store that cannot be
   used: its directory is missing, a probe file cannot be written next to it, or the store file is not valid. The
   check reads the file without changing it, so it is safe to run next to a running controller.
+- a settings file or managed secrets file whose directory is missing or not writable (checked with a probe file, as
+  for the identity store), a file that is not valid or holds a secret it must not hold, or settings the controller
+  would refuse at startup. The report names the setting, never its value.
 - with `DeploymentCheck__DeployKeySha256` set (the deploy script sets it): no configured key has that SHA-256, or
   that key has neither the `RoofOperator` nor the `RoofAdmin` role
 - `RoofControllerSecurity:RequireHttps` in effect when Kestrel would not listen on HTTPS
@@ -163,7 +194,8 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - a configuration that cannot be loaded at all, such as a malformed settings file
 
 It warns on plain HTTP outside Development, a certificate that expires within 30 days, a certificate given only by
-store subject, no identity store outside Development (people and sessions would be lost at each restart),
+store subject, no identity store outside Development (people and sessions would be lost at each restart), no
+settings file or managed secrets file outside Development (settings changed through the API would be lost),
 `AllowAnonymousStop`, a misconfigured camera proxy (the roof still works), `AllowedHosts=*` in
 Production, and allowed HAT emulator mode (the roof will not move). It never prints key values, passwords or other
 setting values.
@@ -203,6 +235,8 @@ deploy.
 | `HTTPS_CERT_DIR` | (empty) | Certificate directory on the Pi. Required unless `ALLOW_INSECURE_HTTP=true`. |
 | `HTTPS_CERT_FILE` | `roof-controller.pfx` | PFX file name inside `HTTPS_CERT_DIR` |
 | `IDENTITY_DIR` | `/var/lib/hvo-roof/identity` | [Identity store](#3-the-identity-store) directory on the Pi, mounted read-write for the pre-flight and the controller. Empty keeps the store in memory: people, sessions and managed keys are lost at each restart. |
+| `CONFIG_DIR` | `/etc/hvo-roof/config` | [Settings](#4-the-settings-directories) directory on the Pi, mounted read-write for the pre-flight and the controller. Empty keeps settings changed through the API in memory: they are lost at each restart. |
+| `MANAGED_SECRETS_DIR` | `/var/lib/hvo-roof/settings-secrets` | [Managed secrets](#4-the-settings-directories) directory on the Pi, mounted the same way. Empty keeps secrets set through the API in memory. |
 | `ALLOW_INSECURE_HTTP` | `false` | Plain HTTP on `HOST_PORT` with `RoofControllerSecurity__RequireHttps=false` |
 | `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts`. A list must include `localhost`: the health check and the script's in-container calls use it. |
 | `REMOTE_CA_CERT` | (empty) | PEM file on this machine that verifies the Pi's certificate, for the remote check |
@@ -264,7 +298,8 @@ anything.
    be restored but never starts by itself. An older, stopped `<name>-previous` is removed only after this stop has
    succeeded, just before the rename, so an aborted deploy keeps it. The script reads the container states again
    after the pre-flight, and a `<name>-previous` that is running by then still aborts before anything is stopped.
-6. **Starts the new container** with `--restart unless-stopped` and `--stop-timeout 30`. In HTTPS mode only
+6. **Starts the new container** with `--restart unless-stopped` and `--stop-timeout 30`. The restart policy also
+   starts the controller again after `POST /api/v4.0/System/Restart`, which exits with code 75. In HTTPS mode only
    `HTTPS_HOST_PORT` is published; plain HTTP listens on loopback inside the container, for the health check and the
    script's `docker exec` calls.
 7. **Verifies the new controller:**
@@ -429,7 +464,9 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./d
 
 Both Pi profiles mirror the script: the secrets directory at `/run/secrets` (`HVO_ROOF_SECRETS_DIR`, default
 `/etc/hvo-roof/secrets`), the identity store directory (`HVO_ROOF_IDENTITY_DIR`, default `/var/lib/hvo-roof/identity`),
-`stop_grace_period: 30s`, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets, certificate and identity
+the [settings directories](#4-the-settings-directories) (`HVO_ROOF_CONFIG_DIR` and `HVO_ROOF_MANAGED_SECRETS_DIR`),
+`stop_grace_period: 30s`, `restart: unless-stopped`, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets,
+certificate, identity and settings
 directories must exist; compose does not create them.
 
 Each Pi profile first runs the [deployment check](#the-deployment-check) as a one-shot service with the same environment
@@ -524,8 +561,8 @@ Compose ran; keep it under a tag of its own to return to it.
    ([above](#checking-a-compose-controller-from-another-machine)) and the checks in
    [After deploying](#after-deploying-checks-on-the-device).
 
-Both sides mount the same identity directory, so people, managed keys and open sessions carry over in both
-directions.
+Both sides mount the same identity and settings directories, so people, managed keys, open sessions and settings
+carry over in both directions.
 
 `tests/emulator/deploy-scenarios.sh migration` runs both moves against the HAT emulator, with the refusals on each
 side and a person whose session carries over (see [Container scenarios](emulator.md#container-scenarios)).

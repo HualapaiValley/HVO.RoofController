@@ -60,9 +60,86 @@ The production `appsettings.json` matches the documented wiring:
 - `DepartureReleaseTimeout` unset (C10)
 - `IgnorePhysicalLimitSwitches = false` and `AllowIgnoringLimitSwitchesOnPhysicalHardware = false`
 
-`ProductionConfigurationTests` fails if these drift. The scenarios start from these settings (`Scenario.Production`).
+`ProductionConfigurationTests` fails if these drift. On the Pi, a value in the [settings file](#the-settings-file)
+replaces the shipped one, so check it too. The scenarios start from these settings (`Scenario.Production`).
 Where a scenario changes a setting, it does so through the configuration API or the host settings, and the step
 says so.
+
+## The settings file
+
+Settings changed through the API are saved on the Pi, in files the controller writes. They sit above the shipped
+`appsettings.json`, so a value in them replaces the installed configuration above:
+
+| File on the Pi | Holds | Mode |
+|----------------|-------|------|
+| `/etc/hvo-roof/config/appsettings.Local.json` | the settings that differ from the shipped defaults | 0644, in a 0755 directory |
+| `/var/lib/hvo-roof/settings-secrets/secrets.json` | the secrets set through the API (the Blue Iris user and password) | 0600, in a 0700 directory |
+
+Before a check, read `GET /api/v4.0/Settings` as an admin. A setting whose `source` is `settings file` differs from the
+installed configuration, and a difference in a setting listed above changes an assumption (see the ground rules).
+[deployment.md](deployment.md#4-the-settings-directories) covers creating the directories, and
+[security.md](security.md#settings) who may change what.
+
+### Editing the file by hand
+
+The container runs as root, so root owns both directories and files. Edit the settings file with `sudoedit`:
+
+```bash
+sudoedit /etc/hvo-roof/config/appsettings.Local.json
+```
+
+Use the section and key names of `appsettings.json`, and durations as `hh:mm:ss`:
+
+```json
+{
+  "HvoRoofSettings": { "Version": 7, "SavedAtUtc": "2026-09-28T17:05:11.0000000Z", "SavedBy": "maintainer" },
+  "RoofControllerOptionsV4": {
+    "SafetyWatchdogTimeout": "00:02:30"
+  }
+}
+```
+
+- Leave `HvoRoofSettings` as it is: the controller keeps the version there.
+- Never put a secret in this file (a key named `Key` or `Password`, or the Blue Iris user). The controller refuses to
+  start with one. Set secrets through the API, or as files in the secrets directory.
+- Comments and trailing commas are allowed, but the next save through the API, or a reload, rewrites the file without
+  its comments. Keep notes in the operations record.
+
+While the controller runs, it notices the edit but does not use it:
+
+1. The settings pages, and `GET /api/v4.0/Settings` (`pendingHandEdit`), show the edit as pending: each changed setting,
+   from and to. Changes through the API are refused until the edit is reloaded or discarded.
+2. An admin reviews the edit and reloads it (`POST /api/v4.0/Settings/Reload` with its token). The reload is checked
+   like a change through the API: a safety-critical change needs confirmation, and a local-only setting needs a local
+   credential (the kiosk with an admin PIN, or a local admin API key on the Pi).
+3. Or the admin discards it (`POST /api/v4.0/Settings/Discard`), which writes back the settings in effect.
+
+`POST /api/v4.0/System/Restart` also loads the edit, after the same checks. Restarting the container directly skips
+them.
+
+### A file the controller cannot use
+
+A settings file that is not valid JSON, holds a secret, or holds a value outside its limits stops the controller at
+startup. It never falls back to the defaults. The container log (`docker logs roof-controller`) shows the reason, and
+never a value:
+
+```
+The roof controller did not start: The settings file '/etc/hvo-roof/config/appsettings.Local.json' is not valid JSON (line 4, position 2). Fix it, or move it aside to start again from the shipped defaults.
+```
+
+The controller exits with code 1, and the restart policy keeps trying until the file is fixed. The roof cannot be moved
+from the controller meanwhile; the hardware stop path (C1) is unaffected. Fix the file, or move it aside to start from
+the shipped defaults. The [deployment check](deployment.md#the-deployment-check) reports the same problems without
+starting the controller, so run it after a hand edit made while the controller is stopped.
+
+### Backing up
+
+Back up `/etc/hvo-roof/config` and `/var/lib/hvo-roof/settings-secrets` with `/etc/hvo-roof/secrets` and
+`/var/lib/hvo-roof/identity`, after each change. The settings file holds no secrets and can go in the private operations
+record. The managed secrets file holds the Blue Iris password: keep it as safe as the secrets directory.
+
+To restore, stop the controller, copy the files back with their modes (above), and start it. A file restored while the
+controller runs shows as a pending hand edit.
 
 ## Checks
 

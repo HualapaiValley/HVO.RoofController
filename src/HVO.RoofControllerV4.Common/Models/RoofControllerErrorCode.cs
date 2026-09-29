@@ -76,5 +76,29 @@ public enum RoofControllerErrorCode
     /// The caller's role would allow this, but not the way they signed in: a PIN session cannot manage people, API keys
     /// or sessions. Use an admin API key or sign in with a password. HTTP 403.
     /// </summary>
-    CredentialNotAllowed = 21
+    CredentialNotAllowed = 21,
+
+    /// <summary>
+    /// The caller may not change that setting: its role is too low, or the setting is local-only and the caller has no
+    /// local credential. HTTP 403.
+    /// </summary>
+    SettingNotPermitted = 22,
+
+    /// <summary>
+    /// The settings file was edited by hand since it was loaded. Reload or discard the edit before changing settings
+    /// through the API. HTTP 409.
+    /// </summary>
+    SettingsHandEditPending = 23,
+
+    /// <summary>The settings file could not be read or written. HTTP 503.</summary>
+    SettingsStoreUnavailable = 24,
+
+    /// <summary>
+    /// The controller will not restart: the roof stop could not be verified, or the settings it would start with are
+    /// invalid or need confirmation or a local credential. HTTP 409.
+    /// </summary>
+    RestartRefused = 25,
+
+    /// <summary>No setting or settings group has that name. HTTP 404.</summary>
+    SettingNotFound = 26
 }

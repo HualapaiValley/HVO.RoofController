@@ -12,7 +12,6 @@ using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
 using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Components;
@@ -36,6 +35,7 @@ internal sealed class RoofConsoleHarness : IAsyncDisposable
         Roof = new Mock<IRoofControllerServiceV4>();
         Roof.SetupGet(r => r.IsInitialized).Returns(true);
         Roof.Setup(r => r.GetCurrentStatusSnapshot()).Returns(() => Current);
+        Roof.Setup(r => r.GetConfigurationSnapshot()).Returns(new RoofControllerOptionsV4());
 
         Health = new Mock<HealthCheckService>();
         Footer = new FooterStatusService();
@@ -46,7 +46,6 @@ internal sealed class RoofConsoleHarness : IAsyncDisposable
         Context.Services.AddSingleton(Health.Object);
         Context.Services.AddSingleton(Footer);
         Context.Services.AddSingleton(Circuit);
-        Context.Services.AddSingleton(Options.Create(new RoofControllerOptionsV4()));
 
         Context.ComponentFactories.AddStub<CameraStream>();
         Context.ComponentFactories.AddStub<ConsoleLogViewer>();

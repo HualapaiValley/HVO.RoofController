@@ -27,8 +27,9 @@
 #
 # Each Pi profile first runs a one-shot deployment check (--validate-deployment) with the same environment and mounts,
 # and the new controller starts only if it passes: roof options valid, a usable RoofOperator or RoofAdmin key, a
-# readable and writable identity store, and, for HTTPS, a loadable, unexpired certificate with its private key. The
-# check reads configuration and writes nothing but a probe file it removes at once; it maps /dev/i2c-1 only to see
+# readable and writable identity store, readable settings files in writable directories, and, for HTTPS, a loadable,
+# unexpired certificate with its private key. The check reads configuration and writes nothing but probe files it
+# removes at once; it maps /dev/i2c-1 only to see
 # whether the HAT is present and never opens it.
 # `up` stops and replaces a running controller before the check runs, so a failed check leaves NO controller
 # running. Run the check on its own first (docs/deployment.md):
@@ -44,6 +45,10 @@ x-roof-environment: &roof-environment
   HatEmulator__AllowOutsideDevelopment: "false"
   # People, sessions and managed API keys (the identity store), in the directory mounted by identity-mount.
   RoofControllerSecurity__Identity__StorePath: /var/lib/hvo-roof/identity/identity.json
+  # The settings changed through the API (appsettings.Local.json, in config-mount) and the secrets set through it (in
+  # managed-secrets-mount). A setting given here in the environment overrides both and cannot be changed through the API.
+  RoofControllerSettings__FilePath: /etc/hvo-roof/config/appsettings.Local.json
+  RoofControllerSettings__SecretsFilePath: /var/lib/hvo-roof/settings-secrets/secrets.json
   # Host names/IPs clients use to reach the controller (semicolon-separated). A list must include localhost (the
   # health check calls it); "*" logs a startup warning.
   AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
@@ -93,6 +98,24 @@ x-identity-mount: &identity-mount
   type: bind
   source: ${HVO_ROOF_IDENTITY_DIR:-/var/lib/hvo-roof/identity}
   target: /var/lib/hvo-roof/identity
+  bind:
+    create_host_path: false
+
+# The settings file (appsettings.Local.json): the settings changed from the shipped defaults, through the API or by hand
+# (docs/commissioning.md). Read-write, and the directory must exist (sudo install -d -m 0755 /etc/hvo-roof/config).
+x-config-mount: &config-mount
+  type: bind
+  source: ${HVO_ROOF_CONFIG_DIR:-/etc/hvo-roof/config}
+  target: /etc/hvo-roof/config
+  bind:
+    create_host_path: false
+
+# The managed secrets file: secrets set through the API, owner-only. Read-write, and the directory must exist
+# (sudo install -d -m 0700 /var/lib/hvo-roof/settings-secrets). Back it up with the secrets directory.
+x-managed-secrets-mount: &managed-secrets-mount
+  type: bind
+  source: ${HVO_ROOF_MANAGED_SECRETS_DIR:-/var/lib/hvo-roof/settings-secrets}
+  target: /var/lib/hvo-roof/settings-secrets
   bind:
     create_host_path: false
 
@@ -182,6 +205,8 @@ services:
       - *secrets-mount
       - *cert-mount
       - *identity-mount
+      - *config-mount
+      - *managed-secrets-mount
     profiles:
       - pi
 
@@ -198,6 +223,8 @@ services:
       - *secrets-mount
       - *cert-mount
       - *identity-mount
+      - *config-mount
+      - *managed-secrets-mount
     profiles:
       - pi
 
@@ -207,6 +234,8 @@ services:
     volumes:
       - *secrets-mount
       - *identity-mount
+      - *config-mount
+      - *managed-secrets-mount
     profiles:
       - pi-lan-http
 
@@ -222,6 +251,8 @@ services:
       - *thermal-mount
       - *secrets-mount
       - *identity-mount
+      - *config-mount
+      - *managed-secrets-mount
     profiles:
       - pi-lan-http
 

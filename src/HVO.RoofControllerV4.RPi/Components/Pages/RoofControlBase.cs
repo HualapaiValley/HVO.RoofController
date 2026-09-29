@@ -13,7 +13,6 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Components.Pages;
 
@@ -41,7 +40,6 @@ public class RoofControlBase : ComponentBase, IDisposable
 
     [Inject] protected IRoofControllerServiceV4 RoofController { get; set; } = default!;
     [Inject] protected ILogger<RoofControlBase> Logger { get; set; } = default!;
-    [Inject] protected IOptions<RoofControllerOptionsV4> RoofControllerOptions { get; set; } = default!;
     [Inject] protected FooterStatusService? FooterStatusService { get; set; }
     [Inject] protected HealthCheckService HealthCheckService { get; set; } = default!;
     [Inject] protected IAuthorizationService AuthorizationService { get; set; } = default!;
@@ -178,7 +176,8 @@ public class RoofControlBase : ComponentBase, IDisposable
     public double? LeaseSecondsRemaining => Snapshot.LeaseSecondsRemaining;
     public bool IsSafetyWatchdogRunning => Snapshot.IsWatchdogActive;
     public double SafetyWatchdogTimeRemaining => Snapshot.WatchdogSecondsRemaining ?? 0;
-    public double SafetyWatchdogTimeoutSeconds => RoofControllerOptions.Value.SafetyWatchdogTimeout.TotalSeconds;
+    // The applied configuration, which a settings change updates without a restart.
+    public double SafetyWatchdogTimeoutSeconds => RoofController.GetConfigurationSnapshot().SafetyWatchdogTimeout.TotalSeconds;
     public DateTimeOffset? LastTransitionUtc => Snapshot.LastTransitionUtc;
     public RoofControllerStopReason LastStopReason => Snapshot.LastStopReason;
     public bool WasEmergencyStop => RoofConsoleRules.IsSafetyStopReason(LastStopReason);

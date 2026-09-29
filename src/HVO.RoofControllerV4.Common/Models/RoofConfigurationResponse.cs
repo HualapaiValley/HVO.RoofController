@@ -41,13 +41,22 @@ public sealed record class RoofConfigurationResponse
 
     public double? AtSpeedConfirmationTimeoutSeconds { get; init; }
 
-    /// <summary>Local-only setting; reported for visibility, never changed through the API.</summary>
+    /// <summary>
+    /// Local-only setting; reported for visibility. This endpoint never changes it; <c>POST Settings/roof</c> does, with a
+    /// local credential.
+    /// </summary>
     public double? DriveStopConfirmationTimeoutSeconds { get; init; }
 
-    /// <summary>Local-only setting; reported for visibility, never changed through the API.</summary>
+    /// <summary>
+    /// Local-only setting; reported for visibility. This endpoint never changes it; <c>POST Settings/roof</c> does, with a
+    /// local credential.
+    /// </summary>
     public double? DepartureReleaseTimeoutSeconds { get; init; }
 
-    /// <summary>Local-only safeguard; reported for visibility, never changed through the API.</summary>
+    /// <summary>
+    /// Local-only safeguard; reported for visibility. This endpoint never changes it; <c>POST Settings/roof</c> does, with a
+    /// local credential.
+    /// </summary>
     public bool AllowIgnoringLimitSwitchesOnPhysicalHardware { get; init; }
 
     public int RestartOnFailureWaitTimeSeconds { get; init; }

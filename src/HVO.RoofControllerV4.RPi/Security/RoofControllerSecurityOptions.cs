@@ -60,4 +60,12 @@ public sealed class RoofApiKeyOptions
     /// key must have the <c>RoofViewer</c> role; the PIN unlocks more.
     /// </summary>
     public bool Kiosk { get; set; }
+
+    /// <summary>
+    /// True for a key kept only on the controller or the device beside it (for example the kiosk's key, or an admin key
+    /// used from the controller's own shell). It is a local credential: only a local credential may change local-only
+    /// settings (<c>GET api/v4.0/Settings/Catalogue</c> marks them). The check is on the key, never on the caller's
+    /// address. Keys added through the API are never local.
+    /// </summary>
+    public bool Local { get; set; }
 }
