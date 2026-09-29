@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Runtime.InteropServices;
 using FluentAssertions;
 using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
@@ -16,6 +19,7 @@ using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
+using Terminal.Gui.Testing;
 using Terminal.Gui.Time;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -330,6 +334,39 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void F10_WhileAStopIsOnItsWay_ThatNothingConfirms_StaysOpenAndSaysSo_UntilF10AgainClosesIt()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host)
+        {
+            WrapHandler = inner => new GatedHandler(
+                new StubAnswerHandler(inner, "/RoofControl/Stop", HttpStatusCode.ServiceUnavailable, "text/html", "<html>503</html>"),
+                "/RoofControl/Stop",
+                answer.Task)
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = new TuiDriver(rig);
+        tui.WaitIdle("the caller", () => tui.Ui.Caller is not null);
+
+        tui.Press(Key.F9);
+        tui.Press(Key.F10);
+        answer.SetResult();
+        tui.WaitIdle("the Stop's answer", () => !tui.Ui.StopInFlight);
+
+        tui.Ui.UnconfirmedStop.Should().NotBeNull();
+        tui.Ui.UnconfirmedStop!.Outcome.Should().Be(RoofStopOutcome.Failed);
+        tui.Ui.StopResult.Should().Be(RoofStopText.Failed("The controller is not ready. Try again shortly."));
+        tui.Ui.Message.Should().Be("Nothing confirmed the Stop, so the interface stays open. F10 closes it.");
+        tui.Ui.QuitRequested.Should().BeFalse();
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeFalse("closing would hide a Stop that nothing confirmed");
+
+        tui.Press(Key.F10);
+
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeTrue("F10 again closes it, with the result known");
+    }
+
+    [TestMethod]
     public void Closing_WithAStopOnItsWay_DeliversTheStopFirst()
     {
         var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -357,12 +394,15 @@ public sealed class RoofTerminalUiTests
     [TestMethod]
     public void Ui_OnATerminationSignal_ClosesTheInterface_AndExitsInterrupted()
     {
+        var exits = new ConcurrentQueue<int>();
+        using var termination = new RoofCliTermination(exits.Enqueue);
         using var host = RoofClientApiTests.CreateHost();
-        using var signal = new CancellationTokenSource();
+        var held = false;
         var closed = false;
         using var rig = new CliRig(host)
         {
             Interactive = true,
+            Termination = termination,
             CreateApplication = () =>
             {
                 var app = Application.Create(new VirtualTimeProvider());
@@ -373,7 +413,12 @@ public sealed class RoofTerminalUiTests
             RunApplication = (app, window) =>
             {
                 var session = app.Begin(window);
-                signal.Cancel();
+
+                // Closing the terminal: two SIGHUPs well under a millisecond apart. The interface holds the process
+                // from the start, so the second does not end it before the interface closes.
+                held = termination.IsHeld;
+                termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
+                termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
                 var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
                 while (!window.StopRequested && DateTime.UtcNow < deadline)
                 {
@@ -389,10 +434,67 @@ public sealed class RoofTerminalUiTests
         using var output = new StringWriter();
         using var error = new StringWriter();
 
-        var code = RoofCli.RunAsync(["ui", "--credentials-file", rig.CredentialsPath], rig.CreateHost(output, error), signal.Token).GetAwaiter().GetResult();
+        var code = RoofCli.RunAsync(["ui", "--credentials-file", rig.CredentialsPath], rig.CreateHost(output, error), termination.Token)
+            .GetAwaiter().GetResult();
 
         code.Should().Be((int)RoofExitCode.Interrupted, error.ToString());
         closed.Should().BeTrue("a termination signal closes the interface as F10 does");
+        held.Should().BeTrue("the interface holds the process while it runs");
+        exits.Should().BeEmpty("the second SIGHUP must not end the process while the interface closes");
+        termination.IsHeld.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Ui_ClosedAfterAStopThatNothingConfirmed_SaysSoOnTheTerminal_AndExitsStopNotVerified()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        var closed = false;
+        using var rig = new CliRig(host)
+        {
+            Interactive = true,
+            WrapHandler = inner => new StubAnswerHandler(inner, "/RoofControl/Stop", HttpStatusCode.ServiceUnavailable, "text/html", "<html>503</html>"),
+            CreateApplication = () =>
+            {
+                var app = Application.Create(new VirtualTimeProvider());
+                app.Init(DriverRegistry.Names.ANSI);
+                app.Driver!.SetScreenSize(120, 36);
+                return app;
+            },
+            RunApplication = (app, window) =>
+            {
+                var session = app.Begin(window);
+                bool Showing(string text)
+                {
+                    app.LayoutAndDraw(true);
+                    return app.Driver!.ToString()!.Contains(text, StringComparison.Ordinal);
+                }
+
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                app.InjectKey(Key.F9);
+                while (!Showing("Stop failed") && DateTime.UtcNow < deadline)
+                {
+                    app.TimedEvents!.RunTimers();
+                    Thread.Sleep(10);
+                }
+
+                app.InjectKey(Key.F10);
+                app.TimedEvents!.RunTimers();
+                closed = window.StopRequested;
+                app.End(session!);
+            }
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var code = RoofCli.RunAsync(["ui", "--credentials-file", rig.CredentialsPath], rig.CreateHost(output, error), CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        closed.Should().BeTrue("F10 closes the interface once the Stop is answered, confirmed or not");
+        code.Should().Be((int)RoofExitCode.StopNotVerified, error.ToString());
+        error.ToString().Should().Be(
+            "The last Stop sent from the interface was not confirmed. "
+            + RoofStopText.Failed("The controller is not ready. Try again shortly.") + Environment.NewLine);
     }
 
     // ---- Staleness ---------------------------------------------------------------------------------------------------
@@ -602,6 +704,40 @@ public sealed class RoofTerminalUiTests
         tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
         roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
         ((IRunnable)tui.Ui.Window).StopRequested.Should().BeTrue("the interface closes once the Stop is answered");
+    }
+
+    [TestMethod]
+    public void Open_WithNoLease_F10_WhenTheStopIsRefusedAsUnverified_StaysOpenAndSaysSo()
+    {
+        var moving = false;
+        var roof = RoofServiceMock.Create();
+        roof.Setup(service => service.GetCurrentStatusSnapshot()).Returns(() => Volatile.Read(ref moving)
+            ? RoofServiceMock.Snapshot(RoofControllerStatus.Opening, RoofMotionDirection.Opening, relayState: RoofRelayRegisterState.Unverified)
+                with { LeaseSecondsRemaining = null }
+            : RoofServiceMock.Snapshot());
+        roof.Setup(service => service.Open()).Returns(() =>
+        {
+            Volatile.Write(ref moving, true);
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening);
+        });
+        roof.Setup(service => service.Stop(It.IsAny<RoofControllerStopReason>())).Returns(Result<RoofControllerStatus>.Failure(
+            new RoofControllerException(RoofControllerErrorCode.RelayStateUnverified, "The relays could not be read back (test).")));
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        page.OpenButton.InvokeCommand(Command.Accept);
+        tui.WaitIdle("Open", () => tui.Ui.Message.StartsWith("Open accepted", StringComparison.Ordinal));
+
+        tui.Press(Key.F10);
+        tui.WaitIdle("Stop before quitting", () => !tui.Ui.StopInFlight && tui.Ui.StopResult != RoofStopText.Sending);
+
+        tui.Ui.StopResult.Should().Be(RoofStopText.SentUnverified);
+        tui.Ui.UnconfirmedStop!.Outcome.Should().Be(RoofStopOutcome.RelayUnverified);
+        tui.Ui.Message.Should().Be("Nothing confirmed the Stop, so the interface stays open. F10 closes it.");
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeFalse("the roof may still be moving, and the operator must see that");
+        roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
     }
 
     [TestMethod]

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using HVO.RoofControllerV4.Cli;
@@ -74,6 +75,9 @@ internal sealed class CliRig : IDisposable
 
     public Func<IApplication>? CreateApplication { get; set; }
 
+    /// <summary>The process's termination signals, as the real process has them; none unless a test gives one.</summary>
+    public RoofCliTermination? Termination { get; set; }
+
     public RoofCliHost CreateHost(TextWriter output, TextWriter error) => new()
     {
         Out = output,
@@ -95,7 +99,8 @@ internal sealed class CliRig : IDisposable
             : (_, _, _) => throw new HttpRequestException("The status hub's WebSocket is not offered (test)."),
         StatusFeed = ClientTestSupport.FastFeed,
         CreateApplication = CreateApplication ?? (() => throw new InvalidOperationException("This test gives no terminal application.")),
-        RunApplication = RunApplication ?? ((_, _) => { })
+        RunApplication = RunApplication ?? ((_, _) => { }),
+        Termination = Termination
     };
 
     /// <summary>A context as the command line would make it, with this rig's credentials file.</summary>
@@ -315,6 +320,19 @@ internal sealed class UnreachableHandler(HttpMessageHandler inner, TaskCompletio
         tried?.TrySetResult();
         throw new HttpRequestException("Connection refused (test).");
     }
+}
+
+/// <summary>
+/// Answers the request whose path ends in <paramref name="path"/> itself, as a failing server or proxy would, while
+/// <paramref name="answering"/> says so (always, when not given).
+/// </summary>
+internal sealed class StubAnswerHandler(
+    HttpMessageHandler inner, string path, HttpStatusCode status, string mediaType, string body, Func<bool>? answering = null) : DelegatingHandler(inner)
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        => request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase) && (answering?.Invoke() ?? true)
+            ? Task.FromResult(new HttpResponseMessage(status) { RequestMessage = request, Content = new StringContent(body, Encoding.UTF8, mediaType) })
+            : base.SendAsync(request, cancellationToken);
 }
 
 /// <summary>Holds the request whose path ends in <paramref name="path"/> until <paramref name="gate"/> opens, then sends it.</summary>

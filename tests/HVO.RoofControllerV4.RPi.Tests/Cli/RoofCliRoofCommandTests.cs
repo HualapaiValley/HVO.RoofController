@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
@@ -171,6 +173,38 @@ public sealed class RoofCliRoofCommandTests
         lines[0].GetProperty("status").GetProperty("status").GetString().Should().Be("Closed");
         lines[1].GetProperty("stale").GetBoolean().Should().BeTrue();
         lines[1].GetProperty("staleSince").GetDateTimeOffset().Should().Be(ClientStart + FastFeed.StaleAfter);
+    }
+
+    [TestMethod]
+    public async Task StatusWatch_Json_WritesAChangeThatTheTextLineDoesNotShow_ButNotTheSameStatusAgain()
+    {
+        var first = RoofServiceMock.Snapshot() with { StatusVersion = 10, SnapshotUtc = ClientStart, LastSuccessfulInputReadUtc = ClientStart };
+        var current = first;
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Volatile.Read(ref current)));
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+        await using var run = RunningCommand.Start(rig, "status", "--watch", "--json");
+        await run.WaitForOutAsync("\"stale\":false", "the first snapshot");
+
+        // The same status again, as the hub repeats it: a new version and time, and a later read of the inputs.
+        RaiseStatus(host, first with { StatusVersion = 11, SnapshotUtc = ClientStart.AddSeconds(1), LastSuccessfulInputReadUtc = ClientStart.AddSeconds(1) });
+
+        // The inputs can no longer be read: the text line reads the same, and a script watching the JSON must see it.
+        var failed = first with { StatusVersion = 12, SnapshotUtc = ClientStart.AddSeconds(2), InputsHealthy = false, ConsecutiveInputReadFailures = 3 };
+        RoofCliFormat.DescribeState(failed).Should().Be(RoofCliFormat.DescribeState(first), "the text line does not show the inputs' health");
+        Volatile.Write(ref current, failed);
+        RaiseStatus(host, failed);
+        await run.WaitForOutAsync("\"inputsHealthy\":false", "the change");
+        var result = await run.InterruptAsync();
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        var lines = result.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => JsonDocument.Parse(line).RootElement.GetProperty("status"))
+            .ToList();
+        lines.Should().HaveCount(2, result.ToString());
+        lines[0].GetProperty("inputsHealthy").GetBoolean().Should().BeTrue();
+        lines[1].GetProperty("inputsHealthy").GetBoolean().Should().BeFalse();
+        lines[1].GetProperty("consecutiveInputReadFailures").GetInt32().Should().Be(3);
     }
 
     [TestMethod]
@@ -423,6 +457,40 @@ public sealed class RoofCliRoofCommandTests
         result.Code.Should().Be(RoofExitCode.StopNotVerified, result.ToString());
         result.Error.Should().Be(message + Environment.NewLine);
         result.Out.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(PosixSignal.SIGINT)]
+    [DataRow(PosixSignal.SIGTERM)]
+    [DataRow(PosixSignal.SIGHUP)]
+    public async Task Stop_SignalsWhileTheStopIsOnItsWay_DoNotCutItShort(PosixSignal signal)
+    {
+        var exits = new ConcurrentQueue<int>();
+        using var termination = new RoofCliTermination(exits.Enqueue);
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host)
+        {
+            Termination = termination,
+            WrapHandler = inner => new NoticingHandler(new GatedHandler(inner, "/RoofControl/Stop", answer.Task), "/RoofControl/Stop", reached)
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.StartWithSignals(rig, "stop", "--json");
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Two signals while the Stop waits for the network: neither cancels it, and neither ends the process.
+        termination.OnSignal(new PosixSignalContext(signal));
+        termination.OnSignal(new PosixSignalContext(signal));
+        answer.SetResult();
+        var result = await run.EndAsync();
+
+        exits.Should().BeEmpty("nothing cuts a Stop short");
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Json.GetProperty("outcome").GetString().Should().Be("Acknowledged");
+        result.Json.GetProperty("message").GetString().Should().Be(RoofStopText.AcknowledgedVerified);
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+        termination.IsHeld.Should().BeFalse("the command has ended");
     }
 
     [TestMethod]
@@ -761,6 +829,55 @@ public sealed class RoofCliRoofCommandTests
     }
 
     [TestMethod]
+    public async Task Open_Following_TheTerminalClosing_TwoSignalsBeforeTheCommandSeesOne_SendsStop_AndExitsInterrupted()
+    {
+        var exits = new ConcurrentQueue<int>();
+        using var termination = new RoofCliTermination(exits.Enqueue);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        using var rig = new CliRig(host) { Termination = termination };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.StartWithSignals(rig, "open");
+        await run.WaitForOutAsync("Open accepted. Following the motion; Ctrl+C sends Stop.", "the motion to be followed");
+
+        // The command holds the process while the roof may move on its order, before any signal: closing a terminal
+        // sends SIGHUP twice (the kernel's and the shell's), well under a millisecond apart.
+        termination.IsHeld.Should().BeTrue("the roof moves on this command's order");
+        termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
+        termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
+        var result = await run.EndAsync();
+
+        exits.Should().BeEmpty("the second SIGHUP must not end the process before the Stop");
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        result.Error.Should().Contain("Interrupted: Stop sent.");
+        result.Out.Should().Contain(RoofStopText.AcknowledgedVerified);
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+        termination.IsHeld.Should().BeFalse("the command has ended");
+    }
+
+    [TestMethod]
+    public async Task Open_TheTerminalClosing_BeforeTheAnswerArrives_SendsStop()
+    {
+        var exits = new ConcurrentQueue<int>();
+        using var termination = new RoofCliTermination(exits.Enqueue);
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        using var rig = new CliRig(host) { Termination = termination };
+        rig.WrapHandler = inner => new AnswerLostHandler(inner, "/Open", delivered);
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.StartWithSignals(rig, "open");
+        await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        termination.IsHeld.Should().BeTrue("the Open reached the controller, and the roof may be moving");
+        termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
+        termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
+        var result = await run.EndAsync();
+
+        exits.Should().BeEmpty("the second SIGHUP must not end the process before the Stop");
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
     public async Task Open_CtrlC_BeforeTheAnswerArrives_SendsStop_AndExitsInterrupted()
     {
         using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
@@ -957,6 +1074,95 @@ public sealed class RoofCliRoofCommandTests
             + Environment.NewLine);
         clock.GetUtcNow().Should().BeOnOrAfter(ClientStart + TimeSpan.FromSeconds(30), "the command gives up only after 30 s with no status");
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    [TestMethod]
+    [DataRow(HttpStatusCode.BadGateway, "text/html", "<html><body><h1>502 Bad Gateway</h1></body></html>")]
+    [DataRow(HttpStatusCode.ServiceUnavailable, "application/problem+json", "{\"status\":503,\"title\":\"Service Unavailable\"}")]
+    [DataRow(HttpStatusCode.InternalServerError, "application/problem+json", "{\"status\":500,\"title\":\"An error occurred\"}")]
+    public async Task Open_Following_AServerErrorToAStatusRead_IsNoStatus_TheCommandKeepsReading(HttpStatusCode status, string mediaType, string body)
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        var current = Moving(RoofMotionDirection.Opening, leaseSeconds: null);
+        var failing = true;
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Volatile.Read(ref current)));
+        using var rig = new CliRig(host)
+        {
+            Time = clock,
+            WrapHandler = inner => new StubAnswerHandler(
+                new UnreachableHandler(inner, null, RoofStatusHubContract.Path), "/RoofControl/Status", status, mediaType, body, () => Volatile.Read(ref failing))
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open");
+        await run.WaitForOutAsync("Open accepted. Following the motion; Ctrl+C sends Stop.", "the motion to be followed");
+
+        // Reads that get the error for 10 s: the command goes on following the roof.
+        await AdvanceUntilAsync(clock, () => clock.GetUtcNow() >= ClientStart + TimeSpan.FromSeconds(10), "10 s of failed reads");
+        run.Error.Should().Be("Live status is not connected: reading the status every 2 s instead. Ctrl+C sends Stop." + Environment.NewLine);
+        Volatile.Write(ref failing, false);
+        Volatile.Write(ref current, RoofServiceMock.Snapshot(RoofControllerStatus.Open) with { StatusVersion = 12 });
+        await AdvanceUntilAsync(clock, () => run.Out.Contains("Done.", StringComparison.Ordinal), "the read that finds the roof open");
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Error.Should().Be("Live status is not connected: reading the status every 2 s instead. Ctrl+C sends Stop." + Environment.NewLine);
+    }
+
+    [TestMethod]
+    public async Task Open_Following_AServerErrorToEveryStatusRead_GivesUpAfter30s_AndExitsUnreachable()
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        using var rig = new CliRig(host)
+        {
+            Time = clock,
+            WrapHandler = inner => new StubAnswerHandler(
+                new UnreachableHandler(inner, null, RoofStatusHubContract.Path), "/RoofControl/Status", HttpStatusCode.BadGateway, "text/html", "<html>502</html>")
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open");
+        await run.WaitForOutAsync("Open accepted. Following the motion; Ctrl+C sends Stop.", "the motion to be followed");
+
+        await AdvanceUntilAsync(clock, () => run.Error.Contains("No status from the controller", StringComparison.Ordinal), "the command to give up");
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Unreachable, result.ToString());
+        result.Error.Should().EndWith(
+            "No status from the controller for 30 s: the roof may still be moving. To stop it, run 'hvo-roof stop', or use the stop control at the roof."
+            + Environment.NewLine);
+        clock.GetUtcNow().Should().BeOnOrAfter(ClientStart + TimeSpan.FromSeconds(30));
+    }
+
+    [TestMethod]
+    [DataRow(HttpStatusCode.ServiceUnavailable, "The controller is not ready. Try again shortly.")]
+    [DataRow(HttpStatusCode.BadGateway, "The controller reported an unexpected error.")]
+    public async Task Open_Following_AServerErrorToTheRenewal_SaysSo_AndExitsUnreachable(HttpStatusCode status, string reason)
+    {
+        var clock = new ManualTimeProvider(ClientStart);
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: 1.5)));
+        using var rig = new CliRig(host) { Time = clock };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = new RunningCommand(
+            (output, error) => new RoofCliHost
+            {
+                Out = output,
+                Error = error,
+                GetEnvironmentVariable = _ => null,
+                ReadLine = (_, _) => null,
+                Time = clock,
+                CreateHandler = () => new StubAnswerHandler(CreateHandler(() => host.Server), "/RoofControl/Lease", status, "text/html", "<html>error</html>"),
+                WebSocketFactory = WebSocketFactory(() => host.Server),
+                StatusFeed = FastFeed
+            },
+            "open", "--credentials-file", rig.CredentialsPath);
+        await run.WaitForOutAsync("Open accepted. Following the motion; Ctrl+C sends Stop.", "the motion to be followed");
+
+        await AdvanceUntilAsync(clock, () => run.Error.Contains("The lease could not be renewed", StringComparison.Ordinal), "the failed renewal");
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Unreachable, result.ToString());
+        result.Error.Should().Be(
+            $"The lease could not be renewed: {reason} If the controller is running, it stops the roof when the lease runs out." + Environment.NewLine);
     }
 
     /// <summary>Moves <paramref name="clock"/> on in half-second steps until <paramref name="condition"/> holds.</summary>
@@ -1399,14 +1605,28 @@ file sealed class RunningCommand : IAsyncDisposable
     private readonly Task<int> _run;
 
     public RunningCommand(Func<TextWriter, TextWriter, RoofCliHost> createHost, params string[] args)
+        : this(createHost, null, args)
+    {
+    }
+
+    /// <param name="termination">The real process's signal handling, in place of <see cref="InterruptAsync"/>.</param>
+    private RunningCommand(Func<TextWriter, TextWriter, RoofCliHost> createHost, RoofCliTermination? termination, string[] args)
     {
         var host = createHost(_out, _error);
-        _run = Task.Run(() => RoofCli.RunAsync(args, host, _interrupt.Token));
+        var interrupt = termination?.Token ?? _interrupt.Token;
+        _run = Task.Run(() => RoofCli.RunAsync(args, host, interrupt));
     }
 
     /// <summary>Runs <paramref name="args"/> with the rig's host and credentials file.</summary>
     public static RunningCommand Start(CliRig rig, params string[] args)
         => new(rig.CreateHost, [.. args, "--credentials-file", rig.CredentialsPath]);
+
+    /// <summary>
+    /// Runs <paramref name="args"/> as the real process does: the rig's <see cref="CliRig.Termination"/> handles the
+    /// signals, which the test delivers with <see cref="RoofCliTermination.OnSignal"/>.
+    /// </summary>
+    public static RunningCommand StartWithSignals(CliRig rig, params string[] args)
+        => new(rig.CreateHost, rig.Termination ?? throw new InvalidOperationException("The rig has no termination."), [.. args, "--credentials-file", rig.CredentialsPath]);
 
     public string Out => _out.Text;
 
@@ -1480,6 +1700,20 @@ file sealed class AnswerLostHandler(HttpMessageHandler inner, string path, TaskC
     }
 }
 
+/// <summary>Sets <paramref name="reached"/> when the request whose path ends in <paramref name="path"/> is sent.</summary>
+file sealed class NoticingHandler(HttpMessageHandler inner, string path, TaskCompletionSource reached) : DelegatingHandler(inner)
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase))
+        {
+            reached.TrySetResult();
+        }
+
+        return base.SendAsync(request, cancellationToken);
+    }
+}
+
 /// <summary>A writer that the command and the test can use from different threads.</summary>
 file sealed class LockedWriter : TextWriter
 {
@@ -1530,13 +1764,4 @@ file sealed class LockedWriter : TextWriter
             _text.Append(value).Append(CoreNewLine);
         }
     }
-}
-
-/// <summary>Answers the request whose path ends in <paramref name="path"/> itself, as a failing server or proxy would.</summary>
-file sealed class StubAnswerHandler(HttpMessageHandler inner, string path, HttpStatusCode status, string mediaType, string body) : DelegatingHandler(inner)
-{
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        => request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase)
-            ? Task.FromResult(new HttpResponseMessage(status) { RequestMessage = request, Content = new StringContent(body, Encoding.UTF8, mediaType) })
-            : base.SendAsync(request, cancellationToken);
 }

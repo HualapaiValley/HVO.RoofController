@@ -120,20 +120,22 @@ request, and it is worded the same as in every other client:
 | Not delivered, no answer, an answer that could not be read, or a server error (HTTP 5xx, including a 503 when the controller could not verify the stop or its hardware is unavailable) | `Stop failed: <reason> Use the stop control at the roof.` | 9 |
 | Refused by the controller (HTTP 403, or another 4xx) | `Stop failed: <reason> Use the stop control at the roof.` | 6 or 7 |
 
+A signal does not cut `stop` short: it sends the Stop, waits for the answer, and reports it with the exit code above.
 `stop --json` writes the same document whatever the outcome, with the exit code in it:
 `{"outcome", "message", "exitCode", "code", "status"}`. `outcome` is `Acknowledged`, `RelayUnverified` or `Failed`;
 `code` is the controller's problem code, when it gave one; `status` is the roof's status, when the answer carried it.
 
 **Motion.** `open` and `close` follow the roof until it stops, then print where it stopped. While they follow it, they
-renew the operator lease; a lease that cannot be renewed is an error (exit 4), and the controller stops the roof when
-the lease runs out. If the command is interrupted (see [Signals](#signals)), it sends Stop first and exits 130. That
+renew the operator lease; a lease that cannot be renewed (no answer, or a server error) is an error (exit 4), and the
+controller stops the roof when the lease runs out. If the command is interrupted (see [Signals](#signals)), it sends Stop first and exits 130. That
 includes an interruption before the controller's answer arrives, because the roof may already be moving. With
 `--json`, an interrupted command writes `{"interrupted": true, "exitCode": 130, "stop": {...}}`, where `stop` is the
 `stop --json` document.
 
 The status comes from the status hub. While the hub is not connected, the command says so on standard error
 (`Live status is not connected: reading the status every 2 s instead. Ctrl+C sends Stop.`) and reads the status over
-REST every 2 s. With no status at all for 30 s it gives up (exit 4) and says that the roof may still be moving.
+REST every 2 s. A read that gets no answer, or a server error (a proxy's 502, say), is not a status: the command keeps
+reading, and with no status at all for 30 s it gives up (exit 4) and says that the roof may still be moving.
 
 With `--no-wait`, the command returns once the controller accepts the motion. If the controller holds the motion on a
 lease, the command says so, and the roof stops when the lease runs out unless something runs `hvo-roof lease`.
@@ -189,9 +191,11 @@ controller's answer shows that one is pending.
 
 - **The first signal** ends the command, not the process. A command that has the roof moving (`open`, `close`, or
   `ui`) sends Stop first. The command exits 130.
-- **The process still ends.** 5 s after the first signal it exits 130, unless a Stop is on its way. A Stop has up to
-  15 s: the Stop timeout (10 s) and a margin to print its answer and restore the terminal.
-- **A second signal** ends the process at once, unless a Stop is on its way: nothing cuts a Stop short.
+- **The process still ends.** 5 s after the first signal it exits 130. `open`, `close`, `stop` and `ui` have up to
+  15 s, for the Stop timeout (10 s) and a margin to print its answer and restore the terminal.
+- **A second signal** ends the process at once, except in `open`, `close`, `stop` and `ui`: nothing cuts their Stop
+  short. Closing a terminal sends SIGHUP twice (the kernel's and the shell's, well under a millisecond apart), before a
+  command can have seen the first.
 
 ### Exit codes
 
@@ -206,7 +210,7 @@ controller's answer shows that one is pending.
 | 6 | Forbidden | The credential is valid, but its role may not do this (HTTP 403). |
 | 7 | Refused | The controller refused the command, for example because of the roof's state, a latched fault, a settings version conflict or a value it does not accept. |
 | 8 | Unhealthy | `health`: the controller answered, but it is degraded or unhealthy. |
-| 9 | StopNotVerified | `stop`: nothing confirms that the roof stopped. The controller could not verify that the relays are off, or the stop did not reach it, its answer never came or could not be read, or it answered with a server error (HTTP 5xx). Use the stop control at the roof. |
+| 9 | StopNotVerified | `stop`: nothing confirms that the roof stopped. The controller could not verify that the relays are off, or the stop did not reach it, its answer never came or could not be read, or it answered with a server error (HTTP 5xx). Use the stop control at the roof. `ui`: the same, for the last Stop sent from the interface. |
 | 10 | ConfirmationRequired | Nothing was sent, because the command needs a confirmation. A safety-critical change is confirmed with `--confirm-safety-critical` once you have reviewed it. A question (removing a user or key, discarding a hand edit, restarting) is confirmed at the terminal, or with `--force` when there is none. |
 | 11 | Stale | `status --watch`: it was ended while the status was stale (no recent message from the controller), or before any status arrived. |
 | 130 | Interrupted | The command was interrupted (Ctrl+C, SIGTERM, or the terminal closing) before it finished. What it had sent may still take effect. |
@@ -237,6 +241,11 @@ controller's answer shows that one is pending.
   (`Stopping the roof, which moves on a command from this interface, before closing.`).
 - **Quitting never cuts a Stop short.** While a Stop is on its way, quitting says
   `Waiting for Stop to be answered before closing.` and closes once the controller answers.
+- **Quitting does not hide a Stop that nothing confirmed.** When the Stop that quitting sent or waited for failed, or
+  its relays could not be verified, F10 leaves the interface open with the result on screen
+  (`Nothing confirmed the Stop, so the interface stays open. F10 closes it.`). Whenever the last Stop sent from the
+  interface was not confirmed, `hvo-roof ui` repeats its result on the restored terminal and exits 9 (130 after a
+  termination signal, which closes the interface anyway).
 - **A stale status.** When the status stops arriving, a banner says `STALE: no status since …`. When live status is not
   connected, a status read with Refresh is stale from the start: the banner says
   `STALE: status from a single read at …; live status is not connected. Stop still works.` The Roof page then shows
@@ -310,9 +319,9 @@ Nothing here needs the Pi, the HAT or the roof.
   - stops, with F9, a roof that another client started, and checks with `status --json` that the roof stopped short of
     the open limit;
   - checks that Esc leaves the interface open and that F10 exits 0;
-  - sends SIGHUP to `hvo-roof open` and SIGTERM to `hvo-roof close` while each follows the roof, and checks that each
-    sent Stop, that the controller verified it, that the roof stopped short of the limit, and that the command exited
-    130.
+  - closes the terminal of `hvo-roof open` (a tmux window killed under its shell, which delivers SIGHUP twice) and sends
+    SIGTERM to `hvo-roof close` while each follows the roof, and checks that each sent Stop, that the controller verified
+    it and that the roof stopped short of the limit, and that `close` exited 130.
 
   The `Emulator image` workflow keeps the screens as the `terminal-screens-<run id>` artifact: each as text, with its
   colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The screenshots above are those images.

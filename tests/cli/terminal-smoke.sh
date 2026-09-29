@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The published hvo-roof command against a running controller (#45), in a real terminal: a few commands, then
 # 'hvo-roof ui' in a tmux pane, where every page is drawn, F9 stops a roof that another client started, Esc leaves the
-# interface open, and F10 closes it with exit code 0. Then SIGHUP (the terminal closing) during 'hvo-roof open' and
-# SIGTERM during 'hvo-roof close': each sends Stop, the roof stops short of the limit, and the command exits 130. The
+# interface open, and F10 closes it with exit code 0. Then the terminal closing during 'hvo-roof open' (a tmux window
+# killed under its shell, which delivers SIGHUP twice) and SIGTERM during 'hvo-roof close': each sends Stop, the roof
+# stops short of the limit, and 'close' exits 130 (a closed terminal leaves no one to read the exit code of 'open'). The
 # screens are saved as text, and drawn as SVG images (tests/cli/ansi-to-svg.py), for the CI artifacts and the
 # screenshots in docs/cli.md.
 #
@@ -43,8 +44,16 @@ fail() {
     exit 1
 }
 
+# The motion command that signal_during runs in the background, until it ends.
+background_pid=""
+
 cleanup() {
     local status=$?
+    # A failed check can leave it following the roof: SIGTERM makes it send Stop and end.
+    if [ -n "${background_pid}" ]; then
+        kill "${background_pid}" 2>/dev/null || true
+        wait "${background_pid}" 2>/dev/null || true
+    fi
     if t has-session -t "${session}" 2>/dev/null; then
         t capture-pane -p -t "${session}" >"${out}/last-screen.txt" 2>/dev/null || true
     fi
@@ -89,6 +98,7 @@ signal_during() {
     shift 2
     "${cli}" "$@" >"${out}/${name}.txt" 2>&1 &
     pid=$!
+    background_pid=${pid}
     deadline=$((SECONDS + 15))
     until grep -qF "Following the motion" "${out}/${name}.txt"; do
         kill -0 "${pid}" 2>/dev/null || fail "'hvo-roof $*' ended before it followed the motion: $(cat "${out}/${name}.txt")"
@@ -97,12 +107,39 @@ signal_during() {
     done
     kill -s "${signal}" "${pid}"
     wait "${pid}" || code=$?
+    background_pid=""
     [ "${code}" -eq 130 ] || fail "'hvo-roof $*' exited ${code} on SIG${signal}, not 130: $(cat "${out}/${name}.txt")"
     grep -qF "Interrupted: Stop sent." "${out}/${name}.txt" \
         || fail "'hvo-roof $*' did not say it sent Stop on SIG${signal}: $(cat "${out}/${name}.txt")"
     grep -qF "Stop acknowledged. Relay register verified de-energized." "${out}/${name}.txt" \
         || fail "the Stop that 'hvo-roof $*' sent on SIG${signal} was not verified: $(cat "${out}/${name}.txt")"
     echo "[terminal] SIG${signal} during 'hvo-roof $*': Stop sent and verified, exit 130"
+}
+
+# hangup_during <name> <args...>: runs a motion command at an interactive shell in a tmux window of its own, and closes
+# the window once the command follows the motion, as closing a terminal or dropping an SSH session does: the kernel and
+# then the shell each send it SIGHUP, well under a millisecond apart. Checks that it sent Stop and that the controller
+# verified the stop. The shell goes with the window, so the exit code cannot be read.
+hangup_during() {
+    local name=$1 deadline
+    shift
+    t new-window -d -t "${session}" -n "${name}" "bash --norc --noprofile -i"
+    t send-keys -t "${session}:${name}" "'${cli}' $* >'${out}/${name}.txt' 2>&1" Enter
+    deadline=$((SECONDS + 15))
+    until grep -qF "Following the motion" "${out}/${name}.txt" 2>/dev/null; do
+        [ "${SECONDS}" -lt "${deadline}" ] || fail "'hvo-roof $*' did not follow the motion within 15 s: $(cat "${out}/${name}.txt" 2>&1)"
+        sleep 0.1
+    done
+    t kill-window -t "${session}:${name}"
+    deadline=$((SECONDS + 20))
+    until grep -qF "Stop acknowledged. Relay register verified de-energized." "${out}/${name}.txt"; do
+        [ "${SECONDS}" -lt "${deadline}" ] \
+            || fail "'hvo-roof $*' did not send a verified Stop within 20 s of its terminal closing: $(cat "${out}/${name}.txt")"
+        sleep 0.25
+    done
+    grep -qF "Interrupted: Stop sent." "${out}/${name}.txt" \
+        || fail "'hvo-roof $*' did not say it sent Stop when its terminal closed: $(cat "${out}/${name}.txt")"
+    echo "[terminal] the terminal closed during 'hvo-roof $*': Stop sent and verified"
 }
 
 # wait_screen <description> <timeout seconds> <text>: waits for the pane to show the text.
@@ -177,10 +214,10 @@ t send-keys -t "${session}" F10
 wait_screen "F10 closes the interface with exit code 0" 15 "hvo-roof exited 0"
 save 08-closed
 
-# A signal to a command that has the roof moving: the terminal closing (SIGHUP), and a service manager or 'kill'
-# (SIGTERM). Each sends Stop before the command ends.
-signal_during hup HUP open
-stopped_short hup-stopped Open
+# A command that has the roof moving loses its terminal, or gets SIGTERM from a service manager or 'kill'. Each sends
+# Stop before it ends.
+hangup_during hangup open
+stopped_short hangup-stopped Open
 signal_during term TERM close
 stopped_short term-stopped Closed
 

@@ -39,6 +39,14 @@ public static partial class RoofCli
             return (int)RoofExitCode.Success;
         }
 
+        /// <summary>
+        /// A status as <c>status --watch --json</c> compares it: every field but the times that advance with each
+        /// snapshot and each read of the HAT.
+        /// </summary>
+        internal static string DescribeJsonState(RoofStatusResponse status) => System.Text.Json.JsonSerializer.Serialize(
+            status with { StatusVersion = 0, SnapshotUtc = default, LastSuccessfulRelayReadUtc = null, LastSuccessfulInputReadUtc = null },
+            RoofCliJson.Compact);
+
         private static async Task<int> WatchStatusAsync(RoofCliContext context, CancellationToken cancellationToken)
         {
             using var client = context.Connect();
@@ -48,8 +56,9 @@ public static partial class RoofCli
             var received = false;
             var saidStale = false;
 
-            // The last state written, without its time: the hub repeats an unchanged status every second, and the
-            // watch writes one line per change.
+            // The last state written, without its times: the hub repeats an unchanged status every second, and the
+            // watch writes one line per change. A line is the text summary; a JSON line is the whole status, so a
+            // change to any of its fields (the inputs' health, say) is written.
             string? lastState = null;
 
             // Set once the watch has ended: disposing the feed disconnects it, which is not news to report.
@@ -67,7 +76,7 @@ public static partial class RoofCli
 
                     received = true;
                     var restarted = e.IsNewInstance && e.Previous is not null;
-                    var state = RoofCliFormat.DescribeState(e.Status);
+                    var state = context.Json ? DescribeJsonState(e.Status) : RoofCliFormat.DescribeState(e.Status);
                     if (state == lastState && !saidStale && !restarted && e.SafetyAlert is null)
                     {
                         return;
@@ -217,10 +226,12 @@ public static partial class RoofCli
         private Command CreateStopCommand()
         {
             var command = new Command("stop", $"{RoofStopText.ButtonLabel}. Sent at once over REST; exits 9 when the relays could not be verified.");
-            SetAction(command, async (context, _, cancellationToken) =>
+            SetAction(command, async (context, _, _) =>
             {
+                // A signal does not cut the Stop short: it is sent and answered, and the process waits for it.
+                using var hold = context.Host.Termination?.Hold();
                 using var client = context.Connect();
-                return ReportStop(context, await client.StopAsync(cancellationToken).ConfigureAwait(false));
+                return ReportStop(context, await client.StopAsync(CancellationToken.None).ConfigureAwait(false));
             });
             return command;
         }
@@ -283,6 +294,10 @@ public static partial class RoofCli
 
         private static async Task<int> MoveAsync(RoofCliContext context, RoofMotionDirection direction, bool follow, CancellationToken cancellationToken)
         {
+            // From before the command is sent until this command ends, the roof may move on its order: no signal ends
+            // the process before the Stop that the first one asks for. The terminal closing sends SIGHUP twice, well
+            // before this command has seen the first.
+            using var hold = context.Host.Termination?.Hold();
             using var client = context.Connect();
             var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
             RoofStatusResponse status;
@@ -332,7 +347,6 @@ public static partial class RoofCli
         /// </summary>
         private static async Task<int> StopOnInterruptAsync(RoofCliContext context, RoofControllerClient client)
         {
-            using var hold = context.Host.Termination?.Hold();
             var result = await client.StopAsync(CancellationToken.None).ConfigureAwait(false);
             var code = StopExitCode(result);
             if (context.Json)
@@ -501,7 +515,7 @@ public static partial class RoofCli
             {
                 return refusal.RoofStatus ?? await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception error) when (IsUnreachable(error, cancellationToken))
+            catch (Exception error) when (IsUnreachable(error, cancellationToken) || IsServerError(error))
             {
                 throw new RoofCliRefusedException(
                     $"The lease could not be renewed: {RoofText.DescribeFailure(error)} If the controller is running, it stops the roof when the lease runs out.",
@@ -510,14 +524,17 @@ public static partial class RoofCli
             }
         }
 
-        /// <summary>Reads the status over REST; null when the controller could not be reached.</summary>
+        /// <summary>
+        /// Reads the status over REST; null when the controller could not be reached or answered with a server error
+        /// (a proxy's 502 included), which says nothing about the roof.
+        /// </summary>
         private static async Task<RoofStatusResponse?> ReadStatusAsync(RoofControllerClient client, CancellationToken cancellationToken)
         {
             try
             {
                 return await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception error) when (IsUnreachable(error, cancellationToken))
+            catch (Exception error) when (IsUnreachable(error, cancellationToken) || IsServerError(error))
             {
                 return null;
             }
@@ -526,6 +543,10 @@ public static partial class RoofCli
         private static bool IsUnreachable(Exception error, CancellationToken cancellationToken)
             => error is HttpRequestException or TimeoutException
                 || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested);
+
+        /// <summary>An HTTP 5xx answer, a 503 included: the controller (or a proxy in front of it) could not answer.</summary>
+        private static bool IsServerError(Exception error)
+            => error is RoofApiException { StatusCode: >= System.Net.HttpStatusCode.InternalServerError };
 
         private static DateTimeOffset? Earliest(DateTimeOffset? left, DateTimeOffset? right)
             => left is null ? right : right is null ? left : left < right ? left : right;

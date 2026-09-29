@@ -49,6 +49,7 @@ internal sealed class RoofTerminalUi : IDisposable
     private Task _stops = Task.CompletedTask;
     private int _stopsInFlight;
     private bool _quitAfterStop;
+    private bool _quitInterrupted;
 
     // When the status shown was taken; with no live status, a status read over REST is stale from then.
     private DateTimeOffset? _statusTakenAt;
@@ -171,6 +172,12 @@ internal sealed class RoofTerminalUi : IDisposable
     /// <summary>True once F10 asked the interface to close.</summary>
     public bool QuitRequested { get; private set; }
 
+    /// <summary>
+    /// The result of the last Stop sent from here when nothing confirmed it (it failed, or the relays could not be
+    /// verified); null when none was sent, or the last one was acknowledged.
+    /// </summary>
+    public RoofStopResult? UnconfirmedStop { get; private set; }
+
     /// <summary>Connects and shows the first page: the roof, or Setup when there is no controller address.</summary>
     public void Start()
     {
@@ -265,7 +272,9 @@ internal sealed class RoofTerminalUi : IDisposable
         ShowStopResult(RoofStopOutcome.Sent, RoofStopText.Sending);
         if (_client is not { } client)
         {
-            ShowStopResult(RoofStopOutcome.Failed, RoofStopText.Failed("No controller address is configured."));
+            var message = RoofStopText.Failed("No controller address is configured.");
+            ShowStopResult(RoofStopOutcome.Failed, message);
+            UnconfirmedStop = new RoofStopResult(RoofStopOutcome.Failed, message, null, null);
             QuitIfAsked();
             return;
         }
@@ -293,6 +302,7 @@ internal sealed class RoofTerminalUi : IDisposable
                 {
                     _stopsInFlight--;
                     ShowStopResult(result.Outcome, result.Message);
+                    UnconfirmedStop = result.IsAcknowledged ? null : result;
                     if (result.Status is { } status)
                     {
                         Apply(status);
@@ -312,11 +322,14 @@ internal sealed class RoofTerminalUi : IDisposable
 
     /// <summary>
     /// Closes the interface. A motion started here is stopped first, as Ctrl+C does for 'open', and a Stop still on its
-    /// way is answered before the interface closes.
+    /// way is answered before the interface closes. When quitting waited for a Stop that nothing then confirmed, F10
+    /// leaves the interface open with that result on screen; a termination signal (<paramref name="interrupted"/>)
+    /// closes it anyway, and 'hvo-roof ui' says so on the restored terminal.
     /// </summary>
-    public void Quit()
+    public void Quit(bool interrupted = false)
     {
         QuitRequested = true;
+        _quitInterrupted |= interrupted;
         if (FollowsMotion)
         {
             Say("Stopping the roof, which moves on a command from this interface, before closing.");
@@ -338,10 +351,21 @@ internal sealed class RoofTerminalUi : IDisposable
     /// <summary>Closes the interface when F10 (or a termination signal) waited for the Stops sent from here.</summary>
     private void QuitIfAsked()
     {
-        if (_quitAfterStop && _stopsInFlight == 0)
+        if (!_quitAfterStop || _stopsInFlight > 0)
         {
-            _app.RequestStop();
+            return;
         }
+
+        _quitAfterStop = false;
+        if (UnconfirmedStop is not null && !_quitInterrupted)
+        {
+            // Quitting said it stops the roof first; it does not close on a Stop that nothing confirmed.
+            QuitRequested = false;
+            Say("Nothing confirmed the Stop, so the interface stays open. F10 closes it.", error: true);
+            return;
+        }
+
+        _app.RequestStop();
     }
 
     /// <summary>How long closing waits for a Stop still on its way: the Stop timeout and a margin.</summary>

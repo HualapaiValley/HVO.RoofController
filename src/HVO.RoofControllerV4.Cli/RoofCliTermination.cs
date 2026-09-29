@@ -6,8 +6,8 @@ namespace HVO.RoofControllerV4.Cli;
 /// The termination signals of <c>hvo-roof</c>: SIGINT (Ctrl+C), SIGTERM, and SIGHUP (the terminal closing, or an SSH
 /// session dropping). The first one cancels <see cref="Token"/> instead of ending the process, so a command that has
 /// the roof moving sends Stop and exits 130. The process still ends: <see cref="CommandGrace"/> after the first signal it
-/// exits 130, unless a Stop is on its way (<see cref="Hold"/>), and never later than <see cref="StopGrace"/>. A later
-/// signal ends the process at once, unless a Stop is on its way: it never cuts a Stop short.
+/// exits 130, unless a command holds it (<see cref="Hold"/>), and never later than <see cref="StopGrace"/>. A later
+/// signal ends the process at once, unless a command holds it: it never cuts a Stop short.
 /// </summary>
 public sealed class RoofCliTermination : IDisposable
 {
@@ -64,8 +64,10 @@ public sealed class RoofCliTermination : IDisposable
     }
 
     /// <summary>
-    /// Marks a Stop on its way (or the terminal interface closing) until the result is disposed: a signal then does not
-    /// end the process before <see cref="StopGrace"/>.
+    /// Marks a command whose Stop no signal may cut short, until the result is disposed: one that has sent Open or
+    /// Close, or is sending Stop, or the terminal interface. A signal then does not end the process before
+    /// <see cref="StopGrace"/>. The hold is taken before the first signal can arrive: closing a terminal sends SIGHUP
+    /// twice, well under a millisecond apart.
     /// </summary>
     public IDisposable Hold()
     {
@@ -75,6 +77,18 @@ public sealed class RoofCliTermination : IDisposable
         }
 
         return new Release(this);
+    }
+
+    /// <summary>True while a command holds the process (<see cref="Hold"/>).</summary>
+    internal bool IsHeld
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _holds > 0;
+            }
+        }
     }
 
     /// <summary>Handles one signal: the first cancels <see cref="Token"/>, a later one ends the process unless held.</summary>
