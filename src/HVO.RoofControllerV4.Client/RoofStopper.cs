@@ -11,11 +11,13 @@ namespace HVO.RoofControllerV4.Client;
 internal sealed class RoofStopper : IDisposable
 {
     private readonly RoofHttp _http;
+    private readonly Func<RoofCredential?> _credential;
     private readonly ILogger _logger;
 
     public RoofStopper(RoofConnectionOptions options, Func<RoofCredential?> credential, ILogger logger)
     {
         _http = new RoofHttp(options, credential, options.StopTimeout);
+        _credential = credential;
         _logger = logger;
     }
 
@@ -43,7 +45,9 @@ internal sealed class RoofStopper : IDisposable
             _logger.LogWarning("Stop refused: HTTP {StatusCode} {Code}", (int)ex.StatusCode, ex.CodeText);
             if (ex.StatusCode == HttpStatusCode.Unauthorized)
             {
-                return new RoofStopResult(RoofStopOutcome.Failed, RoofStopText.SignedOut, null, ex);
+                // A key (an API key, or a kiosk's device key, which Stop falls back to) has nothing to sign in to.
+                var text = _credential() is null or RoofSessionCredential ? RoofStopText.SignedOut : RoofStopText.KeyRefused;
+                return new RoofStopResult(RoofStopOutcome.Failed, text, null, ex);
             }
 
             var (outcome, message) = RoofStopText.Classify(false, ex.RoofStatus, ex.Code, ex.Message);

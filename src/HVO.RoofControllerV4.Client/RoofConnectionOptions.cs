@@ -96,13 +96,16 @@ public sealed class RoofConnectionOptions
 /// <summary>Reconnection and staleness settings for <see cref="RoofStatusFeed"/>.</summary>
 public sealed class RoofStatusFeedOptions
 {
-    /// <summary>The first reconnect delay; each failed attempt doubles it. Default 1 s.</summary>
+    /// <summary>The first reconnect delay, and the shortest; each failed attempt doubles it. Default 1 s.</summary>
     public TimeSpan InitialReconnectDelay { get; init; } = TimeSpan.FromSeconds(1);
 
     /// <summary>The longest reconnect delay. Default 30 s.</summary>
     public TimeSpan MaxReconnectDelay { get; init; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>Random spread applied to each delay, as a fraction (0.2 is ±20%), so clients do not reconnect in step.</summary>
+    /// <summary>
+    /// Random spread applied to each delay, as a fraction (0.2 is ±20%), so clients do not reconnect in step. A delay is
+    /// never below <see cref="InitialReconnectDelay"/> or above <see cref="MaxReconnectDelay"/>.
+    /// </summary>
     public double ReconnectJitter { get; init; } = 0.2;
 
     /// <summary>

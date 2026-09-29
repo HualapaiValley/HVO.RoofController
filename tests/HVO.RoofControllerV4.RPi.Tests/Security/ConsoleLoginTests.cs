@@ -308,7 +308,7 @@ public sealed class ConsoleLoginTests
         Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await ApiJson.ReadAsync<ConsoleStopResponse>(response);
         Assert.AreEqual(nameof(RoofStopOutcome.Failed), body.Outcome);
-        body.Message.Should().Contain("out of date");
+        body.Message.Should().Be(RoofStopText.PageOutOfDate);
         _host.RoofService.Verify(s => s.Stop(Moq.It.IsAny<RoofControllerStopReason>()), Moq.Times.Never);
     }
 

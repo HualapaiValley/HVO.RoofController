@@ -65,7 +65,7 @@ public sealed class RoofStatusReceivedEventArgs : EventArgs
 /// while stale so a client can show it as the last known state, with <see cref="StaleSince"/>.</para>
 /// <para>The feed only reads: commands, Stop included, go over REST. A kiosk connects with its device key alone, so a
 /// PIN session that ends does not interrupt status. Events are raised on a thread-pool thread; a UI marshals them to its
-/// own thread. Thread-safe.</para>
+/// own thread. A handler that throws is logged and does not affect the feed or the other handlers. Thread-safe.</para>
 /// </remarks>
 public sealed class RoofStatusFeed : IAsyncDisposable
 {
@@ -199,7 +199,15 @@ public sealed class RoofStatusFeed : IAsyncDisposable
 
             _stopping = new CancellationTokenSource();
             var stopping = _stopping.Token;
-            _loop = Task.Run(() => RunAsync(stopping), CancellationToken.None);
+            var previous = _loop;
+            _loop = Task.Run(
+                async () =>
+                {
+                    // A loop that StopAsync is still ending finishes first, so two loops never run at once.
+                    await previous.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                    await RunAsync(stopping).ConfigureAwait(false);
+                },
+                CancellationToken.None);
         }
     }
 
@@ -428,12 +436,12 @@ public sealed class RoofStatusFeed : IAsyncDisposable
 
         if (received is not null)
         {
-            StatusReceived?.Invoke(this, received);
+            RaiseStatusReceived(received);
         }
 
         if (wasStale)
         {
-            StateChanged?.Invoke(this, EventArgs.Empty);
+            RaiseStateChanged();
         }
     }
 
@@ -471,29 +479,39 @@ public sealed class RoofStatusFeed : IAsyncDisposable
     {
         lock (_gate)
         {
-            // A message may have arrived while this callback was queued.
-            if (_lastMessageUtc is { } last && _time.GetUtcNow() - last < _feed.StaleAfter)
+            // A message may have arrived while this callback was queued. The check and the change are one step, so a
+            // message cannot land between them.
+            if ((_lastMessageUtc is { } last && _time.GetUtcNow() - last < _feed.StaleAfter) || !TryMarkStaleLocked())
             {
                 return;
             }
         }
 
-        MarkStale();
+        RaiseStateChanged();
     }
 
     private void MarkStale()
     {
         lock (_gate)
         {
-            if (_current is null || _staleSince is not null)
+            if (!TryMarkStaleLocked())
             {
                 return;
             }
-
-            _staleSince = _time.GetUtcNow();
         }
 
-        StateChanged?.Invoke(this, EventArgs.Empty);
+        RaiseStateChanged();
+    }
+
+    private bool TryMarkStaleLocked()
+    {
+        if (_current is null || _staleSince is not null)
+        {
+            return false;
+        }
+
+        _staleSince = _time.GetUtcNow();
+        return true;
     }
 
     private void SetState(RoofStatusFeedState state)
@@ -508,7 +526,39 @@ public sealed class RoofStatusFeed : IAsyncDisposable
             _state = state;
         }
 
-        StateChanged?.Invoke(this, EventArgs.Empty);
+        RaiseStateChanged();
+    }
+
+    // Each handler runs on its own: one that throws is logged and does not stop the others, the reconnect loop or the
+    // stale timer (where an unhandled exception would end the process).
+    private void RaiseStateChanged()
+    {
+        foreach (var handler in StateChanged?.GetInvocationList() ?? [])
+        {
+            try
+            {
+                ((EventHandler)handler)(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "A {Event} handler ({Handler}) failed; the status feed carries on.", nameof(StateChanged), handler.Method.Name);
+            }
+        }
+    }
+
+    private void RaiseStatusReceived(RoofStatusReceivedEventArgs received)
+    {
+        foreach (var handler in StatusReceived?.GetInvocationList() ?? [])
+        {
+            try
+            {
+                ((EventHandler<RoofStatusReceivedEventArgs>)handler)(this, received);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "A {Event} handler ({Handler}) failed; the status feed carries on.", nameof(StatusReceived), handler.Method.Name);
+            }
+        }
     }
 
     private void SetError(Exception error)

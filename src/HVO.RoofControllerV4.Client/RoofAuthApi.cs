@@ -67,8 +67,10 @@ public sealed class RoofAuthApi
     /// </summary>
     public async Task<RoofCallerResponse> RefreshAsync(CancellationToken cancellationToken = default)
     {
+        // The answer describes the credential the request was sent with; one set meanwhile (a new sign-in) is left alone.
+        var sent = _owner.Credential;
         var caller = await GetCallerAsync(cancellationToken).ConfigureAwait(false);
-        if (_owner.Credential is RoofSessionCredential session)
+        if (sent is RoofSessionCredential session && ReferenceEquals(_owner.Credential, sent))
         {
             session.Update(caller);
         }

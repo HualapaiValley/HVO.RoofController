@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Client;
 
@@ -54,7 +55,7 @@ internal sealed class RoofHttp : IDisposable
             {
                 foreach (var header in credential.GetHeaders(use!.Value))
                 {
-                    request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    request.Headers.Add(header.Key, header.Value);
                 }
             }
 
@@ -71,7 +72,11 @@ internal sealed class RoofHttp : IDisposable
 
             using (response)
             {
-                if (response.StatusCode == HttpStatusCode.Unauthorized && credential is not null)
+                var refusal = await RoofApiException.FromResponseAsync(response, _time, cancellationToken).ConfigureAwait(false);
+
+                // SignInFailed refuses a secret in the request (a wrong current password or PIN), not the credential.
+                if (response.StatusCode == HttpStatusCode.Unauthorized && credential is not null
+                    && refusal.Code != RoofControllerErrorCode.SignInFailed)
                 {
                     var changed = credential.OnRefused(use!.Value);
                     if (changed && !retried && method == HttpMethod.Get)
@@ -81,7 +86,7 @@ internal sealed class RoofHttp : IDisposable
                     }
                 }
 
-                throw await RoofApiException.FromResponseAsync(response, _time, cancellationToken).ConfigureAwait(false);
+                throw refusal;
             }
         }
     }

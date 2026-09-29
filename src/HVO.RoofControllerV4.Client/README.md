@@ -21,6 +21,9 @@ using var client = new RoofControllerClient(new RoofConnectionOptions
 var status = await client.Roof.GetStatusAsync();
 ```
 
+The pin covers requests, Stop and the status hub's WebSocket. Any other certificate must be trusted as usual.
+`RoofCertificatePinTests` checks all three over real HTTPS, with the right pin, another certificate's pin, and none.
+
 `RoofControllerClient` groups the endpoints:
 
 | Property | Endpoints |
@@ -52,13 +55,16 @@ var result = await client.StopAsync();
 ```
 
 Stop goes straight to REST on a connection of its own. It never waits behind another command, a camera stream or the
-status hub, and nothing is queued: two Stops are two requests. It never needs a PIN: a kiosk sends its device key
-beside the PIN session, and the controller accepts the device key for Stop when the PIN session has ended. A person
-whose session has ended is told to sign in again or use the stop control at the roof. The result claims only what the
-controller said: "relay register verified de-energized" only when the controller verified it.
+status hub, and nothing is queued: two Stops are two requests. It never needs a PIN: a kiosk sends its device key beside
+the PIN session, and the controller accepts the device key for Stop when the PIN session has ended. A person whose
+session has ended is told to sign in again or use the stop control at the roof. A key the controller does not accept (an
+API key, or a kiosk's device key) is reported as refused, since there is nothing to sign in to. The result claims only
+what the controller said: "relay register verified de-energized" only when the controller verified it.
 
 Every client uses the wording in `RoofStopText`: the button label `Stop roof` and the result messages.
-`RoofClientWordingTests` pins them, and checks that the web console uses the same text.
+`RoofClientWordingTests` pins them, and checks that the web console uses the same text. The console's reconnect dialog
+has no wording of its own: the server renders its texts into the page (`RoofConsoleStopTexts`), including those for a
+proxy's error page, the HTTPS and origin checks, and no answer.
 
 ## Status feed
 
@@ -73,7 +79,8 @@ The feed connects to the status hub, reconnects with a doubling delay (1 s to 30
 snapshot in the hub's `sequence` order. A new `instanceId` means the controller restarted; the first snapshot from it
 is taken whatever its sequence. The feed is stale from the moment the connection drops, or after 3 s without a message
 (three heartbeats); `StaleSince` says since when. A client shows a stale snapshot as the last known state, never as the
-current one. The feed only reads: commands go over REST.
+current one. A handler that throws is logged, and the feed and the other handlers carry on. The feed only reads:
+commands go over REST.
 
 ## Credentials
 
@@ -83,8 +90,12 @@ current one. The feed only reads: commands go over REST.
 | `RoofSessionCredential` | `Authorization: Bearer` | a person signed in with a password (`Auth.SignInAsync`) |
 | `RoofKioskCredential` | the device key, plus the PIN session while unlocked | the kiosk (`Auth.SignInWithPinAsync`) |
 
-A session that the controller refuses is marked ended and raises `Ended`. When a kiosk's PIN session ends, the kiosk
-locks, and the device key still reads status and sends Stop.
+`X-On-Behalf-Of` must be a user name, as the controller defines one. Any other name is refused when the credential is
+made, so it cannot carry another header. A key, token or PIN session must be printable ASCII (no line break or control
+character), and one that is not is refused when the credential is made, so no request, Stop included, can fail on a
+header it cannot send. A credentials file that holds one is reported as a `RoofCredentialFileException`. A session that
+the controller refuses is marked ended and raises `Ended`; a wrong password at sign-in does not end the session in use.
+When a kiosk's PIN session ends, the kiosk locks, and the device key still reads status and sends Stop.
 
 ### Command-line credentials
 
@@ -93,10 +104,11 @@ locks, and the device key still reads status and sends Stop.
 - In the environment: `HVO_ROOF_URL`, `HVO_ROOF_API_KEY` (with `HVO_ROOF_ON_BEHALF_OF`), `HVO_ROOF_SESSION` and
   `HVO_ROOF_CERT_SHA256`.
 - In a file: `$XDG_CONFIG_HOME/hvo-roof/credentials.json`, or `~/.config/hvo-roof/credentials.json`. The file is
-  written atomically with mode `0600` in a `0700` directory. A file that other users can read or change is refused,
-  with the `chmod` command that fixes it.
+  written atomically with mode `0600` in a `0700` directory. A file that other users can read or change, or one in a
+  directory they can change, is refused, with the `chmod` command that fixes it.
 
-The saved records leave the key and the token out of their `ToString()`, so they can be logged.
+The saved records, and the sign-in, password and user requests, leave keys, tokens, passwords and PINs out of their
+`ToString()`, so they can be logged.
 
 ## Settings forms
 
@@ -104,8 +116,8 @@ The saved records leave the key and the token out of their `ToString()`, so they
 with labels, the value to show, the default, and whether the caller may change each one (and if not, why). A secret is
 shown only as `(set)` or `(not set)`. `form.Edit(group)` checks typed text against the setting (`5m` or `300` for a
 duration, `yes` or `no` for a switch), and says whether the change is safety-critical, needs a local credential or
-applies after a restart. `ToRequest(confirm)` builds the `POST Settings/{group}` body with the version the form was
-read at.
+applies after a restart. A secret left empty keeps its value; `ClearSecret(key)` removes it. `ToRequest(confirm)` builds
+the `POST Settings/{group}` body with the version the form was read at.
 
 ## Shared text
 

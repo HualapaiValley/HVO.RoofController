@@ -142,8 +142,15 @@ the roof against this server; use the authenticated browser console for operator
   session, or a kiosk's device key with a PIN session; a command-line client reads them from
   `HVO_ROOF_*` environment variables or a `0600` credentials file. Stop is sent at once on a
   connection of its own, never queued, and every client uses the same Stop wording, pinned by a
-  test. Settings forms are built from the catalogue. The web console now takes its Stop wording
-  and status rules from the library. See
+  test; a key the controller does not accept is reported as refused, not as a sign-in. A
+  certificate pin covers requests, Stop and the status hub's WebSocket. Settings forms are built
+  from the catalogue; a secret left empty keeps its value, and `ClearSecret` removes it.
+  `X-On-Behalf-Of` must be a user name, and a key or token must be printable ASCII, so no
+  request, Stop included, fails on a header it cannot send. A credentials file in a directory other users can
+  change is refused, and requests print secrets only as `(set)`. A status feed handler that
+  throws is logged and the feed carries on. The web console now takes its Stop wording and
+  status rules from the library: the reconnect dialog's texts, for every answer and for none,
+  are rendered by the server. See
   [src/HVO.RoofControllerV4.Client/README.md](src/HVO.RoofControllerV4.Client/README.md).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks

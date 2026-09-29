@@ -139,15 +139,76 @@ public sealed class RoofStatusFeedTests
         using var client = CreateClient(host, kiosk);
         using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
         await using var feed = client.CreateStatusFeed();
+
+        // Signed in first, so the feed's one connection is made while the kiosk holds a session.
+        var session = await client.Auth.SignInWithPinAsync("olive", Security.TestSecrets.Pin);
+        kiosk.GetHeaders(RoofCredentialUse.Request).Select(header => header.Key).Should().Contain("Authorization");
+        kiosk.GetHeaders(RoofCredentialUse.StatusHub).Should().ContainSingle()
+            .Which.Key.Should().Be(RoofControllerApiContract.ApiKeyHeaderName, "the hub gets the device key, never the person's session");
         feed.Start();
         await WaitUntilAsync(() => feed.State == RoofStatusFeedState.Connected && feed.Current is not null, "the first snapshot");
 
-        var session = await client.Auth.SignInWithPinAsync("olive", Security.TestSecrets.Pin);
         await admin.Identity.EndSessionAsync(session.SessionId);
         RaiseStatus(host, RoofServiceMock.Snapshot() with { StatusVersion = 12 });
 
         await WaitUntilAsync(() => feed.Status?.StatusVersion == 12, "status after the PIN session ended");
-        feed.ConnectionCount.Should().Be(1);
+        feed.State.Should().Be(RoofStatusFeedState.Connected);
+        feed.ConnectionCount.Should().Be(1, "ending the person's session does not touch the hub connection");
+    }
+
+    [TestMethod]
+    public async Task AThrowingHandler_IsLogged_AndTheFeedAndTheOtherHandlersCarryOn()
+    {
+        var serverClock = new ManualTimeProvider();
+        var clientClock = new ManualTimeProvider(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero));
+        using var host = RoofClientApiTests.CreateHost(configureServices: services => services.AddSingleton<TimeProvider>(serverClock));
+        using var client = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Viewer), time: clientClock);
+        await using var feed = client.CreateStatusFeed();
+        var stateChanges = 0;
+        var received = new ConcurrentQueue<long>();
+        feed.StateChanged += (_, _) => throw new InvalidOperationException("A state handler failed (test).");
+        feed.StateChanged += (_, _) => Interlocked.Increment(ref stateChanges);
+        feed.StatusReceived += (_, _) => throw new ObjectDisposedException("view (test)");
+        feed.StatusReceived += (_, e) => received.Enqueue(e.Status.StatusVersion);
+
+        feed.Start();
+        await WaitUntilAsync(() => feed.State == RoofStatusFeedState.Connected && received.Contains(11), "the first snapshot");
+
+        // The silence timer runs on the calling thread here, so an escaping exception would fail this line.
+        var before = Volatile.Read(ref stateChanges);
+        clientClock.Advance(ClientTestSupport.FastFeed.StaleAfter);
+        feed.IsStale.Should().BeTrue();
+        Volatile.Read(ref stateChanges).Should().Be(before + 1, "the handler after the throwing one still ran");
+
+        RaiseStatus(host, RoofServiceMock.Snapshot() with { StatusVersion = 12 });
+        await WaitUntilAsync(() => received.Contains(12) && !feed.IsStale, "the next snapshot after a handler threw");
+        feed.State.Should().Be(RoofStatusFeedState.Connected);
+        feed.ConnectionCount.Should().Be(1, "a throwing handler does not end the connection or the loop");
+        feed.LastError.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task StartingAgain_WhileAStopIsEnding_RunsOneLoop_AndEndsConnected()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var client = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Viewer));
+        await using var feed = client.CreateStatusFeed();
+        var states = new ConcurrentQueue<RoofStatusFeedState>();
+        feed.StateChanged += (_, _) => states.Enqueue(feed.State);
+        feed.Start();
+        await WaitUntilAsync(() => feed.State == RoofStatusFeedState.Connected && feed.Current is not null, "the first snapshot");
+
+        var stopping = feed.StopAsync();
+        feed.Start();
+        await stopping;
+        await WaitUntilAsync(() => feed.State == RoofStatusFeedState.Connected && feed.ConnectionCount == 2, "the second connection");
+        await Task.Delay(300);
+
+        feed.State.Should().Be(RoofStatusFeedState.Connected, "the old loop's last state change comes before the new loop's first");
+        feed.ConnectionCount.Should().Be(2, "one connection before the restart and one after");
+        states.Last().Should().Be(RoofStatusFeedState.Connected);
+        RaiseStatus(host, RoofServiceMock.Snapshot() with { StatusVersion = 12 });
+        await WaitUntilAsync(() => feed.Status?.StatusVersion == 12, "status on the new connection");
     }
 
     [TestMethod]

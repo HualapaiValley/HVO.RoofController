@@ -52,7 +52,9 @@ public sealed class RoofClientScenarios
         feed.Status.IsMoving.Should().BeFalse();
         received.Where(e => e.IsNewInstance).Should().ContainSingle();
         feed.ConnectionCount.Should().BeGreaterThanOrEqualTo(2);
-        received.Select(e => e.Message).Where(m => m.InstanceId == before).Select(m => m.Sequence).Should().BeInAscendingOrder();
+        var messages = received.ToList();
+        messages.Skip(messages.FindIndex(e => e.IsNewInstance)).Should().OnlyContain(
+            e => e.Message.InstanceId == feed.Current!.InstanceId, "nothing from the stopped controller is shown after the restarted one's first snapshot");
         (await client.StopAsync()).Outcome.Should().Be(RoofStopOutcome.Acknowledged, "Stop works against the restarted controller");
     }
 }

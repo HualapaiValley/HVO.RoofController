@@ -175,6 +175,39 @@ public sealed class RoofSettingsClientTests
     }
 
     [TestMethod]
+    public async Task ASecretLeftEmpty_IsKept_AndIsClearedOnlyWhenAskedTo()
+    {
+        const string password = "test-camera-password-not-real-16";
+        using var host = StartHost(new Dictionary<string, string?> { [CameraServer] = "http://192.168.0.4:81" });
+        using var client = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        var edit = (await LoadFormAsync(client)).Edit(RoofSettingsContract.CameraGroup);
+        edit.TrySet(CameraUser, "test-camera-user", out var error).Should().BeTrue(error);
+        edit.TrySet(CameraPassword, password, out error).Should().BeTrue(error);
+        var form = RoofSettingsForm.Create(
+            await client.Settings.GetCatalogueAsync(),
+            await client.Settings.UpdateAsync(RoofSettingsContract.CameraGroup, edit.ToRequest()));
+
+        // A form shows every secret as an empty box, so text left empty (or typed and then removed) sends nothing.
+        var kept = form.Edit(RoofSettingsContract.CameraGroup);
+        kept.TrySet(CameraPassword, "", out error).Should().BeTrue(error);
+        kept.TrySet(CameraUser, "test-typed-then-removed", out error).Should().BeTrue(error);
+        kept.TrySet(CameraUser, "   ", out error).Should().BeTrue(error);
+        kept.ToRequest().Values!.Keys.Should().NotContain(CameraUser).And.NotContain(CameraPassword);
+        kept.HasChanges.Should().BeFalse();
+
+        var cleared = form.Edit(RoofSettingsContract.CameraGroup);
+        cleared.ClearSecret(CameraUser);
+        cleared.ClearSecret(CameraPassword);
+        cleared.ToRequest().Values![CameraPassword].ValueKind.Should().Be(JsonValueKind.Null);
+        cleared.Invoking(e => e.ClearSecret(CameraServer)).Should().Throw<ArgumentException>().WithMessage("*is not a secret.*");
+        var saved = await client.Settings.UpdateAsync(RoofSettingsContract.CameraGroup, cleared.ToRequest());
+
+        var after = RoofSettingsForm.Create(await client.Settings.GetCatalogueAsync(), saved);
+        after.FindField(CameraPassword)!.DisplayValue.Should().Be(RoofSettingValues.SecretNotSet);
+        after.FindField(CameraUser)!.DisplayValue.Should().Be(RoofSettingValues.SecretNotSet);
+    }
+
+    [TestMethod]
     public async Task AnOperator_SeesOnlyTheUiGroup_AndChangesIt()
     {
         using var host = StartHost();

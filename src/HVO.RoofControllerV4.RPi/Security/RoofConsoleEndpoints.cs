@@ -56,9 +56,7 @@ public static class RoofConsoleEndpoints
                 caller,
                 http.Connection.RemoteIpAddress);
             return Results.Json(
-                new ConsoleStopResponse(
-                    nameof(RoofStopOutcome.Failed),
-                    "Stop was not sent because this page is out of date. Reload the page, or use the stop control at the roof."),
+                new ConsoleStopResponse(nameof(RoofStopOutcome.Failed), RoofStopText.PageOutOfDate),
                 statusCode: StatusCodes.Status400BadRequest);
         }
 

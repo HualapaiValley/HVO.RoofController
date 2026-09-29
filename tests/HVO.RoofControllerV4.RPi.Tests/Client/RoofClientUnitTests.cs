@@ -31,6 +31,11 @@ public sealed class RoofClientUnitTests
     {
         _directory = Path.Combine(Path.GetTempPath(), "hvo-client-unit-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_directory);
+        if (!OperatingSystem.IsWindows())
+        {
+            // Whatever the umask, the credentials file's directory must be the owner's alone.
+            File.SetUnixFileMode(_directory, OwnerDirectory);
+        }
     }
 
     [TestCleanup]
@@ -109,6 +114,30 @@ public sealed class RoofClientUnitTests
     }
 
     [TestMethod]
+    [DataRow(UnixFileMode.GroupWrite)]
+    [DataRow(UnixFileMode.OtherWrite)]
+    public void AFileInADirectoryOtherUsersCanChange_IsRefused_ForReadingAndWriting(UnixFileMode extra)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var path = Path.Combine(_directory, "credentials.json");
+        RoofCredentialStore.Save(path, new RoofStoredCredentials { ApiKey = ApiKey });
+        File.SetUnixFileMode(_directory, OwnerDirectory | extra);
+        var expected = $"{_directory} can be changed by other users, who could replace the credentials file. Run 'chmod 700 {_directory}', then try again.";
+
+        FluentActions.Invoking(() => RoofCredentialStore.Load(path)).Should().Throw<RoofCredentialFileException>()
+            .Which.Message.Should().Be(expected);
+        FluentActions.Invoking(() => RoofCredentialStore.Save(path, new RoofStoredCredentials { ApiKey = ApiKey }))
+            .Should().Throw<RoofCredentialFileException>().Which.Message.Should().Be(expected);
+
+        File.SetUnixFileMode(_directory, OwnerDirectory | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        RoofCredentialStore.Load(path)!.ApiKey.Should().Be(ApiKey, "others may list the directory, as long as they cannot change it");
+    }
+
+    [TestMethod]
     public void AMissingFile_IsNoCredentials_AndAnInvalidOne_IsRefused()
     {
         var path = Path.Combine(_directory, "credentials.json");
@@ -166,6 +195,12 @@ public sealed class RoofClientUnitTests
         RoofCredentialStore.FromEnvironment(Get)!.ToCredential().Should().BeOfType<RoofSessionCredential>()
             .Which.Token.Should().Be(Token, "a session is used before an API key");
 
+        environment.Remove(RoofCredentialStore.SessionVariable);
+        environment[RoofCredentialStore.OnBehalfOfVariable] = "Zoë Smith";
+        FluentActions.Invoking(() => RoofCredentialStore.FromEnvironment(Get)!.ToCredential()).Should().Throw<RoofCredentialFileException>()
+            .WithMessage(RoofApiKeyCredential.InvalidOnBehalfOf, "a name that is not a user name would break every request");
+        environment[RoofCredentialStore.OnBehalfOfVariable] = "alice";
+
         foreach (var address in new[] { "roof.local:5001", "/roof", "ftp://roof.local/" })
         {
             environment[RoofCredentialStore.ControllerVariable] = address;
@@ -189,6 +224,39 @@ public sealed class RoofClientUnitTests
         credential.Token.Should().Be(Token);
         credential.Name.Should().Be("alice");
         credential.SessionId.Should().Be("session-1");
+        FluentActions.Invoking(() => new RoofStoredCredentials { ApiKey = ApiKey, OnBehalfOf = "alice\r\nX-Other: 1" }.ToCredential())
+            .Should().Throw<RoofCredentialFileException>().WithMessage(RoofApiKeyCredential.InvalidOnBehalfOf);
+        new RoofStoredCredentials { ApiKey = ApiKey, OnBehalfOf = " alice " }.ToCredential()
+            .Should().BeOfType<RoofApiKeyCredential>().Which.OnBehalfOf.Should().Be("alice");
+        FluentActions.Invoking(() => new RoofStoredCredentials { ApiKey = ApiKey + "\nX-Other: 1" }.ToCredential())
+            .Should().Throw<RoofCredentialFileException>().WithMessage(RoofCredential.InvalidHeaderValue);
+        FluentActions.Invoking(() => new RoofStoredCredentials { Session = session with { Token = Token + "ö" } }.ToCredential())
+            .Should().Throw<RoofCredentialFileException>().WithMessage(RoofCredential.InvalidHeaderValue);
+    }
+
+    [TestMethod]
+    [DataRow("test-key-not-a-real-secret\r\nX-Other: 1")]
+    [DataRow("test-key-not-a-real-secret\t1")]
+    [DataRow("test-kéy-not-a-real-secret")]
+    public void AKeyOrTokenAHeaderCannotCarry_IsRefusedWhenTheCredentialIsMade(string value)
+    {
+        // Otherwise every request, Stop included, would fail as it is sent, and read as an unreachable controller.
+        var session = new RoofSessionResponse(value, "session-1", "olive", RoofControllerApiContract.OperatorRole, RoofCredentialKind.Pin, DateTimeOffset.UtcNow, 300);
+        var kiosk = new RoofKioskCredential(ApiKey);
+        foreach (var (make, parameter) in new (Action Make, string Parameter)[]
+        {
+            (() => _ = new RoofApiKeyCredential(value), "apiKey"),
+            (() => _ = new RoofSessionCredential(value), "token"),
+            (() => _ = new RoofKioskCredential(value), "deviceKey"),
+            (() => kiosk.UsePinSession(session), "session")
+        })
+        {
+            FluentActions.Invoking(make).Should().Throw<ArgumentException>().WithMessage(RoofCredential.InvalidHeaderValue + "*")
+                .Which.ParamName.Should().Be(parameter);
+        }
+
+        kiosk.PinSession.Should().BeNull();
+        new RoofApiKeyCredential("test key with spaces, not a secret").GetHeaders(RoofCredentialUse.Request).Should().ContainSingle();
     }
 
     [TestMethod]
@@ -208,7 +276,12 @@ public sealed class RoofClientUnitTests
             session.ToString(),
             new RoofStoredSession(Token, "alice", null, null, now).ToString(),
             new RoofStoredCredentials { ApiKey = ApiKey, Session = new RoofStoredSession(Token, "alice", null, null, null) }.ToString(),
-            new RoofApiKeySecretResponse(new RoofApiKeyResponse("kiosk-1", RoofControllerApiContract.ViewerRole, true, RoofApiKeySource.Managed, null, null), secret).ToString()
+            new RoofApiKeySecretResponse(new RoofApiKeyResponse("kiosk-1", RoofControllerApiContract.ViewerRole, true, RoofApiKeySource.Managed, null, null), secret).ToString(),
+            new RoofSignInRequest { Name = "alice", Password = secret }.ToString(),
+            new RoofPinSignInRequest { Name = "olive", Pin = secret }.ToString(),
+            new RoofPasswordChangeRequest { CurrentPassword = secret, NewPassword = secret + "-new" }.ToString(),
+            new RoofUserCreateRequest { Name = "bob", Role = RoofControllerApiContract.ViewerRole, Password = secret }.ToString(),
+            new RoofUserUpdateRequest { Pin = secret, RemovePassword = true }.ToString()
         };
         kiosk.UsePinSession(session);
         printed.Add(kiosk.ToString());
@@ -224,6 +297,11 @@ public sealed class RoofClientUnitTests
             "RoofStoredSession { Name = alice, Role = , SessionId = , ExpiresUtc = 2026-03-01T12:00:00.0000000+00:00 }",
             "RoofStoredCredentials { Controller = , ApiKey = (set), OnBehalfOf = , Session = RoofStoredSession { Name = alice, Role = , SessionId = , ExpiresUtc =  }, CertificateSha256 =  }",
             "RoofApiKeySecretResponse { Key = RoofApiKeyResponse { Name = kiosk-1, Role = RoofViewer, Kiosk = True, Source = Managed, CreatedUtc = , UpdatedUtc =  } }",
+            "RoofSignInRequest { Name = alice, Password = (set) }",
+            "RoofPinSignInRequest { Name = olive, Pin = (set) }",
+            "RoofPasswordChangeRequest { CurrentPassword = (set), NewPassword = (set) }",
+            "RoofUserCreateRequest { Name = bob, Role = RoofViewer, Password = (set), Pin = (none) }",
+            "RoofUserUpdateRequest { Role = , Password = (none), Pin = (set), RemovePassword = True, RemovePin = False }",
             "kiosk unlocked by olive");
     }
 
@@ -392,6 +470,8 @@ public sealed class RoofClientUnitTests
     {
         TimeSpan Delay(int attempt, double random) => RoofReconnectDelay.For(attempt, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), 0.2, random);
 
+        Delay(0, 0).Should().Be(TimeSpan.FromSeconds(1), "the jitter never shortens the first delay below the initial one");
+        Delay(0, 1).Should().Be(TimeSpan.FromSeconds(1.2));
         Delay(1, 0).Should().Be(TimeSpan.FromSeconds(1.6));
         Delay(1, 0.5).Should().Be(TimeSpan.FromSeconds(2));
         Delay(1, 1).Should().Be(TimeSpan.FromSeconds(2.4));

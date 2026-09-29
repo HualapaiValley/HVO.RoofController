@@ -222,6 +222,23 @@ public sealed class RoofStopTests
     }
 
     [TestMethod]
+    public async Task AStopWithAKeyTheControllerDoesNotKnow_SaysTheKeyWasRefused_NotToSignIn()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var client = CreateClient(host, new RoofApiKeyCredential("test-unknown-key-not-real-09"));
+        using var kiosk = CreateClient(host, new RoofKioskCredential("test-unknown-kiosk-key-not-real-10"));
+
+        var result = await client.StopAsync();
+        var kioskResult = await kiosk.StopAsync();
+
+        result.Outcome.Should().Be(RoofStopOutcome.Failed);
+        result.Message.Should().Be(RoofStopText.KeyRefused);
+        result.Error.Should().BeOfType<RoofApiException>().Which.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        kioskResult.Message.Should().Be(RoofStopText.KeyRefused, "a kiosk has no sign-in that would help");
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    [TestMethod]
     public async Task AStopWithNoCredential_IsRefused_AsSignedOut()
     {
         using var host = RoofClientApiTests.CreateHost();

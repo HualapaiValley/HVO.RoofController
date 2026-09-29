@@ -4,6 +4,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Components.Pages;
+using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 using static Microsoft.Playwright.Assertions;
@@ -87,7 +88,7 @@ public sealed class C15ReconnectDialogStopBrowserTests
     /// the stop was not sent rather than that the controller is unreachable.
     /// </summary>
     [TestMethod]
-    public async Task WhenTheSessionHasEnded_TheDialogsStop_IsNotSent_AndSaysToSignInOrUseTheRoofStop()
+    public async Task WhenTheSessionHasEnded_TheDialogsStop_IsNotSent_AndSaysToReloadOrUseTheRoofStop()
     {
         var browser = _browser = await ConsoleBrowser.StartAsync(TestContext, Scenario.Production(travelMeters: 2.0), ConsoleDevices.Phone);
         var rig = browser.Rig;
@@ -102,12 +103,83 @@ public sealed class C15ReconnectDialogStopBrowserTests
 
         await browser.DialogStop.ClickAsync();
         await Expect(browser.DialogStopResult).ToHaveAttributeAsync("data-state", "failed");
-        await Expect(browser.DialogStopResult).ToHaveTextAsync(
-            RoofStopText.SignedOut);
+        await Expect(browser.DialogStopResult).ToHaveTextAsync(RoofStopText.PageSignedOut);
         rig.Controller.GetCurrentStatusSnapshot().IsMoving.Should().BeTrue("a stop without a session is refused");
         rig.Logs.Entries.Should().NotContain(e => e.Message.StartsWith("Console stop (no circuit) from "));
 
         await client.AcceptedAsync("Stop");
         (await rig.WaitForRestAsync("the API's Stop")).ShouldBeDeenergized(rig);
+    }
+
+    /// <summary>
+    /// Not a commissioning step: a dialog whose texts cannot be read still sends Stop. The browser posts the form itself
+    /// and shows the controller's answer as the page.
+    /// </summary>
+    [TestMethod]
+    public async Task WithoutItsTexts_TheDialogsStop_IsStillSent()
+    {
+        var browser = _browser = await ConsoleBrowser.StartAsync(TestContext, Scenario.Production(travelMeters: 2.0), ConsoleDevices.Phone);
+        var rig = browser.Rig;
+        await browser.SignInAsync(TestApiKeys.Operator);
+        await browser.Open.ClickAsync();
+        await rig.WaitForControllerAsync(s => s.IsMoving, "the roof to open");
+
+        await browser.CutConnectionAsync();
+        await browser.ExpectReconnectDialogAsync();
+        // The answer opens in a new tab: Playwright's WebSocket routes fail when the console page itself navigates away.
+        await browser.Page.EvalOnSelectorAsync(
+            "form[data-console-stop]",
+            "form => { form.removeAttribute('data-console-stop-texts'); form.target = '_blank'; }");
+        var answer = await browser.Page.RunAndWaitForPopupAsync(() => browser.DialogStop.ClickAsync());
+
+        var stopped = await rig.WaitForRestAsync("the reconnect dialog's Stop, posted by the browser");
+        stopped.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
+        stopped.ShouldBeDeenergized(rig);
+        rig.Logs.Entries.Should().Contain(e => e.Message.StartsWith("Console stop (no circuit) from "));
+        await Expect(answer.Locator("body")).ToContainTextAsync(RoofStopText.AcknowledgedVerified);
+    }
+
+    /// <summary>
+    /// Not a commissioning step: an answer that is not the endpoint's own (a proxy's error page, the origin check, a
+    /// status with no wording) and an answer that never comes are described as every other client describes them.
+    /// </summary>
+    [TestMethod]
+    public async Task AnAnswerThatIsNotTheControllers_OrNoAnswer_IsDescribedInTheSharedWording()
+    {
+        var browser = _browser = await ConsoleBrowser.StartAsync(TestContext, Scenario.Production(travelMeters: 2.0), ConsoleDevices.Phone);
+        await browser.SignInAsync(TestApiKeys.Operator);
+        await browser.CutConnectionAsync();
+        await browser.ExpectReconnectDialogAsync();
+        var stopPath = "**" + RoofControllerSecurityDefaults.ConsoleStopPath;
+
+        async Task ExpectAnswerAsync(int status, string contentType, string body, string text)
+        {
+            await browser.Page.UnrouteAsync(stopPath);
+            await browser.Page.RouteAsync(stopPath, route => route.FulfillAsync(new() { Status = status, ContentType = contentType, Body = body }));
+            await browser.DialogStop.ClickAsync();
+            await Expect(browser.DialogStopResult).ToHaveAttributeAsync("data-state", "failed");
+            await Expect(browser.DialogStopResult).ToHaveTextAsync(text);
+        }
+
+        await ExpectAnswerAsync(502, "text/html", "<html><body>Bad gateway</body></html>",
+            RoofStopText.Failed(RoofText.DescribeRefusal(502, null, null)));
+        await ExpectAnswerAsync(503, "text/html", "<html><body>Service unavailable</body></html>",
+            "Stop failed: The controller is not ready. Try again shortly. Use the stop control at the roof.");
+        await ExpectAnswerAsync(403, "application/problem+json", """{ "status": 403, "code": "origin_not_allowed" }""",
+            RoofStopText.Failed(RoofText.DescribeRefusal(403, null, "origin_not_allowed")));
+        await ExpectAnswerAsync(403, "application/problem+json", """{ "status": 403, "code": "constructor" }""",
+            RoofStopText.Failed(RoofText.DescribeRefusal(403, null, null)));
+        await ExpectAnswerAsync(418, "text/plain", "teapot",
+            "Stop failed: The controller refused the request (HTTP 418). Use the stop control at the roof.");
+
+        // The answer never comes: the page gives up after 5 s.
+        await browser.Page.UnrouteAsync(stopPath);
+        await browser.Page.RouteAsync(stopPath, _ => Task.CompletedTask);
+        await browser.DialogStop.ClickAsync();
+        await Expect(browser.DialogStopResult).ToHaveTextAsync(RoofStopText.Sending);
+        await Expect(browser.DialogStopResult).ToHaveTextAsync(RoofStopText.Failed(RoofText.TimedOut), new() { Timeout = 10_000 });
+        await Expect(browser.DialogStopResult).ToHaveAttributeAsync("data-state", "failed");
+        browser.Rig.Controller.GetCurrentStatusSnapshot().LastStopReason.Should().NotBe(
+            RoofControllerStopReason.NormalStop, "no stop reached the controller: every answer came from the test's route");
     }
 }

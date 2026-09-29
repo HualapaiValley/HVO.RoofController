@@ -120,6 +120,13 @@ public sealed record class RoofSignInRequest
     [Required]
     [JsonRequired]
     public string? Password { get; init; }
+
+    // The password is left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Name = {Name}, Password = {(Password is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>Body of <c>POST Auth/Pin</c>, sent with a kiosk key in <c>X-Api-Key</c>.</summary>
@@ -132,6 +139,13 @@ public sealed record class RoofPinSignInRequest
     [Required]
     [JsonRequired]
     public string? Pin { get; init; }
+
+    // The PIN is left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Name = {Name}, Pin = {(Pin is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>Body of <c>POST Auth/Password</c>: a signed-in person changes their own password.</summary>
@@ -144,6 +158,13 @@ public sealed record class RoofPasswordChangeRequest
     [Required]
     [JsonRequired]
     public string? NewPassword { get; init; }
+
+    // The passwords are left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"CurrentPassword = {(CurrentPassword is null ? "(none)" : "(set)")}, NewPassword = {(NewPassword is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>A new session. The token is shown only here; send it as <c>Authorization: Bearer &lt;token&gt;</c>.</summary>
@@ -219,6 +240,13 @@ public sealed record class RoofUserCreateRequest
 
     /// <summary>For signing in at a kiosk. Operators and admins only.</summary>
     public string? Pin { get; init; }
+
+    // The password and PIN are left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Name = {Name}, Role = {Role}, Password = {(Password is null ? "(none)" : "(set)")}, Pin = {(Pin is null ? "(none)" : "(set)")}");
+        return true;
+    }
 }
 
 /// <summary>
@@ -239,6 +267,14 @@ public sealed record class RoofUserUpdateRequest
     public bool RemovePassword { get; init; }
 
     public bool RemovePin { get; init; }
+
+    // The password and PIN are left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Role = {Role}, Password = {(Password is null ? "(none)" : "(set)")}, Pin = {(Pin is null ? "(none)" : "(set)")}, ")
+            .Append($"RemovePassword = {RemovePassword}, RemovePin = {RemovePin}");
+        return true;
+    }
 }
 
 /// <summary>An API key, as the admin endpoints show it. Never its value or hash.</summary>

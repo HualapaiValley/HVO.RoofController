@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using FluentAssertions;
@@ -12,6 +13,7 @@ using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Moq;
 using static HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport;
@@ -164,12 +166,37 @@ public sealed class RoofClientApiTests
     public async Task AnApiKeyActingForSomeone_SendsTheirNameForTheAudit()
     {
         using var host = CreateHost();
-        using var client = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Operator, "  alice  "));
+        var sent = new ConcurrentQueue<RecordedRequest>();
+        using var client = CreateClient(
+            host,
+            new RoofApiKeyCredential(TestApiKeys.Operator, "  alice  "),
+            handler: () => new RecordingHandler(host.Server, sent));
 
         var caller = await client.Auth.GetCallerAsync();
+        var stop = await client.StopAsync();
 
         caller.Name.Should().Contain("test-operator");
+        stop.IsAcknowledged.Should().BeTrue();
+        sent.Should().HaveCount(2).And.OnlyContain(request =>
+            request.Headers[RoofIdentityContract.OnBehalfOfHeaderName] == "alice"
+            && request.Headers.ContainsKey(RoofControllerApiContract.ApiKeyHeaderName));
         client.Credential!.ToString().Should().Be("API key on behalf of alice");
+    }
+
+    [TestMethod]
+    [DataRow("Zoë", DisplayName = "not ASCII")]
+    [DataRow("alice\r\nX-Api-Key: other", DisplayName = "a header break")]
+    [DataRow("-alice", DisplayName = "not starting with a letter or digit")]
+    [DataRow("alice smith", DisplayName = "a space")]
+    public void AnOnBehalfOfName_ThatIsNotAUserName_IsRefusedWhenTheCredentialIsMade(string name)
+    {
+        var make = () => new RoofApiKeyCredential(TestApiKeys.Operator, name);
+
+        make.Should().Throw<ArgumentException>().Which.Message.Should().StartWith(RoofApiKeyCredential.InvalidOnBehalfOf);
+        new Func<RoofApiKeyCredential>(() => new RoofApiKeyCredential(TestApiKeys.Operator, new string('a', 65)))
+            .Should().Throw<ArgumentException>("a user name has at most 64 characters");
+        new RoofApiKeyCredential(TestApiKeys.Operator, new string('a', 64)).OnBehalfOf.Should().HaveLength(64);
+        new RoofApiKeyCredential(TestApiKeys.Operator, "   ").OnBehalfOf.Should().BeNull("a blank name means nobody");
     }
 
     [TestMethod]
@@ -279,6 +306,41 @@ public sealed class RoofClientApiTests
 
         refused.Code.Should().Be(RoofControllerErrorCode.SignInFailed);
         refused.Detail.Should().Be("The current password is not correct.");
+        var session = (RoofSessionCredential)client.Credential!;
+        session.IsEnded.Should().BeFalse("a wrong password in the request does not mean the session was refused");
+        (await client.Auth.GetCallerAsync()).Name.Should().Be("alice");
+    }
+
+    [TestMethod]
+    public async Task ARefresh_LeavesASessionSetDuringIt_Alone()
+    {
+        using var host = CreateHost();
+        await AddUserAsync(host, "alice", RoofControllerApiContract.OperatorRole);
+        await AddUserAsync(host, "bob", RoofControllerApiContract.ViewerRole);
+        RoofControllerClient? owner = null;
+        RoofSessionCredential? bob = null;
+        using var client = CreateClient(host, handler: () => new RecordingHandler(host.Server, new ConcurrentQueue<RecordedRequest>(), request =>
+        {
+            // Bob signs in on this client while the refresh for Alice is on its way back.
+            if (request.Path.EndsWith("/Auth/Me", StringComparison.Ordinal) && bob is not null)
+            {
+                owner!.Credential = bob;
+            }
+        }));
+        owner = client;
+        var alice = await client.Auth.SignInAsync("alice", TestSecrets.Password);
+        var bobSession = await client.Auth.SignInAsync("bob", TestSecrets.Password);
+        var bobExpires = bobSession.ExpiresUtc;
+        client.Credential = alice;
+        bob = bobSession;
+
+        var caller = await client.Auth.RefreshAsync();
+
+        caller.Name.Should().Be("alice");
+        client.Credential.Should().BeSameAs(bobSession);
+        bobSession.Name.Should().Be("bob");
+        bobSession.Role.Should().Be(RoofControllerApiContract.ViewerRole);
+        bobSession.ExpiresUtc.Should().Be(bobExpires);
     }
 
     [TestMethod]
@@ -547,6 +609,24 @@ public sealed class RoofClientApiTests
         live.IsHealthy.Should().BeTrue();
         live.Status.Should().Be("Healthy");
         (await RefusedAsync(() => anonymous.Health.GetReportAsync())).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [TestMethod]
+    public async Task AnUnhealthyController_IsReadAsAReport_NotAnError()
+    {
+        using var host = CreateHost(configureServices: services => services.AddHealthChecks().AddCheck(
+            "test_failing", () => HealthCheckResult.Unhealthy("Failing on purpose (test)."), tags: ["hardware"]));
+        using var viewer = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Viewer));
+        using var anonymous = CreateClient(host);
+
+        var report = await viewer.Health.GetReportAsync();
+        var ready = await anonymous.Health.GetReadinessAsync();
+
+        report.Status.Should().Be("Unhealthy");
+        report.Checks.Should().Contain(check => check.Name == "test_failing" && check.Status == "Unhealthy");
+        ready.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        ready.IsHealthy.Should().BeFalse();
+        ready.Status.Should().Be("Unhealthy");
     }
 
     [TestMethod]

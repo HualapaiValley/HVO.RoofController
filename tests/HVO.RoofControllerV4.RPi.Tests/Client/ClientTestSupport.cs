@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
@@ -128,4 +129,27 @@ internal sealed class FailingHandler(Func<HttpRequestMessage, CancellationToken,
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         => respond(request, cancellationToken);
+}
+
+/// <summary>A request as it was sent: its method, path and headers.</summary>
+internal sealed record RecordedRequest(HttpMethod Method, string Path, IReadOnlyDictionary<string, string> Headers);
+
+/// <summary>
+/// Sends each request to the test server and records it in <paramref name="log"/>. <paramref name="answered"/>, when
+/// given, runs after each answer and before the client reads it.
+/// </summary>
+internal sealed class RecordingHandler(TestServer server, ConcurrentQueue<RecordedRequest> log, Action<RecordedRequest>? answered = null)
+    : DelegatingHandler(server.CreateHandler())
+{
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var recorded = new RecordedRequest(
+            request.Method,
+            request.RequestUri!.AbsolutePath,
+            request.Headers.ToDictionary(header => header.Key, header => string.Join(",", header.Value), StringComparer.OrdinalIgnoreCase));
+        log.Enqueue(recorded);
+        var response = await base.SendAsync(request, cancellationToken);
+        answered?.Invoke(recorded);
+        return response;
+    }
 }

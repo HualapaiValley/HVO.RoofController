@@ -33,7 +33,24 @@ public abstract class RoofCredential
     /// </summary>
     protected internal virtual bool OnRefused(RoofCredentialUse use) => false;
 
+    /// <summary>Why a key or token cannot be used: a header cannot carry it.</summary>
+    public const string InvalidHeaderValue =
+        "A key or token can hold only printable ASCII characters: no line break, control character or character outside ASCII.";
+
     protected static KeyValuePair<string, string> ApiKeyHeader(string key) => new(RoofControllerApiContract.ApiKeyHeaderName, key);
+
+    /// <summary>
+    /// Refuses a key or token that a header cannot carry, when the credential is made. Otherwise every request, Stop
+    /// included, would fail as it is sent, and read as a controller that cannot be reached.
+    /// </summary>
+    protected static void RequireHeaderValue(string value, string paramName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
+        if (value.Any(c => c is < ' ' or > '~'))
+        {
+            throw new ArgumentException(InvalidHeaderValue, paramName);
+        }
+    }
 
     protected static KeyValuePair<string, string> BearerHeader(string token) => new("Authorization", $"{RoofIdentityContract.BearerScheme} {token}");
 }
@@ -45,12 +62,21 @@ public sealed class RoofApiKeyCredential : RoofCredential
 
     public RoofApiKeyCredential(string apiKey, string? onBehalfOf = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        RequireHeaderValue(apiKey, nameof(apiKey));
         OnBehalfOf = string.IsNullOrWhiteSpace(onBehalfOf) ? null : onBehalfOf.Trim();
+        if (OnBehalfOf is not null && !RoofIdentityContract.IsValidName(OnBehalfOf))
+        {
+            throw new ArgumentException(InvalidOnBehalfOf, nameof(onBehalfOf));
+        }
+
         _headers = OnBehalfOf is null
             ? [ApiKeyHeader(apiKey)]
             : [ApiKeyHeader(apiKey), new(RoofIdentityContract.OnBehalfOfHeaderName, OnBehalfOf)];
     }
+
+    /// <summary>Why a name cannot be sent as <c>X-On-Behalf-Of</c>: it must be a user name, as the controller defines one.</summary>
+    public const string InvalidOnBehalfOf =
+        "The on-behalf-of name must be a user name: up to 64 characters, a letter or digit, then letters, digits, '.', '_', '@' or '-'.";
 
     public string? OnBehalfOf { get; }
 
@@ -76,7 +102,7 @@ public sealed class RoofSessionCredential : RoofCredential
 
     public RoofSessionCredential(string token, string? name = null, string? role = null, string? sessionId = null, DateTimeOffset? expiresUtc = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        RequireHeaderValue(token, nameof(token));
         Token = token;
         Name = name;
         Role = role;
@@ -148,7 +174,7 @@ public sealed class RoofKioskCredential : RoofCredential
 
     public RoofKioskCredential(string deviceKey)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(deviceKey);
+        RequireHeaderValue(deviceKey, nameof(deviceKey));
         _deviceHeader = ApiKeyHeader(deviceKey);
         _requestHeaders = [_deviceHeader];
     }
@@ -171,7 +197,7 @@ public sealed class RoofKioskCredential : RoofCredential
     public void UsePinSession(RoofSessionResponse session)
     {
         ArgumentNullException.ThrowIfNull(session);
-        ArgumentException.ThrowIfNullOrWhiteSpace(session.Token);
+        RequireHeaderValue(session.Token, nameof(session));
         lock (_gate)
         {
             _pinSession = session;

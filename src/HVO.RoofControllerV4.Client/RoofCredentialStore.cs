@@ -38,14 +38,23 @@ public sealed record RoofStoredCredentials
     }
 
     /// <summary>The credential to use: a saved session first, else the API key; null when neither is saved.</summary>
+    /// <exception cref="RoofCredentialFileException">The key, the token or the on-behalf-of name cannot be sent.</exception>
     public RoofCredential? ToCredential()
     {
-        if (Session is { } session && !string.IsNullOrWhiteSpace(session.Token))
+        try
         {
-            return new RoofSessionCredential(session.Token, session.Name, session.Role, session.SessionId, session.ExpiresUtc);
-        }
+            if (Session is { } session && !string.IsNullOrWhiteSpace(session.Token))
+            {
+                return new RoofSessionCredential(session.Token, session.Name, session.Role, session.SessionId, session.ExpiresUtc);
+            }
 
-        return string.IsNullOrWhiteSpace(ApiKey) ? null : new RoofApiKeyCredential(ApiKey, OnBehalfOf);
+            return string.IsNullOrWhiteSpace(ApiKey) ? null : new RoofApiKeyCredential(ApiKey, OnBehalfOf);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RoofCredentialFileException(
+                ex.ParamName == "onBehalfOf" ? RoofApiKeyCredential.InvalidOnBehalfOf : RoofCredential.InvalidHeaderValue, ex);
+        }
     }
 }
 
@@ -60,8 +69,8 @@ public sealed class RoofCredentialFileException : Exception
 
 /// <summary>
 /// Credentials for command-line use: from the environment (<c>HVO_ROOF_API_KEY</c> or <c>HVO_ROOF_SESSION</c>), or from
-/// a JSON file that only its owner may read (<c>0600</c>, in a <c>0700</c> directory). A file that other users can read
-/// is refused rather than used, because it holds a key or a session token.
+/// a JSON file that only its owner may read (<c>0600</c>, in a <c>0700</c> directory). A file that other users can read,
+/// or one in a directory they can change, is refused rather than used, because it holds a key or a session token.
 /// </summary>
 public static class RoofCredentialStore
 {
@@ -73,6 +82,8 @@ public static class RoofCredentialStore
 
     private const UnixFileMode OwnerFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private const UnixFileMode OwnerDirectoryMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    private const UnixFileMode OthersWriteMask = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
 
     private const UnixFileMode OthersMask = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
         | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
@@ -123,7 +134,9 @@ public static class RoofCredentialStore
     }
 
     /// <summary>Reads the file, or returns null when it does not exist.</summary>
-    /// <exception cref="RoofCredentialFileException">Other users can read or write the file, or it is not valid JSON.</exception>
+    /// <exception cref="RoofCredentialFileException">
+    /// Other users can read or write the file, or change its directory; or it is not valid JSON.
+    /// </exception>
     public static RoofStoredCredentials? Load(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -134,6 +147,7 @@ public static class RoofCredentialStore
 
         if (!OperatingSystem.IsWindows())
         {
+            CheckDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             var mode = File.GetUnixFileMode(path);
             if ((mode & OthersMask) != 0)
             {
@@ -156,6 +170,7 @@ public static class RoofCredentialStore
     /// <summary>
     /// Writes the file atomically with mode <c>0600</c>, creating its directory with mode <c>0700</c> when missing.
     /// </summary>
+    /// <exception cref="RoofCredentialFileException">Other users can change the directory.</exception>
     public static void Save(string path, RoofStoredCredentials credentials)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -163,7 +178,11 @@ public static class RoofCredentialStore
 
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath)!;
-        if (!Directory.Exists(directory))
+        if (Directory.Exists(directory))
+        {
+            CheckDirectory(directory);
+        }
+        else
         {
             if (OperatingSystem.IsWindows())
             {
@@ -195,6 +214,16 @@ public static class RoofCredentialStore
         finally
         {
             File.Delete(temporary);
+        }
+    }
+
+    // Another user who can change the directory can replace the file, whatever the file's own mode.
+    private static void CheckDirectory(string directory)
+    {
+        if (!OperatingSystem.IsWindows() && (File.GetUnixFileMode(directory) & OthersWriteMask) != 0)
+        {
+            throw new RoofCredentialFileException(
+                $"{directory} can be changed by other users, who could replace the credentials file. Run 'chmod 700 {directory}', then try again.");
         }
     }
 

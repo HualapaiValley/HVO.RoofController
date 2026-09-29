@@ -123,7 +123,10 @@ public sealed class RoofSettingsFormField
         ? State?.IsSet == true ? RoofSettingValues.SecretSet : RoofSettingValues.SecretNotSet
         : RoofSettingValues.Describe(Setting, Value);
 
-    /// <summary>The value as text to edit. Empty for a secret, which is never returned.</summary>
+    /// <summary>
+    /// The value as text to edit. Empty for a secret, which is never returned; <see cref="RoofSettingsEdit.TrySet"/> keeps a
+    /// secret whose text is left empty.
+    /// </summary>
     public string EditText => Setting.Secret ? string.Empty : RoofSettingValues.Format(Setting, Value);
 
     /// <summary>The default value for display.</summary>
@@ -184,17 +187,50 @@ public sealed class RoofSettingsEdit
 
     private IEnumerable<RoofSettingsFormField> ChangedFields => Group.Fields.Where(candidate => _changes.ContainsKey(candidate.Key));
 
-    /// <summary>Parses and sets a value. Returns false with a message when the text is not a value the setting can take.</summary>
+    /// <summary>
+    /// Parses and sets a value. Returns false with a message when the text is not a value the setting can take. Empty
+    /// text for a secret leaves the secret as it is, because a form shows every secret as an empty box; use
+    /// <see cref="ClearSecret"/> to clear one.
+    /// </summary>
     public bool TrySet(string key, string? text, out string? error)
     {
         var field = GetWritableField(key, out error);
-        if (field is null || !field.TryParse(text, out var value, out error))
+        if (field is null)
+        {
+            return false;
+        }
+
+        if (field.Setting.Secret && string.IsNullOrWhiteSpace(text))
+        {
+            _changes.Remove(field.Key);
+            return true;
+        }
+
+        if (!field.TryParse(text, out var value, out error))
         {
             return false;
         }
 
         Apply(field, value);
         return true;
+    }
+
+    /// <summary>Clears a secret (sends null). Throws <see cref="ArgumentException"/> when the setting is not a secret, or must have a value.</summary>
+    public void ClearSecret(string key)
+    {
+        var field = GetWritableField(key, out var error) ?? throw new ArgumentException(error, nameof(key));
+        if (!field.Setting.Secret)
+        {
+            throw new ArgumentException($"{field.Label} is not a secret.", nameof(key));
+        }
+
+        error = RoofSettingValues.Validate(field.Setting, RoofSettingValues.Null);
+        if (error is not null)
+        {
+            throw new ArgumentException($"{field.Label}: {error}", nameof(key));
+        }
+
+        _changes[field.Key] = RoofSettingValues.Null;
     }
 
     /// <summary>Sets a wire value. Throws <see cref="ArgumentException"/> when the setting cannot take it.</summary>

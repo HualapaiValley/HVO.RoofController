@@ -38,7 +38,18 @@ public static class RoofStopText
 
     public const string UseRoofStop = "Use the stop control at the roof.";
 
+    /// <summary>A 401 for a session, or for a client with no credential.</summary>
     public const string SignedOut = "Stop was not sent because the session is signed out. Sign in again, or use the stop control at the roof.";
+
+    /// <summary>A 401 for an API key or a kiosk's device key: there is nothing to sign in to.</summary>
+    public const string KeyRefused = "Stop was not sent because the controller did not accept the key. Use the stop control at the roof.";
+
+    /// <summary>A 401 in the browser console's reconnect dialog, which has no sign-in of its own.</summary>
+    public const string PageSignedOut =
+        "Stop was not sent because this page is signed out. Reload the page to sign in again, or use the stop control at the roof.";
+
+    /// <summary>The browser console's Stop with a missing or old antiforgery token.</summary>
+    public const string PageOutOfDate = "Stop was not sent because this page is out of date. Reload the page, or use the stop control at the roof.";
 
     /// <summary>A failed stop, with the reason, sending the operator to the roof.</summary>
     public static string Failed(string reason) => $"Stop failed: {reason} {UseRoofStop}";
