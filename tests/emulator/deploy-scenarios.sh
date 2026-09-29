@@ -470,6 +470,11 @@ container_running() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == true ]]
 }
 
+# container_stopped <name>: Docker says the container is not running. A docker error is neither running nor stopped.
+container_stopped() {
+  [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == false ]]
+}
+
 # container_log_has <name> <text> [since]: the log, or the part since a `now` value (the container keeps the log of
 # every run), has the text. The log is read whole first: grep -q would end a pipe early, and pipefail would then report
 # docker's SIGPIPE as a failure.
@@ -479,11 +484,30 @@ container_log_has() {
   grep -qF -- "$2" <<<"${log}"
 }
 
-# container_log_count <name> <text>: how many lines of the container's log have the text.
+# container_log_lacks <name> <text> [since]: the log, or the part since a `now` value, was read and lacks the text. A
+# log docker cannot read fails the check: docker logs exits 1 for its own errors, as grep does when nothing matches.
+container_log_lacks() {
+  local log
+  log=$(docker logs ${3:+--since "$3"} "$1" 2>&1) || fail "could not read the log of $1: ${log}"
+  ! grep -qF -- "$2" <<<"${log}"
+}
+
+# container_log_count <name> <text>: how many lines of the container's log have the text. Fails (prints no count) when
+# docker cannot read the log.
 container_log_count() {
   local log
-  log=$(docker logs "$1" 2>&1)
+  log=$(docker logs "$1" 2>&1) || return 1
   grep -cF -- "$2" <<<"${log}" || true
+}
+
+# expect_no_leftovers <which deploy>: no container of this run's image is left but the controller and its previous
+# version. A list docker cannot give fails the check.
+expect_no_leftovers() {
+  local names leftovers
+  names=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}') \
+    || fail "could not list the containers of ${image}"
+  leftovers=$(grep -vx -e "${controller}" -e "${previous}" <<<"${names}" || true)
+  [[ -z "${leftovers}" ]] || fail "containers of the $1 deploy remain: ${leftovers}"
 }
 
 container_image() {
@@ -747,7 +771,8 @@ scenario_lifecycle() {
     || (( controller_stopping > controller_stopped || controller_stopped > ui_stopping )); then
     fail "the supervisor did not stop the controller (exit code 0) before the web UI: lines ${controller_stopping:-none}, ${controller_stopped:-none}, ${ui_stopping:-none}"
   fi
-  ! container_log_has "${controller}" 'did not stop within' "${start}" || fail "the supervisor killed a process at the end of its wait"
+  container_log_lacks "${controller}" 'did not stop within' "${start}" \
+    || fail "the supervisor killed a process at the end of its wait"
   wait_for "the camera stream to end" 5 camera_stream_ended
   stream_seconds=$(awk -v s="${start}" -v e="$(cat "${work}/camera.ended")" 'BEGIN { printf "%.1f", e - s }')
   stop_camera_stream
@@ -801,7 +826,7 @@ scenario_lifecycle() {
   local held
   held=$(plant | jq '.relayRegister')
   (( held != 0 )) || fail "the relays were released when the process died; the HAT holds them until something writes the register"
-  container_running "${controller}" && fail "the killed container restarted by itself"
+  container_stopped "${controller}" || fail "the killed container restarted by itself (or docker could not say)"
   start=$(now)
   docker start "${controller}" >/dev/null
   wait_for "the restarted controller to turn the relays off" 60 plant_is '.relayRegister == 0'
@@ -852,7 +877,7 @@ scenario_lifecycle() {
     || fail "the controller's log does not report its shutdown stop unverified"
   container_log_has "${controller}" 'Roof controller shutdown stop FAILED' "${start}" \
     || fail "the controller's log does not report its shutdown stop failed"
-  ! container_log_has "${controller}" 'did not stop within' "${start}" \
+  container_log_lacks "${controller}" 'did not stop within' "${start}" \
     || fail "the supervisor killed the controller at the end of its wait"
   held=$(plant | jq '.relayRegister')
   (( held != 0 )) || fail "the relays are off although no relay write reached the HAT"
@@ -1098,7 +1123,7 @@ scenario_c12() {
   new_id=$(container_id "${controller}")
   [[ "${new_id}" != "${old_id}" ]] || fail "the controller was not replaced"
   [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "the old controller is not kept as ${previous}"
-  ! container_running "${previous}" || fail "${previous} is running"
+  container_stopped "${previous}" || fail "${previous} is running (or docker could not say)"
   web_ui_live || fail "the web UI is not live at ${web}"
   relays_stayed_off
   assert_relays_off
@@ -1114,9 +1139,11 @@ scenario_c12() {
   assert_relays_off
   old_id=$(container_id "${controller}")
   # That Stop logged a NormalStop too: only one more, and no HostShutdown, shows the script's stop gate stopped the move.
-  local normal_stops shutdown_stops
-  normal_stops=$(container_log_count "${controller}" 'stopped: NormalStop')
-  shutdown_stops=$(container_log_count "${controller}" 'stopped: HostShutdown')
+  local normal_stops shutdown_stops old_normal_stops old_shutdown_stops
+  normal_stops=$(container_log_count "${controller}" 'stopped: NormalStop') \
+    || fail "could not read the log of ${controller}"
+  shutdown_stops=$(container_log_count "${controller}" 'stopped: HostShutdown') \
+    || fail "could not read the log of ${controller}"
   deploy_in_background
   wait_for "the deploy script's pre-flight" 900 background_deploy_reached "[deploy] Pre-flight"
   roof_post Open >/dev/null
@@ -1132,9 +1159,13 @@ scenario_c12() {
   [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "the old controller is not kept as ${previous}"
   plant_is '.openLimitActuated == false and .closedLimitActuated == false' \
     || fail "the roof reached a limit: the stop gate did not stop it mid-travel: $(plant)"
-  (( $(container_log_count "${previous}" 'stopped: NormalStop') == normal_stops + 1 )) \
+  old_normal_stops=$(container_log_count "${previous}" 'stopped: NormalStop') \
+    || fail "could not read the log of ${previous}"
+  old_shutdown_stops=$(container_log_count "${previous}" 'stopped: HostShutdown') \
+    || fail "could not read the log of ${previous}"
+  (( old_normal_stops == normal_stops + 1 )) \
     || fail "the old controller's log does not show one NormalStop of the moving roof by the script's Stop"
-  (( $(container_log_count "${previous}" 'stopped: HostShutdown') == shutdown_stops )) \
+  (( old_shutdown_stops == shutdown_stops )) \
     || fail "the old controller stopped the moving roof at its shutdown (HostShutdown), not at the script's stop gate"
   assert_relays_off
   pass "the script stopped the moving roof (NormalStop, verified all-off) before replacing the controller; the roof stopped between its limits at $(plant | jq '.openPercent | floor')% open"
@@ -1207,9 +1238,7 @@ scenario_c12() {
   container_running "${controller}" || fail "the old controller is not running"
   wait_for "the old controller ready" 120 controller_ready
   roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
-  local leftovers
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  expect_no_leftovers failed
   local rollback_started rollback_seconds
   rollback_started=$(grep -m 1 '\[rollback\]' "${DEPLOY_LOG}" | cut -d' ' -f1)
   rollback_seconds=$(awk -v a="${rollback_started}" -v b="${DEPLOY_SECONDS}" 'BEGIN { printf "%.1f", b - a }')
@@ -1231,8 +1260,7 @@ scenario_c12() {
   ! deploy_log_has "Stopping ${controller} gracefully" || fail "the script stopped ${controller}"
   [[ "$(container_id "${controller}")" == "${current_id}" ]] || fail "${controller} was replaced"
   container_running "${controller}" || fail "${controller} is not running"
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the aborted deploy remain: ${leftovers}"
+  expect_no_leftovers aborted
   relays_stayed_off
   local stop_answer
   stop_answer=$(grep -m 1 -o -e 'Stop returned HTTP [0-9]*' -e 'Stop result: relayRegisterState=[A-Za-z]*' "${DEPLOY_LOG}" || true)
@@ -1261,8 +1289,7 @@ scenario_c12() {
   container_running "${controller}" || fail "the old controller is not running"
   wait_for "the old controller ready" 120 controller_ready
   roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  expect_no_leftovers failed
   relays_stayed_off
   assert_relays_off
   pass "the new controller was not ready within 45 s; exit ${DEPLOY_STATUS} after ${DEPLOY_SECONDS} s with the previous controller running and ready again; relays 0 in ${RELAY_SAMPLES} samples"
@@ -1282,8 +1309,7 @@ scenario_c12() {
   wait_for "the old controller ready" 120 controller_ready
   roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
   wait_for "the old version's web UI live" 60 web_ui_live
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  expect_no_leftovers failed
   relays_stayed_off
   assert_relays_off
   pass "the new web UI could not start; exit ${DEPLOY_STATUS} after ${DEPLOY_SECONDS} s with the previous controller and its web UI running again; relays 0 in ${RELAY_SAMPLES} samples"
@@ -1436,9 +1462,12 @@ scenario_migration() {
   expect_deploy_log "[done] Deployment complete and verified at ${roof}"
   local script_id
   script_id=$(container_id "${controller}")
-  [[ -z "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${controller}")" ]] \
-    || fail "the script's controller carries a Compose label"
-  [[ "$(container_image "${controller}")" != "${compose_image}" ]] || fail "the script's controller runs the Compose version"
+  local script_label script_image
+  script_label=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${controller}") \
+    || fail "could not inspect ${controller}"
+  [[ -z "${script_label}" ]] || fail "the script's controller carries a Compose label"
+  script_image=$(container_image "${controller}") || fail "could not inspect ${controller}"
+  [[ "${script_image}" != "${compose_image}" ]] || fail "the script's controller runs the Compose version"
   session_knows_person "${compose_session}" || fail "the session opened on the Compose controller does not work on the script's"
   person_signs_in || fail "the person added on the Compose controller cannot sign in on the script's"
   default_camera_is scenario-camera || fail "the setting changed on the Compose controller is not in effect on the script's"
