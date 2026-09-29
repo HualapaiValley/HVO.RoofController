@@ -644,7 +644,8 @@ scenario_lifecycle() {
     || fail "POST System/Restart answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
   sed '$d' <<<"${response}" | jq -e '.exitCode == 75' >/dev/null || fail "the restart answer does not name exit code 75: $(sed '$d' <<<"${response}")"
   wait_for "Docker to start the controller again" 60 restarted_since "${restarts}"
-  exit_codes=$(docker events --since "${start}" --until "$(date +%s)" --filter "container=${container}" --filter event=die \
+  # A whole-second --until leaves out the events of the current second, so give it the fraction.
+  exit_codes=$(docker events --since "${start}" --until "$(date +%s.%N)" --filter "container=${container}" --filter event=die \
     --format '{{index .Actor.Attributes "exitCode"}}' | paste -sd ' ')
   [[ "${exit_codes}" == 75 ]] || fail "the controller exited with '${exit_codes}' after the restart request, not 75 once"
   [[ "$(container_id "${controller}")" == "${container}" ]] || fail "the restart replaced the container"

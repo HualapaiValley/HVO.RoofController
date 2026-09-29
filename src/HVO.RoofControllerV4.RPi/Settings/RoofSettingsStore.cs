@@ -771,7 +771,6 @@ public sealed class RoofSettingsStore
         settings.Replace(settingsDocument);
     }
 
-
     private void RestoreSecrets(string path, byte[]? previous)
     {
         try

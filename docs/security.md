@@ -449,8 +449,8 @@ configuration, such as Kestrel endpoints or API keys, belongs in the deployment'
   leaves the old file or the new one, never a torn one. The file is mode 0644: it holds no secrets.
 - The controller reads comments and trailing commas in the file, but a save through the API rewrites it without them.
 - A file that is not valid JSON, sets a secret or a key outside the catalogue, or holds a value the controller cannot
-  use stops the start. The error names the key but never its value. The controller writes `The roof controller did not start: ...` to standard error and exits with code 1. It never falls
-  back to the defaults.
+  use stops the start. The error names the key but never its value. The controller writes
+  `The roof controller did not start: ...` to standard error and exits with code 1. It never falls back to the defaults.
 - Without a `FilePath` (or a `SecretsFilePath`), changes are kept in memory and lost at a restart. `GET Settings`
   reports `fileBacked: false` with a warning, and the deployment check warns outside Development.
 

@@ -122,7 +122,8 @@ sudo install -d -m 0700 /var/lib/hvo-roof/settings-secrets
 
 The controller runs as root in its image, so root owning them is enough. It creates the files at the first save.
 Neither the deploy script nor Compose creates them. Docker refuses to start the deployment check and the controller
-when either is missing, and the [deployment check](#the-deployment-check) fails when either is not writable. The secrets directory, `/etc/hvo-roof/secrets`, stays read-only.
+when either is missing, and the [deployment check](#the-deployment-check) fails when either is not writable. The
+secrets directory, `/etc/hvo-roof/secrets`, stays read-only.
 
 A setting given with `--env`, in `EXTRA_DOCKER_ARGS` or in the secrets directory overrides the settings file, and the
 API cannot change it (`GET /api/v4.0/Settings` names where it comes from). Keep settings that people should change
