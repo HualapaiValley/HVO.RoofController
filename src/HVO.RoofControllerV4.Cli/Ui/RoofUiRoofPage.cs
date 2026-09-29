@@ -83,6 +83,11 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             return unavailable;
         }
 
+        if (Ui.QuitRequested)
+        {
+            return "the interface is closing";
+        }
+
         var status = Ui.Status!;
         if (_commandInFlight)
         {

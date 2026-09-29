@@ -337,6 +337,38 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void F10_WhileAStopIsOnItsWay_OffersNoOpenOrClose_AndRefusesOne_SoClosingWaitsOnNoNewMotion()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host) { WrapHandler = inner => new GatedHandler(inner, "/RoofControl/Stop", answer.Task) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        page.OpenButton.Enabled.Should().BeTrue("the roof is stopped and the status is fresh");
+
+        tui.Press(Key.F9);
+        tui.Press(Key.F10);
+
+        page.OpenButton.Enabled.Should().BeFalse("quitting may already have sent its Stop, and would wait on the Open");
+        page.CloseButton.Enabled.Should().BeFalse();
+        page.BlockReason(RoofMotionDirection.Opening).Should().Be("the interface is closing");
+        tui.Screen.Should().Contain("Open and Close: the interface is closing.");
+        page.OpenButton.InvokeCommand(Command.Accept);
+        tui.Ui.Run("Sending Open…", (client, cancellationToken) => client.Roof.OpenAsync(cancellationToken), motion: true)
+            .Should().BeFalse("a motion is refused once quitting has begun, whoever asks for it");
+        tui.Ui.Message.Should().Be(RoofTerminalUi.MotionWhileQuittingText);
+        tui.Ui.MotionInFlight.Should().BeFalse();
+
+        answer.SetResult();
+        tui.WaitIdle("the Stop's answer", () => !tui.Ui.StopInFlight);
+
+        ((IRunnable)tui.Ui.Window).StopRequested.Should().BeTrue("nothing but the Stop was on its way");
+        host.RoofService.Verify(service => service.Open(), Times.Never());
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
     public void F10_WhileAStopIsOnItsWay_ThatNothingConfirms_StaysOpenAndSaysSo_UntilF10AgainClosesIt()
     {
         var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -363,6 +395,8 @@ public sealed class RoofTerminalUiTests
         tui.Ui.Message.Should().Be("Nothing confirmed the Stop, so the interface stays open. F10 closes it.");
         tui.Ui.QuitRequested.Should().BeFalse();
         ((IRunnable)tui.Ui.Window).StopRequested.Should().BeFalse("closing would hide a Stop that nothing confirmed");
+        ((RoofUiRoofPage)tui.Ui.CurrentPage).BlockReason(RoofMotionDirection.Opening)
+            .Should().NotBe("the interface is closing", "the interface stays open, so the roof's own state decides again");
 
         tui.Press(Key.F10);
 
@@ -1059,6 +1093,33 @@ public sealed class RoofTerminalUiTests
             service => service.Stop(RoofControllerStopReason.NormalStop),
             Times.Exactly(2),
             "the only Stop went out before the Open arrived; F10 sends another before it closes, and has said both results");
+    }
+
+    [TestMethod]
+    public void Closing_WaitsNoLongerThanFeedCloseWait_ForALiveStatusThatDoesNotClose()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        var tui = Started(rig);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        tui.Ui.CloseFeed = async feed =>
+        {
+            await release.Task;
+            await feed.DisposeAsync();
+            closed.SetResult();
+        };
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        tui.Dispose();
+        watch.Stop();
+        release.SetResult();
+        closed.Task.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue("the held live status closes once released");
+
+        // The signal budget counts on this: a live status that does not close is dropped with the process.
+        watch.Elapsed.Should().BeGreaterThanOrEqualTo(RoofTerminalUi.FeedCloseWait - TimeSpan.FromMilliseconds(50))
+            .And.BeLessThan(RoofTerminalUi.FeedCloseWait + TimeSpan.FromSeconds(2));
     }
 
     [TestMethod]

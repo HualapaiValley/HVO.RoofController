@@ -15,8 +15,9 @@ public sealed class RoofCliTermination : IDisposable
     public static readonly TimeSpan CommandGrace = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// The longest the process runs after the first signal: the Stop timeout (10 s) and a margin for the answer to be
-    /// printed and the terminal restored.
+    /// The longest the process runs after the first signal: the wait for an Open or Close's answer (3 s), the Stop timeout
+    /// (10 s), closing the live status in 'ui' (up to 1 s), and a margin for the answer to be printed and the terminal
+    /// restored.
     /// </summary>
     public static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(15);
 

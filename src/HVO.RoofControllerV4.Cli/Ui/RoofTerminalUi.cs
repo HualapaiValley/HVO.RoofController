@@ -65,6 +65,7 @@ internal sealed class RoofTerminalUi : IDisposable
 
     // Numbers the Stops sent from here: only the answer to the newest decides the result shown and UnconfirmedStop.
     private int _stopsSent;
+    private bool _quitRequested;
     private bool _quitAfterStop;
     private bool _quitInterrupted;
 
@@ -204,8 +205,22 @@ internal sealed class RoofTerminalUi : IDisposable
 
     public string StopResult => _stopResult.Text;
 
-    /// <summary>True once F10 asked the interface to close.</summary>
-    public bool QuitRequested { get; private set; }
+    /// <summary>
+    /// True once F10 (or a termination signal) asked the interface to close, until it closes or stays open to show why.
+    /// Open and Close are not offered meanwhile: quitting stops a motion started here, and would wait on a new one.
+    /// </summary>
+    public bool QuitRequested
+    {
+        get => _quitRequested;
+        private set
+        {
+            if (_quitRequested != value)
+            {
+                _quitRequested = value;
+                _page?.StatusChanged();
+            }
+        }
+    }
 
     /// <summary>
     /// The result of the last Stop sent from here when nothing confirmed it (it failed, or the relays could not be
@@ -416,6 +431,8 @@ internal sealed class RoofTerminalUi : IDisposable
         "The Open or Close sent from here was not answered, so it may still reach the controller after the Stop. "
         + "The interface stays open to show the roof: F9 stops it, F10 closes the interface.";
 
+    internal const string MotionWhileQuittingText = "Not sent: the interface is closing.";
+
     internal const string UnconfirmedStopText = "Nothing confirmed the Stop, so the interface stays open. F10 closes it.";
 
     internal const string UnconfirmedStopAndAnswerLostText =
@@ -463,18 +480,28 @@ internal sealed class RoofTerminalUi : IDisposable
     /// <summary>How long closing waits for the live status to close.</summary>
     internal static readonly TimeSpan FeedCloseWait = TimeSpan.FromSeconds(1);
 
+    /// <summary>Closes the live status when the interface closes. Tests hold it open, to time the wait for it.</summary>
+    internal Func<RoofStatusFeed, ValueTask> CloseFeed { get; set; } = feed => feed.DisposeAsync();
+
     /// <summary>
     /// Runs <paramref name="work"/> off the interface's thread with the current client. A failure is shown on the
     /// message line in the shared wording. <paramref name="busy"/>, when given, is shown until the work says more.
     /// Returns false, having said why, when there is no controller to send to. <paramref name="motion"/> marks Open or
     /// Close: quitting while it is on its way waits for it (or cancels it after <see cref="MotionAnswerWait"/>) and then
-    /// sends Stop.
+    /// sends Stop. Once quitting has begun, Open and Close are refused, and false is returned.
     /// </summary>
     public bool Run(string? busy, Func<RoofControllerClient, CancellationToken, Task> work, bool motion = false)
     {
         if (_client is not { } client)
         {
             Say(ConnectionProblem ?? "No controller address is configured. Use Setup (F5).", error: true);
+            return false;
+        }
+
+        if (motion && QuitRequested)
+        {
+            // Quitting may already have sent its Stop, and would wait on this command's answer.
+            Say(MotionWhileQuittingText, error: true);
             return false;
         }
 
@@ -944,7 +971,7 @@ internal sealed class RoofTerminalUi : IDisposable
             // Off the interface's thread: the feed's handlers only post to it, and posting stops once closed. Not waited
             // for long: after a signal, the process has StopGrace for the answer wait, the Stop, this, and the restored
             // terminal's messages, and a feed that does not close in time is dropped with the process.
-            Task.Run(async () => await feed.DisposeAsync().ConfigureAwait(false)).Wait(FeedCloseWait);
+            Task.Run(async () => await CloseFeed(feed).ConfigureAwait(false)).Wait(FeedCloseWait);
         }
 
         client?.Dispose();

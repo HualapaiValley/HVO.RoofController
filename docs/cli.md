@@ -136,7 +136,9 @@ controller after it:
 `The Open was not answered, so it may still reach the controller after the Stop. Check the roof, and run 'hvo-roof stop' if it moves.`
 With `--json`, an interrupted command writes
 `{"interrupted": true, "exitCode": 130, "commandAnswered": true, "stop": {...}}`, where `commandAnswered` is false
-when the Open or Close got no answer, and `stop` is the `stop --json` document.
+when the Open or Close got no answer, and `stop` is the `stop --json` document. An interruption before the Open or
+Close is sent is different: nothing is sent, not even Stop, and the command exits 130 with the error document,
+`{"error": {"exitCode": 130, "kind": "Interrupted", "message": "Interrupted before Open was sent: nothing was sent.", ...}}`.
 
 An `open` or `close` whose answer never arrives may still have reached the controller. That covers no answer in time,
 the connection dropping after the command was sent, an answer that could not be read, and a proxy's 502 or 504. The

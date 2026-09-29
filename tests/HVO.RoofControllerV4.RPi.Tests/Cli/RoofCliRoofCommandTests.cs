@@ -958,6 +958,29 @@ public sealed class RoofCliRoofCommandTests
     }
 
     [TestMethod]
+    public async Task CtrlC_BeforeTheCommandIsSent_WithJson_WritesTheInterruptedError_AsDocumented()
+    {
+        var roof = RoofShowing(() => RoofServiceMock.Snapshot());
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        using var interrupt = new CancellationTokenSource();
+        await interrupt.CancelAsync();
+
+        var code = await RoofCli.RunAsync(["open", "--json", "--credentials-file", rig.CredentialsPath], rig.CreateHost(output, error), interrupt.Token);
+
+        code.Should().Be((int)RoofExitCode.Interrupted);
+        var failure = JsonDocument.Parse(output.ToString()).RootElement.GetProperty("error");
+        failure.GetProperty("exitCode").GetInt32().Should().Be(130);
+        failure.GetProperty("kind").GetString().Should().Be("Interrupted");
+        failure.GetProperty("message").GetString().Should().Be("Interrupted before Open was sent: nothing was sent.");
+        roof.Verify(service => service.Open(), Times.Never());
+        roof.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    [TestMethod]
     public async Task Open_CtrlC_WhileTheOpenIsOnItsWay_WaitsForItsAnswer_SoTheStopReachesTheControllerAfterIt()
     {
         var moving = false;
