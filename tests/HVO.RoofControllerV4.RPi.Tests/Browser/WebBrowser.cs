@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Client;
@@ -22,7 +25,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 /// <summary>
 /// The screens the web UI is tested on: a phone and a tablet, each held upright and sideways, a small phone held sideways
 /// (Playwright's device descriptors: viewport, scale, touch, mobile user agent), and a desktop browser window. All run
-/// in Chromium.
+/// in Chromium. The phones reach the web UI over HTTPS, as a phone on the observatory's network does; the tablets and
+/// the desktop over plain HTTP, which the web UI also serves (<c>ALLOW_INSECURE_HTTP</c>).
 /// </summary>
 internal static class WebDevices
 {
@@ -45,6 +49,9 @@ internal static class WebDevices
     public const string Desktop = "Desktop 1440x900";
 
     public static IReadOnlyList<string> All { get; } = [Phone, PhoneLandscape, SmallPhoneLandscape, Tablet, TabletLandscape, Desktop];
+
+    /// <summary>Whether the browser emulating <paramref name="device"/> reaches the web UI over HTTPS (the phones).</summary>
+    public static bool UsesHttps(string device) => device is Phone or PhoneLandscape or SmallPhoneLandscape;
 
     public static BrowserNewContextOptions Options(IPlaywright playwright, string device)
         => device == Desktop
@@ -74,7 +81,8 @@ internal sealed record ControlPlacement(
 /// <summary>
 /// The web UI as it is deployed, driven from a headless Chromium: an <see cref="EmulatedRoofRig"/> (the controller
 /// against the emulated plant) on a loopback port, and the web UI (<see cref="WebProgram.BuildApp"/>) on another,
-/// reaching the controller over HTTP with its own Stop key. The controller has three people with the test password:
+/// reaching the controller over HTTP with its own Stop key. For a phone the web UI serves HTTPS with a certificate of its
+/// own, which the browser accepts as a phone told to trust the Pi's certificate does (<see cref="WebDevices.UsesHttps"/>). The controller has three people with the test password:
 /// <see cref="Admin"/>, <see cref="Operator"/> and <see cref="Viewer"/>. The browser emulates one of
 /// <see cref="WebDevices"/> and records a trace. Disposing it after a failed test saves a screenshot, the trace and the
 /// logs to the test's results; then it closes the browser and stops the web UI and the rig.
@@ -134,7 +142,7 @@ internal sealed class WebBrowser : IAsyncDisposable
         """;
 
     private readonly TestContext _testContext;
-    // The web UI's Stop key file and data protection keys.
+    // The web UI's Stop key file, data protection keys and certificate.
     private readonly WebTestSupport.TempDirectory _directory = new();
     private readonly ConcurrentQueue<string> _log = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -161,6 +169,9 @@ internal sealed class WebBrowser : IAsyncDisposable
 
     /// <summary>Whether <see cref="CutConnectionAsync"/> can cut the page's live connection.</summary>
     public bool CuttableConnection { get; }
+
+    /// <summary>Whether the web UI serves the browser over HTTPS (<see cref="WebDevices.UsesHttps"/>).</summary>
+    public bool Https => WebDevices.UsesHttps(Device);
 
     /// <summary>The web UI's address, which the browser's relative URLs go to.</summary>
     public Uri WebAddress { get; private set; } = null!;
@@ -360,14 +371,21 @@ internal sealed class WebBrowser : IAsyncDisposable
     }
 
     /// <summary>Waits for the web UI to log <paramref name="message"/>.</summary>
-    public async Task WaitForWebLogAsync(string message)
+    public Task WaitForWebLogAsync(string message)
+        => WaitForWebLogAsync(logged => string.Equals(logged, message, StringComparison.Ordinal), $"\"{message}\"");
+
+    /// <summary>Waits for the web UI to log a message that <paramref name="pattern"/> matches.</summary>
+    public Task WaitForWebLogAsync(Regex pattern)
+        => WaitForWebLogAsync(pattern.IsMatch, $"a message matching /{pattern}/");
+
+    private async Task WaitForWebLogAsync(Func<string, bool> match, string description)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (!WebLogs.Entries.Any(e => string.Equals(e.Message, message, StringComparison.Ordinal)))
+        while (!WebLogs.Entries.Any(e => match(e.Message)))
         {
             if (DateTime.UtcNow > deadline)
             {
-                throw new AssertFailedException($"The web UI did not log \"{message}\" within 5 s.");
+                throw new AssertFailedException($"The web UI did not log {description} within 5 s.");
             }
 
             await Task.Delay(50);
@@ -437,11 +455,18 @@ internal sealed class WebBrowser : IAsyncDisposable
         var args = new List<string>
         {
             "--environment=Production",
-            "--RoofWeb:Urls=http://127.0.0.1:0",
+            $"--RoofWeb:Urls={(Https ? "https" : "http")}://127.0.0.1:0",
             $"--RoofWeb:ControllerUrl={Rig.BaseAddress}",
             $"--RoofWeb:StopKeyFile={_directory.File("stop-key")}",
             $"--RoofWeb:DataProtectionPath={_directory.File("keys")}",
         };
+        if (Https)
+        {
+            var (certificate, passwordFile) = WriteCertificate();
+            args.Add($"--RoofWeb:Certificate:Path={certificate}");
+            args.Add($"--RoofWeb:Certificate:PasswordFile={passwordFile}");
+        }
+
         args.AddRange((webSettings ?? new Dictionary<string, string?>()).Select(setting => $"--{setting.Key}={setting.Value}"));
 
         _web = WebProgram.BuildApp([.. args], builder =>
@@ -456,6 +481,23 @@ internal sealed class WebBrowser : IAsyncDisposable
         Log($"web UI at {WebAddress}, controller at {Rig.BaseAddress}");
     }
 
+    // The web UI's certificate for 127.0.0.1, with a password, as the supervisor gives it the controller's.
+    private (string Certificate, string PasswordFile) WriteCertificate()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest("CN=127.0.0.1", key, HashAlgorithmName.SHA256);
+        var names = new SubjectAlternativeNameBuilder();
+        names.AddIpAddress(IPAddress.Loopback);
+        names.AddDnsName("localhost");
+        request.CertificateExtensions.Add(names.Build());
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.1")], false));
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(1));
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+        File.WriteAllBytes(_directory.File("web.pfx"), certificate.Export(X509ContentType.Pkcs12, password));
+        File.WriteAllText(_directory.File("web.pfx.password"), password + "\n");
+        return (_directory.File("web.pfx"), _directory.File("web.pfx.password"));
+    }
+
     private async Task LaunchAsync()
     {
         Assertions.SetDefaultExpectTimeout((float)ExpectTimeout.TotalMilliseconds);
@@ -463,6 +505,7 @@ internal sealed class WebBrowser : IAsyncDisposable
         _browser = await _playwright.Chromium.LaunchAsync(new() { Headless = true });
         var options = WebDevices.Options(_playwright, Device);
         options.BaseURL = WebAddress.ToString();
+        options.IgnoreHTTPSErrors = Https;
         _context = await _browser.NewContextAsync(options);
         await _context.Tracing.StartAsync(new() { Title = _testContext.TestDisplayName, Screenshots = true, Snapshots = true });
 

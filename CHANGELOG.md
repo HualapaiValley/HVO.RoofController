@@ -342,11 +342,14 @@ the roof against this server; use the web UI (port 8088) for operator access.
   two-hour soak nightly and on demand, with the soak's invariant results in the run summary
   and its artifacts.
 - Browser tests (#31, #46): Playwright runs the web UI in Chromium on an iPhone 13 and an iPad
-  (gen 7), each upright and sideways, on an iPhone SE sideways and in a desktop window, against
-  the whole controller and the emulated plant: sign-in, Stop in view and uncovered on every page
-  and stopping the roof, what each role is offered, the stale status, the camera stalling and
-  going offline, the lease when the page closes or loses its connection (C9) and the reconnect
-  dialog's Stop (C15). A failed test attaches a screenshot, the trace and the browser log.
+  (gen 7), each upright and sideways, on an iPhone SE sideways and in a desktop window, the
+  phones over HTTPS, against the whole controller and the emulated plant: sign-in, the session
+  cookie, a session that expires while its page is open, another origin's form posts and live
+  connection refused, Stop in view and uncovered on every page and stopping the roof, what each
+  role is offered, the stale status, the camera stalling and going offline, the lease when the
+  page closes or loses its connection (C9) and the reconnect dialog's Stop (C15). Every page's
+  screenshots on a phone, a tablet and a desktop are kept with the results (CI artifacts), and a
+  failed test attaches a screenshot, the trace and the browser log.
 - Emulated camera (#31): the HAT emulator serves an MJPEG camera of the emulated roof at
   `/mjpg/camNN/video.mjpg`, the Blue Iris path the camera proxy requests, and
   `POST /api/emulator/camera` freezes it, refuses with 503 or 401, changes its frame rate or ends

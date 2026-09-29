@@ -219,7 +219,8 @@ scenario job, and for `HVO_SOAK_DURATION` (two hours nightly), with its results 
 `Browser/` runs the web UI in a headless Chromium through Playwright, with the phone and tablet device descriptors
 (iPhone 13 and iPad (gen 7), each upright and sideways, and iPhone SE sideways) and a 1440 x 900 desktop window. The
 web UI runs as deployed: its own host on a loopback port, reaching an `EmulatedRoofRig` (the controller against the
-emulated plant) on another over HTTP. `WebBrowser` signs in, measures where Stop is without scrolling, and cuts and
+emulated plant) on another over HTTP. The phones reach the web UI over HTTPS, with a certificate the test makes for it
+(the browser accepts it, as a phone told to trust the Pi's certificate does); the tablets and the desktop over HTTP. `WebBrowser` signs in, measures where Stop is without scrolling, and cuts and
 restores the page's live connection through Playwright's WebSocket route. After a failed test it attaches a screenshot, the Playwright
 trace and the browser log to the test's results. The tests are `[TestCategory("Browser")]` and `[DoNotParallelize]`, and
 C9 step 4 and C15 are among them. They need Chromium, installed once after a build, with its system libraries (leave out

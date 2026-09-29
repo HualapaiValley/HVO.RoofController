@@ -213,10 +213,12 @@ Nothing here needs the Pi, the HAT or the roof.
   role is offered, the stale view, the lease, settings changes, secrets and refusals, people and keys, restart and
   forced restart, and the web UI's host (sign-in, the cookie, the origin check, the headers and Stop).
 - **Browser tests** (`TestCategory=Browser`, `tests/HVO.RoofControllerV4.RPi.Tests/Browser`) run the web UI in
-  Chromium against the whole controller and the emulated roof, on phones and tablets (upright and sideways) and a
-  desktop window: sign-in, Stop in view and uncovered on every page and stopping the roof, what each role is offered,
-  the stale status, the camera stalling and going offline, the lease when the page closes or loses its connection
-  (commissioning C9), and the reconnect dialog's Stop (commissioning C15). Install Chromium once with
+  Chromium against the whole controller and the emulated roof, on phones over HTTPS, and on tablets (upright and
+  sideways) and a desktop window over HTTP: sign-in, the session cookie, a session that expires while its page is open,
+  another origin's form posts and live connection refused, Stop in view and uncovered on every page and stopping the
+  roof, what each role is offered, the stale status, the camera stalling and going offline, the lease when the page
+  closes or loses its connection (commissioning C9), and the reconnect dialog's Stop (commissioning C15). CI keeps the
+  screenshots and a failed test's trace with the results. Install Chromium once with
   `pwsh tests/HVO.RoofControllerV4.RPi.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium`, then,
   from `src/`:
 

@@ -121,7 +121,7 @@ jobs:
           --results-directory TestResults
           -- RunConfiguration.TreatNoTestsAsError=true
 
-      # Screenshots and traces of a failed test are attached to its result.
+      # Every page's screenshots (WebScreenshotTests), and a failed test's screenshot, trace and browser log.
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
