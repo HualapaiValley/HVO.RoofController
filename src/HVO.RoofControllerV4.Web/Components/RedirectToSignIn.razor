@@ -1,0 +1,15 @@
+@inject NavigationManager Navigation
+
+@code {
+    // A live page whose person is signed out: their session ended (they are here only after signing in).
+    protected override void OnInitialized()
+    {
+        Navigation.NavigateTo(BuildSignInUrl(Navigation), forceLoad: true);
+    }
+
+    internal static string BuildSignInUrl(NavigationManager navigation)
+    {
+        var returnUrl = WebAccountEndpoints.GetSafeReturnUrl("/" + navigation.ToBaseRelativePath(navigation.Uri));
+        return WebAccountEndpoints.BuildSignInUrl(SignInMessages.Ended, returnUrl).TrimStart('/');
+    }
+}

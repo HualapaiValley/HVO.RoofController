@@ -32,6 +32,28 @@ public sealed class RoofWebOptions
     /// <summary>How often the pages check the controller's readiness and the supervisor's state, in seconds. Default 2.</summary>
     public int StatusRefreshSeconds { get; set; } = 2;
 
+    /// <summary>
+    /// A file holding the web UI's own API key for Stop (a Viewer key is enough; a trailing line break is ignored). The
+    /// web UI sends it with a person's Stop, naming them in <c>X-On-Behalf-Of</c>, so Stop still works when their session
+    /// has ended at the controller. None: Stop uses the person's session alone.
+    /// </summary>
+    public string? StopKeyFile { get; set; }
+
+    /// <summary>
+    /// Origins, besides the web UI's own, that may post its forms and open its live connection: for example
+    /// <c>https://roof.example.org</c> when a proxy serves the web UI under another name. Scheme, host and port only.
+    /// </summary>
+    public string[] AllowedOrigins { get; set; } = [];
+
+    /// <summary>
+    /// Where the web UI keeps the keys that protect its sign-in cookies and forms, so they survive a restart. None: the
+    /// keys live in memory, and everyone signs in again after the web UI restarts.
+    /// </summary>
+    public string? DataProtectionPath { get; set; }
+
+    /// <summary>Sign-in attempts accepted from one address per minute; more are refused before the controller is asked. Default 10.</summary>
+    public int SignInAttemptsPerMinute { get; set; } = 10;
+
     /// <summary>The problems with these settings, empty when they are valid.</summary>
     public IReadOnlyList<string> Validate(bool isDevelopment)
     {
@@ -58,6 +80,29 @@ public sealed class RoofWebOptions
         if (StatusRefreshSeconds is < 1 or > 60)
         {
             problems.Add($"{SectionName}:StatusRefreshSeconds must be between 1 and 60, got {StatusRefreshSeconds}.");
+        }
+
+        if (SignInAttemptsPerMinute is < 1 or > 1000)
+        {
+            problems.Add($"{SectionName}:SignInAttemptsPerMinute must be between 1 and 1000, got {SignInAttemptsPerMinute}.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(StopKeyFile) && !File.Exists(StopKeyFile))
+        {
+            problems.Add($"{SectionName}:StopKeyFile names {StopKeyFile}, which does not exist.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(DataProtectionPath) && !Directory.Exists(DataProtectionPath))
+        {
+            problems.Add($"{SectionName}:DataProtectionPath names {DataProtectionPath}, which is not a directory.");
+        }
+
+        foreach (var origin in AllowedOrigins ?? [])
+        {
+            if (!Security.OriginCheck.IsValidAllowedOrigin(origin))
+            {
+                problems.Add($"{SectionName}:AllowedOrigins has '{origin}', which is not an origin such as https://roof.example.org (scheme, host and port only).");
+            }
         }
 
         var usesHttps = urls.Any(url => url.StartsWith("https://", StringComparison.OrdinalIgnoreCase));

@@ -1,28 +1,98 @@
-/* The web UI's own styles, on top of the HVO dark theme (HVO.WebSite.Themes). */
-html,
-body {
-    margin: 0;
+/* The web UI's own styles, on top of Bootstrap and the HVO dark theme (HVO.WebSite.Themes). */
+body[data-theme="hvo-dark"] {
     background: var(--hvo-body-bg, #05070d);
     color: var(--hvo-body-color, #f8fafc);
-    font-family: var(--hvo-font-family, "Helvetica Neue", Helvetica, Arial, sans-serif);
-}
-
-.web-header {
-    padding: 0.75rem 1rem;
-    background: var(--hvo-navbar-bg, #020617);
-    border-bottom: 1px solid var(--hvo-border-muted, #334155);
-}
-
-.web-brand {
-    color: inherit;
-    font-weight: 600;
-    text-decoration: none;
 }
 
 .web-main {
-    max-width: 48rem;
+    width: 100%;
+    max-width: 72rem;
     margin: 0 auto;
     padding: 1rem;
+}
+
+.web-main h1 {
+    font-size: 1.6rem;
+    margin-bottom: 1rem;
+}
+
+.web-nav {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.web-nav-links {
+    flex-wrap: wrap;
+    margin-right: auto;
+}
+
+.web-user {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.web-user-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: inherit;
+    text-decoration: none;
+}
+
+.web-user-name:hover,
+.web-user-name:focus {
+    text-decoration: underline;
+}
+
+.web-signout {
+    margin: 0;
+}
+
+.web-card {
+    padding: 1.5rem;
+    border-radius: 16px;
+    border: 1px solid var(--hvo-border-muted, #334155);
+    background: var(--hvo-card-bg, #0f172a);
+    box-shadow: var(--hvo-panel-shadow, none);
+}
+
+.web-narrow {
+    max-width: 32rem;
+}
+
+.web-muted {
+    color: var(--hvo-muted-strong, #cbd5e1);
+}
+
+.web-signin-frame {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 55%), var(--hvo-body-bg, #05070d);
+}
+
+.web-signin-main {
+    width: 100%;
+    max-width: 26rem;
+}
+
+.web-signin-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.25rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.web-signin-help {
+    margin: 1rem 0 0;
+    font-size: 0.9rem;
 }
 
 .web-status {
@@ -61,14 +131,7 @@ body {
     font-size: 1rem;
 }
 
-.web-checked,
-.web-notice {
+.web-checked {
     color: var(--hvo-muted, #cbd5e1);
     font-size: 0.9rem;
-}
-
-.web-notice {
-    margin-top: 2rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--hvo-border-muted, #334155);
 }

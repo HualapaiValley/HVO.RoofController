@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Web.Components;
+using HVO.RoofControllerV4.Web.Security;
+using HVO.RoofControllerV4.Web.Sessions;
 using HVO.RoofControllerV4.Web.Supervision;
 using Microsoft.Extensions.Configuration.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -73,7 +75,8 @@ public class Program
             builder.WebHost.ConfigureKestrel(kestrel => kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = certificate));
         }
 
-        ConfigureServices(builder);
+        var stopKey = WebStopKey.Load(options.StopKeyFile);
+        ConfigureServices(builder, options, stopKey);
         customize?.Invoke(builder);
 
         var app = builder.Build();
@@ -81,7 +84,7 @@ public class Program
         return app;
     }
 
-    private static void ConfigureServices(WebApplicationBuilder builder)
+    private static void ConfigureServices(WebApplicationBuilder builder, RoofWebOptions options, WebStopKey stopKey)
     {
         var services = builder.Services;
         services.AddOptions<RoofWebOptions>().Bind(builder.Configuration.GetSection(RoofWebOptions.SectionName));
@@ -101,6 +104,12 @@ public class Program
         services.AddSingleton<ControllerForcedRestart>();
         services.AddSingleton<RoofWebStatusProbe>();
 
+        // Each signed-in person has their own client of the controller, with their session.
+        services.AddSingleton(stopKey);
+        services.AddSingleton<RoofControllerConnector>();
+        services.AddRoofWebAuthentication(options);
+
+        services.AddProblemDetails();
         services.AddRazorComponents().AddInteractiveServerComponents();
         services.AddHealthChecks();
     }
@@ -116,9 +125,16 @@ public class Program
             await next(context);
         });
 
+        // Cross-site requests are refused before anything else looks at them.
+        app.UseMiddleware<OriginCheck>();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.UseMiddleware<LiveConnectionGate>();
         app.UseAntiforgery();
+
         app.MapStaticAssets();
         app.MapHealthChecks(HealthLivePath);
+        app.MapWebAccountEndpoints();
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
     }
 

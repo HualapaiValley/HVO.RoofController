@@ -5,15 +5,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+    <link rel="stylesheet" href="@Assets["lib/bootstrap/css/bootstrap.min.css"]" />
+    <link rel="stylesheet" href="@Assets["lib/bootstrap-icons/bootstrap-icons.min.css"]" />
     <link rel="stylesheet" href="@Assets["_content/HVO.WebSite.Themes/css/themes/hvo-dark.css"]" />
     <link rel="stylesheet" href="@Assets["css/app.css"]" />
     <link rel="stylesheet" href="@Assets["HVO.RoofControllerV4.Web.styles.css"]" />
-    <HeadOutlet />
+    <HeadOutlet @rendermode="PageRenderMode" />
 </head>
 
 <body data-theme="hvo-dark">
-    <Routes />
+    <Routes @rendermode="PageRenderMode" />
     <script src="_framework/blazor.web.js"></script>
 </body>
 
 </html>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    // Every page is live, except those that must work without a live connection (sign-in).
+    private IComponentRenderMode? PageRenderMode => HttpContext.AcceptsInteractiveRouting() ? InteractiveServer : null;
+}

@@ -1,0 +1,53 @@
+@page "/signin"
+@layout SignInLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+
+<PageTitle>Sign in · HVO Roof Controller</PageTitle>
+
+<div class="web-card web-signin-card">
+    <h1 class="web-signin-title">
+        <i class="bi bi-shield-lock" aria-hidden="true"></i> Roof Controller
+    </h1>
+    <p class="web-muted">Sign in with your name and password.</p>
+
+    @if (SignInMessages.Describe(Message) is { } message)
+    {
+        <div class="alert @(message.IsProblem ? "alert-danger" : "alert-info")" role="@(message.IsProblem ? "alert" : "status")" data-testid="signin-message">
+            @message.Text
+        </div>
+    }
+
+    <form method="post" action="@WebAuthentication.SignInPostPath.TrimStart('/')" data-enhance="false">
+        <AntiforgeryToken />
+        <input type="hidden" name="@WebAuthentication.ReturnUrlField" value="@WebAccountEndpoints.GetSafeReturnUrl(ReturnUrl)" />
+
+        <div class="mb-3">
+            <label for="signin-name" class="form-label">Name</label>
+            <input id="signin-name" name="@WebAuthentication.NameField" type="text" class="form-control form-control-lg"
+                   autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus />
+        </div>
+
+        <div class="mb-3">
+            <label for="signin-password" class="form-label">Password</label>
+            <input id="signin-password" name="@WebAuthentication.PasswordField" type="password" class="form-control form-control-lg"
+                   autocomplete="current-password" required />
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg w-100" data-testid="sign-in">
+            <i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Sign in
+        </button>
+    </form>
+
+    <p class="web-muted web-signin-help">
+        An admin adds people with the controller's command line (<code>roofctl</code>) or on the People page.
+    </p>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = WebAuthentication.ReturnUrlField)]
+    public string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromQuery(Name = WebAuthentication.MessageQuery)]
+    public string? Message { get; set; }
+}

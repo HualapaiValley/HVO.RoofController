@@ -1,5 +1,4 @@
 @page "/"
-@rendermode InteractiveServer
 @implements IAsyncDisposable
 @inject RoofWebStatusProbe Probe
 @inject IOptions<RoofWebOptions> Options
@@ -33,11 +32,6 @@ else
 
     <p class="web-checked">Checked at @_status.CheckedAt.UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture) UTC, every @Options.Value.StatusRefreshSeconds s.</p>
 }
-
-<aside class="web-notice">
-    This page reports the controller process and its readiness, not the roof. It does not operate the roof: use the
-    controller's console for that, and keep the independent hardware stop within reach.
-</aside>
 
 @code {
     private readonly CancellationTokenSource _stopping = new();

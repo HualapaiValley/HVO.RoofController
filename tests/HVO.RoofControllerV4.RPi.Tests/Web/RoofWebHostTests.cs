@@ -49,17 +49,17 @@ public sealed class RoofWebHostTests
     [TestMethod]
     public async Task Home_ShowsTheControllerStatus_WithExactlyOneTitle()
     {
-        await using var app = await StartAsync([]);
-        using var client = app.GetTestClient();
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        (await browser.SignInAsync("ada", FakeController.AdaPassword)).StatusCode.Should().Be(HttpStatusCode.Redirect);
 
-        var html = await client.GetStringAsync(new Uri("/", UriKind.Relative));
+        var html = await (await browser.GetAsync("/")).Content.ReadAsStringAsync();
 
         Regex.Matches(html, "<title>").Should().ContainSingle();
         html.Should().Contain("<title>Roof controller</title>");
         Regex.Matches(html, "<h1[ >]").Should().ContainSingle();
         html.Should().Contain("The controller is ready")
-            .And.Contain("The web UI is not running under the container&#x27;s supervisor.")
-            .And.Contain("It does not operate the roof");
+            .And.Contain("The web UI is not running under the container&#x27;s supervisor.");
     }
 
     [TestMethod]
@@ -68,10 +68,13 @@ public sealed class RoofWebHostTests
         using var directory = new WebTestSupport.TempDirectory();
         var path = directory.File("supervisor.json");
         await File.WriteAllTextAsync(path, WebTestSupport.SupervisorState(SupervisedProcess.States.CrashLoop, 5));
-        await using var app = await StartAsync([$"--RoofWeb:SupervisorStatePath={path}"], WebTestSupport.ControllerAnswering(_ => throw new HttpRequestException("Connection refused")));
-        using var client = app.GetTestClient();
+        await using var host = await WebHost.StartAsync(
+            [$"--RoofWeb:SupervisorStatePath={path}"],
+            customize: builder => builder.Services.AddSingleton(WebTestSupport.ControllerAnswering(_ => throw new HttpRequestException("Connection refused"))));
+        using var browser = host.Browser();
+        await browser.SignInAsync("ada", FakeController.AdaPassword);
 
-        var html = await client.GetStringAsync(new Uri("/", UriKind.Relative));
+        var html = await (await browser.GetAsync("/")).Content.ReadAsStringAsync();
 
         html.Should().Contain("The controller is stopped after repeated crashes")
             .And.Contain("It crashed 5 times within 120 s")
