@@ -160,15 +160,16 @@ the roof against this server; use the authenticated browser console for operator
   controller's information and restart. Every command takes `--json`, and the exit codes are
   documented and pinned by a test. Stop never needs more than the credential in use and uses
   the shared wording. Open and close follow the motion and renew the operator lease, and Ctrl+C
-  sends Stop. When their answer never arrives, they say that the roof may be moving and how to stop it. A safety-critical settings change, or a restart that would load one, is shown and
+  sends Stop, after the command's answer (waiting up to 3 s for it). When their answer never arrives, they say that the roof may be moving and how to stop it. A safety-critical settings change, or a restart that would load one, is shown and
   not sent until it is confirmed (exit 10). Credentials come from `HVO_ROOF_*` variables or a
   `0600` file under `~/.config/hvo-roof/`, and a secret is never taken from the command line.
   `hvo-roof setup` saves the address, a key and a certificate pin, and adds the first admin.
   `hvo-roof ui` is a Terminal.Gui interface with Roof, Settings, People, System and Setup
   pages, and Stop on F9 from every page, even over a prompt. It says plainly when the status is
   stale, offers no motion then, and stops a roof it moved, or may have moved, before it quits.
-  That Stop never goes ahead of an Open or Close still on its way, and the interface sends Stop
-  again when an Open or Close overtakes one. It never closes while a Stop is on its way, and it
+  That Stop waits up to 3 s for the answer to an Open or Close still on its way, says so when the
+  command may still reach the controller after it, and the interface sends Stop again when an
+  Open or Close overtakes one. It never closes while a Stop is on its way, and it
   shows the newest Stop's result. It is drawn in HVO Dark, the web console's theme, and in the
   terminal's own colours with `NO_COLOR`. SIGINT, SIGTERM and SIGHUP end a command that moves the
   roof only after it sends Stop, even when a closing terminal sends SIGHUP twice; nothing cuts

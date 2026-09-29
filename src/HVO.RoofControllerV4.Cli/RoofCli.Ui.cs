@@ -34,6 +34,7 @@ public static partial class RoofCli
                 using var hold = context.Host.Termination?.Hold();
                 var app = context.Host.CreateApplication();
                 RoofStopResult? unconfirmed;
+                bool answerLost;
                 try
                 {
                     using var ui = new RoofTerminalUi(context, app);
@@ -41,17 +42,23 @@ public static partial class RoofCli
                     using var interrupted = cancellationToken.Register(() => ui.Post(() => ui.Quit(interrupted: true)));
                     context.Host.RunApplication(app, ui.Window);
                     unconfirmed = ui.UnconfirmedStop;
+                    answerLost = ui.MotionAnswerLost;
                 }
                 finally
                 {
                     app.Dispose();
                 }
 
-                // The interface is gone, and with it the Stop result it showed: a Stop that nothing confirmed is said
-                // again on the restored terminal.
+                // The interface is gone, and with it the Stop result it showed: a Stop that nothing confirmed, or a
+                // command that may still reach the controller after it, is said again on the restored terminal.
                 if (unconfirmed is not null)
                 {
                     context.Host.Error.WriteLine($"The last Stop sent from the interface was not confirmed. {unconfirmed.Message}");
+                }
+
+                if (answerLost)
+                {
+                    context.Host.Error.WriteLine(UnansweredBeforeStop("The Open or Close sent from the interface"));
                 }
 
                 return Task.FromResult((int)(cancellationToken.IsCancellationRequested ? RoofExitCode.Interrupted

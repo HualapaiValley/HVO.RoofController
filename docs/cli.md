@@ -127,10 +127,16 @@ A signal does not cut `stop` short: it sends the Stop, waits for the answer, and
 
 **Motion.** `open` and `close` follow the roof until it stops, then print where it stopped. While they follow it, they
 renew the operator lease; a lease that cannot be renewed (no answer, or a server error) is an error (exit 4), and the
-controller stops the roof when the lease runs out. If the command is interrupted (see [Signals](#signals)), it sends Stop first and exits 130. That
-includes an interruption before the controller's answer arrives, because the roof may already be moving. With
-`--json`, an interrupted command writes `{"interrupted": true, "exitCode": 130, "stop": {...}}`, where `stop` is the
-`stop --json` document.
+controller stops the roof when the lease runs out. If the command is interrupted (see [Signals](#signals)), it sends
+Stop and exits 130. That includes an interruption before the controller's answer arrives, because the roof may already
+be moving. The command then waits up to 3 s for that answer before it sends Stop: the controller may already have the
+Open or Close, and a Stop sent sooner could reach it first and be overtaken by it. When no answer arrives (none within
+the 3 s, or the connection ends), Stop is sent anyway, and the command says the Open or Close may still reach the
+controller after it:
+`The Open was not answered, so it may still reach the controller after the Stop. Check the roof, and run 'hvo-roof stop' if it moves.`
+With `--json`, an interrupted command writes
+`{"interrupted": true, "exitCode": 130, "commandAnswered": true, "stop": {...}}`, where `commandAnswered` is false
+when the Open or Close got no answer, and `stop` is the `stop --json` document.
 
 An `open` or `close` whose answer never arrives may still have reached the controller. That covers no answer in time,
 the connection dropping after the command was sent, an answer that could not be read, and a proxy's 502 or 504. The
@@ -200,9 +206,11 @@ and the Settings page's header then says the file was edited by hand.
 `hvo-roof` handles SIGINT (Ctrl+C), SIGTERM, and SIGHUP (the terminal closing, or an SSH session dropping) the same way:
 
 - **The first signal** ends the command, not the process. A command that has the roof moving (`open`, `close`, or
-  `ui`) sends Stop first. The command exits 130.
+  `ui`) sends Stop first, after the answer to an Open or Close still on its way (it waits up to 3 s for that answer).
+  The command exits 130.
 - **The process still ends.** 5 s after the first signal it exits 130. `open`, `close`, `stop` and `ui` have up to
-  15 s, for the Stop timeout (10 s) and a margin to print its answer and restore the terminal.
+  15 s, for the wait for an Open or Close's answer (3 s), the Stop timeout (10 s), and a margin to print the Stop's
+  answer and restore the terminal.
 - **A second signal** ends the process at once, except in `open`, `close`, `stop` and `ui`: nothing cuts their Stop
   short. Closing a terminal sends SIGHUP twice (the kernel's and the shell's, well under a millisecond apart), before a
   command can have seen the first.
@@ -249,15 +257,20 @@ and the Settings page's header then says the file was edited by hand.
   lease while the roof moves. When the controller holds motion on no lease, the interface says
   `Open accepted. F9 or quitting stops it.` Either way, quitting while the roof moves sends Stop first
   (`Stopping the roof, which moves on a command from this interface, before closing.`).
-- **Quitting while an Open or Close is on its way.** The controller may already have it, so quitting stops waiting
-  for its answer and then sends Stop
-  (`Stopping the roof, which may move on a command from this interface, before closing.`). The Stop is sent after
-  the command, never ahead of it.
+- **Quitting while an Open or Close is on its way.** The controller may already have it, and a Stop sent sooner could
+  reach the controller first and be overtaken by it. So quitting waits up to 3 s for the command's answer
+  (`Waiting up to 3 s for the answer to the Open or Close on its way, then stopping the roof before closing.`), then
+  sends Stop (`Stopping the roof, which may move on a command from this interface, before closing.`). When no answer
+  arrives (none within the 3 s, or the connection ends), Stop is sent anyway, and F10 leaves the interface open to show
+  the roof
+  (`The Open or Close sent from here was not answered, so it may still reach the controller after the Stop. The interface stays open to show the roof: F9 stops it, F10 closes the interface.`).
+  A termination signal closes it anyway. Either way, `hvo-roof ui` repeats the warning on the restored terminal.
 - **Stop wins.** A Stop sent while an Open or Close is on its way may reach the controller first. If the command is
   then accepted and the roof moves, the interface sends Stop again
   (`Open was accepted after Stop was sent from here, so Stop is sent again.`).
-- **An Open or Close whose answer is lost** is followed as if it had been accepted. The interface says the roof may
-  be moving and that F9 stops it, and quitting while a status shows it moving sends Stop.
+- **An Open or Close whose answer is lost** is treated as started here. The interface says the roof may be moving and
+  that F9 stops it, and quitting while a status shows it moving sends Stop. With no answer there is no operator lease
+  to renew.
 - **Quitting never cuts a Stop short.** While a Stop is on its way, quitting says
   `Waiting for Stop to be answered before closing.` and closes once the controller answers.
 - **The result shown is the newest Stop's.** An older Stop's late answer never replaces it. When the newest Stop
@@ -265,7 +278,8 @@ and the Settings page's header then says the file was edited by hand.
 - **Quitting does not hide a Stop that nothing confirmed.** When the Stop that quitting sent or waited for failed, or
   its relays could not be verified, F10 leaves the interface open with the result on screen
   (`Nothing confirmed the Stop, so the interface stays open. F10 closes it.`). The next F10 closes it without
-  another Stop, unless an Open or Close was sent in between. Whenever the last Stop sent from the
+  another Stop, unless an Open or Close was sent in between. A termination signal still sends Stop while the roof
+  moves on a command from here. Whenever the last Stop sent from the
   interface was not confirmed, `hvo-roof ui` repeats its result on the restored terminal and exits 9 (130 after a
   termination signal, which closes the interface anyway).
 - **A stale status.** When the status stops arriving, a banner says `STALE: no status since …`. When live status is not

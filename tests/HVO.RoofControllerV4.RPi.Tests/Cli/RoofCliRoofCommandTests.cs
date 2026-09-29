@@ -865,16 +865,20 @@ public sealed class RoofCliRoofCommandTests
         var exits = new ConcurrentQueue<int>();
         using var termination = new RoofCliTermination(exits.Enqueue);
         var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new ManualTimeProvider(ClientStart);
         using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
-        using var rig = new CliRig(host) { Termination = termination };
+        using var rig = new CliRig(host) { Termination = termination, Time = clock };
         rig.WrapHandler = inner => new AnswerLostHandler(inner, "/Open", delivered);
         rig.UseApiKey(TestApiKeys.Operator);
         await using var run = RunningCommand.StartWithSignals(rig, "open");
         await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var timers = clock.ActiveTimerCount;
 
         termination.IsHeld.Should().BeTrue("the Open reached the controller, and the roof may be moving");
         termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
         termination.OnSignal(new PosixSignalContext(PosixSignal.SIGHUP));
+        await WaitUntilAsync(() => clock.ActiveTimerCount > timers, "the wait for the Open's answer");
+        clock.Advance(RoofCli.CommandBuilder.MotionAnswerWait);
         var result = await run.EndAsync();
 
         exits.Should().BeEmpty("the second SIGHUP must not end the process before the Stop");
@@ -883,10 +887,11 @@ public sealed class RoofCliRoofCommandTests
     }
 
     [TestMethod]
-    public async Task Open_CtrlC_BeforeTheAnswerArrives_SendsStop_AndExitsInterrupted()
+    public async Task Open_CtrlC_WhenTheAnswerNeverArrives_SendsStopAfterTheAnswerWait_SaysTheOpenMayStillArrive_AndExitsInterrupted()
     {
         using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
-        using var rig = new CliRig(host);
+        var clock = new ManualTimeProvider(ClientStart);
+        using var rig = new CliRig(host) { Time = clock };
         rig.UseApiKey(TestApiKeys.Operator);
         var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -903,19 +908,174 @@ public sealed class RoofCliRoofCommandTests
                     ReadLine = rigHost.ReadLine,
                     StatusFeed = rigHost.StatusFeed,
                     WebSocketFactory = rigHost.WebSocketFactory,
+                    Time = rigHost.Time,
                     CreateHandler = () => new AnswerLostHandler(rigHost.CreateHandler!(), "/Open", delivered)
                 };
             },
             "open", "--credentials-file", rig.CredentialsPath);
         await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var timers = clock.ActiveTimerCount;
 
-        var result = await run.InterruptAsync();
+        await run.SendInterruptAsync();
+        await WaitUntilAsync(() => clock.ActiveTimerCount > timers, "the wait for the Open's answer");
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never(), "Ctrl+C waits for the Open's answer first");
+        clock.Advance(RoofCli.CommandBuilder.MotionAnswerWait);
+        var result = await run.EndAsync();
 
         result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
-        result.Error.Should().Contain("Interrupted: Stop sent.");
+        result.Error.Should().Be(
+            "Interrupted: Stop sent." + Environment.NewLine
+            + "The Open was not answered, so it may still reach the controller after the Stop. Check the roof, and run 'hvo-roof stop' if it moves."
+            + Environment.NewLine);
         result.Out.Should().Contain(RoofStopText.AcknowledgedVerified).And.NotContain("Open accepted");
         host.RoofService.Verify(service => service.Open(), Times.Once());
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
+    public async Task Open_CtrlC_WhileTheOpenIsOnItsWay_WaitsForItsAnswer_SoTheStopReachesTheControllerAfterIt()
+    {
+        var moving = false;
+        var roof = RoofShowing(() => Volatile.Read(ref moving) ? Moving(RoofMotionDirection.Opening, leaseSeconds: null) : RoofServiceMock.Snapshot());
+        roof.Setup(service => service.Open()).Returns(() =>
+        {
+            Volatile.Write(ref moving, true);
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening);
+        });
+        roof.Setup(service => service.Stop(It.IsAny<RoofControllerStopReason>())).Returns(() =>
+        {
+            Volatile.Write(ref moving, false);
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped);
+        });
+        using var host = RoofClientApiTests.CreateHost(roof);
+        var clock = new ManualTimeProvider(ClientStart);
+        var onItsWay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new CliRig(host)
+        {
+            Time = clock,
+            WrapHandler = inner => new InFlightRequestHandler(new NoticingHandler(inner, "/Stop", stopSent), "/Open", onItsWay, gate.Task)
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open", "--json");
+        await onItsWay.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var timers = clock.ActiveTimerCount;
+
+        // Ctrl+C while the Open has not reached the controller yet.
+        await run.SendInterruptAsync();
+        await WaitUntilAsync(() => clock.ActiveTimerCount > timers, "the wait for the Open's answer");
+        await Task.WhenAny(stopSent.Task, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        stopSent.Task.IsCompleted.Should().BeFalse("a Stop sent now could reach the controller ahead of the Open");
+
+        // The Open reaches the controller within the wait, and is answered.
+        gate.SetResult();
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        result.Json.GetProperty("commandAnswered").GetBoolean().Should().BeTrue();
+        result.Json.GetProperty("stop").GetProperty("outcome").GetString().Should().Be("Acknowledged");
+        Volatile.Read(ref moving).Should().BeFalse("the Stop reached the controller after the Open, and stopped the motion it started");
+        roof.Invocations.Select(call => call.Method.Name).Where(name => name is nameof(IRoofControllerServiceV4.Open) or nameof(IRoofControllerServiceV4.Stop))
+            .Should().Equal(nameof(IRoofControllerServiceV4.Open), nameof(IRoofControllerServiceV4.Stop));
+    }
+
+    [TestMethod]
+    public async Task OpenNoWait_CtrlC_WhileTheOpenIsOnItsWay_SendsStopAfterItsAnswer_AndExitsInterrupted()
+    {
+        var moving = false;
+        var roof = RoofShowing(() => Volatile.Read(ref moving) ? Moving(RoofMotionDirection.Opening, leaseSeconds: null) : RoofServiceMock.Snapshot());
+        roof.Setup(service => service.Open()).Returns(() =>
+        {
+            Volatile.Write(ref moving, true);
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening);
+        });
+        roof.Setup(service => service.Stop(It.IsAny<RoofControllerStopReason>())).Returns(() =>
+        {
+            Volatile.Write(ref moving, false);
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped);
+        });
+        using var host = RoofClientApiTests.CreateHost(roof);
+        var clock = new ManualTimeProvider(ClientStart);
+        var onItsWay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new CliRig(host)
+        {
+            Time = clock,
+            WrapHandler = inner => new InFlightRequestHandler(new NoticingHandler(inner, "/Stop", stopSent), "/Open", onItsWay, gate.Task)
+        };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open", "--no-wait");
+        await onItsWay.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var timers = clock.ActiveTimerCount;
+
+        await run.SendInterruptAsync();
+        await WaitUntilAsync(() => clock.ActiveTimerCount > timers, "the wait for the Open's answer");
+        await Task.WhenAny(stopSent.Task, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        stopSent.Task.IsCompleted.Should().BeFalse("a Stop sent now could reach the controller ahead of the Open");
+        gate.SetResult();
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        result.Error.Should().Be("Interrupted: Stop sent." + Environment.NewLine, "the Open was answered, so nothing more is said about it");
+        result.Out.Should().NotContain("Open accepted");
+        Volatile.Read(ref moving).Should().BeFalse("Ctrl+C stops a roof the command set moving, even without following it");
+        roof.Invocations.Select(call => call.Method.Name).Where(name => name is nameof(IRoofControllerServiceV4.Open) or nameof(IRoofControllerServiceV4.Stop))
+            .Should().Equal(nameof(IRoofControllerServiceV4.Open), nameof(IRoofControllerServiceV4.Stop));
+    }
+
+    [TestMethod]
+    public async Task Open_CtrlC_WhenTheConnectionEndsDuringTheAnswerWait_SendsStop_SaysTheOpenMayStillArrive_AndExitsInterrupted()
+    {
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        var clock = new ManualTimeProvider(ClientStart);
+        var onItsWay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new CliRig(host) { Time = clock, WrapHandler = inner => new InFlightRequestHandler(inner, "/Open", onItsWay, gate.Task) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open");
+        await onItsWay.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var timers = clock.ActiveTimerCount;
+
+        await run.SendInterruptAsync();
+        await WaitUntilAsync(() => clock.ActiveTimerCount > timers, "the wait for the Open's answer");
+
+        // The connection ends within the wait: the Open may have been delivered, or may yet be.
+        gate.SetException(new HttpRequestException(HttpRequestError.ResponseEnded, "The response ended prematurely (test)."));
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        result.Error.Should().Be(
+            "Interrupted: Stop sent." + Environment.NewLine
+            + "The Open was not answered, so it may still reach the controller after the Stop. Check the roof, and run 'hvo-roof stop' if it moves."
+            + Environment.NewLine);
+        result.Out.Should().Contain(RoofStopText.AcknowledgedVerified);
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Once());
+    }
+
+    [TestMethod]
+    public async Task OpenJson_CtrlC_WhenTheAnswerNeverArrives_SaysTheCommandWasNotAnswered()
+    {
+        using var host = RoofClientApiTests.CreateHost(RoofShowing(() => Moving(RoofMotionDirection.Opening, leaseSeconds: null)));
+        var clock = new ManualTimeProvider(ClientStart);
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new CliRig(host) { Time = clock, WrapHandler = inner => new AnswerLostHandler(inner, "/Open", delivered) };
+        rig.UseApiKey(TestApiKeys.Operator);
+        await using var run = RunningCommand.Start(rig, "open", "--json");
+        await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var timers = clock.ActiveTimerCount;
+
+        await run.SendInterruptAsync();
+        await WaitUntilAsync(() => clock.ActiveTimerCount > timers, "the wait for the Open's answer");
+        clock.Advance(RoofCli.CommandBuilder.MotionAnswerWait);
+        var result = await run.EndAsync();
+
+        result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
+        result.Json.GetProperty("interrupted").GetBoolean().Should().BeTrue();
+        result.Json.GetProperty("commandAnswered").GetBoolean().Should().BeFalse("the Open may still reach the controller after the Stop");
+        result.Json.GetProperty("stop").GetProperty("outcome").GetString().Should().Be("Acknowledged");
+        result.Error.Should().BeEmpty();
     }
 
     [TestMethod]
@@ -1053,6 +1213,7 @@ public sealed class RoofCliRoofCommandTests
         result.Code.Should().Be(RoofExitCode.Interrupted, result.ToString());
         result.Json.GetProperty("interrupted").GetBoolean().Should().BeTrue();
         result.Json.GetProperty("exitCode").GetInt32().Should().Be(130);
+        result.Json.GetProperty("commandAnswered").GetBoolean().Should().BeTrue();
         var stop = result.Json.GetProperty("stop");
         stop.GetProperty("outcome").GetString().Should().Be("Acknowledged");
         stop.GetProperty("message").GetString().Should().Be(RoofStopText.AcknowledgedVerified);
@@ -1691,6 +1852,9 @@ file sealed class RunningCommand : IAsyncDisposable
         await _interrupt.CancelAsync();
         return await EndAsync();
     }
+
+    /// <summary>Ctrl+C, without waiting for the command to end.</summary>
+    public Task SendInterruptAsync() => _interrupt.CancelAsync();
 
     /// <summary>Waits for the command to end by itself.</summary>
     public async Task<CliResult> EndAsync()

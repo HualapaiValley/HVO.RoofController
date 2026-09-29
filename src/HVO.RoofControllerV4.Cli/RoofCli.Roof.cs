@@ -300,23 +300,41 @@ public static partial class RoofCli
             using var hold = context.Host.Termination?.Hold();
             using var client = context.Connect();
             var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
+
+            // Ctrl+C does not cancel the command at once: the controller may already have it, and a Stop sent sooner
+            // could reach it first. Stop is sent once the command is answered, or after MotionAnswerWait without an
+            // answer, when the command is cancelled; it may then still reach the controller after the Stop.
+            using var answerWait = new CancellationTokenSource(Timeout.InfiniteTimeSpan, context.Host.Time);
+            using var interrupted = cancellationToken.Register(() => answerWait.CancelAfter(MotionAnswerWait));
             RoofStatusResponse status;
             try
             {
                 status = direction == RoofMotionDirection.Opening
-                    ? await client.Roof.OpenAsync(cancellationToken).ConfigureAwait(false)
-                    : await client.Roof.CloseAsync(cancellationToken).ConfigureAwait(false);
+                    ? await client.Roof.OpenAsync(answerWait.Token).ConfigureAwait(false)
+                    : await client.Roof.CloseAsync(answerWait.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (answerWait.IsCancellationRequested)
             {
-                // The command may have reached the controller before Ctrl+C, and the roof may be moving.
-                return await StopOnInterruptAsync(context, client).ConfigureAwait(false);
+                return await StopOnInterruptAsync(context, client, unanswered: verb).ConfigureAwait(false);
+            }
+            catch (Exception error) when (cancellationToken.IsCancellationRequested)
+            {
+                // Ended after Ctrl+C, whatever the outcome: Ctrl+C sends Stop, now after the command. When the command got
+                // no answer (the connection ended, say), it may still reach the controller after the Stop.
+                return await StopOnInterruptAsync(context, client, unanswered: MayHaveReachedController(error) ? verb : null)
+                    .ConfigureAwait(false);
             }
             catch (Exception error) when (MayHaveReachedController(error))
             {
                 // Not "not sent": the controller may have acted on it. The exit code stays the failure's.
                 throw new RoofCliRefusedException(
                     Unanswered(error, verb, $"run '{CommandName} stop', or use the stop control at the roof"), RoofCliContext.Classify(error).Code, error);
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                // Accepted after Ctrl+C: the roof may be moving on it.
+                return await StopOnInterruptAsync(context, client).ConfigureAwait(false);
             }
 
             if (!follow || !status.IsMoving)
@@ -374,21 +392,42 @@ public static partial class RoofCli
         internal const string UnansweredConnection = "The connection to the controller ended before its answer arrived.";
 
         /// <summary>
-        /// Ctrl+C (or the terminal closing) during a motion command: sends Stop, reports it, and exits as interrupted.
-        /// The process waits for the Stop's answer before it ends.
+        /// How long an interrupted Open or Close (Ctrl+C, or quitting the interface) waits for its answer before Stop is
+        /// sent anyway. With the Stop timeout, it is well within <see cref="RoofCliTermination.StopGrace"/>.
         /// </summary>
-        private static async Task<int> StopOnInterruptAsync(RoofCliContext context, RoofControllerClient client)
+        internal static readonly TimeSpan MotionAnswerWait = TimeSpan.FromSeconds(3);
+
+        /// <summary>Said when an interrupted Open or Close was not answered before the Stop was sent.</summary>
+        internal static string UnansweredBeforeStop(string command)
+            => $"{command} was not answered, so it may still reach the controller after the Stop. Check the roof, and run '{CommandName} stop' if it moves.";
+
+        /// <summary>
+        /// Ctrl+C (or the terminal closing) during a motion command: sends Stop, reports it, and exits as interrupted.
+        /// The process waits for the Stop's answer before it ends. <paramref name="unanswered"/> names an Open or Close
+        /// cancelled without an answer, which may still reach the controller after the Stop.
+        /// </summary>
+        private static async Task<int> StopOnInterruptAsync(RoofCliContext context, RoofControllerClient client, string? unanswered = null)
         {
             var result = await client.StopAsync(CancellationToken.None).ConfigureAwait(false);
             var code = StopExitCode(result);
             if (context.Json)
             {
-                context.WriteJson(new { interrupted = true, exitCode = (int)RoofExitCode.Interrupted, stop = DescribeStop(result, code) });
+                context.WriteJson(new
+                {
+                    interrupted = true,
+                    exitCode = (int)RoofExitCode.Interrupted,
+                    commandAnswered = unanswered is null,
+                    stop = DescribeStop(result, code)
+                });
             }
             else
             {
                 context.Host.Error.WriteLine("Interrupted: Stop sent.");
                 (code == RoofExitCode.Success ? context.Out : context.Host.Error).WriteLine(result.Message);
+                if (unanswered is not null)
+                {
+                    context.Host.Error.WriteLine(UnansweredBeforeStop($"The {unanswered}"));
+                }
             }
 
             return (int)RoofExitCode.Interrupted;

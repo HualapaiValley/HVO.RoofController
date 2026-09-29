@@ -424,6 +424,32 @@ internal sealed class HeldAnswerHandler(
 }
 
 /// <summary>
+/// A request whose bytes are on their way when the caller gives up: the one whose path ends in <paramref name="path"/>
+/// reaches the controller only when <paramref name="gate"/> opens, and cancelling the caller's wait does not take it
+/// back, as it cannot on a real network. <paramref name="onItsWay"/> is set when it has been sent.
+/// </summary>
+internal sealed class InFlightRequestHandler(HttpMessageHandler inner, string path, TaskCompletionSource onItsWay, Task gate)
+    : DelegatingHandler(inner)
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (!request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase))
+        {
+            return base.SendAsync(request, cancellationToken);
+        }
+
+        onItsWay.TrySetResult();
+        return DeliverAsync(request).WaitAsync(cancellationToken);
+    }
+
+    private async Task<HttpResponseMessage> DeliverAsync(HttpRequestMessage request)
+    {
+        await gate;
+        return await base.SendAsync(request, CancellationToken.None);
+    }
+}
+
+/// <summary>
 /// Sends the request whose path ends in <paramref name="path"/> to the controller, then loses its answer: throws
 /// <paramref name="error"/>, as a connection dropping before the answer arrives does.
 /// </summary>

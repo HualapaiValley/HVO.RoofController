@@ -177,7 +177,8 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             {
                 return () =>
                 {
-                    // The controller may have set the roof moving: it is followed as if the command had been accepted.
+                    // The controller may have set the roof moving: it is treated as started here, so quitting while a
+                    // status shows it moving sends Stop. With no answer, there is no lease to renew.
                     Ui.FollowUnansweredMotion();
                     Ui.Say(RoofCli.CommandBuilder.Unanswered(error, verb, "press F9"), error: true);
                     if (Ui.StopsSent != stopsSent)
@@ -237,7 +238,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
 
     /// <summary>
     /// Sends one command at a time; a refusal's status (the controller attaches it) is shown too. <paramref name="motion"/>
-    /// marks Open and Close, which quitting cancels and then stops.
+    /// marks Open and Close, whose answer quitting waits for (up to a bound) before it sends Stop.
     /// </summary>
     private void Command(string busy, Func<RoofControllerClient, CancellationToken, Task<Action>> send, bool motion)
     {
