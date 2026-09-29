@@ -1,0 +1,26 @@
+@* The buttons of an inline panel (a form or a question): what is wrong with it, the action, and Cancel. *@
+@if (Error is not null)
+{
+    <p class="web-status web-status--bad" role="alert" data-testid="panel-error">@Error</p>
+}
+<div class="web-actions">
+    <button type="button" class="btn btn-sm @(Danger ? "btn-danger" : "btn-primary")" data-testid="@TestId" disabled="@Busy" @onclick="OnAction">@Action</button>
+    <button type="button" class="btn btn-sm btn-outline-light" data-testid="panel-cancel" disabled="@Busy" @onclick="OnCancel">Cancel</button>
+</div>
+
+@code {
+    [Parameter] public string? Error { get; set; }
+
+    [Parameter, EditorRequired] public string Action { get; set; } = default!;
+
+    [Parameter] public string? TestId { get; set; }
+
+    [Parameter] public bool Busy { get; set; }
+
+    /// <summary>True for an action that removes or ends something.</summary>
+    [Parameter] public bool Danger { get; set; }
+
+    [Parameter] public EventCallback OnAction { get; set; }
+
+    [Parameter] public EventCallback OnCancel { get; set; }
+}

@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Linq;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
-using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Security.Identity;
 using Microsoft.Extensions.Logging;
@@ -34,7 +33,7 @@ internal static class RoofSettingsCatalogue
             "Motion and safety supervision. Applied at once, and refused while the roof moves or a fault is being cleared."),
         (RoofSettingsContract.ControllerGroup, "Controller", "The controller host. Changes apply after a restart."),
         (RoofSettingsContract.CameraGroup, "Camera", "The Blue Iris camera proxy."),
-        (RoofSettingsContract.SecurityGroup, "Security", "Transport and browser rules."),
+        (RoofSettingsContract.SecurityGroup, "Security", "Transport and Stop rules."),
         (RoofSettingsContract.IdentityGroup, "Sign-in", "Session lifetimes, lockouts and sign-in rate limits."),
         (RoofSettingsContract.LoggingGroup, "Logging", "Log levels."),
         (RoofSettingsContract.UiGroup, "Clients", "Preferences shared by the web UI, the kiosk and the command line.")
@@ -52,28 +51,54 @@ internal static class RoofSettingsCatalogue
 
     public static bool IsGroup(string group) => Groups.Any(entry => string.Equals(entry.Name, group, StringComparison.Ordinal));
 
-    /// <summary>
-    /// The setting a key read from a settings file belongs to: the setting itself, or the list setting an item such as
-    /// <c>RoofControllerSecurity:AllowedOrigins:0</c> belongs to. Null for a key outside the catalogue.
-    /// </summary>
-    public static RoofSettingDefinition? Owner(string key)
-    {
-        if (Find(key) is { } definition)
-        {
-            return definition;
-        }
-
-        var separator = key.LastIndexOf(':');
-        return separator > 0
-            && int.TryParse(key.AsSpan(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out _)
-            && Find(key[..separator]) is { IsList: true } list
-                ? list
-                : null;
-    }
-
     /// <summary>True for a section above catalogue settings, such as <c>BlueIris</c>, which an empty object leaves.</summary>
     public static bool IsSection(string key)
         => All.Any(definition => definition.Key.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Settings an earlier version had, which a settings file it saved may still set, each with why it went. They no
+    /// longer configure anything, so the file is read without them, and the next change through the API leaves them out.
+    /// </summary>
+    public static IReadOnlyList<(string Key, string Reason)> Retired { get; } =
+    [
+        (RoofControllerSecurityOptions.SectionName + ":AllowedOrigins",
+            "the controller serves no pages since the web UI replaced its console; the web UI's own is RoofWeb:AllowedOrigins"),
+        ("ConsoleLogBuffer:MinimumLevel", "the controller keeps no log view since the web UI replaced its console")
+    ];
+
+    /// <summary>
+    /// The retired setting a key read from a settings file belongs to: the setting, an item of it (a list's
+    /// <c>RoofControllerSecurity:AllowedOrigins:0</c>), or a section only it was in (an empty <c>ConsoleLogBuffer</c>).
+    /// Null for any other key.
+    /// </summary>
+    public static string? FindRetired(string key)
+    {
+        foreach (var (retired, _) in Retired)
+        {
+            if (string.Equals(key, retired, StringComparison.OrdinalIgnoreCase)
+                || key.StartsWith(retired + ":", StringComparison.OrdinalIgnoreCase)
+                || (retired.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase) && !IsSection(key)))
+            {
+                return retired;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>What to tell an admin about the retired settings a settings file sets; null when it sets none.</summary>
+    public static string? DescribeRetired(IReadOnlyList<string> keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (keys.Count == 0)
+        {
+            return null;
+        }
+
+        var settings = keys.Select(key => $"{key} ({Retired.FirstOrDefault(entry => entry.Key == key).Reason ?? "retired"})");
+        return $"The settings file sets {string.Join(" and ", settings)}, which this version no longer uses: ignored, " +
+            "and left out of the file at the next change through the API.";
+    }
 
     /// <summary>
     /// True for a key that holds a secret: a secret setting, an API key, or any key whose last segment is
@@ -183,9 +208,6 @@ internal static class RoofSettingsCatalogue
         Add(securitySection + nameof(RoofControllerSecurityOptions.RequireHttps), RoofSettingsContract.SecurityGroup,
             RoofSettingType.Boolean, "Refuse plain HTTP from other hosts. Null means on outside Development. Cannot be turned on without an HTTPS listener.",
             null, nullable: true, safety: RoofSettingSafety.Always);
-        Add(securitySection + nameof(RoofControllerSecurityOptions.AllowedOrigins), RoofSettingsContract.SecurityGroup,
-            RoofSettingType.StringList, "Extra origins (scheme://host[:port]) allowed to use the browser console, for a reverse proxy that changes the host name.",
-            Array.Empty<string>());
 
         // Sign-in.
         const string identitySection = RoofIdentityOptions.SectionName + ":";
@@ -204,8 +226,6 @@ internal static class RoofSettingsCatalogue
             allowed: AuditedLogLevels);
         Add("Logging:LogLevel:Microsoft.AspNetCore", RoofSettingsContract.LoggingGroup, RoofSettingType.Enum,
             "Lowest level written for the web server.", nameof(LogLevel.Warning), allowed: LogLevels);
-        Add("ConsoleLogBuffer:" + nameof(ConsoleLogBufferOptions.MinimumLevel), RoofSettingsContract.LoggingGroup, RoofSettingType.Enum,
-            "Lowest level kept for the console's log view.", nameof(LogLevel.Information), allowed: LogLevels);
 
         // Clients.
         const string uiSection = RoofControllerUiOptions.SectionName + ":";

@@ -23,20 +23,21 @@ at the configured travel position instead, which exercises the same controller l
 
 Development runs against the emulator. `appsettings.Development.json` turns emulator mode on at `127.0.0.1:5291`. The
 limit switches come from the emulator, so they stay in force, with the documented normally open wiring as in
-production. The console's camera is the emulator's camera (`BlueIris:BaseUrl` is `http://127.0.0.1:5290`, with no
+production. The controller's camera is the emulator's camera (`BlueIris:BaseUrl` is `http://127.0.0.1:5290`, with no
 credentials; `src/docker-compose.yml` points it at `http://hat-emulator:5290`). Start the emulator first, from
 `src/`:
 
 ```bash
 dotnet run --project HVO.RoofControllerV4.Emulator     # register port 127.0.0.1:5291, control API http://127.0.0.1:5290
 dotnet run --project HVO.RoofControllerV4.RPi          # the controller on http://localhost:5195
+dotnet run --project HVO.RoofControllerV4.Web          # the web UI on http://localhost:5188 (optional)
 ```
 
 If the controller starts first, its first initialization cannot verify the relay register. It latches
 `RelayVerificationFailed` and retries every `RestartOnFailureWaitTime` (10 s). Once the emulator is up, the controller
-initializes, but the fault stays latched: the console shows Error and every move is refused until Clear Fault (the
-console button or `POST /api/v4.0/RoofControl/ClearFault`). While the emulator is down, the HAT library also logs each
-failed input poll with a stack trace, as it does for a failed I2C bus.
+initializes, but the fault stays latched: every client shows Error and every move is refused until Clear Fault (the
+web UI's button, `hvo-roof clear-fault` or `POST /api/v4.0/RoofControl/ClearFault`). While the emulator is down, the
+HAT library also logs each failed input poll with a stack trace, as it does for a failed I2C bus.
 
 The ways of running the emulator share default host ports: 5290 for the control API in all three, and 5195 for the
 controller with both `dotnet run` and the compose `emulator` profile. Run one at a time, or move the ports:
@@ -71,10 +72,10 @@ A controller in emulator mode cannot be mistaken for the roof:
 
 | Where | What |
 |-------|------|
-| Every page (the console's layout and the sign-in layout) | An `EMULATED HAT` banner naming the emulator endpoint: "The observatory roof does not move." |
-| Console status badge and footer | `Emulated HAT` |
+| Every page of the web UI, the sign-in page too | An `EMULATED HAT` banner, from the status (on the sign-in page, from the anonymous `GET .../RoofControl/Mode`): "the controller drives the HAT emulator, not the physical HAT. The observatory roof does not move." |
+| The clients' controller line (the web UI's status, `hvo-roof status`, the terminal interface) | `emulated HAT` |
 | `/health` | `Degraded`, "Roof controller is running against the HAT emulator (*host:port*), not the physical HAT". A more serious result, such as a latched fault or failing reads, takes its place with " (HAT emulator at *host:port*)" at the end, so every description names the emulator. The data always has `HardwareMode` `Emulated` and `HatEmulatorEndpoint`. |
-| `GET .../RoofControl/Status` | `hatMode: "Emulated"` |
+| `GET .../RoofControl/Status`, `GET .../RoofControl/Mode` | `hatMode: "Emulated"` |
 | Startup log | Warnings from `HVO.RoofControllerV4.RPi.HatEmulation` and `RoofControllerServiceV4` naming the endpoint. The HAT library's own `Mode: Physical I²C` line is expected: the library takes its hardware path, and only the register accesses go to the emulator. |
 | Telemetry | Resource attributes `hvo.roof.hat.mode=emulated` and `hvo.roof.hat.emulator.endpoint` |
 
@@ -182,14 +183,14 @@ position as a percentage and a frame counter, so consecutive frames always diffe
 authentication, and it ignores any credentials the proxy sends. Point a controller at it with `BlueIris__BaseUrl` set to
 the emulator's control URL and `BlueIris__UserName` and `BlueIris__Password` empty.
 
-`POST /api/emulator/camera` injects the failures the console must survive:
+`POST /api/emulator/camera` injects the failures the web UI must survive:
 
-| Mode | The camera | The controller's proxy and console |
+| Mode | The camera | The controller's proxy and the web UI |
 |------|------------|------------------------------------|
-| `Live` | Streams a frame every `1/framesPerSecond` s | The proxy relays each frame; the console shows `Live` |
-| `Frozen` | Keeps the stream open and sends nothing, as a hung encoder does | The console shows `Stalled` after 5 s and reconnects after 15 s; the proxy aborts a stream that has had no data for `BlueIris:StreamIdleTimeout` (30 s) |
-| `Unavailable` | Ends the open streams, and answers 503 | The proxy answers 502 "Camera unavailable"; the console shows `Offline` and retries with backoff |
-| `Unauthorized` | Ends the open streams, and answers 401 with `WWW-Authenticate: Basic` | As `Unavailable`: the proxy's 502 tells the console nothing about the camera's credentials |
+| `Live` | Streams a frame every `1/framesPerSecond` s | The proxy relays each frame; the web UI shows `Live` |
+| `Frozen` | Keeps the stream open and sends nothing, as a hung encoder does | The web UI shows `Stalled` after 5 s and reconnects after 15 s; the proxy aborts a stream that has had no data for `BlueIris:StreamIdleTimeout` (30 s) |
+| `Unavailable` | Ends the open streams, and answers 503 | The proxy answers 502 "Camera unavailable"; the web UI shows `Offline` and retries with backoff |
+| `Unauthorized` | Ends the open streams, and answers 401 with `WWW-Authenticate: Basic` | As `Unavailable`: the proxy's 502 tells the web UI nothing about the camera's credentials |
 
 A disconnect, a change of mode and a reset end a stream between parts, never inside one.
 
@@ -261,10 +262,10 @@ No test relies on physical hardware.
 | `RoofHatConnectionTests` | Emulator mode selection, the refusal outside Development, the startup warning and the telemetry attributes |
 | `EmulatorApiTests` | The emulator host: the control API changes the plant and the link, and the register port serves the HAT |
 | `EmulatedCameraTests` | The camera: its JPEG encoder against an independent decoder, the frames it draws of the plant, the MJPEG stream, each mode, a disconnect, the status and the refused requests |
-| `Browser/*BrowserTests` | The console in Chromium on a phone and a tablet, each upright and sideways, against the whole controller and the emulated plant: sign-in, Stop in view without scrolling and stopping the roof, stale and unhealthy status, the camera stalling and going offline, the lease during a lost connection (C9) and the reconnect dialog's Stop (C15) |
+| `Browser/*BrowserTests` | The web UI in Chromium on phones and tablets, each upright and sideways, and a desktop window, against the whole controller, the web UI and the emulated plant: sign-in, Stop on every page in view without scrolling and stopping the roof, what each role is offered, stale and unhealthy status, the camera stalling and going offline, the lease during a lost connection (C9), the reconnect dialog's Stop (C15), and the screenshots in [the web UI's documentation](web.md) |
 | `CameraProxyScenarios` | The controller's camera proxy reading the emulated camera over a socket: the frames relayed, 502 for a camera that refuses, the stream aborted after the idle timeout for a frozen one, and the stream ended by a camera server restart |
-| `EmulatorModeAppTests` | The whole controller in emulator mode: open and close through the API; a link outage while moving stops the roof and latches a fault until ClearFault; a controller started before the emulator initializes with a latched fault until ClearFault; the sign-in page banner and the Degraded health |
-| `EmulatedHatDisplayTests` | The banner in the main layout (the console) and on its own, the console's HAT badge and the footer |
+| `EmulatorModeAppTests` | The whole controller in emulator mode: open and close through the API; a link outage while moving stops the roof and latches a fault until ClearFault; a controller started before the emulator initializes with a latched fault until ClearFault; the start's warning, the telemetry marks and the Degraded health |
+| `Web/DashboardTests` | The web UI's `EMULATED HAT` and `SIMULATION` banners, from the status |
 | `DevelopmentConfigurationTests` | Development uses the emulator, with the limit switches in force and the production wiring |
 | `RoofControllerHealthCheckTests` | Emulator mode's health: Degraded naming the endpoint, and every more serious result naming the emulator |
 | `DeploymentValidatorTests` | The deployment check: emulator mode refused outside Development without `AllowOutsideDevelopment`, refused with `/dev/i2c-1` mapped, invalid `HatEmulator` settings |

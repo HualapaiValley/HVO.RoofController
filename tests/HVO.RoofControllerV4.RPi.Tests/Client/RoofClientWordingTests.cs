@@ -3,14 +3,14 @@ using System.Text.Json;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
-using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
+using HVO.RoofControllerV4.Web.Roof;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Client;
 
 /// <summary>
-/// Pins the wording every client shares (#44). Stop in particular reads the same in the web console, the CLI, the kiosk
-/// and the Mac app; a change here is deliberate, and made once, in the client library.
+/// Pins the wording every client shares (#44). Stop in particular reads the same in the web UI, the CLI, the kiosk and
+/// the Mac app; a change here is deliberate, and made once, in the client library.
 /// </summary>
 [TestClass]
 public sealed class RoofClientWordingTests
@@ -63,33 +63,32 @@ public sealed class RoofClientWordingTests
     }
 
     [TestMethod]
-    public void TheWebConsole_UsesTheSharedStopWording()
+    public void TheWebUi_UsesTheSharedStopWording()
     {
-        var web = Path.Combine(RepositoryRoot, "src", "HVO.RoofControllerV4.RPi");
+        var web = Path.Combine(RepositoryRoot, "src", "HVO.RoofControllerV4.Web");
         var app = File.ReadAllText(Path.Combine(web, "Components", "App.razor"));
-        var page = File.ReadAllText(Path.Combine(web, "Components", "Pages", "RoofControlV2.razor"));
-        var script = File.ReadAllText(Path.Combine(web, "wwwroot", "js", "console-stop.js"));
+        var page = File.ReadAllText(Path.Combine(web, "Components", "Pages", "Dashboard.razor"));
+        var script = File.ReadAllText(Path.Combine(web, "wwwroot", "js", "stop.js"));
 
-        app.Should().Contain("</i> @RoofStopText.ButtonLabel</button>")
-            .And.Contain("data-console-stop-texts=\"@RoofConsoleStopTexts.Json\"");
+        app.Should().Contain("</i> @RoofStopText.ButtonLabel").And.Contain("data-web-stop-texts=\"@WebStopTexts.Json\"");
         page.Should().Contain("@RoofStopText.ButtonLabel").And.Contain("@RoofStopText.AlwaysAvailable").And.NotContain("Stop is always");
         foreach (var wording in new[] { "Stop failed", "Stop was not sent", "Stop sent", "Stop acknowledged", "Use the stop control", "Sign in" })
         {
-            script.Should().NotContain(wording, "the script shows only the texts the server renders into the form");
+            script.Should().NotContain(wording, "the script shows only the texts the server renders into the page");
         }
     }
 
     [TestMethod]
-    public void TheWebConsoleStopTexts_SayWhatEveryOtherClientSays()
+    public void TheWebUisStopTexts_SayWhatEveryOtherClientSays()
     {
-        using var document = JsonDocument.Parse(RoofConsoleStopTexts.Json);
+        using var document = JsonDocument.Parse(WebStopTexts.Json);
         var texts = document.RootElement;
         string Text(JsonElement parent, string name) => parent.GetProperty(name).GetString()!;
 
         Text(texts, "sending").Should().Be(RoofStopText.Sending);
         Text(texts, "signedOut").Should().Be(RoofStopText.PageSignedOut, "the page has no sign-in of its own");
-        Text(texts, "timedOut").Should().Be(RoofStopText.Failed(RoofText.TimedOut));
-        Text(texts, "unreachable").Should().Be(RoofStopText.Failed(RoofText.Unreachable));
+        Text(texts, "timedOut").Should().Be("Stop failed: The web UI did not answer in time. Use the stop control at the roof.");
+        Text(texts, "unreachable").Should().Be("Stop failed: The web UI could not be reached. Use the stop control at the roof.");
 
         var codes = texts.GetProperty("codes");
         foreach (var code in Enum.GetValues<RoofControllerErrorCode>())
@@ -97,10 +96,8 @@ public sealed class RoofClientWordingTests
             Text(codes, code.ToString()).Should().Be(RoofStopText.Failed(RoofText.DescribeRefusal(409, code, code.ToString())));
         }
 
-        Text(codes, "https_required").Should().Be(
-            "Stop failed: The controller requires HTTPS from this network. [https_required] Use the stop control at the roof.");
         Text(codes, "origin_not_allowed").Should().Be(
-            "Stop failed: The controller refused a request from this page's origin. [origin_not_allowed] Use the stop control at the roof.");
+            "Stop failed: The web UI refused a request from this page's origin. [origin_not_allowed] Use the stop control at the roof.");
 
         // The script's lookup, for every status it can meet: its own wording, then any server error, then the rest by number.
         var statuses = texts.GetProperty("statuses");
@@ -114,7 +111,7 @@ public sealed class RoofClientWordingTests
             var key = status.ToString(CultureInfo.InvariantCulture);
             var shown = statuses.TryGetProperty(key, out var own) ? own.GetString()
                 : status >= 500 ? Text(texts, "serverError")
-                : Text(texts, "other").Replace(RoofConsoleStopTexts.StatusPlaceholder, key, StringComparison.Ordinal);
+                : Text(texts, "other").Replace(WebStopTexts.StatusPlaceholder, key, StringComparison.Ordinal);
             shown.Should().Be(RoofStopText.Failed(RoofText.DescribeRefusal(status, null, null)), "HTTP {0}", status);
         }
 
@@ -168,7 +165,6 @@ public sealed class RoofClientWordingTests
     public void ARefusalBeforeTheApi_IsDescribedByItsOwnCode()
     {
         RoofText.DescribeRefusal(403, null, "https_required").Should().Be("The controller requires HTTPS from this network. [https_required]");
-        RoofText.DescribeRefusal(403, null, "origin_not_allowed").Should().Be("The controller refused a request from this page's origin. [origin_not_allowed]");
         RoofText.DescribeRefusal(403, null, "some_future_code").Should().Be("Your role does not permit this.");
     }
 
@@ -178,6 +174,7 @@ public sealed class RoofClientWordingTests
         RoofText.DescribeFailure(new HttpRequestException("socket 10.0.0.5:443 reset")).Should().Be(RoofText.Unreachable);
         RoofText.DescribeFailure(new TimeoutException("internal")).Should().Be(RoofText.TimedOut);
         RoofText.DescribeFailure(new TaskCanceledException("t", new TimeoutException())).Should().Be(RoofText.TimedOut);
+        RoofText.DescribeFailure(new RoofProtocolException("unexpected token '<' at 0")).Should().Be(RoofText.AnswerUnreadable);
         RoofText.DescribeFailure(new InvalidOperationException("stack detail")).Should().Be(Unexpected);
         RoofText.DescribeFailure(null).Should().Be(Unexpected);
     }

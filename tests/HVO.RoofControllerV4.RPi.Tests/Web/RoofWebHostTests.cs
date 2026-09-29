@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Web;
+using HVO.RoofControllerV4.Web.Sessions;
 using HVO.RoofControllerV4.Web.Supervision;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -16,7 +17,7 @@ using WebProgram = HVO.RoofControllerV4.Web.Program;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
-/// <summary>The web UI's host: its settings, liveness, the status page and HTTPS.</summary>
+/// <summary>The web UI's host: its settings, liveness, its pages and HTTPS.</summary>
 [TestClass]
 public sealed class RoofWebHostTests
 {
@@ -32,7 +33,7 @@ public sealed class RoofWebHostTests
         (await response.Content.ReadAsStringAsync()).Should().Be("Healthy");
         response.Headers.GetValues("X-Content-Type-Options").Should().Equal("nosniff");
         response.Headers.GetValues("X-Frame-Options").Should().Equal("DENY");
-        response.Headers.GetValues("Referrer-Policy").Should().Equal("no-referrer");
+        response.Headers.GetValues("Referrer-Policy").Should().Equal("same-origin");
     }
 
     [TestMethod]
@@ -47,31 +48,89 @@ public sealed class RoofWebHostTests
     }
 
     [TestMethod]
-    public async Task Home_ShowsTheControllerStatus_WithExactlyOneTitle()
+    [DataRow("/", "Roof · HVO Roof Controller")]
+    [DataRow("/health", "Health · HVO Roof Controller")]
+    [DataRow("/settings", "Settings · HVO Roof Controller")]
+    [DataRow("/people", "People · HVO Roof Controller")]
+    [DataRow("/system", "System · HVO Roof Controller")]
+    [DataRow("/account/password", "Change password · HVO Roof Controller")]
+    [DataRow("/denied", "Not permitted · HVO Roof Controller")]
+    [DataRow("/no-such-page", "Not found · HVO Roof Controller")]
+    public async Task EveryPage_HasExactlyOneTitle_AndOneHeading(string page, string title)
     {
-        await using var app = await StartAsync([]);
-        using var client = app.GetTestClient();
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        (await browser.SignInAsync("ada", FakeController.AdaPassword)).StatusCode.Should().Be(HttpStatusCode.Redirect);
 
-        var html = await client.GetStringAsync(new Uri("/", UriKind.Relative));
+        var html = await (await browser.GetAsync(page)).Content.ReadAsStringAsync();
 
         Regex.Matches(html, "<title>").Should().ContainSingle();
-        html.Should().Contain("<title>Roof controller</title>");
+        html.Should().Contain($"<title>{title}</title>");
         Regex.Matches(html, "<h1[ >]").Should().ContainSingle();
-        html.Should().Contain("The controller is ready")
-            .And.Contain("The web UI is not running under the container&#x27;s supervisor.")
-            .And.Contain("It does not operate the roof");
     }
 
     [TestMethod]
-    public async Task Home_UnderTheSupervisor_ShowsACrashLoop()
+    [DataRow("/people")]
+    [DataRow("/system")]
+    public async Task TheAdminPages_AreDeniedToAViewer(string page)
+    {
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        await browser.SignInAsync("vic", FakeController.AdaPassword);
+
+        using var response = await browser.GetAsync(page);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.PathAndQuery.Should().StartWith(WebAuthentication.AccessDeniedPath + "?");
+        var denied = await (await browser.GetAsync(response.Headers.Location.PathAndQuery)).Content.ReadAsStringAsync();
+        denied.Should().Contain("data-testid=\"role-denied\"");
+    }
+
+    [TestMethod]
+    [DataRow("vic", false)]
+    [DataRow("olga", false)]
+    [DataRow("ada", true)]
+    public async Task TheMenu_OffersTheAdminPages_OnlyToAnAdmin(string name, bool admin)
+    {
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        await browser.SignInAsync(name, FakeController.AdaPassword);
+
+        using var response = await browser.GetAsync("/settings");
+        var html = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "everyone may read the settings their role allows");
+        html.Should().Contain("href=\"settings\"");
+        html.Contains("href=\"people\"", StringComparison.Ordinal).Should().Be(admin);
+        html.Contains("href=\"system\"", StringComparison.Ordinal).Should().Be(admin);
+    }
+
+    [TestMethod]
+    public async Task Health_ShowsTheControllerStatus()
+    {
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        await browser.SignInAsync("ada", FakeController.AdaPassword);
+
+        var html = await (await browser.GetAsync("/health")).Content.ReadAsStringAsync();
+
+        html.Should().Contain("The controller is ready")
+            .And.Contain("The web UI is not running under the container&#x27;s supervisor.");
+    }
+
+    [TestMethod]
+    public async Task Health_UnderTheSupervisor_ShowsACrashLoop()
     {
         using var directory = new WebTestSupport.TempDirectory();
         var path = directory.File("supervisor.json");
         await File.WriteAllTextAsync(path, WebTestSupport.SupervisorState(SupervisedProcess.States.CrashLoop, 5));
-        await using var app = await StartAsync([$"--RoofWeb:SupervisorStatePath={path}"], WebTestSupport.ControllerAnswering(_ => throw new HttpRequestException("Connection refused")));
-        using var client = app.GetTestClient();
+        await using var host = await WebHost.StartAsync(
+            [$"--RoofWeb:SupervisorStatePath={path}"],
+            customize: builder => builder.Services.AddSingleton(WebTestSupport.ControllerAnswering(_ => throw new HttpRequestException("Connection refused"))));
+        using var browser = host.Browser();
+        await browser.SignInAsync("ada", FakeController.AdaPassword);
 
-        var html = await client.GetStringAsync(new Uri("/", UriKind.Relative));
+        var html = await (await browser.GetAsync("/health")).Content.ReadAsStringAsync();
 
         html.Should().Contain("The controller is stopped after repeated crashes")
             .And.Contain("It crashed 5 times within 120 s")
@@ -85,8 +144,12 @@ public sealed class RoofWebHostTests
         using var client = app.GetTestClient();
 
         using var response = await client.GetAsync(new Uri("/no-such-page", UriKind.Relative));
+        var html = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Regex.Matches(html, "<title>").Should().ContainSingle();
+        html.Should().Contain("<title>Not found · HVO Roof Controller</title>").And.Contain("There is nothing at this address.");
+        html.Should().NotContain("\"type\":\"server\"", "the page needs no live connection, which a visitor who is not signed in could not open");
     }
 
     [TestMethod]

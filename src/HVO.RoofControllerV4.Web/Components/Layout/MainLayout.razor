@@ -1,9 +1,62 @@
 @inherits LayoutComponentBase
 
-<header class="web-header">
-    <a class="web-brand" href="">HVO Roof Controller</a>
-</header>
+<div class="app-frame">
+    <header>
+        <ModeBanner />
+        <nav class="navbar navbar-expand navbar-dark app-navbar" aria-label="Main">
+            <div class="container-fluid web-nav">
+                <a class="navbar-brand" href="">
+                    <i class="bi bi-house-fill me-2" aria-hidden="true"></i>HVO Roof Controller
+                </a>
+                <AuthorizeView>
+                    <Authorized>
+                        <ul class="navbar-nav web-nav-links">
+                            <li class="nav-item">
+                                <NavLink class="nav-link" href="" Match="NavLinkMatch.All">Roof</NavLink>
+                            </li>
+                            <li class="nav-item">
+                                <NavLink class="nav-link" href="health">Health</NavLink>
+                            </li>
+                            <li class="nav-item">
+                                <NavLink class="nav-link" href="settings">Settings</NavLink>
+                            </li>
+                            @if (context.User.IsInRole(WebRoles.Admin))
+                            {
+                                <li class="nav-item">
+                                    <NavLink class="nav-link" href="people">People</NavLink>
+                                </li>
+                                <li class="nav-item">
+                                    <NavLink class="nav-link" href="system">System</NavLink>
+                                </li>
+                            }
+                        </ul>
+                        <div class="web-user" data-testid="signed-in-user">
+                            <a class="navbar-text web-user-name" href="@WebAccountEndpoints.ChangePasswordPath.TrimStart('/')" title="Change your password">
+                                <i class="bi bi-person-circle" aria-hidden="true"></i>
+                                @context.User.Identity?.Name
+                                <span class="badge bg-outline ms-1" data-testid="signed-in-role">@WebRoles.Describe(HighestRole(context.User))</span>
+                            </a>
+                            <form method="post" action="@WebAuthentication.SignOutPostPath.TrimStart('/')" class="web-signout">
+                                <button type="submit" class="btn btn-sm btn-outline-light" data-testid="sign-out">
+                                    <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Sign out
+                                </button>
+                            </form>
+                        </div>
+                    </Authorized>
+                </AuthorizeView>
+            </div>
+        </nav>
+    </header>
 
-<main class="web-main">
-    @Body
-</main>
+    <main class="app-main web-main">
+        @Body
+    </main>
+</div>
+
+@code {
+    private static string? HighestRole(ClaimsPrincipal user)
+        => user.IsInRole(WebRoles.Admin) ? WebRoles.Admin
+            : user.IsInRole(WebRoles.Operator) ? WebRoles.Operator
+            : user.IsInRole(WebRoles.Viewer) ? WebRoles.Viewer
+            : null;
+}

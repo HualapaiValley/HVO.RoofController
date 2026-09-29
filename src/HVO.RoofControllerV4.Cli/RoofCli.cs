@@ -58,15 +58,6 @@ public static partial class RoofCli
 
     internal const string CommandName = "hvo-roof";
 
-    internal static readonly string NameRule =
-        $"use 1 to {Common.Models.RoofIdentityContract.MaximumNameLength} letters, digits, '.', '_', '@' or '-', starting with a letter or digit.";
-
-    internal static readonly string PasswordRule =
-        $"A password must be {Common.Models.RoofIdentityContract.MinimumPasswordLength} to {Common.Models.RoofIdentityContract.MaximumPasswordLength} characters.";
-
-    internal static readonly string PinRule =
-        $"A PIN must be {Common.Models.RoofIdentityContract.MinimumPinLength} to {Common.Models.RoofIdentityContract.MaximumPinLength} digits.";
-
     /// <summary>The global options, recognised after any command.</summary>
     internal sealed class GlobalOptions
     {

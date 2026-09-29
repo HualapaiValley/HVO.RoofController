@@ -21,14 +21,12 @@ using HVO.Iot.Devices.Implementation;
 
 using System.Runtime.Loader;
 using HVO.Iot.Devices.Iot.Devices.Sequent;
-using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Components.Server.Circuits;
 
 namespace HVO.RoofControllerV4.RPi;
 
@@ -147,16 +145,8 @@ public class Program
         services.Configure<RoofControllerHostOptionsV4>(Configuration.GetSection(nameof(RoofControllerHostOptionsV4)));
         ConfigureTelemetry(services, Configuration, Environment);
 
-        // API keys, console cookie, policies and authentication state for Blazor (docs/security.md)
+        // API keys, sessions, the Stop credential and the role policies (docs/security.md)
         services.AddRoofControllerSecurity(Configuration);
-
-        // Add Razor Components for Blazor Server
-        services.AddRazorComponents()
-            .AddInteractiveServerComponents();
-
-        // One per circuit: tells the console when the browser connection drops, so it stops renewing the operator lease.
-        services.AddScoped<ConsoleCircuitMonitor>();
-        services.AddScoped<CircuitHandler>(serviceProvider => serviceProvider.GetRequiredService<ConsoleCircuitMonitor>());
 
         services.AddSingleton<IGpioControllerClient>(_ => GpioControllerClientFactory.CreateAutoSelecting());
 
@@ -176,7 +166,6 @@ public class Program
 
         // Register RoofController based on configuration
         services.AddSingleton<IRoofControllerServiceV4, RoofControllerServiceV4>();
-        services.AddScoped<FooterStatusService>();
 
         // Live status hub (/hubs/roof) for the separate clients: JSON with string enums, as the REST API writes them.
         services.AddSignalR()
@@ -190,10 +179,6 @@ public class Program
         services.AddSingleton<IRoofStatusSender, HubRoofStatusSender>();
         services.AddSingleton<RoofStatusBroadcaster>();
         services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<RoofStatusBroadcaster>());
-
-        services.Configure<ConsoleLogBufferOptions>(Configuration.GetSection("ConsoleLogBuffer"));
-        services.AddSingleton<ConsoleLogBuffer>();
-        services.AddSingleton<ILoggerProvider, ConsoleLogLoggerProvider>();
 
         // Add exception handling middleware
         // NOTE: Use built-in exception handling instead of custom error controllers
@@ -249,8 +234,8 @@ public class Program
         // Enable endpoints API explorer for OpenAPI
         services.AddEndpointsApiExplorer();
 
-        // Add MVC + Views + JSON enum string serialization (single registration to avoid overriding options)
-        services.AddControllersWithViews()
+        // The API's controllers, with JSON enum string serialization (single registration to avoid overriding options)
+        services.AddControllers()
             .AddJsonOptions(options =>
             {
                 if (!options.JsonSerializerOptions.Converters.Any(c => c is JsonStringEnumConverter))
@@ -278,9 +263,6 @@ public class Program
                 };
             })
             .RedactLoggedHeaders(_ => true);
-
-        // Add HttpContextAccessor for Blazor components
-        services.AddHttpContextAccessor();
     }
 
     private static void ConfigureTelemetry(
@@ -348,9 +330,9 @@ public class Program
 
     private static void Configure(WebApplication app)
     {
-        var apiKeyViewer = new AuthorizeAttribute(RoofControllerSecurityDefaults.ViewerPolicy)
+        var apiViewer = new AuthorizeAttribute(RoofControllerSecurityDefaults.ViewerPolicy)
         {
-            AuthenticationSchemes = RoofSecurityServiceCollectionExtensions.ApiKeyOrCookieSchemes
+            AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme
         };
 
         // Add exception handling middleware
@@ -373,21 +355,15 @@ public class Program
         // from other hosts get 403 https_required instead (loopback and /health/live|ready are exempt).
         app.UseMiddleware<RequireHttpsMiddleware>();
 
-        // Serve static web assets (including the generated .styles.css bundle)
-        app.UseStaticFiles();
         app.UseRouting();
 
-        app.UseMiddleware<OriginCheckMiddleware>();
-
         app.UseAuthentication();
-        app.UseMiddleware<BlazorHubAuthorizationMiddleware>();
         app.UseAuthorization();
 
         // Sign-in attempts per caller (Auth/Session, Auth/Pin, Auth/Password), before any secret is checked. After
         // authorization, so a request without a valid key or session never counts, and a kiosk key or a signed-in
         // person is counted as itself rather than by address.
         app.UseRateLimiter();
-        app.UseAntiforgery();
 
         // OpenAPI document (/openapi/v4.json): open in Development, Admin API key elsewhere. Scalar UI is Development-only.
         var openApi = app.MapOpenApi();
@@ -404,7 +380,7 @@ public class Program
         }
 
         // Health endpoints. Do NOT duplicate these with custom controllers.
-        // /health: detailed report for people (Viewer key or signed-in console). Keeps 503 for Unhealthy so HTTP-only
+        // /health: detailed report for people (a Viewer key or session). Keeps 503 for Unhealthy so HTTP-only
         // monitors still see failures; clients must read the JSON body on 503 as well.
         app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
         {
@@ -429,7 +405,7 @@ public class Program
                 };
                 await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(response));
             }
-        }).RequireAuthorization(apiKeyViewer);
+        }).RequireAuthorization(apiViewer);
 
         // Readiness probe (anonymous, status text only): hardware-tagged checks. Used by the Docker HEALTHCHECK and deploy.
         app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
@@ -443,19 +419,9 @@ public class Program
             Predicate = _ => false
         }).AllowAnonymous();
 
-        // POST /account/login and /account/logout for the web console (the /login page itself is a Razor component).
-        app.MapRoofAccountEndpoints();
-
-        // POST /console/stop: Stop from the reconnect dialog while the Blazor circuit is down.
-        app.MapRoofConsoleEndpoints();
-
-        // Map Razor components for Blazor Server
-        app.MapRazorComponents<Components.App>()
-            .AddInteractiveServerRenderMode();
-
         app.MapControllers();
 
-        // Live status for API clients: the Viewer policy with an API key or a session (never the console cookie).
+        // Live status for the clients: the Viewer policy with an API key or a session.
         app.MapHub<RoofStatusHub>(RoofStatusHubContract.Path)
             .RequireAuthorization(new AuthorizeAttribute(RoofControllerSecurityDefaults.ViewerPolicy)
             {
@@ -463,6 +429,8 @@ public class Program
             });
 
         RoofSecurityStartup.ReportSecurityPosture(app.Services, app.Configuration, app.Environment);
+        RoofSettingsConfiguration.ReportRetiredSettings(
+            app.Configuration, app.Services.GetRequiredService<ILoggerFactory>().CreateLogger<RoofSettingsStore>());
         HatEmulatorStartup.ReportHatMode(app.Services);
     }
 }

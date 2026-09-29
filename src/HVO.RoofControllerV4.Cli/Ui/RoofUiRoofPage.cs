@@ -12,6 +12,8 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// </summary>
 internal sealed class RoofUiRoofPage : RoofUiPage
 {
+    private const string NotConfigured = "no controller is configured";
+
     private readonly Label _status;
     private readonly Label _blocked;
     private bool _commandInFlight;
@@ -63,101 +65,37 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         OpenButton.Enabled = open is null;
         CloseButton.Enabled = close is null;
         ClearFaultButton.Enabled = clear is null;
-        _blocked.Text = open is not null && close is not null
-            ? $"Open and Close: {(open == close ? open : $"{open}; {close}")}."
-            : open is not null ? $"Open: {open}." : close is not null ? $"Close: {close}." : string.Empty;
+        _blocked.Text = RoofCommandRules.DescribeMotionBlocks(open, close) ?? string.Empty;
     }
 
     public override string Describe() => $"{_status.Text}\n{_blocked.Text}";
 
-    /// <summary>Why Open or Close is not offered; null when it is. The controller still checks every request.</summary>
+    /// <summary>
+    /// Why Open or Close is not offered; null when it is. The rules every client shares (RoofCommandRules), and quitting,
+    /// which waits on a motion started here. The controller still checks every request.
+    /// </summary>
     internal string? BlockReason(RoofMotionDirection direction)
     {
-        if (Ui.Caller is not null && !IsOperator)
+        if (Ui.Connection is null)
         {
-            return "the Operator role is needed to open or close the roof";
+            return NotConfigured;
         }
 
-        if (Availability() is { } unavailable)
-        {
-            return unavailable;
-        }
-
-        if (Ui.QuitRequested)
+        // Quitting comes after the role and the controller's availability, which say more.
+        var state = CommandState;
+        if (Ui.QuitRequested && state.CanOperate != false && RoofCommandRules.GetAvailabilityBlockReason(state.Status, state.IsStale) is null)
         {
             return "the interface is closing";
         }
 
-        var status = Ui.Status!;
-        if (_commandInFlight)
-        {
-            return "a command is on its way";
-        }
-
-        if (status.IsClearFaultInProgress)
-        {
-            return "a clear-fault pulse is in progress";
-        }
-
-        if (status.IsFaultLatched)
-        {
-            return "a fault is latched: clear it first";
-        }
-
-        if (status.IsMoving)
-        {
-            return "the roof is moving: stop it first";
-        }
-
-        return direction switch
-        {
-            RoofMotionDirection.Opening when status.Status is RoofControllerStatus.Open or RoofControllerStatus.Opening => "the roof is already open",
-            RoofMotionDirection.Closing when status.Status is RoofControllerStatus.Closed or RoofControllerStatus.Closing => "the roof is already closed",
-            _ => null
-        };
+        return RoofCommandRules.GetMotionBlockReason(direction, state);
     }
 
     internal string? ClearFaultBlockReason()
-    {
-        if (Ui.Caller is not null && !IsOperator)
-        {
-            return "the Operator role is needed to clear a fault";
-        }
+        => Ui.Connection is null ? NotConfigured : RoofCommandRules.GetClearFaultBlockReason(CommandState);
 
-        if (Availability() is { } unavailable)
-        {
-            return unavailable;
-        }
-
-        var status = Ui.Status!;
-        return _commandInFlight ? "a command is on its way"
-            : status.IsClearFaultInProgress ? "a clear-fault pulse is in progress"
-            : status.IsMoving ? "the roof is moving: stop it first"
-            : status.IsFaultLatched ? null
-            : "no fault is latched";
-    }
-
-    private string? Availability()
-    {
-        if (Ui.Connection is null)
-        {
-            return "no controller is configured";
-        }
-
-        if (Ui.Status is not { } status)
-        {
-            return "there is no status yet";
-        }
-
-        if (Ui.IsStale)
-        {
-            return "the status is stale, so the roof cannot be watched";
-        }
-
-        return !status.IsInitialized ? "the controller is initializing"
-            : status.IsShuttingDown ? "the controller is shutting down"
-            : null;
-    }
+    // The role is known once the controller has said who the credential is.
+    private RoofCommandState CommandState => new(Ui.Status, Ui.IsStale, Ui.Caller is null ? null : IsOperator, _commandInFlight);
 
     private void Move(RoofMotionDirection direction)
     {

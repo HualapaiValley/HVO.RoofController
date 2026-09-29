@@ -39,8 +39,8 @@ internal static class Scenario
     public const string SoakCategory = "Soak";
 
     /// <summary>
-    /// The console's browser tests: the whole host against the emulated plant, driven from a headless Chromium. They
-    /// need the Playwright browser installed, so they have their own CI job and are not scenarios.
+    /// The web UI's browser tests: the web UI and the controller against the emulated plant, driven from a headless
+    /// Chromium. They need the Playwright browser installed, so they have their own CI job and are not scenarios.
     /// </summary>
     public const string BrowserCategory = "Browser";
 

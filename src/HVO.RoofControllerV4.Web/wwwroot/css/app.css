@@ -1,28 +1,120 @@
-/* The web UI's own styles, on top of the HVO dark theme (HVO.WebSite.Themes). */
-html,
-body {
-    margin: 0;
+/* The web UI's own styles, on top of Bootstrap and the HVO dark theme (HVO.WebSite.Themes). */
+body[data-theme="hvo-dark"] {
     background: var(--hvo-body-bg, #05070d);
     color: var(--hvo-body-color, #f8fafc);
-    font-family: var(--hvo-font-family, "Helvetica Neue", Helvetica, Arial, sans-serif);
+    /* Room for the Stop bar, so it never covers the end of a page. The theme fixes the body's height to the screen,
+       which puts that room at the end of the first screen instead of the page's. */
+    height: auto;
+    padding-bottom: var(--web-stop-bar-space);
 }
 
-.web-header {
-    padding: 0.75rem 1rem;
-    background: var(--hvo-navbar-bg, #020617);
-    border-bottom: 1px solid var(--hvo-border-muted, #334155);
+/* The theme's frame fills the screen; here it fills the screen above the Stop bar's room, so a short page does not
+   scroll by that room. */
+body[data-theme="hvo-dark"] .app-frame {
+    min-height: calc(100vh - var(--web-stop-bar-space));
+    min-height: calc(100dvh - var(--web-stop-bar-space));
 }
 
-.web-brand {
+:root {
+    --web-stop-bar-height: 4.5rem;
+    /* How tall the Stop bar is: js/stop.js sets it to the bar's height, which an answer to a Stop can make taller. */
+    --web-stop-bar-space: calc(var(--web-stop-bar-height) + env(safe-area-inset-bottom, 0px));
+}
+
+/* Long setting keys and names break rather than widen the page past a phone's screen. */
+.web-main {
+    width: 100%;
+    max-width: 72rem;
+    margin: 0 auto;
+    overflow-wrap: anywhere;
+    padding: 1rem;
+}
+
+.web-main h1 {
+    font-size: 1.6rem;
+    margin-bottom: 1rem;
+}
+
+/* Bootstrap's .navbar > .container-fluid keeps the bar on one line (nowrap), which on a phone pushes the signed-in user
+   off the side of the page; here it wraps instead. */
+.app-navbar > .web-nav {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.web-nav-links {
+    flex-wrap: wrap;
+    margin-right: auto;
+}
+
+.web-user {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.web-user-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     color: inherit;
-    font-weight: 600;
     text-decoration: none;
 }
 
-.web-main {
-    max-width: 48rem;
-    margin: 0 auto;
+.web-user-name:hover,
+.web-user-name:focus {
+    text-decoration: underline;
+}
+
+.web-signout {
+    margin: 0;
+}
+
+.web-card {
+    padding: 1.5rem;
+    border-radius: 16px;
+    border: 1px solid var(--hvo-border-muted, #334155);
+    background: var(--hvo-card-bg, #0f172a);
+    box-shadow: var(--hvo-panel-shadow, none);
+}
+
+.web-narrow {
+    max-width: 32rem;
+}
+
+.web-muted {
+    color: var(--hvo-muted-strong, #cbd5e1);
+}
+
+/* The screen above the Stop bar, so the form is centred where it is not covered. */
+.web-signin-frame {
+    min-height: calc(100vh - var(--web-stop-bar-space));
+    min-height: calc(100dvh - var(--web-stop-bar-space));
+    display: flex;
+    align-items: center;
+    justify-content: center;
     padding: 1rem;
+    background: radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 55%), var(--hvo-body-bg, #05070d);
+}
+
+.web-signin-main {
+    width: 100%;
+    max-width: 26rem;
+}
+
+.web-signin-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.25rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.web-signin-help {
+    margin: 1rem 0 0;
+    font-size: 0.9rem;
 }
 
 .web-status {
@@ -61,14 +153,380 @@ body {
     font-size: 1rem;
 }
 
-.web-checked,
-.web-notice {
+.web-checked {
     color: var(--hvo-muted, #cbd5e1);
     font-size: 0.9rem;
 }
 
-.web-notice {
-    margin-top: 2rem;
+.web-status--info {
+    background: var(--hvo-info-bg);
+    color: var(--hvo-info-fg);
+}
+
+/* Stop, fixed at the bottom of every page (App.razor, js/stop.js). Above the page, below the reconnect dialog. Stop,
+   Open and Close have the colours every client uses (RoofUiPalette): warning, success and danger. */
+.web-stop-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1050;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: var(--web-stop-bar-height);
+    margin: 0;
+    padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--hvo-warning-strong, #facc15);
+    background: color-mix(in srgb, var(--hvo-card-bg, #0f172a) 94%, transparent);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 -8px 24px rgba(2, 6, 23, 0.55);
+}
+
+/* A button a person taps is at least 44 x 44 CSS pixels (WebTouchTargetBrowserTests). */
+.web-tap,
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-actions .btn {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+}
+
+.web-stop-button {
+    flex: 0 0 auto;
+    min-width: 12rem;
+    min-height: 3.25rem;
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+.web-stop-result {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.web-stop-result[data-state="sent"] {
+    color: var(--hvo-info-fg);
+}
+
+.web-stop-result[data-state="ok"] {
+    color: var(--hvo-success-strong);
+}
+
+.web-stop-result[data-state="warn"] {
+    color: var(--hvo-warning-strong);
+    font-weight: 600;
+}
+
+.web-stop-result[data-state="failed"] {
+    color: var(--hvo-danger-strong);
+    font-weight: 600;
+}
+
+@media (max-width: 576px) {
+    :root {
+        --web-stop-bar-height: 6.5rem;
+    }
+
+    .web-stop-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.35rem;
+    }
+
+    .web-stop-button {
+        width: 100%;
+    }
+
+    .web-stop-result:empty {
+        display: none;
+    }
+}
+
+/* The error notice (App.razor) sits just above the Stop bar and over its shadow: under the bar, a page whose live
+   connection ended on an error would still look live. Below the reconnect dialog. */
+body[data-theme="hvo-dark"] #blazor-error-ui {
+    bottom: var(--web-stop-bar-space);
+    z-index: 1060;
+}
+
+/* The reconnect dialog (App.razor): the theme styles it, and the states it leaves out. */
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-paused,
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-resume-failed {
+    display: flex;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-paused .components-reconnect-paused,
+body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-resume-failed .components-reconnect-resume-failed {
+    display: block;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
     padding-top: 1rem;
-    border-top: 1px solid var(--hvo-border-muted, #334155);
+    border-top: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop .btn {
+    min-width: 12rem;
+    min-height: 3rem;
+    font-weight: 700;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result:empty {
+    display: none;
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="ok"] {
+    color: var(--hvo-success-strong);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="warn"] {
+    color: var(--hvo-warning-strong);
+}
+
+body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="failed"] {
+    color: var(--hvo-danger-strong);
+}
+
+/* The mode banner (Layout/ModeBanner.razor): on every page while the roof does not move, or ignores its limits. */
+.web-mode-banner {
+    margin: 0;
+    padding: 0.5rem 1rem;
+    border-radius: 0;
+    border-width: 0 0 1px;
+    text-align: center;
+    font-size: 0.95rem;
+}
+
+.web-mode-banner p {
+    margin: 0;
+}
+
+/* On the sign-in page the banner sits above the sign-in card, as a card of its own. */
+.web-signin-mode {
+    margin-bottom: 1rem;
+    border-width: 1px;
+    border-radius: var(--bs-border-radius);
+}
+
+/* The controller's status on the sign-in page: the Health page's headline, one line above the sign-in card. */
+.web-signin-status {
+    margin: 0 0 1rem;
+    padding: 0.75rem 1rem;
+    text-align: center;
+    font-weight: 600;
+}
+
+.web-health {
+    margin-top: 1rem;
+}
+
+.web-health-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.web-health-head h2 {
+    margin: 0;
+    font-size: 1.15rem;
+}
+
+.web-health-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.web-health-check {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.6rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-muted, #334155);
+    background: var(--hvo-card-glass, rgba(15, 23, 42, 0.6));
+}
+
+.web-health-description {
+    flex: 1 1 100%;
+    color: var(--hvo-muted-strong, #cbd5e1);
+    font-size: 0.9rem;
+}
+
+/* Settings, People and System (admin pages). */
+.web-card + .web-card,
+.web-pills + .web-card,
+.web-card + .web-pills,
+.web-status + .web-pills {
+    margin-top: 1rem;
+}
+
+.web-card > h2 {
+    font-size: 1.15rem;
+}
+
+.web-message p {
+    margin: 0;
+}
+
+.web-message p + p {
+    margin-top: 0.25rem;
+}
+
+.web-pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.web-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.web-settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.web-setting {
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-muted, #334155);
+    background: var(--hvo-card-glass, rgba(15, 23, 42, 0.6));
+}
+
+.web-setting p {
+    margin: 0.35rem 0;
+}
+
+.web-setting .web-status {
+    padding: 0.5rem 0.75rem;
+}
+
+.web-setting-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.6rem;
+}
+
+.web-setting-key {
+    font-size: 0.8rem;
+    color: var(--hvo-muted, #94a3b8);
+    overflow-wrap: anywhere;
+}
+
+.web-setting-value {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.web-setting-description {
+    color: var(--hvo-muted-strong, #cbd5e1);
+    font-size: 0.9rem;
+}
+
+.web-editor,
+.web-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    max-width: 36rem;
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    border-radius: 12px;
+    border: 1px solid var(--hvo-border-strong, #475569);
+    background: var(--hvo-card-bg, #0f172a);
+}
+
+.web-editor .form-label {
+    margin: 0.25rem 0 0;
+}
+
+.web-editor-help {
+    font-size: 0.85rem;
+}
+
+.web-change-list {
+    margin: 0.25rem 0;
+    padding-left: 1.25rem;
+}
+
+.web-change-list code {
+    color: inherit;
+    overflow-wrap: anywhere;
+}
+
+.web-table {
+    --bs-table-bg: transparent;
+    margin: 0;
+}
+
+.web-table th,
+.web-table td {
+    vertical-align: middle;
+}
+
+.web-row-actions td {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.web-secret-value {
+    font-family: var(--bs-font-monospace);
+}
+
+.web-facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 1rem;
+    margin: 0 0 0.5rem;
+}
+
+.web-facts dt {
+    color: var(--hvo-muted-strong, #cbd5e1);
+    font-weight: 400;
+}
+
+.web-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 575.98px) {
+    .web-facts {
+        grid-template-columns: 1fr;
+    }
+
+    .web-facts dd {
+        margin-bottom: 0.35rem;
+    }
 }

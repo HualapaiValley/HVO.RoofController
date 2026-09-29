@@ -1,0 +1,9 @@
+@inherits WebRoofComponent
+
+@* On every page while the controller does not drive the observatory roof as in normal use, so an emulator or simulation
+   run is never mistaken for the roof. From the newest status, even a stale one: the mode does not change while running.
+   The sign-in page has its own (SignInLayout). *@
+@if (View.Status is { } status)
+{
+    <ModeWarnings Warnings="RoofStatusText.DescribeModeWarnings(status)" />
+}

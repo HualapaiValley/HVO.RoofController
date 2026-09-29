@@ -31,7 +31,7 @@ public sealed record EmulatedCameraStatus(
 /// <summary>
 /// An MJPEG camera for the emulated plant, standing in for the Blue Iris server the controller's camera proxy reads:
 /// <c>GET /mjpg/camNN/video.mjpg</c> answers <c>multipart/x-mixed-replace</c> with one JPEG of the plant per part, each
-/// with its <c>Content-Length</c>. The mode injects the camera failures the console must survive.
+/// with its <c>Content-Length</c>. The mode injects the camera failures the web UI must survive.
 /// </summary>
 public sealed class EmulatedCamera
 {

@@ -82,7 +82,7 @@ public static partial class RoofCli
                     RoofCliFormat.WriteTable(
                         context.Out,
                         ["SETTING", "VALUE", "DEFAULT", "NOTES"],
-                        shown.Fields.Select(field => (IReadOnlyList<string>)[field.Key, field.DisplayValue, field.DefaultValue, DescribeNotes(field)]));
+                        shown.Fields.Select(field => (IReadOnlyList<string>)[field.Key, field.DisplayValue, field.DefaultValue, RoofSettingsText.DescribeNotes(field)]));
                 }
 
                 return (int)RoofExitCode.Success;
@@ -114,7 +114,7 @@ public static partial class RoofCli
                     ("Source", field.State?.Source ?? "(not returned)"),
                     ("Change", field.CanWrite ? "you may change it" : $"read-only: {field.ReadOnlyReason}")
                 };
-                if (DescribeNotes(field) is { Length: > 0 } notes)
+                if (RoofSettingsText.DescribeNotes(field) is { Length: > 0 } notes)
                 {
                     rows.Add(("Notes", notes));
                 }
@@ -344,7 +344,8 @@ public static partial class RoofCli
             }
 
             context.Out.WriteLine($"Saved (settings version {saved.Version}).");
-            if (!saved.FileBacked)
+            // The controller's warnings say why the settings are in memory; this line is for when it gives no reason.
+            if (!saved.FileBacked && saved.Warnings.Count == 0)
             {
                 context.Out.WriteLine("The controller keeps settings in memory only: this change is lost when it restarts.");
             }
@@ -391,7 +392,7 @@ public static partial class RoofCli
         /// <summary>Writes a pending hand edit, and the command that confirms it (<paramref name="command"/>).</summary>
         private static void WriteHandEdit(RoofCliContext context, RoofSettingsForm form, RoofSettingsHandEdit pending, string command)
         {
-            foreach (var line in DescribeHandEdit(form, pending))
+            foreach (var line in RoofSettingsText.DescribeHandEdit(form, pending))
             {
                 context.Out.WriteLine(line);
             }
@@ -399,41 +400,6 @@ public static partial class RoofCli
             if (pending.RequiresConfirmation)
             {
                 context.Out.WriteLine($"To confirm it: '{CommandName} {command} --confirm-safety-critical'.");
-            }
-        }
-
-        /// <summary>A pending hand edit, one line each: what changed, what is wrong with it, and what applying it needs.</summary>
-        internal static IEnumerable<string> DescribeHandEdit(RoofSettingsForm form, RoofSettingsHandEdit pending)
-        {
-            yield return "The settings file was edited by hand. Until it is applied or discarded, changes through the controller are refused.";
-            foreach (var change in pending.Changes)
-            {
-                var field = form.FindField(change.Key);
-                string Show(JsonElement? value) => change.Secret ? "(secret)" : field is null ? value?.GetRawText() ?? "(none)" : RoofSettingValues.Describe(field.Setting, value);
-                var safety = field is not null && change.To is { } to && field.NeedsConfirmation(to) ? "  [SAFETY-CRITICAL]" : string.Empty;
-                yield return change.Secret
-                    ? $"  {change.Key}: secret changed"
-                    : $"  {change.Key}: {Show(change.From)} -> {Show(change.To)}{safety}";
-            }
-
-            if (pending.FileProblem is { } fileProblem)
-            {
-                yield return $"The file cannot be used: {fileProblem}";
-            }
-
-            foreach (var problem in pending.Problems)
-            {
-                yield return $"Problem: {problem.Key}: {problem.Message}";
-            }
-
-            if (pending.RequiresConfirmation)
-            {
-                yield return "Applying it is safety-critical and needs confirming.";
-            }
-
-            if (pending.RequiresLocalCredential)
-            {
-                yield return "Applying it needs a local credential.";
             }
         }
 
@@ -515,21 +481,8 @@ public static partial class RoofCli
                 return null;
             }
 
-            throw new RoofCliRefusedException(HandEditNeedsAdmin(form), RoofExitCode.Forbidden);
+            throw new RoofCliRefusedException(RoofSettingsText.HandEditNeedsAdmin(form), RoofExitCode.Forbidden);
         }
-
-        /// <summary>
-        /// Said to anyone without the admin role, who is not shown a pending hand edit: the fields still say when one is
-        /// pending.
-        /// </summary>
-        internal static string HandEditNeedsAdmin(RoofSettingsForm form)
-            => "Reviewing, applying or discarding a hand edit of the settings file needs the admin role."
-                + (HandEditSeen(form) ? " A hand edit is pending: ask an admin to review it." : string.Empty);
-
-        /// <summary>True when a field says a hand edit is pending, which anyone can see.</summary>
-        internal static bool HandEditSeen(RoofSettingsForm form)
-            => form.PendingHandEdit is not null
-                || form.Fields.Any(field => field.ReadOnlyCode == RoofControllerErrorCode.SettingsHandEditPending);
 
         private static int NoHandEdit(RoofCliContext context)
         {
@@ -610,22 +563,6 @@ public static partial class RoofCli
                 context.Out.WriteLine($"Warning: {warning}");
             }
         }
-
-        internal static string DescribeNotes(RoofSettingsFormField field) => string.Join(", ", new[]
-        {
-            field.CanWrite ? null : "read-only",
-            field.Setting.Safety switch
-            {
-                RoofSettingSafety.Always => "safety-critical",
-                RoofSettingSafety.WhenTurnedOff => "safety-critical to turn off",
-                _ => null
-            },
-            field.Setting.AppliesAfterRestart ? "after restart" : null,
-            field.State?.RestartPending == true ? "RESTART PENDING" : null,
-            field.NeedsLocalCredential ? "local credential" : null,
-            field.Setting.Secret ? "secret" : null,
-            field.State?.Problem is null ? null : "PROBLEM"
-        }.OfType<string>());
 
         private static object DescribeFieldJson(RoofSettingsFormField field) => new
         {

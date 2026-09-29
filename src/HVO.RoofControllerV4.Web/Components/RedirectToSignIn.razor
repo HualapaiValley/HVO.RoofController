@@ -1,0 +1,20 @@
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider Authentication
+
+@code {
+    // A live page whose person is signed out: they signed out (on this page or another), or their session ended (they
+    // are here only after signing in). After a sign-out it goes where the sign-out sends the page that posted it.
+    protected override void OnInitialized()
+    {
+        var url = Authentication is WebAuthenticationStateProvider { PersonSignedOut: true }
+            ? WebAccountEndpoints.BuildSignInUrl(SignInMessages.SignedOut, "/").TrimStart('/')
+            : BuildSignInUrl(Navigation);
+        Navigation.NavigateTo(url, forceLoad: true);
+    }
+
+    internal static string BuildSignInUrl(NavigationManager navigation)
+    {
+        var returnUrl = WebAccountEndpoints.GetSafeReturnUrl("/" + navigation.ToBaseRelativePath(navigation.Uri));
+        return WebAccountEndpoints.BuildSignInUrl(SignInMessages.Ended, returnUrl).TrimStart('/');
+    }
+}

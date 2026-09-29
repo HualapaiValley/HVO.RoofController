@@ -176,6 +176,53 @@ public sealed class RoofSettingsClientTests
         JsonSerializer.Serialize(saved).Should().NotContain(password);
     }
 
+    /// <summary>
+    /// A group's secrets are typed and sent together, as the controller takes the camera's user and password only
+    /// together while the proxy is on; each must be typed, alike twice, and clearing them clears those that are set.
+    /// </summary>
+    [TestMethod]
+    public async Task AGroupsSecrets_AreSetAndClearedTogether()
+    {
+        const string user = "test-camera-user-not-real";
+        const string password = "test-camera-password-not-real-16";
+        using var host = StartHost(new Dictionary<string, string?> { [CameraServer] = "http://192.168.0.4:81" });
+        using var client = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        var form = await LoadFormAsync(client);
+        var camera = form.FindGroup(RoofSettingsContract.CameraGroup)!;
+        camera.Secrets.Select(secret => secret.Key).Should().Equal(CameraUser, CameraPassword);
+        RoofSettingsText.SecretsSetTogether(camera).Should().Be("User name and Password are set and cleared together.");
+        RoofSettingsText.SecretsSetTogether(form.FindGroup(RoofSettingsContract.RoofGroup)!).Should().BeNull("the roof group has no secrets");
+
+        var edit = form.Edit(RoofSettingsContract.CameraGroup);
+        edit.TrySetSecrets([(user, user), ("", "")], out var error).Should().BeFalse();
+        error.Should().Be("Type the new Password: User name and Password are set and cleared together. To remove them, use Clear secret.");
+        edit.TrySetSecrets([(user, user + "!"), (password, password)], out error).Should().BeFalse();
+        error.Should().Be("The two User name values differ.");
+        edit.HasChanges.Should().BeFalse("nothing is set until every secret is typed");
+        edit.Invoking(e => e.TrySetSecrets([(user, user)], out _)).Should().Throw<ArgumentException>();
+
+        edit.TrySetSecrets([(user, user), (password, password)], out error).Should().BeTrue(error);
+        edit.Changes.Keys.Should().BeEquivalentTo(CameraUser, CameraPassword);
+        var saved = RoofSettingsForm.Create(
+            await client.Settings.GetCatalogueAsync(),
+            await client.Settings.UpdateAsync(RoofSettingsContract.CameraGroup, edit.ToRequest()));
+        saved.FindField(CameraUser)!.DisplayValue.Should().Be(RoofSettingValues.SecretSet);
+        saved.FindField(CameraPassword)!.DisplayValue.Should().Be(RoofSettingValues.SecretSet);
+
+        var cleared = saved.Edit(RoofSettingsContract.CameraGroup);
+        cleared.ClearSecrets();
+        cleared.Changes.Keys.Should().BeEquivalentTo(CameraUser, CameraPassword);
+        var after = RoofSettingsForm.Create(
+            await client.Settings.GetCatalogueAsync(),
+            await client.Settings.UpdateAsync(RoofSettingsContract.CameraGroup, cleared.ToRequest()));
+        after.FindField(CameraUser)!.DisplayValue.Should().Be(RoofSettingValues.SecretNotSet);
+        after.FindField(CameraPassword)!.DisplayValue.Should().Be(RoofSettingValues.SecretNotSet);
+
+        var nothing = after.Edit(RoofSettingsContract.CameraGroup);
+        nothing.ClearSecrets();
+        nothing.HasChanges.Should().BeFalse("only the secrets that are set are cleared");
+    }
+
     [TestMethod]
     public async Task ASecretLeftEmpty_IsKept_AndIsClearedOnlyWhenAskedTo()
     {
@@ -347,9 +394,6 @@ public sealed class RoofSettingsClientTests
         Refusal(Setting(RoofSettingType.Duration, minimum: 5, maximum: 600, unit: "s"), "1s").Should().Be("Enter at least 5 s.");
         Refusal(Setting(RoofSettingType.Enum, allowed: ["Trace", "Debug", "Information"]), "Warning").Should().Be(
             "Enter one of: Trace, Debug, Information.");
-        Refusal(Setting(RoofSettingType.StringList), "[1, 2]").Should().Be("Enter the items separated by commas, or as a JSON array of strings.");
-        Refusal(Setting(RoofSettingType.StringList), "[null]").Should().Be("Enter the items separated by commas, or as a JSON array of strings.");
-        Refusal(Setting(RoofSettingType.StringList), "[\"unclosed\"").Should().Be("Enter the items separated by commas, or as a JSON array of strings.");
         Refusal(Setting(RoofSettingType.String, maximum: 5), "abcdef").Should().Be("Enter at most 5 characters.");
     }
 
@@ -360,10 +404,6 @@ public sealed class RoofSettingsClientTests
         Parse(Setting(RoofSettingType.Number), "1.5e1").GetDouble().Should().Be(15);
         Parse(Setting(RoofSettingType.Duration), "5m").GetDouble().Should().Be(300);
         Parse(Setting(RoofSettingType.Enum, allowed: ["Trace", "Debug"]), "debug").GetString().Should().Be("Debug", "the allowed spelling is sent");
-        Parse(Setting(RoofSettingType.StringList), "https://a.example, https://b.example\nhttps://c.example").EnumerateArray()
-            .Select(item => item.GetString()).Should().Equal("https://a.example", "https://b.example", "https://c.example");
-        Parse(Setting(RoofSettingType.StringList), "[\"one, two\"]").EnumerateArray().Select(item => item.GetString()).Should().Equal("one, two");
-        Parse(Setting(RoofSettingType.StringList), "").GetArrayLength().Should().Be(0, "an empty list is a value, not null");
         Parse(Setting(RoofSettingType.String), "").GetString().Should().BeEmpty("a string that cannot be null may be empty");
         Parse(Setting(RoofSettingType.String), " Pier ").GetString().Should().Be(" Pier ", "text is sent as typed");
         Parse(Setting(RoofSettingType.String, nullable: true), "  ").ValueKind.Should().Be(JsonValueKind.Null);
@@ -380,7 +420,6 @@ public sealed class RoofSettingsClientTests
         RoofSettingValues.Validate(Setting(RoofSettingType.Boolean), Json("1")).Should().Be("Enter true or false.");
         RoofSettingValues.Validate(Setting(RoofSettingType.Enum, allowed: ["Debug"]), Json("\"debug\"")).Should().Be(
             "Enter one of: Debug.", "the wire value must use the allowed spelling");
-        RoofSettingValues.Validate(Setting(RoofSettingType.StringList), Json("[1]")).Should().Be("Enter a list of text items.");
         RoofSettingValues.Validate(Setting(RoofSettingType.String), Json("5")).Should().Be("Enter text.");
         RoofSettingValues.Validate(Setting(RoofSettingType.String), RoofSettingValues.Null).Should().Be("A value is required.");
         RoofSettingValues.Validate(Setting(RoofSettingType.String, nullable: true), RoofSettingValues.Null).Should().BeNull();
@@ -396,7 +435,6 @@ public sealed class RoofSettingsClientTests
         RoofSettingValues.Format(duration, Json("90.0")).Should().Be("90");
         RoofSettingValues.Format(duration, Json("1.5")).Should().Be("1.5");
         RoofSettingValues.Format(Setting(RoofSettingType.Boolean), Json("false")).Should().Be("false");
-        RoofSettingValues.Format(Setting(RoofSettingType.StringList), Json("[\"a\",\"b\"]")).Should().Be("a, b");
 
         RoofSettingValues.Describe(duration, Json("45")).Should().Be("45 s");
         RoofSettingValues.Describe(duration, Json("0.5")).Should().Be("0.5 s");
@@ -406,8 +444,6 @@ public sealed class RoofSettingsClientTests
         RoofSettingValues.Describe(Setting(RoofSettingType.Integer, unit: "s"), Json("20")).Should().Be("20 s");
         RoofSettingValues.Describe(Setting(RoofSettingType.Integer), Json("20")).Should().Be("20");
         RoofSettingValues.Describe(Setting(RoofSettingType.String, unit: "chars"), Json("\"Pier\"")).Should().Be("Pier", "text has no unit");
-        RoofSettingValues.Describe(Setting(RoofSettingType.StringList), Json("[]")).Should().Be("(empty)");
-        RoofSettingValues.Describe(Setting(RoofSettingType.StringList), RoofSettingValues.Null).Should().Be(RoofSettingValues.None);
 
         foreach (var text in new[] { "0.5", "90", "1.25", "3600" })
         {

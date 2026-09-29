@@ -221,19 +221,19 @@ internal sealed class RoofUiSetupPage : RoofUiPage
 
         Ui.Ask(new RoofUiPrompt(
             "First admin",
-            $"Adds an admin person, who can then sign in with the password. Name: {RoofCli.NameRule} Password: {RoofCli.PasswordRule}",
+            $"Adds an admin person, who can then sign in with the password. Name: {RoofIdentityText.NameRule} Password: {RoofIdentityText.PasswordRule}",
             [new RoofUiField("Name"), new RoofUiField("Password", Secret: true), new RoofUiField("Password again", Secret: true)],
             [new RoofUiAction("Add", values =>
             {
                 var name = values[0].Trim();
                 if (!RoofIdentityContract.IsValidName(name))
                 {
-                    return $"'{name}' is not a valid name: {RoofCli.NameRule}";
+                    return $"'{name}' is not a valid name: {RoofIdentityText.NameRule}";
                 }
 
                 if (!RoofIdentityContract.IsValidPassword(values[1]))
                 {
-                    return RoofCli.PasswordRule;
+                    return RoofIdentityText.PasswordRule;
                 }
 
                 if (values[1] != values[2])

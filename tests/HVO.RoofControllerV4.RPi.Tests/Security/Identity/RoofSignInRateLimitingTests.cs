@@ -42,13 +42,13 @@ public sealed class RoofSignInRateLimitingTests
     }
 
     [TestMethod]
-    public void AnAnonymousEndpoint_IsCountedByAddress_EvenWithAConsoleCookie()
+    public void AnAnonymousEndpoint_IsCountedByAddress_EvenWithAnApiKey()
     {
         var context = new DefaultHttpContext
         {
             User = RoofPrincipalFactory.Create(
                 new RoofApiKeyIdentity("cfg-viewer", RoofControllerApiContract.ViewerRole, "0123456789abcdef", Kiosk: false),
-                "Cookies")
+                RoofControllerSecurityDefaults.ApiKeyScheme)
         };
         context.SetEndpoint(new Endpoint(null, new EndpointMetadataCollection(new AllowAnonymousAttribute()), "Auth/Session"));
         context.Connection.RemoteIpAddress = IPAddress.Parse("192.0.2.10");

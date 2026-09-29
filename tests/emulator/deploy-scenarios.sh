@@ -9,7 +9,7 @@
 #   supervisor The container's two processes (docs/deployment.md, "The container's two processes"): the controller
 #              killed during travel inside the container, a crash loop that leaves it stopped with the container
 #              unhealthy and the web UI saying why, a forced restart through the web UI's control file, and the web UI
-#              killed while the roof moves (C11 steps 6-9); and the web UI's user and environment.
+#              killed while the roof moves (C11 steps 6-9); and the web UI's user, environment and keys directory.
 #   c12        commissioning.md C12 with deploy-roofcontroller-rpi.sh: an idle deploy, a deploy while the roof moves,
 #              pre-flight failures, a remote-check failure that rolls back, --rollback twice, a Stop that cannot be
 #              verified, a new controller that never becomes ready, a new web UI that cannot start, and the relays off
@@ -266,10 +266,12 @@ web_ui_live() {
   curl -fsS --max-time 5 --cacert "${work}/ca.pem" "${web}/health/live" >/dev/null
 }
 
-# web_page_has <text>: the web UI's home page, as the server renders it, has the text.
+# web_page_has <text>: the web UI's home page, as the server renders it for someone not signed in, has the text: the
+# sign-in page it redirects to, which says whether the controller is running and ready (nobody can sign in while the
+# controller is stopped).
 web_page_has() {
   local page
-  page=$(curl -fsS --max-time 10 --cacert "${work}/ca.pem" "${web}/") || return 1
+  page=$(curl -fsSL --max-time 10 --cacert "${work}/ca.pem" "${web}/") || return 1
   grep -qF -- "$1" <<<"${page}"
 }
 
@@ -280,6 +282,61 @@ kill_supervised() {
   pid=$(supervised_value ".$1.pid // empty")
   [[ "${pid}" =~ ^[0-9]+$ ]] || fail "the supervisor reports no running $1 to kill: $(supervisor_state)"
   docker exec "${controller}" bash -c "kill -KILL ${pid}"
+}
+
+# restart_web_ui: kills the web UI, as a crash ends it, and waits until the supervisor has started it again and it is live.
+# The wait allows for the supervisor's longest backoff (HVO_SUPERVISOR_BACKOFF_MAX_SECONDS, 30 s) and more: the web UI is
+# killed several times within the supervisor's crash window.
+restart_web_ui() {
+  local starts
+  starts=$(supervised_value '.ui.starts') || fail "could not read the supervisor's state"
+  [[ "${starts}" =~ ^[0-9]+$ ]] || fail "the supervisor reports no web UI starts: $(supervisor_state)"
+  kill_supervised ui || fail "could not kill the web UI"
+  wait_for "the supervisor to start the web UI again" 45 \
+    supervised_is ".ui.state == \"running\" and .ui.starts == $((starts + 1))"
+  wait_for "the web UI live again" 60 web_ui_live
+}
+
+# expect_absent <user> <path> <message>: the path does not exist, as that user in the container sees it. Fails with the
+# message when it does, and says so when docker could not check. The answer is printed in the container, because
+# docker exec exits 1 for its own errors (a container that is not running, for example), as test -e does.
+expect_absent() {
+  local answer
+  answer=$(docker exec -u "$1" "${controller}" \
+    sh -c 'if [ -e "$1" ]; then echo present; else echo absent; fi' sh "$2") \
+    || fail "could not check for $2 (docker exec failed)"
+  case ${answer} in
+    absent) ;;
+    present) fail "$3" ;;
+    *) fail "could not check for $2 (${answer:-no answer})" ;;
+  esac
+}
+
+# expect_refused <user> <message> <command...>: the command is refused (exit status 1, as cat and ln exit when they are
+# denied) as that user in the container. Fails with the message when it works, and says so when docker or the command
+# could not check. The answer is printed in the container, as in expect_absent.
+expect_refused() {
+  local user=$1 message=$2 answer
+  shift 2
+  answer=$(docker exec -u "${user}" "${controller}" sh -c \
+    '"$@" >/dev/null 2>&1; s=$?; case $s in 0) echo allowed ;; 1) echo refused ;; *) echo "exit $s" ;; esac' sh "$@") \
+    || fail "could not check whether ${user} can run: $* (docker exec failed)"
+  case ${answer} in
+    refused) ;;
+    allowed) fail "${message}" ;;
+    *) fail "could not check whether ${user} can run: $* (${answer:-no answer})" ;;
+  esac
+}
+
+# web_ui_keys_setting: the RoofWeb__DataProtectionPath setting the supervisor started the running web UI with; nothing
+# when it has none. Only that line of its environment is read, as the web UI's user: root in the container has no
+# CAP_SYS_PTRACE, so it cannot read another user's environment.
+web_ui_keys_setting() {
+  local pid
+  pid=$(supervised_value '.ui.pid // empty')
+  [[ "${pid}" =~ ^[0-9]+$ ]] || fail "the supervisor reports no running web UI: $(supervisor_state)"
+  docker exec -u app "${controller}" bash -c \
+    "set -o pipefail; tr '\\0' '\\n' < /proc/${pid}/environ | { grep '^RoofWeb__DataProtectionPath=' || true; }"
 }
 
 # request_forced_restart: what the web UI does for a forced restart, as the web UI's user: it creates the request file
@@ -413,6 +470,11 @@ container_running() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == true ]]
 }
 
+# container_stopped <name>: Docker says the container is not running. A docker error is neither running nor stopped.
+container_stopped() {
+  [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == false ]]
+}
+
 # container_log_has <name> <text> [since]: the log, or the part since a `now` value (the container keeps the log of
 # every run), has the text. The log is read whole first: grep -q would end a pipe early, and pipefail would then report
 # docker's SIGPIPE as a failure.
@@ -422,11 +484,30 @@ container_log_has() {
   grep -qF -- "$2" <<<"${log}"
 }
 
-# container_log_count <name> <text>: how many lines of the container's log have the text.
+# container_log_lacks <name> <text> [since]: the log, or the part since a `now` value, was read and lacks the text. A
+# log docker cannot read fails the check: docker logs exits 1 for its own errors, as grep does when nothing matches.
+container_log_lacks() {
+  local log
+  log=$(docker logs ${3:+--since "$3"} "$1" 2>&1) || fail "could not read the log of $1: ${log}"
+  ! grep -qF -- "$2" <<<"${log}"
+}
+
+# container_log_count <name> <text>: how many lines of the container's log have the text. Fails (prints no count) when
+# docker cannot read the log.
 container_log_count() {
   local log
-  log=$(docker logs "$1" 2>&1)
+  log=$(docker logs "$1" 2>&1) || return 1
   grep -cF -- "$2" <<<"${log}" || true
+}
+
+# expect_no_leftovers <which deploy>: no container of this run's image is left but the controller and its previous
+# version. A list docker cannot give fails the check.
+expect_no_leftovers() {
+  local names leftovers
+  names=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}') \
+    || fail "could not list the containers of ${image}"
+  leftovers=$(grep -vx -e "${controller}" -e "${previous}" <<<"${names}" || true)
+  [[ -z "${leftovers}" ]] || fail "containers of the $1 deploy remain: ${leftovers}"
 }
 
 container_image() {
@@ -690,7 +771,8 @@ scenario_lifecycle() {
     || (( controller_stopping > controller_stopped || controller_stopped > ui_stopping )); then
     fail "the supervisor did not stop the controller (exit code 0) before the web UI: lines ${controller_stopping:-none}, ${controller_stopped:-none}, ${ui_stopping:-none}"
   fi
-  ! container_log_has "${controller}" 'did not stop within' "${start}" || fail "the supervisor killed a process at the end of its wait"
+  container_log_lacks "${controller}" 'did not stop within' "${start}" \
+    || fail "the supervisor killed a process at the end of its wait"
   wait_for "the camera stream to end" 5 camera_stream_ended
   stream_seconds=$(awk -v s="${start}" -v e="$(cat "${work}/camera.ended")" 'BEGIN { printf "%.1f", e - s }')
   stop_camera_stream
@@ -744,7 +826,7 @@ scenario_lifecycle() {
   local held
   held=$(plant | jq '.relayRegister')
   (( held != 0 )) || fail "the relays were released when the process died; the HAT holds them until something writes the register"
-  container_running "${controller}" && fail "the killed container restarted by itself"
+  container_stopped "${controller}" || fail "the killed container restarted by itself (or docker could not say)"
   start=$(now)
   docker start "${controller}" >/dev/null
   wait_for "the restarted controller to turn the relays off" 60 plant_is '.relayRegister == 0'
@@ -795,7 +877,7 @@ scenario_lifecycle() {
     || fail "the controller's log does not report its shutdown stop unverified"
   container_log_has "${controller}" 'Roof controller shutdown stop FAILED' "${start}" \
     || fail "the controller's log does not report its shutdown stop failed"
-  ! container_log_has "${controller}" 'did not stop within' "${start}" \
+  container_log_lacks "${controller}" 'did not stop within' "${start}" \
     || fail "the supervisor killed the controller at the end of its wait"
   held=$(plant | jq '.relayRegister')
   (( held != 0 )) || fail "the relays are off although no relay write reached the HAT"
@@ -835,15 +917,14 @@ scenario_supervisor() {
   # The key file exists (root reads it), so a refusal to app is the permission, not a missing file.
   docker exec "${controller}" test -r /run/secrets/RoofControllerSecurity__ApiKeys__0__Key \
     || fail "the controller's API key file is not at /run/secrets/RoofControllerSecurity__ApiKeys__0__Key"
-  ! docker exec -u app "${controller}" cat /run/secrets/RoofControllerSecurity__ApiKeys__0__Key >/dev/null 2>&1 \
-    || fail "the web UI's user can read the controller's API keys"
+  expect_refused app "the web UI's user can read the controller's API keys" \
+    cat /run/secrets/RoofControllerSecurity__ApiKeys__0__Key
   # The web UI's private directory (its certificate copies) is root's: the web UI reads it but cannot plant a link there
   # for the supervisor, running as root, to write through.
   local private
   private=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/web) || fail "no /run/hvo-roof/web"
   [[ "${private}" == "root:app 750" ]] || fail "/run/hvo-roof/web is ${private}, not root:app 750"
-  ! docker exec -u app "${controller}" ln -s /app/x /run/hvo-roof/web/probe 2>/dev/null \
-    || fail "the web UI's user can create a link in /run/hvo-roof/web"
+  expect_refused app "the web UI's user can create a link in /run/hvo-roof/web" ln -s /app/x /run/hvo-roof/web/probe
   pass "the web UI (pid ${ui_pid}) runs as app with its RoofWeb__* settings and none of the controller's, cannot read /run/secrets, and cannot write its private directory (root:app 750)"
 
   container=$(container_id "${controller}")
@@ -960,6 +1041,64 @@ scenario_supervisor() {
   assert_relays_off
   close_roof
   pass "the supervisor started only the web UI again (start ${ui_starts} -> $((ui_starts + 1))) and it is live; the controller (pid ${controller_pid}) kept running and the move went on; relays off after Stop"
+
+  # CommissioningCheck("C11")
+  current_check="Supervisor: the web UI's keys directory is in a directory only root can change"
+  # What the links below name: a directory made for this step, which only root can change, so that a link followed by
+  # mistake changes nothing outside the container.
+  local keys_dir=/var/lib/hvo-roof-web target=/var/lib/hvo-scenario-target owners target_was setting
+  docker exec "${controller}" install -d -m 0750 -o root -g root "${target}" || fail "could not make ${target}"
+  target_was=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target}"
+  owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ') \
+    || fail "no ${keys_dir}/keys"
+  [[ "${owners}" == "root:root 755 app:app 700" ]] || fail "${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
+  expect_refused app "the web UI's user can create a link in ${keys_dir}" ln -s "${target}" "${keys_dir}/probe"
+  # A volume there given to the web UI's user, as the docs once advised: at the web UI's next start, root takes it back
+  # before it makes the keys directory in it.
+  docker exec "${controller}" chown app:app "${keys_dir}" || fail "could not give ${keys_dir} to the web UI's user"
+  restart_web_ui
+  owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ') \
+    || fail "no ${keys_dir}/keys after the web UI's restart"
+  [[ "${owners}" == "root:root 755 app:app 700" ]] \
+    || fail "after the web UI's restart, ${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
+  # A symbolic link in place of the keys directory is refused at the web UI's next start: the web UI keeps its keys in
+  # memory, and what the link names is left as it was. The web UI's user makes this one, while ${keys_dir} is its own,
+  # as it could in a volume given to it. Then the same for a link in place of ${keys_dir}, which only root can make.
+  docker exec "${controller}" chown app:app "${keys_dir}" || fail "could not give ${keys_dir} to the web UI's user"
+  docker exec -u app "${controller}" bash -c "mv ${keys_dir}/keys ${keys_dir}/keys.scenario && ln -s ${target} ${keys_dir}/keys" \
+    || fail "the web UI's user could not put a link in place of ${keys_dir}/keys"
+  expect_keys_link_refused "${keys_dir}/keys" "${target}" "${target_was}"
+  docker exec "${controller}" bash -c "rm ${keys_dir}/keys && mv ${keys_dir}/keys.scenario ${keys_dir}/keys \
+    && mv ${keys_dir} ${keys_dir}.scenario && ln -s ${target} ${keys_dir}" || fail "could not put a link in place of ${keys_dir}"
+  expect_keys_link_refused "${keys_dir}" "${target}" "${target_was}"
+  docker exec "${controller}" bash -c "rm ${keys_dir} && mv ${keys_dir}.scenario ${keys_dir} && rmdir ${target}" \
+    || fail "could not put ${keys_dir} back, or remove ${target}"
+  restart_web_ui
+  setting=$(web_ui_keys_setting) || fail "could not read the web UI's keys setting"
+  [[ "${setting}" == "RoofWeb__DataProtectionPath=${keys_dir}/keys" ]] \
+    || fail "the web UI was not given ${keys_dir}/keys again once the links were gone (${setting:-no setting})"
+  pass "${keys_dir} is root:root 755 and its keys directory app:app 700; the web UI's user cannot make a link there, and a ${keys_dir} given to that user is root's again at the web UI's next start; a link in place of the keys directory (made by the web UI's user) or of ${keys_dir} is refused: the web UI keeps its keys in memory and writes none under its home, and ${target}, which the links named, is still ${target_was}; the directory is used again once the link is gone"
+}
+
+# expect_keys_link_refused <link> <target> <target's owners and mode before>: at the web UI's next start, the supervisor
+# refuses the link (a WARNING), gives the web UI no keys directory, and leaves what the link names as it was; the web UI
+# keeps its keys in memory, not in ASP.NET Core's default directory under its home.
+expect_keys_link_refused() {
+  local link=$1 target=$2 target_was=$3 start setting target_now
+  start=$(now)
+  restart_web_ui
+  [[ -n "$(supervisor_log_line "WARNING: cannot use ${link} for the web UI's keys" "${start}")" ]] \
+    || fail "the supervisor did not refuse the link at ${link}; its last lines: $(docker logs --since "${start}" "${controller}" 2>&1 \
+      | grep -F '[supervisor]' | tail -n 3 | paste -sd ' ')"
+  setting=$(web_ui_keys_setting) || fail "could not read the web UI's keys setting"
+  [[ -z "${setting}" ]] || fail "the web UI was given a keys directory through the link at ${link} (${setting})"
+  target_now=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target} after the web UI's restart"
+  [[ "${target_now}" == "${target_was}" ]] \
+    || fail "${target}, named by the link at ${link}, was changed from ${target_was} to ${target_now}"
+  expect_absent root "${target}/keys" "a keys directory was made in ${target}, through the link at ${link}"
+  # The sign-in page's form token needs the keys.
+  web_page_has '__RequestVerificationToken' || fail "the web UI's sign-in page has no form token"
+  expect_absent app /home/app/.aspnet "the web UI wrote its keys under /home/app/.aspnet instead of keeping them in memory"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -984,7 +1123,7 @@ scenario_c12() {
   new_id=$(container_id "${controller}")
   [[ "${new_id}" != "${old_id}" ]] || fail "the controller was not replaced"
   [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "the old controller is not kept as ${previous}"
-  ! container_running "${previous}" || fail "${previous} is running"
+  container_stopped "${previous}" || fail "${previous} is running (or docker could not say)"
   web_ui_live || fail "the web UI is not live at ${web}"
   relays_stayed_off
   assert_relays_off
@@ -1000,9 +1139,11 @@ scenario_c12() {
   assert_relays_off
   old_id=$(container_id "${controller}")
   # That Stop logged a NormalStop too: only one more, and no HostShutdown, shows the script's stop gate stopped the move.
-  local normal_stops shutdown_stops
-  normal_stops=$(container_log_count "${controller}" 'stopped: NormalStop')
-  shutdown_stops=$(container_log_count "${controller}" 'stopped: HostShutdown')
+  local normal_stops shutdown_stops old_normal_stops old_shutdown_stops
+  normal_stops=$(container_log_count "${controller}" 'stopped: NormalStop') \
+    || fail "could not read the log of ${controller}"
+  shutdown_stops=$(container_log_count "${controller}" 'stopped: HostShutdown') \
+    || fail "could not read the log of ${controller}"
   deploy_in_background
   wait_for "the deploy script's pre-flight" 900 background_deploy_reached "[deploy] Pre-flight"
   roof_post Open >/dev/null
@@ -1018,9 +1159,13 @@ scenario_c12() {
   [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "the old controller is not kept as ${previous}"
   plant_is '.openLimitActuated == false and .closedLimitActuated == false' \
     || fail "the roof reached a limit: the stop gate did not stop it mid-travel: $(plant)"
-  (( $(container_log_count "${previous}" 'stopped: NormalStop') == normal_stops + 1 )) \
+  old_normal_stops=$(container_log_count "${previous}" 'stopped: NormalStop') \
+    || fail "could not read the log of ${previous}"
+  old_shutdown_stops=$(container_log_count "${previous}" 'stopped: HostShutdown') \
+    || fail "could not read the log of ${previous}"
+  (( old_normal_stops == normal_stops + 1 )) \
     || fail "the old controller's log does not show one NormalStop of the moving roof by the script's Stop"
-  (( $(container_log_count "${previous}" 'stopped: HostShutdown') == shutdown_stops )) \
+  (( old_shutdown_stops == shutdown_stops )) \
     || fail "the old controller stopped the moving roof at its shutdown (HostShutdown), not at the script's stop gate"
   assert_relays_off
   pass "the script stopped the moving roof (NormalStop, verified all-off) before replacing the controller; the roof stopped between its limits at $(plant | jq '.openPercent | floor')% open"
@@ -1093,9 +1238,7 @@ scenario_c12() {
   container_running "${controller}" || fail "the old controller is not running"
   wait_for "the old controller ready" 120 controller_ready
   roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
-  local leftovers
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  expect_no_leftovers failed
   local rollback_started rollback_seconds
   rollback_started=$(grep -m 1 '\[rollback\]' "${DEPLOY_LOG}" | cut -d' ' -f1)
   rollback_seconds=$(awk -v a="${rollback_started}" -v b="${DEPLOY_SECONDS}" 'BEGIN { printf "%.1f", b - a }')
@@ -1117,8 +1260,7 @@ scenario_c12() {
   ! deploy_log_has "Stopping ${controller} gracefully" || fail "the script stopped ${controller}"
   [[ "$(container_id "${controller}")" == "${current_id}" ]] || fail "${controller} was replaced"
   container_running "${controller}" || fail "${controller} is not running"
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the aborted deploy remain: ${leftovers}"
+  expect_no_leftovers aborted
   relays_stayed_off
   local stop_answer
   stop_answer=$(grep -m 1 -o -e 'Stop returned HTTP [0-9]*' -e 'Stop result: relayRegisterState=[A-Za-z]*' "${DEPLOY_LOG}" || true)
@@ -1147,8 +1289,7 @@ scenario_c12() {
   container_running "${controller}" || fail "the old controller is not running"
   wait_for "the old controller ready" 120 controller_ready
   roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  expect_no_leftovers failed
   relays_stayed_off
   assert_relays_off
   pass "the new controller was not ready within 45 s; exit ${DEPLOY_STATUS} after ${DEPLOY_SECONDS} s with the previous controller running and ready again; relays 0 in ${RELAY_SAMPLES} samples"
@@ -1168,8 +1309,7 @@ scenario_c12() {
   wait_for "the old controller ready" 120 controller_ready
   roof_is '.isInitialized' || fail "the old controller did not answer Status at ${roof}"
   wait_for "the old version's web UI live" 60 web_ui_live
-  leftovers=$(docker ps -a --filter "ancestor=${image}" --format '{{.Names}}' | grep -vx -e "${controller}" -e "${previous}" || true)
-  [[ -z "${leftovers}" ]] || fail "containers of the failed deploy remain: ${leftovers}"
+  expect_no_leftovers failed
   relays_stayed_off
   assert_relays_off
   pass "the new web UI could not start; exit ${DEPLOY_STATUS} after ${DEPLOY_SECONDS} s with the previous controller and its web UI running again; relays 0 in ${RELAY_SAMPLES} samples"
@@ -1322,9 +1462,12 @@ scenario_migration() {
   expect_deploy_log "[done] Deployment complete and verified at ${roof}"
   local script_id
   script_id=$(container_id "${controller}")
-  [[ -z "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${controller}")" ]] \
-    || fail "the script's controller carries a Compose label"
-  [[ "$(container_image "${controller}")" != "${compose_image}" ]] || fail "the script's controller runs the Compose version"
+  local script_label script_image
+  script_label=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${controller}") \
+    || fail "could not inspect ${controller}"
+  [[ -z "${script_label}" ]] || fail "the script's controller carries a Compose label"
+  script_image=$(container_image "${controller}") || fail "could not inspect ${controller}"
+  [[ "${script_image}" != "${compose_image}" ]] || fail "the script's controller runs the Compose version"
   session_knows_person "${compose_session}" || fail "the session opened on the Compose controller does not work on the script's"
   person_signs_in || fail "the person added on the Compose controller cannot sign in on the script's"
   default_camera_is scenario-camera || fail "the setting changed on the Compose controller is not in effect on the script's"

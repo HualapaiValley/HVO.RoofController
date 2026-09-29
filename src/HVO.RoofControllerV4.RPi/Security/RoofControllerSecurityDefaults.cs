@@ -3,7 +3,7 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.RPi.Security;
 
 /// <summary>
-/// Names shared by the HTTP API, the Blazor console and the authentication setup in <c>Program</c>.
+/// Names shared by the HTTP API, the status hub and the authentication setup in <c>Program</c>.
 /// </summary>
 public static class RoofControllerSecurityDefaults
 {
@@ -14,8 +14,8 @@ public static class RoofControllerSecurityDefaults
     public const string SessionScheme = "RoofSession";
 
     /// <summary>
-    /// The scheme <c>api/*</c> routes, the status hub and OpenAPI accept: a session when the request carries
-    /// <c>Authorization: Bearer</c>, otherwise an API key. Never a cookie.
+    /// The scheme <c>api/*</c> routes, the camera, <c>/health</c>, the status hub and OpenAPI accept: a session when the
+    /// request carries <c>Authorization: Bearer</c>, otherwise an API key.
     /// </summary>
     public const string ApiScheme = "RoofApi";
 
@@ -24,21 +24,6 @@ public static class RoofControllerSecurityDefaults
     /// or expired) an API key sent with it is tried, so a kiosk or UI can always stop with its own key.
     /// </summary>
     public const string StopScheme = "RoofStop";
-
-    /// <summary>Cookie scheme used only by the Blazor console after an access-key login.</summary>
-    public const string CookieScheme = "RoofConsoleCookie";
-
-    public const string LoginPath = "/login";
-    public const string LoginPostPath = "/account/login";
-    public const string LogoutPostPath = "/account/logout";
-    public const string AccessDeniedPath = "/access-denied";
-
-    /// <summary>Console Stop that does not need the Blazor circuit (used by the reconnect dialog).</summary>
-    public const string ConsoleStopPath = "/console/stop";
-
-    /// <summary>Form field names posted to <see cref="LoginPostPath"/>.</summary>
-    public const string AccessKeyFormField = "accessKey";
-    public const string ReturnUrlFormField = "returnUrl";
 
     /// <summary>Status, camera and health details. Granted to every role.</summary>
     public const string ViewerPolicy = "RoofViewerPolicy";

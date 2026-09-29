@@ -2,7 +2,11 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Web.Components;
+using HVO.RoofControllerV4.Web.Roof;
+using HVO.RoofControllerV4.Web.Security;
+using HVO.RoofControllerV4.Web.Sessions;
 using HVO.RoofControllerV4.Web.Supervision;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.Extensions.Configuration.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -73,7 +77,8 @@ public class Program
             builder.WebHost.ConfigureKestrel(kestrel => kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = certificate));
         }
 
-        ConfigureServices(builder);
+        var stopKey = WebStopKey.Load(options.StopKeyFile);
+        ConfigureServices(builder, options, stopKey);
         customize?.Invoke(builder);
 
         var app = builder.Build();
@@ -81,7 +86,7 @@ public class Program
         return app;
     }
 
-    private static void ConfigureServices(WebApplicationBuilder builder)
+    private static void ConfigureServices(WebApplicationBuilder builder, RoofWebOptions options, WebStopKey stopKey)
     {
         var services = builder.Services;
         services.AddOptions<RoofWebOptions>().Bind(builder.Configuration.GetSection(RoofWebOptions.SectionName));
@@ -100,7 +105,21 @@ public class Program
         services.AddSingleton<SupervisorStateReader>();
         services.AddSingleton<ControllerForcedRestart>();
         services.AddSingleton<RoofWebStatusProbe>();
+        services.AddSingleton<WebControllerMode>();
+        services.AddSingleton<WebControllerStatus>();
 
+        // Each signed-in person has their own client of the controller, with their session.
+        services.AddSingleton(stopKey);
+        services.AddSingleton<RoofControllerConnector>();
+        services.AddRoofWebAuthentication(options);
+
+        // One console per live page (circuit), shared by its layout and page; it drops the lease when the page's
+        // connection goes down.
+        services.AddScoped<WebCircuitMonitor>();
+        services.AddScoped<CircuitHandler>(provider => provider.GetRequiredService<WebCircuitMonitor>());
+        services.AddScoped<WebRoofConsole>();
+
+        services.AddProblemDetails();
         services.AddRazorComponents().AddInteractiveServerComponents();
         services.AddHealthChecks();
     }
@@ -112,13 +131,23 @@ public class Program
             var headers = context.Response.Headers;
             headers.XContentTypeOptions = "nosniff";
             headers.XFrameOptions = "DENY";
-            headers["Referrer-Policy"] = "no-referrer";
+            // Not no-referrer: under it a browser sends "Origin: null" with a form post, which OriginCheck refuses.
+            headers["Referrer-Policy"] = "same-origin";
             await next(context);
         });
 
+        // Cross-site requests are refused before anything else looks at them.
+        app.UseMiddleware<OriginCheck>();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.UseMiddleware<LiveConnectionGate>();
         app.UseAntiforgery();
+
         app.MapStaticAssets();
         app.MapHealthChecks(HealthLivePath);
+        app.MapWebAccountEndpoints();
+        app.MapWebStopEndpoint();
+        app.MapWebCameraEndpoint();
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
     }
 

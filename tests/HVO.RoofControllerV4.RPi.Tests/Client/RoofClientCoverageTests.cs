@@ -23,19 +23,6 @@ public sealed class RoofClientCoverageTests
     /// <summary>Endpoints the library does not call, each with the reason.</summary>
     private static readonly Dictionary<string, string> NotCalled = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["GET,POST /"] = WebConsole,
-        ["GET,POST /access-denied"] = WebConsole,
-        ["GET,POST /login"] = WebConsole,
-        ["GET,POST /roof-control"] = WebConsole,
-        ["GET,POST /roof-control-v2"] = WebConsole,
-        ["POST /account/login"] = WebConsole + ": its cookie sign-in form",
-        ["POST /account/logout"] = WebConsole + ": its cookie sign-out form",
-        ["POST /console/stop"] = WebConsole + ": its cookie-authenticated Stop; clients use RoofControl/Stop",
-        ["* /_blazor"] = Blazor,
-        ["* /_blazor/disconnect/"] = Blazor,
-        ["* /_blazor/initializers/"] = Blazor,
-        ["* /_blazor/negotiate"] = Blazor,
-        ["GET /_framework/opaque-redirect"] = Blazor,
         ["GET /openapi/{documentName}.json"] = ApiDocs,
         ["GET /scalar/{documentName?}"] = ApiDocs,
         ["GET /scalar/favicon.svg"] = ApiDocs,
@@ -43,8 +30,6 @@ public sealed class RoofClientCoverageTests
         ["GET /scalar/scalar.js"] = ApiDocs
     };
 
-    private const string WebConsole = "the controller's own web console, not an API";
-    private const string Blazor = "the web console's Blazor circuit";
     private const string ApiDocs = "the API description and its viewer, read by people and tools, not by clients";
 
     /// <summary>A SignalR negotiate answer offering WebSockets, so the status feed goes on to open one.</summary>
@@ -55,6 +40,7 @@ public sealed class RoofClientCoverageTests
     private static readonly (string Name, Func<RoofControllerClient, Task> Call)[] Calls =
     [
         ("Roof.GetStatus", client => client.Roof.GetStatusAsync()),
+        ("Roof.GetMode", client => client.Roof.GetModeAsync()),
         ("Roof.Open", client => client.Roof.OpenAsync()),
         ("Roof.Close", client => client.Roof.CloseAsync()),
         ("Roof.RenewLease", client => client.Roof.RenewLeaseAsync()),

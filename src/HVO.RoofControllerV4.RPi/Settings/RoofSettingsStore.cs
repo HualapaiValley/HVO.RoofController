@@ -593,6 +593,11 @@ public sealed class RoofSettingsStore
             warnings.Add("The settings file was edited outside the API. Review the pending edit, then reload or discard it.");
         }
 
+        if (admin && RoofSettingsCatalogue.DescribeRetired(layers.Settings?.Document.Retired ?? []) is { } retired)
+        {
+            warnings.Add(retired);
+        }
+
         var document = layers.Settings?.Document ?? RoofSettingsDocument.Empty;
         return new RoofSettingsResponse(
             document.Version,
@@ -993,7 +998,7 @@ public sealed class RoofSettingsStore
         var index = layers.IndexOf(layer);
         for (var i = layers.Providers.Count - 1; i > index; i--)
         {
-            if (RoofConfigurationView.Sets(layers.Providers[i], definition.Key, definition.IsList))
+            if (RoofConfigurationView.Sets(layers.Providers[i], definition.Key))
             {
                 return new Refusal(
                     RoofControllerErrorCode.SettingNotPermitted,
@@ -1017,7 +1022,7 @@ public sealed class RoofSettingsStore
     {
         for (var i = layers.Providers.Count - 1; i >= 0; i--)
         {
-            if (RoofConfigurationView.Sets(layers.Providers[i], definition.Key, definition.IsList))
+            if (RoofConfigurationView.Sets(layers.Providers[i], definition.Key))
             {
                 return Label(layers.Providers[i]);
             }
@@ -1093,29 +1098,16 @@ public sealed class RoofSettingsStore
         return updated;
     }
 
-    /// <summary><paramref name="data"/> with each change's keys replaced by its new value's.</summary>
+    /// <summary><paramref name="data"/> with each change's key set to its new value.</summary>
     private static Dictionary<string, string?> Overlay(Dictionary<string, string?> data, IEnumerable<Change> changes)
     {
         foreach (var change in changes)
         {
-            var key = change.Definition.Key;
-            foreach (var existing in data.Keys.Where(existing => Covers(key, existing)).ToList())
-            {
-                data.Remove(existing);
-            }
-
-            foreach (var (entryKey, value) in change.Definition.ToConfigurationEntries(change.To))
-            {
-                data[entryKey] = value;
-            }
+            data[change.Definition.Key] = RoofSettingDefinition.Format(change.To);
         }
 
         return data;
     }
-
-    private static bool Covers(string settingKey, string key)
-        => string.Equals(settingKey, key, StringComparison.OrdinalIgnoreCase)
-            || key.StartsWith(settingKey + ConfigurationPath.KeyDelimiter, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Removes the key's property from <paramref name="root"/>, and the objects left empty above it.</summary>
     private static void RemovePath(JsonObject root, string key)
@@ -1229,7 +1221,6 @@ public sealed class RoofSettingsStore
     {
         null => false,
         string text => text.Length > 0,
-        IReadOnlyList<string> items => items.Count > 0,
         _ => true
     };
 

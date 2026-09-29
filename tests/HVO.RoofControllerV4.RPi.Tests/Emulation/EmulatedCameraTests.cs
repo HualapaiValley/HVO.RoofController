@@ -20,7 +20,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Emulation;
 
 /// <summary>
 /// The emulated camera: its JPEG encoder (checked against an independent decoder), its view of the plant, and the
-/// emulator host's MJPEG endpoint with the failure modes the console must survive.
+/// emulator host's MJPEG endpoint with the failure modes the web UI must survive.
 /// </summary>
 [TestClass]
 public sealed class EmulatedCameraTests

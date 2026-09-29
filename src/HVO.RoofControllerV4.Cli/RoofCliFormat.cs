@@ -5,112 +5,25 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.Cli;
 
 /// <summary>
-/// How the command line and the terminal interface show the roof. Every claim comes from a field the controller sent:
-/// a verified relay register is not reported as contacts that moved, and an unknown input is shown as unknown.
+/// How the command line and the terminal interface show the roof. The words for a status's parts are
+/// <see cref="RoofStatusText"/>'s, shared with the other clients; this adds the rows, the times and the tables.
 /// </summary>
 internal static class RoofCliFormat
 {
     /// <summary>The status as label and value rows.</summary>
-    public static IReadOnlyList<(string Label, string Value)> DescribeStatus(RoofStatusResponse status)
-    {
-        var rows = new List<(string, string)>
-        {
-            ("Roof", DescribeRoof(status)),
-            ("Last stop", DescribeLastStop(status)),
-            ("Fault", DescribeFault(status)),
-            ("Limits", $"open {DescribeInput(status.IsOpenLimitActive)}, closed {DescribeInput(status.IsClosedLimitActive)}"),
-            ("Drive fault", DescribeInput(status.IsDriveFaultActive)),
-            ("Inputs", status.InputsHealthy ? "read OK" : DescribeFailures("reads failing", status.ConsecutiveInputReadFailures)),
-            ("Relays", DescribeRelays(status))
-        };
+    public static IReadOnlyList<(string Label, string Value)> DescribeStatus(RoofStatusResponse status) => RoofStatusText.DescribeRows(status);
 
-        if (status.LeaseSecondsRemaining is { } lease)
-        {
-            rows.Add(("Lease", $"{Seconds(lease)} left"));
-        }
+    public static string DescribeRoof(RoofStatusResponse status) => RoofStatusText.DescribeRoof(status);
 
-        if (status.IsWatchdogActive && status.WatchdogSecondsRemaining is { } watchdog)
-        {
-            rows.Add(("Watchdog", $"{Seconds(watchdog)} left"));
-        }
+    public static string DescribeLastStop(RoofStatusResponse status) => RoofStatusText.DescribeLastStop(status);
 
-        rows.Add(("Controller", DescribeController(status)));
-        if (!string.IsNullOrWhiteSpace(status.LastError))
-        {
-            rows.Add(("Last error", status.LastError!));
-        }
+    public static string DescribeFault(RoofStatusResponse status) => RoofStatusText.DescribeFault(status);
 
-        return rows;
-    }
+    public static string DescribeRelays(RoofStatusResponse status) => RoofStatusText.DescribeRelays(status);
 
-    public static string DescribeRoof(RoofStatusResponse status)
-    {
-        var position = RoofText.DescribePosition(status.Status);
-        var motion = status.CommandedMotion switch
-        {
-            RoofMotionDirection.Opening => ", commanded to open",
-            RoofMotionDirection.Closing => ", commanded to close",
-            _ => string.Empty
-        };
-        var state = !status.IsInitialized ? " (controller not initialized)"
-            : status.IsShuttingDown ? " (controller shutting down)"
-            : string.Empty;
-        return position + motion + state;
-    }
+    public static string DescribeController(RoofStatusResponse status) => RoofStatusText.DescribeController(status);
 
-    public static string DescribeLastStop(RoofStatusResponse status)
-    {
-        var text = RoofText.DescribeStopReason(status.LastStopReason);
-        return status.LastTransitionUtc is { } at ? $"{text}, {Time(at)}" : text;
-    }
-
-    public static string DescribeFault(RoofStatusResponse status)
-    {
-        if (status.IsClearFaultInProgress)
-        {
-            return "clearing";
-        }
-
-        if (!status.IsFaultLatched)
-        {
-            return "none";
-        }
-
-        return status.LatchedFaultReason is { } reason ? $"LATCHED: {RoofText.DescribeStopReason(reason)}" : "LATCHED";
-    }
-
-    public static string DescribeRelays(RoofStatusResponse status)
-    {
-        var state = status.RelayRegisterState switch
-        {
-            RoofRelayRegisterState.Verified => "register read-back matched",
-            RoofRelayRegisterState.Unverified => "UNVERIFIED: confirm at the roof that the motor has stopped",
-            _ => "not read back yet"
-        };
-        return status.RelayRegisterReadsHealthy
-            ? state
-            : $"{state}; {DescribeFailures("register reads failing", status.ConsecutiveRelayReadFailures)}";
-    }
-
-    public static string DescribeController(RoofStatusResponse status)
-    {
-        var name = string.IsNullOrWhiteSpace(status.ControllerName) ? "controller" : status.ControllerName;
-        var hat = status.HatMode switch
-        {
-            RoofHatMode.Physical => "physical HAT",
-            RoofHatMode.Emulated => "emulated HAT",
-            RoofHatMode.Simulation => "simulated registers",
-            _ => "HAT not reported"
-        };
-        return $"{name}, {hat}, snapshot {status.StatusVersion} at {Time(status.SnapshotUtc)}";
-    }
-
-    public static string DescribeInput(bool? active) => active switch
-    {
-        true => "active",
-        false => "inactive",
-        null => "unknown"
-    };
+    public static string DescribeInput(bool? active) => RoofStatusText.DescribeInput(active);
 
     /// <summary>One line for <c>status --watch</c>: the snapshot's time, then <see cref="DescribeState"/>.</summary>
     public static string DescribeLine(RoofStatusResponse status) => $"{Time(status.SnapshotUtc)}  {DescribeState(status)}";
@@ -159,17 +72,9 @@ internal static class RoofCliFormat
         _ => null
     };
 
-    public static string Time(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+    public static string Time(DateTimeOffset value) => RoofStatusText.Time(value);
 
-    public static string Seconds(double seconds) => $"{Math.Max(0, seconds).ToString("0", CultureInfo.InvariantCulture)} s";
-
-    public static string Duration(TimeSpan value) => value.TotalDays >= 1
-        ? $"{(int)value.TotalDays}d {value.Hours}h {value.Minutes}m"
-        : value.TotalHours >= 1 ? $"{(int)value.TotalHours}h {value.Minutes}m" : $"{value.Minutes}m {value.Seconds}s";
-
-    public static string Bytes(long bytes) => bytes >= 1 << 20
-        ? $"{(bytes / (double)(1 << 20)).ToString("0.0", CultureInfo.InvariantCulture)} MiB"
-        : $"{(bytes / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)} KiB";
+    public static string Seconds(double seconds) => RoofStatusText.Seconds(seconds);
 
     /// <summary>Writes rows as <c>Label: value</c>, aligned.</summary>
     public static void WriteRows(TextWriter output, IEnumerable<(string Label, string Value)> rows)
@@ -195,6 +100,4 @@ internal static class RoofCliFormat
 
         string Line(IReadOnlyList<string> cells) => string.Join("  ", cells.Select((cell, column) => cell.PadRight(widths[column]))).TrimEnd();
     }
-
-    private static string DescribeFailures(string text, int count) => count > 0 ? $"{text} ({count} in a row)" : text;
 }

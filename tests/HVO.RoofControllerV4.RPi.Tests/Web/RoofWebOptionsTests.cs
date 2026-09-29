@@ -1,5 +1,6 @@
 using FluentAssertions;
 using HVO.RoofControllerV4.Web;
+using Microsoft.Extensions.Configuration;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -16,7 +17,44 @@ public sealed class RoofWebOptionsTests
         options.StatusRefreshSeconds.Should().Be(2);
         options.SupervisorStatePath.Should().BeNull();
         options.SupervisorControlPath.Should().BeNull();
+        options.Cameras.Should().Equal(RoofWebOptions.DefaultCameraId);
         options.Validate(isDevelopment: false).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void Cameras_FromSettings_ReplaceTheDefault_AndCountEachOnce()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["RoofWeb:CameraIds:0"] = "5",
+                ["RoofWeb:CameraIds:1"] = "3",
+                ["RoofWeb:CameraIds:2"] = "5",
+            })
+            .Build();
+
+        var options = configuration.GetSection(RoofWebOptions.SectionName).Get<RoofWebOptions>()!;
+
+        options.Cameras.Should().Equal(5, 3);
+        options.Validate(false).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(100)]
+    [DataRow(-2)]
+    public void Validate_ACameraThatIsNotOneToNinetyNine_IsRefused(int camera)
+    {
+        new RoofWebOptions { CameraIds = [2, camera] }.Validate(false).Should().ContainSingle()
+            .Which.Should().Be($"RoofWeb:CameraIds has {camera}, which is not a camera number from 1 to 99.");
+    }
+
+    [TestMethod]
+    public void Validate_MoreThanFourCameras_IsRefused_ButARepeatCountsOnce()
+    {
+        new RoofWebOptions { CameraIds = [1, 2, 3, 4, 5] }.Validate(false).Should().ContainSingle()
+            .Which.Should().Be("RoofWeb:CameraIds names 5 cameras; the roof page shows at most 4.");
+        new RoofWebOptions { CameraIds = [1, 2, 3, 4, 4, 1] }.Validate(false).Should().BeEmpty();
     }
 
     [TestMethod]

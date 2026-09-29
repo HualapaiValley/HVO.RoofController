@@ -10,7 +10,6 @@ using System.Text.RegularExpressions;
 using HVO.Enterprise.Telemetry.Configuration;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
-using HVO.RoofControllerV4.RPi.Logging;
 using HVO.RoofControllerV4.RPi.Middleware;
 using HVO.RoofControllerV4.RPi.Security.Identity;
 using HVO.RoofControllerV4.RPi.Settings;
@@ -271,7 +270,6 @@ public static partial class DeploymentValidator
     private static void ValidateOtherOptions(IConfiguration configuration, List<string> problems, List<string> warnings)
     {
         Bind<RoofControllerHostOptionsV4>(configuration, nameof(RoofControllerHostOptionsV4), problems);
-        Bind<ConsoleLogBufferOptions>(configuration, "ConsoleLogBuffer", problems);
 
         var blueIris = Bind<BlueIrisOptions>(configuration, BlueIrisOptions.SectionName, problems);
         if (!string.IsNullOrWhiteSpace(blueIris?.BaseUrl) && blueIris.GetConfigurationProblem() is { } cameraProblem)
@@ -342,7 +340,7 @@ public static partial class DeploymentValidator
         notes.Add("API keys: " + string.Join(", ", keys.Select(key => $"{key.Name} ({key.Role})")));
         if (!keys.Any(key => CanOperate(key.Role)))
         {
-            problems.Add("No API key has the RoofOperator or RoofAdmin role, so nobody could open, close or stop the roof through the API or console.");
+            problems.Add("No API key has the RoofOperator or RoofAdmin role, so nobody could open, close or stop the roof through the API.");
         }
 
         ValidateDeployKey(configuration[DeployKeySha256Key], keys, problems, notes);
@@ -533,7 +531,7 @@ public static partial class DeploymentValidator
         else if (!httpsRequired && !environment.IsDevelopment())
         {
             warnings.Add(
-                "HTTPS is not required: API keys and the console access key cross the network in clear text. Use this only on an " +
+                "HTTPS is not required: API keys, passwords and PINs cross the network in clear text. Use this only on an " +
                 "isolated LAN (docs/deployment.md).");
         }
 

@@ -1,0 +1,11 @@
+@page "/not-found"
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+
+@* The router's page for an address nothing takes (NoSuchAddress), served as a 404 to anyone. Static, so it needs no live
+   connection, which a visitor who is not signed in could not open. *@
+<PageTitle>Not found · HVO Roof Controller</PageTitle>
+
+<h1>Not found</h1>
+<p role="alert">There is nothing at this address.</p>
+<p><a href="">Back to the roof</a></p>

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using Terminal.Gui.ViewBase;
@@ -124,9 +123,9 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
 
         _header.Text = form.PendingHandEdit is { } pending
             ? $"Version {form.Version}. The settings file was edited by hand ({pending.Changes.Count} change(s)): changes here are refused until it is applied or discarded (Hand edit)."
-            : RoofCli.CommandBuilder.HandEditSeen(form)
-                ? $"Version {form.Version}. The settings file was edited by hand: changes here are refused until an admin applies or discards it."
-                : $"Version {form.Version}.{(form.Settings.FileBacked ? string.Empty : " Kept in memory only: changes are lost when the controller restarts.")}";
+            : RoofSettingsText.HandEditSeen(form)
+                ? $"Version {form.Version}. {RoofSettingsText.HandEditSeenByOthers}"
+                : $"Version {form.Version}.{(form.Settings.FileBacked ? string.Empty : $" {RoofSettingsText.InMemoryOnly}")}";
         SetLines(_groups, form.Groups.Select(group => group.Title).ToArray());
         ShowFields();
     }
@@ -154,7 +153,7 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
-        var notes = RoofCli.CommandBuilder.DescribeNotes(field);
+        var notes = RoofSettingsText.DescribeNotes(field);
         var lines = new List<string>
         {
             $"{field.Label} ({field.Key}): {field.DisplayValue}{(field.Setting.Secret ? string.Empty : $"   default {field.DefaultValue}")}",
@@ -188,33 +187,31 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
-        if (field.Setting.Secret)
+        if (field.Setting.Secret && form.FindGroup(field.Setting.Group) is { } group)
         {
+            // A secret is sent with the group's other secrets, which the controller may take only together.
+            var secrets = group.Secrets;
+            var together = RoofSettingsText.SecretsSetTogether(group);
             Ui.Ask(new RoofUiPrompt(
-                $"Change {field.Label}",
-                $"{field.Description}\nThe secret is never shown. Type the new value twice.",
-                [new RoofUiField("New value", Secret: true), new RoofUiField("Again", Secret: true)],
+                together is null ? $"Change {field.Label}" : $"Change {string.Join(" and ", secrets.Select(secret => secret.Label))}",
+                together is null
+                    ? $"{field.Description}\nThe secret is never shown. Type the new value twice."
+                    : $"{together}\nThe secrets are never shown. Type each new value twice.",
+                [.. secrets.SelectMany(secret => together is null
+                    ? new[] { new RoofUiField("New value", Secret: true), new RoofUiField("Again", Secret: true) }
+                    : [new RoofUiField($"New {secret.Label}", Secret: true), new RoofUiField($"{secret.Label} again", Secret: true)])],
                 [new RoofUiAction("Save", values =>
                 {
-                    if (string.IsNullOrWhiteSpace(values[0]))
-                    {
-                        return "Type the new value; to remove the secret, use Clear secret.";
-                    }
-
-                    if (values[0] != values[1])
-                    {
-                        return "The two values differ.";
-                    }
-
-                    var edit = form.Edit(field.Setting.Group);
-                    return edit.TrySet(field.Key, values[0], out var error) ? Review(form, edit) : error;
+                    var edit = form.Edit(group.Name);
+                    var typed = secrets.Select((_, i) => ((string?)values[2 * i], (string?)values[2 * i + 1])).ToList();
+                    return edit.TrySetSecrets(typed, out var error) ? Review(form, edit) : error;
                 })]));
             return;
         }
 
         Ui.Ask(new RoofUiPrompt(
             $"Change {field.Label}",
-            $"{field.Description}\nNow {field.DisplayValue}; default {field.DefaultValue}.{(RoofCli.CommandBuilder.DescribeNotes(field) is { Length: > 0 } notes ? $" ({notes})" : string.Empty)}",
+            $"{field.Description}\nNow {field.DisplayValue}; default {field.DefaultValue}.{(RoofSettingsText.DescribeNotes(field) is { Length: > 0 } notes ? $" ({notes})" : string.Empty)}",
             [new RoofUiField("New value", Initial: field.EditText)],
             [new RoofUiAction("Save", values =>
             {
@@ -237,10 +234,11 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
+        // The group's secrets are cleared together, as they are set.
         var edit = form.Edit(field.Setting.Group);
         try
         {
-            edit.ClearSecret(field.Key);
+            edit.ClearSecrets();
         }
         catch (ArgumentException error)
         {
@@ -248,20 +246,28 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
+        var cleared = edit.Group.Fields.Where(candidate => edit.Changes.ContainsKey(candidate.Key)).ToList();
+        if (cleared.Count == 0)
+        {
+            Ui.Say($"Nothing to clear: {field.Label} is not set.");
+            return;
+        }
+
+        var names = string.Join(" and ", cleared.Select(secret => secret.Label));
         Ui.Ask(new RoofUiPrompt(
-            $"Clear {field.Label}",
-            $"Remove {field.Label}? {field.Description}",
+            $"Clear {names}",
+            cleared.Count == 1 ? $"Remove {names}? {cleared[0].Description}" : $"Remove {names}? {RoofSettingsText.SecretsSetTogether(edit.Group)}",
             [],
-            [new RoofUiAction("Clear it", _ => Review(form, edit))]));
+            [new RoofUiAction(cleared.Count == 1 ? "Clear it" : "Clear them", _ => Review(form, edit))]));
     }
 
     /// <summary>Sends the edit, or first asks to confirm it when it is safety-critical. Returns an error to show, or null.</summary>
     private string? Review(RoofSettingsForm form, RoofSettingsEdit edit)
     {
-        var changes = Describe(edit);
+        var changes = RoofSettingsText.DescribeChanges(edit).Select(change => "  " + change).ToList();
         if (changes.Count == 0)
         {
-            Ui.Say("Nothing to change: the setting already has this value.");
+            Ui.Say(RoofSettingsText.NothingToChange);
             return null;
         }
 
@@ -269,7 +275,7 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
         {
             Ui.Ask(new RoofUiPrompt(
                 "Safety-critical change",
-                $"[{edit.Group.Title}]\n{string.Join('\n', changes)}\nThis change is safety-critical. Send it only if the roof is safe with it.",
+                $"[{edit.Group.Title}]\n{string.Join('\n', changes)}\n{RoofSettingsText.SafetyCriticalChange}",
                 [],
                 [new RoofUiAction("Confirm and send", _ =>
                 {
@@ -282,26 +288,6 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
         Send(form, edit, confirm: false);
         return null;
     }
-
-    private static List<string> Describe(RoofSettingsEdit edit) => edit.Group.Fields
-        .Where(field => edit.Changes.ContainsKey(field.Key))
-        .Select(field =>
-        {
-            var value = edit.Changes[field.Key];
-            var to = field.Setting.Secret
-                ? value.ValueKind == JsonValueKind.Null ? RoofSettingValues.SecretNotSet : RoofSettingValues.SecretNewValue
-                : RoofSettingValues.Describe(field.Setting, value);
-            var notes = string.Join(", ", new[]
-            {
-                field.NeedsConfirmation(value) ? "SAFETY-CRITICAL" : null,
-                field.Setting.AppliesAfterRestart ? "applies after a restart" : null,
-                field.NeedsLocalCredential ? "needs a local credential" : null
-            }.OfType<string>());
-            return (Text: $"  {field.Label}: {field.DisplayValue} -> {to}{(notes.Length > 0 ? $"  [{notes}]" : string.Empty)}", Changed: field.Setting.Secret || field.DisplayValue != to || field.NeedsConfirmation(value));
-        })
-        .Where(change => change.Changed)
-        .Select(change => change.Text)
-        .ToList();
 
     private void Send(RoofSettingsForm form, RoofSettingsEdit edit, bool confirm)
     {
@@ -318,7 +304,8 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
                 _form = reloaded;
                 Show();
                 var notes = new List<string> { $"Saved (settings version {saved.Version})." };
-                if (!saved.FileBacked)
+                // The controller's warnings say why the settings are in memory; this note is for when it gives no reason.
+                if (!saved.FileBacked && saved.Warnings.Count == 0)
                 {
                     notes.Add("Kept in memory only: it is lost when the controller restarts.");
                 }
@@ -351,7 +338,7 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             }
             else if (caller.Role != RoofControllerApiContract.AdminRole)
             {
-                Ui.Say(RoofCli.CommandBuilder.HandEditNeedsAdmin(form), error: true);
+                Ui.Say(RoofSettingsText.HandEditNeedsAdmin(form), error: true);
             }
             else
             {
@@ -361,7 +348,7 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
-        var lines = string.Join('\n', RoofCli.CommandBuilder.DescribeHandEdit(form, pending));
+        var lines = string.Join('\n', RoofSettingsText.DescribeHandEdit(form, pending));
         var request = new RoofSettingsHandEditRequest { Token = pending.Token };
         Ui.Ask(new RoofUiPrompt(
             "Hand edit",
@@ -378,7 +365,7 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
                 {
                     Ui.Ask(new RoofUiPrompt(
                         "Discard the hand edit",
-                        "Discard the hand edit? The edited file is overwritten with the settings the controller uses.",
+                        RoofSettingsText.DiscardHandEditQuestion,
                         [],
                         [new RoofUiAction("Discard it", _ =>
                         {

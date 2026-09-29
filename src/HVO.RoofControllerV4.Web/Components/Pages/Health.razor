@@ -1,0 +1,195 @@
+@page "/health"
+@implements IAsyncDisposable
+@inject RoofWebStatusProbe Probe
+@inject WebSessionAccessor Sessions
+@inject IOptions<RoofWebOptions> Options
+@inject TimeProvider Time
+@inject ILogger<Health> Logger
+
+<PageTitle>Health · HVO Roof Controller</PageTitle>
+
+<h1>Health</h1>
+
+@if (_status is null)
+{
+    <p class="web-status web-status--busy" role="status">Checking the controller…</p>
+}
+else
+{
+    var view = RoofWebStatusText.DescribeController(_status);
+    <section class="web-status web-status--@view.Level.ToString().ToLowerInvariant()" role="status" aria-live="polite"
+             data-testid="controller-status" data-level="@view.Level">
+        <h2>@view.Headline</h2>
+        @foreach (var detail in view.Details)
+        {
+            <p>@detail</p>
+        }
+    </section>
+
+    <section class="web-supervisor" data-testid="supervisor-status">
+        <h2>Container</h2>
+        <p>@RoofWebStatusText.DescribeSupervisor(_status.Supervisor)</p>
+    </section>
+
+    <p class="web-checked">Checked at @RoofStatusText.Time(_status.CheckedAt), every @Options.Value.StatusRefreshSeconds s.</p>
+}
+
+<section class="web-card web-health" aria-labelledby="health-report-title" data-testid="health-report">
+    <div class="web-health-head">
+        <h2 id="health-report-title">Controller health checks</h2>
+        <button type="button" class="btn btn-sm btn-outline-light" data-testid="health-refresh" disabled="@_reading" @onclick="ReadReportAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </div>
+    @if (_reportError is not null)
+    {
+        <p class="web-status web-status--warning" role="alert" data-testid="health-report-error">@_reportError</p>
+    }
+    else if (_report is null)
+    {
+        <p class="web-muted" role="status">@(_reading ? "Reading the controller's health checks…" : "Not read yet.")</p>
+    }
+    else
+    {
+        <p data-testid="health-overall">Overall: <strong>@_report.Status</strong>@(Took(_report.TotalDuration) is { } took ? $", in {took}" : string.Empty). Read at @RoofStatusText.Time(_reportAt).</p>
+        @if (_report.Checks.Count == 0)
+        {
+            <p class="web-muted">The controller reported no checks.</p>
+        }
+        else
+        {
+            <ul class="web-health-list">
+                @foreach (var check in _report.Checks.OrderBy(check => Rank(check.Status)).ThenBy(check => check.Name, StringComparer.Ordinal))
+                {
+                    <li class="web-health-check" data-testid="health-check">
+                        <span class="badge @BadgeClass(check.Status)">@check.Status</span>
+                        <strong>@check.Name</strong>
+                        @if (check.Description is { Length: > 0 } description)
+                        {
+                            <span class="web-health-description">@description</span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    }
+</section>
+
+@code {
+    /// <summary>How long the checks took, from the controller's TimeSpan: "12 ms", "0.1 ms" or "1.2 s".</summary>
+    internal static string? Took(string? duration)
+    {
+        if (!TimeSpan.TryParse(duration, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            return string.IsNullOrWhiteSpace(duration) ? null : duration;
+        }
+
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        return value.TotalSeconds >= 1 ? $"{value.TotalSeconds.ToString("0.0", invariant)} s"
+            : value.TotalMilliseconds >= 1 ? $"{value.TotalMilliseconds.ToString("0", invariant)} ms"
+            : $"{value.TotalMilliseconds.ToString("0.0", invariant)} ms";
+    }
+
+    private readonly CancellationTokenSource _stopping = new();
+    private RoofWebStatus? _status;
+    private HealthReportPayload? _report;
+    private DateTimeOffset _reportAt;
+    private string? _reportError;
+    private bool _reading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _status = await Probe.CheckAsync(_stopping.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _ = RefreshAsync(_stopping.Token);
+            await ReadReportAsync();
+        }
+    }
+
+    private async Task ReadReportAsync()
+    {
+        if (_reading)
+        {
+            return;
+        }
+
+        _reading = true;
+        StateHasChanged();
+        try
+        {
+            var session = await Sessions.GetAsync();
+            if (session is null)
+            {
+                _reportError = "You are signed out. Sign in again to read the controller's health checks.";
+                return;
+            }
+
+            _report = await session.Client.Health.GetReportAsync(_stopping.Token);
+            _reportAt = Time.GetUtcNow();
+            _reportError = null;
+        }
+        catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "The controller's health report could not be read");
+            _reportError = $"The health checks could not be read: {RoofText.DescribeFailure(ex)}";
+        }
+        finally
+        {
+            _reading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Options.Value.StatusRefreshSeconds), Time);
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                _status = await Probe.CheckAsync(cancellationToken);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            // The page stops refreshing rather than breaking the circuit; a reload starts it again.
+            Logger.LogWarning(ex, "The health page stopped refreshing");
+        }
+    }
+
+    // Unhealthy first, then degraded, then healthy: what needs attention is at the top.
+    private static int Rank(string status) => status switch
+    {
+        "Unhealthy" => 0,
+        "Degraded" => 1,
+        "Healthy" => 2,
+        _ => 3
+    };
+
+    private static string BadgeClass(string status) => status switch
+    {
+        "Healthy" => "bg-success",
+        "Degraded" => "bg-warning text-dark",
+        "Unhealthy" => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    public ValueTask DisposeAsync()
+    {
+        _stopping.Cancel();
+        _stopping.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

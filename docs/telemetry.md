@@ -56,7 +56,7 @@ For example, `roof.controller.travel.duration` becomes `hvo_roof_controller_trav
 
 | Instrument | Type | Tags | Meaning |
 |---|---|---|---|
-| `roof.controller.commands` | counter | `roof.command`, `roof.outcome` (`success`, `failure`) | Commands. The controller service counts each `open`, `close`, `stop` and `clear-fault` from any source (API, console, host shutdown). The API also counts its own requests (`open`, `close`, `stop`, `lease`, `clear_fault`), so an API command is counted twice, once under each name. |
+| `roof.controller.commands` | counter | `roof.command`, `roof.outcome` (`success`, `failure`) | Commands. The controller service counts each `open`, `close`, `stop` and `clear-fault` from any source (the API, which the web UI and the other clients use, and host shutdown). The API also counts its own requests (`open`, `close`, `stop`, `lease`, `clear_fault`), so an API command is counted twice, once under each name. |
 | `roof.controller.command.duration` | histogram, s | as above | How long the command call took. This is not the travel time. |
 | `roof.controller.safety.stops` | counter | `roof.stop.reason`, `roof.stop.source` | Stops while moving for a safety reason, including arrival at a limit (`LimitSwitchReached`). Operator and host-shutdown stops are not counted. Sources: `open-limit`, `closed-limit`, `fault`, `watchdog`, `relay`, `inputs`, `lease`, `drive`, `limits`, `operator`, `unknown`. |
 | `roof.controller.limit.switch.events` | counter | `roof.limit.switch` (`open`, `closed`), `roof.limit.state` (`reached`, `cleared`) | Limit switch transitions. |

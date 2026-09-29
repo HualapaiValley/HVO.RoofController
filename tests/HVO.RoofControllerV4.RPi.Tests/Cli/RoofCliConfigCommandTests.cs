@@ -335,7 +335,7 @@ public sealed class RoofCliConfigCommandTests
     }
 
     [TestMethod]
-    public async Task Set_OnAControllerWithoutASettingsFile_SaysTheChangeIsLostAtARestart()
+    public async Task Set_OnAControllerWithoutASettingsFile_SaysOnceThatTheChangeIsLostAtARestart_AndWhy()
     {
         using var host = RoofClientApiTests.CreateHost();
         using var rig = new CliRig(host);
@@ -344,8 +344,8 @@ public sealed class RoofCliConfigCommandTests
         var result = await rig.RunAsync("config", "set", "DefaultCamera=Pier");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
-        result.Out.Should().Contain("The controller keeps settings in memory only: this change is lost when it restarts.")
-            .And.Contain("Warning: Settings changes are held in memory only");
+        result.Out.Should().NotContain("The controller keeps settings in memory only", "the controller's warning says it, and why")
+            .And.Contain("Warning: Settings changes are held in memory only and are lost when the controller restarts (RoofControllerSettings:FilePath is not set).");
     }
 
     [TestMethod]
@@ -865,6 +865,42 @@ public sealed class RoofCliConfigCommandTests
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         result.Out.Should().Contain("(BlueIris:UserName): (not set) -> (new value)").And.Contain($"({CameraPassword}): (not set) -> (new value)");
         result.ToString().Should().NotContain(CameraSecret).And.NotContain("test-camera-user");
+    }
+
+    /// <summary>
+    /// The move docs/cli.md gives: the camera's credentials stay with the server they were set for, so they are cleared,
+    /// the server is changed, and they are set again for the new one.
+    /// </summary>
+    [TestMethod]
+    public async Task MovingTheCameraProxy_ToAnotherServer_IsRefusedWhileItsCredentialsAreSet_AndWorksAsTheDocsSay()
+    {
+        const string cameraUser = "test-camera-user";
+        const string cameraUserName = "BlueIris:UserName";
+        const string newServer = "http://192.168.0.5:81/";
+        using var controller = new ControllerWithFiles(new Dictionary<string, string?> { [CameraServer] = "http://192.168.0.4:81" });
+        using var rig = new CliRig(controller.Host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Input.Enqueue(cameraUser);
+        rig.Input.Enqueue(CameraSecret);
+        var first = await rig.RunAsync("config", "set-secret", cameraUserName, CameraPassword);
+        first.Code.Should().Be(RoofExitCode.Success, first.ToString());
+
+        var refused = await rig.RunAsync("config", "set", $"{CameraServer}={newServer}");
+        refused.Code.Should().Be(RoofExitCode.Refused, refused.ToString());
+        refused.Error.Should().Contain("Moving the camera proxy to another server");
+
+        var cleared = await rig.RunAsync("config", "set-secret", "--clear", cameraUserName, CameraPassword);
+        cleared.Code.Should().Be(RoofExitCode.Success, cleared.ToString());
+        var moved = await rig.RunAsync("config", "set", $"{CameraServer}={newServer}");
+        moved.Code.Should().Be(RoofExitCode.Success, moved.ToString());
+        rig.Input.Enqueue(cameraUser);
+        rig.Input.Enqueue(CameraSecret);
+        var again = await rig.RunAsync("config", "set-secret", cameraUserName, CameraPassword);
+        again.Code.Should().Be(RoofExitCode.Success, again.ToString());
+
+        Row((await rig.RunAsync("config", "get", CameraServer)).Out, "Value").Should().Contain("192.168.0.5");
+        Row((await rig.RunAsync("config", "get", cameraUserName)).Out, "Value").Should().Be("(set)");
+        Row((await rig.RunAsync("config", "get", CameraPassword)).Out, "Value").Should().Be("(set)");
     }
 
     [TestMethod]

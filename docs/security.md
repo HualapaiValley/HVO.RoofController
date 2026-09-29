@@ -1,8 +1,7 @@
 # Roof Controller V4 security
 
 The controller drives a real roof motor, so its HTTP surface is closed by default. Every roof command, status read,
-configuration change, health detail and camera stream needs an API key, a person's session or a signed-in console
-session. The anonymous endpoints are the liveness and readiness probes, and signing in with a name and password.
+configuration change, health detail and camera stream needs an API key or a person's session. The anonymous endpoints are the liveness and readiness probes (the readiness, with the container supervisor's state, also gives the web UI's sign-in page its one-line controller status), signing in with a name and password, and how the roof is driven (`GET /api/v4.0/RoofControl/Mode`, for the mode banner on the web UI's sign-in page).
 
 This page covers:
 
@@ -10,7 +9,7 @@ This page covers:
 - what each role may do
 - how people sign in, and how admins manage people, keys and sessions
 - remote settings: who may change what, the settings file, hand edits and restarts
-- how the console and camera authenticate
+- how the web UI and the camera authenticate
 - the transport settings
 
 For TLS certificates and the deploy script, see [deployment.md](deployment.md).
@@ -22,7 +21,7 @@ Operator includes Viewer.
 
 | Role (`Role` value) | Policy name        | Allows                                                                |
 |---------------------|--------------------|-----------------------------------------------------------------------|
-| `RoofViewer`        | `RoofViewerPolicy` | Roof status, `/health` details, camera streams, console (read-only) |
+| `RoofViewer`        | `RoofViewerPolicy` | Roof status, `/health` details, camera streams, the status hub, the settings it may read |
 | `RoofOperator`      | `RoofOperatorPolicy` | Everything above, plus Open, Close, ClearFault, lease renewal and the `ui` settings |
 | `RoofAdmin`         | `RoofAdminPolicy`  | Everything above, plus every other setting, `System/*` (including Restart) and the OpenAPI document |
 
@@ -34,7 +33,7 @@ Anonymous callers may stop it only when `RoofControllerSecurity:AllowAnonymousSt
 
 API routes accept an API key in the `X-Api-Key` header (scheme `ApiKey`) or a session token in
 `Authorization: Bearer <token>` (scheme `RoofSession`). The policy scheme `RoofApi` uses the session when a request
-carries `Authorization: Bearer`, and the key otherwise. A console cookie is never accepted there, and neither a key nor a
+carries `Authorization: Bearer`, and the key otherwise. The controller has no cookie scheme, and neither a key nor a
 token is accepted in the query string. Commands use `POST`; a `GET` to a command route returns 405.
 
 Stop uses its own scheme, `RoofStop`, so that a client holding a session that has just ended can still stop the roof. It
@@ -44,6 +43,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | Method and route                                         | Policy            | Success | Other responses |
 |----------------------------------------------------------|-------------------|---------|-----------------|
 | `GET  /api/v4.0/RoofControl/Status`                      | Viewer            | 200 `RoofStatusResponse` (after a forced hardware read) | 401, 403, 500 |
+| `GET  /api/v4.0/RoofControl/Mode`                        | anonymous         | 200 `RoofModeResponse` (the HAT mode and whether the limit switches are ignored, nothing else, from the last status, without a hardware read) | 403 (`https_required`, as on every route but the probes) |
 | `POST /api/v4.0/RoofControl/Open`                        | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
 | `POST /api/v4.0/RoofControl/Close`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
 | `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key or session) | 200 `RoofStatusResponse` | 401, 503, 500 |
@@ -56,7 +56,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | `POST /api/v4.0/Settings/Reload`, `POST /api/v4.0/Settings/Discard` | Admin (API key or session) | 200 `RoofSettingsResponse` | 400, 401, 403, 409, 503 |
 | `POST /api/v4.0/System/Restart`                          | Admin (API key or session) | 202 `RoofRestartResponse`, then the controller exits with code 75 | 401, 403, 409 (`RestartRefused`) |
 | `GET  /api/v1.0/System/info`, `GET /api/v1.0/System/metrics` | Admin         | 200 | 401, 403 |
-| `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key, session or console cookie) | 200 MJPEG | 401, 502, 503, 504 |
+| `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key or session) | 200 MJPEG | 401, 502, 503, 504 |
 | `POST /api/v4.0/Auth/Session`                            | anonymous         | 200 `RoofSessionResponse` | 400, 401 (`SignInFailed`), 429 (`SignInLockedOut`, `SignInBusy`), 503 |
 | `POST /api/v4.0/Auth/Pin`                                | a kiosk key (API key only) | 200 `RoofSessionResponse` | 400, 401, 403 (`KioskKeyRequired`), 429, 503 |
 | `GET  /api/v4.0/Auth/Pin/Users`                          | a kiosk key (API key only) | 200 `RoofPinUserResponse[]` | 401, 403 (`KioskKeyRequired`), 503 |
@@ -67,11 +67,9 @@ other route refuses such a request with 401, and never falls back to the key.
 | `GET, POST /api/v4.0/Identity/ApiKeys`, `PUT, DELETE /api/v4.0/Identity/ApiKeys/{name}`, `POST .../ApiKeys/{name}/Rotate` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed`), 404, 409, 503 |
 | `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin (not a PIN session) | 200, 204 | 401, 403 (`CredentialNotAllowed`), 404, 503 |
 | `GET  /openapi/v4.json`                                  | Admin (API key or session) outside Development | 200 | 401, 403 |
-| `GET  /health`                                           | Viewer (API key, session or cookie) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
+| `GET  /health`                                           | Viewer (API key or session) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
 | `GET  /health/live`, `GET /health/ready`                 | anonymous         | 200 / 503 | none |
-| `/hubs/roof` (SignalR status hub, with `/hubs/roof/negotiate`) | Viewer (API key or session, never the cookie) | status messages ([Status hub](#status-hub)) | 401, 403 (`https_required`) |
-| `POST /account/login`, `POST /account/logout`            | anonymous (form)  | 302 | 403 (`origin_not_allowed`) |
-| `POST /console/stop`                                     | Stop (console cookie and antiforgery token only) | 200 `{outcome, message}` | 400 (stale form token), 401, 403 (`origin_not_allowed`), 503 (stop not verified), 500 |
+| `/hubs/roof` (SignalR status hub, with `/hubs/roof/negotiate`) | Viewer (API key or session) | status messages ([Status hub](#status-hub)) | 401, 403 (`https_required`) |
 
 When a request has no key or an unknown key, the response is 401 with `WWW-Authenticate: ApiKey`. When a session
 token is unknown, ended or expired, the response is 401 with `WWW-Authenticate: Bearer error="invalid_token"`. When a
@@ -131,7 +129,7 @@ Each entry has these settings:
 
 | Setting | Meaning |
 |---------|---------|
-| `RoofControllerSecurity:ApiKeys:N:Name` | Identifies the holder in logs and audit entries (for example `console-operator`). Not secret. |
+| `RoofControllerSecurity:ApiKeys:N:Name` | Identifies the holder in logs and audit entries (for example `observatory-operator`). Not secret. |
 | `RoofControllerSecurity:ApiKeys:N:Role` | `RoofViewer`, `RoofOperator` or `RoofAdmin`. |
 | `RoofControllerSecurity:ApiKeys:N:Key` | The key, at least 24 characters. |
 | `RoofControllerSecurity:ApiKeys:N:KeySha256` | Alternative to `Key`: 64 hex characters of SHA-256 over the key's UTF-8 bytes. Use it so the controller never stores the key itself. |
@@ -157,7 +155,7 @@ in place of `:`. The deploy script and `docker-compose.yaml` bind-mount `/etc/hv
 ```bash
 sudo install -d -m 700 /etc/hvo-roof/secrets
 cd /etc/hvo-roof/secrets
-printf '%s' 'console-operator' | sudo tee RoofControllerSecurity__ApiKeys__0__Name >/dev/null
+printf '%s' 'observatory-operator' | sudo tee RoofControllerSecurity__ApiKeys__0__Name >/dev/null
 printf '%s' 'RoofOperator' | sudo tee RoofControllerSecurity__ApiKeys__0__Role >/dev/null
 printf '%s' "$KEY"         | sudo tee RoofControllerSecurity__ApiKeys__0__Key  >/dev/null
 # ...repeat with index 1, 2, ... for a viewer key, an admin key, etc.
@@ -182,18 +180,18 @@ Recommended keys:
 
 | Holder | Role |
 |--------|------|
-| Console operator | `RoofOperator` |
+| Operator | `RoofOperator` |
 | Deploy script | `RoofOperator` (the pre-deploy Stop and the post-deploy Status and Stop checks; the deployment check confirms it is configured) |
 | Monitoring | `RoofViewer` |
 | Maintainer | `RoofAdmin` (configuration and OpenAPI) |
 
-The console login accepts any of these keys. Keys in the configuration are read-only through the API. An admin can
-also add keys through the API ([managed API keys](#managed-api-keys)); they need no restart and no file on the Pi.
+Keys in the configuration are read-only through the API. An admin can
+also add keys through the API ([managed API keys](#managing-people-keys-and-sessions)); they need no restart and no file on the Pi.
 
 ### Rotation
 
-Keys reload when the configuration changes. After replacing a key file, restart the container to be certain. A console
-session that was signed in with a removed, rotated or re-roled key ends at the next request or revalidation. Managed
+Keys reload when the configuration changes. After replacing a key file, restart the container to be certain. A removed,
+rotated or re-roled key is refused at its next request, and a status hub connection that used it closes within a second. Managed
 keys are rotated through the API, and the old value stops working at once.
 
 ### Local development
@@ -263,13 +261,14 @@ so a caller with many IPv6 networks can fill those slots within seconds, where o
 
 Each caller may try `SignInAttemptsPerMinute` sign-ins (default 30; 0 turns the limit off) across `Auth/Session`,
 `Auth/Pin` and `Auth/Password`. A kiosk counts by its key, a signed-in person changing their password by their name,
-and an anonymous `Auth/Session` by its remote address, whatever cookie comes with it. A public IPv6 address from
+and an anonymous `Auth/Session` by its remote address, whatever credential comes with it. A public IPv6 address from
 another network counts by its /64 network, since one host there can pick a new address for every attempt; a loopback,
 link-local or unique local IPv6 address, or one in the controller's own /64, counts by itself, since every host on the
 LAN shares that /64. The limit is applied after the key or session is checked, so a request without a valid one is refused (401) without counting. Beyond the limit the
 caller gets 429 `SignInBusy` with `Retry-After` before any secret is checked, and a `SECURITY` warning is logged at most
 every 30 seconds. A client that signs people in for them, such as a web UI, is one address for all of them, so one
-visitor there could use up the limit for the others; the web UI will limit sign-ins per visitor itself.
+visitor there could use up the limit for the others; the web UI limits sign-ins per address itself
+(`RoofWeb:SignInAttemptsPerMinute`, [web.md](web.md#settings)).
 
 Hashing is limited to a few at a time, so sign-in cannot starve the roof. A sign-in that cannot get a turn also gets
 429 `SignInBusy`. The settings are under `RoofControllerSecurity:Identity`, and the controller refuses to start with
@@ -303,8 +302,7 @@ it from anywhere until it idles out (`PinSessionIdleTimeout`, default 10 minutes
 A change that would leave no admin credential is refused with 409 `LastAdministrator`. An admin credential is an admin
 API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed
 or locked-out sign-in as a `SECURITY` warning, with the name and remote address and never a secret. A request with a removed, rotated or re-roled key, or an ended
-session, is refused at once. A status hub connection that used it closes within a second, and a console session ends at
-its next revalidation.
+session, is refused at once. A status hub connection that used it closes within a second.
 
 ### The identity store
 
@@ -355,9 +353,9 @@ only after a restart (`appliesAfterRestart`), needs a local credential (`localOn
 | `roof` | Admin | `RoofControllerOptionsV4`: the relay ids, polling, the limit-switch type and debounce, the limit-switch bypass and its consent, fault polarity, input read failures, the watchdog, the operator lease, the IN4 interlock and its stop confirmation, and the departure check |
 | `controller` | Admin | `RoofControllerHostOptionsV4`: `RestartOnFailureWaitTime` and `ControllerName` (both after a restart) |
 | `camera` | Admin | `BlueIris`: the server address, the user and password (secrets), the timeouts and the stream limit (`MaxConcurrentStreams` and `ConnectTimeout` after a restart) |
-| `security` | Admin | `RoofControllerSecurity`: `AllowAnonymousStop`, `RequireHttps` and `AllowedOrigins` |
+| `security` | Admin | `RoofControllerSecurity`: `AllowAnonymousStop` and `RequireHttps` |
 | `identity` | Admin | `RoofControllerSecurity:Identity`: the session lifetimes, lockouts and the sign-in rate limit |
-| `logging` | Admin | The log levels of the controller, the web server and the console's log view |
+| `logging` | Admin | The log levels of the controller and its web server |
 | `ui` | Operator | `RoofControllerUi`: `DefaultCamera` and `KioskScreenTimeout` |
 
 Admin covers anything that changes how the roof moves, what is trusted, or who may act. The operator settings are
@@ -449,8 +447,6 @@ configuration, such as Kestrel endpoints or API keys, belongs in the deployment'
 - The configuration layers, lowest first: `appsettings.json`, `appsettings.{Environment}.json`, the settings file, the
   managed secrets file, user secrets (Development only), environment variables, the command line and the secrets
   directory. A higher layer overrides a lower one.
-- A list the file sets, such as `AllowedOrigins`, replaces the list below it, and `[]` clears it. (The layers above the
-  file still merge by index, as .NET configuration does.)
 - The file holds only the settings that differ from the layers below it, so a default that a later release changes
   still takes effect.
 - Its first property, `HvoRoofSettings`, holds the version and when and by whom it was last saved, so `expectedVersion`
@@ -461,6 +457,10 @@ configuration, such as Kestrel endpoints or API keys, belongs in the deployment'
 - A file that is not valid JSON, sets a secret or a key outside the catalogue, or holds a value the controller cannot
   use stops the start. The error names the key but never its value. The controller writes
   `The roof controller did not start: ...` to standard error and exits with code 1. It never falls back to the defaults.
+- A setting that an earlier version had and this one has retired does not stop the start. These are
+  `RoofControllerSecurity:AllowedOrigins` and `ConsoleLogBuffer:MinimumLevel`, which went with the controller's own
+  pages when the [web UI](web.md) replaced them. The controller ignores them and logs a warning naming them at start,
+  `GET Settings` shows the warning to admins, and the next change through the API leaves them out of the file.
 - Without a `FilePath` (or a `SecretsFilePath`), changes are kept in memory and lost at a restart. `GET Settings`
   reports `fileBacked: false` with a warning, and the deployment check warns outside Development.
 
@@ -501,46 +501,37 @@ A restart also loads a pending edit, so it is refused while the edit could not b
 In the container, the supervisor (`roof-supervisor`, see [deployment.md](deployment.md)) starts the controller again at
 once, and the web UI stays up. A controller that no supervisor restarts stays stopped.
 
-## Web console
+## Web UI
 
-The Blazor console uses a separate cookie scheme, `RoofConsoleCookie`. Its cookie, `hvo.roof.console`, is:
+The controller serves no pages. The web UI ([web.md](web.md)) is a process of its own in the controller's container, and
+a client of the API like any other:
 
-- HttpOnly
-- `SameSite=Strict`
-- Secure when served over HTTPS
-- valid for 8 hours, with sliding expiration
-
-Signing in works like this:
-
-1. An unauthenticated page navigation redirects to `/login?returnUrl=...`.
-2. The `/login` page is static server-rendered. It posts a form to `POST /account/login` with these fields:
-   - `accessKey`: any configured API key
-   - `returnUrl`
-   - the antiforgery token (`<AntiforgeryToken />`)
-3. On success, the response is a 302 to `returnUrl` (local paths only; anything else goes to `/`). On failure:
-   - `/login?error=1`: wrong key. The answer comes after a 1-second delay.
-   - `/login?error=2`: missing or stale form token.
-4. `POST /account/logout` clears the cookie and redirects to `/login`.
-
-A user with the wrong role for a page is redirected to `/access-denied`.
-
-The Blazor hub (`/_blazor`) refuses unauthenticated connections with 401. The hub, `POST /account/*` and
-`POST /console/*` also refuse a cross-site `Origin` with 403 `origin_not_allowed`. Behind a reverse proxy that changes
-the host name, add the public origin to `RoofControllerSecurity:AllowedOrigins`.
-
-The console runs over a SignalR connection, so two things do not depend on it:
-
-- **Stop in the reconnect dialog.** While the connection is down, the dialog's **Stop roof** button posts to
-  `POST /console/stop` with `fetch`. The endpoint accepts only the console cookie, applies the Stop policy, and needs
-  the antiforgery token rendered into the dialog. It answers with the same outcome the console's own Stop reports
-  (`Acknowledged`, `RelayUnverified` or `Failed`, with a message). When the cookie is no longer accepted (it expired,
-  or its key was removed or rotated), the endpoint returns 401 and the dialog says the page is signed out: reload it,
-  or use the stop control at the roof. The dialog's texts are the client library's Stop wording, rendered into the
-  page by the server, so a proxy's error page, the origin check and no answer within 5 s read as they do in every
-  other client.
-- **Operator lease.** The console renews the lease on the server only while the browser connection is up. When the
-  server sees the connection drop (at once for a closed tab, within about 30 s for a silent network loss) renewal
-  stops, and it does not resume on reconnect, so the lease runs out and stops the roof.
+- A person signs in with their name and password, which the web UI sends to `POST Auth/Session`. The web UI keeps the
+  session token on its server, and the browser holds only the web UI's own encrypted cookie. Each call the web UI makes
+  for the person, and its status hub connection, carries the token as `Authorization: Bearer`, so the controller
+  applies the person's role, lockouts and revocation as it does for any session.
+- The web UI's Stop is a `POST .../Stop` with the person's session. With `RoofWeb:StopKeyFile`, it also sends its own
+  API key and `X-On-Behalf-Of` (see [Signing in](#signing-in)), so Stop still works after the session has ended.
+- With `RoofWeb:StopKeyFile`, signing in also gives the browser a **Stop pass** (the `hvo.roof.web.stop` cookie, sent
+  only with the web UI's `POST /stop`: [web.md](web.md#stop)). It names the person and holds no controller token. Once
+  the sign-in cookie has gone, the web UI sends that person's Stop with its own key until the pass runs out,
+  `RoofWeb:StopAfterSessionHours` (12 by default, at most 168) after the session would have expired. Signing out
+  removes it.
+- **What a pass still allows.** The controller answers 401 alike for a session that expired, idled out or was ended,
+  so the web UI cannot tell a person who was removed from one whose session ran out. Until their pass runs out, a
+  removed person's browser can still send Stop through the web UI, and nothing else; the controller logs each as the
+  web UI's key on behalf of that person. To end every pass at once, remove the web UI's data protection keys (`RoofWeb__DataProtectionPath`, by
+  default `/var/lib/hvo-roof-web/keys`) and restart the container (`docker exec roof-controller sh -c 'rm -f /var/lib/hvo-roof-web/keys/*'`, then
+  `docker restart roof-controller`), or redeploy it: every sign-in cookie and Stop pass is then unreadable, and everyone
+  signs in again. Without `RoofWeb:StopKeyFile` there are no passes; with `RoofWeb:StopAfterSessionHours` at 0 a pass
+  lasts only as long as the session would have. Replacing the Stop key does not end the passes: the web UI sends the
+  key it has now.
+- The web UI limits `POST /stop` to 30 at once, then four a second, so a script cannot make it flood the controller or
+  its log. It counts each signed-in person by their session, and signed-out pages by address. A post without the page's
+  token is refused before it is counted, so no one sharing a person's address can use up their Stops. The controller
+  itself never limits Stop.
+- The web UI's own sign-in rate limit, its origin check (403 `origin_not_allowed` for a form post or live connection
+  from another site) and its headers are its settings, in [web.md](web.md#settings).
 
 ## Status hub
 
@@ -551,8 +542,8 @@ REST API. Invoking any method returns an error for that call and changes nothing
 - **Authentication.** Every role may connect, with the `X-Api-Key` header or a session's `Authorization: Bearer`
   header on the negotiate request and on the WebSocket or long-polling requests that follow. Neither is accepted in
   the query string, so browser JavaScript, which cannot set headers on a WebSocket, cannot connect directly; a browser
-  UI gets status through its server. The console cookie is not accepted, so a page on another site cannot open a
-  connection with a signed-in browser's cookie. Without a valid key or session the negotiate request returns 401;
+  UI gets status through its server. No cookie is accepted, so a page on another site cannot open a connection with
+  a signed-in browser's cookie. Without a valid key or session the negotiate request returns 401;
   plain HTTP from the network returns 403 `https_required` when `RequireHttps` is on, as the API does.
 - **Revocation.** A connection authenticates once, when it opens. Once a second, on its own schedule and whether or
   not the status is changing, the controller checks each connection's key or session again. It closes the connection
@@ -586,7 +577,8 @@ REST API. Invoking any method returns an error for that call and changes nothing
 ## Camera proxy
 
 The controller proxies the Blue Iris MJPEG stream so clients never see Blue Iris credentials. API clients call
-`GET /api/v1.0/Camera/{id}/mjpeg` with a Viewer `X-Api-Key`. The console's player uses its cookie.
+`GET /api/v1.0/Camera/{id}/mjpeg` with a Viewer `X-Api-Key` or session. The web UI relays the stream to the browser
+with the person's session ([web.md](web.md#the-camera)).
 
 Stream limits and failure responses:
 
@@ -627,11 +619,10 @@ neither. When both are empty, no `Authorization` header is sent. An empty `BaseU
 |---------|---------|--------|
 | `RoofControllerSecurity:RequireHttps` | `true` outside Development | Plain-HTTP requests from non-loopback clients get 403 `https_required` instead of being served. There is no redirect, because a redirect would already have exposed the key. Loopback requests are exempt, as are `/health/live` and `/health/ready`. Setting `false` in Production logs a warning. |
 | `RoofControllerSecurity:AllowAnonymousStop` | `false` | Lets unauthenticated callers use `POST .../Stop`. Logs a warning. |
-| `RoofControllerSecurity:AllowedOrigins` | empty | Extra origins allowed for the console hub and `/account/*`. |
 | `AllowedHosts` | `*` | Set it to the controller's host names (for example `roof-pi;roof-pi.local;localhost`) to refuse DNS-rebinding requests. The list must include `localhost`: the container health check and the deploy script's in-container calls use it, and the [deployment check](deployment.md#the-deployment-check) refuses a list without it. Production logs a warning while it is `*`. |
 
-The first three are the `security` [settings](#settings) group, so admins can change them through the API, each with
-`ConfirmSafetyCriticalChange` except `AllowedOrigins`. On the Pi, `RequireHttps` is the exception: the deploy script
+The first two are the `security` [settings](#settings) group, so admins can change them through the API, each with
+`ConfirmSafetyCriticalChange`. On the Pi, `RequireHttps` is the exception: the deploy script
 (from `ALLOW_INSECURE_HTTP`) and both compose profiles set it in the environment, so the API shows it as read-only and a
 redeploy changes it. `AllowedHosts` is not in the catalogue.
 

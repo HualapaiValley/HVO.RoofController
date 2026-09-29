@@ -1,0 +1,273 @@
+@page "/"
+@inherits WebRoofComponent
+@inject IOptions<RoofWebOptions> WebOptions
+
+<PageTitle>Roof · HVO Roof Controller</PageTitle>
+
+@{
+    var status = View.Status;
+    var stale = View.IsStale;
+}
+
+<div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel">
+    <header class="rc2-header">
+        <div class="rc2-header-text">
+            <h1 class="rc2-title">Roof</h1>
+            <p class="rc2-intro-text">
+                Open or close the roof from the controls below. The controller stops the motor on a limit, a fault, a lost
+                input or a timeout. @RoofStopText.ButtonLabel is at the bottom of every page.
+            </p>
+        </div>
+
+        <div class="rc2-status-pill">
+            <span class="badge rc2-badge @FeedBadgeClass" data-testid="feed-state" title="Where the status on this page comes from">
+                <i class="bi bi-broadcast" aria-hidden="true"></i>Status: @View.FeedLabel
+            </span>
+            @if (View.HoldsLease)
+            {
+                <span class="badge rc2-badge bg-info text-dark" data-testid="lease" title="This page renews the operator lease while the roof moves">
+                    <i class="bi bi-stopwatch" aria-hidden="true"></i>Renewing lease@(status?.LeaseSecondsRemaining is { } lease ? $" ({RoofStatusText.Seconds(lease)} left)" : string.Empty)
+                </span>
+            }
+        </div>
+    </header>
+
+    <div class="rc2-banners">
+        @if (!View.IsStarted)
+        {
+            <div class="rc2-banner rc2-banner-info" role="status" data-testid="connecting">
+                <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                <span>Connecting to the roof's status…</span>
+            </div>
+        }
+        else if (!View.HasSession)
+        {
+            <div class="rc2-banner rc2-banner-danger" role="alert" data-testid="signed-out">
+                <i class="bi bi-person-x" aria-hidden="true"></i>
+                <span>You are signed out, so this page shows no status. <a href="signin" data-testid="sign-in-again">Sign in again</a>. @View.StopAfterSessionEnds</span>
+            </div>
+        }
+
+        @if (View.FeedBanner is { } banner)
+        {
+            <div class="rc2-banner @(View.FeedRefused ? "rc2-banner-danger" : "rc2-banner-warn")" role="alert" data-testid="feed-banner">
+                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                <span>@banner</span>
+            </div>
+        }
+
+        @if (status is not null && RoofCommandRules.HasFault(status))
+        {
+            <div class="rc2-banner rc2-alert-danger" role="alert" data-testid="fault-banner">
+                <i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i>
+                <span class="flex-grow-1">
+                    <strong>Fault: @RoofStatusText.DescribeFault(status).</strong>
+                    Open and Close are refused until the cause is fixed and the fault is cleared.@(View.CanOperate ? string.Empty : " An operator must clear it.")
+                </span>
+            </div>
+        }
+
+        @if (status is not null && status.RelayRegisterState == RoofRelayRegisterState.Unverified)
+        {
+            <div class="rc2-banner rc2-banner-warn" role="alert" data-testid="relays-banner">
+                <i class="bi bi-question-diamond-fill" aria-hidden="true"></i>
+                <span>Relays: @RoofStatusText.DescribeRelays(status).</span>
+            </div>
+        }
+        else if (status is not null && !status.RelayRegisterReadsHealthy)
+        {
+            <div class="rc2-banner rc2-banner-warn" role="alert" data-testid="relays-banner">
+                <i class="bi bi-cpu" aria-hidden="true"></i>
+                <span>Relays: @RoofStatusText.DescribeRelays(status).</span>
+            </div>
+        }
+
+        @if (status is not null && !status.InputsHealthy)
+        {
+            <div class="rc2-banner rc2-banner-warn" role="alert" data-testid="inputs-banner">
+                <i class="bi bi-activity" aria-hidden="true"></i>
+                <span>Safety inputs: @RoofStatusText.DescribeInputs(status). Motion may be refused.</span>
+            </div>
+        }
+    </div>
+
+    <div class="rc2-main">
+        <section class="rc2-card rc2-controls" aria-labelledby="rc2-controls-title">
+            <div class="rc2-card-head">
+                <h2 class="rc2-card-title" id="rc2-controls-title"><i class="bi bi-controller me-2" aria-hidden="true"></i>Controls</h2>
+            </div>
+            <div class="rc2-card-body">
+                <div class="rc2-state @(stale ? "rc2-state--stale" : null)" aria-live="polite">
+                    <div class="rc2-state-item">
+                        <div class="rc2-state-label">@(stale && status is not null ? "Position (last known)" : "Position")</div>
+                        <div class="rc2-state-value rc2-state-value--position" data-testid="position">
+                            @(status is null ? "Unknown" : RoofText.DescribePosition(status.Status))
+                        </div>
+                    </div>
+                    <div class="rc2-state-item">
+                        <div class="rc2-state-label">@(stale && status is not null ? "Commanded (last known)" : "Commanded")</div>
+                        <div class="rc2-state-value" data-testid="commanded">
+                            <i class="bi @MotionIcon(status) me-2" aria-hidden="true"></i>@DescribeMotion(status)
+                        </div>
+                    </div>
+                    @if (status is not null)
+                    {
+                        // While the inputs cannot be read, the controller reports the limits from the last read that worked.
+                        var lastRead = status.InputsHealthy ? string.Empty : " (last read)";
+                        <div class="rc2-state-limits">
+                            <span class="@LimitChipClass(status.IsOpenLimitActive)" data-testid="open-limit">Open limit@(lastRead): @RoofStatusText.DescribeInput(status.IsOpenLimitActive)</span>
+                            <span class="@LimitChipClass(status.IsClosedLimitActive)" data-testid="closed-limit">Closed limit@(lastRead): @RoofStatusText.DescribeInput(status.IsClosedLimitActive)</span>
+                            @if (status.IsWatchdogActive && status.WatchdogSecondsRemaining is { } watchdog)
+                            {
+                                <span class="rc2-chip rc2-chip--on" data-testid="watchdog">Watchdog: @RoofStatusText.Seconds(watchdog) left</span>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="rc2-action-grid">
+                    <button class="btn btn-success btn-lg rc2-action" type="button" data-testid="open"
+                            disabled="@(View.OpenBlock is not null)" title="@(View.OpenBlock is { } open ? RoofCommandRules.Capitalize(open) : "Open the roof")"
+                            @onclick="Roof.OpenAsync">
+                        <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i>Open
+                    </button>
+                    <button class="btn btn-danger btn-lg rc2-action" type="button" data-testid="close"
+                            disabled="@(View.CloseBlock is not null)" title="@(View.CloseBlock is { } close ? RoofCommandRules.Capitalize(close) : "Close the roof")"
+                            @onclick="Roof.CloseAsync">
+                        <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i>Close
+                    </button>
+                    <button class="btn btn-outline-light rc2-action rc2-action--small" type="button" data-testid="clear-fault"
+                            disabled="@(View.ClearFaultBlock is not null)" title="@(View.ClearFaultBlock is { } clear ? RoofCommandRules.Capitalize(clear) : "Clear the latched fault")"
+                            @onclick="Roof.ClearFaultAsync">
+                        <i class="bi bi-bandaid me-2" aria-hidden="true"></i>Clear fault
+                    </button>
+                    <button class="btn btn-outline-light rc2-action rc2-action--small" type="button" data-testid="refresh"
+                            disabled="@(!View.HasSession)" title="Read the status once" @onclick="Roof.RefreshAsync">
+                        <i class="bi bi-arrow-clockwise me-2" aria-hidden="true"></i>Read status
+                    </button>
+                </div>
+
+                <p class="rc2-blocked" data-testid="blocked" aria-live="polite">
+                    @if (View.Busy is { } busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>@busy
+                    }
+                    else if (View.IsStarted && RoofCommandRules.DescribeMotionBlocks(View.OpenBlock, View.CloseBlock) is { } blocked)
+                    {
+                        @blocked
+                    }
+                </p>
+
+                @if (View.HasSession && !View.CanOperate)
+                {
+                    <p class="rc2-role-hint" data-testid="role-hint">
+                        <i class="bi bi-person-lock me-1" aria-hidden="true"></i>
+                        Open, Close and Clear fault need the Operator role. @RoofStopText.AlwaysAvailable
+                    </p>
+                }
+
+                @if (View.Notices.Count > 0)
+                {
+                    <ul class="rc2-notices" data-testid="notices" aria-live="polite">
+                        @foreach (var notice in View.Notices)
+                        {
+                            <li class="rc2-notice rc2-notice--@notice.Level.ToString().ToLowerInvariant()" data-testid="notice" data-level="@notice.Level">
+                                <span class="rc2-notice-time">@RoofStatusText.Time(notice.At)</span>
+                                <span>@notice.Text</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </section>
+
+        <section class="rc2-card rc2-camera" aria-labelledby="rc2-camera-title" data-testid="cameras">
+            <div class="rc2-card-head">
+                <h2 class="rc2-card-title" id="rc2-camera-title"><i class="bi bi-camera-video me-2" aria-hidden="true"></i>@(Cameras.Count == 1 ? "Roof camera" : "Cameras")</h2>
+            </div>
+            <div class="rc2-card-body rc2-camera-body">
+                @* A camera that fails takes only its own view with it: the roof controls, and Stop, are unaffected. *@
+                <ErrorBoundary @ref="_cameraErrorBoundary">
+                    <ChildContent>
+                        @foreach (var camera in Cameras)
+                        {
+                            <CameraStream @key="camera" CameraId="camera" Label="@(Cameras.Count == 1 ? "Roof camera stream" : $"Camera {camera} stream")" />
+                        }
+                    </ChildContent>
+                    <ErrorContent>
+                        <div class="rc2-camera-error" role="alert" data-testid="camera-failed">
+                            <i class="bi bi-camera-video-off" aria-hidden="true"></i>
+                            <span>The camera view failed. The roof controls are unaffected.</span>
+                            <button type="button" class="btn btn-sm btn-outline-light" data-testid="camera-retry" @onclick="RecoverCamera">Retry</button>
+                        </div>
+                    </ErrorContent>
+                </ErrorBoundary>
+            </div>
+        </section>
+
+        <section class="rc2-card rc2-details" aria-labelledby="rc2-details-title">
+            <div class="rc2-card-head">
+                <h2 class="rc2-card-title" id="rc2-details-title"><i class="bi bi-activity me-2" aria-hidden="true"></i>Status</h2>
+            </div>
+            <div class="rc2-card-body">
+                @if (status is null)
+                {
+                    <p class="web-muted mb-0" data-testid="no-status">No status yet.</p>
+                }
+                else
+                {
+                    <p class="rc2-status-time @(stale ? "rc2-status-time--stale" : null)" data-testid="status-time">
+                        @(stale ? "Last known state, as of" : "Status at") @RoofStatusText.Time(status.SnapshotUtc)@(stale ? ". It may not be the roof's state now." : string.Empty)
+                    </p>
+                    <dl class="rc2-rows" data-testid="status-rows">
+                        @foreach (var (label, value) in RoofStatusText.DescribeRows(status))
+                        {
+                            <div class="rc2-row">
+                                <dt>@label</dt>
+                                <dd>@value</dd>
+                            </div>
+                        }
+                    </dl>
+                }
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    private ErrorBoundary? _cameraErrorBoundary;
+
+    private IReadOnlyList<int> Cameras => WebOptions.Value.Cameras;
+
+    private void RecoverCamera() => _cameraErrorBoundary?.Recover();
+
+    private string FeedBadgeClass => View.FeedLabel switch
+    {
+        "live" => "bg-success",
+        "refused" or "STALE" => "bg-danger",
+        _ => "bg-warning text-dark"
+    };
+
+    private static string DescribeMotion(RoofStatusResponse? status) => status?.CommandedMotion switch
+    {
+        RoofMotionDirection.Opening => "Opening",
+        RoofMotionDirection.Closing => "Closing",
+        null => "Unknown",
+        _ => "None"
+    };
+
+    private static string MotionIcon(RoofStatusResponse? status) => status?.CommandedMotion switch
+    {
+        RoofMotionDirection.Opening => "bi-arrow-up-circle",
+        RoofMotionDirection.Closing => "bi-arrow-down-circle",
+        null => "bi-question-circle",
+        _ => "bi-pause-circle"
+    };
+
+    private static string LimitChipClass(bool? active) => active switch
+    {
+        true => "rc2-chip rc2-chip--on",
+        false => "rc2-chip",
+        null => "rc2-chip rc2-chip--unknown"
+    };
+}

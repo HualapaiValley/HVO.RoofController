@@ -2,7 +2,9 @@ using System.Net;
 using System.Text;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Web;
+using HVO.RoofControllerV4.Web.Sessions;
 using HVO.RoofControllerV4.Web.Supervision;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
@@ -25,6 +27,18 @@ internal static class WebTestSupport
             .Replace("\"lastExitReason\":\"crashed (exit code 1)\"", lastExitReason is null ? "\"lastExitReason\":null" : $"\"lastExitReason\":\"{lastExitReason}\"", StringComparison.Ordinal);
 
     public static IOptionsMonitor<RoofWebOptions> Monitor(RoofWebOptions options) => new FixedOptionsMonitor(options);
+
+    /// <summary>A Stop key (not a key the controller knows), read from a file as the web UI reads it.</summary>
+    public static WebStopKey StopKey(string value = "web-stop-key-for-tests")
+    {
+        using var directory = new TempDirectory();
+        System.IO.File.WriteAllText(directory.File("stop-key"), value);
+        return WebStopKey.Load(directory.File("stop-key"));
+    }
+
+    /// <summary>The Stop pass of a web UI with <paramref name="stopKey"/> (none: <see cref="WebStopKey.None"/>).</summary>
+    public static WebStopPass StopPass(WebStopKey? stopKey = null, RoofWebOptions? options = null, TimeProvider? time = null)
+        => new(new EphemeralDataProtectionProvider(), stopKey ?? WebStopKey.None, Options.Create(options ?? new RoofWebOptions()), time ?? TimeProvider.System);
 
     /// <summary>A controller client whose every request is answered by <paramref name="answer"/>.</summary>
     public static RoofControllerClient ControllerAnswering(Func<HttpRequestMessage, HttpResponseMessage> answer)

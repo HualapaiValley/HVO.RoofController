@@ -7,6 +7,7 @@ internal static class RoofApiRoutes
     private const string V1 = "api/v1.0/";
 
     public const string Status = V4 + "RoofControl/Status";
+    public const string Mode = V4 + "RoofControl/Mode";
     public const string Open = V4 + "RoofControl/Open";
     public const string Close = V4 + "RoofControl/Close";
     public const string Stop = V4 + "RoofControl/Stop";

@@ -51,8 +51,8 @@ public static class RoofSecurityStartup
         if (!keyStore.HasKeys)
         {
             logger.LogCritical(
-                "No usable API keys are configured: every protected endpoint (roof commands, status, configuration, /health, camera, " +
-                "and the web console login) will answer 401. Provision at least one key per role, for example with environment variables " +
+                "No usable API keys are configured: every protected endpoint (roof commands, status, configuration, /health and " +
+                "camera) will answer 401 to an API key. Provision at least one key per role, for example with environment variables " +
                 "RoofControllerSecurity__ApiKeys__0__Name=operator, RoofControllerSecurity__ApiKeys__0__Role=RoofOperator and " +
                 "RoofControllerSecurity__ApiKeys__0__Key=<random value of at least {MinimumKeyLength} characters>, or as Docker secrets " +
                 "with the same names under /run/secrets. See docs/security.md.",
@@ -67,7 +67,7 @@ public static class RoofSecurityStartup
         if (!environment.IsDevelopment() && options.RequireHttps == false)
         {
             logger.LogWarning(
-                "RoofControllerSecurity:RequireHttps is explicitly disabled in {Environment}: API keys and the console access key " +
+                "RoofControllerSecurity:RequireHttps is explicitly disabled in {Environment}: API keys, passwords and PINs " +
                 "can be read by anyone on the network path. Enable HTTPS (docs/deployment.md).",
                 environment.EnvironmentName);
         }

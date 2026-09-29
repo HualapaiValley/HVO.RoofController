@@ -43,15 +43,15 @@ public static class RoofSettingValues
     /// <summary>
     /// Parses <paramref name="text"/> as a value of <paramref name="setting"/>. Empty text is null for a nullable setting
     /// and an empty string for a string. Durations take seconds (<c>90</c>, <c>1.5</c>), a number with a unit (<c>500ms</c>,
-    /// <c>90s</c>, <c>5m</c>, <c>2h</c>, <c>1d</c>) or <c>[d.]hh:mm:ss</c>. Lists take items separated by commas or new
-    /// lines, or a JSON array. Returns false with a message for a value the setting cannot take.
+    /// <c>90s</c>, <c>5m</c>, <c>2h</c>, <c>1d</c>) or <c>[d.]hh:mm:ss</c>. Returns false with a message for a value the
+    /// setting cannot take.
     /// </summary>
     public static bool TryParse(RoofSettingDescriptor setting, string? text, out JsonElement value, out string? error)
     {
         ArgumentNullException.ThrowIfNull(setting);
         value = Null;
         var trimmed = text?.Trim() ?? string.Empty;
-        if (trimmed.Length == 0 && setting.Type != RoofSettingType.StringList && (setting.Nullable || setting.Type != RoofSettingType.String))
+        if (trimmed.Length == 0 && (setting.Nullable || setting.Type != RoofSettingType.String))
         {
             error = setting.Nullable ? null : "A value is required.";
             return error is null;
@@ -118,16 +118,6 @@ public static class RoofSettingValues
                 value = JsonSerializer.SerializeToElement(match);
                 break;
 
-            case RoofSettingType.StringList:
-                if (!TryParseList(trimmed, out var items))
-                {
-                    error = "Enter the items separated by commas, or as a JSON array of strings.";
-                    return false;
-                }
-
-                value = JsonSerializer.SerializeToElement(items);
-                break;
-
             default:
                 value = JsonSerializer.SerializeToElement(text ?? string.Empty);
                 break;
@@ -171,11 +161,6 @@ public static class RoofSettingValues
                         ? null
                         : $"Enter one of: {string.Join(", ", setting.AllowedValues ?? [])}.";
 
-            case RoofSettingType.StringList:
-                return value.ValueKind == JsonValueKind.Array && value.EnumerateArray().All(item => item.ValueKind == JsonValueKind.String)
-                    ? null
-                    : "Enter a list of text items.";
-
             default:
                 if (value.ValueKind != JsonValueKind.String)
                 {
@@ -189,8 +174,8 @@ public static class RoofSettingValues
     }
 
     /// <summary>
-    /// The value as a person would type it: <c>true</c>, <c>42</c>, <c>1.5</c> (a duration in seconds), the text, or the
-    /// list items separated by commas. Null is an empty string.
+    /// The value as a person would type it: <c>true</c>, <c>42</c>, <c>1.5</c> (a duration in seconds) or the text. Null
+    /// is an empty string.
     /// </summary>
     public static string Format(RoofSettingDescriptor setting, JsonElement? value)
     {
@@ -206,7 +191,6 @@ public static class RoofSettingValues
             JsonValueKind.False => "false",
             JsonValueKind.Number => element.TryGetInt64(out var whole) ? whole.ToString(CultureInfo.InvariantCulture) : Format(element.GetDouble()),
             JsonValueKind.String => element.GetString()!,
-            JsonValueKind.Array => string.Join(", ", element.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() : item.GetRawText())),
             _ => element.GetRawText()
         };
     }
@@ -220,7 +204,7 @@ public static class RoofSettingValues
         var text = Format(setting, value);
         if (text.Length == 0)
         {
-            return setting.Type == RoofSettingType.StringList && value is { ValueKind: JsonValueKind.Array } ? "(empty)" : None;
+            return None;
         }
 
         if (setting.Type == RoofSettingType.Duration && value!.Value.ValueKind == JsonValueKind.Number)
@@ -328,26 +312,6 @@ public static class RoofSettingValues
         }
 
         return text.ToString();
-    }
-
-    private static bool TryParseList(string text, out string[] items)
-    {
-        items = [];
-        if (text.StartsWith('['))
-        {
-            try
-            {
-                items = JsonSerializer.Deserialize<string[]>(text) ?? [];
-                return items.All(item => item is not null);
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
-        }
-
-        items = text.Split([',', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return true;
     }
 
     private static string? CheckRange(RoofSettingDescriptor setting, double value)

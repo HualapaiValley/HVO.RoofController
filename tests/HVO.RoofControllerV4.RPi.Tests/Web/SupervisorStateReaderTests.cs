@@ -95,6 +95,8 @@ public sealed class SupervisorStateReaderTests
     [DataRow("[]")]
     [DataRow("{}")]
     [DataRow("{\"controller\":{\"state\":\"running\"}}")]
+    [DataRow("{\"controller\":null,\"ui\":{\"state\":\"running\"}}")]
+    [DataRow("{\"controller\":{\"state\":\"running\"},\"ui\":null}")]
     public async Task Read_AFileThatIsNotTheSupervisorsState_IsUnreadable(string content)
     {
         using var directory = new WebTestSupport.TempDirectory();

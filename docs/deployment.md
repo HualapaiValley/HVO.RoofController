@@ -19,7 +19,7 @@ file per setting from there. The file name is the setting name with `__` in plac
 
 ```
 /etc/hvo-roof/secrets/                                      (mode 700)
-  RoofControllerSecurity__ApiKeys__0__Name                  e.g. console-operator
+  RoofControllerSecurity__ApiKeys__0__Name                  e.g. observatory-operator
   RoofControllerSecurity__ApiKeys__0__Role                  RoofOperator
   RoofControllerSecurity__ApiKeys__0__Key                   <random, >= 24 chars>
   RoofControllerSecurity__ApiKeys__1__...                   more keys (viewer, admin, deploy)
@@ -64,7 +64,7 @@ shred -u roof.key
 The web UI serves the same certificate on its own port (8088): the container's supervisor gives it a private copy of
 the certificate and its password (see [The container's two processes](#the-containers-two-processes)).
 
-Install `roof.crt`, or your CA certificate, as trusted on browsers that use the console or the web UI. Keep a copy on the machine
+Install `roof.crt`, or your CA certificate, as trusted on browsers that use the web UI. Keep a copy on the machine
 that runs the deploy script too: pass it as `REMOTE_CA_CERT` so the script can check the HTTPS endpoint after a deploy
 (not needed when that machine already trusts the CA).
 
@@ -186,7 +186,7 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
   physical deployment, usually a `HatEmulator` file in the secrets directory: it is read last, so it overrides the
   `HatEmulator__Enabled=false` that the deploy script and the Pi compose profiles set.
 - a value that cannot be converted in `RoofControllerOptionsV4`, `RoofControllerSecurity`,
-  `RoofControllerHostOptionsV4`, `ConsoleLogBuffer`, `BlueIris`, `Telemetry` or `HatEmulator` (the report names the setting, not the
+  `RoofControllerHostOptionsV4`, `BlueIris`, `Telemetry` or `HatEmulator` (the report names the setting, not the
   value), and `Telemetry` options that the controller would refuse
 - a `Logging` level (`Logging:LogLevel:*` or `Logging:<provider>:LogLevel:*`, nested categories included) that is not
   a log level name, such as `Info`: the controller would not start
@@ -467,8 +467,8 @@ back from it with `--rollback` runs the verified stop gate against that old cont
 needs `--force-unverified-stop` and the typed confirmation as well.
 
 Before that deploy, provision `/etc/hvo-roof/secrets`, including the operator key used by the script. Then update any
-API automation clients (they now need `X-Api-Key` and `POST` commands). Operators sign in to the console with a key
-from the secrets directory.
+API automation clients (they now need `X-Api-Key` and `POST` commands). People sign in to the web UI with a name and
+password ([People, sessions and managed API keys](security.md#people-sessions-and-managed-api-keys)).
 
 ## Deploying with compose
 
@@ -604,8 +604,8 @@ side and a person whose session carries over (see [Container scenarios](emulator
 
 ## The container's two processes
 
-The container runs two processes: the controller (`HVO.RoofControllerV4.RPi`: the API, the hub, the console and the
-roof itself) and the web UI (`HVO.RoofControllerV4.Web`, on port 8088). The web UI is a client of the controller: it
+The container runs two processes: the controller (`HVO.RoofControllerV4.RPi`: the API, the status hub and the roof
+itself) and the web UI (`HVO.RoofControllerV4.Web`, on port 8088). The web UI is a client of the controller: it
 calls the controller's API over the container's loopback (`RoofWeb__ControllerUrl`, default `http://localhost:8080`),
 as any other client does, and never drives the HAT itself.
 
@@ -637,8 +637,8 @@ Pi:
 docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller
 ```
 
-The web UI's control for it, for admins only and after confirming what a kill means for the roof, comes with the web
-UI's sign-in (issue #46). The supervisor records what it did with the last request in its state
+The web UI's control for it is on the System page, for admins only, after confirming what a kill means for the roof
+([web.md](web.md#system)). The supervisor records what it did with the last request in its state
 (`lastForcedRestart`: `restarted`, or `ignored` within 10 s of a start).
 
 ### The web UI's user and settings
@@ -665,12 +665,38 @@ root can write) of the certificate it serves and of that certificate's password:
 It takes them again at each start of the web UI, so a renewed certificate is used after a restart of the web UI or the
 container.
 
+The web UI's own key for Stop ([web.md](web.md#stop)) is a file as well, `RoofWeb__StopKeyFile`, so the key never
+enters the web UI's environment. Point it at a Viewer key's file in the secrets directory, such as
+`/run/secrets/RoofControllerSecurity__ApiKeys__2__Key` (the same file the controller reads), with
+`HVO_ROOF_WEB_STOP_KEY_FILE` for Compose or `EXTRA_DOCKER_ARGS="--env RoofWeb__StopKeyFile=..."` for the deploy script.
+The supervisor gives the web UI a private copy at each start of the web UI, as it does the certificate; a key file it
+cannot read is logged, and the web UI's Stop then uses the person's session alone.
+
+The web UI keeps the keys that protect its sign-in cookie and its forms in a directory only its user can read (mode
+`0700`): `/var/lib/hvo-roof-web/keys` (`HVO_SUPERVISOR_UI_DATA_DIR`), or `RoofWeb__DataProtectionPath` when that is set.
+The default is in the container, so people stay signed in when the web UI or the container restarts, and sign in again
+after a redeploy. The supervisor makes the default as root, also when a setting names it, written with repeated slashes
+or a trailing slash or not (a path with `.` or `..` in it is not taken for the default). It first gives
+`/var/lib/hvo-roof-web` to root (mode `0755`), so only root can change what its `keys` directory is. A volume mounted
+there must be one root in the container can change the owner of (a Docker volume or a local bind mount); it needs
+nothing else done to it, and one given to 1654 before is taken back at the web UI's next start. A share that root cannot
+change (such as NFS with root squash) is logged, and the web UI keeps its keys in memory: mount it elsewhere, give it to
+1654, and name it in `RoofWeb__DataProtectionPath`. The supervisor makes any other directory (named in
+`RoofWeb__DataProtectionPath`, or the `keys` directory under `HVO_SUPERVISOR_UI_DATA_DIR`) as the web UI's user, not as
+root, so a symbolic link along the path gains that user nothing: the directory must be where that user (the image's
+`app`, UID 1654) can make it, or already be one it owns (for a volume elsewhere, give it to 1654 once). A directory that
+cannot be made, or a symbolic link, is logged, and the web UI keeps the keys in memory (never on disk elsewhere), so
+everyone signs in again when it restarts.
+
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `RoofWeb__Urls` | `http://+:8088` | Where the web UI listens. The deploy script and the `pi` profile set `https://+:8088`, and `ALLOW_INSECURE_HTTP=true` and `pi-lan-http` set `http://+:8088`. |
 | `RoofWeb__ControllerUrl` | `http://localhost:8080` | The controller's API, over loopback |
 | `RoofWeb__StatusRefreshSeconds` | `2` | How often the pages check the controller's readiness and the supervisor's state, from 1 to 60 |
 | `RoofWeb__Certificate__Path`, `RoofWeb__Certificate__PasswordFile` | the controller's | A certificate of the web UI's own (a `.pfx` file), and a file with its password (none when unset). A password file that cannot be read is logged, and no password is given. |
+| `RoofWeb__StopKeyFile` | none | A file with the web UI's own API key for Stop, such as a Viewer key's file in the secrets directory. The web UI gets a private copy. |
+| `RoofWeb__DataProtectionPath` | `/var/lib/hvo-roof-web/keys` | Where the web UI keeps the keys that protect its sign-in cookie and forms. Root makes the default, also when named here; any other directory, set here or under `HVO_SUPERVISOR_UI_DATA_DIR`, is made by the web UI's user (UID 1654). |
+| `RoofWeb__AllowedOrigins__N`, `RoofWeb__SignInAttemptsPerMinute`, `RoofWeb__CameraIds__N` | none, `10`, camera 2 | Other origins that may post the web UI's forms, sign-in attempts from one address a minute, and the cameras the roof page shows ([web.md](web.md#settings)) |
 
 The web UI checks its settings at start. An invalid one stops it with
 `The roof controller's web UI did not start: ...`, and the supervisor starts it again with the backoff, so a deploy
@@ -721,7 +747,7 @@ One health check, `roof_controller`, backs three endpoints:
 |----------|--------|---------|
 | `/health/live` | anonymous | 200 whenever the process answers. No check runs. |
 | `/health/ready` | anonymous, status text only | 200 for Healthy or Degraded, 503 for Unhealthy. The container's health check and the deploy script's readiness wait use it, from inside the container. |
-| `/health` | Viewer key or signed-in console | The same result with its description and data (`HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 for Unhealthy. |
+| `/health` | Viewer key or a person's session | The same result with its description and data (`HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 for Unhealthy. |
 
 The check reports the first of these that applies:
 

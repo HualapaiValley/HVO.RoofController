@@ -7,8 +7,8 @@ using HVO.RoofControllerV4.RPi.Security.Identity;
 namespace HVO.RoofControllerV4.RPi.Security;
 
 /// <summary>
-/// Builds the principal for an authenticated API key or session. Used by the <c>ApiKey</c> and session handlers and
-/// the console cookie login so all carry the same claims. Roles are hierarchical: an Admin principal also carries the
+/// Builds the principal for an authenticated API key or session. Used by the <c>ApiKey</c> and session handlers so both
+/// carry the same claims. Roles are hierarchical: an Admin principal also carries the
 /// Operator and Viewer role claims, so <c>IsInRole(RoofViewer)</c> is true for every authenticated caller.
 /// </summary>
 public static class RoofPrincipalFactory
@@ -130,7 +130,7 @@ public static class RoofPrincipalFactory
 
     /// <summary>
     /// How <paramref name="user"/> proved who it is, or null when it is not authenticated. A principal with a key
-    /// identifier and no credential claim (a console cookie from before sessions existed) is an API key.
+    /// identifier and no credential claim is an API key.
     /// </summary>
     public static RoofCredentialKind? GetCredentialKind(ClaimsPrincipal? user)
     {

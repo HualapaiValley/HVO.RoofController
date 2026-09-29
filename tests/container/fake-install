@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# A stand-in for install, for the supervisor tests of the web UI's default keys directory, /var/lib/hvo-roof-web/keys,
+# which only root can make: it appends its arguments to FAKE_DIR/install.log (one call a line) and makes nothing under
+# /var/lib/hvo-roof-web. Every other call goes to the real install, found on PATH without this stand-in's directory.
+set -uo pipefail
+
+printf '%s\n' "$*" >>"${FAKE_DIR}/install.log"
+case "${*: -1}" in
+  /var/lib/hvo-roof-web | /var/lib/hvo-roof-web/*) exit 0 ;;
+esac
+PATH=${PATH//"$(dirname "$0"):"/}
+exec install "$@"

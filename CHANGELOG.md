@@ -16,15 +16,15 @@ against the installed drive and wiring before relying on the roof.
 ### BREAKING
 
 Upgrade the controller and API automation scripts together. Older clients cannot operate
-the roof against this server; use the authenticated browser console for operator access.
+the roof against this server; use the web UI (port 8088) for operator access.
 
-- **iPad app retired.** The native iPad app is retired; operators must use the authenticated
-  web console. Browser tests run it with phone and tablet emulation (#31).
+- **iPad app retired.** The native iPad app is retired; operators use the web UI (#46).
+  Browser tests run it with phone, tablet and desktop emulation (#31, #46).
 - **API keys required.** Every protected endpoint needs an `X-Api-Key` header with a key
   from `RoofControllerSecurity:ApiKeys` (roles `RoofViewer`, `RoofOperator`, `RoofAdmin`).
   Keys come from environment variables or Docker secrets, never committed settings. With no
   keys configured, protected endpoints return 401 and the controller logs a Critical message
-  at startup. The web console now has a sign-in page. See [docs/security.md](docs/security.md).
+  at startup. People sign in to the web UI (#46). See [docs/security.md](docs/security.md).
 - **Commands are POST only.** `Open`, `Close`, `Stop`, `ClearFault` and the new `Lease` under
   `api/v4.0/RoofControl` accept only `POST`; the old `GET` command routes return 405. Stop
   needs any authenticated role (anonymous Stop only with `AllowAnonymousStop=true`); Open,
@@ -60,7 +60,7 @@ the roof against this server; use the authenticated browser console for operator
 - **Camera.** Blue Iris credentials come from `BlueIris:UserName` and `BlueIris:Password`
   (environment variables or Docker secrets); the hard-coded credential was removed and must be
   rotated because it remains in the git history. `GET api/v1.0/Camera/{id}/mjpeg` needs a
-  Viewer key or the console sign-in.
+  Viewer key or a person's session (#41).
 - **Deployment.** `deploy-roofcontroller-rpi.sh` needs the operator key
   (`ROOF_OPERATOR_API_KEY` or `~/.config/hvo-roof/operator.key`) and aborts unless the Stop it
   sends is verified. It needs `HTTPS_CERT_DIR` (or `ALLOW_INSECURE_HTTP=true`); with HTTPS it
@@ -68,6 +68,17 @@ the roof against this server; use the authenticated browser console for operator
   that used `http://<pi>:8080` must move to `https://<pi>:8443`. The compose `pi` profile
   likewise needs a certificate and publishes only 8443; the new `pi-lan-http` profile is the
   explicit plain-HTTP opt-out. See [docs/deployment.md](docs/deployment.md).
+- **The controller serves no pages (#46).** The web UI on port 8088 replaces the controller's
+  browser console: the controller's pages, `/login`, `/account`, `/console/stop`, its sign-in
+  cookie and its log view are gone, and ports 8080 and 8443 answer only the API, the status hub,
+  `/health` and the camera proxy. Move bookmarks and reverse proxies to `https://<pi>:8088/`.
+  `RoofControllerSecurity:AllowedOrigins` and `ConsoleLogBuffer:MinimumLevel` are retired; the
+  web UI's own origins are `RoofWeb__AllowedOrigins__N`. A settings file that an earlier version
+  saved with them still loads: they are ignored, the controller logs a warning at start and shows
+  it to admins with the settings, and the next change through the API leaves them out of the
+  file. For Stop without a session, give the web UI a Viewer key with
+  `HVO_ROOF_WEB_STOP_KEY_FILE` (Compose) or `RoofWeb__StopKeyFile`
+  ([docs/deployment.md](docs/deployment.md#the-web-uis-user-and-settings)).
 - **Settings directories (#42).** Before upgrading, create `/etc/hvo-roof/config` (mode 0755)
   and `/var/lib/hvo-roof/settings-secrets` (mode 0700) on the Pi. The deploy script and both
   Pi compose profiles mount them, and Docker refuses to start the controller while either is
@@ -80,7 +91,7 @@ the roof against this server; use the authenticated browser console for operator
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`
-  header; the console cookie is not accepted. A slow client receives only the newest status
+  header or a person's session; a browser cookie is not accepted. A slow client receives only the newest status
   and never delays the controller or other clients. Connections whose key is removed, rotated
   or re-roled are closed within about a second, even while the roof moves; at most 32 are open
   at once, and at most 8 with one key. The hub accepts no commands. See [docs/security.md](docs/security.md#status-hub).
@@ -148,9 +159,8 @@ the roof against this server; use the authenticated browser console for operator
   `X-On-Behalf-Of` must be a user name, and a key or token must be printable ASCII, so no
   request, Stop included, fails on a header it cannot send. A credentials file in a directory other users can
   change is refused, and requests print secrets only as `(set)`. A status feed handler that
-  throws is logged and the feed carries on. The web console now takes its Stop wording and
-  status rules from the library: the reconnect dialog's texts, for every answer and for none,
-  are rendered by the server. See
+  throws is logged and the feed carries on. The web UI takes its Stop wording and status
+  rules from the library (#46). See
   [src/HVO.RoofControllerV4.Client/README.md](src/HVO.RoofControllerV4.Client/README.md).
 - Command line and terminal interface (#45). `hvo-roof` (`HVO.RoofControllerV4.Cli`) reaches the
   controller only through the client library. It is published as one self-contained file for
@@ -173,7 +183,7 @@ the roof against this server; use the authenticated browser console for operator
   That Stop waits up to 3 s for the answer to an Open or Close still on its way, says so when the
   command may still reach the controller after it, and the interface sends Stop again when an
   Open or Close overtakes one. It never closes while a Stop is on its way, and it
-  shows the newest Stop's result. It is drawn in HVO Dark, the web console's theme, and in the
+  shows the newest Stop's result. It is drawn in HVO Dark, the web UI's theme, and in the
   terminal's own colours with `NO_COLOR`. SIGINT, SIGTERM and SIGHUP end a command that moves the
   roof only after it sends Stop, even when a closing terminal sends SIGHUP twice; nothing cuts
   `stop` short; and the process still ends within 5 s, or 15 s for `open`, `close`, `stop` and
@@ -194,7 +204,7 @@ the roof against this server; use the authenticated browser console for operator
   the container's health check failing, instead of looping. A web UI that exits is restarted on
   its own, and the controller is not touched. A controller that does not answer can be restarted
   by force (a kill, with the guarantees of `docker kill`): for now with `docker exec` and the
-  supervisor's control file; the web UI's admin control for it comes with its sign-in (#46). The
+  supervisor's control file, or the web UI's System page (#46). The
   web UI runs as the unprivileged `app` user with only its `RoofWeb__*` settings, and cannot read
   the secrets directory; for HTTPS it holds a copy of the certificate it serves and its password
   (by default the controller's; `RoofWeb__Certificate__Path` gives it its own). It
@@ -205,6 +215,38 @@ the roof against this server; use the authenticated browser console for operator
   when it cannot start. `tests/container/supervisor-tests.sh` tests the supervisor with fake
   processes, and the `supervisor` container scenarios run it on real Docker (C11 steps 5-9). See
   [docs/deployment.md](docs/deployment.md#the-containers-two-processes).
+- Web UI (#46). `HVO.RoofControllerV4.Web` is the browser interface for phones, tablets and
+  desktops, in HVO Dark, a client of the controller's API and status hub like `hvo-roof`. People
+  sign in with a name and password (the controller's session, kept in an HttpOnly,
+  `SameSite=Strict` cookie that never outlasts it; `RoofWeb:SignInAttemptsPerMinute` per
+  address), and change their own password. The Roof page follows the live status, with Open,
+  Close and Clear fault for operators, the operator lease renewed only while the page's
+  connection is up, a stale view after 3 s without a status, and the roof camera relayed with
+  the person's session (Live, Stalled, Reconnecting or Offline, with the last frame kept). The
+  Health page shows readiness, the supervisor and the health checks; the Settings page changes
+  one setting at a time, with a review, confirmation for safety-critical changes, secrets set
+  and never shown, and hand edits; admins manage people, API keys and sessions, and restart
+  the controller or force a restart through the supervisor. Stop is on every page, the
+  sign-in page too, in a bar that is never disabled and works without the page's live
+  connection (`POST /stop`), with the controller's wording; with `RoofWeb:StopKeyFile` it
+  still works after the person's session ends, from a Stop pass (a cookie sent only with
+  `/stop`, naming the person) that lasts `RoofWeb:StopAfterSessionHours` (default 12) after the
+  session would have expired and is removed at sign-out. `/stop` allows 30 Stops at once from
+  each person (signed-out pages: from each address), then four a second. Sign-out ends the
+  session in the web UI even when the controller does not answer, and an unknown address shows a Not found page (404). A mode banner marks an emulated HAT on every
+  page, the sign-in page too, which reads it from the new anonymous
+  `GET /api/v4.0/RoofControl/Mode` (only the HAT mode and whether the limit switches are
+  ignored). The sign-in page also says whether the controller is running and ready (the Health page's
+  headline, without the details), so while nobody can sign in, for example after repeated crashes, it says why.
+  Form posts and the live connection must come from the web UI or `RoofWeb:AllowedOrigins`.
+  The supervisor gives the web UI a private copy of its Stop key and a directory for the keys
+  that protect its cookie (`/var/lib/hvo-roof-web/keys`, made by root in a directory it keeps
+  root's; any other, set with `RoofWeb__DataProtectionPath` or `HVO_SUPERVISOR_UI_DATA_DIR`, is
+  made by the web UI's user).
+  Every button a person taps is at
+  least 44 x 44 CSS pixels and 8 CSS pixels from its neighbours on each screen tested. The
+  pages are tested with bUnit against a fake controller, and in Chromium against the emulated
+  roof, which also takes the screenshots in [docs/web.md](docs/web.md).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.
@@ -216,10 +258,9 @@ the roof against this server; use the authenticated browser console for operator
 - Status fields: `statusVersion`, `commandedMotion`, fault latch, input health, lease and
   controller identity.
 - The roof stops with reason `HostShutdown` when the container or host shuts down.
-- Web console: the reconnect dialog has a Stop button that works while the console's
-  connection is down (`POST /console/stop`, console sign-in plus the page's antiforgery
-  token), and the console stops renewing the operator lease as soon as its connection drops.
-  Renewal does not resume on reconnect.
+- Web UI (#46): the reconnect dialog has a Stop button that works while the page's live
+  connection is down (`POST /stop` on the web UI), and the page stops renewing the operator
+  lease as soon as its connection drops. Renewal does not resume on reconnect.
 - Drive-running interlock on IN4 (#29), with `AtSpeedConfirmationTimeout` set: a start is
   refused with `InterlockActive` while IN4 still reports the drive running (after a ramp stop a
   reversal is refused until the drive has stopped; with the coast stop IN4 drops within
@@ -256,7 +297,7 @@ the roof against this server; use the authenticated browser console for operator
   timeout or a malformed reply is an I/O error, which the controller fails safe on as for a
   failed I2C transfer. Emulator mode is refused outside Development unless
   `HatEmulator:AllowOutsideDevelopment` is set. It shows as an `EMULATED HAT` banner on every
-  console page, `hatMode: "Emulated"` in Status, Degraded health (every health description
+  web UI page, `hatMode: "Emulated"` in Status, Degraded health (every health description
   names the emulator, a fault's too), startup warnings and the
   telemetry attributes `hvo.roof.hat.mode` and `hvo.roof.hat.emulator.endpoint`. The deployment
   check fails on refused emulator settings and on emulator mode with `/dev/i2c-1` mapped, and
@@ -312,13 +353,15 @@ the roof against this server; use the authenticated browser console for operator
   scenarios on pull requests to `main` and `feature/**` and on pushes to `main`, and the
   two-hour soak nightly and on demand, with the soak's invariant results in the run summary
   and its artifacts.
-- Browser tests (#31): Playwright runs the console in Chromium on an iPhone 13 and an iPad
-  (gen 7), each upright and sideways, and on an iPhone SE sideways, against the whole
-  controller and the emulated plant: sign-in, Stop in view without scrolling and stopping the
-  roof, stale and unhealthy status, the whole roof status in the footer on a narrow screen, the
-  camera stalling and going offline, the lease during a lost connection (C9) and the
-  reconnect dialog's Stop (C15). A failed test attaches a screenshot, the trace and the browser
-  log.
+- Browser tests (#31, #46): Playwright runs the web UI in Chromium on an iPhone 13 and an iPad
+  (gen 7), each upright and sideways, on an iPhone SE sideways and in a desktop window, the
+  phones over HTTPS, against the whole controller and the emulated plant: sign-in, the session
+  cookie, a session that expires while its page is open, another origin's form posts and live
+  connection refused, Stop in view and uncovered on every page and stopping the roof, what each
+  role is offered, the stale status, the camera stalling and going offline, the lease when the
+  page closes or loses its connection (C9) and the reconnect dialog's Stop (C15). Every page's
+  screenshots on a phone, a tablet and a desktop are kept with the results (CI artifacts), and a
+  failed test attaches a screenshot, the trace and the browser log.
 - Emulated camera (#31): the HAT emulator serves an MJPEG camera of the emulated roof at
   `/mjpg/camNN/video.mjpg`, the Blue Iris path the camera proxy requests, and
   `POST /api/emulator/camera` freezes it, refuses with 503 or 401, changes its frame rate or ends
@@ -385,9 +428,7 @@ the roof against this server; use the authenticated browser console for operator
 - API security tests (#18; tests only, no behaviour change): every mapped endpoint must refuse
   an anonymous caller unless allow-listed; a viewer is refused Close, ClearFault and Lease;
   `System/metrics` needs an admin; malformed, empty and `text/plain` configuration bodies are
-  refused and change nothing; a cross-origin logout is refused and keeps the session; a host
-  outside `AllowedHosts` gets 400; and the console cookie expires after 8 idle hours and slides
-  with activity, judged by a manual clock.
+  refused and change nothing; and a host outside `AllowedHosts` gets 400.
 
 ### Changed
 
@@ -439,14 +480,6 @@ the roof against this server; use the authenticated browser console for operator
   exits before it is ready, whether its container stopped or Docker restarted it ("exited
   before it became ready"), instead of waiting out `READY_TIMEOUT_SECONDS`, and then rolls
   back (#17).
-- The console on short screens, such as a phone held sideways, puts the roof state beside the
-  buttons, keeps the Controls heading for screen readers only and, wider than 576 px, puts the
-  footer on one row, so Stop is in view without scrolling (#20). The browser tests found Stop
-  below the footer.
-- The console's camera view (#20) closes a response that arrives for an attempt it already
-  cancelled, instead of reporting it as a failure that cancelled the attempt replacing it, and
-  leaving a stream open. Closing the view releases the player and the module even when the
-  player's own cleanup fails.
 - The idle supervision loop runs an overdue drive-stop check at once. It could wake just before
   the deadline and then fall back to the 1 s idle interval, so "Drive still reports running
   (IN4)" was logged about 1.1 s late.
@@ -481,8 +514,12 @@ assumptions, so the distances are indicative. Mitigations beyond these settings 
 
 ### Removed
 
-- The native iPad/MAUI app and its iOS and self-hosted M5 build workflows. The authenticated
-  web console is the supported operator client. The server findings from its review were fixed
+- The controller's browser console (#46), replaced by the web UI: its pages and scripts, its
+  sign-in cookie and `/login`, `/account` and `/console/stop`, its origin check, its log view
+  (`ConsoleLogBuffer`) and the settings only it used (`RoofControllerSecurity:AllowedOrigins`,
+  `ConsoleLogBuffer:MinimumLevel`, and the settings catalogue's `StringList` type).
+- The native iPad/MAUI app and its iOS and self-hosted M5 build workflows. The web UI (#46) is
+  the supported operator client. The server findings from its review were fixed
   in #28, and the safety checks run as the emulated commissioning scenarios (#31).
 
 ## [1.0.0] - 2025-03-01

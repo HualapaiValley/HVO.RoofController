@@ -39,6 +39,7 @@ setup() {
     "HVO_SUPERVISOR_CONTROLLER_EXEC=${WORK}/bin/controller"
     "HVO_SUPERVISOR_UI_EXEC=${WORK}/bin/ui"
     "HVO_SUPERVISOR_UI_USER="
+    "HVO_SUPERVISOR_UI_DATA_DIR=${WORK}/data"
     "HVO_SUPERVISOR_TICK_SECONDS=0.1"
     "HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=5"
     "HVO_SUPERVISOR_UI_STOP_SECONDS=2"
@@ -86,14 +87,23 @@ start_supervisor() {
   SUPERVISOR_PID=$!
 }
 
-# start_supervisor_as_ui_user: start_supervisor, with the web UI given its own user (the test's own) and a
-# stand-in setpriv that logs its options to setpriv.log, since changing user needs root. Sets UI_USER and UI_GROUP.
+# start_supervisor_as_ui_user [VAR=value ...]: start_supervisor, with the web UI given its own user (the test's own) and
+# a stand-in setpriv that logs its options to setpriv.log, since changing user needs root. Sets UI_USER and UI_GROUP.
 start_supervisor_as_ui_user() {
   mkdir -p "${WORK}/setpriv-bin"
   ln -sf "${TESTS_DIR}/fake-setpriv" "${WORK}/setpriv-bin/setpriv"
   UI_USER=$(id -un)
   UI_GROUP=$(id -gn)
-  start_supervisor "HVO_SUPERVISOR_UI_USER=${UI_USER}" "PATH=${WORK}/setpriv-bin:${PATH}"
+  start_supervisor "HVO_SUPERVISOR_UI_USER=${UI_USER}" "PATH=${WORK}/setpriv-bin:${PATH}" "$@"
+}
+
+# start_supervisor_with_the_default_data_dir [VAR=value ...]: start_supervisor_as_ui_user, with the web UI's data
+# directory left to its default (/var/lib/hvo-roof-web), and a stand-in install that logs its calls to install.log and
+# makes nothing there, since that needs root.
+start_supervisor_with_the_default_data_dir() {
+  mkdir -p "${WORK}/install-bin"
+  ln -sf "${TESTS_DIR}/fake-install" "${WORK}/install-bin/install"
+  start_supervisor_as_ui_user "HVO_SUPERVISOR_UI_DATA_DIR=" "PATH=${WORK}/install-bin:${WORK}/setpriv-bin:${PATH}" "$@"
 }
 
 # wait_until <seconds> <description> <command...>: polls the command every 0.1 s; fails the test at the deadline.
@@ -194,7 +204,7 @@ test_the_defaults_are_the_documented_ones() {
   for entry in "${SUPERVISOR_ENV[@]}"; do
     case "${entry%%=*}" in
       HVO_SUPERVISOR_APP_DIR|HVO_SUPERVISOR_RUN_DIR|HVO_SUPERVISOR_SECRETS_DIR|HVO_SUPERVISOR_CONTROLLER_EXEC|\
-      HVO_SUPERVISOR_UI_EXEC|HVO_SUPERVISOR_UI_USER) paths+=("${entry}") ;;
+      HVO_SUPERVISOR_UI_EXEC|HVO_SUPERVISOR_UI_USER|HVO_SUPERVISOR_UI_DATA_DIR) paths+=("${entry}") ;;
     esac
   done
   SUPERVISOR_ENV=("${paths[@]}")
@@ -251,8 +261,9 @@ test_a_requested_restart_starts_only_the_controller_again_at_once() {
   first_controller=$(pid_of controller)
   ui=$(pid_of ui)
   echo 75 >"${FAKE_DIR}/controller.exit-now"
-  # No backoff for a requested restart (the backoff here would be at least 1 s).
-  wait_until 0.9 "a second controller start" state_is .controller.starts 2 || return
+  # No backoff for a requested restart (the backoff here would be at least 1 s): the gap below, between the exit and
+  # the next start as the stand-ins logged them (times.log), shows it. The wait only allows for a busy machine.
+  wait_until 5 "a second controller start" state_is .controller.starts 2 || return
   wait_until 2 "the controller running again" state_is .controller.state running || return
   [[ "$(pid_of controller)" != "${first_controller}" ]] || fail_test "the controller was not started again"
   expect_equal "web UI pid" "$(pid_of ui)" "${ui}"
@@ -530,6 +541,174 @@ test_the_web_uis_own_certificate_gets_its_own_password_file() {
   [[ ! -e "${WORK}/run/web/certificate-password" ]] || fail_test "a password copy is left from the first start"
 }
 
+test_the_web_ui_gets_a_private_copy_of_its_stop_key() {
+  # The Stop key is a Viewer key the controller reads from the secrets directory; the web UI cannot read that directory.
+  local key="${WORK}/secrets/RoofControllerSecurity__ApiKeys__3__Key"
+  printf 'stop-key-value-for-the-web-ui' >"${key}"
+  start_supervisor "RoofWeb__StopKeyFile=${key}"
+  wait_both_running || return
+  expect_equal "Stop key setting" "$(ui_env | grep '^RoofWeb__StopKeyFile=')" "RoofWeb__StopKeyFile=${WORK}/run/web/stop-key"
+  expect_equal "Stop key contents" "$(cat "${WORK}/run/web/stop-key")" "stop-key-value-for-the-web-ui"
+  expect_equal "Stop key mode" "$(stat -c %a "${WORK}/run/web/stop-key")" 400
+  [[ "$(ui_env)" != *stop-key-value-for-the-web-ui* ]] || fail_test "the Stop key is in the web UI's environment"
+
+  # A rotated key is copied again when the web UI starts again.
+  printf 'rotated-stop-key-for-the-web-ui' >"${key}"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 2 || return
+  expect_equal "rotated Stop key" "$(cat "${WORK}/run/web/stop-key")" "rotated-stop-key-for-the-web-ui"
+  if (( EUID == 0 )); then
+    return # root reads any file: the unreadable case cannot be made
+  fi
+  # A key the supervisor cannot read: a warning, and no Stop key (Stop uses the person's session).
+  chmod 000 "${key}"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 3 || return
+  grep -qF "WARNING: the web UI's Stop key ${key} cannot be read" "${WORK}/supervisor.log" \
+    || fail_test "no warning for the unreadable Stop key"
+  ! ui_env | grep -q '^RoofWeb__StopKeyFile' || fail_test "the web UI was given a Stop key it cannot have"
+  [[ ! -e "${WORK}/run/web/stop-key" ]] || fail_test "a Stop key copy is left from the last start"
+}
+
+test_the_web_ui_keeps_its_keys_across_its_restarts() {
+  start_supervisor
+  wait_both_running || return
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
+    "RoofWeb__DataProtectionPath=${WORK}/data/keys"
+  expect_equal "keys directory mode" "$(stat -c %a "${WORK}/data/keys")" 700
+  printf 'key ring' >"${WORK}/data/keys/key-1.xml"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 2 || return
+  expect_equal "keys kept" "$(cat "${WORK}/data/keys/key-1.xml")" "key ring"
+}
+
+test_the_web_ui_keeps_its_keys_where_it_is_told() {
+  start_supervisor "RoofWeb__DataProtectionPath=${WORK}/volume/web-keys"
+  wait_both_running || return
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
+    "RoofWeb__DataProtectionPath=${WORK}/volume/web-keys"
+  expect_equal "keys directory mode" "$(stat -c %a "${WORK}/volume/web-keys")" 700
+  [[ ! -e "${WORK}/data/keys" ]] || fail_test "the default keys directory was made as well"
+}
+
+test_a_link_where_the_keys_go_is_not_used() {
+  local before
+  mkdir -p "${WORK}/data" "${WORK}/elsewhere"
+  chmod 0755 "${WORK}/elsewhere"
+  before=$(stat -c %a "${WORK}/elsewhere")
+  ln -s "${WORK}/elsewhere" "${WORK}/data/keys"
+  start_supervisor
+  wait_both_running || return
+  grep -qF "WARNING: cannot use ${WORK}/data/keys for the web UI's keys; the web UI keeps them in memory" \
+    "${WORK}/supervisor.log" || fail_test "no warning for a link: $(cat "${WORK}/supervisor.log")"
+  ! ui_env | grep -q '^RoofWeb__DataProtectionPath' || fail_test "the web UI was given a link for its keys"
+  expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
+}
+
+# A part of the path is a link, as the web UI's user could make one in a directory it can write: the directory is made
+# through it by the web UI's user, with that user's rights alone (setpriv), and not by the supervisor's user (root).
+test_a_keys_directory_of_the_operators_choosing_is_made_by_the_web_uis_user() {
+  local path="${WORK}/home/app/x/web-keys" before
+  mkdir -p "${WORK}/home/app" "${WORK}/elsewhere"
+  chmod 0755 "${WORK}/elsewhere"
+  before=$(stat -c %a "${WORK}/elsewhere")
+  ln -s "${WORK}/elsewhere" "${WORK}/home/app/x"
+  start_supervisor_as_ui_user "RoofWeb__DataProtectionPath=${path}"
+  wait_both_running || return
+  grep -qxF -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | install -d -m 0700 ${path}" \
+    "${FAKE_DIR}/setpriv.log" || fail_test "the keys directory was not made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" "RoofWeb__DataProtectionPath=${path}"
+  expect_equal "keys directory" "$(stat -c '%a %U' "${WORK}/elsewhere/web-keys")" "700 ${UI_USER}"
+  expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
+}
+
+# The same for a data directory of the operator's choosing (HVO_SUPERVISOR_UI_DATA_DIR): its keys directory is made by
+# the web UI's user, through a link in the path, and root makes nothing there.
+test_a_data_directory_of_the_operators_choosing_is_made_by_the_web_uis_user() {
+  local data="${WORK}/home/app/x/data" before
+  mkdir -p "${WORK}/home/app" "${WORK}/elsewhere"
+  chmod 0755 "${WORK}/elsewhere"
+  before=$(stat -c %a "${WORK}/elsewhere")
+  ln -s "${WORK}/elsewhere" "${WORK}/home/app/x"
+  start_supervisor_as_ui_user "HVO_SUPERVISOR_UI_DATA_DIR=${data}"
+  wait_both_running || return
+  grep -qxF -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | install -d -m 0700 ${data}/keys" \
+    "${FAKE_DIR}/setpriv.log" || fail_test "the keys directory was not made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" "RoofWeb__DataProtectionPath=${data}/keys"
+  expect_equal "keys directory" "$(stat -c '%a %U' "${WORK}/elsewhere/data/keys")" "700 ${UI_USER}"
+  expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
+}
+
+# expect_the_default_keys_directory_made_by_the_supervisor: the supervisor itself (root, in the container) made
+# /var/lib/hvo-roof-web root's (also when it was the web UI's user's) before it made a keys directory in it for the web
+# UI's user, not through setpriv, and gave it to the web UI.
+expect_the_default_keys_directory_made_by_the_supervisor() {
+  expect_equal "install calls, in order" "$(grep -F /var/lib/hvo-roof-web "${FAKE_DIR}/install.log")" \
+    "$(printf '%s\n' "-d -m 0755 -o root -g root /var/lib/hvo-roof-web" \
+      "-d -m 0700 -o ${UI_USER} -g ${UI_GROUP} /var/lib/hvo-roof-web/keys")"
+  ! grep -qE -- '\| install .*/var/lib/hvo-roof-web' "${FAKE_DIR}/setpriv.log" \
+    || fail_test "the keys directory was made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
+    "RoofWeb__DataProtectionPath=/var/lib/hvo-roof-web/keys"
+}
+
+# The default keys directory, the one the shipped container uses, is in directories only root can change.
+test_the_default_keys_directory_is_made_by_the_supervisor_for_the_web_uis_user() {
+  start_supervisor_with_the_default_data_dir
+  wait_both_running || return
+  expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+# A setting that names the default changes nothing: the web UI's user could not make it there.
+test_the_default_keys_directory_named_as_the_keys_directory_is_made_the_same_way() {
+  start_supervisor_with_the_default_data_dir "RoofWeb__DataProtectionPath=/var/lib/hvo-roof-web/keys"
+  wait_both_running || return
+  expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+test_the_default_keys_directory_named_as_the_data_directory_is_made_the_same_way() {
+  start_supervisor_with_the_default_data_dir "HVO_SUPERVISOR_UI_DATA_DIR=/var/lib/hvo-roof-web"
+  wait_both_running || return
+  expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+# Repeated slashes and a trailing slash name the same directory.
+test_the_default_keys_directory_written_with_extra_slashes_is_made_the_same_way() {
+  start_supervisor_with_the_default_data_dir "RoofWeb__DataProtectionPath=/var/lib//hvo-roof-web/keys/"
+  wait_both_running || return
+  expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+test_the_default_data_directory_written_with_a_trailing_slash_is_made_the_same_way() {
+  start_supervisor_with_the_default_data_dir "HVO_SUPERVISOR_UI_DATA_DIR=/var/lib/hvo-roof-web/"
+  wait_both_running || return
+  expect_the_default_keys_directory_made_by_the_supervisor
+}
+
+# A path with "." or ".." in it is not taken for the default (a link can make ".." name somewhere else): it is made as
+# any other, by the web UI's user, and root does nothing to /var/lib/hvo-roof-web.
+test_a_keys_directory_written_with_a_dot_is_made_by_the_web_uis_user() {
+  local path=/var/lib/hvo-roof-web/./keys
+  start_supervisor_with_the_default_data_dir "RoofWeb__DataProtectionPath=${path}"
+  wait_both_running || return
+  grep -qxF -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | install -d -m 0700 ${path}" \
+    "${FAKE_DIR}/setpriv.log" || fail_test "the keys directory was not made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
+  expect_equal "install calls" "$(grep -F /var/lib/hvo-roof-web "${FAKE_DIR}/install.log")" "-d -m 0700 ${path}"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" "RoofWeb__DataProtectionPath=${path}"
+}
+
+# Without a user of its own, the web UI runs as the supervisor does, so there is no one else to give the directories to.
+test_the_default_keys_directory_without_a_web_ui_user_is_left_to_the_supervisors_user() {
+  mkdir -p "${WORK}/install-bin"
+  ln -sf "${TESTS_DIR}/fake-install" "${WORK}/install-bin/install"
+  start_supervisor "HVO_SUPERVISOR_UI_DATA_DIR=" "PATH=${WORK}/install-bin:${PATH}"
+  wait_both_running || return
+  expect_equal "install calls" "$(grep -F /var/lib/hvo-roof-web "${FAKE_DIR}/install.log")" \
+    "$(printf '%s\n' "-d -m 0755 /var/lib/hvo-roof-web" "-d -m 0700 /var/lib/hvo-roof-web/keys")"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" \
+    "RoofWeb__DataProtectionPath=/var/lib/hvo-roof-web/keys"
+}
+
 test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
   start_supervisor_as_ui_user
   wait_both_running || return
@@ -538,6 +717,7 @@ test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
   grep -qxF "USER=${UI_USER}" <(ui_env) || fail_test "the web UI's environment does not name its user"
   expect_equal "control directory" "$(stat -c '%a %U %G' "${WORK}/run/control")" "700 ${UI_USER} ${UI_GROUP}"
   expect_equal "private directory" "$(stat -c '%a %G' "${WORK}/run/web")" "750 ${UI_GROUP}"
+  expect_equal "keys directory" "$(stat -c '%a %U %G' "${WORK}/data/keys")" "700 ${UI_USER} ${UI_GROUP}"
   ! grep -q "can read" "${WORK}/supervisor.log" || fail_test "a warning without secrets: $(grep "can read" "${WORK}/supervisor.log")"
 }
 

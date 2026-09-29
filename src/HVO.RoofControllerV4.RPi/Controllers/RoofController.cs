@@ -19,7 +19,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
 {
     /// <summary>
     /// Roof Controller API v4.0 - controls the observatory roof. Accepts the <c>X-Api-Key</c> header or a session's
-    /// <c>Authorization: Bearer</c> token (never the console cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
+    /// <c>Authorization: Bearer</c> token (never a cookie), so these routes cannot be driven cross-site. Commands are POST and return the controller's
     /// coherent status snapshot; refusals are RFC 7807 ProblemDetails with <c>code</c> and <c>roofStatus</c> extensions.
     /// </summary>
     // No class-level [Produces]: it would override the application/problem+json content type of refusals.
@@ -63,6 +63,20 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             // Re-read the inputs so the snapshot reflects current hardware when input events are not flowing.
             _roofController.RefreshStatus(forceHardwareRead: true);
             return Ok(_roofController.GetCurrentStatusSnapshot());
+        }
+
+        /// <summary>
+        /// How the controller drives the roof (anonymous): the HAT mode and whether it ignores the limit switches, so a
+        /// sign-in page can warn that it is not the observatory roof in normal use. No position, state or name.
+        /// </summary>
+        /// <response code="200">The mode.</response>
+        [HttpGet("Mode", Name = nameof(GetRoofMode))]
+        [AllowAnonymous]
+        [ProducesResponseType(typeof(RoofModeResponse), StatusCodes.Status200OK)]
+        public ActionResult<RoofModeResponse> GetRoofMode()
+        {
+            var status = _roofController.GetCurrentStatusSnapshot();
+            return Ok(new RoofModeResponse(status.HatMode, status.IsIgnoringPhysicalLimitSwitches));
         }
 
         /// <summary>

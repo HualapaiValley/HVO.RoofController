@@ -1,0 +1,36 @@
+@inherits LayoutComponentBase
+@inject WebControllerMode ControllerMode
+@inject WebControllerStatus ControllerStatus
+@* Streamed: the page, and every Stop on it, is sent at once; the mode banner and the controller's status follow when
+   they are known. *@
+@attribute [StreamRendering]
+
+<div class="web-signin-frame">
+    <main class="web-signin-main">
+        <ModeWarnings Warnings="_warnings" Class="web-signin-mode" />
+        @if (_status is { } status)
+        {
+            <p class="web-status web-status--@status.Level.ToString().ToLowerInvariant() web-signin-status" role="status"
+               data-testid="controller-status" data-level="@status.Level">@status.Headline</p>
+        }
+        @Body
+    </main>
+</div>
+
+@code {
+    // The mode banner before signing in too, from the controller's anonymous mode read, so an emulator or simulation
+    // run is never mistaken for the roof. Nothing while the controller has not said.
+    private IReadOnlyList<string>? _warnings;
+
+    // Whether the controller is running and ready (the Health page's headline), so a person who cannot sign in because
+    // the controller is stopped, for example after repeated crashes, sees why. Nothing when it could not be checked.
+    private RoofWebStatusView? _status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var mode = ControllerMode.ReadAsync();
+        var status = ControllerStatus.ReadAsync();
+        _warnings = await mode is { } known ? RoofStatusText.DescribeModeWarnings(known) : null;
+        _status = await status;
+    }
+}

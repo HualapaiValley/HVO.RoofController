@@ -35,7 +35,8 @@ internal sealed class RoofSettingsDocument
         DateTimeOffset? savedAtUtc,
         string? savedBy,
         JsonObject body,
-        IReadOnlyDictionary<string, string?> data)
+        IReadOnlyDictionary<string, string?> data,
+        IReadOnlyList<string>? retired = null)
     {
         Exists = exists;
         Hash = hash;
@@ -44,6 +45,7 @@ internal sealed class RoofSettingsDocument
         SavedBy = savedBy;
         Body = body;
         Data = data;
+        Retired = retired ?? [];
     }
 
     /// <summary>No file: version 1, no keys.</summary>
@@ -73,6 +75,12 @@ internal sealed class RoofSettingsDocument
 
     /// <summary>Configuration keys and values, flattened as the JSON configuration provider does.</summary>
     public IReadOnlyDictionary<string, string?> Data { get; }
+
+    /// <summary>
+    /// The retired settings the file sets (<see cref="RoofSettingsCatalogue.Retired"/>). They are in neither
+    /// <see cref="Data"/> nor <see cref="Body"/>, so the next save leaves them out.
+    /// </summary>
+    public IReadOnlyList<string> Retired { get; }
 }
 
 /// <summary>
@@ -230,12 +238,24 @@ internal static class RoofSettingsFile
             throw new RoofSettingsFileException($"{name} sets {secret}, which is a secret. Secrets stay out of the settings file: {where}");
         }
 
+        var retired = new List<string>();
         foreach (var (key, value) in data)
         {
             // An empty object or array leaves its key with no value.
-            var owner = RoofSettingsCatalogue.Owner(key);
+            var owner = RoofSettingsCatalogue.Find(key);
             if (owner is null && value is null && RoofSettingsCatalogue.IsSection(key))
             {
+                continue;
+            }
+
+            if (owner is null && kind == RoofSettingsFileKind.Settings && RoofSettingsCatalogue.FindRetired(key) is { } setting)
+            {
+                // Saved by an earlier version: read without it (it configures nothing now), and not saved again.
+                if (!retired.Contains(setting, StringComparer.Ordinal))
+                {
+                    retired.Add(setting);
+                }
+
                 continue;
             }
 
@@ -256,6 +276,11 @@ internal static class RoofSettingsFile
         }
 
         var root = JsonNode.Parse(body, NodeOptions) as JsonObject ?? new JsonObject(NodeOptions);
+        foreach (var setting in retired)
+        {
+            Remove(root, setting);
+        }
+
         return new RoofSettingsDocument(
             exists: true,
             Hash(bytes),
@@ -263,7 +288,38 @@ internal static class RoofSettingsFile
             savedAtUtc,
             savedBy,
             root,
-            new Dictionary<string, string?>(data, StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, string?>(
+                data.Where(entry => RoofSettingsCatalogue.Find(entry.Key) is not null || RoofSettingsCatalogue.FindRetired(entry.Key) is null),
+                StringComparer.OrdinalIgnoreCase),
+            retired);
+    }
+
+    /// <summary>Removes <paramref name="key"/> from <paramref name="root"/>, and each section it leaves empty.</summary>
+    private static void Remove(JsonObject root, string key)
+    {
+        var names = key.Split(':');
+        var parents = new List<JsonObject> { root };
+        for (var index = 0; index < names.Length - 1; index++)
+        {
+            if (parents[^1][names[index]] is not JsonObject section)
+            {
+                break;
+            }
+
+            parents.Add(section);
+        }
+
+        // Only the retired setting itself, or a section left with nothing in it, is removed.
+        for (var depth = parents.Count - 1; depth >= 0; depth--)
+        {
+            var name = names[depth];
+            if (depth < names.Length - 1 && parents[depth][name] is JsonObject { Count: > 0 })
+            {
+                break;
+            }
+
+            parents[depth].Remove(name);
+        }
     }
 
     /// <summary>

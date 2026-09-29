@@ -1,0 +1,18 @@
+@* What a page says after a request (WebClientPage.Message). A failure is an alert; anything else is a status. *@
+@if (Message is { } message)
+{
+    <div class="alert alert-@message.Level.ToString().ToLowerInvariant() web-message"
+         role="@(message.Level is WebMessageLevel.Danger or WebMessageLevel.Warning ? "alert" : "status")"
+         data-testid="@TestId" data-level="@message.Level">
+        @foreach (var line in message.Lines)
+        {
+            <p>@line</p>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public WebPageMessage? Message { get; set; }
+
+    [Parameter] public string TestId { get; set; } = "page-message";
+}

@@ -5,15 +5,96 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+    <link rel="stylesheet" href="@Assets["lib/bootstrap/css/bootstrap.min.css"]" />
+    <link rel="stylesheet" href="@Assets["lib/bootstrap-icons/bootstrap-icons.min.css"]" />
     <link rel="stylesheet" href="@Assets["_content/HVO.WebSite.Themes/css/themes/hvo-dark.css"]" />
     <link rel="stylesheet" href="@Assets["css/app.css"]" />
     <link rel="stylesheet" href="@Assets["HVO.RoofControllerV4.Web.styles.css"]" />
-    <HeadOutlet />
+    <HeadOutlet @rendermode="PageRenderMode" />
 </head>
 
 <body data-theme="hvo-dark">
-    <Routes />
+    <Routes @rendermode="PageRenderMode" />
+
+    @* Stop, on every page. It is outside the live page: js/stop.js posts it with fetch and shows the answer, so it works
+       while the page's live connection is down; without the script the browser posts it itself. Never disabled. *@
+    <form class="web-stop-bar" method="post" action="@WebAuthentication.StopPostPath.TrimStart('/')" aria-label="Stop"
+          data-web-stop data-web-stop-texts="@WebStopTexts.Json">
+        <AntiforgeryToken />
+        <button class="btn btn-warning web-stop-button" type="submit" data-testid="stop">
+            <i class="bi bi-stop-circle-fill" aria-hidden="true"></i> @RoofStopText.ButtonLabel
+        </button>
+        <p class="web-stop-result" data-web-stop-result data-testid="stop-outcome" role="status" aria-live="assertive"></p>
+    </form>
+
+    <div id="components-reconnect-modal" data-nosnippet>
+        <div class="reconnect-dialog">
+            <div class="components-reconnect-show reconnect-state" role="status" aria-live="polite">
+                <div class="reconnect-icon reconnect-icon--attempting"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></div>
+                <h2 class="reconnect-heading">Reconnecting…</h2>
+                <p class="reconnect-copy">This page lost its live connection to the web UI, so the roof status here is not updating.</p>
+            </div>
+            <div class="components-reconnect-failed reconnect-state" role="alert">
+                <div class="reconnect-icon reconnect-icon--failed"><i class="bi bi-wifi-off" aria-hidden="true"></i></div>
+                <h2 class="reconnect-heading">Connection lost</h2>
+                <p class="reconnect-copy">This page could not reconnect to the web UI. Check the network, then reload.</p>
+                <div class="reconnect-actions">
+                    <button class="btn btn-outline-light" type="button" onclick="location.reload()">Reload</button>
+                </div>
+            </div>
+            <div class="components-reconnect-rejected reconnect-state" role="alert">
+                <div class="reconnect-icon reconnect-icon--rejected"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
+                <h2 class="reconnect-heading">Page expired</h2>
+                <p class="reconnect-copy">The web UI no longer has this page (it may have restarted). Reload to continue.</p>
+                <div class="reconnect-actions">
+                    <button class="btn btn-primary" type="button" onclick="location.reload()">Reload</button>
+                </div>
+            </div>
+            <div class="components-reconnect-paused reconnect-state" role="status" aria-live="polite">
+                <div class="reconnect-icon reconnect-icon--attempting"><i class="bi bi-pause-circle" aria-hidden="true"></i></div>
+                <h2 class="reconnect-heading">Page paused</h2>
+                <p class="reconnect-copy">This page's live connection was paused, so the roof status here is not updating.</p>
+                <div class="reconnect-actions">
+                    <button class="btn btn-primary" type="button" onclick="Blazor.resumeCircuit()">Resume</button>
+                </div>
+            </div>
+            <div class="components-reconnect-resume-failed reconnect-state" role="alert">
+                <div class="reconnect-icon reconnect-icon--failed"><i class="bi bi-wifi-off" aria-hidden="true"></i></div>
+                <h2 class="reconnect-heading">Could not resume</h2>
+                <p class="reconnect-copy">This page could not resume its live connection. Reload to continue.</p>
+                <div class="reconnect-actions">
+                    <button class="btn btn-primary" type="button" onclick="location.reload()">Reload</button>
+                </div>
+            </div>
+            @* The Stop bar is behind this dialog, so the dialog has its own Stop form; both show the newest answer. *@
+            <form class="reconnect-stop" method="post" action="@WebAuthentication.StopPostPath.TrimStart('/')"
+                  data-web-stop data-web-stop-texts="@WebStopTexts.Json">
+                <AntiforgeryToken />
+                <p class="reconnect-copy">Stop still works while this page is disconnected.</p>
+                <button class="btn btn-warning" type="submit" data-testid="reconnect-stop">
+                    <i class="bi bi-stop-circle-fill" aria-hidden="true"></i> @RoofStopText.ButtonLabel
+                </button>
+                <p class="reconnect-stop-result" data-web-stop-result role="status" aria-live="assertive"></p>
+            </form>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui" data-nosnippet>
+        This page hit an error and stopped updating. Stop still works.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss" role="button" aria-label="Dismiss">🗙</a>
+    </div>
+
     <script src="_framework/blazor.web.js"></script>
+    <script src="@Assets["js/stop.js"]"></script>
 </body>
 
 </html>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    // Every page is live, except those that must work without a live connection (sign-in).
+    private IComponentRenderMode? PageRenderMode => HttpContext.AcceptsInteractiveRouting() ? InteractiveServer : null;
+}

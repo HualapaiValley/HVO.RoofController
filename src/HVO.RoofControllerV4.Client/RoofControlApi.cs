@@ -16,6 +16,10 @@ public sealed class RoofControlApi
     public Task<RoofStatusResponse> GetStatusAsync(CancellationToken cancellationToken = default)
         => _http.GetAsync<RoofStatusResponse>(RoofApiRoutes.Status, cancellationToken);
 
+    /// <summary>How the controller drives the roof (anonymous, sent without the credential): for a page nobody has signed in to.</summary>
+    public Task<RoofModeResponse> GetModeAsync(CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofModeResponse>(RoofApiRoutes.Mode, cancellationToken, use: null);
+
     /// <summary>Starts opening. Operator role.</summary>
     public Task<RoofStatusResponse> OpenAsync(CancellationToken cancellationToken = default)
         => _http.SendAsync<RoofStatusResponse>(HttpMethod.Post, RoofApiRoutes.Open, null, cancellationToken);

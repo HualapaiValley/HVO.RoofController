@@ -42,7 +42,7 @@ public sealed class SupervisorStateReader
             // The supervisor replaces the file atomically (rename), so a read never sees half of it.
             await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true);
             var snapshot = await JsonSerializer.DeserializeAsync<SupervisorSnapshot>(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (snapshot is null || string.IsNullOrEmpty(snapshot.Controller.State) || string.IsNullOrEmpty(snapshot.Ui.State))
+            if (snapshot is null || string.IsNullOrEmpty(snapshot.Controller?.State) || string.IsNullOrEmpty(snapshot.Ui?.State))
             {
                 return new SupervisorReading(SupervisorAvailability.Unreadable, null, $"{path} does not hold the supervisor's state.");
             }

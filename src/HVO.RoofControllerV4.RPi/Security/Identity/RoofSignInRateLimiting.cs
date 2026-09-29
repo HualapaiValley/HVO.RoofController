@@ -1,10 +1,10 @@
 using System;
 using System.Globalization;
 using System.Net;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.RateLimiting;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Common.Net;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -60,7 +60,7 @@ public static class RoofSignInRateLimiting
     /// <summary>
     /// Who a sign-in attempt is counted against: <c>key:&lt;id&gt;</c> for an API key, <c>person:&lt;name&gt;</c> for a
     /// session, otherwise <c>address:&lt;address&gt;</c> (<see cref="AddressOf"/>). An anonymous endpoint
-    /// (<c>Auth/Session</c>) is always counted by address: a console cookie sent with it must not buy its own budget.
+    /// (<c>Auth/Session</c>) is always counted by address: a credential sent with it must not buy its own budget.
     /// </summary>
     internal static string PartitionFor(HttpContext context)
     {
@@ -83,43 +83,8 @@ public static class RoofSignInRateLimiting
         return "address:" + AddressOf(context.Connection.RemoteIpAddress, context.Connection.LocalIpAddress);
     }
 
-    /// <summary>
-    /// An IPv4 address as it is (also when mapped into IPv6). A public IPv6 address from another network is counted by
-    /// its /64, since one host there usually holds a whole /64 and can pick a new address for every attempt. On a LAN
-    /// every host shares one /64, so a loopback, link-local or unique local address, or one in the same /64 as
-    /// <paramref name="local"/> (the address the request came in on), is counted as itself.
-    /// </summary>
-    internal static string AddressOf(IPAddress? address, IPAddress? local = null)
-    {
-        if (address is null)
-        {
-            return "unknown";
-        }
-
-        if (address.IsIPv4MappedToIPv6)
-        {
-            address = address.MapToIPv4();
-        }
-
-        if (address.AddressFamily != AddressFamily.InterNetworkV6
-            || IPAddress.IsLoopback(address)
-            || address.IsIPv6LinkLocal
-            || address.IsIPv6SiteLocal
-            || address.IsIPv6UniqueLocal
-            || (local is { AddressFamily: AddressFamily.InterNetworkV6 } && Network64(local) == Network64(address)))
-        {
-            return address.ToString();
-        }
-
-        return Network64(address) + "/64";
-    }
-
-    private static string Network64(IPAddress address)
-    {
-        var bytes = address.GetAddressBytes();
-        Array.Clear(bytes, 8, 8);
-        return new IPAddress(bytes).ToString();
-    }
+    /// <summary>The address an anonymous caller is counted by (<see cref="RoofCallerAddress.Of"/>).</summary>
+    internal static string AddressOf(IPAddress? address, IPAddress? local = null) => RoofCallerAddress.Of(address, local);
 
     private static async ValueTask OnRejectedAsync(OnRejectedContext context, CancellationToken cancellationToken)
     {

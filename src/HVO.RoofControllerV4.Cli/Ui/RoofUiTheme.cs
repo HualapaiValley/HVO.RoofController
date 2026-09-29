@@ -7,7 +7,7 @@ using Attribute = Terminal.Gui.Drawing.Attribute;
 namespace HVO.RoofControllerV4.Cli.Ui;
 
 /// <summary>
-/// The terminal interface in HVO Dark, the web console's theme (<see cref="RoofUiPalette"/>): text on the page's dark
+/// The terminal interface in HVO Dark, the web UI's theme (<see cref="RoofUiPalette"/>): text on the page's dark
 /// background, the focused control in the accent blue, Stop yellow, Open green and Close red, and a stale status or an
 /// error in the theme's warning and danger colours. Terminal.Gui draws the colours as the terminal allows: true colour,
 /// or the nearest of 256 or 16 colours. With <c>NO_COLOR</c> set (https://no-color.org) the interface is drawn in the
@@ -75,7 +75,7 @@ internal sealed class RoofUiTheme
     /// <summary>The window and everything in it without a scheme of its own.</summary>
     public Scheme Base { get; }
 
-    /// <summary>Frame lines, dimmer than the text, as the web console's panel borders are.</summary>
+    /// <summary>Frame lines, dimmer than the text, as the web UI's panel borders are.</summary>
     public Scheme Frame { get; }
 
     /// <summary>
@@ -84,7 +84,7 @@ internal sealed class RoofUiTheme
     /// </summary>
     public Scheme WindowFrame { get; }
 
-    /// <summary>Who is signed in and whether the status is live: the web console's navigation bar.</summary>
+    /// <summary>Who is signed in and whether the status is live: the web UI's navigation bar.</summary>
     public Scheme Header { get; }
 
     /// <summary>A key in the key bar.</summary>
@@ -93,7 +93,7 @@ internal sealed class RoofUiTheme
     /// <summary>What a key in the key bar does.</summary>
     public Scheme KeyName { get; }
 
-    /// <summary>The Stop button: yellow, as on the web console, in every state; focus underlines it.</summary>
+    /// <summary>The Stop button: yellow, as on the web UI, in every state; focus underlines it.</summary>
     public Scheme Stop { get; }
 
     /// <summary>The Open button.</summary>
@@ -108,7 +108,7 @@ internal sealed class RoofUiTheme
     /// <summary>An error or a refusal.</summary>
     public Scheme Danger { get; }
 
-    /// <summary>A prompt over the page (a sign-in, a confirmation), on the raised surface of the web console's dialogs.</summary>
+    /// <summary>A prompt over the page (a sign-in, a confirmation), on the raised surface of the web UI's dialogs.</summary>
     public Scheme Panel { get; }
 
     /// <summary>The frame of a prompt, in the accent colour so the prompt stands out from the page.</summary>
@@ -121,7 +121,7 @@ internal sealed class RoofUiTheme
     public static RoofUiTheme For(Func<string, string?> environment)
         => string.IsNullOrEmpty(environment("NO_COLOR")) ? HvoDark : NoColour;
 
-    /// <summary>The Stop result, coloured as the web console colours it.</summary>
+    /// <summary>The Stop result, coloured as the web UI colours it.</summary>
     public Scheme ForStop(RoofStopOutcome outcome) => outcome switch
     {
         RoofStopOutcome.Sent => _stopSent,

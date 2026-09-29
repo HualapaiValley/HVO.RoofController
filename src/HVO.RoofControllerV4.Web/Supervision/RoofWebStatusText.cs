@@ -37,7 +37,7 @@ public static class RoofWebStatusText
                 details.Insert(0, string.Create(
                     CultureInfo.InvariantCulture,
                     $"It crashed {controller.RecentCrashes} times within {snapshot!.CrashWindowSeconds} s, so the supervisor left it stopped instead of starting it again while the roof may need attention. The container's health check fails; Docker marks it unhealthy after three failed checks."));
-                details.Add("Find the cause in the container's log. A forced restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or a restart of the container, starts the controller again.");
+                details.Add("Find the cause in the container's log. A forced restart (an admin, on the System page; or docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or a restart of the container, starts the controller again.");
                 return new RoofWebStatusView(RoofWebStatusLevel.Bad, "The controller is stopped after repeated crashes", details);
 
             case SupervisedProcess.States.Restarting:
@@ -67,7 +67,7 @@ public static class RoofWebStatusText
                 details.Insert(0, status.Controller.Detail);
                 if (controller?.State == SupervisedProcess.States.Running)
                 {
-                    details.Add("The supervisor reports it running. If it stays unanswered, force a restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller) or restart the container.");
+                    details.Add("The supervisor reports it running. If it stays unanswered, an admin can force a restart on the System page (or docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or restart the container.");
                 }
 
                 return new RoofWebStatusView(RoofWebStatusLevel.Bad, "The controller is not answering", details);

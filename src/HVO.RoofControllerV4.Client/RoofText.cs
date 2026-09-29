@@ -14,6 +14,9 @@ public static class RoofText
     /// <summary>Shown when the controller did not answer before the request timed out.</summary>
     public const string TimedOut = "The controller did not answer in time.";
 
+    /// <summary>Shown when the controller answered with something the client could not read.</summary>
+    public const string AnswerUnreadable = "The controller's answer could not be read. It may be a different version.";
+
     public static string DescribePosition(RoofControllerStatus status) => status switch
     {
         RoofControllerStatus.Open => "Open",
@@ -98,7 +101,7 @@ public static class RoofText
 
     /// <summary>
     /// Text for a refused request: the shared wording for its code, followed by the code in brackets. Requests refused
-    /// before they reach the roof (HTTPS, origin, sign-in, permissions) fall back to wording by HTTP status.
+    /// before they reach the roof (HTTPS, sign-in, permissions) fall back to wording by HTTP status.
     /// </summary>
     public static string DescribeRefusal(int statusCode, RoofControllerErrorCode? code, string? codeText)
     {
@@ -110,7 +113,6 @@ public static class RoofText
         return codeText switch
         {
             "https_required" => "The controller requires HTTPS from this network. [https_required]",
-            "origin_not_allowed" => "The controller refused a request from this page's origin. [origin_not_allowed]",
             _ => statusCode switch
             {
                 400 => "The request was invalid.",
@@ -136,6 +138,7 @@ public static class RoofText
         TimeoutException => TimedOut,
         TaskCanceledException { InnerException: TimeoutException } => TimedOut,
         HttpRequestException => Unreachable,
+        RoofProtocolException => AnswerUnreadable,
         _ => DescribeErrorCode(RoofControllerErrorCode.Unknown)
     };
 }

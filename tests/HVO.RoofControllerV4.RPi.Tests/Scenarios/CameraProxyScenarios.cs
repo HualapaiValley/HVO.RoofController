@@ -16,7 +16,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
 
 /// <summary>
 /// The controller's camera proxy against the emulated camera over a loopback socket, as it reads Blue Iris: the frames
-/// relayed as sent, and each camera failure turned into the answer the console handles.
+/// relayed as sent, and each camera failure turned into the answer the web UI handles.
 /// </summary>
 [TestClass]
 [DoNotParallelize]

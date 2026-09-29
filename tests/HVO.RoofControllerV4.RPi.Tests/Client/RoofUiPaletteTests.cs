@@ -8,8 +8,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Client;
 
 /// <summary>
 /// The colours of the interfaces that are not web pages (the terminal interface, the kiosk and the Mac app) are the web
-/// console's: each <see cref="RoofUiPalette"/> value is checked against the HVO Dark stylesheet, and Stop, Open and
-/// Close against the web console's buttons. A new theme copied into HVO.WebSite.Themes fails here until the palette
+/// UI's: each <see cref="RoofUiPalette"/> value is checked against the HVO Dark stylesheet, and Stop, Open and Close
+/// against the web UI's buttons. A new theme copied into HVO.WebSite.Themes fails here until the palette
 /// follows it.
 /// </summary>
 [TestClass]
@@ -20,7 +20,7 @@ public sealed partial class RoofUiPaletteTests
     private static readonly string Theme = File.ReadAllText(
         Path.Combine(RepositoryRoot, "src", "HVO.WebSite.Themes", "wwwroot", "css", "themes", "hvo-dark.css"));
 
-    private static readonly string Web = Path.Combine(RepositoryRoot, "src", "HVO.RoofControllerV4.RPi");
+    private static readonly string Web = Path.Combine(RepositoryRoot, "src", "HVO.RoofControllerV4.Web");
 
     [TestMethod]
     [DataRow(RoofUiPalette.Background, "--hvo-body-bg")]
@@ -59,9 +59,11 @@ public sealed partial class RoofUiPaletteTests
     [DataRow("stop", "btn-warning", RoofUiPalette.StopButton, RoofUiPalette.StopButtonText)]
     [DataRow("open", "btn-success", RoofUiPalette.OpenButton, RoofUiPalette.OpenButtonText)]
     [DataRow("close", "btn-danger", RoofUiPalette.CloseButton, RoofUiPalette.CloseButtonText)]
-    public void StopOpenAndClose_HaveTheWebConsolesButtonColours(string testId, string buttonClass, string background, string text)
+    public void StopOpenAndClose_HaveTheWebUisButtonColours(string testId, string buttonClass, string background, string text)
     {
-        var page = File.ReadAllText(Path.Combine(Web, "Components", "Pages", "RoofControlV2.razor"));
+        // Stop is on every page (App.razor); Open and Close are on the dashboard.
+        var page = File.ReadAllText(Path.Combine(Web, "Components", "App.razor"))
+            + File.ReadAllText(Path.Combine(Web, "Components", "Pages", "Dashboard.razor"));
         page.Should().MatchRegex($"<button class=\"btn {buttonClass} [^\"]*\"[^>]*data-testid=\"{testId}\"");
 
         // The theme leaves these buttons to Bootstrap.
@@ -74,7 +76,7 @@ public sealed partial class RoofUiPaletteTests
     }
 
     [TestMethod]
-    public void TheTheme_IsTheOneTheWebConsoleLoads()
+    public void TheTheme_IsTheOneTheWebUiLoads()
     {
         var app = File.ReadAllText(Path.Combine(Web, "Components", "App.razor"));
         app.Should().Contain("_content/HVO.WebSite.Themes/css/themes/hvo-dark.css");

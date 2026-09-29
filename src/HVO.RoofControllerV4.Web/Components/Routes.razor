@@ -1,12 +1,19 @@
-<Router AppAssembly="typeof(Program).Assembly">
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
+            <Authorizing>
+                <p class="web-muted" role="status">Checking your sign-in…</p>
+            </Authorizing>
+            <NotAuthorized>
+                @if (context.User.Identity?.IsAuthenticated == true)
+                {
+                    <RoleDenied />
+                }
+                else
+                {
+                    <RedirectToSignIn />
+                }
+            </NotAuthorized>
+        </AuthorizeRouteView>
     </Found>
-    <NotFound>
-        <PageTitle>Not found</PageTitle>
-        <LayoutView Layout="typeof(MainLayout)">
-            <h1>Not found</h1>
-            <p role="alert">There is nothing at this address.</p>
-        </LayoutView>
-    </NotFound>
 </Router>

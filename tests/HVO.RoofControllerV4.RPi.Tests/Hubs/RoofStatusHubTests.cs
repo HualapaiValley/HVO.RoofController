@@ -10,7 +10,6 @@ using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Security;
-using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
@@ -206,22 +205,6 @@ public sealed class RoofStatusHubTests
     }
 
     [TestMethod]
-    public async Task TheConsoleCookie_DoesNotOpenAConnection()
-    {
-        using var host = new RoofApiTestHost();
-        var cookie = await ConsoleSignInAsync(host, TestApiKeys.Admin);
-        using var client = host.CreateApiClient();
-
-        foreach (var (method, path) in new[] { (HttpMethod.Post, RoofStatusHubContract.Path + "/negotiate?negotiateVersion=1"), (HttpMethod.Get, RoofStatusHubContract.Path) })
-        {
-            using var request = new HttpRequestMessage(method, path);
-            request.Headers.Add("Cookie", cookie);
-            var response = await client.SendAsync(request);
-            response.StatusCode.Should().Be(HttpStatusCode.Unauthorized, $"{method} {path} must not accept the console cookie");
-        }
-    }
-
-    [TestMethod]
     [DataRow(TestApiKeys.Viewer)]
     [DataRow(TestApiKeys.HashedViewer)]
     [DataRow(TestApiKeys.Operator)]
@@ -334,29 +317,6 @@ public sealed class RoofStatusHubTests
 
         await using var secure = await StatusHub.ConnectAsync(host, TestApiKeys.Viewer, HttpTransportType.LongPolling, https: true);
         (await secure.NextAsync()).Status.Should().NotBeNull();
-    }
-
-    /// <summary>Signs in to the console with <paramref name="accessKey"/>; returns the console cookie as <c>name=value</c>.</summary>
-    internal static async Task<string> ConsoleSignInAsync(RoofApiTestHost host, string accessKey)
-    {
-        var antiforgery = host.Services.GetRequiredService<IAntiforgery>();
-        var tokens = antiforgery.GetAndStoreTokens(new DefaultHttpContext { RequestServices = host.Services });
-        var cookieName = host.Services.GetRequiredService<IOptions<AntiforgeryOptions>>().Value.Cookie.Name;
-        using var request = new HttpRequestMessage(HttpMethod.Post, RoofControllerSecurityDefaults.LoginPostPath)
-        {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                [RoofControllerSecurityDefaults.AccessKeyFormField] = accessKey,
-                [RoofControllerSecurityDefaults.ReturnUrlFormField] = "/",
-                [tokens.FormFieldName] = tokens.RequestToken!
-            })
-        };
-        request.Headers.Add("Cookie", $"{cookieName}={tokens.CookieToken}");
-        using var client = host.CreateApiClient();
-        var response = await client.SendAsync(request);
-        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        response.Headers.TryGetValues("Set-Cookie", out var values).Should().BeTrue();
-        return values!.Single(v => v.StartsWith(RoofSecurityServiceCollectionExtensions.ConsoleCookieName + "=", StringComparison.Ordinal)).Split(';')[0];
     }
 }
 

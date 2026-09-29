@@ -100,7 +100,7 @@ public static partial class RoofCli
             session.Id,
             session.Name,
             RoofCliFormat.Role(session.Role),
-            session.Kind == RoofCredentialKind.Pin ? "PIN" : "password",
+            RoofIdentityText.DescribeKind(session.Kind),
             session.Device ?? string.Empty,
             RoofCliFormat.Time(session.CreatedUtc),
             RoofCliFormat.Time(session.ExpiresUtc)
@@ -545,18 +545,18 @@ public static partial class RoofCli
 
         private static string RequireName(string name) => RoofIdentityContract.IsValidName(name)
             ? name
-            : throw new RoofCliUsageException($"'{name}' is not a valid name: {NameRule}");
+            : throw new RoofCliUsageException($"'{name}' is not a valid name: {RoofIdentityText.NameRule}");
 
         private static string ReadNewPassword(RoofCliContext context, string prompt)
         {
             var password = context.ReadNewSecret(prompt);
-            return RoofIdentityContract.IsValidPassword(password) ? password : throw new RoofCliUsageException(PasswordRule);
+            return RoofIdentityContract.IsValidPassword(password) ? password : throw new RoofCliUsageException(RoofIdentityText.PasswordRule);
         }
 
         private static string ReadNewPin(RoofCliContext context, string prompt)
         {
             var pin = context.ReadNewSecret(prompt);
-            return RoofIdentityContract.IsValidPin(pin) ? pin : throw new RoofCliUsageException(PinRule);
+            return RoofIdentityContract.IsValidPin(pin) ? pin : throw new RoofCliUsageException(RoofIdentityText.PinRule);
         }
 
         private static int ReportDone<T>(RoofCliContext context, T value, string message)

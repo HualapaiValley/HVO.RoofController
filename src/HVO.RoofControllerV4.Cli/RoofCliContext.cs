@@ -179,7 +179,7 @@ internal sealed class RoofCliContext
         RoofApiException { StatusCode: HttpStatusCode.ServiceUnavailable } refusal => (RoofExitCode.Refused, refusal.Message),
         RoofApiException { StatusCode: >= HttpStatusCode.InternalServerError } refusal => (RoofExitCode.Failed, refusal.Message),
         RoofApiException refusal => (RoofExitCode.Refused, refusal.Message),
-        RoofProtocolException => (RoofExitCode.Failed, "The controller's answer could not be read. It may be a different version."),
+        RoofProtocolException => (RoofExitCode.Failed, RoofText.AnswerUnreadable),
         HttpRequestException or TimeoutException or TaskCanceledException { InnerException: TimeoutException }
             => (RoofExitCode.Unreachable, RoofText.DescribeFailure(error)),
         _ => (RoofExitCode.Failed, RoofText.DescribeFailure(error))

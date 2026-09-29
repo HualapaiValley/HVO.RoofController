@@ -2,8 +2,8 @@
 # End-to-end check of the emulator compose profile (src/HVO.RoofControllerV4.RPi/docker-compose.yaml, profile
 # emulator): builds the controller and HAT emulator images for this machine, starts them, and drives the emulated roof
 # through the controller's API: open to the open limit, close to the closed limit, with no plant violations. It also
-# checks that the controller says it is emulated (health, status and the console banner), and that its camera proxy
-# relays the emulator's MJPEG camera.
+# checks that the controller says it is emulated (health and status), that its web UI answers, and that its camera
+# proxy relays the emulator's MJPEG camera.
 #
 # Needs docker with compose v2, curl and jq. It touches no hardware: the controller maps no devices and talks to the
 # emulator over the compose network. Everything it starts is removed on exit.
@@ -11,7 +11,7 @@
 #   tests/emulator/compose-smoke-test.sh
 #
 # Settings (environment): SMOKE_PROJECT (compose project, default hvo-roof-emulator-smoke), HVO_EMULATED_ROOF_PORT
-# (default 15195), HVO_EMULATOR_CONTROL_PORT (default 15290), HVO_EMULATOR_TIME_SCALE (default 4), SMOKE_NO_BUILD=1 to
+# (default 15195), HVO_EMULATED_WEB_PORT (default 15196), HVO_EMULATOR_CONTROL_PORT (default 15290), HVO_EMULATOR_TIME_SCALE (default 4), SMOKE_NO_BUILD=1 to
 # reuse images already built. With HVO_ROOF_CLI naming a published hvo-roof, it also runs tests/cli/terminal-smoke.sh
 # against the controller (the command line and its terminal interface in tmux), saving the screens in
 # TERMINAL_SMOKE_OUT.
@@ -22,6 +22,7 @@ compose_file="${repo_root}/src/HVO.RoofControllerV4.RPi/docker-compose.yaml"
 project=${SMOKE_PROJECT:-hvo-roof-emulator-smoke}
 
 export HVO_EMULATED_ROOF_PORT=${HVO_EMULATED_ROOF_PORT:-15195}
+export HVO_EMULATED_WEB_PORT=${HVO_EMULATED_WEB_PORT:-15196}
 export HVO_EMULATOR_CONTROL_PORT=${HVO_EMULATOR_CONTROL_PORT:-15290}
 export HVO_EMULATOR_TIME_SCALE=${HVO_EMULATOR_TIME_SCALE:-4}
 # A throwaway admin key for this run only.
@@ -29,6 +30,7 @@ HVO_EMULATED_ROOF_API_KEY=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
 export HVO_EMULATED_ROOF_API_KEY
 
 roof="http://127.0.0.1:${HVO_EMULATED_ROOF_PORT}"
+web="http://127.0.0.1:${HVO_EMULATED_WEB_PORT}"
 roof_api="${roof}/api/v4.0/RoofControl"
 emulator_api="http://127.0.0.1:${HVO_EMULATOR_CONTROL_PORT}/api/emulator"
 
@@ -118,9 +120,16 @@ jq -e '.status == "Degraded" and any(.checks[]; .data.HardwareMode == "Emulated"
     || fail "health is not Degraded with HardwareMode Emulated: ${health}"
 echo "[smoke] Health is Degraded and names the emulated HAT"
 
-curl -fsS --max-time 10 "${roof}/login" | grep -q 'data-testid="emulated-hat-banner"' \
-    || fail "the console login page does not carry the EMULATED HAT banner"
-echo "[smoke] The console shows the EMULATED HAT banner"
+# The controller's anonymous mode read, which the web UI's sign-in page shows; it says nothing else of the roof.
+mode=$(curl -fsS --max-time 10 "${roof}/api/v4.0/RoofControl/Mode")
+jq -e '.hatMode == "Emulated" and .isIgnoringPhysicalLimitSwitches == false and (keys | length) == 2' <<<"${mode}" >/dev/null \
+    || fail "the anonymous mode read does not report only an emulated HAT with the limit switches in use: ${mode}"
+
+# The web UI, the container's second process: its sign-in page, with the Stop bar and the EMULATED HAT banner.
+signin=$(curl -fsS --max-time 10 "${web}/signin")
+grep -q 'data-testid="stop"' <<<"${signin}" || fail "the web UI's sign-in page does not answer with its Stop bar"
+grep -q 'EMULATED HAT' <<<"${signin}" || fail "the web UI's sign-in page does not carry the EMULATED HAT banner"
+echo "[smoke] The web UI answers, with Stop and the EMULATED HAT banner on its sign-in page"
 
 # The camera proxy relays the emulator's MJPEG camera: three seconds of the stream hold JPEG parts. curl ends the
 # endless stream with its time limit (exit 28).

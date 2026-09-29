@@ -36,8 +36,8 @@ The pin covers requests, Stop and the status hub's WebSocket. Any other certific
 | `Health` | `/health`, `/health/ready`, `/health/live` |
 | `Camera` | the camera stream |
 
-`RoofClientCoverageTests` checks that every endpoint the controller maps has a call here, apart from the web console's
-own pages and the API description.
+`RoofClientCoverageTests` checks that every endpoint the controller maps has a call here, apart from the API
+description.
 
 ## Errors
 
@@ -62,9 +62,9 @@ API key, or a kiosk's device key) is reported as refused, since there is nothing
 what the controller said: "relay register verified de-energized" only when the controller verified it.
 
 Every client uses the wording in `RoofStopText`: the button label `Stop roof` and the result messages.
-`RoofClientWordingTests` pins them, and checks that the web console uses the same text. The console's reconnect dialog
-has no wording of its own: the server renders its texts into the page (`RoofConsoleStopTexts`), including those for a
-proxy's error page, the HTTPS and origin checks, and no answer.
+`RoofClientWordingTests` pins them, and checks that the web UI uses the same text. Its Stop bar and reconnect dialog
+have no wording of their own: the web UI renders their texts into the page (`WebStopTexts`), including those for an
+error page, its origin check, and no answer.
 
 ## Status feed
 
@@ -122,12 +122,12 @@ the `POST Settings/{group}` body with the version the form was read at.
 ## Shared text
 
 `RoofText` describes the roof's position, stop reasons and every error code, so every client shows the same words.
-`RoofStatusRules` holds the rules the web console used before this library: which of two snapshots is newer, the safety
-alerts a change raises, the motion the controller has commanded, and when to renew the operator lease.
+`RoofStatusRules` holds the rules every client shares: which of two snapshots is newer, the safety alerts a change
+raises, the motion the controller has commanded, and when to renew the operator lease.
 
 ## Colours
 
-`RoofUiPalette` holds HVO Dark, the web console's theme (`hvo-dark.css` in `HVO.WebSite.Themes`), as `#rrggbb` values
+`RoofUiPalette` holds HVO Dark, the web UI's theme (`hvo-dark.css` in `HVO.WebSite.Themes`), as `#rrggbb` values
 for the clients that are not web pages: the terminal interface, the kiosk and the Mac app. Each value names the
-stylesheet's token. Stop, Open and Close have the colours of the web console's buttons, so they look the same in every
+stylesheet's token. Stop, Open and Close have the colours of the web UI's buttons, so they look the same in every
 client. `RoofUiPaletteTests` checks each value against the stylesheet.

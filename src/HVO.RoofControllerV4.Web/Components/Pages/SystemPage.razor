@@ -1,0 +1,268 @@
+@page "/system"
+@attribute [Authorize(Roles = WebRoles.Admin)]
+@inherits WebClientPage
+@inject RoofWebStatusProbe Probe
+@inject ControllerForcedRestart ForcedRestart
+@inject ILogger<SystemPage> Logger
+@inject TimeProvider Time
+
+<PageTitle>System · HVO Roof Controller</PageTitle>
+
+<h1>System</h1>
+
+<PageMessage Message="Message" />
+
+<section class="web-card" aria-labelledby="system-information-title" data-testid="system-information">
+    <div class="web-health-head">
+        <h2 id="system-information-title">Controller</h2>
+        <div class="web-actions">
+            <button type="button" class="btn btn-sm btn-outline-light" data-testid="system-readiness" disabled="@Busy" @onclick="CheckReadinessAsync">
+                <i class="bi bi-heart-pulse" aria-hidden="true"></i> Readiness
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-light" data-testid="system-reload" disabled="@Busy" @onclick="ReloadAsync">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+            </button>
+        </div>
+    </div>
+    @if (_information is null)
+    {
+        <p class="web-muted" role="status">@(Busy || Message is null ? "Reading the controller's information…" : "The controller's information is not read.")</p>
+    }
+    else
+    {
+        <dl class="web-facts">
+            @foreach (var (label, value) in _information)
+            {
+                <dt>@label</dt>
+                <dd data-testid="system-fact" data-label="@label">@value</dd>
+            }
+        </dl>
+        <p class="web-checked">Read at @RoofStatusText.Time(_readAt). The health checks are on the <a href="health">Health</a> page.</p>
+    }
+</section>
+
+<section class="web-card" aria-labelledby="restart-title" data-testid="restart">
+    <h2 id="restart-title">Restart</h2>
+    <p>The controller stops the roof and verifies the stop, then exits; the container's supervisor starts it again. A roof that is moving is stopped first. It is refused when the stop cannot be verified, or when a pending hand edit it would load cannot be used.</p>
+    @if (_restartForm is { } form)
+    {
+        <div class="web-confirm" role="group" aria-label="Restart the controller" data-testid="restart-confirm">
+            <p>@RoofSystemText.RestartQuestion</p>
+            @if (form.PendingHandEdit is { } pending)
+            {
+                <p class="web-status web-status--warning" data-testid="restart-hand-edit">@RoofSystemText.RestartLoadsHandEdit</p>
+                <ul class="web-change-list">
+                    @foreach (var change in RoofSettingsText.DescribeHandEditChanges(form, pending))
+                    {
+                        <li><code>@change</code></li>
+                    }
+                </ul>
+                @foreach (var note in RoofSettingsText.DescribeHandEditNotes(pending))
+                {
+                    <p>@note</p>
+                }
+            }
+            <PanelActions Action="@(RestartNeedsConfirmation ? "Confirm and restart" : "Restart")" Danger="true" TestId="restart-send" Busy="Busy"
+                          OnAction="RestartAsync" OnCancel="() => _restartForm = null" />
+        </div>
+    }
+    else
+    {
+        <button type="button" class="btn btn-sm btn-outline-warning" data-testid="restart-start" disabled="@Busy" @onclick="AskRestartAsync">
+            <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Restart the controller
+        </button>
+    }
+</section>
+
+<section class="web-card web-forced-restart" aria-labelledby="forced-restart-title" data-testid="forced-restart">
+    <h2 id="forced-restart-title">Forced restart</h2>
+    <p>For a controller that does not answer, so cannot restart itself. The supervisor kills it (as <code>docker kill</code> does) and starts it again.</p>
+    <p class="web-status web-status--warning" data-testid="forced-restart-warning">@KillWarning</p>
+    <p class="web-muted" data-testid="forced-restart-last">@DescribeLastForcedRestart()</p>
+    <PageMessage Message="_forcedResult" TestId="forced-restart-result" />
+    @if (_forcing)
+    {
+        <div class="web-confirm" role="group" aria-label="Force a restart" data-testid="forced-restart-confirm">
+            <label for="forced-restart-word" class="form-label">To kill the controller, type <strong>@ConfirmWord</strong>.</label>
+            <input id="forced-restart-word" class="form-control form-control-sm" autocomplete="off" data-testid="forced-restart-word"
+                   @bind="_confirmText" @bind:event="oninput" />
+            <div class="web-actions">
+                <button type="button" class="btn btn-sm btn-danger" data-testid="forced-restart-send" disabled="@(Busy || !Confirmed)" @onclick="ForceRestartAsync">Kill and restart</button>
+                <button type="button" class="btn btn-sm btn-outline-light" data-testid="panel-cancel" disabled="@Busy" @onclick="CloseForcedRestart">Cancel</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <button type="button" class="btn btn-sm btn-outline-danger" data-testid="forced-restart-start" disabled="@Busy" @onclick="OpenForcedRestart">
+            <i class="bi bi-lightning" aria-hidden="true"></i> Force a restart…
+        </button>
+    }
+</section>
+
+@code {
+    /// <summary>What an admin types to confirm a forced restart.</summary>
+    public const string ConfirmWord = "restart";
+
+    /// <summary>What a kill means for the roof (commissioning.md C11), shown before a forced restart is asked for.</summary>
+    public const string KillWarning = "A kill does not stop the roof. The relays stay as they were until the new controller starts, which turns them all off first. If the roof is moving, use the stop control at the roof: the Stop here goes through the controller, which is not answering.";
+
+    private IReadOnlyList<(string Label, string Value)>? _information;
+    private DateTimeOffset _readAt;
+    private RoofWebStatus? _status;
+    private RoofSettingsForm? _restartForm;
+    private bool _forcing;
+    private string _confirmText = string.Empty;
+    private WebPageMessage? _forcedResult;
+
+    private bool RestartNeedsConfirmation => _restartForm?.PendingHandEdit?.RequiresConfirmation == true;
+
+    private bool Confirmed => string.Equals(_confirmText.Trim(), ConfirmWord, StringComparison.OrdinalIgnoreCase);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await ReloadAsync();
+        }
+    }
+
+    /// <summary>Reads the supervisor's state (which needs no controller) and the controller's information.</summary>
+    private async Task ReloadAsync()
+    {
+        await ReadSupervisorAsync();
+        if (await SendAsync("The controller's information could not be read.", async (session, cancellationToken) =>
+        {
+            var information = await session.Client.System.GetInformationAsync(cancellationToken);
+            var metrics = await session.Client.System.GetMetricsAsync(cancellationToken);
+            _information = [.. RoofSystemText.DescribeInformation(information, metrics)];
+            _readAt = Time.GetUtcNow();
+        }))
+        {
+            Message = null;
+        }
+    }
+
+    private async Task ReadSupervisorAsync()
+    {
+        try
+        {
+            _status = await Probe.CheckAsync(Closing);
+        }
+        catch (OperationCanceledException) when (Closing.IsCancellationRequested)
+        {
+        }
+    }
+
+    private Task CheckReadinessAsync() => SendAsync("Readiness could not be checked.", async (session, cancellationToken) =>
+    {
+        var result = await session.Client.Health.GetReadinessAsync(cancellationToken);
+        Message = result.IsHealthy ? Success($"Ready: {result.Status}.") : Warning($"Not ready: {result.Status}.");
+    });
+
+    /// <summary>Reads the settings for a pending hand edit (a restart would load it), then asks.</summary>
+    private Task AskRestartAsync() => SendAsync("The settings could not be read to check for a hand edit.", async (session, cancellationToken) =>
+    {
+        var catalogue = await session.Client.Settings.GetCatalogueAsync(cancellationToken);
+        var settings = await session.Client.Settings.GetAsync(cancellationToken);
+        _restartForm = RoofSettingsForm.Create(catalogue, settings);
+        Message = null;
+    });
+
+    private async Task RestartAsync()
+    {
+        var confirm = RestartNeedsConfirmation;
+        RoofRestartResponse? restart = null;
+        if (await SendAsync("The controller could not be restarted.", async (session, cancellationToken) =>
+            restart = await session.Client.System.RestartAsync(confirm, cancellationToken)))
+        {
+            _restartForm = null;
+            _information = null;
+            Message = Info(restart!.Message, RoofSystemText.RestartComingBack);
+        }
+    }
+
+    private void OpenForcedRestart()
+    {
+        _forcing = true;
+        _confirmText = string.Empty;
+        _forcedResult = null;
+    }
+
+    private void CloseForcedRestart()
+    {
+        _forcing = false;
+        _confirmText = string.Empty;
+    }
+
+    /// <summary>
+    /// Asks the supervisor to kill and restart the controller. The page is for admins only, and the person's session is
+    /// checked again here: a role taken away since the page opened is not enough to kill the controller.
+    /// </summary>
+    private async Task ForceRestartAsync()
+    {
+        if (!Confirmed)
+        {
+            return;
+        }
+
+        var session = await Sessions.GetAsync();
+        if (session is not { Role: WebRoles.Admin } || !session.IsOpen)
+        {
+            _forcedResult = Danger(session is null ? SignedOut : "A forced restart needs the Admin role.");
+            return;
+        }
+
+        var result = ForcedRestart.Request();
+        Logger.LogWarning("Forced restart of the controller asked for by {Name}: {Outcome}", session.Name, result.Outcome);
+        _forcedResult = result.Outcome == ForcedRestartRequestOutcome.Requested
+            ? Warning(result.Message, "The Health page shows when the controller is back.")
+            : Danger(result.Message);
+        CloseForcedRestart();
+        _information = null;
+        if (result.Outcome == ForcedRestartRequestOutcome.Requested)
+        {
+            _ = ReadSupervisorLaterAsync();
+        }
+    }
+
+    /// <summary>The supervisor records what it did with a forced restart within a second or so: reads its state then.</summary>
+    private async Task ReadSupervisorLaterAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), Time, Closing);
+            await ReadSupervisorAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (Closing.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+            // The page closed while waiting.
+        }
+    }
+
+    private string DescribeLastForcedRestart()
+    {
+        if (_status is null)
+        {
+            return "Reading the supervisor's state…";
+        }
+
+        if (_status.Supervisor.Availability != SupervisorAvailability.Available || _status.Supervisor.Snapshot is not { } snapshot)
+        {
+            return RoofWebStatusText.DescribeSupervisor(_status.Supervisor);
+        }
+
+        return snapshot.LastForcedRestart switch
+        {
+            null => "No forced restart since the container started.",
+            { Outcome: ForcedRestartRecord.Outcomes.Ignored } ignored => string.Create(
+                CultureInfo.InvariantCulture,
+                $"The last forced restart, at {RoofStatusText.Time(ignored.At)}, was ignored: the controller had started less than {snapshot.ForceRestartMinSeconds} s before."),
+            { } last => $"The last forced restart: {last.Outcome}, at {RoofStatusText.Time(last.At)}."
+        };
+    }
+}
