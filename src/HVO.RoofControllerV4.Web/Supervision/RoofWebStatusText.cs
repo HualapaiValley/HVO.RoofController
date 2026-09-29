@@ -67,7 +67,7 @@ public static class RoofWebStatusText
                 details.Insert(0, status.Controller.Detail);
                 if (controller?.State == SupervisedProcess.States.Running)
                 {
-                    details.Add("The supervisor reports it running. If it stays unanswered, an admin can force a restart.");
+                    details.Add("The supervisor reports it running. If it stays unanswered, force a restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller) or restart the container.");
                 }
 
                 return new RoofWebStatusView(RoofWebStatusLevel.Bad, "The controller is not answering", details);

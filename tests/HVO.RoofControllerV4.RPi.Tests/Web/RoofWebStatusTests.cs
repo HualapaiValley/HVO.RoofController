@@ -52,7 +52,7 @@ public sealed class RoofWebStatusTextTests
         view.Headline.Should().Be("The controller is not answering");
         view.Details.Should().Equal(
             "Connection refused (localhost:8080)",
-            "The supervisor reports it running. If it stays unanswered, an admin can force a restart.");
+            "The supervisor reports it running. If it stays unanswered, force a restart (docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller) or restart the container.");
     }
 
     [TestMethod]
