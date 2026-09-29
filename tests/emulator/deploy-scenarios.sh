@@ -285,13 +285,28 @@ kill_supervised() {
 }
 
 # restart_web_ui: kills the web UI, as a crash ends it, and waits until the supervisor has started it again and it is live.
+# The wait allows for the supervisor's longest backoff (HVO_SUPERVISOR_BACKOFF_MAX_SECONDS, 30 s) and more: the web UI is
+# killed several times within the supervisor's crash window.
 restart_web_ui() {
   local starts
-  starts=$(supervised_value '.ui.starts')
-  kill_supervised ui
-  wait_for "the supervisor to start the web UI again" 30 \
+  starts=$(supervised_value '.ui.starts') || fail "could not read the supervisor's state"
+  [[ "${starts}" =~ ^[0-9]+$ ]] || fail "the supervisor reports no web UI starts: $(supervisor_state)"
+  kill_supervised ui || fail "could not kill the web UI"
+  wait_for "the supervisor to start the web UI again" 45 \
     supervised_is ".ui.state == \"running\" and .ui.starts == $((starts + 1))"
   wait_for "the web UI live again" 60 web_ui_live
+}
+
+# expect_absent <user> <path> <message>: the path does not exist, as that user in the container sees it. Fails with the
+# message when it does, and says so when docker could not check.
+expect_absent() {
+  local status=0
+  docker exec -u "$1" "${controller}" test -e "$2" || status=$?
+  case ${status} in
+    1) ;;
+    0) fail "$3" ;;
+    *) fail "could not check for $2 (docker exec exit ${status})" ;;
+  esac
 }
 
 # web_ui_keys_setting: the RoofWeb__DataProtectionPath setting the supervisor started the running web UI with; nothing
@@ -986,12 +1001,20 @@ scenario_supervisor() {
 
   # CommissioningCheck("C11")
   current_check="Supervisor: the web UI's keys directory is in a directory only root can change"
-  local keys_dir=/var/lib/hvo-roof-web owners
+  # What the links below name: a directory made for this step, which only root can change, so that a link followed by
+  # mistake changes nothing outside the container.
+  local keys_dir=/var/lib/hvo-roof-web target=/var/lib/hvo-scenario-target owners target_was setting status=0
+  docker exec "${controller}" install -d -m 0750 -o root -g root "${target}" || fail "could not make ${target}"
+  target_was=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target}"
   owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ') \
     || fail "no ${keys_dir}/keys"
   [[ "${owners}" == "root:root 755 app:app 700" ]] || fail "${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
-  ! docker exec -u app "${controller}" ln -s /var/lib/hvo-roof/identity "${keys_dir}/probe" 2>/dev/null \
-    || fail "the web UI's user can create a link in ${keys_dir}"
+  docker exec -u app "${controller}" ln -s "${target}" "${keys_dir}/probe" 2>/dev/null || status=$?
+  case ${status} in
+    1) ;;
+    0) fail "the web UI's user can create a link in ${keys_dir}" ;;
+    *) fail "could not check whether the web UI's user can create a link in ${keys_dir} (docker exec exit ${status})" ;;
+  esac
   # A volume there given to the web UI's user, as the docs once advised: at the web UI's next start, root takes it back
   # before it makes the keys directory in it.
   docker exec "${controller}" chown app:app "${keys_dir}" || fail "could not give ${keys_dir} to the web UI's user"
@@ -1000,38 +1023,44 @@ scenario_supervisor() {
     || fail "no ${keys_dir}/keys after the web UI's restart"
   [[ "${owners}" == "root:root 755 app:app 700" ]] \
     || fail "after the web UI's restart, ${keys_dir} and its keys directory are ${owners}, not root:root 755 and app:app 700"
-  # A symbolic link in place of the keys directory, and then of the directory it is in, is refused: the web UI keeps its
-  # keys in memory, and what the link names (here the identity store's directory) is left as it was.
-  local target=/var/lib/hvo-roof/identity target_was setting
-  target_was=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target}"
-  docker exec "${controller}" bash -c "mv ${keys_dir}/keys ${keys_dir}/keys.scenario && ln -s ${target} ${keys_dir}/keys" \
-    || fail "could not put a link in place of ${keys_dir}/keys"
+  # A symbolic link in place of the keys directory is refused at the web UI's next start: the web UI keeps its keys in
+  # memory, and what the link names is left as it was. The web UI's user makes this one, while ${keys_dir} is its own,
+  # as it could in a volume given to it. Then the same for a link in place of ${keys_dir}, which only root can make.
+  docker exec "${controller}" chown app:app "${keys_dir}" || fail "could not give ${keys_dir} to the web UI's user"
+  docker exec -u app "${controller}" bash -c "mv ${keys_dir}/keys ${keys_dir}/keys.scenario && ln -s ${target} ${keys_dir}/keys" \
+    || fail "the web UI's user could not put a link in place of ${keys_dir}/keys"
   expect_keys_link_refused "${keys_dir}/keys" "${target}" "${target_was}"
   docker exec "${controller}" bash -c "rm ${keys_dir}/keys && mv ${keys_dir}/keys.scenario ${keys_dir}/keys \
     && mv ${keys_dir} ${keys_dir}.scenario && ln -s ${target} ${keys_dir}" || fail "could not put a link in place of ${keys_dir}"
   expect_keys_link_refused "${keys_dir}" "${target}" "${target_was}"
-  docker exec "${controller}" bash -c "rm ${keys_dir} && mv ${keys_dir}.scenario ${keys_dir}" \
-    || fail "could not put ${keys_dir} back"
+  docker exec "${controller}" bash -c "rm ${keys_dir} && mv ${keys_dir}.scenario ${keys_dir} && rmdir ${target}" \
+    || fail "could not put ${keys_dir} back, or remove ${target}"
   restart_web_ui
   setting=$(web_ui_keys_setting) || fail "could not read the web UI's keys setting"
   [[ "${setting}" == "RoofWeb__DataProtectionPath=${keys_dir}/keys" ]] \
     || fail "the web UI was not given ${keys_dir}/keys again once the links were gone (${setting:-no setting})"
-  pass "${keys_dir} is root:root 755 and its keys directory app:app 700; the web UI's user cannot make a link there, and a ${keys_dir} given to that user is root's again at the web UI's next start; a link in place of the keys directory or of ${keys_dir} is refused (the web UI keeps its keys in memory, and ${target} is still ${target_was}), and the directory is used again once the link is gone"
+  pass "${keys_dir} is root:root 755 and its keys directory app:app 700; the web UI's user cannot make a link there, and a ${keys_dir} given to that user is root's again at the web UI's next start; a link in place of the keys directory (made by the web UI's user) or of ${keys_dir} is refused: the web UI keeps its keys in memory and writes none under its home, and ${target}, which the links named, is still ${target_was}; the directory is used again once the link is gone"
 }
 
 # expect_keys_link_refused <link> <target> <target's owners and mode before>: at the web UI's next start, the supervisor
-# refuses the link (a WARNING), gives the web UI no keys directory, and leaves what the link names as it was.
+# refuses the link (a WARNING), gives the web UI no keys directory, and leaves what the link names as it was; the web UI
+# keeps its keys in memory, not in ASP.NET Core's default directory under its home.
 expect_keys_link_refused() {
-  local link=$1 target=$2 target_was=$3 start setting
+  local link=$1 target=$2 target_was=$3 start setting target_now
   start=$(now)
   restart_web_ui
   [[ -n "$(supervisor_log_line "WARNING: cannot use ${link} for the web UI's keys" "${start}")" ]] \
-    || fail "the supervisor did not refuse the link at ${link}: $(docker logs --since "${start}" "${controller}" 2>&1 | tail -n 20)"
+    || fail "the supervisor did not refuse the link at ${link}; its last lines: $(docker logs --since "${start}" "${controller}" 2>&1 \
+      | grep -F '[supervisor]' | tail -n 3 | paste -sd ' ')"
   setting=$(web_ui_keys_setting) || fail "could not read the web UI's keys setting"
   [[ -z "${setting}" ]] || fail "the web UI was given a keys directory through the link at ${link} (${setting})"
-  [[ "$(docker exec "${controller}" stat -c '%U:%G %a' "${target}")" == "${target_was}" ]] \
-    || fail "${target}, named by the link at ${link}, was changed: $(docker exec "${controller}" stat -c '%U:%G %a' "${target}")"
-  ! docker exec "${controller}" test -e "${target}/keys" || fail "a keys directory was made in ${target}"
+  target_now=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target} after the web UI's restart"
+  [[ "${target_now}" == "${target_was}" ]] \
+    || fail "${target}, named by the link at ${link}, was changed from ${target_was} to ${target_now}"
+  expect_absent root "${target}/keys" "a keys directory was made in ${target}, through the link at ${link}"
+  # The sign-in page's form token needs the keys.
+  web_page_has '__RequestVerificationToken' || fail "the web UI's sign-in page has no form token"
+  expect_absent app /home/app/.aspnet "the web UI wrote its keys under /home/app/.aspnet instead of keeping them in memory"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------

@@ -4,8 +4,10 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Web.Sessions;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -255,6 +257,35 @@ public sealed class WebSignInTests
         session.Credential.Session.Token.Should().Be("token-1-ada");
         session.ExpiresUtc.Should().BeCloseTo(controller.Time.GetUtcNow().AddHours(12), TimeSpan.FromMinutes(1));
         logs.Entries.Select(entry => entry.Message).Should().Contain("Web session for ada (RoofAdmin) picked up again from its cookie");
+    }
+
+    [TestMethod]
+    public async Task WithoutAKeysDirectory_TheKeysAreInMemory_AndACookieDoesNotSurviveARestart()
+    {
+        var controller = new FakeController();
+        string cookie;
+        await using (var first = await WebHost.StartAsync(controller: controller))
+        {
+            using var browser = first.Browser();
+            await browser.SignInAsync("ada", FakeController.AdaPassword);
+            cookie = browser.Cookie(WebAuthentication.CookieName)!;
+
+            // The key manager keeps the keys it made in memory, and writes none to a directory of ASP.NET Core's choosing.
+            var keys = first.App.Services.GetRequiredService<IOptions<KeyManagementOptions>>().Value.XmlRepository;
+            keys.Should().BeOfType<WebKeysInMemory>()
+                .Which.GetAllElements().Should().Contain(element => element.Name.LocalName == "key");
+        }
+
+        await using var second = await WebHost.StartAsync(controller: controller);
+        using var restarted = second.Browser();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/account/password");
+        request.Headers.Add("Cookie", $"{WebAuthentication.CookieName}={cookie}");
+
+        using var response = await restarted.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.PathAndQuery.Should().Be("/signin?returnUrl=%2Faccount%2Fpassword");
+        second.Sessions.TryGet("session-1", out _).Should().BeFalse();
     }
 
     [TestMethod]

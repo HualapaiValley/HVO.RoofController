@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.XmlEncryption;
 using Microsoft.AspNetCore.WebUtilities;
 
 namespace HVO.RoofControllerV4.Web.Sessions;
@@ -61,6 +63,16 @@ public static class WebAuthentication
         if (!string.IsNullOrWhiteSpace(options.DataProtectionPath))
         {
             dataProtection.PersistKeysToFileSystem(new DirectoryInfo(options.DataProtectionPath));
+        }
+        else
+        {
+            services.Configure<KeyManagementOptions>(keys =>
+            {
+                keys.XmlRepository = new WebKeysInMemory();
+                // The keys never leave memory, so there is nothing to encrypt; without an encryptor the key manager
+                // warns at each start that they may be stored unencrypted.
+                keys.XmlEncryptor = new NullXmlEncryptor();
+            });
         }
 
         services.AddSingleton<WebSessionStore>();

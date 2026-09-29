@@ -684,6 +684,18 @@ test_the_default_data_directory_written_with_a_trailing_slash_is_made_the_same_w
   expect_the_default_keys_directory_made_by_the_supervisor
 }
 
+# A path with "." or ".." in it is not taken for the default (a link can make ".." name somewhere else): it is made as
+# any other, by the web UI's user, and root does nothing to /var/lib/hvo-roof-web.
+test_a_keys_directory_written_with_a_dot_is_made_by_the_web_uis_user() {
+  local path=/var/lib/hvo-roof-web/./keys
+  start_supervisor_with_the_default_data_dir "RoofWeb__DataProtectionPath=${path}"
+  wait_both_running || return
+  grep -qxF -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | install -d -m 0700 ${path}" \
+    "${FAKE_DIR}/setpriv.log" || fail_test "the keys directory was not made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
+  expect_equal "install calls" "$(grep -F /var/lib/hvo-roof-web "${FAKE_DIR}/install.log")" "-d -m 0700 ${path}"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" "RoofWeb__DataProtectionPath=${path}"
+}
+
 # Without a user of its own, the web UI runs as the supervisor does, so there is no one else to give the directories to.
 test_the_default_keys_directory_without_a_web_ui_user_is_left_to_the_supervisors_user() {
   mkdir -p "${WORK}/install-bin"
