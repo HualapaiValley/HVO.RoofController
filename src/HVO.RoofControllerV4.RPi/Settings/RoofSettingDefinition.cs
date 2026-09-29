@@ -252,10 +252,10 @@ internal sealed class RoofSettingDefinition
     };
 
     /// <summary>
-    /// The value as the settings file holds it. A list is padded with blank entries to <paramref name="minimumItems"/>,
-    /// so that it hides the lower layers' entries (configuration merges lists by index); consumers ignore blanks.
+    /// The value as the settings file holds it. A list is written as it is: the settings file's list replaces the list
+    /// below it (<see cref="RoofSettingsFileProvider.GetChildKeys"/>).
     /// </summary>
-    public JsonNode? ToNode(object? value, int minimumItems = 0) => value switch
+    public JsonNode? ToNode(object? value) => value switch
     {
         null => null,
         bool flag => JsonValue.Create(flag),
@@ -263,10 +263,7 @@ internal sealed class RoofSettingDefinition
         double number => JsonValue.Create(number),
         TimeSpan duration => JsonValue.Create(duration.ToString("c", CultureInfo.InvariantCulture)),
         string text => JsonValue.Create(text),
-        IReadOnlyList<string> items => new JsonArray(items
-            .Concat(Enumerable.Repeat(string.Empty, Math.Max(0, minimumItems - items.Count)))
-            .Select(item => (JsonNode?)JsonValue.Create(item))
-            .ToArray()),
+        IReadOnlyList<string> items => new JsonArray(items.Select(item => (JsonNode?)JsonValue.Create(item)).ToArray()),
         _ => throw new InvalidOperationException($"{Key} has an unexpected value type {value.GetType().Name}.")
     };
 
@@ -433,13 +430,15 @@ internal sealed class RoofSettingDefinition
 /// </summary>
 internal sealed class RoofConfigurationView
 {
+    private readonly IReadOnlyList<IConfigurationProvider> _bottomUp;
     private readonly IReadOnlyList<IConfigurationProvider> _topDown;
 
     /// <param name="providers">Providers in configuration order (lowest first), as <c>IConfigurationRoot.Providers</c>.</param>
     public RoofConfigurationView(IEnumerable<IConfigurationProvider> providers)
     {
         ArgumentNullException.ThrowIfNull(providers);
-        _topDown = providers.Reverse().ToList();
+        _bottomUp = providers.ToList();
+        _topDown = _bottomUp.Reverse().ToList();
     }
 
     public bool TryGet(string key, out string? value)
@@ -462,11 +461,7 @@ internal sealed class RoofConfigurationView
     /// </summary>
     public IReadOnlyList<string>? GetListItems(string key)
     {
-        var childKeys = _topDown
-            .Aggregate(Enumerable.Empty<string>(), (seed, provider) => provider.GetChildKeys(seed, key))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(ConfigurationKeyComparer.Instance)
-            .ToList();
+        var childKeys = ChildKeys(key).Order(ConfigurationKeyComparer.Instance).ToList();
         if (childKeys.Count == 0)
         {
             return TryGet(key, out _) ? Array.Empty<string>() : null;
@@ -485,24 +480,6 @@ internal sealed class RoofConfigurationView
     }
 
     /// <summary>
-    /// The number of list slots the layers give <paramref name="key"/>: one more than the highest numeric index under
-    /// it, or 0. A list written above these layers must be at least this long to hide every entry below it.
-    /// </summary>
-    public int CountListSlots(string key)
-    {
-        var slots = 0;
-        foreach (var child in _topDown.Aggregate(Enumerable.Empty<string>(), (seed, provider) => provider.GetChildKeys(seed, key)))
-        {
-            if (int.TryParse(child, NumberStyles.None, CultureInfo.InvariantCulture, out var index) && index < MaximumSlots)
-            {
-                slots = Math.Max(slots, index + 1);
-            }
-        }
-
-        return slots;
-    }
-
-    /// <summary>
     /// Every key the layers set and its effective value, as <c>IConfiguration.AsEnumerable()</c> would list them. Used
     /// to build a candidate configuration without touching the live providers.
     /// </summary>
@@ -514,11 +491,7 @@ internal sealed class RoofConfigurationView
 
         void Walk(string? parent)
         {
-            var children = _topDown
-                .Aggregate(Enumerable.Empty<string>(), (seed, provider) => provider.GetChildKeys(seed, parent))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            foreach (var child in children)
+            foreach (var child in ChildKeys(parent))
             {
                 var key = parent is null ? child : ConfigurationPath.Combine(parent, child);
                 if (TryGet(key, out var value))
@@ -531,8 +504,15 @@ internal sealed class RoofConfigurationView
         }
     }
 
-    /// <summary>Largest list index that counts toward <see cref="CountListSlots"/>, so a stray key cannot force a huge list.</summary>
-    private const int MaximumSlots = 1024;
+    /// <summary>
+    /// The keys directly under <paramref name="parent"/>, gathered in configuration order as <c>IConfiguration</c>
+    /// does, so a layer can hide the entries below it (a list in the settings file replaces the list below).
+    /// </summary>
+    private List<string> ChildKeys(string? parent)
+        => _bottomUp
+            .Aggregate(Enumerable.Empty<string>(), (seed, provider) => provider.GetChildKeys(seed, parent))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     /// <summary>True when a layer sets <paramref name="key"/>, or (for a list) any entry under it.</summary>
     public static bool Sets(IConfigurationProvider provider, string key, bool includeChildren)

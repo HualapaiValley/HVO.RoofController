@@ -24,6 +24,9 @@ internal static class RoofSettingsCatalogue
 
     private static readonly string[] LogLevels = Enum.GetNames<LogLevel>();
 
+    // AUDIT entries for changes that are not safety-critical are written at Information.
+    private static readonly string[] AuditedLogLevels = [nameof(LogLevel.Trace), nameof(LogLevel.Debug), nameof(LogLevel.Information)];
+
     /// <summary>Groups in display order: (name, title, description).</summary>
     public static IReadOnlyList<(string Name, string Title, string Description)> Groups { get; } =
     [
@@ -197,7 +200,8 @@ internal static class RoofSettingsCatalogue
 
         // Logging.
         Add("Logging:LogLevel:Default", RoofSettingsContract.LoggingGroup, RoofSettingType.Enum,
-            "Lowest level written to the log.", nameof(LogLevel.Information), allowed: LogLevels);
+            "Lowest level written to the log. No higher than Information, so every AUDIT entry is written.", nameof(LogLevel.Information),
+            allowed: AuditedLogLevels);
         Add("Logging:LogLevel:Microsoft.AspNetCore", RoofSettingsContract.LoggingGroup, RoofSettingType.Enum,
             "Lowest level written for the web server.", nameof(LogLevel.Warning), allowed: LogLevels);
         Add("ConsoleLogBuffer:" + nameof(ConsoleLogBufferOptions.MinimumLevel), RoofSettingsContract.LoggingGroup, RoofSettingType.Enum,

@@ -8,6 +8,7 @@ using FluentAssertions;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
@@ -41,6 +42,7 @@ public sealed class SettingsApiTests
     private const string CloseRelay = "RoofControllerOptionsV4:CloseRelayId";
     private const string Departure = "RoofControllerOptionsV4:DepartureReleaseTimeout";
     private const string AnonymousStop = "RoofControllerSecurity:AllowAnonymousStop";
+    private const string AllowedOrigins = "RoofControllerSecurity:AllowedOrigins";
     private const string LockoutThreshold = "RoofControllerSecurity:Identity:LockoutThreshold";
     private const string CameraServer = "BlueIris:BaseUrl";
     private const string CameraUser = "BlueIris:UserName";
@@ -516,6 +518,35 @@ public sealed class SettingsApiTests
     }
 
     [TestMethod]
+    [DataRow("Warning")]
+    [DataRow("Error")]
+    [DataRow("Critical")]
+    [DataRow("None")]
+    public async Task TheDefaultLogLevel_CannotHideTheAuditEntries(string level)
+    {
+        const string key = "Logging:LogLevel:Default";
+        var logs = new RecordingLoggerProvider();
+        using var host = StartHost(new RoofDouble(), logs);
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+
+        var refused = await PostGroupAsync(admin, RoofSettingsContract.LoggingGroup,
+            await ReadGroupAsync(admin, RoofSettingsContract.LoggingGroup, values => values[key] = Json(JsonSerializer.Serialize(level))));
+
+        (await ErrorsAsync(refused)).Should().Contain($"{key} must be one of Trace, Debug, Information.");
+        var catalogue = await ApiJson.ReadAsync<RoofSettingsCatalogueResponse>(await admin.GetAsync($"{Settings}/Catalogue"));
+        catalogue.Groups.SelectMany(group => group.Settings).Single(setting => setting.Key == key).AllowedValues
+            .Should().Equal("Trace", "Debug", "Information");
+
+        var changed = await PostGroupAsync(admin, RoofSettingsContract.LoggingGroup,
+            await ReadGroupAsync(admin, RoofSettingsContract.LoggingGroup, values => values[key] = Json("\"Debug\"")));
+
+        changed.StatusCode.Should().Be(HttpStatusCode.OK, await changed.Content.ReadAsStringAsync());
+        logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Information
+            && entry.Message.StartsWith("AUDIT settings changed by test-admin", StringComparison.Ordinal)
+            && entry.Message.Contains($"{key}: \"Information\" -> \"Debug\"", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public async Task AChange_WhileTheRoofMoves_IsRefused_AndNothingIsSaved()
     {
         var roof = new RoofDouble { Moving = true };
@@ -542,7 +573,8 @@ public sealed class SettingsApiTests
         }
 
         var roof = new RoofDouble();
-        using var host = StartHost(roof);
+        var logs = new RecordingLoggerProvider();
+        using var host = StartHost(roof, logs);
         using var admin = host.CreateApiClient(TestApiKeys.Admin);
         var request = await ReadGroupAsync(admin, RoofSettingsContract.RoofGroup, values => values[Watchdog] = Json("300"));
         File.SetUnixFileMode(ConfigDirectory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
@@ -555,7 +587,11 @@ public sealed class SettingsApiTests
 
         refused.Status.Should().Be(503);
         refused.Code.Should().Be(nameof(RoofControllerErrorCode.SettingsStoreUnavailable));
-        refused.Detail.Should().StartWith("The settings could not be saved, so nothing was changed.");
+        refused.Detail.Should().Be("The settings could not be saved, so nothing was changed. The controller log has the reason.",
+            "the answer never names a path on the controller");
+        logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Error
+            && entry.Message.StartsWith("Settings change by test-admin not saved: The settings file", StringComparison.Ordinal)
+            && entry.Message.Contains(SettingsPath, StringComparison.Ordinal));
         roof.Applied.Should().HaveCount(2);
         roof.Applied[1].IncludeLocalOnly.Should().BeTrue("the roof is put back as it was, local-only settings included");
         roof.Current.SafetyWatchdogTimeout.Should().Be(TimeSpan.FromMinutes(2));
@@ -584,6 +620,56 @@ public sealed class SettingsApiTests
         var accepted = await PostGroupAsync(@operator, RoofSettingsContract.UiGroup, request);
         accepted.StatusCode.Should().Be(HttpStatusCode.OK, await accepted.Content.ReadAsStringAsync());
         State(await ApiJson.ReadAsync<RoofSettingsResponse>(accepted), KioskTimeout).Value!.Value.GetDouble().Should().Be(600);
+    }
+
+    [TestMethod]
+    public async Task AnAllowedOriginsList_ReplacesTheListBelowTheSettingsFile_AndAnEmptyListClearsIt()
+    {
+        var shipped = new Dictionary<string, string?>
+        {
+            [AllowedOrigins + ":0"] = "https://a.example",
+            [AllowedOrigins + ":1"] = "https://b.example",
+            [AllowedOrigins + ":2"] = "https://c.example"
+        };
+        using (var host = StartHost(new RoofDouble(), extraSettings: shipped))
+        {
+            using var admin = host.CreateApiClient(TestApiKeys.Admin);
+            await ChangeOriginsAsync(host, admin, """["https://one.example"]""", ["https://one.example"]);
+        }
+
+        using (var host = StartHost(new RoofDouble(), extraSettings: shipped))
+        {
+            using var admin = host.CreateApiClient(TestApiKeys.Admin);
+            Origins(host).Should().Equal(["https://one.example"], "the saved list is read again at a restart");
+            await ChangeOriginsAsync(host, admin, "[]", []);
+        }
+
+        using (var host = StartHost(new RoofDouble(), extraSettings: shipped))
+        {
+            using var admin = host.CreateApiClient(TestApiKeys.Admin);
+            Origins(host).Should().BeEmpty("the saved empty list still hides the list below at a restart");
+            await ChangeOriginsAsync(host, admin, """["https://a.example","https://b.example","https://c.example"]""",
+                ["https://a.example", "https://b.example", "https://c.example"]);
+            ReadFile(SettingsPath)["RoofControllerSecurity"].Should().BeNull("a list equal to the one below is not written");
+        }
+
+        async Task ChangeOriginsAsync(RoofApiTestHost host, HttpClient admin, string list, string[] expected)
+        {
+            var request = await ReadGroupAsync(admin, RoofSettingsContract.SecurityGroup, values => values[AllowedOrigins] = Json(list));
+            var response = await PostGroupAsync(admin, RoofSettingsContract.SecurityGroup, request);
+            response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+
+            State(await ApiJson.ReadAsync<RoofSettingsResponse>(response), AllowedOrigins).Value!.Value.EnumerateArray()
+                .Select(item => item.GetString()).Should().Equal(expected);
+            Origins(host).Should().Equal(expected, "the controller uses exactly the list it answers");
+            if (ReadFile(SettingsPath)["RoofControllerSecurity"]?["AllowedOrigins"] is JsonArray saved)
+            {
+                saved.Select(item => item!.GetValue<string>()).Should().Equal(expected, "the file holds the list as sent, with no padding");
+            }
+        }
+
+        static List<string> Origins(RoofApiTestHost host)
+            => host.Services.GetRequiredService<IOptionsMonitor<RoofControllerSecurityOptions>>().CurrentValue.AllowedOrigins;
     }
 
     [TestMethod]

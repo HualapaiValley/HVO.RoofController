@@ -465,7 +465,7 @@ public sealed class RoofSettingsStore
                 _logger.LogError("Hand edit discard by {Caller} not saved: {Problem}", caller, ex.Message);
                 return RoofSettingsOutcome.Refused(
                     RoofControllerErrorCode.SettingsStoreUnavailable,
-                    $"The settings could not be saved, so the edit is still there. {ex.Message}");
+                    "The settings could not be saved, so the edit is still there. The controller log has the reason.");
             }
 
             _logger.LogWarning(
@@ -652,7 +652,7 @@ public sealed class RoofSettingsStore
 
             return RoofSettingsOutcome.Refused(
                 RoofControllerErrorCode.SettingsStoreUnavailable,
-                $"The settings could not be saved, so nothing was changed. {ex.Message}");
+                "The settings could not be saved, so nothing was changed. The controller log has the reason.");
         }
 
         if (roofChanges.Count > 0)
@@ -712,7 +712,7 @@ public sealed class RoofSettingsStore
             var baseReadable = definition.TryRead(below, out var baseValue, out _);
             if (!baseReadable || !RoofSettingDefinition.ValuesEqual(baseValue, change.To))
             {
-                SetPath(body, definition.Key, definition.ToNode(change.To, definition.IsList ? below.CountListSlots(definition.Key) : 0));
+                SetPath(body, definition.Key, definition.ToNode(change.To));
             }
         }
 

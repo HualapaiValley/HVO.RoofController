@@ -395,7 +395,8 @@ Most settings take effect at once. The others show `restartPending` until the co
 
 Every change is written to the log as an `AUDIT` entry with the caller's key or person name, the old and new versions,
 and each setting's old and new value. A safety-critical change is logged at Warning, any other at Information. A
-secret is shown only as `(not set)` or `(set)`.
+secret is shown only as `(not set)` or `(set)`. So that no change can hide the entries, `Logging:LogLevel:Default`
+takes only `Trace`, `Debug` or `Information`, through the API and in the settings file.
 
 ### Local-only settings
 
@@ -438,6 +439,8 @@ configuration, such as Kestrel endpoints or API keys, belongs in the deployment'
 - The configuration layers, lowest first: `appsettings.json`, `appsettings.{Environment}.json`, the settings file, the
   managed secrets file, user secrets (Development only), environment variables, the command line and the secrets
   directory. A higher layer overrides a lower one.
+- A list the file sets, such as `AllowedOrigins`, replaces the list below it, and `[]` clears it. (The layers above the
+  file still merge by index, as .NET configuration does.)
 - The file holds only the settings that differ from the layers below it, so a default that a later release changes
   still takes effect.
 - Its first property, `HvoRoofSettings`, holds the version and when and by whom it was last saved, so `expectedVersion`

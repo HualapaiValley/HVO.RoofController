@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using HVO.RoofControllerV4.RPi.Middleware;
+using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.Memory;
@@ -315,7 +316,7 @@ public sealed class RoofSettingsFileTests
     }
 
     [TestMethod]
-    public void TheView_ReadsTheTopLayer_CountsListSlots_AndFlattens()
+    public void TheView_ReadsTheTopLayer_AndFlattens()
     {
         var view = new RoofConfigurationView(
         [
@@ -324,8 +325,7 @@ public sealed class RoofSettingsFileTests
                 ["RoofControllerUi:DefaultCamera"] = "Shipped",
                 ["RoofControllerSecurity:AllowedOrigins:0"] = "https://a.example",
                 ["RoofControllerSecurity:AllowedOrigins:1"] = "https://b.example",
-                ["RoofControllerSecurity:AllowedOrigins:2"] = "https://c.example",
-                ["RoofControllerSecurity:ApiKeys:99999:Name"] = "stray"
+                ["RoofControllerSecurity:AllowedOrigins:2"] = "https://c.example"
             }),
             Layer(new()
             {
@@ -339,13 +339,47 @@ public sealed class RoofSettingsFileTests
         camera.Should().Be("Mine");
         view.TryGet("RoofControllerUi:Nothing", out _).Should().BeFalse();
         view.GetListItems("RoofControllerSecurity:AllowedOrigins").Should().Equal(
-            ["https://mine.example", "https://c.example"], "a blank entry is no entry, and a shorter list above leaves the rest showing");
+            ["https://mine.example", "https://c.example"], "a blank entry is no entry, and a plain layer merges lists by index");
         view.GetListItems("RoofControllerSecurity:Nothing").Should().BeNull();
-        view.CountListSlots("RoofControllerSecurity:AllowedOrigins").Should().Be(3);
-        view.CountListSlots("RoofControllerSecurity:ApiKeys").Should().Be(0, "an index past the limit does not count");
         view.Flatten().Should().Contain("RoofControllerUi:DefaultCamera", "Mine")
             .And.Contain("RoofControllerSecurity:AllowedOrigins:2", "https://c.example")
             .And.NotContainKey("RoofControllerUi");
+    }
+
+    [TestMethod]
+    public void AListTheSettingsFileSets_ReplacesTheListBelow_AndAnEmptyListClearsIt()
+    {
+        const string key = "RoofControllerSecurity:AllowedOrigins";
+        var below = Layer(new()
+        {
+            [key + ":0"] = "https://a.example",
+            [key + ":1"] = "https://b.example",
+            [key + ":2"] = "https://c.example"
+        });
+
+        Origins("""{ "RoofControllerSecurity": { "AllowedOrigins": [ "https://x.example" ] } }""")
+            .Should().Equal(["https://x.example"], "the entries below the file's shorter list are gone");
+        Origins("""{ "RoofControllerSecurity": { "AllowedOrigins": [] } }""").Should().BeEmpty();
+        Origins("""{ "RoofControllerUi": { "DefaultCamera": "Roof" } }""")
+            .Should().Equal(["https://a.example", "https://b.example", "https://c.example"], "a file without the list leaves the list below");
+        Origins("""{ "RoofControllerSecurity": { "AllowedOrigins": [ "https://x.example" ] } }""", new() { [key + ":1"] = "https://env.example" })
+            .Should().Equal(["https://x.example", "https://env.example"], "a layer above the file still adds its entries");
+
+        List<string> Origins(string content, Dictionary<string, string?>? above = null)
+        {
+            var file = RoofSettingsFileProvider.Detached(RoofSettingsFileKind.Settings, Parse(content));
+            IConfigurationProvider[] providers = above is null ? [below, file] : [below, file, Layer(above)];
+            using var configuration = new ConfigurationRoot(providers);
+            var options = new RoofControllerSecurityOptions();
+            configuration.GetSection(RoofControllerSecurityOptions.SectionName).Bind(options);
+
+            var view = new RoofConfigurationView(providers);
+            (view.GetListItems(key) ?? []).Should().Equal(options.AllowedOrigins, "the view reads what the options bind");
+            view.Flatten().Where(entry => entry.Key.StartsWith(key + ":", StringComparison.Ordinal))
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal).Select(entry => entry.Value)
+                .Should().Equal(options.AllowedOrigins);
+            return options.AllowedOrigins;
+        }
     }
 
     [TestMethod]
