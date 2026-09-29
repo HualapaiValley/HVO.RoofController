@@ -188,12 +188,35 @@ public sealed class WebStopPassTests
     }
 }
 
-/// <summary>Stop from one address: a burst at once, then four a second; a person pressing Stop never reaches it.</summary>
+/// <summary>Stop from one sender: a burst at once, then four a second; a person pressing Stop never reaches it.</summary>
 [TestClass]
 public sealed class WebStopLimiterTests
 {
-    private static readonly IPAddress Phone = IPAddress.Parse("192.168.1.20");
-    private static readonly IPAddress Laptop = IPAddress.Parse("192.168.1.21");
+    private static readonly string Phone = WebStopLimiter.ForAddress(IPAddress.Parse("192.168.1.20"), null);
+    private static readonly string Laptop = WebStopLimiter.ForAddress(IPAddress.Parse("192.168.1.21"), null);
+
+    [TestMethod]
+    public void APerson_ASignedOutAddress_AndRefusals_AreCountedApart()
+    {
+        var address = IPAddress.Parse("192.168.1.20");
+        string[] senders = [WebStopLimiter.ForSession("session-1"), WebStopLimiter.ForAddress(address, null), WebStopLimiter.ForRefusals(address, null)];
+        var limiter = new WebStopLimiter(new ManualTimeProvider(new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero)));
+
+        senders.Should().OnlyHaveUniqueItems();
+        Enumerable.Range(0, WebStopLimiter.Burst).Should().OnlyContain(_ => limiter.TryAcquire(senders[1]));
+        limiter.TryAcquire(senders[1]).Should().BeFalse();
+        limiter.TryAcquire(senders[0]).Should().BeTrue("the person's Stops are their own");
+        limiter.TryAcquire(senders[2]).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void APublicIPv6Address_IsCountedByItsNetwork()
+    {
+        WebStopLimiter.ForAddress(IPAddress.Parse("2001:db8:1:2::5"), null)
+            .Should().Be(WebStopLimiter.ForAddress(IPAddress.Parse("2001:db8:1:2:ffff::9"), null));
+        WebStopLimiter.ForAddress(IPAddress.Parse("fd12:3456:789a:1::5"), null)
+            .Should().NotBe(WebStopLimiter.ForAddress(IPAddress.Parse("fd12:3456:789a:1::6"), null), "on the LAN each host is itself");
+    }
 
     [TestMethod]
     public void AnAddress_MaySendABurst_ThenFourASecond()
@@ -256,10 +279,10 @@ public sealed class WebStopLimiterTests
         var limiter = new WebStopLimiter(time);
         for (var host = 1; host <= 50; host++)
         {
-            limiter.TryAcquire(IPAddress.Parse($"10.0.0.{host}")).Should().BeTrue();
+            limiter.TryAcquire(WebStopLimiter.ForAddress(IPAddress.Parse($"10.0.0.{host}"), null)).Should().BeTrue();
         }
 
-        limiter.TryAcquire(null).Should().BeTrue("an address the server does not know is counted together");
+        limiter.TryAcquire(WebStopLimiter.ForAddress(null, null)).Should().BeTrue("an address the server does not know is counted together");
         limiter.Count.Should().Be(51);
 
         time.Advance(WebStopLimiter.RefillInterval * WebStopLimiter.Burst);

@@ -1,22 +1,27 @@
 using System.Collections.Concurrent;
 using System.Net;
+using HVO.RoofControllerV4.Common.Net;
 
 namespace HVO.RoofControllerV4.Web.Sessions;
 
 /// <summary>
-/// Limits <c>POST /stop</c> from each address: <see cref="Burst"/> at once, then one more every
-/// <see cref="RefillInterval"/> (four a second). A person pressing Stop, even over and over, never reaches it; a script
-/// posting Stop in a loop cannot make the web UI flood the controller and its log (the controller never limits Stop).
+/// Limits <c>POST /stop</c> for each sender: <see cref="Burst"/> at once, then one more every <see cref="RefillInterval"/>
+/// (four a second). A person pressing Stop, even over and over, never reaches it; a script posting Stop in a loop cannot
+/// make the web UI flood the controller and its log (the controller never limits Stop). A signed-in person, or one with a
+/// Stop pass, is counted by their session (<see cref="ForSession"/>); only a signed-out page is counted by its address
+/// (<see cref="ForAddress"/>). Stops are counted after the page's token is checked, so posts from others at the same
+/// address (behind a proxy or NAT) never use up a signed-in person's Stops. A post without a valid token reaches nothing,
+/// and is counted apart (<see cref="ForRefusals"/>) only to limit how often it is logged.
 /// </summary>
 public sealed class WebStopLimiter
 {
-    /// <summary>The Stops one address may send at once.</summary>
+    /// <summary>The Stops one sender may send at once.</summary>
     public const int Burst = 30;
 
-    /// <summary>How often an address earns another Stop, up to <see cref="Burst"/>.</summary>
+    /// <summary>How often a sender earns another Stop, up to <see cref="Burst"/>.</summary>
     public static TimeSpan RefillInterval { get; } = TimeSpan.FromMilliseconds(250);
 
-    // An address that has earned back its whole burst is forgotten at the next sweep.
+    // A sender that has earned back its whole burst is forgotten at the next sweep.
     private static readonly TimeSpan Full = RefillInterval * Burst;
 
     private readonly ConcurrentDictionary<string, Bucket> _buckets = new(StringComparer.Ordinal);
@@ -25,12 +30,25 @@ public sealed class WebStopLimiter
 
     public WebStopLimiter(TimeProvider time) => _time = time;
 
-    /// <summary>True when another Stop from <paramref name="address"/> may be sent now (and counts it).</summary>
-    public bool TryAcquire(IPAddress? address)
+    /// <summary>A person's Stops, from any of their pages: counted by their session.</summary>
+    public static string ForSession(string sessionId) => "session:" + sessionId;
+
+    /// <summary>
+    /// A signed-out page's Stops: counted by the address they come from (<see cref="RoofCallerAddress.Of"/>, which counts
+    /// a public IPv6 address by its /64).
+    /// </summary>
+    public static string ForAddress(IPAddress? address, IPAddress? local) => "address:" + RoofCallerAddress.Of(address, local);
+
+    /// <summary>Posts refused without reaching the controller: counted by address, apart from the Stops sent.</summary>
+    public static string ForRefusals(IPAddress? address, IPAddress? local) => "refused:" + RoofCallerAddress.Of(address, local);
+
+    /// <summary>True when another Stop from <paramref name="sender"/> may be sent now (and counts it).</summary>
+    public bool TryAcquire(string sender)
     {
+        ArgumentNullException.ThrowIfNull(sender);
         var now = _time.GetUtcNow();
         SweepIfDue(now);
-        var bucket = _buckets.GetOrAdd(address?.ToString() ?? "(unknown)", _ => new Bucket(now));
+        var bucket = _buckets.GetOrAdd(sender, _ => new Bucket(now));
         lock (bucket)
         {
             var earned = (now - bucket.CountedAt) / RefillInterval;
@@ -55,10 +73,10 @@ public sealed class WebStopLimiter
         }
     }
 
-    /// <summary>The addresses counted (tests).</summary>
+    /// <summary>The senders counted (tests).</summary>
     internal int Count => _buckets.Count;
 
-    // Forgets addresses that have earned back their whole burst, at most once in that time.
+    // Forgets senders that have earned back their whole burst, at most once in that time.
     private void SweepIfDue(DateTimeOffset now)
     {
         var due = Interlocked.Read(ref _nextSweepTicks);

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
@@ -57,6 +58,36 @@ public sealed class WebControllerModeTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         html.Should().Contain("data-testid=\"sign-in\"").And.NotContain("mode-banner");
         controller.Logged(HttpMethod.Get, RoofApiRoutesTest.Mode).Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task SignInPage_AndItsStop_AreSent_WhileTheControllerHasNotAnswered()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var controller = new FakeController
+        {
+            Mode = new RoofModeResponse(RoofHatMode.Simulation, false),
+            Hold = request => request.RequestUri!.AbsolutePath == "/" + RoofApiRoutesTest.Mode ? answer.Task : Task.CompletedTask,
+        };
+        await using var host = await WebHost.StartAsync(controller: controller);
+        using var browser = host.Browser();
+
+        using var response = await browser.OpenStreamAsync("/signin").WaitAsync(TimeSpan.FromSeconds(10));
+        await using var body = await response.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(body);
+        var html = new StringBuilder();
+        var buffer = new char[4096];
+        while (!html.ToString().Contains("data-testid=\"sign-in\"", StringComparison.Ordinal))
+        {
+            var read = await reader.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            read.Should().BePositive("the page is sent before the controller answers");
+            html.Append(buffer, 0, read);
+        }
+
+        html.ToString().Should().Contain("data-web-stop", "Stop is on the page as soon as it arrives").And.NotContain("mode-banner");
+        answer.SetResult();
+        html.Append(await reader.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+        html.ToString().Should().Contain(RoofStatusText.Simulation, "the banner follows when the controller answers");
     }
 
     [TestMethod]

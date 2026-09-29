@@ -526,8 +526,10 @@ a client of the API like any other:
   signs in again. Without `RoofWeb:StopKeyFile` there are no passes; with `RoofWeb:StopAfterSessionHours` at 0 a pass
   lasts only as long as the session would have. Replacing the Stop key does not end the passes: the web UI sends the
   key it has now.
-- The web UI limits `POST /stop` from each address to 30 at once, then four a second, so a script cannot make it flood
-  the controller or its log. The controller itself never limits Stop.
+- The web UI limits `POST /stop` to 30 at once, then four a second, so a script cannot make it flood the controller or
+  its log. It counts each signed-in person by their session, and signed-out pages by address. A post without the page's
+  token is refused before it is counted, so no one sharing a person's address can use up their Stops. The controller
+  itself never limits Stop.
 - The web UI's own sign-in rate limit, its origin check (403 `origin_not_allowed` for a form post or live connection
   from another site) and its headers are its settings, in [web.md](web.md#settings).
 

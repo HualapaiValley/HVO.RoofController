@@ -35,8 +35,8 @@ public static class WebStopTexts
     /// </summary>
     public static string AfterSessionEnds(bool stopOutlastsSessions) => stopOutlastsSessions ? StillWorks : MayBeRefused;
 
-    /// <summary>The web UI's own refusal when one address sends more Stops than <see cref="Sessions.WebStopLimiter"/> allows.</summary>
-    public const string TooMany = "Too many Stops were sent from this address. Wait a moment, then press Stop again.";
+    /// <summary>The web UI's own refusal when one person, or one address's signed-out pages, send more Stops than <see cref="Sessions.WebStopLimiter"/> allows.</summary>
+    public const string TooMany = "Too many Stops were sent in a short time. Wait a moment, then press Stop again.";
 
     /// <summary>The web UI did not answer within <see cref="PageTimeout"/>.</summary>
     public const string TimedOut = "The web UI did not answer in time.";

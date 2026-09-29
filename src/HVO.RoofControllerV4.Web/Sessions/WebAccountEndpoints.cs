@@ -176,11 +176,23 @@ public static class WebAccountEndpoints
     {
         var logger = loggerFactory.CreateLogger(typeof(WebAccountEndpoints).FullName!);
         var result = await http.AuthenticateAsync(WebAuthentication.Scheme);
+
+        // Signing out also ends Stop from this browser (the Stop pass); a session that ended by itself keeps it. The answer
+        // goes before the session ends: the person's live pages, this one too, go to the sign-in page as soon as it ends,
+        // and a browser that leaves this page before the answer arrives drops it, with the removal of the Stop pass.
+        await http.SignOutAsync(WebAuthentication.Scheme);
+        stopPass.Remove(http);
+        http.Response.Redirect(BuildSignInUrl(SignInMessages.SignedOut, "/"));
+        http.Response.ContentLength = 0;
+        await http.Response.StartAsync();
+        await http.Response.Body.FlushAsync();
+
         if (store.TryGet(WebAuthentication.GetSessionId(result.Principal), out var session))
         {
             try
             {
-                await session.SignOutAsync(http.RequestAborted);
+                // Not the request's token: the browser may have gone on to the sign-in page already.
+                await session.SignOutAsync(CancellationToken.None);
             }
             catch (Exception ex) when (ex is RoofApiException or TimeoutException or HttpRequestException or RoofProtocolException or OperationCanceledException)
             {
@@ -191,10 +203,7 @@ public static class WebAccountEndpoints
             logger.LogInformation("Web sign-out for {Name} from {RemoteIp}", session.Name, http.Connection.RemoteIpAddress);
         }
 
-        // Signing out also ends Stop from this browser (the Stop pass); a session that ended by itself keeps it.
-        await http.SignOutAsync(WebAuthentication.Scheme);
-        stopPass.Remove(http);
-        return Results.Redirect(BuildSignInUrl(SignInMessages.SignedOut, "/"));
+        return Results.Empty;
     }
 
     private static async Task EndQuietlyAsync(RoofControllerConnector connector, RoofSessionCredential credential, ILogger logger)

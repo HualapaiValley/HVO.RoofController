@@ -16,7 +16,7 @@ public sealed record WebStopResponse(string Outcome, string Message);
 /// session when there is one, still used after it ended (the web UI's Stop key sends Stop for them then); the person's
 /// Stop pass once the sign-in cookie has gone (<see cref="WebStopPass"/>: the Stop key, on their behalf); and no
 /// credential for anyone else (the controller decides, with <c>RoofControllerSecurity:AllowAnonymousStop</c>). The
-/// origin check covers it as well, and <see cref="WebStopLimiter"/> limits each address.
+/// origin check covers it as well, and <see cref="WebStopLimiter"/> limits each person, and each address's signed-out pages.
 /// </summary>
 public static class WebStopEndpoint
 {
@@ -45,30 +45,42 @@ public static class WebStopEndpoint
     {
         var logger = loggerFactory.CreateLogger(typeof(WebStopEndpoint).FullName!);
         var remote = http.Connection.RemoteIpAddress;
-        if (!limiter.TryAcquire(remote))
-        {
-            logger.LogWarning("Web stop refused from {RemoteIp}: more than the allowed Stops from one address", remote);
-            return Answer(RoofStopOutcome.Failed, RoofStopText.Failed(WebStopTexts.TooMany), StatusCodes.Status429TooManyRequests);
-        }
+        var local = http.Connection.LocalIpAddress;
 
         // The cookie of a session that ended still reaches here (WebAuthentication.ValidatePrincipalAsync). Once it has
         // gone, the person's Stop pass names them.
         var authentication = await http.AuthenticateAsync(WebAuthentication.Scheme);
         var ticket = WebAuthentication.ReadTicket(authentication.Principal, authentication.Properties);
         var pass = ticket is null ? stopPass.Read(http) : null;
+        var name = ticket?.Name ?? pass?.Name ?? SignedOutPage;
         if (!await IsAntiforgeryValidAsync(http, antiforgery, pass))
         {
             // The token names who the page was rendered for. With no cookie now, the page was signed in and no longer is.
-            logger.LogWarning(
-                "Web stop refused for {Name} from {RemoteIp}: missing or stale antiforgery token",
-                ticket?.Name ?? pass?.Name ?? SignedOutPage,
-                remote);
+            // Nothing is sent, so the refusal counts against no one's Stops; only how often it is logged is limited.
+            if (limiter.TryAcquire(WebStopLimiter.ForRefusals(remote, local)))
+            {
+                logger.LogWarning("Web stop refused for {Name} from {RemoteIp}: missing or stale antiforgery token", name, remote);
+            }
+
             return ticket is null
                 ? Answer(RoofStopOutcome.Failed, RoofStopText.PageSignedOut, StatusCodes.Status401Unauthorized)
                 : Answer(RoofStopOutcome.Failed, RoofStopText.PageOutOfDate, StatusCodes.Status400BadRequest);
         }
 
-        var name = ticket?.Name ?? pass?.Name ?? SignedOutPage;
+        // A person is counted by their session, so others at the same address cannot use up their Stops.
+        var sender = (ticket?.SessionId ?? pass?.SessionId) is { } sessionId
+            ? WebStopLimiter.ForSession(sessionId)
+            : WebStopLimiter.ForAddress(remote, local);
+        if (!limiter.TryAcquire(sender))
+        {
+            if (limiter.TryAcquire(WebStopLimiter.ForRefusals(remote, local)))
+            {
+                logger.LogWarning("Web stop refused for {Name} from {RemoteIp}: more than the allowed Stops", name, remote);
+            }
+
+            return Answer(RoofStopOutcome.Failed, RoofStopText.Failed(WebStopTexts.TooMany), StatusCodes.Status429TooManyRequests);
+        }
+
         RoofStopResult result;
         try
         {

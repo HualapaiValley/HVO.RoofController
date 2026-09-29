@@ -232,14 +232,15 @@ the roof against this server; use the web UI (port 8088) for operator access.
   still works after the person's session ends, from a Stop pass (a cookie sent only with
   `/stop`, naming the person) that lasts `RoofWeb:StopAfterSessionHours` (default 12) after the
   session would have expired and is removed at sign-out. `/stop` allows 30 Stops at once from
-  one address, then four a second. Sign-out ends the session in the web UI even when the
-  controller does not answer, and an unknown address shows a Not found page (404). A mode banner marks an emulated HAT on every
+  each person (signed-out pages: from each address), then four a second. Sign-out ends the
+  session in the web UI even when the controller does not answer, and an unknown address shows a Not found page (404). A mode banner marks an emulated HAT on every
   page, the sign-in page too, which reads it from the new anonymous
   `GET /api/v4.0/RoofControl/Mode` (only the HAT mode and whether the limit switches are
   ignored). Form posts and the live connection must come from the web UI or `RoofWeb:AllowedOrigins`.
   The supervisor gives the web UI a private copy of its Stop key and a directory for the keys
-  that protect its cookie (`/var/lib/hvo-roof-web/keys`; one named in
-  `RoofWeb__DataProtectionPath` is made by the web UI's user, not root). Every button a person taps is at
+  that protect its cookie (`/var/lib/hvo-roof-web/keys`; one of the operator's choosing, in
+  `RoofWeb__DataProtectionPath` or `HVO_SUPERVISOR_UI_DATA_DIR`, is made by the web UI's user,
+  not root). Every button a person taps is at
   least 44 x 44 CSS pixels and 8 CSS pixels from its neighbours on each screen tested. The
   pages are tested with bUnit against a fake controller, and in Chromium against the emulated
   roof, which also takes the screenshots in [docs/web.md](docs/web.md).

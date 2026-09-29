@@ -217,6 +217,46 @@ public sealed partial class WebStopEndpointTests
         controller.Logged(Post, RoofApiRoutesTest.Stop).Should().BeEmpty();
     }
 
+    /// <summary>
+    /// The answer to a sign-out, which removes both cookies, is sent before the session ends. The person's live pages go
+    /// to the sign-in page as soon as it ends, the page that signed out too; a browser that left before the answer came
+    /// would drop it, and keep its Stop pass.
+    /// </summary>
+    [TestMethod]
+    public async Task WithAStopKey_SigningOut_IsAnswered_BeforeTheSessionEnds()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var clock = new ManualTimeProvider(Start);
+        var controllerSignOut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var controller = new FakeController(clock)
+        {
+            Hold = request => request.Method == HttpMethod.Delete && request.RequestUri!.AbsolutePath == "/" + RoofApiRoutesTest.Session
+                ? controllerSignOut.Task
+                : Task.CompletedTask,
+        };
+        await using var host = await StartWithStopKeyAsync(directory, controller, clock);
+        using var browser = host.Browser();
+        await browser.SignInAsync("olga", FakeController.AdaPassword);
+        browser.Cookie(WebStopPass.CookieName, WebAuthentication.StopPostPath).Should().NotBeNull();
+        host.Sessions.TryGet("session-1", out var session).Should().BeTrue();
+
+        using var response = await browser
+            .PostFormAsync("/account/signout", new Dictionary<string, string>(), completion: HttpCompletionOption.ResponseHeadersRead)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        response.Headers.Location!.OriginalString.Should().Be("/signin?message=signed-out");
+        browser.Cookie(WebStopPass.CookieName, WebAuthentication.StopPostPath).Should().BeNull();
+        browser.Cookie(WebAuthentication.CookieName).Should().BeNull();
+        session.IsEnded.Should().BeFalse("the controller has not answered the sign-out yet");
+
+        controllerSignOut.SetResult();
+        await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        session.IsEnded.Should().BeTrue();
+        host.Sessions.TryGet("session-1", out _).Should().BeFalse();
+        controller.Logged(HttpMethod.Delete, RoofApiRoutesTest.Session).Should().ContainSingle();
+    }
+
     [TestMethod]
     public async Task WithAStopKey_AControllerThatRefusesTheKey_IsNotCalledAStop()
     {
@@ -251,11 +291,59 @@ public sealed partial class WebStopEndpointTests
     }
 
     [TestMethod]
-    public async Task StopsFromOneAddress_BeyondTheLimit_AreRefused_WithoutReachingTheController()
+    public async Task SignedOutPagesAtOneAddress_BeyondTheLimit_AreRefused_WithoutReachingTheController()
     {
-        await using var host = await StartAsync(_ => Stopped());
+        await using var host = await StartOnAStillClockAsync(_ => Stopped());
         using var browser = host.Browser();
         var token = await browser.GetFormTokenAsync("/signin");
+
+        var answers = new List<(HttpStatusCode Status, WebStopResponse Answer)>();
+        for (var stop = 0; stop <= WebStopLimiter.Burst; stop++)
+        {
+            answers.Add(await StopAsync(browser, token));
+        }
+
+        answers.Take(WebStopLimiter.Burst).Should().OnlyContain(answer => answer.Status == HttpStatusCode.OK);
+        answers[^1].Should().Be((HttpStatusCode.TooManyRequests, new WebStopResponse(nameof(RoofStopOutcome.Failed), RoofStopText.Failed(WebStopTexts.TooMany))));
+        host.Controller.Logged(Post, RoofApiRoutesTest.Stop).Should().HaveCount(WebStopLimiter.Burst);
+    }
+
+    [TestMethod]
+    public async Task OthersAtThePersonsAddress_CannotUseUpTheirStops()
+    {
+        // Behind a proxy or NAT everyone has one address (here, the test server's).
+        await using var host = await StartOnAStillClockAsync(_ => Stopped());
+        using var person = host.Browser();
+        await person.SignInAsync("olga", FakeController.AdaPassword);
+        var token = await person.GetFormTokenAsync("/");
+        using var other = host.Browser();
+        var signedOut = await other.GetFormTokenAsync("/signin");
+
+        // Posts without a token, then a signed-out page's Stops past their limit.
+        var refused = new List<HttpStatusCode>();
+        for (var stop = 0; stop < WebStopLimiter.Burst * 2; stop++)
+        {
+            refused.Add((await StopAsync(other, token: null)).Status);
+        }
+
+        for (var stop = 0; stop <= WebStopLimiter.Burst; stop++)
+        {
+            await StopAsync(other, signedOut);
+        }
+
+        refused.Should().OnlyContain(status => status == HttpStatusCode.Unauthorized, "a post without a token is refused, not counted");
+        (await StopAsync(other, signedOut)).Status.Should().Be(HttpStatusCode.TooManyRequests);
+        (await StopAsync(person, token)).Should().Be((HttpStatusCode.OK, new WebStopResponse(nameof(RoofStopOutcome.Acknowledged), RoofStopText.AcknowledgedVerified)));
+        host.Controller.Logged(Post, RoofApiRoutesTest.Stop).Should().HaveCount(WebStopLimiter.Burst + 1);
+    }
+
+    [TestMethod]
+    public async Task APersonsStops_BeyondTheLimit_AreRefused_WithoutReachingTheController()
+    {
+        await using var host = await StartOnAStillClockAsync(_ => Stopped());
+        using var browser = host.Browser();
+        await browser.SignInAsync("olga", FakeController.AdaPassword);
+        var token = await browser.GetFormTokenAsync("/");
 
         var answers = new List<(HttpStatusCode Status, WebStopResponse Answer)>();
         for (var stop = 0; stop <= WebStopLimiter.Burst; stop++)
@@ -431,6 +519,15 @@ public sealed partial class WebStopEndpointTests
 
     private static Task<WebHost> StartAsync(Func<HttpRequestMessage, HttpResponseMessage> stop)
         => WebHost.StartAsync(controller: new FakeController { OtherAnswer = request => IsStop(request) ? stop(request) : null });
+
+    // On a clock that stands still, so no Stop is earned back while a test sends a burst.
+    private static Task<WebHost> StartOnAStillClockAsync(Func<HttpRequestMessage, HttpResponseMessage> stop)
+    {
+        var clock = new ManualTimeProvider(Start);
+        return WebHost.StartAsync(
+            controller: new FakeController(clock) { OtherAnswer = request => IsStop(request) ? stop(request) : null },
+            customize: builder => builder.Services.AddSingleton<TimeProvider>(clock));
+    }
 
     private static bool IsStop(HttpRequestMessage request) => request.RequestUri!.AbsolutePath == "/" + RoofApiRoutesTest.Stop;
 

@@ -55,6 +55,12 @@ internal sealed class FakeController
     /// <summary>When set, the controller's answer to the anonymous mode read; otherwise it answers as for anything else.</summary>
     public RoofModeResponse? Mode { get; set; }
 
+    /// <summary>
+    /// When set, each request waits for the task it returns before it is answered, without holding a thread (as a real
+    /// controller that is slow to answer does).
+    /// </summary>
+    public Func<HttpRequestMessage, Task>? Hold { get; set; }
+
     /// <summary>The role the next sessions get, whatever the person's own.</summary>
     public string? RoleOverride { get; set; }
 
@@ -77,7 +83,20 @@ internal sealed class FakeController
         }
     }
 
-    public HttpMessageHandler CreateHandler() => new WebTestSupport.StubHandler(Answer);
+    public HttpMessageHandler CreateHandler() => new HoldingHandler(this) { InnerHandler = new WebTestSupport.StubHandler(Answer) };
+
+    private sealed class HoldingHandler(FakeController controller) : DelegatingHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (controller.Hold is { } hold)
+            {
+                await hold(request).WaitAsync(cancellationToken);
+            }
+
+            return await base.SendAsync(request, cancellationToken);
+        }
+    }
 
     public HttpResponseMessage Answer(HttpRequestMessage request)
     {
@@ -320,7 +339,15 @@ internal sealed partial class WebBrowserClient : IDisposable
         return value.Success ? WebUtility.HtmlDecode(value.Groups[1].Value) : throw new InvalidOperationException($"{page} has no antiforgery token.");
     }
 
-    public Task<HttpResponseMessage> PostFormAsync(string path, IReadOnlyDictionary<string, string> fields, string? origin = null)
+    /// <summary>
+    /// Posts a form. With <see cref="HttpCompletionOption.ResponseHeadersRead"/>, answers as soon as the headers arrive,
+    /// while the web UI may still be working on the post.
+    /// </summary>
+    public Task<HttpResponseMessage> PostFormAsync(
+        string path,
+        IReadOnlyDictionary<string, string> fields,
+        string? origin = null,
+        HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, new Uri(path, UriKind.Relative)) { Content = new FormUrlEncodedContent(fields) };
         if (origin is not null)
@@ -328,7 +355,7 @@ internal sealed partial class WebBrowserClient : IDisposable
             request.Headers.Add("Origin", origin);
         }
 
-        return _client.SendAsync(request);
+        return _client.SendAsync(request, completion);
     }
 
     public void Dispose() => _client.Dispose();

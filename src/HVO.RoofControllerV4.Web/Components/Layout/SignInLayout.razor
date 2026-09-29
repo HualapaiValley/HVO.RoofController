@@ -1,5 +1,7 @@
 @inherits LayoutComponentBase
 @inject WebControllerMode ControllerMode
+@* Streamed: the page, and every Stop on it, is sent at once; the mode banner follows when the controller answers. *@
+@attribute [StreamRendering]
 
 <div class="web-signin-frame">
     <main class="web-signin-main">

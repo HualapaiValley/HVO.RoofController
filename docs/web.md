@@ -191,9 +191,12 @@ its end, so the bar never covers the end of a page.
   ([security.md](security.md#web-ui) says how to end every pass at once).
 - A page that was signed out when it loaded, in a browser without a Stop pass, sends no credential: the controller then
   decides, with `RoofControllerSecurity:AllowAnonymousStop`.
-- **Limit.** One address may send 30 Stops at once, then one more every 250 ms (four a second). A person pressing Stop
-  over and over never reaches it; past it, the answer is
-  `Stop failed: Too many Stops were sent from this address. Wait a moment, then press Stop again. Use the stop control at the roof.`
+- **Limit.** Each person may send 30 Stops at once, then one more every 250 ms (four a second). A person is counted by
+  their session (from a Stop pass too); signed-out pages are counted together by address, a public IPv6 address by its
+  /64. A post without the page's token is refused before it is counted, so others at the same address (behind a proxy
+  or NAT) cannot use up a signed-in person's Stops. A person pressing Stop over and over never reaches it; past it, the
+  answer is
+  `Stop failed: Too many Stops were sent in a short time. Wait a moment, then press Stop again. Use the stop control at the roof.`
   (429), and the web UI does not ask the controller. The controller itself never limits Stop.
 - The answer says what the controller verified, for example
   `Stop acknowledged. Relay register verified de-energized.`, or why Stop failed, with

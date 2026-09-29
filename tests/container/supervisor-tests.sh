@@ -612,6 +612,23 @@ test_a_keys_directory_of_the_operators_choosing_is_made_by_the_web_uis_user() {
   expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
 }
 
+# The same for a data directory of the operator's choosing (HVO_SUPERVISOR_UI_DATA_DIR): its keys directory is made by
+# the web UI's user, through a link in the path, and root makes nothing there.
+test_a_data_directory_of_the_operators_choosing_is_made_by_the_web_uis_user() {
+  local data="${WORK}/home/app/x/data" before
+  mkdir -p "${WORK}/home/app" "${WORK}/elsewhere"
+  chmod 0755 "${WORK}/elsewhere"
+  before=$(stat -c %a "${WORK}/elsewhere")
+  ln -s "${WORK}/elsewhere" "${WORK}/home/app/x"
+  start_supervisor_as_ui_user "HVO_SUPERVISOR_UI_DATA_DIR=${data}"
+  wait_both_running || return
+  grep -qxF -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | install -d -m 0700 ${data}/keys" \
+    "${FAKE_DIR}/setpriv.log" || fail_test "the keys directory was not made as the web UI's user: $(cat "${FAKE_DIR}/setpriv.log")"
+  expect_equal "keys setting" "$(ui_env | grep '^RoofWeb__DataProtectionPath=')" "RoofWeb__DataProtectionPath=${data}/keys"
+  expect_equal "keys directory" "$(stat -c '%a %U' "${WORK}/elsewhere/data/keys")" "700 ${UI_USER}"
+  expect_equal "link target mode" "$(stat -c %a "${WORK}/elsewhere")" "${before}"
+}
+
 test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
   start_supervisor_as_ui_user
   wait_both_running || return
