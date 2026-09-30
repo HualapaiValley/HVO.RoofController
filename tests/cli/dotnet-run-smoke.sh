@@ -19,7 +19,15 @@ src="${here}/../../src"
 : "${HVO_ROOF_CLI:?HVO_ROOF_CLI must name the hvo-roof executable}"
 out=${TERMINAL_SMOKE_OUT:-$(mktemp -d)}
 mkdir -p "${out}"
+
+# Both as absolute paths: the script works from src/ below.
+out=$(cd "${out}" && pwd)
 export TERMINAL_SMOKE_OUT="${out}"
+case "${HVO_ROOF_CLI}" in
+    /*) ;;
+    *) HVO_ROOF_CLI="$(cd "$(dirname "${HVO_ROOF_CLI}")" && pwd)/$(basename "${HVO_ROOF_CLI}")" ;;
+esac
+export HVO_ROOF_CLI
 
 port=${DOTNET_RUN_SMOKE_PORT:-15395}
 control_port=$((port + 1))

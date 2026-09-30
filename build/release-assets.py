@@ -66,6 +66,7 @@ CREATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 # ELF e_machine values, and the Mach-O 64-bit magic with the arm64 CPU type.
 ELF_MACHINES = {183: "aarch64", 62: "x86-64"}
 MACHO_ARM64 = (0xFEEDFACF, 0x0100000C)
+MACHO_X64 = (0xFEEDFACF, 0x01000007)
 
 
 class AssetError(Exception):
@@ -73,7 +74,8 @@ class AssetError(Exception):
 
 
 def processor(path):
-    """The processor a program file is built for: aarch64 or x86-64 for ELF, macos-arm64 for Mach-O, else None."""
+    """The processor a program file is built for: aarch64 or x86-64 for ELF, macos-arm64 (or macos-x64, an Intel Mac, which
+    is not released) for Mach-O, else None."""
     with open(path, "rb") as file:
         header = file.read(20)
     if header[:4] == b"\x7fELF" and len(header) >= 20:
@@ -81,6 +83,8 @@ def processor(path):
         return ELF_MACHINES.get(struct.unpack(order + "H", header[18:20])[0])
     if len(header) >= 8 and struct.unpack("<II", header[:8]) == MACHO_ARM64:
         return "macos-arm64"
+    if len(header) >= 8 and struct.unpack("<II", header[:8]) == MACHO_X64:
+        return "macos-x64"
     return None
 
 

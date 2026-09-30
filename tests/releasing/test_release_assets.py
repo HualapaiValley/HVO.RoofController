@@ -255,6 +255,10 @@ class TheRefusals(ReleaseTestCase):
         (self.release.cli / "osx-arm64" / "hvo-roof").write_bytes(AARCH64)
         self.refused("osx-arm64/hvo-roof is built for aarch64, not macos-arm64")
 
+    def test_an_intel_mac_program(self):
+        (self.release.cli / "osx-arm64" / "hvo-roof").write_bytes(struct.pack("<II", 0xFEEDFACF, 0x01000007) + b"program")
+        self.refused("osx-arm64/hvo-roof is built for macos-x64, not macos-arm64")
+
     def test_a_linux_program_built_for_the_mac(self):
         (self.release.cli / "linux-arm64" / "hvo-roof").write_bytes(mach_o_arm64())
         self.refused("linux-arm64/hvo-roof is built for macos-arm64, not aarch64")

@@ -424,6 +424,7 @@ jobs:
           dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -v minimal
           --filter "FullyQualifiedName~RoofCertificateAuthorityTests|FullyQualifiedName~RoofCertificatePinTests|FullyQualifiedName~RoofCliCaCertificateTests"
           --logger "trx;LogFileName=mac-certificates.trx" --results-directory "$RUNNER_TEMP/mac-terminal-screens"
+          -- RunConfiguration.TreatNoTestsAsError=true
 
       # What each command wrote, each screen of the terminal interface as text and as an SVG image, the logs of the
       # controller and the emulator, and the certificate tests' results.
