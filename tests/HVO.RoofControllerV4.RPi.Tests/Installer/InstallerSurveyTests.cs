@@ -82,7 +82,7 @@ public sealed class InstallerSurveyTests
         survey.Controller!.Origin.Should().Be(ContainerOrigin.Compose);
         survey.Controller.ComposeProject.Should().Be("hvo-roofcontroller-rpi");
         survey.Controller.HatEmulator.Should().BeNull("it drives the real HAT");
-        InstallerSession.DescribeSurvey(survey).Should().Contain(
+        InstallerSession.DescribeSurvey(survey, FakeMachine.Today).Should().Contain(
             "Container:   roof-controller: running, 4.0.0, the real HAT (made by Docker Compose project hvo-roofcontroller-rpi)");
     }
 
@@ -111,7 +111,7 @@ public sealed class InstallerSurveyTests
 
         survey.Docker.IsUsable.Should().BeTrue();
         survey.Docker.ComposeVersion.Should().BeNull();
-        InstallerSession.DescribeSurvey(survey).Should().Contain("Docker:      27.3.1, no Compose v2");
+        InstallerSession.DescribeSurvey(survey, FakeMachine.Today).Should().Contain("Docker:      27.3.1, no Compose v2");
     }
 
     [TestMethod]
@@ -123,7 +123,7 @@ public sealed class InstallerSurveyTests
         var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
 
         survey.Kiosk.Should().Be(new ServiceSurvey(MachineSurveyor.KioskUnit, Enabled: true, Active: false));
-        InstallerSession.DescribeSurvey(survey).Should().Contain("Kiosk:       hvo-roof-kiosk.service: enabled, stopped");
+        InstallerSession.DescribeSurvey(survey, FakeMachine.Today).Should().Contain("Kiosk:       hvo-roof-kiosk.service: enabled, stopped");
     }
 
     [TestMethod]
@@ -162,7 +162,7 @@ public sealed class InstallerSurveyTests
         survey.UserRecord!.Roles.Should().Equal(InstallRole.Cli);
         survey.HasSystemConfiguration.Should().BeTrue();
         InstallerSession.RecordedAnswers(survey, includeSystem: false)!.Roles.Should().Equal(InstallRole.Cli);
-        InstallerSession.DescribeSurvey(survey).Should().Contain("Recorded:    a test rig 4.0.0 in the machine's record; hvo-roof 4.0.0 in your record");
+        InstallerSession.DescribeSurvey(survey, FakeMachine.Today).Should().Contain("Recorded:    a test rig 4.0.0 in the machine's record; hvo-roof 4.0.0 in your record");
     }
 
     [TestMethod]
@@ -172,7 +172,7 @@ public sealed class InstallerSurveyTests
 
         var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
 
-        InstallerSession.DescribeSurvey(survey).Should().Contain("Found:       /etc/hvo-roof, set up without the installer");
+        InstallerSession.DescribeSurvey(survey, FakeMachine.Today).Should().Contain("Found:       /etc/hvo-roof, set up without the installer");
     }
 
     [TestMethod]

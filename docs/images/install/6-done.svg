@@ -43,8 +43,12 @@
 <text x="222.00" y="199.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">https://roofpi.local:8088/</text>
 <text x="28.80" y="217.50" fill="#f8fafc" textLength="798.00" lengthAdjust="spacingAndGlyphs">The roof has not moved. Confirm the installation assumptions in commissioning.md on site before</text>
 <text x="28.80" y="235.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">the first move.</text>
-<text x="28.80" y="271.50" fill="#f8fafc" textLength="386.40" lengthAdjust="spacingAndGlyphs">The install record: /etc/hvo-roof/install.json</text>
-<text x="28.80" y="289.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">The log: /var/log/hvo-roof-install.log</text>
+<text x="28.80" y="271.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">Clients trust its CA:</text>
+<text x="222.00" y="271.50" fill="#f8fafc" textLength="478.80" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/ca.crt, or https://roofpi.local:8443/ca.crt</text>
+<text x="28.80" y="289.50" fill="#f8fafc" textLength="579.60" lengthAdjust="spacingAndGlyphs">Its SHA-256 fingerprint, to check when a client asks you to trust it:</text>
+<text x="28.80" y="307.50" fill="#f8fafc" textLength="798.00" lengthAdjust="spacingAndGlyphs">7B:9B:59:FF:DE:DA:42:0C:F2:DA:78:53:17:BA:93:72:F8:76:A8:52:BA:39:D2:04:01:E9:73:E5:1C:B0:42:FB</text>
+<text x="28.80" y="343.50" fill="#f8fafc" textLength="386.40" lengthAdjust="spacingAndGlyphs">The install record: /etc/hvo-roof/install.json</text>
+<text x="28.80" y="361.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">The log: /var/log/hvo-roof-install.log</text>
 <text x="20.40" y="541.50" fill="#aeb9c8" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Quit ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>

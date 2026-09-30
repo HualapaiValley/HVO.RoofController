@@ -19,12 +19,12 @@ anything, from an answers file that the wizard saves.
 > - offers only the roles the machine can have, and refuses the rest;
 > - works out and shows the plan;
 > - saves answers files;
-> - makes the controller's folders and writes the install record.
+> - makes the controller's folders, its certificate authority and its HTTPS certificate ([Certificates](#certificates));
+> - writes the install record.
 >
 > It adopts a controller that the deploy script already runs ([Deploying](deployment.md#deploying-with-the-script)).
 > The later installer issues make the rest:
 >
-> - #68: the certificate authority;
 > - #69: deploying the controller and a rig;
 > - #70: the kiosk;
 > - #71: `hvo-roof` and the Mac app.
@@ -60,6 +60,9 @@ terminal, tmux, or Terminal on a Mac.
 | `hvo-roof-install --plan --answers FILE` | Prints every folder, file, container, service and port the install would make or change, and changes nothing. |
 | `hvo-roof-install --plan` | The same for what is installed here, from its install record: yours, or with `sudo` (or without a record of yours) the machine's. |
 | `hvo-roof-install --version` | Prints the installer's version and the commit it was built from, such as `4.0.0+0123abcd…`. |
+| `hvo-roof-install cert` | Checks the controller's certificate and its CA, and makes or renews what needs it. `--plan` shows what it would do. |
+| `hvo-roof-install cert show` | Shows the controller's certificate and CA: what they are for, until when, and their fingerprints. |
+| `hvo-roof-install cert import FILE` | Puts your own certificate in place for the controller. |
 
 The installer runs as root for the machine's roles, and as you for your own ([Roles](#roles)).
 
@@ -69,9 +72,9 @@ The installer runs as root for the machine's roles, and as you for your own ([Ro
 It refuses to mix the two in one run, and refuses the wrong one for a role. `--plan` does not need root, but planning
 the controller or a rig needs Docker access (on Linux, root or the `docker` group).
 
-It asks for no secret. Keys are made on the machine, straight into files that only their user can read. From #69, a
-person types the first administrator's password. An answers file, the plan, the record and the log never hold a
-secret.
+It asks for no secret, except the password of a certificate you import, which it never shows, keeps or logs. Keys are
+made on the machine, straight into files that only their user can read. From #69, a person types the first
+administrator's password. An answers file, the plan, the record and the log never hold a secret.
 
 ### Exit codes
 
@@ -82,7 +85,7 @@ secret.
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, a missing prerequisite (`sudo`, Docker), something the installer will not replace, or a part it cannot install yet. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, a missing prerequisite (`sudo`, Docker), something the installer will not replace, a part it cannot install yet, or a certificate the controller could not serve. |
 | 130 | You quit before installing, or the installer was interrupted (Ctrl+C stops between steps). |
 
 ## Roles
@@ -129,12 +132,18 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
 - **Compose.** A container that Docker Compose made is described in the plan but never replaced. Move it first: see
   [Moving between Compose and the deploy script](deployment.md#moving-between-compose-and-the-deploy-script).
 - **Busy ports.** A port that something else already listens on blocks the plan.
+- **A typed confirmation for plain HTTP.** Before the controller serves plain HTTP, when it does not already, a person
+  types `http`, to confirm that keys, session tokens and PINs may cross this network unencrypted. An answers file can
+  give it as `httpConfirmation`. The wizard never saves it.
 
 ## What it looks for
 
 Before asking anything, and without changing anything, the installer looks at the following:
 
 - **The machine:** the platform, the host name, who runs the installer, the operating system and the Pi's model.
+- **The controller's certificate and CA:** who issued the certificate, the names it is for, until when, and whether
+  its password opens it. Each run warns when either expires soon, or when the certificate is not for a name clients
+  use ([Renewing](#renewing)).
 - **The HAT's devices:** `/dev/i2c-1`, `/dev/gpiomem` and `/sys/class/thermal/thermal_zone0/temp`.
 - **Docker:** its version, and Compose v2's version.
 - **The install records:** the machine's, and yours. A record the installer cannot read is reported and replaced, and
@@ -175,11 +184,17 @@ On a machine with the HAT's I2C bus, choosing a test rig asks for the host name:
 
 **3. Choices.** The questions of the roles chosen, filled in from the record, or with the defaults:
 
-- **The controller:** how clients connect (private CA, your own certificate, self-signed, or HTTP), and the ports.
+- **The controller:** how clients connect (private CA, your own certificate, self-signed, or HTTP), the ports, and
+  the other names and domains clients use for it ([Certificates](#certificates)). The domains start as those this
+  machine's resolver searches.
 - **`hvo-roof`:** its folder.
 - **The Mac app:** its folder.
 
-![Step 3: Choices for the controller: the connection and the HTTPS, HTTP and web UI ports](images/install/3-settings.svg)
+![Step 3: Choices for the controller: the connection, the HTTPS, HTTP and web UI ports, and the names clients use for it](images/install/3-settings.svg)
+
+Choosing HTTP asks you to type `http`, to confirm that keys, session tokens and PINs may cross the network unencrypted:
+
+![Step 3 with HTTP chosen: a warning, and the field where http is typed to confirm](images/install/3-settings-http.svg)
 
 **4. Review the plan.** Every change the install would make, checked against the machine, as `--plan` prints it
 ([The plan](#the-plan)). Install goes ahead only when nothing blocks the plan. **Save answers** writes the answers
@@ -195,10 +210,10 @@ A blocked step says why, and Install stays off:
 
 ![Step 5: Installing, part way through, with each folder created and the record being written](images/install/5-installing.svg)
 
-**6. Done.** What was installed, where to reach it, what comes next, and where the record and the log are. The same
-text stays in the terminal after the wizard closes.
+**6. Done.** What was installed, where to reach it, how clients trust its certificate, what comes next, and where the
+record and the log are. The same text stays in the terminal after the wizard closes.
 
-![Step 6: Done, with the controller's API and web UI addresses, the record and the log](images/install/6-done.svg)
+![Step 6: Done, with the controller's API and web UI addresses, its CA with the CA's fingerprint, the record and the log](images/install/6-done.svg)
 
 When the install is refused, or a step fails, the Done page says why. It also says what was changed, if anything.
 
@@ -217,7 +232,9 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
     "connection": "private-ca",
     "httpsPort": 8443,
     "httpPort": 8080,
-    "webPort": 8088
+    "webPort": 8088,
+    "hostNames": ["roof"],
+    "domains": ["observatory.example"]
   }
 }
 ```
@@ -230,12 +247,15 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
 | `controller.httpsPort` | The controller's API over HTTPS (the deploy script's `HTTPS_HOST_PORT`) | `8443` |
 | `controller.httpPort` | The controller's API over HTTP, with `http` (`HOST_PORT`) | `8080` |
 | `controller.webPort` | The web UI (`WEB_HOST_PORT`) | `8088` |
+| `controller.hostNames` | Other short names clients use for the controller, such as `roof` ([Certificates](#certificates)) | None |
+| `controller.domains` | The domains clients reach it under, such as `observatory.example` | None. The wizard suggests the search domains in `/etc/resolv.conf`. |
 | `cli.folder` | `~/.local/bin` or `/usr/local/bin` | `~/.local/bin` |
 | `macApp.folder` | `/Applications` or `~/Applications` | `/Applications` |
 | `rigConfirmation` | This machine's host name, for a rig on a machine with `/dev/i2c-1` | None |
+| `httpConfirmation` | `http`, to serve plain HTTP where the controller does not already | None |
 
-The `controller` section applies to a rig too. A section for a role that is not chosen is dropped. The wizard saves
-answers to `hvo-roof-answers.json` in the folder where the installer was started, unless you give another path.
+The `controller` section applies to a rig too. A section for a role that is not chosen is dropped. The wizard never
+saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on its own. The wizard saves answers to `hvo-roof-answers.json` in the folder where the installer was started, unless you give another path.
 
 ## The plan
 
@@ -254,23 +274,27 @@ $ hvo-roof-install --plan --answers rig.json
 The plan for a test rig on rig1, 4.0.0:
 
 Folders
-  create     /etc/hvo-roof                       the controller's configuration (0755)
-  create     /etc/hvo-roof/secrets               secrets the controller reads, one file per setting (0700)
-  create     /etc/hvo-roof/https                 the controller's HTTPS certificate (0700)
-  create     /etc/hvo-roof/config                settings files the controller reads (0755)
-  create     /var/lib/hvo-roof                   the controller's data (0755)
-  create     /var/lib/hvo-roof/identity          people, sessions and API keys (0700)
-  create     /var/lib/hvo-roof/settings-secrets  secrets set through the API (0700)
+  create     /etc/hvo-roof                                 the controller's configuration (0755)
+  create     /etc/hvo-roof/secrets                         secrets the controller reads, one file per setting (0700)
+  create     /etc/hvo-roof/https                           the controller's HTTPS certificate (0700)
+  create     /etc/hvo-roof/ca                              the certificate authority's key (0700)
+  create     /etc/hvo-roof/config                          settings files the controller reads (0755)
+  create     /var/lib/hvo-roof                             the controller's data (0755)
+  create     /var/lib/hvo-roof/identity                    people, sessions and API keys (0700)
+  create     /var/lib/hvo-roof/settings-secrets            secrets set through the API (0700)
 Files
-  create     /etc/hvo-roof/install.json          the install record: the roles, choices and versions (no secrets) (0644)
+  create     /etc/hvo-roof/ca.crt                          the certificate authority clients trust (its key stays in /etc/hvo-roof/ca) (a new CA, which may issue only for names in local, localhost, rig1, and private addresses)
+  create     /etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password  the certificate file's password (random, never shown) (0600)
+  create     /etc/hvo-roof/https/roof-controller.pfx       the controller's certificate, from its CA, for rig1 (for 3 names and 3 addresses, until 2027-11-02)
+  create     /etc/hvo-roof/install.json                    the install record: the roles, choices and versions (no secrets) (0644)
 Containers
-  create     hat-emulator                        the HAT emulator: the roof, drive and limit switches the rig drives (deployed by digest with the deploy script)
-  create     roof-controller                     the controller, against the HAT emulator (deployed by digest with the deploy script)
+  create     hat-emulator                                  the HAT emulator: the roof, drive and limit switches the rig drives (deployed by digest with the deploy script)
+  create     roof-controller                               the controller, against the HAT emulator (deployed by digest with the deploy script)
 Ports
-  info       8443                                the controller's API (HTTPS) (free; roof-controller will listen on it)
-  info       8088                                the web UI (free; roof-controller will listen on it)
+  info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)
+  info       8088                                          the web UI (free; roof-controller will listen on it)
 
-10 to create, 0 to change, 0 unchanged.
+14 to create, 0 to change, 0 unchanged.
 Installing a test rig needs root: run the installer with sudo.
 ```
 
@@ -281,6 +305,97 @@ mode set, and its contents are never touched. The record is rewritten only when 
 run of the same answers changes nothing: "Nothing to change: this machine is already as the answers describe."
 
 After a failed step, running the installer again carries on from where it stopped.
+
+## Certificates
+
+The controller serves its API and the web UI over HTTPS, unless you choose plain HTTP. `controller.connection` says
+how clients trust it:
+
+| Connection | The certificate | What each client does |
+|------------|-----------------|-----------------------|
+| `private-ca` (the default) | Issued by the installer's own certificate authority (CA), made on the controller's machine. | Trusts the CA once. A renewed certificate then needs nothing more. |
+| `own-certificate` | Yours, from your own CA, put in place with `cert import`. | Nothing, when it already trusts your CA. |
+| `self-signed` | Signed by itself. | Pins it, and pins it again after each renewal. |
+| `http` | None. Keys, session tokens and PINs cross the network unencrypted. | Nothing. Use it only on a network you trust: a person types `http` to confirm. |
+
+### The installer's CA
+
+The CA and the certificates it issues use ECDSA P-256 keys and SHA-256. They meet the rules that browsers and Apple's
+platforms set for a server certificate.
+
+- **The CA** lasts 10 years. Its key is made on the machine, straight into a file only root can read, and never leaves
+  it. The CA may issue only for these, so a client that trusts it refuses anything else it signs:
+  - `local`, `localhost`, and the short names and domains of the controller;
+  - the private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and loopback.
+
+  A stolen Pi, or the CA's key, therefore cannot pass for another site to the clients.
+- **The certificate** lasts 397 days, the most browsers accept. It is for:
+  - the machine's short host name and each name in `controller.hostNames`, each alone, under `.local` and under each
+    domain in `controller.domains`;
+  - `localhost`;
+  - the machine's private addresses, `127.0.0.1` and `::1`. Addresses on Docker and other virtual networks, and
+    link-local and public addresses, are left out.
+
+  The controller answers to the same names (its `AllowedHosts`).
+- **A self-signed certificate** is for the same names, and lasts 825 days, the most Apple's platforms accept.
+
+| File | Mode | Holds |
+|------|------|-------|
+| `/etc/hvo-roof/ca/ca.key` | `0600`, in a `0700` folder | The CA's private key |
+| `/etc/hvo-roof/ca.crt` | `0644` | The CA's certificate, for clients |
+| `/etc/hvo-roof/https/roof-controller.pfx` | `0600` | The certificate, its key, and its CA's certificate |
+| `/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password` | `0600` | The file's password: random, never shown |
+
+These are the paths [deployment.md](deployment.md#2-tls-certificate) uses: the deploy script serves the certificate
+with `HTTPS_CERT_DIR=/etc/hvo-roof/https` and the default `HTTPS_CERT_FILE`.
+
+### Trusting the CA
+
+The Done page, `cert` and `cert show` print the CA's SHA-256 fingerprint. A client gets the CA from the controller at
+`https://<host>.local:<HTTPS port>/ca.crt`, or as a copy of `/etc/hvo-roof/ca.crt`. Check the fingerprint the client shows
+against the one the installer printed before trusting it. The TLS handshake cannot give the CA: the server leaves a
+self-signed root out of it.
+
+### Renewing
+
+Every run of the installer, `--plan` included, warns when one of these applies:
+
+- the certificate expires within 30 days, or has expired;
+- the CA expires within 400 days, so that its last certificate still lasts its full 397 days;
+- the certificate is not for a name or address clients use;
+- the certificate's password does not open it.
+
+`sudo hvo-roof-install cert` then makes what needs making, and changes only what differs:
+
+- **A new CA** when the CA is missing or cannot be read, expires within 400 days, may not issue for a name the
+  controller now has, or does not limit the names it may issue for. `--new-ca` makes one even when none of these apply.
+  Every client must then trust the new CA.
+- **The certificate again** when the CA is new, the names or addresses have changed, it expires within 30 days,
+  another CA issued it, or its password does not open it. `--renew` issues it again even when none of these apply.
+- **The modes** of the files, when they differ.
+
+It prints the plan, each step, and the certificate as `cert show` does. It never restarts the controller or moves the
+roof. The controller serves a new certificate once it is deployed again: when the roof is idle, run the deploy script
+again ([Deploying](deployment.md#deploying-with-the-script)). From #69 the installer does that step.
+
+`cert --plan` shows what `cert` would do, and changes nothing. It runs without root, but then cannot check the files
+that only root can read.
+
+### Your own certificate
+
+`sudo hvo-roof-install cert import FILE` puts your certificate in place and records that the controller serves your
+own. The file is one of these:
+
+- a PKCS#12 file (`.pfx`, `.p12`) with its key;
+- PEM (`.crt`, `.pem`) with its chain and its key, or with `--key FILE` for the key.
+
+When the file or the key has a password, the installer asks for it, or reads it from `--password-file FILE`. The
+password opens the file only: the installer writes the controller's own file with a new random password. It refuses a
+certificate that has expired, is not yet valid, is a CA's, or is not for a server. It warns when the certificate is not
+for a name or address clients use, and when it lasts longer than Apple's platforms accept. `--plan` checks the file
+and shows what would change.
+
+The installer never renews your certificate. Before it expires, import the new one.
 
 ## The record and the log
 
@@ -324,7 +439,13 @@ machine has files, modes, containers and ports, and its programs are stubbed. Th
 - that a second run changes nothing;
 - that answers files round-trip;
 - that no secret reaches an answers file, the record or the log;
+- the certificates: the CA's name constraints and the names on the certificate it issues, that the key files are made
+  owner-only and never printed, renewal before expiry, a changed name or a new CA, importing a PFX or PEM with its
+  chain, and refusing a certificate the controller could not serve;
 - the exit codes.
+
+The controller's side, `GET /ca.crt` and the `https_certificate` health check, has its own tests
+(`Security/CaCertificateEndpointTests` and `HealthChecks/RoofCertificateHealthCheckTests`).
 
 The wizard is drawn on Terminal.Gui's in-memory driver, with the same pages, keys, colours and work off its thread as
 in a terminal.

@@ -37,21 +37,15 @@
 <text x="20.40" y="73.50" fill="#f8fafc" textLength="193.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 5 of 6: Installing</text>
 <text x="37.20" y="91.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Installing</text>
 <text x="28.80" y="109.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">Installing the controller…</text>
-<text x="28.80" y="127.50" fill="#f8fafc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof…</text>
-<text x="28.80" y="145.50" fill="#f8fafc" textLength="302.40" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof: done.</text>
-<text x="28.80" y="163.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/secrets…</text>
-<text x="28.80" y="181.50" fill="#f8fafc" textLength="369.60" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/secrets: done.</text>
-<text x="28.80" y="199.50" fill="#f8fafc" textLength="302.40" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/https…</text>
-<text x="28.80" y="217.50" fill="#f8fafc" textLength="352.80" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/https: done.</text>
-<text x="28.80" y="235.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/config…</text>
-<text x="28.80" y="253.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/config: done.</text>
-<text x="28.80" y="271.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof…</text>
-<text x="28.80" y="289.50" fill="#f8fafc" textLength="336.00" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof: done.</text>
-<text x="28.80" y="307.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/identity…</text>
-<text x="28.80" y="325.50" fill="#f8fafc" textLength="411.60" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/identity: done.</text>
-<text x="28.80" y="343.50" fill="#f8fafc" textLength="428.40" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/settings-secrets…</text>
-<text x="28.80" y="361.50" fill="#f8fafc" textLength="478.80" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/settings-secrets: done.</text>
-<text x="28.80" y="379.50" fill="#f8fafc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Creating file /etc/hvo-roof/install.json…</text>
+<text x="28.80" y="127.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/config…</text>
+<text x="28.80" y="145.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Creating folder /etc/hvo-roof/config: done.</text>
+<text x="28.80" y="163.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof…</text>
+<text x="28.80" y="181.50" fill="#f8fafc" textLength="336.00" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof: done.</text>
+<text x="28.80" y="199.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/identity…</text>
+<text x="28.80" y="217.50" fill="#f8fafc" textLength="411.60" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/identity: done.</text>
+<text x="28.80" y="235.50" fill="#f8fafc" textLength="428.40" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/settings-secrets…</text>
+<text x="28.80" y="253.50" fill="#f8fafc" textLength="478.80" lengthAdjust="spacingAndGlyphs">Creating folder /var/lib/hvo-roof/settings-secrets: done.</text>
+<text x="28.80" y="271.50" fill="#f8fafc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Creating file /etc/hvo-roof/install.json…</text>
 <text x="20.40" y="541.50" fill="#aeb9c8" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#aeb9c8" textLength="84.00" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦► Next ◄⟧</text>
 <text x="222.00" y="541.50" fill="#fecaca" textLength="621.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">Installing: the installer closes when the install has finished or stopped.</text>

@@ -1,3 +1,4 @@
+using System.Text;
 using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Installer.Machine;
 using Terminal.Gui.App;
@@ -38,12 +39,63 @@ public sealed class InstallerHost
     /// <summary>Runs the wizard until it closes. Tests replace this and drive the window themselves.</summary>
     public Action<IApplication, IRunnable> RunApplication { get; init; } = (app, window) => app.Run(window);
 
+    /// <summary>
+    /// Asks the person at the terminal for a secret (a certificate's password), named by its argument, without showing
+    /// what they type. Null when no one can be asked: the input is not a terminal.
+    /// </summary>
+    public Func<string, string?> ReadSecret { get; init; } = _ => null;
+
     /// <summary>This process, on the machine it runs on.</summary>
     public static InstallerHost System() => new()
     {
         Out = Console.Out,
         Error = Console.Error,
         Machine = InstallerMachine.Current(),
-        IsInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected
+        IsInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected,
+        ReadSecret = ReadSecretFromTerminal
     };
+
+    // Each key read without echo; Backspace takes one back, Ctrl+C stops the installer before anything changes.
+    private static string? ReadSecretFromTerminal(string what)
+    {
+        if (Console.IsInputRedirected)
+        {
+            return null;
+        }
+
+        Console.Error.Write($"Type {what} (it is not shown), then Enter: ");
+        var controlC = Console.TreatControlCAsInput;
+        Console.TreatControlCAsInput = true;
+        var secret = new StringBuilder();
+        try
+        {
+            while (true)
+            {
+                var key = Console.ReadKey(intercept: true);
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    return secret.ToString();
+                }
+
+                if (key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                {
+                    throw new InstallerException("Stopped: nothing was changed.", InstallerExitCode.Cancelled);
+                }
+
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    secret.Length = Math.Max(0, secret.Length - 1);
+                }
+                else if (!char.IsControl(key.KeyChar))
+                {
+                    secret.Append(key.KeyChar);
+                }
+            }
+        }
+        finally
+        {
+            Console.TreatControlCAsInput = controlC;
+            Console.Error.WriteLine();
+        }
+    }
 }

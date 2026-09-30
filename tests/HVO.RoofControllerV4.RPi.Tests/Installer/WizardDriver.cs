@@ -59,7 +59,7 @@ internal sealed class WizardDriver : IDisposable
     public static async Task<WizardDriver> StartAsync(FakeMachine machine, InstallLog? log = null, ICommandRunner? commands = null, int width = 100, int height = 30)
     {
         var onMachine = commands is null ? machine.Machine : machine.Machine.WithCommands(commands);
-        var session = await InstallerSession.StartAsync(onMachine, log ?? InstallLog.None, Version, TimeProvider.System);
+        var session = await InstallerSession.StartAsync(onMachine, log ?? InstallLog.None, Version, FakeMachine.Clock);
         var app = Application.Create(new VirtualTimeProvider());
         app.Init(DriverRegistry.Names.ANSI);
         app.Driver!.SetScreenSize(width, height);

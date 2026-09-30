@@ -32,19 +32,29 @@ public sealed record InstallAnswers
     public string? RigConfirmation { get; init; }
 
     /// <summary>
-    /// These answers with a section, with its defaults, for each role that has questions, and none for a role not
-    /// chosen, so a saved file holds only what applies.
+    /// For the controller over plain HTTP: <c>http</c>, typed to confirm that API keys, session tokens and PINs will cross
+    /// the network unencrypted. Like the rig's confirmation, the wizard never saves it: each machine that starts serving
+    /// HTTP is confirmed by a person, or by an answers file written for it.
     /// </summary>
-    public InstallAnswers Normalised()
+    public string? HttpConfirmation { get; init; }
+
+    /// <summary>
+    /// These answers with a section, with its defaults, for each role that has questions, and none for a role not
+    /// chosen, so a saved file holds only what applies. A controller with no choices yet gets
+    /// <paramref name="defaultController"/>'s, or the defaults.
+    /// </summary>
+    public InstallAnswers Normalised(ControllerSettings? defaultController = null)
     {
         var roles = InstallRoles.Ordered(Roles);
+        var controller = InstallRoles.RunsController(roles) ? (Controller ?? defaultController ?? new ControllerSettings()).Normalised() : null;
         return this with
         {
             Roles = roles,
-            Controller = InstallRoles.RunsController(roles) ? Controller ?? new ControllerSettings() : null,
+            Controller = controller,
             Cli = roles.Contains(InstallRole.Cli) ? Cli ?? new CliSettings() : null,
             MacApp = roles.Contains(InstallRole.MacApp) ? MacApp ?? new MacAppSettings() : null,
-            RigConfirmation = roles.Contains(InstallRole.Rig) ? RigConfirmation : null
+            RigConfirmation = roles.Contains(InstallRole.Rig) ? RigConfirmation : null,
+            HttpConfirmation = controller?.Connection == ConnectionMode.Http ? HttpConfirmation : null
         };
     }
 
@@ -72,8 +82,8 @@ public sealed record InstallAnswers
         }
     }
 
-    /// <summary>The answers as a file, without the rig's confirmation.</summary>
-    public string ToJson() => JsonSerializer.Serialize(Normalised() with { RigConfirmation = null }, InstallerJson.Options) + "\n";
+    /// <summary>The answers as a file, without the confirmations a person types.</summary>
+    public string ToJson() => JsonSerializer.Serialize(Normalised() with { RigConfirmation = null, HttpConfirmation = null }, InstallerJson.Options) + "\n";
 
     /// <summary>Reads an answers file; a member it does not know is an error, so a misspelt one is not silently ignored.</summary>
     public static InstallAnswers Parse(string json)

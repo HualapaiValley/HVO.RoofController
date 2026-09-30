@@ -51,10 +51,31 @@ public static class RoleGuards
     public static string RigConfirmationPrompt(MachineSurvey survey)
         => $"This machine has the HAT's I2C bus ({HatDevices.I2c}). A test rig must never be installed on the observatory's Pi. Type this machine's host name ({survey.HostName}) to confirm it is not.";
 
+    /// <summary>What a person types to confirm plain HTTP.</summary>
+    public const string HttpConfirmationWord = "http";
+
+    /// <summary>What the wizard asks to confirm plain HTTP.</summary>
+    public const string HttpConfirmationPrompt =
+        "Over HTTP, API keys, session tokens and PINs cross the network unencrypted: anyone on it can read and use them. Type http to confirm this network is one you trust.";
+
+    /// <summary>
+    /// True when <paramref name="answers"/> serve the controller over plain HTTP and it does not already: a person then
+    /// types <see cref="HttpConfirmationWord"/> to confirm.
+    /// </summary>
+    public static bool NeedsHttpConfirmation(MachineSurvey survey, InstallAnswers answers)
+    {
+        ArgumentNullException.ThrowIfNull(survey);
+        ArgumentNullException.ThrowIfNull(answers);
+        return InstallRoles.RunsController(answers.Roles)
+            && answers.Controller?.Connection == ConnectionMode.Http
+            && survey.SystemRecord?.Controller?.Connection != ConnectionMode.Http
+            && survey.UserRecord?.Controller?.Connection != ConnectionMode.Http;
+    }
+
     /// <summary>
     /// Every reason the installer refuses <paramref name="answers"/> on this machine; empty when it may go ahead. With
-    /// <paramref name="planOnly"/>, for <c>--plan</c>, which changes nothing, it neither needs root for the machine's roles
-    /// nor the rig's confirmation.
+    /// <paramref name="planOnly"/>, for <c>--plan</c>, which changes nothing, it needs neither root for the machine's roles
+    /// nor the confirmations a person types.
     /// </summary>
     public static IReadOnlyList<string> Check(MachineSurvey survey, InstallAnswers answers, bool planOnly = false)
     {
@@ -119,6 +140,14 @@ public static class RoleGuards
             problems.Add(string.IsNullOrWhiteSpace(answers.RigConfirmation)
                 ? $"Confirm the test rig: this machine has the HAT's I2C bus. Type its host name ({survey.HostName}) to confirm it is not the observatory's Pi (rigConfirmation in an answers file)."
                 : $"The confirmation does not match: type this machine's host name, {survey.HostName}.");
+        }
+
+        if (!planOnly && NeedsHttpConfirmation(survey, answers)
+            && !string.Equals(answers.HttpConfirmation?.Trim(), HttpConfirmationWord, StringComparison.OrdinalIgnoreCase))
+        {
+            problems.Add(string.IsNullOrWhiteSpace(answers.HttpConfirmation)
+                ? "Confirm plain HTTP: API keys, session tokens and PINs would cross the network unencrypted. Type http to confirm (httpConfirmation in an answers file), or choose private-ca."
+                : "The confirmation does not match: type http to serve plain HTTP, or choose private-ca.");
         }
 
         problems.AddRange(answers.Problems());

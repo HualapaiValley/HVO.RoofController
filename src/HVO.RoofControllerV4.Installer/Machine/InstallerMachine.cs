@@ -1,4 +1,9 @@
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
 namespace HVO.RoofControllerV4.Installer.Machine;
@@ -55,7 +60,9 @@ public sealed class InstallerMachine
         HostName = HostName,
         Environment = Environment,
         CurrentDirectory = CurrentDirectory,
-        IsPortInUse = IsPortInUse
+        IsPortInUse = IsPortInUse,
+        NetworkAddresses = NetworkAddresses,
+        ServedCertificateAsync = ServedCertificateAsync
     };
 
     /// <summary>
@@ -63,6 +70,15 @@ public sealed class InstallerMachine
     /// within a second.
     /// </summary>
     public Func<int, bool> IsPortInUse { get; init; } = AnswersOnLoopback;
+
+    /// <summary>The machine's addresses on the interfaces that are up, with each interface's name (the loopback's left out).</summary>
+    public Func<IReadOnlyList<NetworkAddress>> NetworkAddresses { get; init; } = CurrentAddresses;
+
+    /// <summary>
+    /// The certificate presented over TLS on the TCP port, on the loopback address, or null when nothing there answers
+    /// with TLS within a few seconds. Nothing is sent but the handshake.
+    /// </summary>
+    public Func<int, CancellationToken, Task<X509Certificate2?>> ServedCertificateAsync { get; init; } = PresentedOnLoopbackAsync;
 
     /// <summary>The platform as release assets name it: linux-arm64, linux-x64 or osx-arm64 (or another the installer refuses).</summary>
     public string RuntimeIdentifier => $"{(Os == InstallerOs.MacOS ? "osx" : "linux")}-{Architecture.ToString().ToLowerInvariant()}";
@@ -88,6 +104,19 @@ public sealed class InstallerMachine
         try
         {
             return File.ReadAllText(OnDisk(path));
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The file's bytes, or null when there is no such file.</summary>
+    public byte[]? ReadBytes(string path)
+    {
+        try
+        {
+            return File.ReadAllBytes(OnDisk(path));
         }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -201,9 +230,52 @@ public sealed class InstallerMachine
         }
     }
 
+    private static IReadOnlyList<NetworkAddress> CurrentAddresses()
+        => NetworkInterface.GetAllNetworkInterfaces()
+            .Where(network => network.OperationalStatus is OperationalStatus.Up or OperationalStatus.Unknown
+                && network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+            .SelectMany(network => network.GetIPProperties().UnicastAddresses.Select(unicast => new NetworkAddress(network.Name, unicast.Address)))
+            .ToArray();
+
+    private static async Task<X509Certificate2?> PresentedOnLoopbackAsync(int port, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        X509Certificate2? presented = null;
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, port, timeout.Token).ConfigureAwait(false);
+            await using var tls = new SslStream(client.GetStream(), leaveInnerStreamOpen: false);
+
+            // Only read: whatever it presents is accepted, and nothing is sent over the connection.
+            await tls.AuthenticateAsClientAsync(
+                new SslClientAuthenticationOptions
+                {
+                    TargetHost = "localhost",
+                    RemoteCertificateValidationCallback = (_, certificate, _, _) =>
+                    {
+                        presented ??= certificate is null ? null : X509CertificateLoader.LoadCertificate(certificate.GetRawCertData());
+                        return true;
+                    }
+                },
+                timeout.Token).ConfigureAwait(false);
+            return presented;
+        }
+        catch (Exception error) when (error is SocketException or IOException or System.Security.Authentication.AuthenticationException
+            || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            presented?.Dispose();
+            return null;
+        }
+    }
+
     [DllImport("libc", SetLastError = false)]
     private static extern uint geteuid();
 }
+
+/// <summary>An address of the machine, and the network interface it is on (eth0, wlan0, docker0).</summary>
+public sealed record NetworkAddress(string Interface, IPAddress Address);
 
 /// <summary>The permissions the installer gives what it makes.</summary>
 public static class Modes

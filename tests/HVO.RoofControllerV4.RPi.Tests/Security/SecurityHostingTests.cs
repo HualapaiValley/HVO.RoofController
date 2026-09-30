@@ -32,6 +32,8 @@ public sealed class SecurityHostingTests
     [
         "GET /health/live",
         "GET /health/ready",
+        // The CA that issued the controller's certificate (its certificate only), which a client trusts before it has a key.
+        "GET /ca.crt",
         // How the roof is driven (emulator, simulation, limit switches ignored), so a sign-in page can warn of it.
         "GET /api/v4.0/RoofControl/Mode",
         // Signing in with a name and password is how a person without a key gets a session token.

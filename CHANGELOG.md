@@ -145,10 +145,25 @@ the roof against this server; use the web UI (port 8088) for operator access.
   differs, so a second run changes nothing. It records what it installed in `/etc/hvo-roof/install.json` (the
   controller, a rig on Linux, the kiosk) or `~/.config/hvo-roof/install.json` (`hvo-roof`, the Mac app, a rig on a
   Mac), and logs each command and change with no secret. It makes the controller's folders and adopts a controller the
-  deploy script runs; the certificate authority, deploying the controller and a rig, the kiosk, `hvo-roof` and the Mac
-  app follow (#68 to #71), and an install that needs them is refused, with exit code 3, before anything changes. CI
+  deploy script runs; deploying the controller and a rig, the kiosk, `hvo-roof` and the Mac app follow (#69 to #71),
+  and an install that needs them is refused, with exit code 3, before anything changes. CI
   keeps the wizard's pages as `installer-renders-<run id>`. HVO Dark for the terminal moves to
   `HVO.RoofControllerV4.TerminalUi`, which `hvo-roof ui` and the installer share. See [docs/install.md](docs/install.md).
+- Certificates in the installer (#68). The controller's connection is a private CA (the default), your own certificate,
+  a self-signed certificate, or plain HTTP, which must be confirmed by typing `http`. The installer makes the CA
+  (ECDSA P-256, ten years, its key owner-only in `/etc/hvo-roof/ca`, its certificate in `/etc/hvo-roof/ca.crt`), whose
+  name constraints let it issue only for `local`, `localhost`, the machine's short names, the domains you give and
+  private addresses. It issues the controller's certificate (397 days) for the host name, the names and domains you
+  give, `.local`, `localhost` and the machine's private addresses, and writes it as `roof-controller.pfx` with a random
+  password that is never shown. `sudo hvo-roof-install cert` renews what needs it (within 30 days of expiry, a name
+  that changed, a CA that no longer covers it; `--renew`, `--new-ca`), `cert show` prints what is served and the
+  SHA-256 fingerprints, and `cert import FILE` puts your own certificate in place (PKCS#12, or PEM with its chain and
+  key), refusing one that has expired, is not yet valid, is a CA's or is not for a server. Each has `--plan`, and none
+  restarts the controller: the output says to redeploy when the roof is idle. The wizard's settings page asks for the
+  names and domains, and Done shows where clients get the CA and its fingerprint. The controller serves its CA at the
+  anonymous `GET /ca.crt` (the handshake leaves a self-signed root out), and `/health` reports `https_certificate`:
+  Degraded within 30 days of expiry, Unhealthy when it has expired or cannot be read. See
+  [docs/install.md](docs/install.md#certificates).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`

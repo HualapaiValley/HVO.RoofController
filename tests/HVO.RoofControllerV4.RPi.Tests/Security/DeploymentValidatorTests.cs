@@ -1,7 +1,10 @@
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using FluentAssertions;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.RPi.Security;
+using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
@@ -371,6 +374,24 @@ public sealed class DeploymentValidatorTests
 
         result.Problems.Should().BeEmpty();
         result.Warnings.Should().Contain(warning => warning.Contains("renew it soon"));
+    }
+
+    [TestMethod]
+    [UnsupportedOSPlatform("windows")]
+    public void TheInstallersCertificate_Passes_AndIsCheckedRatherThanItsCa()
+    {
+        var path = Path.Combine(_directory, "roof-controller.pfx");
+        var (authority, issued) = InstallerCertificates.Issue(Now);
+        using (authority)
+        using (issued)
+        {
+            File.WriteAllBytes(path, ControllerCertificates.ExportPfx(issued, authority, CertificatePassword));
+
+            var result = Validate(HttpsDeployment(path));
+
+            result.Problems.Should().BeEmpty();
+            result.Notes.Should().Contain(note => note.Contains(issued.Thumbprint, StringComparison.Ordinal) && note.Contains("CN=roofpi", StringComparison.Ordinal));
+        }
     }
 
     [TestMethod]

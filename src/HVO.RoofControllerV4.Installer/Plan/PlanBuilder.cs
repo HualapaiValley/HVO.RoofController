@@ -1,4 +1,5 @@
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -37,12 +38,31 @@ public sealed record ControllerLayout(
 
     public static ControllerLayout For(InstallerMachine machine)
         => machine.Os == InstallerOs.MacOS ? MacRig(machine.Home) : System;
+
+    /// <summary>The installer's certificate authority's folder: its key, which only root reads.</summary>
+    public string Ca => Path.Join(Configuration, "ca");
+
+    /// <summary>The CA's private key (PKCS#8, PEM). It never leaves this machine.</summary>
+    public string CaKey => Path.Join(Ca, "ca.key");
+
+    /// <summary>The CA's certificate (PEM): what each client trusts.</summary>
+    public string CaCertificate => Path.Join(Configuration, "ca.crt");
+
+    /// <summary>The controller's certificate and key (PKCS#12), as the deploy script mounts it (HTTPS_CERT_FILE).</summary>
+    public string Pfx => Path.Join(Https, "roof-controller.pfx");
+
+    /// <summary>The PKCS#12 file's password, a secret the controller reads.</summary>
+    public string PfxPassword => Path.Join(Secrets, "Kestrel__Certificates__Default__Password");
 }
 
 /// <summary>Turns the answers into the steps that install them on this machine.</summary>
 public static class PlanBuilder
 {
-    public static InstallPlan Build(InstallerMachine machine, MachineSurvey survey, InstallAnswers answers)
+    /// <summary>
+    /// The steps that install <paramref name="answers"/>. <paramref name="replacingAuthority"/> is the fingerprint of a
+    /// certificate authority a person asked to replace (<c>--new-ca</c>).
+    /// </summary>
+    public static InstallPlan Build(InstallerMachine machine, MachineSurvey survey, InstallAnswers answers, string? replacingAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(survey);
@@ -56,13 +76,20 @@ public static class PlanBuilder
             var rig = roles.Contains(InstallRole.Rig);
             var layout = ControllerLayout.For(machine);
             var settings = answers.Controller!;
+            var names = CertificateNames.For(machine, settings);
             AddFolder(steps, layout.Configuration, Modes.Folder, "the controller's configuration");
             AddFolder(steps, layout.Secrets, Modes.PrivateFolder, "secrets the controller reads, one file per setting");
             AddFolder(steps, layout.Https, Modes.PrivateFolder, "the controller's HTTPS certificate");
+            if (settings.Connection == ConnectionMode.PrivateCa)
+            {
+                AddFolder(steps, layout.Ca, Modes.PrivateFolder, "the certificate authority's key");
+            }
+
             AddFolder(steps, layout.Settings, Modes.Folder, "settings files the controller reads");
             AddFolder(steps, layout.Data, Modes.Folder, "the controller's data");
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
+            var certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
             if (rig)
             {
                 steps.Add(new ContainerStep(MachineSurveyor.HatEmulatorContainer, null, "the HAT emulator: the roof, drive and limit switches the rig drives"));
@@ -72,7 +99,9 @@ public static class PlanBuilder
                 MachineSurveyor.ControllerContainer,
                 rig ? HatMode.Emulated : HatMode.Real,
                 rig ? "the controller, against the HAT emulator" : "the controller, driving the real HAT",
-                settings));
+                settings,
+                names,
+                certificate));
             steps.Add(new PortStep(settings.ApiPort, settings.UsesHttps ? "the controller's API (HTTPS)" : "the controller's API (HTTP)", MachineSurveyor.ControllerContainer));
             steps.Add(new PortStep(settings.WebPort, "the web UI", MachineSurveyor.ControllerContainer));
         }
@@ -107,6 +136,53 @@ public static class PlanBuilder
     }
 
     /// <summary>
+    /// The controller's certificate alone, as <c>hvo-roof-install cert</c> makes it: its folders, the CA, the file's
+    /// password and the certificate, for the recorded <paramref name="settings"/>. <paramref name="renew"/> issues it
+    /// again even when it is still good.
+    /// </summary>
+    public static InstallPlan BuildCertificate(InstallerMachine machine, ControllerSettings settings, string? replacingAuthority = null, bool renew = false)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(settings);
+        var layout = ControllerLayout.For(machine);
+        var steps = CertificateFolders(layout);
+        AddCertificateSteps(steps, layout, CertificateNames.For(machine, settings.Normalised()), settings.Connection, replacingAuthority, renew);
+        return new InstallPlan(steps);
+    }
+
+    /// <summary>
+    /// A person's own certificate put in place, as <c>hvo-roof-install cert import</c> does it: its folders, the file's
+    /// password, the certificate, and the record (when there is one) saying the controller serves the person's own.
+    /// </summary>
+    public static InstallPlan BuildImport(InstallerMachine machine, ImportedCertificate imported, string source, (InstallScope Scope, string Path)? record)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(imported);
+        ArgumentNullException.ThrowIfNull(source);
+        var layout = ControllerLayout.For(machine);
+        var steps = CertificateFolders(layout);
+        steps.Add(new CertificatePasswordStep(layout));
+        steps.Add(new ImportCertificateStep(layout, imported, source));
+        if (record is var (scope, path))
+        {
+            steps.Add(new RecordStep(scope, path, (_, existing) => existing is { Controller: { } controller }
+                ? existing with { Controller = controller with { Connection = ConnectionMode.OwnCertificate } }
+                : existing!));
+        }
+
+        return new InstallPlan(steps);
+    }
+
+    private static List<PlanStep> CertificateFolders(ControllerLayout layout)
+    {
+        var steps = new List<PlanStep>();
+        AddFolder(steps, layout.Configuration, Modes.Folder, "the controller's configuration");
+        AddFolder(steps, layout.Secrets, Modes.PrivateFolder, "secrets the controller reads, one file per setting");
+        AddFolder(steps, layout.Https, Modes.PrivateFolder, "the controller's HTTPS certificate");
+        return steps;
+    }
+
+    /// <summary>
     /// The record after this install: the roles already recorded and these (the controller replacing a rig, and a rig the
     /// controller), with this install's choices for its roles and the recorded ones for the rest.
     /// </summary>
@@ -129,6 +205,30 @@ public static class PlanBuilder
             Cli = roles.Contains(InstallRole.Cli) ? answers.Cli : all.Contains(InstallRole.Cli) ? existing?.Cli : null,
             MacApp = roles.Contains(InstallRole.MacApp) ? answers.MacApp : all.Contains(InstallRole.MacApp) ? existing?.MacApp : null
         };
+    }
+
+    // The CA (with a private CA), the file's password (unless the person gives their own certificate) and the certificate.
+    private static CertificateStep? AddCertificateSteps(List<PlanStep> steps, ControllerLayout layout, CertificateNames names, ConnectionMode connection, string? replacingAuthority, bool renew = false)
+    {
+        if (connection == ConnectionMode.Http)
+        {
+            return null;
+        }
+
+        if (connection == ConnectionMode.PrivateCa)
+        {
+            AddFolder(steps, layout.Ca, Modes.PrivateFolder, "the certificate authority's key");
+            steps.Add(new CertificateAuthorityStep(layout, names, replacingAuthority));
+        }
+
+        if (connection != ConnectionMode.OwnCertificate)
+        {
+            steps.Add(new CertificatePasswordStep(layout));
+        }
+
+        var certificate = new CertificateStep(layout, names, connection, replacingAuthority, renew);
+        steps.Add(certificate);
+        return certificate;
     }
 
     // A rig on a Mac keeps its data in its configuration folder: each folder once.

@@ -17,6 +17,7 @@ internal sealed class ReadingView : ListView
     private string[] _shown = [];
     private int _wrappedAt = -1;
     private bool _followsEnd;
+    private int? _revealed;
 
     public ReadingView()
     {
@@ -44,6 +45,17 @@ internal sealed class ReadingView : ListView
     {
         _lines = lines;
         _followsEnd = followEnd;
+        _revealed = null;
+        Rewrap();
+    }
+
+    /// <summary>
+    /// Scrolls so line <paramref name="line"/> of <see cref="Lines"/> is near the top, the line before it above it, and
+    /// keeps it there as the view is resized: what the person must read first.
+    /// </summary>
+    public void Reveal(int line)
+    {
+        _revealed = Math.Clamp(line, 0, Math.Max(0, _lines.Count - 1));
         Rewrap();
     }
 
@@ -134,6 +146,10 @@ internal sealed class ReadingView : ListView
         if (_followsEnd)
         {
             ScrollTo(int.MaxValue);
+        }
+        else if (_revealed is { } revealed)
+        {
+            ScrollTo(_lines.Take(Math.Max(0, revealed - 1)).Sum(line => Wrap(line, width).Count()));
         }
     }
 

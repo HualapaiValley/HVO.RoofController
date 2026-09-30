@@ -1,9 +1,11 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security.Cryptography.X509Certificates;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -49,7 +51,7 @@ public sealed class InstallerWizardTests
             .And.Contain("HAT devices: /dev/i2c-1, /dev/gpiomem, the thermal sensor present")
             .And.Contain("Container:   roof-controller: running, 4.0.0, the real HAT (made by the deploy script)")
             .And.NotContain(Secret);
-        wizard.Page.Describe().Should().Equal(InstallerSession.DescribeSurvey(wizard.Session.Survey));
+        wizard.Page.Describe().Should().Equal(InstallerSession.DescribeSurvey(wizard.Session.Survey, wizard.Session.Time.GetUtcNow()));
         wizard.Wizard.BackButton.Enabled.Should().BeFalse();
         wizard.Wizard.NextButton.Enabled.Should().BeTrue();
 
@@ -216,6 +218,91 @@ public sealed class InstallerWizardTests
     }
 
     [TestMethod]
+    public async Task TheSettingsPage_AsksForTheNamesTheCertificateIsFor()
+    {
+        using var pi = AdoptablePi();
+        using var wizard = await WizardDriver.StartAsync(pi);
+        wizard.NextTo(1);
+        wizard.Press(Key.Space);
+        wizard.NextTo(2);
+        var settings = (SettingsPage)wizard.Page;
+
+        settings.HostNames!.Text.Should().BeEmpty();
+        settings.Domains!.Text.Should().BeEmpty("the machine's resolver searches no domain");
+        wizard.Screen.Should().Contain("Names clients use for it")
+            .And.Contain("Other host names:")
+            .And.Contain("Domains:")
+            .And.Contain("Separate them with spaces. The controller answers to roofpi and each of these, alone, under")
+            .And.Contain(".local and under each domain, and its certificate is for them all.");
+        ShouldHaveColours(wizard.ColoursOf("Names clients use for it"), RoofUiPalette.Text, RoofUiPalette.Surface);
+
+        settings.HostNames.Text = "roof roof.observatory.example";
+        settings.Domains.Text = "observatory..example";
+        wizard.Press(Key.Enter);
+        wizard.Page.Should().BeSameAs(settings);
+        wizard.Wizard.Message.Should().Be(
+            "'roof.observatory.example' is not a host name: give a single name of letters, digits and hyphens (roof), not an address or a name with dots. "
+            + "'observatory..example' is not a domain: give names of letters, digits and hyphens joined by dots (observatory.example).");
+
+        // Names as a person types them: commas or spaces, any case, each once.
+        settings.HostNames.Text = "Roof, roof dome";
+        settings.Domains.Text = "Observatory.Example.";
+        wizard.NextTo(3);
+        wizard.Session.Answers.Controller!.HostNames.Should().Equal("roof", "dome");
+        wizard.Session.Answers.Controller.Domains.Should().Equal("observatory.example");
+
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().BeSameAs(settings);
+        settings.HostNames.Text.Should().Be("roof dome");
+        settings.Domains.Text.Should().Be("observatory.example");
+        settings.Describe().Should().Contain("Names: roof, dome; domains: observatory.example");
+    }
+
+    [TestMethod]
+    public async Task TheSettingsPage_AsksForAConfirmation_BeforePlainHttp()
+    {
+        using var pi = AdoptablePi();
+        using var wizard = await WizardDriver.StartAsync(pi);
+        wizard.NextTo(1);
+        wizard.Press(Key.Space);
+        wizard.NextTo(2);
+        var settings = (SettingsPage)wizard.Page;
+        settings.HttpConfirmation!.Visible.Should().BeFalse("HTTPS is chosen");
+        wizard.Screen.Should().NotContain("Type http");
+
+        settings.Connection!.Value = Array.IndexOf(Enum.GetValues<ConnectionMode>(), ConnectionMode.Http);
+        wizard.Pump();
+        settings.HttpConfirmation.Visible.Should().BeTrue();
+        settings.Describe()[^1].Should().Be(RoleGuards.HttpConfirmationPrompt);
+        wizard.Screen.Should().Contain("Over HTTP, API keys, session tokens and PINs cross the network unencrypted");
+        ShouldHaveColours(wizard.ColoursOf("Over HTTP"), RoofUiPalette.WarningText, RoofUiPalette.WarningBackground);
+        wizard.Screen.Should().Contain(".local and under each domain.").And.NotContain("certificate is for", "there is no certificate");
+
+        wizard.Press(Key.Enter);
+        wizard.Page.Should().BeSameAs(settings);
+        wizard.Wizard.Message.Should().Be(
+            "Confirm plain HTTP: API keys, session tokens and PINs would cross the network unencrypted. Type http to confirm (httpConfirmation in an answers file), or choose private-ca.");
+
+        settings.HttpConfirmation.Text = "yes";
+        wizard.Press(Key.Enter);
+        wizard.Wizard.Message.Should().Be("The confirmation does not match: type http to serve plain HTTP, or choose private-ca.");
+
+        settings.HttpConfirmation.Text = "http";
+        wizard.Render(TestContext, "3-settings-http");
+        wizard.NextTo(3);
+        wizard.Session.Answers.Controller!.Connection.Should().Be(ConnectionMode.Http);
+        wizard.Session.Answers.HttpConfirmation.Should().Be("http");
+
+        // Back to HTTPS: the confirmation is no longer asked for, or kept.
+        wizard.Press(Key.Esc);
+        settings.Connection.Value = Array.IndexOf(Enum.GetValues<ConnectionMode>(), ConnectionMode.PrivateCa);
+        wizard.Pump();
+        settings.HttpConfirmation.Visible.Should().BeFalse();
+        wizard.NextTo(3);
+        wizard.Session.Answers.HttpConfirmation.Should().BeNull();
+    }
+
+    [TestMethod]
     public async Task TheReviewPage_ChecksThePlan_BeforeInstallCanBePressed()
     {
         using var pi = AdoptablePi();
@@ -254,7 +341,7 @@ public sealed class InstallerWizardTests
         review.Describe().Should().Equal(
             ["Installing the controller on roofpi, 4.0.0:", string.Empty, .. HVO.RoofControllerV4.Installer.Plan.PlanText.Lines(review.Plan)]);
         var screen = wizard.Screen;
-        screen.Should().Contain("Installing the controller on roofpi, 4.0.0:").And.Contain("  create     /etc/hvo-roof ");
+        screen.Should().Contain("Installing the controller on roofpi, 4.0.0:").And.Contain("  unchanged  /etc/hvo-roof ");
         screen.Should().Contain("Save these answers (no secrets) to:").And.Contain("/root/hvo-roof-answers.json");
         wizard.Render(TestContext, "4-review");
     }
@@ -354,7 +441,9 @@ public sealed class InstallerWizardTests
         installing.Describe()[^1].Should().Be($"Creating file {InstallPaths.SystemRecord}: done.");
         wizard.Page.Describe().Should().Equal(["The install finished.", .. wizard.Session.DoneLines()]);
         ShouldHaveColours(wizard.ColoursOf("The install finished."), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton);
-        wizard.Screen.Should().Contain("The controller's API:  https://roofpi.local:8443/");
+        wizard.Screen.Should().Contain("The controller's API:  https://roofpi.local:8443/")
+            .And.Contain("Clients trust its CA:  /etc/hvo-roof/ca.crt, or https://roofpi.local:8443/ca.crt")
+            .And.Contain(ControllerCertificates.Fingerprint(X509Certificate2.CreateFromPem(pi.Read("/etc/hvo-roof/ca.crt"))));
         wizard.Wizard.NextButton.Text.Should().Be("Quit");
         wizard.Screen.Should().Contain("Enter Quit");
         wizard.Wizard.BackButton.Enabled.Should().BeFalse();
@@ -443,7 +532,7 @@ public sealed class InstallerWizardTests
             Press(app, window, Key.Enter, screen => screen.Contains("Step 2 of 6", StringComparison.Ordinal));
             Press(app, window, Key.Space, screen => screen.Contains("☑ Controller", StringComparison.Ordinal));
             Press(app, window, Key.Enter, screen => screen.Contains("Step 3 of 6", StringComparison.Ordinal));
-            Press(app, window, Key.Enter, screen => screen.Contains("unchanged  roof-controller", StringComparison.Ordinal));
+            Press(app, window, Key.Enter, screen => screen.Contains("Installing the controller on roofpi, 4.0.0:", StringComparison.Ordinal));
             Press(app, window, Key.Enter, screen => screen.Contains("The install finished.", StringComparison.Ordinal));
             Press(app, window, Key.Enter, _ => window.StopRequested);
         }));

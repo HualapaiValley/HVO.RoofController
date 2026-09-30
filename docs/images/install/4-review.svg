@@ -21,11 +21,6 @@
 <rect x="826.80" y="240.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="826.80" y="258.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="826.80" y="276.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="294.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="312.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="330.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="348.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="366.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="818.40" y="501.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="222.00" y="537.00" width="4.50" height="9.30" fill="#000000"/>
@@ -53,45 +48,46 @@
 <text x="28.80" y="109.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Installing the controller on roofpi, 4.0.0:</text>
 <text x="826.80" y="109.50" fill="#f8fafc">▲</text>
 <text x="28.80" y="145.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Folders</text>
-<text x="45.60" y="163.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
+<text x="45.60" y="163.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">unchanged</text>
 <text x="138.00" y="163.50" fill="#f8fafc" textLength="109.20" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof</text>
-<text x="440.40" y="163.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">the controller's configuration (0755)</text>
-<text x="45.60" y="181.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="181.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/secrets</text>
-<text x="440.40" y="181.50" fill="#f8fafc" textLength="352.80" lengthAdjust="spacingAndGlyphs">secrets the controller reads, one file per</text>
-<text x="138.00" y="199.50" fill="#f8fafc" textLength="117.60" lengthAdjust="spacingAndGlyphs">setting (0700)</text>
-<text x="45.60" y="217.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="217.50" fill="#f8fafc" textLength="159.60" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/https</text>
-<text x="440.40" y="217.50" fill="#f8fafc" textLength="344.40" lengthAdjust="spacingAndGlyphs">the controller's HTTPS certificate (0700)</text>
-<text x="45.60" y="235.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="235.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/config</text>
-<text x="440.40" y="235.50" fill="#f8fafc" textLength="352.80" lengthAdjust="spacingAndGlyphs">settings files the controller reads (0755)</text>
-<text x="45.60" y="253.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="253.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof</text>
-<text x="440.40" y="253.50" fill="#f8fafc" textLength="235.20" lengthAdjust="spacingAndGlyphs">the controller's data (0755)</text>
-<text x="45.60" y="271.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="271.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof/identity</text>
-<text x="440.40" y="271.50" fill="#f8fafc" textLength="302.40" lengthAdjust="spacingAndGlyphs">people, sessions and API keys (0700)</text>
-<text x="45.60" y="289.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="289.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof/settings-secrets</text>
-<text x="440.40" y="289.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">secrets set through the API (0700)</text>
-<text x="28.80" y="307.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Files</text>
-<text x="45.60" y="325.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="325.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/install.json</text>
-<text x="440.40" y="325.50" fill="#f8fafc" textLength="352.80" lengthAdjust="spacingAndGlyphs">the install record: the roles, choices and</text>
-<text x="138.00" y="343.50" fill="#f8fafc" textLength="235.20" lengthAdjust="spacingAndGlyphs">versions (no secrets) (0644)</text>
-<text x="28.80" y="361.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Containers</text>
-<text x="45.60" y="379.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">unchanged</text>
-<text x="138.00" y="379.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">roof-controller</text>
-<text x="440.40" y="379.50" fill="#f8fafc" textLength="386.40" lengthAdjust="spacingAndGlyphs">the controller, driving the real HAT (adopted:</text>
-<text x="138.00" y="397.50" fill="#f8fafc" textLength="193.20" lengthAdjust="spacingAndGlyphs">running, version 4.0.0)</text>
+<text x="524.40" y="163.50" fill="#f8fafc" textLength="252.00" lengthAdjust="spacingAndGlyphs">the controller's configuration</text>
+<text x="138.00" y="181.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">(0755)</text>
+<text x="45.60" y="199.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">unchanged</text>
+<text x="138.00" y="199.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/secrets</text>
+<text x="524.40" y="199.50" fill="#f8fafc" textLength="277.20" lengthAdjust="spacingAndGlyphs">secrets the controller reads, one</text>
+<text x="138.00" y="217.50" fill="#f8fafc" textLength="193.20" lengthAdjust="spacingAndGlyphs">file per setting (0700)</text>
+<text x="45.60" y="235.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">unchanged</text>
+<text x="138.00" y="235.50" fill="#f8fafc" textLength="159.60" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/https</text>
+<text x="524.40" y="235.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">the controller's HTTPS certificate</text>
+<text x="138.00" y="253.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">(0700)</text>
+<text x="45.60" y="271.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">unchanged</text>
+<text x="138.00" y="271.50" fill="#f8fafc" textLength="134.40" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/ca</text>
+<text x="524.40" y="271.50" fill="#f8fafc" textLength="260.40" lengthAdjust="spacingAndGlyphs">the certificate authority's key</text>
+<text x="138.00" y="289.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">(0700)</text>
+<text x="45.60" y="307.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
+<text x="138.00" y="307.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/config</text>
+<text x="524.40" y="307.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">settings files the controller reads ░</text>
+<text x="138.00" y="325.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">(0755)</text>
+<text x="826.80" y="325.50" fill="#f8fafc">░</text>
+<text x="45.60" y="343.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
+<text x="138.00" y="343.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof</text>
+<text x="524.40" y="343.50" fill="#f8fafc" textLength="235.20" lengthAdjust="spacingAndGlyphs">the controller's data (0755)</text>
+<text x="826.80" y="343.50" fill="#f8fafc">░</text>
+<text x="45.60" y="361.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
+<text x="138.00" y="361.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof/identity</text>
+<text x="524.40" y="361.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">people, sessions and API keys (0700)░</text>
+<text x="45.60" y="379.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
+<text x="138.00" y="379.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof/settings-secrets</text>
+<text x="524.40" y="379.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">secrets set through the API (0700)</text>
+<text x="826.80" y="379.50" fill="#f8fafc">░</text>
+<text x="28.80" y="397.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Files</text>
 <text x="826.80" y="397.50" fill="#f8fafc">░</text>
-<text x="28.80" y="415.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Ports</text>
+<text x="45.60" y="415.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">unchanged</text>
+<text x="138.00" y="415.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/ca.crt</text>
+<text x="524.40" y="415.50" fill="#f8fafc" textLength="277.20" lengthAdjust="spacingAndGlyphs">the certificate authority clients</text>
 <text x="826.80" y="415.50" fill="#f8fafc">░</text>
-<text x="45.60" y="433.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">info</text>
-<text x="138.00" y="433.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">8443</text>
-<text x="440.40" y="433.50" fill="#f8fafc" textLength="394.80" lengthAdjust="spacingAndGlyphs">the controller's API (HTTPS) (roof-controller ░</text>
-<text x="138.00" y="451.50" fill="#f8fafc" textLength="117.60" lengthAdjust="spacingAndGlyphs">listens on it)</text>
+<text x="138.00" y="433.50" fill="#f8fafc" textLength="697.20" lengthAdjust="spacingAndGlyphs">trust (its key stays in /etc/hvo-roof/ca) (kept: HVO Roof CA (roofpi, 2026-10-01),░</text>
+<text x="138.00" y="451.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">until 2036-09-28)</text>
 <text x="826.80" y="451.50" fill="#f8fafc">▼</text>
 <text x="28.80" y="487.50" fill="#f8fafc" textLength="294.00" lengthAdjust="spacingAndGlyphs">Save these answers (no secrets) to:</text>
 <text x="28.80" y="505.50" fill="#f8fafc" textLength="226.80" lengthAdjust="spacingAndGlyphs">/root/hvo-roof-answers.json</text>

@@ -1,4 +1,5 @@
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
@@ -34,10 +35,11 @@ public sealed class InstallerSession
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(time);
         var logged = machine.WithCommands(new LoggingCommandRunner(machine.Commands, log));
         log.Write($"hvo-roof-install {version} on {machine.HostName} ({machine.RuntimeIdentifier}), as {machine.UserName}.");
         var survey = await MachineSurveyor.SurveyAsync(logged, cancellationToken).ConfigureAwait(false);
-        foreach (var line in DescribeSurvey(survey))
+        foreach (var line in DescribeSurvey(survey, time.GetUtcNow()))
         {
             log.Write(line);
         }
@@ -60,6 +62,17 @@ public sealed class InstallerSession
     public InstallAnswers Answers { get; set; }
 
     public IReadOnlyList<RoleOption> Options => RoleGuards.Options(Survey);
+
+    /// <summary>
+    /// The controller's choices when nothing is recorded: the person's own certificate when one is in place that another
+    /// CA issued (so it is never replaced unasked), otherwise a private CA (in place of a self-signed one, or one that
+    /// cannot be opened); and the domains this machine seems to be in, which the person may clear.
+    /// </summary>
+    public ControllerSettings DefaultController => new()
+    {
+        Connection = Survey.Certificate is { Problem: null, Issuer: not null, FromAuthority: false } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa,
+        Domains = CertificateNames.SuggestedDomains(Machine)
+    };
 
     /// <summary>Why the installer refuses the answers here; empty when it may go ahead.</summary>
     public IReadOnlyList<string> Problems(bool planOnly = false) => RoleGuards.Check(Survey, Answers, planOnly);
@@ -140,6 +153,12 @@ public sealed class InstallerSession
             lines.Add(rig
                 ? "This is a test rig: the controller drives the HAT emulator, and nothing here moves a roof."
                 : "The roof has not moved. Confirm the installation assumptions in commissioning.md on site before the first move.");
+            var trust = TrustLines(controller, $"{scheme}://{host}:{controller.ApiPort}/ca.crt").ToArray();
+            if (trust.Length > 0)
+            {
+                lines.Add(string.Empty);
+                lines.AddRange(trust);
+            }
         }
 
         if (answers.Roles.Contains(InstallRole.Kiosk))
@@ -179,6 +198,28 @@ public sealed class InstallerSession
         return lines;
     }
 
+    // What clients trust, and the fingerprint a person checks when one asks: the CA's, or the self-signed certificate's.
+    private IEnumerable<string> TrustLines(ControllerSettings controller, string caUrl)
+    {
+        if (controller.Connection is not (ConnectionMode.PrivateCa or ConnectionMode.SelfSigned))
+        {
+            yield break;
+        }
+
+        var (certificate, authority) = MachineSurveyor.SurveyCertificates(Machine, controller);
+        if (controller.Connection == ConnectionMode.PrivateCa && authority is { Fingerprint: { } caFingerprint })
+        {
+            yield return $"Clients trust its CA:  {authority.Path}, or {caUrl}";
+            yield return "Its SHA-256 fingerprint, to check when a client asks you to trust it:";
+            yield return caFingerprint;
+        }
+        else if (controller.Connection == ConnectionMode.SelfSigned && certificate is { Fingerprint: { } fingerprint })
+        {
+            yield return "Each client pins its self-signed certificate. Its SHA-256 fingerprint, to check when one asks:";
+            yield return fingerprint;
+        }
+    }
+
     /// <summary>
     /// The answers of what is installed here, from the install records: the machine's (as root, or with
     /// <paramref name="includeSystem"/>) and the person's. Null when nothing is recorded.
@@ -190,8 +231,8 @@ public sealed class InstallerSession
         return record?.ToAnswers();
     }
 
-    /// <summary>What the survey found, a line each: the wizard's first page, and the log.</summary>
-    public static IReadOnlyList<string> DescribeSurvey(MachineSurvey survey)
+    /// <summary>What the survey found, a line each, with the certificate's warnings at <paramref name="now"/>: the wizard's first page, and the log.</summary>
+    public static IReadOnlyList<string> DescribeSurvey(MachineSurvey survey, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(survey);
         var lines = new List<string>
@@ -247,12 +288,85 @@ public sealed class InstallerSession
             lines.Add($"Mac app:     {macApp.Path}{(macApp.Version is null ? string.Empty : $" ({macApp.Version})")}");
         }
 
+        if (survey.Certificate is { } certificate)
+        {
+            lines.Add(certificate.Problem is { } problem
+                ? $"Certificate: {certificate.Path}: {problem}"
+                : $"Certificate: {certificate.Subject}, until {Date(certificate.NotAfter)}, {(certificate.Issuer is null ? "self-signed" : $"issued by {certificate.Issuer}")}");
+        }
+
+        if (survey.Authority is { } authority)
+        {
+            lines.Add(authority.Problem is { } problem
+                ? $"CA:          {authority.Path}: {problem}"
+                : $"CA:          {authority.Subject}, until {Date(authority.NotAfter)}");
+        }
+
+        lines.AddRange(CertificateWarnings(survey, now).Select(warning => $"             {warning}"));
         return lines;
+    }
+
+    /// <summary>
+    /// What needs doing about the controller's certificate or its CA at <paramref name="now"/>, a sentence each: it has
+    /// expired or soon will, it is not for a name clients use, or its password does not open it. Every run says them.
+    /// </summary>
+    public static IReadOnlyList<string> CertificateWarnings(MachineSurvey survey, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(survey);
+        return CertificateWarnings(survey.Certificate, survey.Authority, now);
+    }
+
+    /// <summary>What needs doing about <paramref name="certificate"/> and <paramref name="authority"/> at <paramref name="now"/>, a sentence each.</summary>
+    public static IReadOnlyList<string> CertificateWarnings(CertificateSurvey? certificate, AuthoritySurvey? authority, DateTimeOffset now)
+    {
+        var warnings = new List<string>();
+        if (certificate is not null)
+        {
+            // Your own certificate is renewed by whoever issued it; the installer renews the ones it makes.
+            var own = certificate.Issuer is not null && !certificate.FromAuthority;
+            var renew = own ? "Put a new one in place with: sudo hvo-roof-install cert import FILE" : "Renew it with: sudo hvo-roof-install cert";
+            if (certificate.Problem is { } problem)
+            {
+                // Without root nothing can be said; a password that does not open it is a certificate the controller cannot serve.
+                if (!certificate.NeedsRoot)
+                {
+                    warnings.Add($"The controller cannot serve its certificate: {problem}.");
+                }
+            }
+            else if (certificate.NotAfter is { } notAfter)
+            {
+                var left = notAfter - now;
+                if (left <= TimeSpan.Zero)
+                {
+                    warnings.Add($"The certificate expired on {Date(notAfter)}: clients refuse it. {renew}");
+                }
+                else if (left < ControllerCertificates.RenewWithin)
+                {
+                    warnings.Add($"The certificate expires on {Date(notAfter)}, in {(int)Math.Ceiling(left.TotalDays)} days. {renew}");
+                }
+
+                if (certificate.Uncovered.Count > 0)
+                {
+                    warnings.Add($"The certificate is not for {string.Join(", ", certificate.Uncovered)}: a client that uses {(certificate.Uncovered.Count == 1 ? "it" : "one")} refuses it.");
+                }
+            }
+        }
+
+        if (authority is { NotAfter: { } authorityExpires } && authorityExpires - now < ControllerCertificates.RenewAuthorityWithin)
+        {
+            warnings.Add(authorityExpires <= now
+                ? $"The CA expired on {Date(authorityExpires)}: the installer makes a new one, which every client must then trust."
+                : $"The CA expires on {Date(authorityExpires)}: the installer makes a new one, which every client must then trust.");
+        }
+
+        return warnings;
     }
 
     /// <summary>The release a version names: its version without the commit.</summary>
     public static string RoofVersion(string informationalVersion)
         => Common.RoofProductVersion.WithoutCommit(informationalVersion);
+
+    internal static string Date(DateTimeOffset? date) => date is { } value ? AuthorityAssessment.Date(value.UtcDateTime) : "?";
 
     private static string DescribeRecord(InstallRecord? record, string whose)
         => record is null ? $"nothing in {whose} record" : $"{InstallRoles.Describe(record.Roles)} {record.Version} in {whose} record";
