@@ -12,7 +12,7 @@ for the right processor, and the output folder must be new or empty, so a releas
 missing. The images are <registry>/roof-controller and <registry>/roof-hat-emulator, on GHCR unless --registry names
 another (a test's local registry). The assets:
 
-  hvo-roof-<runtime>                          hvo-roof, one file per runtime
+  hvo-roof-<runtime>                          hvo-roof, one file per runtime (linux-arm64, linux-x64, osx-arm64)
   hvo-roof-kiosk-<version>-linux-arm64.tar.gz the kiosk's program, unit, udev rule and example settings, in one folder
   HVO-Roof-<version>.zip                      HVO Roof.app, signed ad hoc
   docker-compose.yaml                         the release compose file, each image pinned to its digest
@@ -47,7 +47,7 @@ release_compose = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release_compose)
 
 # The runtimes hvo-roof is released for, and the processor each file must be built for.
-CLI_RUNTIMES = {"linux-arm64": "aarch64", "linux-x64": "x86-64"}
+CLI_RUNTIMES = {"linux-arm64": "aarch64", "linux-x64": "x86-64", "osx-arm64": "macos-arm64"}
 
 # The kiosk's files and their modes: the program, and docs/kiosk.md's deploy files beside it.
 KIOSK_FILES = {
@@ -66,6 +66,7 @@ CREATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 # ELF e_machine values, and the Mach-O 64-bit magic with the arm64 CPU type.
 ELF_MACHINES = {183: "aarch64", 62: "x86-64"}
 MACHO_ARM64 = (0xFEEDFACF, 0x0100000C)
+MACHO_X64 = (0xFEEDFACF, 0x01000007)
 
 
 class AssetError(Exception):
@@ -73,7 +74,8 @@ class AssetError(Exception):
 
 
 def processor(path):
-    """The processor a program file is built for: aarch64 or x86-64 for ELF, macos-arm64 for Mach-O, else None."""
+    """The processor a program file is built for: aarch64 or x86-64 for ELF, macos-arm64 (or macos-x64, an Intel Mac, which
+    is not released) for Mach-O, else None."""
     with open(path, "rb") as file:
         header = file.read(20)
     if header[:4] == b"\x7fELF" and len(header) >= 20:
@@ -81,6 +83,8 @@ def processor(path):
         return ELF_MACHINES.get(struct.unpack(order + "H", header[18:20])[0])
     if len(header) >= 8 and struct.unpack("<II", header[:8]) == MACHO_ARM64:
         return "macos-arm64"
+    if len(header) >= 8 and struct.unpack("<II", header[:8]) == MACHO_X64:
+        return "macos-x64"
     return None
 
 

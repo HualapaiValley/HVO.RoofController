@@ -9,10 +9,10 @@
     <RootNamespace>HVO.RoofControllerV4.Cli</RootNamespace>
     <Description>Command-line client and terminal interface for the HVO roof controller, over its REST API and status hub.</Description>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <RuntimeIdentifiers>linux-arm64;linux-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>linux-arm64;linux-x64;osx-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
-  <!-- dotnet publish -r linux-arm64 (the Pi) or -r linux-x64 (development) gives one self-contained file. -->
+  <!-- dotnet publish -r linux-arm64 (the Pi), -r linux-x64 (development) or -r osx-arm64 (a Mac) gives one self-contained file. -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>

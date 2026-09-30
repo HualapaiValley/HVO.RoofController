@@ -30,6 +30,8 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
@@ -51,12 +53,14 @@ jobs:
       # (docs/releasing.md). MSBuild reads the Version variable as a property, so every restore, build and publish below
       # gets it; the SDK adds the commit (+<sha>) from the checkout.
       - name: Product version
+        id: version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           version=${RELEASE_VERSION:-$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")}
           echo "Product version: ${version}"
           echo "Version=${version}" >> "$GITHUB_ENV"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -148,14 +152,38 @@ jobs:
       - name: Build (Release, warnings as errors)
         run: dotnet build HVO.RoofController.sln -c Release -v minimal -p:ContinuousIntegrationBuild=true
 
-      # hvo-roof as one self-contained file: linux-arm64 for the Pi, linux-x64 for development (docs/cli.md).
+      # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof for osx-arm64 and HVO Roof.app. Its release
+      # is checked against a pinned SHA-256. Not RCODESIGN_*: rcodesign reads those variables as its own settings, and
+      # refuses ones it does not know.
+      - name: Install rcodesign
+        env:
+          APPLE_CODESIGN_VERSION: 0.29.0
+          APPLE_CODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+        run: |
+          archive="apple-codesign-${APPLE_CODESIGN_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive.tar.gz" \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${APPLE_CODESIGN_VERSION}/$archive.tar.gz"
+          echo "${APPLE_CODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/$archive/rcodesign" --version
+          echo "APPLE_CODESIGN=$RUNNER_TEMP/$archive/rcodesign" >> "$GITHUB_ENV"
+
+      # hvo-roof as one self-contained file: linux-arm64 for the Pi, linux-x64 for development, and osx-arm64 for a Mac
+      # with Apple silicon, signed ad hoc as the Mac app is (docs/cli.md). The mac-cli job runs it on a Mac.
       - name: Publish hvo-roof
         run: |
-          for rid in linux-arm64 linux-x64; do
+          for rid in linux-arm64 linux-x64 osx-arm64; do
             dotnet publish HVO.RoofControllerV4.Cli -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof/$rid"
             test -x "hvo-roof/$rid/hvo-roof"
           done
           file hvo-roof/linux-arm64/hvo-roof | grep -q 'ARM aarch64'
+          file hvo-roof/osx-arm64/hvo-roof | grep -q 'Mach-O 64-bit arm64'
+          # The SDK signs it ad hoc under its file name; this signature names it as docs/cli.md does.
+          "$APPLE_CODESIGN" sign --binary-identifier io.github.hualapaivalley.hvo-roof hvo-roof/osx-arm64/hvo-roof
+          "$APPLE_CODESIGN" print-signature-info hvo-roof/osx-arm64/hvo-roof > cli-signature.txt
+          grep -E '^ +(flags|identifier): ' cli-signature.txt
+          grep -q 'flags: CodeSignatureFlags(ADHOC)' cli-signature.txt
+          grep -q 'identifier: io.github.hualapaivalley.hvo-roof$' cli-signature.txt
           # The product version and this commit.
           expected="${Version}+${GITHUB_SHA}"
           actual=$(./hvo-roof/linux-x64/hvo-roof --version)
@@ -195,14 +223,10 @@ jobs:
           done
           ls -l kiosk-artifact
 
-      # HVO Roof.app (docs/mac.md): published for osx-arm64 and made into the bundle, signed ad hoc by rcodesign (no
-      # Xcode; its release is checked against a pinned SHA-256), and published for linux-x64 to check that the program
-      # refuses missing settings (exit 78) before it opens a window. The mac-app job runs the bundle on a Mac.
+      # HVO Roof.app (docs/mac.md): published for osx-arm64 and made into the bundle, signed ad hoc by rcodesign, and
+      # published for linux-x64 to check that the program refuses missing settings (exit 78) before it opens a window.
+      # The mac-app job runs the bundle on a Mac.
       - name: Publish HVO Roof.app
-        # Not RCODESIGN_*: rcodesign reads those variables as its own settings, and refuses ones it does not know.
-        env:
-          APPLE_CODESIGN_VERSION: 0.29.0
-          APPLE_CODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
         run: |
           for rid in osx-arm64 linux-x64; do
             dotnet publish HVO.RoofControllerV4.Mac -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof-mac/$rid"
@@ -216,17 +240,11 @@ jobs:
             echo "::error file=src/HVO.RoofControllerV4.Mac/Program.cs::hvo-roof-mac without settings exited ${status}, not 78 with its settings message"
             exit 1
           fi
-          archive="apple-codesign-${APPLE_CODESIGN_VERSION}-x86_64-unknown-linux-musl"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive.tar.gz" \
-            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${APPLE_CODESIGN_VERSION}/$archive.tar.gz"
-          echo "${APPLE_CODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
-          rcodesign="$RUNNER_TEMP/$archive/rcodesign"
           version="${Version}"
           python3 HVO.RoofControllerV4.Mac/bundle/bundle.py make hvo-roof-mac/osx-arm64 mac-artifact \
-            --version "$version" --build "$GITHUB_RUN_NUMBER" --rcodesign "$rcodesign"
+            --version "$version" --build "$GITHUB_RUN_NUMBER" --rcodesign "$APPLE_CODESIGN"
           python3 HVO.RoofControllerV4.Mac/bundle/bundle.py check "mac-artifact/HVO Roof.app" --version "$version"
-          "$rcodesign" print-signature-info "mac-artifact/HVO Roof.app/Contents/MacOS/hvo-roof-mac" > mac-signature.txt
+          "$APPLE_CODESIGN" print-signature-info "mac-artifact/HVO Roof.app/Contents/MacOS/hvo-roof-mac" > mac-signature.txt
           grep -E '^ +(flags|identifier): ' mac-signature.txt
           grep -q 'flags: CodeSignatureFlags(ADHOC)' mac-signature.txt
           grep -q 'identifier: io.github.hualapaivalley.roof$' mac-signature.txt
@@ -332,6 +350,93 @@ jobs:
             exit 1
           fi
 
+  # hvo-roof on a Mac (Apple silicon), as docs/cli.md installs it: its signature and version, then setup (the credentials
+  # file's modes) and the terminal interface in tmux (tests/cli/terminal-smoke.sh) against the controller and the HAT
+  # emulator run with dotnet run (tests/cli/dotnet-run-smoke.sh), and the client's certificate checks. No hardware: the
+  # roof is the emulator's.
+  mac-cli:
+    needs: build-and-test
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download hvo-roof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hvo-roof-${{ github.run_id }}
+          path: ${{ runner.temp }}/hvo-roof
+
+      # An artifact keeps no execute bits; a release's asset is downloaded the same way, and docs/cli.md sets the bit.
+      - name: Check the signature and the version
+        env:
+          VERSION: ${{ needs.build-and-test.outputs.version }}
+        run: |
+          cli="$RUNNER_TEMP/hvo-roof/osx-arm64/hvo-roof"
+          chmod +x "$cli"
+          codesign --verify --strict --verbose=2 "$cli"
+          codesign -dv "$cli" 2> codesign.txt
+          cat codesign.txt
+          grep -q '^Identifier=io.github.hualapaivalley.hvo-roof$' codesign.txt
+          grep -q '^Signature=adhoc$' codesign.txt
+          expected="${VERSION}+${GITHUB_SHA}"
+          actual=$("$cli" --version)
+          echo "hvo-roof --version: ${actual}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error file=Directory.Build.props::hvo-roof --version printed ${actual}, not ${expected}"
+            exit 1
+          fi
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      # tmux, and bash 4 or later for the scripts (the Mac's own bash is 3.2).
+      - name: Install tmux and bash
+        run: |
+          brew install tmux bash
+          tmux -V
+          bash --version | head -n 1
+
+      - name: Setup and the terminal interface against dotnet run
+        timeout-minutes: 12
+        env:
+          TERMINAL_SMOKE_OUT: ${{ runner.temp }}/mac-terminal-screens
+        run: HVO_ROOF_CLI="$RUNNER_TEMP/hvo-roof/osx-arm64/hvo-roof" tests/cli/dotnet-run-smoke.sh
+
+      # The controller's certificate checked on macOS (#65), where X509Chain uses Apple's trust evaluation: a private CA,
+      # a pin, and hvo-roof's setup with them, over real HTTPS to certificates made as the tests run. Debug, as
+      # dotnet-run-smoke.sh built the controller.
+      - name: Certificate tests on macOS
+        timeout-minutes: 10
+        working-directory: src
+        run: >-
+          dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -v minimal
+          --filter "FullyQualifiedName~RoofCertificateAuthorityTests|FullyQualifiedName~RoofCertificatePinTests|FullyQualifiedName~RoofCliCaCertificateTests"
+          --logger "trx;LogFileName=mac-certificates.trx" --results-directory "$RUNNER_TEMP/mac-terminal-screens"
+          -- RunConfiguration.TreatNoTestsAsError=true
+
+      # What each command wrote, each screen of the terminal interface as text and as an SVG image, the logs of the
+      # controller and the emulator, and the certificate tests' results.
+      - name: Upload the terminal screens
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-terminal-screens-${{ github.run_id }}
+          path: ${{ runner.temp }}/mac-terminal-screens
+          if-no-files-found: warn
+          retention-days: 7
+
   # The Pi deploy path: the deploy script (against fake docker/curl, see tests/deploy), the container's supervisor
   # (tests/container) and the compose profiles.
   deploy-script:
@@ -350,6 +455,7 @@ jobs:
           bash -n tests/emulator/compose-smoke-test.sh
           bash -n tests/emulator/deploy-scenarios.sh
           bash -n tests/cli/terminal-smoke.sh
+          bash -n tests/cli/dotnet-run-smoke.sh
           for script in build/*.sh tests/versioning/*.sh tests/releasing/*.sh; do
             bash -n "${script}"
           done
@@ -363,7 +469,7 @@ jobs:
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh \
-            src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-* \
+            tests/cli/dotnet-run-smoke.sh src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-* \
             build/*.sh tests/versioning/*.sh tests/releasing/*.sh
 
       # build/version.sh (the product version and the release tag's check) and build/check-image-labels.sh.

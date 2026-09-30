@@ -89,6 +89,9 @@ public sealed class SystemPageTests
         using var harness = new WebAdminHarness();
         var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
         harness.EditSettingsFile("{ \"RoofControllerOptionsV4\": { \"OpenRelayId\": 2, \"CloseRelayId\": 1 } }");
+
+        // Taken before the restart: the restart stops the host, which may be disposed by the time the test looks.
+        var signal = harness.Host.Services.GetRequiredService<RoofRestartSignal>();
         await using var context = harness.Context(session);
         var cut = Loaded(context);
 
@@ -102,7 +105,7 @@ public sealed class SystemPageTests
         cut.Click("[data-testid=restart-send]");
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Info)));
-        harness.Host.Services.GetRequiredService<RoofRestartSignal>().Requested.Should().BeTrue("the confirmation was sent with the restart");
+        signal.Requested.Should().BeTrue("the confirmation was sent with the restart");
     }
 
     [TestMethod]

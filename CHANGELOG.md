@@ -125,6 +125,13 @@ the roof against this server; use the web UI (port 8088) for operator access.
   and the Mac app take `ServerCaCertificateFile`. A certificate that is not accepted says why: another CA, expired,
   another host name, outside the name constraints, or not the pinned one, and `hvo-roof` names the option that would
   help. See [docs/cli.md](docs/cli.md#setup).
+- `hvo-roof` on a Mac (#66). CI publishes `hvo-roof` for `osx-arm64` as well, signs it ad hoc (rcodesign, as the Mac
+  app) and checks the signature, and the release adds it as `hvo-roof-osx-arm64`. A `mac-cli` job on a macOS runner
+  checks the signature and the version with `codesign`, runs the terminal smoke test against a controller and the HAT
+  emulator started with `dotnet run` (`tests/cli/dotnet-run-smoke.sh`), and runs the certificate tests (the pin, the
+  CA and the name constraints) on macOS; the smoke test's screens are kept as `mac-terminal-screens-<run id>`. The
+  smoke test now also checks that `setup` keeps the credentials file at mode 600 in a folder at 700. See
+  [docs/cli.md](docs/cli.md#on-a-mac).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`
