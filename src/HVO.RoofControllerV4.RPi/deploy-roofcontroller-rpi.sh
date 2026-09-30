@@ -1508,8 +1508,11 @@ NEW_CONTAINER_ID=$(dockerc run -d --cidfile "${NEW_CIDFILE}" --name "${CONTAINER
   || abort_switch "docker run failed for the new controller"
 
 verify_controller "${CONTAINER_NAME}" || abort_switch "${FAILURE}"
+# The switch is complete and verified, and what is left only reports it: from here neither a signal nor a lost terminal
+# ends the script with an error while the new controller runs.
+trap '' HUP INT TERM PIPE
 RESTORE_MODE=""
 
-echo "[deploy] Container status"
+echo "[deploy] Container status" || true
 show_containers
-echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. HAT: ${HAT_SUMMARY}. The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it."
+echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. HAT: ${HAT_SUMMARY}. The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it." || true

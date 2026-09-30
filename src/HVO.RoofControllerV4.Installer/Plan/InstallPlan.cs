@@ -78,7 +78,7 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
                 if (check.Change == StepChange.Blocked)
                 {
                     // The machine changed since the plan was checked: stop, not skip (earlier steps may have run).
-                    throw new InstallerException($"{doing}: {check.Detail ?? "it can no longer go ahead"}");
+                    throw new StepBlockedException($"{doing}: {check.Detail ?? "it can no longer go ahead"}");
                 }
 
                 if (!check.MakesChange)

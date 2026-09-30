@@ -273,6 +273,7 @@ public sealed class ControllerStep(
 
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
+        MoreThanCertificateChanged = false;
         var check = await CheckChangeAsync(context, cancellationToken).ConfigureAwait(false);
         if (check.MakesChange && RefusedKey(context.Machine) is { } refused)
         {
@@ -289,8 +290,8 @@ public sealed class ControllerStep(
     }
 
     /// <summary>
-    /// Whether a check with <see cref="CertificateOnly"/> found that more than the certificate would change: only the
-    /// installer, which shows all of it, redeploys the controller then.
+    /// Whether the last check, with <see cref="CertificateOnly"/>, found that more than the certificate would change: only
+    /// the installer, which shows all of it, redeploys the controller then.
     /// </summary>
     public bool MoreThanCertificateChanged { get; private set; }
 
@@ -608,7 +609,8 @@ public sealed class ControllerStep(
 
         // The installer never kills the script: killed part-way through the switch, it would leave the old controller stopped.
         // A Ctrl-C at the terminal reaches the script too, which stops and puts the old controller back itself (its EXIT
-        // trap); an interrupt only the installer gets lets the script run to its end. Either way the plan stops after it.
+        // trap), unless the new controller has passed its checks: from there it runs to its end, as it does for an
+        // interrupt only the installer gets. The plan then stops before its next step that changes something.
         using (cancellationToken.Register(() => context.Progress?.Invoke(StoppingMessage)))
         {
             try

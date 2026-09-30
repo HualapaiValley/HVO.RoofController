@@ -97,7 +97,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid. |
 | 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, a missing prerequisite (`sudo`, Docker), something the installer will not replace, a part it cannot install yet, or a certificate the controller could not serve. |
-| 130 | You quit before installing, or the installer was interrupted (Ctrl+C stops between steps; it stops a running deploy script too, which puts the old controller back if it was replacing it). |
+| 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
 
@@ -422,11 +422,12 @@ mode set, and its contents are never touched. The record is rewritten only when 
 run of the same answers changes nothing: "Nothing to change: this machine is already as the answers describe."
 
 After a failed step, running the installer again carries on from where it stopped. So does it after Ctrl+C, which
-stops the installer between steps. The installer never kills a deploy script that has started: a Ctrl+C at the terminal
+stops the installer between steps. The installer never kills a deploy script that has started. A Ctrl+C at the terminal
 (outside the wizard, which reads its own keys) reaches the script too, which stops and puts the old controller back if
-it was replacing it, while an interrupt only the installer gets (`kill -INT`) lets the script run to its end. Either way the installer then says what runs as the
-controller, and exits 130. An API key entry that a stopped install left with its name but no key is finished by the
-next run.
+it was replacing it; the installer then says what runs as the controller, and exits 130. Once the new controller has
+passed the script's checks, the script ignores Ctrl+C and runs to its end, as it does for an interrupt only the
+installer gets (`kill -INT`): the installer then stops before its next step and exits 130, or finishes when no step
+was left. An API key entry that a stopped install left with its name but no key is finished by the next run.
 
 The deploy script runs with a clean environment. Only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TERM`, `TMPDIR`
 and Docker's own `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` reach it from the
@@ -537,14 +538,15 @@ controller, `cert` then redeploys it, through the deploy script as an install do
 The deploy script stops the roof with a verified Stop before it replaces the controller, and puts the old one back if
 the new one fails a check. A controller that is stopped serves the new certificate when it starts again. One that is not
 deployed yet serves it once `hvo-roof-install` deploys it. When something else stands in the way, such as a controller
-that Docker Compose made, `cert` says what it is: once that is dealt with, run `cert --redeploy`. After Ctrl+C, it
-says what runs as the controller, and that `cert --redeploy` finishes.
+that Docker Compose made, `cert` says what it is: once that is dealt with, run `cert --redeploy`. After a Ctrl+C that
+stopped the deploy script, it says what runs as the controller, and that `cert --redeploy` finishes. When the script ran
+to its end anyway (see [Running it again](#running-it-again)), the controller serves the new certificate.
 
 `cert --redeploy` also redeploys a controller that serves another certificate than the one in place, such as after a
 renewal that was not redeployed. On a machine that cannot reach GitHub, give the release's folder with `--release DIR`,
 as for an install ([The release it installs](#the-release-it-installs)). It exits with code 3 when it could not
-redeploy: the roof moves, more than the certificate would change, or no controller is deployed. The certificate is in
-place either way.
+redeploy: the roof moves, more than the certificate would change, or no controller is deployed. So does `cert` when you
+agreed to the redeploy and the check just before the deploy script refuses it. The certificate is in place either way.
 
 With nothing recorded, such as a controller the deploy script runs, it never redeploys, and `--redeploy` is refused
 before anything changes. When the roof is idle, run the deploy script again

@@ -411,6 +411,10 @@ anything.
    `Rolled back:` when the old controller is back. The script exits 1, or 129, 130 or 143 after SIGHUP, SIGINT or
    SIGTERM. With no previous controller (a first deploy), the outcome says the roof controller is not running.
 
+   Once the new controller passes every check in step 7, there is nothing left to undo: the script ignores signals
+   and a lost terminal while it shows the containers, and ends with `[done] Deployment complete and verified` and
+   exit code 0.
+
 ### Deploying a released image
 
 A release publishes the controller's image on GHCR, for `linux/arm64` and `linux/amd64`, and lists each image's digest

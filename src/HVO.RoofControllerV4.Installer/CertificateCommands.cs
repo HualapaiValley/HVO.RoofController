@@ -380,7 +380,7 @@ internal static class CertificateCommands
         catch (InstallerException error)
         {
             // Such as a release.json it could not get: the certificate is in place all the same.
-            throw NotRedeployed(error, session, retry);
+            throw NotRedeployed(error, session, retry, error.ExitCode);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !planOnly)
         {
@@ -465,8 +465,12 @@ internal static class CertificateCommands
         }
         catch (InstallerException error)
         {
-            // More than the certificate changed while the person decided: only the installer shows it all first.
-            throw NotRedeployed(error, session, controller.MoreThanCertificateChanged ? install : retry);
+            // A redeploy the person asked for that the check just before it refuses (the roof started moving, or more than
+            // the certificate changed while they decided) was not done: cert refuses (3), as --redeploy does when it finds
+            // the refusal first. When more changed, only the installer shows it all first.
+            throw controller.MoreThanCertificateChanged ? NotRedeployed(error, session, install, InstallerExitCode.Refused)
+                : error is StepBlockedException ? NotRedeployed(error, session, retry, InstallerExitCode.Refused)
+                : NotRedeployed(error, session, retry, error.ExitCode);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -489,11 +493,11 @@ internal static class CertificateCommands
             InstallerExitCode.Cancelled);
     }
 
-    private static InstallerException NotRedeployed(InstallerException error, InstallerSession session, string retry)
+    private static InstallerException NotRedeployed(InstallerException error, InstallerSession session, string retry, InstallerExitCode exitCode)
         => new(
             $"The controller was not redeployed: {error.Message}{Environment.NewLine}"
             + $"The certificate is in place{(session.Log.Path is { } log ? $"; the log is {log}" : string.Empty)}. To serve it, run {retry} once the roof is idle.",
-            error.ExitCode);
+            exitCode);
 
     // The plan's lines; then, unless only planning, the changes and what is in place after them.
     private static async Task<int> RunPlanAsync(InstallerHost host, InstallerSession session, CheckedPlan checkedPlan, bool planOnly, string what, ControllerSettings settings, CancellationToken cancellationToken)

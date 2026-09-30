@@ -161,7 +161,7 @@ public sealed class InstallerCertificateRedeployTests
     }
 
     [TestMethod]
-    public async Task Renew_WhenMoreChangesWhileThePersonDecides_IsNotRedeployed()
+    public async Task Renew_WhenMoreChangesWhileThePersonDecides_IsRefused()
     {
         using var pi = await InstalledAsync(new ControllerSettings { Camera = new CameraSettings { BaseUrl = "http://192.168.0.4:81" } });
         pi.Replies = _ =>
@@ -173,13 +173,51 @@ public sealed class InstallerCertificateRedeployTests
 
         var run = await pi.RunAsync("cert", "--renew");
 
-        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         pi.Questions.Should().Equal(Question);
         run.Error.Should().Contain("The controller was not redeployed:")
             .And.Contain("more than its certificate would change now: redeployed to read the camera's new settings")
             .And.Contain("The certificate is in place; the log is /var/log/hvo-roof-install.log. To serve it, run sudo hvo-roof-install once the roof is idle.")
             .And.NotContain("--redeploy", "cert --redeploy would refuse again: only the installer shows all that changed");
         pi.Deploys.Should().ContainSingle("what the person agreed to was the certificate alone");
+    }
+
+    [TestMethod]
+    public async Task Renew_WhenMoreChangesWhileThePersonDecides_WithAReleaseFolder_SaysToInstallFromIt()
+    {
+        using var pi = await InstalledAsync(new ControllerSettings { Camera = new CameraSettings { BaseUrl = "http://192.168.0.4:81" } });
+        pi.Write("/root/release files/release.json", FakeMachine.ReleaseJson());
+        pi.Replies = _ =>
+        {
+            File.SetLastWriteTimeUtc(pi.OnDisk($"{Layout.Secrets}/{CameraSteps.BaseUrlSetting}"), DateTime.UtcNow.AddMinutes(1));
+            return true;
+        };
+
+        var run = await pi.RunAsync("cert", "--renew", "--release", "/root/release files");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain("To serve it, run sudo hvo-roof-install --release '/root/release files' once the roof is idle.");
+        pi.Deploys.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task Renew_WhenTheRoofStartsMovingWhileThePersonDecides_IsRefused()
+    {
+        using var pi = await InstalledAsync();
+        pi.Replies = _ =>
+        {
+            pi.StatusJson = Moving;
+            return true;
+        };
+
+        var run = await pi.RunAsync("cert", "--renew");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        pi.Questions.Should().Equal(Question);
+        run.Error.Should().Contain("The controller was not redeployed:")
+            .And.Contain("the roof is moving (Opening)")
+            .And.Contain("To serve it, run sudo hvo-roof-install cert --redeploy once the roof is idle.");
+        pi.Deploys.Should().ContainSingle("the check just before the deploy script refuses a roof that moves");
     }
 
     [TestMethod]
@@ -235,6 +273,25 @@ public sealed class InstallerCertificateRedeployTests
         run.Error.Should().Contain("The controller was not redeployed: The deploy script was stopped (exit 130): [deploy] Interrupted: the old controller was put back.")
             .And.Contain("roof-controller runs now, version 4.0.0.")
             .And.Contain("To serve it, run sudo hvo-roof-install cert --redeploy once the roof is idle.");
+    }
+
+    [TestMethod]
+    public async Task CtrlC_AfterTheScriptVerifiedTheController_ServesTheCertificate()
+    {
+        using var pi = await InstalledAsync();
+        using var interrupt = new CancellationTokenSource();
+        pi.Replies = _ => true;
+
+        // The script ignores the Ctrl-C once the new controller passed its checks, and runs to its end.
+        pi.DuringDeploy = interrupt.Cancel;
+
+        var run = await pi.RunAsync(interrupt.Token, "cert", "--renew");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain(ControllerStep.StoppingMessage)
+            .And.EndWith("The controller serves the new certificate.\n");
+        pi.Deploys.Should().HaveCount(2);
+        ServesTheCertificateInItsFile(pi).Should().BeTrue();
     }
 
     [TestMethod]

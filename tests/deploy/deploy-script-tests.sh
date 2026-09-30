@@ -2114,6 +2114,28 @@ test_interrupt_after_rename_restores_old_controller() {
   [[ -z "$(controller_run_args)" ]] || fail_test "the new controller was started after the interrupt"
 }
 
+test_interrupt_after_the_switch_is_complete_leaves_the_new_controller() {
+  seed_container roof-controller old true 8443:8443
+  # A Ctrl-C once the new controller is verified, while the script shows the containers: nothing is left to undo.
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="{{.Status}}" FAKE_SIGNAL=INT FAKE_SIGNAL_GROUP=true
+
+  assert_status_is 0
+  assert_output_contains "[done] Deployment complete and verified"
+  assert_output_not_contains "Rolled back"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+test_hangup_after_the_switch_is_complete_leaves_the_new_controller() {
+  seed_container roof-controller old true 8443:8443
+  # The terminal goes away once the new controller is verified: SIGHUP, and every later write fails with EIO.
+  deploy_on_terminal "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="{{.Status}}" FAKE_SIGNAL=HUP FAKE_SIGNAL_KILLS_OUTPUT=true
+
+  assert_status_is 0
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
 test_stop_gate_abort_keeps_older_previous() {
   seed_container roof-controller old true 8443:8443
   seed_container roof-controller-previous older false
