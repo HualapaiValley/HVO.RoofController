@@ -295,6 +295,21 @@ public sealed class InstallerCommandTests
     }
 
     [TestMethod]
+    public void APinOfDigits_IsRedacted_OnlyWhereItStandsAlone()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var log = InstallLog.Open(pi.Machine, InstallPaths.SystemLog, FakeMachine.Clock);
+        log.AddSecret("844312");
+        log.AddSecret("s3cret");
+
+        log.Redact("pin 844312, \"844312\" and pin=844312")
+            .Should().Be("pin [secret], \"[secret]\" and pin=[secret]");
+        log.Redact("size 18443120 bytes, digest a844312f, build 2844312")
+            .Should().Be("size 18443120 bytes, digest a844312f, build 2844312", "a [secret] inside another number would show where the PIN's digits are");
+        log.Redact("xs3cretx").Should().Be("x[secret]x", "any other secret is replaced wherever it is");
+    }
+
+    [TestMethod]
     public async Task AProgramThatCannotBeRun_IsAFailedCommand_NotACrash()
     {
         var folder = Directory.CreateTempSubdirectory("hvo-install-programs-");
@@ -321,6 +336,31 @@ public sealed class InstallerCommandTests
         {
             folder.Delete(recursive: true);
         }
+    }
+
+    [TestMethod]
+    public async Task ACommandThatDoesNotInherit_GetsOnlyTheKeptVariables_AndItsOwn()
+    {
+        var env = new ProcessCommandRunner().Find("env");
+        env.Should().NotBeNull("env is on every Linux and macOS PATH");
+        var runner = new ProcessCommandRunner(name => name switch
+        {
+            "PATH" => Environment.GetEnvironmentVariable("PATH"),
+            "HOME" => "/home/roy",
+            "DOCKER_HOST" => "unix:///run/docker.sock",
+            "IMAGE_TAG" => "not-this",
+            _ => null
+        });
+
+        var result = await runner.RunAsync(new CommandLine(env!) { InheritEnvironment = false, Environment = new Dictionary<string, string> { ["CONTAINER_NAME"] = "roof-controller" } });
+
+        result.ExitCode.Should().Be(0, result.Reason);
+        var names = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Split('=', 2)[0]).ToList();
+        names.Should().BeEquivalentTo(["PATH", "HOME", "DOCKER_HOST", "LC_ALL", "CONTAINER_NAME"], "IMAGE_TAG is not a kept variable, and nothing else of the test's own environment is passed");
+        result.Output.Should().Contain("HOME=/home/roy\n").And.Contain("CONTAINER_NAME=roof-controller\n");
+
+        var inherited = await new ProcessCommandRunner().RunAsync(new CommandLine(env!));
+        inherited.Output.Split('\n').Length.Should().BeGreaterThan(names.Count, "a command inherits the installer's environment unless it says otherwise");
     }
 
     [TestMethod]

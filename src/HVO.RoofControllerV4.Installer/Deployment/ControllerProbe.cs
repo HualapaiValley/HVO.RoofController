@@ -63,15 +63,22 @@ public static class ControllerProbe
         {
             using var status = JsonDocument.Parse(response.Body);
             var root = status.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return NotTheControllers;
+            }
+
             var moving = root.TryGetProperty("isMoving", out var isMoving) && isMoving.ValueKind == JsonValueKind.True;
             var motion = root.TryGetProperty("commandedMotion", out var commanded) && commanded.ValueKind == JsonValueKind.String ? commanded.GetString() : null;
             return new ProbeResult(ProbeOutcome.Accepted, moving || (motion is not null && !motion.Equals("None", StringComparison.OrdinalIgnoreCase)), motion);
         }
         catch (JsonException)
         {
-            return new ProbeResult(ProbeOutcome.NoAnswer, Reason: "its Status answered with something that is not the controller's");
+            return NotTheControllers;
         }
     }
+
+    private static readonly ProbeResult NotTheControllers = new(ProbeOutcome.NoAnswer, Reason: "its Status answered with something that is not the controller's");
 
     /// <summary>
     /// The keys the deploy script could be given for the running controller, best first: the operator and admin keys the

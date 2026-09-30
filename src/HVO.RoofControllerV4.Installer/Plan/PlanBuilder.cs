@@ -206,13 +206,18 @@ public static class PlanBuilder
         var rig = roles.Contains(InstallRole.Rig);
         var keys = AllocateKeys(machine, survey, layout, roles);
         var steps = new List<PlanStep>(keys.Select(key => new ApiKeyStep(layout, key))) { new DeployToolsStep() };
+
+        // The camera's files as the record has them: a change to one, or one written by an install that stopped before it
+        // redeployed the controller, is more than the certificate.
+        var camera = CameraSteps.For(layout, rig, settings.Camera);
+        steps.AddRange(camera);
         var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
         if (emulator is not null)
         {
             steps.Add(emulator);
         }
 
-        steps.Add(new ControllerStep(layout, settings, CertificateNames.For(machine, settings), rig, certificate, keys, emulator));
+        steps.Add(new ControllerStep(layout, settings, CertificateNames.For(machine, settings), rig, certificate, keys, emulator, camera));
         return new InstallPlan(steps);
     }
 

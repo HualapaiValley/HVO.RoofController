@@ -10,15 +10,18 @@
 #            in the output, the log, the record or the controller's environment.
 #   again    The same answers again: nothing to change, and nothing is replaced.
 #   change   A new time scale: the emulator is replaced and the controller redeployed against it.
-#   cert     cert --renew --redeploy: a new certificate, and the controller redeployed to serve it.
+#   cert     cert --renew --redeploy: a new certificate from the same CA, the CA unchanged, and the controller
+#            redeployed to serve it.
 # Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
 # and no violation.
 #
-# Needs docker (buildx), the .NET SDK (to publish the installer), curl, jq, openssl and sudo without a password: the
-# installer runs as root, as a rig on Linux needs. It runs only against the local Docker daemon, never on a Raspberry
-# Pi, and only on a machine without the rig's folders (/etc/hvo-roof, /var/lib/hvo-roof), the installer's log, the
-# containers (roof-controller, roof-controller-previous, hat-emulator) and the hvo-emulator network: it removes them all
-# when it ends. The images it built stay (the build cache); the ones pulled from its registry go.
+# Needs docker (buildx), the .NET SDK (to publish the installer), curl, jq, openssl, ss and sudo without a password: the
+# installer runs as root, as a rig on Linux needs. It runs only against the local Docker daemon, which sudo must reach
+# too, never on a Raspberry Pi, and only on a machine without the rig's folders (/etc/hvo-roof, /var/lib/hvo-roof), the
+# installer's log, the containers (roof-controller, roof-controller-previous, hat-emulator) and the hvo-emulator
+# network: it removes them all when it ends. The ports it uses must be free: RIG_HTTPS_PORT, RIG_WEB_PORT, 5290 (the
+# emulator's control API) and RIG_REGISTRY_PORT. The images it built stay (the build cache); the ones pulled from its
+# registry go.
 #
 #   tests/installer/rig-scenario.sh
 #
@@ -247,9 +250,13 @@ ready() {
   [[ "$(curl -sS --max-time 5 --cacert "${ca}" -o /dev/null -w '%{http_code}' "${roof}/health/ready" 2>/dev/null)" == 200 ]]
 }
 
+# served_certificate: the certificate the controller serves, as PEM.
+served_certificate() {
+  openssl s_client -connect "127.0.0.1:${https_port}" -servername localhost </dev/null 2>/dev/null | openssl x509
+}
+
 served_fingerprint() {
-  openssl s_client -connect "127.0.0.1:${https_port}" -servername localhost </dev/null 2>/dev/null \
-    | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
+  served_certificate | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
 }
 
 # sign_in: the first admin signs in with the password given in the file, and is an admin; the token is in ${token}.
@@ -312,16 +319,31 @@ mode_is() {
   done
 }
 
+# loopback_only <container>: the container publishes ports, each on loopback only.
+loopback_only() {
+  local ports
+  ports=$(docker port "$1") || fail "could not read the ports $1 publishes"
+  [[ -n "${ports}" ]] || fail "$1 publishes nothing"
+  if grep -vqE '(^| )127\.0\.0\.1:' <<<"${ports}"; then
+    fail "$1 publishes a port beyond loopback: $(tr '\n' ' ' <<<"${ports}")"
+  fi
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Setup: the installer, the release in a registry of this run's own, and the answers.
 
 setup() {
   local tool
-  for tool in docker curl jq openssl dotnet; do
+  for tool in docker curl jq openssl dotnet ss; do
     command -v "${tool}" >/dev/null || fail "${tool} is required"
   done
   docker buildx version >/dev/null 2>&1 || fail "docker buildx is required"
   sudo -n true 2>/dev/null || fail "sudo must run without a password: the installer installs a rig as root"
+  # The installer, as root, must install the rig on the daemon this run checks and cleans up.
+  local daemon
+  daemon=$(docker info -f '{{.ID}}') || fail "docker cannot reach this machine's Docker daemon"
+  [[ -n "${daemon}" && "${daemon}" == "$(sudo -n docker info -f '{{.ID}}' 2>/dev/null)" ]] \
+    || fail "sudo reaches another Docker daemon than this shell's, or none: run the scenario where both reach this machine's"
   if sudo -n test -e /etc/hvo-roof || sudo -n test -e /var/lib/hvo-roof || sudo -n test -e "${install_log}"; then
     fail "/etc/hvo-roof, /var/lib/hvo-roof or ${install_log} exists: this machine has a controller or a rig. Run the scenario where there is none."
   fi
@@ -329,9 +351,10 @@ setup() {
     || docker network inspect "${network}" >/dev/null 2>&1; then
     fail "${controller}, ${emulator}, ${registry_name} or the ${network} network exists: remove them first."
   fi
-  local port
+  local port out
   for port in "${https_port}" "${web_port}" 5290 "${registry_port}"; do
-    ! ss -ltnH "sport = :${port}" 2>/dev/null | grep -q . || fail "port ${port} is in use"
+    out=$(ss -ltnH "sport = :${port}") || fail "ss could not list the ports in use"
+    [[ -z "${out}" ]] || fail "port ${port} is in use"
   done
   owns_resources=1
 
@@ -434,8 +457,8 @@ scenario_install() {
   [[ "$(docker inspect --format '{{.Config.Image}}' "${emulator}")" == "$(jq -r .images.hatEmulator.reference "${release_dir}/release.json")" ]] \
     || fail "${emulator} does not run the release's image"
   [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${controller}")" == "${network}" ]] || fail "${controller} is not on ${network}"
-  docker port "${controller}" | grep -vqE '(^| )127\.0\.0\.1:' && fail "${controller} publishes a port beyond loopback: $(docker port "${controller}" | tr '\n' ' ')"
-  docker port "${emulator}" | grep -vqE '(^| )127\.0\.0\.1:' && fail "${emulator} publishes a port beyond loopback: $(docker port "${emulator}" | tr '\n' ' ')"
+  loopback_only "${controller}"
+  loopback_only "${emulator}"
   pass "installed in ${seconds} s: ${controller} and ${emulator} run the release's images by digest on ${network}, published on loopback only"
 
   current_check="install: folders and files"
@@ -514,6 +537,7 @@ scenario_cert() {
   controller_id=$(container_id "${controller}")
   before=$(served_fingerprint)
   [[ -n "${before}" ]] || fail "the controller serves no certificate"
+  sudo -n cat "${ca}" > "${work}/ca-before.crt" || fail "could not read ${ca}"
   start_relay_monitor
   install cert cert --renew --redeploy --release "${release_dir}"
   expect_installed "cert --renew --redeploy"
@@ -521,12 +545,16 @@ scenario_cert() {
   wait_for "the controller" 60 ready
   after=$(served_fingerprint)
   [[ -n "${after}" && "${after}" != "${before}" ]] || fail "the controller still serves the old certificate"
+  sudo -n cmp -s "${work}/ca-before.crt" "${ca}" || fail "the renewal replaced the CA"
+  served_certificate > "${work}/served.crt" || fail "could not read the certificate the controller serves"
+  openssl verify -CAfile "${work}/ca-before.crt" "${work}/served.crt" >/dev/null \
+    || fail "the certificate the controller serves is not from the CA it had before the renewal"
   sign_in
   roof_still
   collect_secrets
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
   no_secret_in "${work}/cert.txt" "${work}/install-log.txt"
-  pass "a new certificate from the same CA, served by the redeployed controller; relay register 0 in ${ROOF_SAMPLES} samples"
+  pass "a new certificate from the same CA, which is unchanged, served by the redeployed controller; relay register 0 in ${ROOF_SAMPLES} samples"
 }
 
 setup

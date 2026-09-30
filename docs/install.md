@@ -97,7 +97,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid. |
 | 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, a missing prerequisite (`sudo`, Docker), something the installer will not replace, a part it cannot install yet, or a certificate the controller could not serve. |
-| 130 | You quit before installing, or the installer was interrupted (Ctrl+C stops between steps). |
+| 130 | You quit before installing, or the installer was interrupted (Ctrl+C stops between steps, and lets a deploy script that has started finish). |
 
 ## Roles
 
@@ -143,6 +143,12 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
 - **Compose.** A container that Docker Compose made is described in the plan but never replaced. Move it first: see
   [Moving between Compose and the deploy script](deployment.md#moving-between-compose-and-the-deploy-script).
 - **Busy ports.** A port that something else already listens on blocks the plan.
+- **An API key the controller refuses.** The controller refuses to start with an entry in `/etc/hvo-roof/secrets`
+  that has no name, a role other than `RoofViewer`, `RoofOperator` or `RoofAdmin`, both a key and a key hash or
+  neither, a key shorter than 24 or longer than 512 characters, a hash that is not 64 hexadecimal digits, or a kiosk
+  key without the `RoofViewer` role. The deploy script's pre-flight check fails on such an entry, so it blocks a
+  deploy: the plan names the entry and what is wrong with it, never its key. A controller that is left as it is is
+  not blocked.
 - **A typed confirmation for plain HTTP.** Before the controller serves plain HTTP, when it does not already, a person
   types `http`, to confirm that keys, session tokens and PINs may cross this network unencrypted. An answers file can
   give it as `httpConfirmation`. The wizard never saves it.
@@ -312,8 +318,8 @@ A rig's `controller` section has no `camera`. It has a `rig` section instead:
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
-| `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1`, or the running emulator's |
-| `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5`, or the running emulator's |
+| `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
+| `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
 | `cli.folder` | `~/.local/bin` or `/usr/local/bin` | `~/.local/bin` |
 | `macApp.folder` | `/Applications` or `~/Applications` | `/Applications` |
@@ -335,7 +341,7 @@ only when a step needs one:
 
 Without a terminal (`--answers` in a script), give each in a file that only you can read, and the installer reads
 its first line: `--admin-password-file FILE`, `--admin-pin-file FILE` and `--camera-password-file FILE`. When a
-step needs one that was not given, the installer refuses and changes nothing.
+step needs one that was not given, the installer stops with exit code 2 and changes nothing.
 
 ### Settings from a backup
 
@@ -347,8 +353,11 @@ from another one. Give the full path of the saved `appsettings.Local.json`, such
   no settings file there. It never changes the settings of a controller that has them: change those in the web UI, or
   with `hvo-roof settings`.
 - A controller that runs is redeployed to read them.
-- The installer checks that the file holds a JSON object, and refuses the install before anything changes when it
-  does not. The deploy script's [deployment check](deployment.md#the-deployment-check) then reads it as the
+- The installer checks that the file holds a JSON object that sets no secret, and refuses the install before anything
+  changes when it does not. A secret is a setting named `Key` or `Password`, or the camera's `BlueIris:UserName`: the
+  settings file is one anyone on the machine can read, and the controller refuses one that sets a secret. The message
+  names the setting, never its value. Take it out of the backup and put it in a file in `/etc/hvo-roof/secrets`
+  instead; the installer asks for the camera's user and password itself. The deploy script's [deployment check](deployment.md#the-deployment-check) then reads it as the
   controller will, before the controller is replaced.
 - The path is not recorded in the install record, since an import is done once. Running the same answers again
   changes nothing.
@@ -412,7 +421,17 @@ Each step checks the machine just before it runs, and changes only what differs.
 mode set, and its contents are never touched. The record is rewritten only when it would say something new. A second
 run of the same answers changes nothing: "Nothing to change: this machine is already as the answers describe."
 
-After a failed step, running the installer again carries on from where it stopped.
+After a failed step, running the installer again carries on from where it stopped. So does it after Ctrl+C, which
+stops the installer between steps. A deploy script that has started runs to its end first, since it puts the old
+controller back if it cannot finish, and the installer then says what runs as the controller. An API key entry that a
+stopped install left with its name but no key is finished by the next run.
+
+The deploy script runs with a clean environment. Only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TERM`, `TMPDIR`
+and Docker's own `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` reach it from the
+installer's; the installer gives it the rest. A setting of the deploy script's in your shell never changes what the
+installer deploys. The installer also sets `REQUIRE_IDLE_ROOF`: the script then stops before it replaces the
+controller when it cannot read the roof's status, as well as when the roof moves
+([Deploying](deployment.md#deploying-with-the-script)).
 
 ## Certificates
 
@@ -443,8 +462,8 @@ platforms set for a server certificate.
   - the machine's short host name and each name in `controller.hostNames`, each alone, under `.local` and under each
     domain in `controller.domains`;
   - `localhost`;
-  - the machine's private addresses, `127.0.0.1` and `::1`. Addresses on Docker and other virtual networks, and
-    link-local and public addresses, are left out.
+  - the machine's private addresses, `127.0.0.1` and `::1`. Addresses on Docker and other virtual networks,
+    link-local and public addresses, and IPv6 temporary and deprecated addresses, which do not last, are left out.
 
   The controller answers to the same names (its `AllowedHosts`).
 - **A self-signed certificate** is for the same names, and lasts 825 days, the most Apple's platforms accept.
@@ -505,20 +524,25 @@ controller, `cert` then redeploys it, through the deploy script as an install do
 - **Only while the roof is idle.** It reads the controller's status first, and again just before the deploy script
   runs. While the roof moves, it leaves the controller as it is and says to run `sudo hvo-roof-install cert --redeploy`
   once the roof is idle.
-- **Only when the certificate is all that would change.** When more would, such as a new release, it leaves the
-  controller as it is and says to run `sudo hvo-roof-install`, which redeploys it with the new certificate.
+- **Only when the certificate is all that would change.** When more would, it leaves the controller as it is and says
+  to run `sudo hvo-roof-install`, which redeploys it with the new certificate. More would change with a new release,
+  for example, or with camera settings or API keys that an install which stopped before its redeploy wrote. It checks
+  this again just before the deploy script runs, after you agree.
 - **Only once you agree.** It asks `Redeploy the controller now? [y/N]`. With no one at a terminal, such as in a
   script, it does not ask and does not redeploy. `--redeploy` redeploys without asking. `--no-redeploy` puts the
   certificate in place and stops there.
 
 The deploy script stops the roof with a verified Stop before it replaces the controller, and puts the old one back if
 the new one fails a check. A controller that is stopped serves the new certificate when it starts again. One that is not
-deployed yet serves it once `hvo-roof-install` deploys it.
+deployed yet serves it once `hvo-roof-install` deploys it. When something else stands in the way, such as a controller
+that Docker Compose made, `cert` says what it is: once that is dealt with, run `cert --redeploy`. After Ctrl+C, it
+says what runs as the controller, and that `cert --redeploy` finishes.
 
 `cert --redeploy` also redeploys a controller that serves another certificate than the one in place, such as after a
 renewal that was not redeployed. On a machine that cannot reach GitHub, give the release's folder with `--release DIR`,
-as for an install ([The release it installs](#the-release-it-installs)). It exits with code 3 when it could not redeploy, because the roof moves or more than
-the certificate would change. The certificate is in place either way.
+as for an install ([The release it installs](#the-release-it-installs)). It exits with code 3 when it could not
+redeploy: the roof moves, more than the certificate would change, or no controller is deployed. The certificate is in
+place either way.
 
 With nothing recorded, such as a controller the deploy script runs, it never redeploys, and `--redeploy` is refused
 before anything changes. When the roof is idle, run the deploy script again
@@ -604,10 +628,11 @@ prints for `--version` and `--plan`.
 
 ### The rig end to end
 
-`tests/installer/rig-scenario.sh`, the Scenarios workflow's `installer-rig` job, installs a test rig for real. It
-uses the published installer, real Docker and the HAT emulator. The release is built as the release workflow builds
-one: the controller's and the emulator's images, each an index of two platforms. They go in a registry of the run's
-own on loopback, with the `release.json` that names them by digest. The script checks:
+`tests/installer/rig-scenario.sh`, the Scenarios workflow's `installer-rig` job, installs a test rig for real. It uses
+the published installer, real Docker and the HAT emulator. The release is built as the release workflow builds one:
+the controller's and the emulator's images, each an index of this machine's platform, built from its Dockerfile, and
+an empty image for the other platform. They go in a registry of the run's own on loopback, with the `release.json`
+that names them by digest. The script checks:
 
 1. **Install.** `--plan` changes nothing. The install as root with `--answers`, `--release` and
    `--admin-password-file` then runs the release's images by digest, published on loopback only. The folders and files
@@ -616,16 +641,18 @@ own on loopback, with the `release.json` that names them by digest. The script c
    log, the record or the containers' configuration.
 2. **Again.** The same answers change nothing and replace nothing.
 3. **Change.** A new time scale replaces the emulator and redeploys the controller against it.
-4. **Certificate.** `cert --renew --redeploy` serves a new certificate from the same CA.
+4. **Certificate.** `cert --renew --redeploy` serves a new certificate that the CA from before the renewal verifies,
+   and leaves that CA unchanged.
 
 Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
 and no violation.
 
-It needs Docker with buildx, the .NET SDK, `curl`, `jq`, `openssl`, and `sudo` without a password. It refuses to run
-on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`, `/var/lib/hvo-roof`,
-the installer's log, or its containers or network. It removes all of them when it ends. `RIG_HTTPS_PORT` and
-`RIG_WEB_PORT` move the controller off ports 8443 and 8088. `RIG_RESULTS_DIR` writes each check's result and timing to
-`rig-scenario.md`.
+It needs Docker with buildx, the .NET SDK, `curl`, `jq`, `openssl`, `ss`, and `sudo` without a password that reaches
+the same Docker daemon. It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a
+rig: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the installer's log, or its containers or network. It removes all of them
+when it ends. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and its registry's
+15001. `RIG_HTTPS_PORT` and `RIG_WEB_PORT` move the controller off 8443 and 8088, and `RIG_REGISTRY_PORT` moves the
+registry. `RIG_RESULTS_DIR` writes each check's result and timing to `rig-scenario.md`.
 
 ### Refreshing the screenshots
 

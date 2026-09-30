@@ -62,7 +62,7 @@ public sealed record CertificateNames(
         foreach (var found in machine.NetworkAddresses())
         {
             var address = found.Address;
-            if (IsVirtual(found.Interface) || IPAddress.IsLoopback(address) || address.IsIPv6LinkLocal || address.IsIPv6Multicast
+            if (found.Temporary || IsVirtual(found.Interface) || IPAddress.IsLoopback(address) || address.IsIPv6LinkLocal || address.IsIPv6Multicast
                 || address.IsIPv4MappedToIPv6 || address.IsIPv6SiteLocal || IsIPv4LinkLocal(address) || IsIPv4Multicast(address))
             {
                 continue;

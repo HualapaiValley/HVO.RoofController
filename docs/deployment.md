@@ -306,6 +306,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
 | `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them (use `HTTPS_HOST_PORT`, `HOST_PORT` and `WEB_HOST_PORT` for the ports), and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device`, `--privileged` and a mount of the host's `/` or `/dev` are refused as well. |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 25 s for the controller's shutdown, then 2 s for the web UI ([Shutdown timing](#shutdown-timing)). |
+| `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
 | `ROOF_OPERATOR_API_KEY` / `OPERATOR_KEY_FILE` | / `~/.config/hvo-roof/operator.key` | Key for the Stop and Status checks |
@@ -361,6 +362,10 @@ anything.
    you can see the roof and that it is not moving, or that the drive is isolated. The script reads the confirmation
    from the terminal (`/dev/tty`), not from standard input. Without a terminal, or with any other answer, the deploy
    aborts and the old controller keeps running.
+
+   With `REQUIRE_IDLE_ROOF=true`, the script first sends `GET /api/v4.0/RoofControl/Status` the same way. Unless it
+   returns 200 with `isMoving` `false` and `commandedMotion` `None`, the deploy stops before the Stop, with nothing
+   changed. Run it again once the roof is idle.
 5. **Stops the old container gracefully** with `docker stop -t 30` (SIGTERM). The container's supervisor stops the
    controller first, whose shutdown path stops the roof again and ends camera streams, then the web UI. The old container is renamed `<name>-previous` with restart policy `no`, so it can
    be restored but never starts by itself. An older, stopped `<name>-previous` is removed only after this stop has

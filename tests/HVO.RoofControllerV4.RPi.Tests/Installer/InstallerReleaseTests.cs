@@ -84,6 +84,23 @@ public sealed class InstallerReleaseTests
     }
 
     [TestMethod]
+    public async Task ADownloadThatFailed_IsTriedAgain_TheNextTimeTheReleaseIsAskedFor()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var published = pi.Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()];
+        pi.Downloads.Clear();
+        var source = ReleaseSource.GitHub();
+        var first = () => source.GetAsync(pi.Machine, InstallLog.None, "4.0.0", CancellationToken.None);
+        await first.Should().ThrowAsync<InstallerException>();
+
+        pi.Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = published;
+        var release = await source.GetAsync(pi.Machine, InstallLog.None, "4.0.0", CancellationToken.None);
+
+        release.Version.Should().Be("4.0.0");
+        pi.Downloaded.Should().HaveCount(2);
+    }
+
+    [TestMethod]
     public async Task ARelease_GitHubDoesNotHave_SaysToGiveItsFolder()
     {
         using var pi = new FakeMachine().WithPi();

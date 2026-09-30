@@ -141,11 +141,19 @@ public sealed class ReleaseSource
     /// <summary>The folder it reads, or null for GitHub.</summary>
     public string? FolderPath => _folder;
 
-    /// <summary>The release of <paramref name="version"/>, read the first time it is asked for; a failure says how to go on.</summary>
+    /// <summary>
+    /// The release of <paramref name="version"/>, read the first time it is asked for; a failure says how to go on, and
+    /// the next call reads it again (a download that timed out may work the second time).
+    /// </summary>
     public Task<ReleaseManifest> GetAsync(InstallerMachine machine, InstallLog log, string version, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(log);
+        if (_manifest is { IsFaulted: true } or { IsCanceled: true })
+        {
+            _manifest = null;
+        }
+
         return _manifest ??= LoadAsync(machine, log, version, cancellationToken);
     }
 

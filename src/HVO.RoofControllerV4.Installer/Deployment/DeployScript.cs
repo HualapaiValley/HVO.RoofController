@@ -57,7 +57,10 @@ public static class DeployScript
         var result = await context.Machine.Commands.RunAsync(
             new CommandLine("bash", script)
             {
+                // Only the installer's settings: a variable the script reads that the person happened to have set (IMAGE_TAG,
+                // READY_TIMEOUT_SECONDS, a proxy its checks would go through) never reaches it.
                 Environment = environment,
+                InheritEnvironment = false,
 
                 // The script has its own limits: the pull, the pre-flight check, the Stop, the new controller's start.
                 Timeout = null,
@@ -69,7 +72,7 @@ public static class DeployScript
             var said = LastWords(result);
             throw new InstallerException(
                 $"The deploy script stopped (exit {result.ExitCode}){(said is null ? string.Empty : $": {context.Log.Redact(said)}")}. "
-                + "When it fails after stopping a running controller, it puts that one back; `docker ps` shows what runs. The install log has the script's output.");
+                + "When it fails after stopping a running controller, it puts that one back. The install log has the script's output.");
         }
     }
 

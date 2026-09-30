@@ -289,11 +289,31 @@ public sealed class InstallerMachine
     }
 
     private static IReadOnlyList<NetworkAddress> CurrentAddresses()
-        => NetworkInterface.GetAllNetworkInterfaces()
+    {
+        var passing = PassingAddresses();
+        return NetworkInterface.GetAllNetworkInterfaces()
             .Where(network => network.OperationalStatus is OperationalStatus.Up or OperationalStatus.Unknown
                 && network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-            .SelectMany(network => network.GetIPProperties().UnicastAddresses.Select(unicast => new NetworkAddress(network.Name, unicast.Address)))
+            .SelectMany(network => network.GetIPProperties().UnicastAddresses.Select(unicast => new NetworkAddress(network.Name, unicast.Address)
+            {
+                Temporary = passing.Contains((network.Name, unicast.Address))
+            }))
             .ToArray();
+    }
+
+    // Linux says which IPv6 addresses are temporary or deprecated in /proc/net/if_inet6; .NET does not. macOS has no such
+    // file, and its addresses count as lasting.
+    private static IReadOnlySet<(string Interface, IPAddress Address)> PassingAddresses()
+    {
+        try
+        {
+            return File.Exists("/proc/net/if_inet6") ? NetworkAddress.PassingIn(File.ReadAllText("/proc/net/if_inet6")) : new HashSet<(string, IPAddress)>();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return new HashSet<(string, IPAddress)>();
+        }
+    }
 
     private static async Task<X509Certificate2?> PresentedOnLoopbackAsync(int port, CancellationToken cancellationToken)
     {
@@ -333,7 +353,46 @@ public sealed class InstallerMachine
 }
 
 /// <summary>An address of the machine, and the network interface it is on (eth0, wlan0, docker0).</summary>
-public sealed record NetworkAddress(string Interface, IPAddress Address);
+public sealed record NetworkAddress(string Interface, IPAddress Address)
+{
+    // The kernel's address flags (linux/if_addr.h): a temporary (privacy) address, and one that is on its way out.
+    private const int TemporaryFlag = 0x01;
+    private const int DeprecatedFlag = 0x20;
+
+    /// <summary>
+    /// A temporary (privacy) or deprecated IPv6 address: the machine drops it within a day or so, so a certificate that
+    /// named it would name an address the controller no longer has.
+    /// </summary>
+    public bool Temporary { get; init; }
+
+    /// <summary>The temporary and deprecated addresses in <c>/proc/net/if_inet6</c>'s text, with their interfaces.</summary>
+    public static IReadOnlySet<(string Interface, IPAddress Address)> PassingIn(string ifInet6)
+    {
+        ArgumentNullException.ThrowIfNull(ifInet6);
+        var passing = new HashSet<(string, IPAddress)>();
+
+        // Each line: the address in 32 hex digits, the interface's index, the prefix length, the scope, the flags, the name.
+        foreach (var line in ifInet6.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (fields is [var hex, _, _, _, var flags, var name]
+                && hex.Length == 32
+                && int.TryParse(flags, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var value)
+                && (value & (TemporaryFlag | DeprecatedFlag)) != 0)
+            {
+                try
+                {
+                    passing.Add((name, new IPAddress(Convert.FromHexString(hex))));
+                }
+                catch (FormatException)
+                {
+                }
+            }
+        }
+
+        return passing;
+    }
+}
 
 /// <summary>The permissions the installer gives what it makes.</summary>
 public static class Modes

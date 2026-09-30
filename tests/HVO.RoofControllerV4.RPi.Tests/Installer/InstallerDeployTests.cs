@@ -58,12 +58,14 @@ public sealed class InstallerDeployTests
             ["ALLOW_INSECURE_HTTP"] = "false",
             ["REMOTE_CA_CERT"] = "/etc/hvo-roof/ca.crt",
             ["SKIP_REMOTE_CHECK"] = "false",
+            ["REQUIRE_IDLE_ROOF"] = "true",
             ["OPERATOR_KEY_FILE"] = $"{Secrets}/RoofControllerSecurity__ApiKeys__0__Key",
             ["ROOF_OPERATOR_API_KEY"] = string.Empty
         });
         pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(controller => !controller.Emulated && controller.Digest == FakeMachine.ControllerDigest);
-        pi.Ran.Should().Contain(command => command.Program == "bash", "the deploy script runs")
-            .Which.Environment.Should().NotBeNull();
+        var script = pi.Ran.Should().Contain(command => command.Program == "bash", "the deploy script runs").Which;
+        script.Environment.Should().NotBeNull();
+        script.InheritEnvironment.Should().BeFalse("a variable the person happened to set must not change what the script does");
         Directory.GetDirectories(pi.OnDisk("/tmp")).Should().BeEmpty("the work folder with the script is deleted");
 
         var log = pi.Read(InstallPaths.SystemLog);
@@ -140,11 +142,7 @@ public sealed class InstallerDeployTests
     [TestMethod]
     public async Task ReplacingARigsEmulator_StopsTheControllerThatDrivesIt_First()
     {
-        using var bench = InstallerPlanTests.Installed(new FakeMachine(architecture: Architecture.X64, hostName: "bench")
-            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = true, Network = HatEmulatorStep.Network, PublishAddress = "127.0.0.1" })
-            .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer { Network = HatEmulatorStep.Network, PublishAddress = HatEmulatorStep.ControlAddress, Digest = "sha256:" + new string('d', 64) })
-            .WithCertificates());
-        bench.Write(InstallPaths.SystemRecord, InstallerGuardTests.Record(InstallRole.Rig, HatMode.Emulated).ToJson());
+        using var bench = RigWithAnOldEmulator();
 
         var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }));
 
@@ -154,6 +152,31 @@ public sealed class InstallerDeployTests
         bench.Read(InstallPaths.SystemLog).Should().Contain("Stopped roof-controller");
         bench.Deploys.Should().ContainSingle("the controller is started again against the new emulator");
         bench.Containers[MachineSurveyor.HatEmulatorContainer].Digest.Should().Be(FakeMachine.EmulatorDigest);
+    }
+
+    [TestMethod]
+    public async Task AnEmulatorThatDoesNotStart_SaysTheControllerItStopped_StaysStopped()
+    {
+        using var bench = RigWithAnOldEmulator();
+        bench.EmulatorHealth = "unhealthy";
+
+        var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }));
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain("hat-emulator did not become healthy (it is unhealthy): see docker logs hat-emulator. "
+            + "roof-controller, which drives the emulated roof, was stopped to replace the emulator and stays stopped: run the installer again to start both.");
+        bench.Containers[MachineSurveyor.ControllerContainer].State.Should().Be("exited");
+        bench.Deploys.Should().BeEmpty();
+    }
+
+    private static FakeMachine RigWithAnOldEmulator()
+    {
+        var bench = InstallerPlanTests.Installed(new FakeMachine(architecture: Architecture.X64, hostName: "bench")
+            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = true, Network = HatEmulatorStep.Network, PublishAddress = "127.0.0.1" })
+            .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer { Network = HatEmulatorStep.Network, PublishAddress = HatEmulatorStep.ControlAddress, Digest = "sha256:" + new string('d', 64) })
+            .WithCertificates());
+        bench.Write(InstallPaths.SystemRecord, InstallerGuardTests.Record(InstallRole.Rig, HatMode.Emulated).ToJson());
+        return bench;
     }
 
     [TestMethod]
@@ -213,6 +236,8 @@ public sealed class InstallerDeployTests
     [TestMethod]
     [DataRow("{\"isMoving\":true,\"commandedMotion\":\"Opening\"}", "the roof is moving (Opening), and the deploy script stops it before it replaces the controller: run the installer again once the roof is idle", DisplayName = "Moving")]
     [DataRow(null, "it runs but does not answer an authenticated Status (", DisplayName = "No answer")]
+    [DataRow("[]", "it runs but does not answer an authenticated Status (its Status answered with something that is not the controller's)", DisplayName = "An array")]
+    [DataRow("\"ok\"", "it runs but does not answer an authenticated Status (its Status answered with something that is not the controller's)", DisplayName = "A string")]
     public async Task ARoofThatMoves_OrAControllerThatDoesNotAnswer_BlocksTheRedeploy(string? status, string expected)
     {
         using var pi = InstallerPlanTests.AdoptablePi();
@@ -226,6 +251,23 @@ public sealed class InstallerDeployTests
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         pi.Deploys.Should().BeEmpty();
         pi.Ran.Should().NotContain(command => command.Arguments.Contains("stop"), "nothing is stopped");
+    }
+
+    [TestMethod]
+    [DataRow("paused", "it is paused, and the deploy script's verified Stop needs it to answer: unpause it (docker unpause roof-controller)")]
+    [DataRow("restarting", "it is restarting, and the deploy script's verified Stop needs it to answer: wait until it runs")]
+    public async Task APausedOrRestartingController_BlocksTheRedeploy(string state, string expected)
+    {
+        using var pi = InstallerPlanTests.AdoptablePi();
+        pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { State = state };
+
+        var plan = await (await InstallerPlanTests.StartAsync(pi, InstallRole.Controller)).CheckAsync();
+
+        plan.Steps.Single(step => step.Step.Target == MachineSurveyor.ControllerContainer).Check
+            .Should().Match<StepCheck>(check => check.Change == StepChange.Blocked && check.Detail!.StartsWith(expected, StringComparison.Ordinal));
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        pi.Deploys.Should().BeEmpty();
     }
 
     [TestMethod]
@@ -258,8 +300,23 @@ public sealed class InstallerDeployTests
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
         run.Error.Should().Contain("The deploy script stopped (exit 1): [deploy] ERROR: the pre-flight check failed: the new image did not start. Nothing was changed.")
-            .And.Contain("`docker ps` shows what runs");
+            .And.Contain("roof-controller runs now, version 4.0.0.");
         pi.Exists(InstallPaths.SystemRecord).Should().BeFalse("the record says the roles are installed only once they are");
+    }
+
+    [TestMethod]
+    public async Task ACtrlC_WhileTheScriptRuns_LetsItFinish()
+    {
+        using var pi = InstallerPlanTests.AdoptablePi();
+        using var interrupt = new CancellationTokenSource();
+        pi.DuringDeploy = interrupt.Cancel;
+
+        var run = await pi.RunAsync(interrupt.Token, "--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
+
+        pi.DeploysCancellable.Should().Equal([false], "killing the script part-way through the switch would leave the old controller stopped");
+        run.Output.Should().Contain("Stopping once the deploy script finishes: it puts the old controller back if it cannot finish.", run.ToString());
+        pi.Containers[MachineSurveyor.ControllerContainer].Settings.Should().ContainKey(MachineSurveyor.WebStopKeyFileSetting, "the script finished the switch");
+        run.ExitCode.Should().Be((int)InstallerExitCode.Cancelled, run.ToString());
     }
 
     [TestMethod]

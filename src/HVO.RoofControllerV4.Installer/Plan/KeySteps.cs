@@ -28,10 +28,41 @@ public enum ApiKeyUse
 /// </summary>
 public sealed record ConfiguredApiKey(int Index, string? Name, string? Role, bool Kiosk, bool Local, bool HasKey)
 {
-    /// <summary>True when the installer can use it: it has a name, a role and its key (not only the key's hash).</summary>
-    public bool IsUsable => !string.IsNullOrWhiteSpace(Name) && Role is not null && HasKey;
+    // The controller's limits on a key (RoofControllerSecurityOptions.MinimumKeyLength, RoofApiKeyStore's longest).
+    public const int MinimumKeyLength = 24;
+    public const int MaximumKeyLength = 512;
 
-    public bool Is(string role) => string.Equals(Role, role, StringComparison.OrdinalIgnoreCase);
+    /// <summary>How long its key is as the controller reads it, one trailing newline left off; null when not known.</summary>
+    public int? KeyLength { get; init; }
+
+    /// <summary>Whether it gives its key's hash (KeySha256) rather than, or as well as, the key.</summary>
+    public bool HasKeySha256 { get; init; }
+
+    /// <summary>Whether its KeySha256 is the 64 hexadecimal digits the controller needs.</summary>
+    public bool KeySha256IsHex { get; init; }
+
+    /// <summary>
+    /// Why the controller refuses the entry (as RoofApiKeyStore does, and the deploy script's pre-flight check with it);
+    /// null when it takes it.
+    /// </summary>
+    public string? Problem
+        => string.IsNullOrWhiteSpace(Name) ? "it has no name"
+            : RoleName is null ? $"its role is not {RoofControllerApiContract.ViewerRole}, {RoofControllerApiContract.OperatorRole} or {RoofControllerApiContract.AdminRole}"
+            : HasKey && HasKeySha256 ? "it has both a key and a key hash"
+            : !HasKey && !HasKeySha256 ? "it has neither a key nor a key hash"
+            : HasKey && KeyLength < MinimumKeyLength ? $"its key is shorter than {MinimumKeyLength} characters"
+            : HasKey && KeyLength > MaximumKeyLength ? $"its key is longer than {MaximumKeyLength} characters"
+            : !HasKey && !KeySha256IsHex ? "its key hash is not 64 hexadecimal digits"
+            : Kiosk && RoleName != RoofControllerApiContract.ViewerRole ? $"it is a kiosk key without the {RoofControllerApiContract.ViewerRole} role"
+            : null;
+
+    /// <summary>True when the installer can use it: the controller takes it, and it has its key (not only the key's hash).</summary>
+    public bool IsUsable => HasKey && Problem is null;
+
+    public bool Is(string role) => string.Equals(Role?.Trim(), role, StringComparison.OrdinalIgnoreCase);
+
+    private string? RoleName
+        => new[] { RoofControllerApiContract.ViewerRole, RoofControllerApiContract.OperatorRole, RoofControllerApiContract.AdminRole }.FirstOrDefault(Is);
 }
 
 /// <summary>
@@ -95,18 +126,31 @@ public static partial class ApiKeyFiles
                 fields[index] = entry = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             }
 
-            // The key is read only to know that it is there; it is never kept.
+            // The key is read only to know how long it is, as the controller reads it (a file's one trailing newline left
+            // off); it is never kept.
             var value = machine.ReadText(file) ?? string.Empty;
-            entry[field] = field.Equals("Key", StringComparison.OrdinalIgnoreCase) ? (value.Length > 0 ? "yes" : string.Empty) : value.Trim();
+            entry[field] = field.Equals("Key", StringComparison.OrdinalIgnoreCase)
+                ? (value.EndsWith('\n') ? value.Length - 1 : value.Length).ToString(CultureInfo.InvariantCulture)
+                : value.Trim();
         }
 
-        return [.. fields.OrderBy(entry => entry.Key).Select(entry => new ConfiguredApiKey(
-            entry.Key,
-            entry.Value.GetValueOrDefault("Name") is { Length: > 0 } name ? name : null,
-            entry.Value.GetValueOrDefault("Role") is { Length: > 0 } role ? role : null,
-            IsTrue(entry.Value.GetValueOrDefault("Kiosk")),
-            IsTrue(entry.Value.GetValueOrDefault("Local")),
-            entry.Value.GetValueOrDefault("Key") is { Length: > 0 }))];
+        return [.. fields.OrderBy(entry => entry.Key).Select(entry =>
+        {
+            var keyLength = int.Parse(entry.Value.GetValueOrDefault("Key") ?? "0", CultureInfo.InvariantCulture);
+            var hash = entry.Value.GetValueOrDefault("KeySha256") ?? string.Empty;
+            return new ConfiguredApiKey(
+                entry.Key,
+                entry.Value.GetValueOrDefault("Name") is { Length: > 0 } name ? name : null,
+                entry.Value.GetValueOrDefault("Role") is { Length: > 0 } role ? role : null,
+                IsTrue(entry.Value.GetValueOrDefault("Kiosk")),
+                IsTrue(entry.Value.GetValueOrDefault("Local")),
+                keyLength > 0)
+            {
+                KeyLength = keyLength > 0 ? keyLength : null,
+                HasKeySha256 = hash.Length > 0,
+                KeySha256IsHex = hash.Length == 64 && hash.All(char.IsAsciiHexDigit)
+            };
+        })];
     }
 
     /// <summary>
@@ -147,8 +191,6 @@ public static partial class ApiKeyFiles
                 continue;
             }
 
-            var index = Enumerable.Range(0, int.MaxValue).First(candidate => !taken.Contains(candidate));
-            taken.Add(index);
             var (name, role, kiosk, local) = use switch
             {
                 ApiKeyUse.Operator => (OperatorName, RoofControllerApiContract.OperatorRole, false, false),
@@ -156,6 +198,20 @@ public static partial class ApiKeyFiles
                 ApiKeyUse.WebStop => (WebStopName, RoofControllerApiContract.ViewerRole, false, false),
                 _ => (KioskName, RoofControllerApiContract.ViewerRole, true, true)
             };
+
+            // A new key the installer began to write and did not finish (stopped between its name and its key): its entry
+            // is finished now, rather than left for the controller to refuse.
+            var unfinished = existing.FirstOrDefault(key => !key.HasKey && !key.HasKeySha256 && key.Name is not null && IsNameFor(key.Name.Trim(), name)
+                && (key.Role is null || key.Is(role)) && (!key.Kiosk || kiosk) && (!key.Local || local)
+                && allocations.All(allocation => allocation.Index != key.Index));
+            if (unfinished is not null)
+            {
+                allocations.Add(new ApiKeyAllocation(use, unfinished.Index, unfinished.Name!.Trim(), role, kiosk, local, Reused: false));
+                continue;
+            }
+
+            var index = Enumerable.Range(0, int.MaxValue).First(candidate => !taken.Contains(candidate));
+            taken.Add(index);
             name = Unique(name, names);
             names.Add(name);
             allocations.Add(new ApiKeyAllocation(use, index, name, role, kiosk, local, Reused: false));
@@ -168,6 +224,13 @@ public static partial class ApiKeyFiles
     public static string NewKey() => ControllerCertificates.NewPassword();
 
     private static bool Named(ConfiguredApiKey key, string name) => string.Equals(key.Name?.Trim(), name, StringComparison.OrdinalIgnoreCase);
+
+    // A name the installer gives a key for this use: the use's own, or it with a number (Unique).
+    private static bool IsNameFor(string candidate, string name)
+        => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)
+            || (candidate.Length > name.Length + 1
+                && candidate.StartsWith(name + "-", StringComparison.OrdinalIgnoreCase)
+                && candidate[(name.Length + 1)..].All(char.IsAsciiDigit));
 
     // The controller ignores a key added through the API that is named as a configured key is, so a new key never takes a
     // name already there.
@@ -233,7 +296,7 @@ public sealed class ApiKeyStep(ControllerLayout layout, ApiKeyAllocation key) : 
         }
 
         var entry = existing.FirstOrDefault(candidate => candidate.Index == key.Index);
-        if (entry is null || (!key.Reused && Matches(entry) && !entry.HasKey))
+        if (entry is null || (!key.Reused && !entry.HasKey && !entry.HasKeySha256 && string.Equals(entry.Name?.Trim(), key.Name, StringComparison.OrdinalIgnoreCase)))
         {
             return key.Reused
                 ? new StepCheck(StepChange.Blocked, $"{Target} is gone since the plan was made: run the installer again")

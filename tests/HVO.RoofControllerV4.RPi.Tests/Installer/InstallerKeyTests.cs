@@ -194,10 +194,103 @@ public sealed class InstallerKeyTests
         var keys = ApiKeyFiles.Read(pi.Machine, Secrets);
 
         keys.Should().Equal(
-            new ConfiguredApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole, false, false, true),
-            new ConfiguredApiKey(2, "touchscreen", RoofControllerApiContract.ViewerRole, true, true, true),
-            new ConfiguredApiKey(10, "hashed", RoofControllerApiContract.AdminRole, false, false, false));
+            new ConfiguredApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole, false, false, true) { KeyLength = 43 },
+            new ConfiguredApiKey(2, "touchscreen", RoofControllerApiContract.ViewerRole, true, true, true) { KeyLength = 43 },
+            new ConfiguredApiKey(10, "hashed", RoofControllerApiContract.AdminRole, false, false, false) { HasKeySha256 = true, KeySha256IsHex = true });
+        keys.Should().OnlyContain(key => key.Problem == null);
         ApiKeyFiles.Read(pi.Machine, "/etc/hvo-roof/none").Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow("Name", "", "it has no name")]
+    [DataRow("Role", "Operator", "its role is not RoofViewer, RoofOperator or RoofAdmin")]
+    [DataRow("Key", "", "it has neither a key nor a key hash")]
+    [DataRow("Key", "\n", "it has neither a key nor a key hash")]
+    [DataRow("Key", "a23456789012345678901\n\n", "its key is shorter than 24 characters")]
+    [DataRow("KeySha256", "0123", "it has both a key and a key hash")]
+    [DataRow("Kiosk", "true", "it is a kiosk key without the RoofViewer role")]
+    public void AnEntryTheControllerRefuses_SaysWhy_AsTheControllerWould(string field, string value, string problem)
+    {
+        using var pi = new FakeMachine().WithApiKey(0, "observatory", RoofControllerApiContract.OperatorRole);
+        pi.Write(Setting(0, field), value);
+
+        var key = ApiKeyFiles.Read(pi.Machine, Secrets).Single();
+
+        key.Problem.Should().Be(problem);
+        key.IsUsable.Should().BeFalse();
+        ApiKeyFiles.Allocate([key], ControllerUses, webStopIndex: null).Should().OnlyContain(allocation => !allocation.Reused);
+    }
+
+    [TestMethod]
+    [DataRow("Key", "a23456789012345678901234\n", DisplayName = "24 characters and the newline the controller leaves off")]
+    [DataRow("Key", "a2345678901234567890123\r", DisplayName = "24 characters, one a carriage return")]
+    [DataRow("Role", " roofoperator ", DisplayName = "A role in another case, with spaces")]
+    public void AnEntryTheControllerTakes_HasNoProblem(string field, string value)
+    {
+        using var pi = new FakeMachine().WithApiKey(0, "observatory", RoofControllerApiContract.OperatorRole);
+        pi.Write(Setting(0, field), value);
+
+        var key = ApiKeyFiles.Read(pi.Machine, Secrets).Single();
+
+        key.Problem.Should().BeNull();
+        key.IsUsable.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void AHashThatIsNot64HexDigits_IsRefused()
+    {
+        using var pi = new FakeMachine().WithApiKey(0, "hashed", RoofControllerApiContract.OperatorRole, key: false);
+        pi.Write(Setting(0, "KeySha256"), new string('g', 64));
+
+        ApiKeyFiles.Read(pi.Machine, Secrets).Single().Problem.Should().Be("its key hash is not 64 hexadecimal digits");
+    }
+
+    [TestMethod]
+    public async Task AnEntryTheControllerRefuses_BlocksADeploy_ButNotAControllerLeftAsItIs()
+    {
+        using var pi = InstallerPlanTests.AdoptablePi();
+        pi.WithApiKey(9, "hand-made", RoofControllerApiContract.OperatorRole, key: false);
+        pi.Write(Setting(9, "Key"), "too-short");
+
+        var plan = await (await InstallerPlanTests.StartAsync(pi, InstallRole.Controller)).CheckAsync();
+
+        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(
+            StepChange.Blocked,
+            $"API key entry 9 in {Secrets} (hand-made) is one the controller refuses: its key is shorter than 24 characters. "
+            + "The deploy script's pre-flight check fails on it: correct or remove its files (RoofControllerSecurity__ApiKeys__9__*), then run the installer again."));
+        plan.IsBlocked.Should().BeTrue();
+
+        using var installed = InstallerPlanTests.InstalledPi();
+        installed.WithApiKey(9, "hand-made", RoofControllerApiContract.OperatorRole, key: false);
+        installed.Write(Setting(9, "Key"), "too-short");
+
+        var unchanged = await (await InstallerPlanTests.StartAsync(installed, InstallRole.Controller)).CheckAsync();
+        Change(unchanged, MachineSurveyor.ControllerContainer).Change.Should().Be(StepChange.Unchanged, "the running controller already ignores it, and nothing is deployed");
+    }
+
+    [TestMethod]
+    [DataRow(false, DisplayName = "Stopped after its name and role")]
+    [DataRow(true, DisplayName = "Stopped after its name")]
+    public async Task AKeyLeftHalfWritten_ByAnInstallThatStopped_IsFinished_ByTheNextRun(bool nameOnly)
+    {
+        using var pi = InstallerPlanTests.AdoptablePi();
+        pi.WithApiKey(1, "installer-admin", RoofControllerApiContract.AdminRole, key: false);
+        if (nameOnly)
+        {
+            File.Delete(pi.OnDisk(Setting(1, "Role")));
+        }
+
+        var session = await InstallerPlanTests.StartAsync(pi, InstallRole.Controller);
+        var plan = await session.CheckAsync();
+
+        Change(plan, Key(1)).Should().Be(new StepCheck(StepChange.Create, "installer-admin (RoofAdmin): a new random key, never shown"));
+        plan.Steps.Where(step => step.Step is ApiKeyStep).Select(step => step.Step.Target).Should().NotContain(Key(3), "no new entry is taken for it");
+        plan.IsBlocked.Should().BeFalse(plan.ToString());
+        await session.ApplyAsync(plan);
+
+        pi.Read(Key(1)).Should().MatchRegex("^[A-Za-z0-9_-]{43}$");
+        pi.Read(Setting(1, "Role")).Should().Be(RoofControllerApiContract.AdminRole);
+        ApiKeyFiles.Read(pi.Machine, Secrets).Should().OnlyContain(key => key.Problem == null);
     }
 
     [TestMethod]

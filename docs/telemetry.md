@@ -22,7 +22,8 @@ and configuration changes log an `AUDIT` entry ([security.md](security.md#loggin
 
 OTLP export is on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. The production compose file supplies a default off-Pi
 collector, and the emulator profile uses `HVO_EMULATED_ROOF_OTLP_ENDPOINT`. The deploy script uses the same default
-when the variable is unset; set it to an empty value to turn export off.
+when the variable is unset. With the deploy script, an empty value turns export off; Compose treats an empty value as
+unset and uses its default.
 
 | Setting | Compose and deploy-script default | |
 |---|---|---|

@@ -11,7 +11,9 @@ set -euo pipefail
 #    listener and certificate). If it fails, the running controller is not touched.
 # 2. The running controller is replaced only after a VERIFIED stop: POST /Stop (from inside the container, over
 #    loopback) must return 200 with relayRegisterState=Verified, relayRegisterMask=0 and commandedMotion=None.
-#    Anything else aborts, unless --force-unverified-stop is given AND the operator types a confirmation. The old
+#    Anything else aborts, unless --force-unverified-stop is given AND the operator types a confirmation. With
+#    REQUIRE_IDLE_ROOF=true, an authenticated Status inside the container must first report the roof idle (isMoving
+#    false, commandedMotion None); a moving roof, or a Status that says nothing, aborts with nothing changed. The old
 #    container is stopped gracefully (SIGTERM) and kept, not started, as <name>-previous; an older stopped
 #    <name>-previous is removed only once that stop has succeeded.
 # 3. The new controller must become ready, answer an authenticated Status inside the container, and answer an
@@ -146,6 +148,10 @@ ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
 # 2 s for the web UI, so it must be 30 or more: a shorter one would let Docker kill the controller before its shutdown
 # ends.
 STOP_TIMEOUT_SECONDS=${STOP_TIMEOUT_SECONDS:-30}
+# true: a running controller is replaced only while its roof is idle. Before the verified Stop, an authenticated Status
+# inside the container must report isMoving false and commandedMotion None, or nothing is changed. The installer sets
+# it, so a roof that began to move after the installer last looked is not stopped halfway by the Stop.
+REQUIRE_IDLE_ROOF=${REQUIRE_IDLE_ROOF:-false}
 READY_TIMEOUT_SECONDS=${READY_TIMEOUT_SECONDS:-120}
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-3}
 
@@ -234,6 +240,10 @@ require_number STOP_TIMEOUT_SECONDS 30 86400
 require_number HOST_PORT 1 65535
 require_number HTTPS_HOST_PORT 1 65535
 require_number WEB_HOST_PORT 1 65535
+case "${REQUIRE_IDLE_ROOF}" in
+  true|false) ;;
+  *) fail "REQUIRE_IDLE_ROOF must be true or false, got '${REQUIRE_IDLE_ROOF}'. Nothing was changed." ;;
+esac
 publish_prefix=""
 if [[ -n "${PUBLISH_ADDRESS}" ]]; then
   address_pattern='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$'
@@ -642,7 +652,47 @@ confirm_unverified_stop() {
   [[ "${answer}" == "STOP-UNVERIFIED" ]] || fail "Confirmation not given; deployment aborted."
 }
 
+# Prints "<isMoving>\t<commandedMotion>" from a status JSON on stdin, with "null" for a missing field.
+parse_motion() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '[(.isMoving | if . == null then "null" else tostring end), (.commandedMotion // "null")] | @tsv'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print("null" if d.get("isMoving") is None else json.dumps(d.get("isMoving")), "null" if d.get("commandedMotion") is None else str(d.get("commandedMotion")), sep="\t")'
+  else
+    return 1
+  fi
+}
+
+# REQUIRE_IDLE_ROOF=true: fails, with nothing changed, unless an authenticated Status inside the container reports the
+# roof idle (isMoving false and commandedMotion None). Anything it cannot read counts as not idle.
+require_idle_roof() {
+  local response http_status body parsed moving motion
+  [[ "${REQUIRE_IDLE_ROOF}" == "true" ]] || return 0
+  if ! response=$(container_api GET Status); then
+    fail "REQUIRE_IDLE_ROOF=true: could not ask ${CONTAINER_NAME} for its Status, so the roof is not known to be idle. Nothing was changed; run again once the roof is idle."
+  fi
+  http_status=$(tail -n 1 <<<"${response}")
+  body=$(sed '$d' <<<"${response}")
+  if [[ "${http_status}" != "200" ]]; then
+    fail "REQUIRE_IDLE_ROOF=true: ${CONTAINER_NAME}'s Status returned HTTP ${http_status:-<none>}, so the roof is not known to be idle. Nothing was changed; run again once the roof is idle."
+  fi
+  if ! parsed=$(parse_motion <<<"${body}"); then
+    fail "REQUIRE_IDLE_ROOF=true: cannot parse ${CONTAINER_NAME}'s Status (install jq or python3), so the roof is not known to be idle. Nothing was changed; run again once the roof is idle."
+  fi
+  IFS=$'\t' read -r moving motion <<<"${parsed}"
+  if [[ "${moving}" == "true" || ( "${motion}" != "None" && "${motion}" != "null" ) ]]; then
+    fail "The roof is moving (commandedMotion=${motion}, isMoving=${moving}), and REQUIRE_IDLE_ROOF=true, so ${CONTAINER_NAME} was neither stopped nor replaced. Nothing was changed; run again once the roof is idle."
+  fi
+  if [[ "${moving}" != "false" || "${motion}" != "None" ]]; then
+    fail "REQUIRE_IDLE_ROOF=true: ${CONTAINER_NAME}'s Status does not say whether the roof is moving (isMoving=${moving}, commandedMotion=${motion}). Nothing was changed; run again once the roof is idle."
+  fi
+  echo "[deploy] The roof is idle (isMoving=false, commandedMotion=None)."
+}
+
 stop_roof_before_replacing() {
+  require_idle_roof
   echo "[deploy] Requesting a verified roof stop from ${CONTAINER_NAME}"
   local response
   if ! response=$(container_api POST Stop); then

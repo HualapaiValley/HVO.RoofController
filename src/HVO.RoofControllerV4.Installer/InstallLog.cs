@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Installer.Machine;
 
 namespace HVO.RoofControllerV4.Installer;
@@ -120,7 +121,11 @@ public sealed class InstallLog
         {
             foreach (var secret in _secrets)
             {
-                text = text.Replace(secret, "[secret]", StringComparison.Ordinal);
+                // A secret of digits only (the admin PIN) is replaced only where it stands alone: inside a longer number,
+                // or a digest, [secret] would show where the PIN's digits are, and so the PIN.
+                text = secret.All(char.IsAsciiDigit)
+                    ? Regex.Replace(text, $"(?<![0-9A-Za-z]){secret}(?![0-9A-Za-z])", "[secret]", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1))
+                    : text.Replace(secret, "[secret]", StringComparison.Ordinal);
             }
         }
 

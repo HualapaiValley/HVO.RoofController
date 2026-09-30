@@ -343,10 +343,20 @@ internal static class CertificateCommands
         var retry = sudo + new CommandLine(Installer.CommandName, again);
         var ok = (int)InstallerExitCode.Success;
         var notDone = choice == RedeployChoice.Yes ? (int)InstallerExitCode.Refused : ok;
-        var container = await MachineSurveyor.SurveyContainerAsync(machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
-        if (container is not { IsRunning: true })
+        ContainerSurvey? container;
+        try
         {
-            if (changed)
+            container = await MachineSurveyor.SurveyContainerAsync(machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !planOnly)
+        {
+            throw await StoppedAsync(session, retry).ConfigureAwait(false);
+        }
+
+        // A paused or restarting one is checked as any other: the controller's step says what to do about it.
+        if (container is null || container.State is not ("running" or "paused" or "restarting"))
+        {
+            if (changed || choice == RedeployChoice.Yes)
             {
                 host.Out.WriteLine();
                 host.Out.WriteLine(container is null
@@ -354,7 +364,8 @@ internal static class CertificateCommands
                     : $"The controller is not running ({container.State}): it serves this certificate when it starts again.");
             }
 
-            return ok;
+            // With --redeploy, a controller that is not there is one that was not redeployed.
+            return container is null ? notDone : ok;
         }
 
         var plan = PlanBuilder.BuildRedeploy(machine, session.Survey, roles, settings, certificate);
@@ -369,6 +380,10 @@ internal static class CertificateCommands
             // Such as a release.json it could not get: the certificate is in place all the same.
             throw NotRedeployed(error, session, retry);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !planOnly)
+        {
+            throw await StoppedAsync(session, retry).ConfigureAwait(false);
+        }
 
         var check = checkedPlan.Steps.Single(step => step.Step == controller).Check;
         if (!checkedPlan.HasChanges && !checkedPlan.IsBlocked)
@@ -380,8 +395,8 @@ internal static class CertificateCommands
         host.Out.WriteLine();
         if (checkedPlan.Steps.FirstOrDefault(step => step.Check.Change == StepChange.Blocked) is { } blocked)
         {
-            host.Out.WriteLine($"The controller is not redeployed to serve the new certificate: {blocked.Check.Detail}.");
-            host.Out.WriteLine($"To serve it, run {retry} once the roof is idle.");
+            host.Out.WriteLine($"The controller is not redeployed to serve the new certificate: {blocked.Check.Detail?.TrimEnd('.')}.");
+            host.Out.WriteLine($"The certificate is in place. Once that is dealt with, run {retry} to serve it.");
             session.Log.Write($"Not redeployed: {blocked.Check.Detail}");
             return planOnly ? ok : notDone;
         }
@@ -438,6 +453,9 @@ internal static class CertificateCommands
 
         host.Out.WriteLine();
         session.Log.Write($"Redeploying {controller.Target}: {check.Detail}.");
+
+        // What the person agreed to: the controller's step refuses to go ahead if, by now, more than its certificate differs.
+        controller.CertificateOnly = true;
         try
         {
             // Each step is checked again just before it runs: a roof that started moving stops the redeploy there.
@@ -447,10 +465,25 @@ internal static class CertificateCommands
         {
             throw NotRedeployed(error, session, retry);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw await StoppedAsync(session, retry).ConfigureAwait(false);
+        }
 
         session.Log.Write($"Redeployed {controller.Target} to serve the new certificate.");
         host.Out.WriteLine("The controller serves the new certificate.");
         return ok;
+    }
+
+    // Ctrl-C before the controller was redeployed (a deploy script that started runs to its end first): what runs now,
+    // and how to finish.
+    private static async Task<InstallerException> StoppedAsync(InstallerSession session, string retry)
+    {
+        session.Log.Write("Stopped before the controller was redeployed.");
+        return new InstallerException(
+            $"Stopped before the controller was redeployed. {await ControllerStep.NowAsync(session.Context).ConfigureAwait(false)}{Environment.NewLine}"
+            + $"The certificate is in place{(session.Log.Path is { } log ? $"; the log is {log}" : string.Empty)}. To serve it, run {retry} once the roof is idle.",
+            InstallerExitCode.Cancelled);
     }
 
     private static InstallerException NotRedeployed(InstallerException error, InstallerSession session, string retry)

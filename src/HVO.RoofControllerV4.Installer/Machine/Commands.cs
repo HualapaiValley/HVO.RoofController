@@ -21,8 +21,21 @@ public sealed record CommandLine(string Program, IReadOnlyList<string> Arguments
     /// <summary>True when the input or the output may hold a secret: the log then records only the command and its exit code.</summary>
     public bool Secret { get; init; }
 
+    /// <summary>
+    /// The variables that a command which does not <see cref="InheritEnvironment"/> still gets from the installer's: where
+    /// programs are, the person's home and terminal, and which Docker daemon the installer asked.
+    /// </summary>
+    public static readonly IReadOnlyList<string> KeptEnvironment =
+        ["PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY"];
+
     /// <summary>Variables added to the installer's environment for this command.</summary>
     public IReadOnlyDictionary<string, string>? Environment { get; init; }
+
+    /// <summary>
+    /// False to give the command only <see cref="KeptEnvironment"/> and <see cref="Environment"/>: for a script that reads
+    /// its settings from variables, so none the person happened to have set reaches it.
+    /// </summary>
+    public bool InheritEnvironment { get; init; } = true;
 
     /// <summary>How long the command may run before it is stopped (and fails); null waits as long as it takes.</summary>
     public TimeSpan? Timeout { get; init; } = TimeSpan.FromMinutes(2);
@@ -114,6 +127,18 @@ public sealed class ProcessCommandRunner : ICommandRunner
         foreach (var argument in command.Arguments)
         {
             start.ArgumentList.Add(argument);
+        }
+
+        if (!command.InheritEnvironment)
+        {
+            start.Environment.Clear();
+            foreach (var name in CommandLine.KeptEnvironment)
+            {
+                if (_environment(name) is { } value)
+                {
+                    start.Environment[name] = value;
+                }
+            }
         }
 
         // Programs answer in English, so the installer can read what they say.

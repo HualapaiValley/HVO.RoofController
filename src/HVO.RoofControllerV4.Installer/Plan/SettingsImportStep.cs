@@ -106,6 +106,14 @@ public sealed class SettingsImportStep(ControllerLayout layout, string source) :
             {
                 return $"{source} is not the controller's settings: it must hold a JSON object, like appsettings.json";
             }
+
+            // The settings file is one anyone on the machine reads, and the controller refuses one that sets a secret.
+            if (Settings(document.RootElement, string.Empty).FirstOrDefault(IsSecret) is { } secret)
+            {
+                return $"{source} sets {secret}, which is a secret: the controller refuses a settings file with one, and anyone on this machine "
+                    + $"can read that file. Take it out of the backup and put it in a file in {layout.Secrets} instead (the installer asks for "
+                    + "the camera's user and password itself), then run the installer again";
+            }
         }
         catch (JsonException error)
         {
@@ -115,5 +123,44 @@ public sealed class SettingsImportStep(ControllerLayout layout, string source) :
 
         text = read;
         return null;
+    }
+
+    // The settings in a JSON object, named as configuration names them (Section:Name, an array's items by index), as the
+    // controller reads its settings file: each value, and each empty object or array.
+    private static IEnumerable<string> Settings(JsonElement element, string prefix)
+    {
+        var children = element.ValueKind switch
+        {
+            JsonValueKind.Object => element.EnumerateObject().Select(property => (Name: property.Name, Value: property.Value)).ToList(),
+            JsonValueKind.Array => element.EnumerateArray().Select((item, index) => (Name: index.ToString(System.Globalization.CultureInfo.InvariantCulture), Value: item)).ToList(),
+            _ => null
+        };
+
+        if (children is null || children.Count == 0)
+        {
+            if (prefix.Length > 0)
+            {
+                yield return prefix;
+            }
+
+            yield break;
+        }
+
+        foreach (var (name, value) in children)
+        {
+            foreach (var setting in Settings(value, prefix.Length > 0 ? $"{prefix}:{name}" : name))
+            {
+                yield return setting;
+            }
+        }
+    }
+
+    // As the controller's RoofSettingsCatalogue.IsSecretKey: the camera's user and password, and any key or password.
+    private static bool IsSecret(string setting)
+    {
+        var name = setting[(setting.LastIndexOf(':') + 1)..];
+        return name.Equals("Key", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Password", StringComparison.OrdinalIgnoreCase)
+            || setting.Equals("BlueIris:UserName", StringComparison.OrdinalIgnoreCase);
     }
 }

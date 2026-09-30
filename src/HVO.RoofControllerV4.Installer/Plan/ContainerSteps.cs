@@ -114,8 +114,27 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         var image = release.HatEmulator.Reference;
         await Docker(context, "pull the HAT emulator's image", TimeSpan.FromMinutes(20), cancellationToken, "pull", "--platform", ControllerStep.Platform(context.Machine), image).ConfigureAwait(false);
-        await StopEmulatedControllerAsync(context, cancellationToken).ConfigureAwait(false);
+        if (!await StopEmulatedControllerAsync(context, cancellationToken).ConfigureAwait(false))
+        {
+            await StartAsync(context, check, image, cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
+        try
+        {
+            await StartAsync(context, check, image, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InstallerException error)
+        {
+            throw new InstallerException(
+                $"{error.Message} {MachineSurveyor.ControllerContainer}, which drives the emulated roof, was stopped to replace the emulator and stays stopped: "
+                + "run the installer again to start both.",
+                error.ExitCode);
+        }
+    }
+
+    private async Task StartAsync(InstallContext context, StepCheck check, string image, CancellationToken cancellationToken)
+    {
         var network = await context.Machine.Commands.RunAsync(new CommandLine("docker", "network", "inspect", Network), cancellationToken).ConfigureAwait(false);
         if (!network.Succeeded)
         {
@@ -170,14 +189,17 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
     // A controller that drives the emulator loses its HAT when the emulator is replaced, and could not then report the
     // verified Stop the deploy script needs; it drives no real roof, so it is stopped here, and the controller's step
     // starts it again. A controller on the real HAT is never stopped here.
-    private static async Task StopEmulatedControllerAsync(InstallContext context, CancellationToken cancellationToken)
+    private static async Task<bool> StopEmulatedControllerAsync(InstallContext context, CancellationToken cancellationToken)
     {
         var controller = await MachineSurveyor.SurveyContainerAsync(context.Machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
-        if (controller is { IsRunning: true, HatEmulator: not null, Origin: ContainerOrigin.DeployScript })
+        if (controller is not { IsRunning: true, HatEmulator: not null, Origin: ContainerOrigin.DeployScript })
         {
-            await Docker(context, $"stop {MachineSurveyor.ControllerContainer}", TimeSpan.FromMinutes(2), cancellationToken, "stop", MachineSurveyor.ControllerContainer).ConfigureAwait(false);
-            context.Log.Write($"Stopped {MachineSurveyor.ControllerContainer}, which drives the emulated roof, before replacing the HAT emulator.");
+            return false;
         }
+
+        await Docker(context, $"stop {MachineSurveyor.ControllerContainer}", TimeSpan.FromMinutes(2), cancellationToken, "stop", MachineSurveyor.ControllerContainer).ConfigureAwait(false);
+        context.Log.Write($"Stopped {MachineSurveyor.ControllerContainer}, which drives the emulated roof, before replacing the HAT emulator.");
+        return true;
     }
 
     private static async Task Docker(InstallContext context, string doing, TimeSpan timeout, CancellationToken cancellationToken, params string[] arguments)
@@ -243,7 +265,49 @@ public sealed class ControllerStep(
     /// </summary>
     public bool OnlyCertificateDiffers { get; private set; }
 
+    /// <summary>
+    /// Set by <c>hvo-roof-install cert</c> once the person agreed to a redeploy for the certificate alone: a later check
+    /// (the one just before it runs) refuses to go ahead when more than the certificate differs by then.
+    /// </summary>
+    public bool CertificateOnly { get; set; }
+
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
+    {
+        var check = await CheckChangeAsync(context, cancellationToken).ConfigureAwait(false);
+        if (check.MakesChange && RefusedKey(context.Machine) is { } refused)
+        {
+            return refused;
+        }
+
+        return CertificateOnly && check.MakesChange && !OnlyCertificateDiffers
+            ? new StepCheck(StepChange.Blocked, $"more than its certificate would change now: {check.Detail}")
+            : check;
+    }
+
+    // An API key entry the controller refuses fails the deploy script's pre-flight check, so a deploy is not tried with
+    // one there; one of the installer's own that it will finish (ApiKeyFiles.Allocate) is not in the way.
+    private StepCheck? RefusedKey(InstallerMachine machine)
+    {
+        IReadOnlyList<ConfiguredApiKey> configured;
+        try
+        {
+            configured = ApiKeyFiles.Read(machine, layout.Secrets);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        var refused = configured.FirstOrDefault(key => key.Problem is not null && keys.All(own => own.Index != key.Index));
+        return refused is null
+            ? null
+            : new StepCheck(
+                StepChange.Blocked,
+                string.Create(CultureInfo.InvariantCulture, $"API key entry {refused.Index} in {layout.Secrets}{(refused.Name is { } name ? $" ({name})" : string.Empty)} is one the controller refuses: {refused.Problem}. ")
+                + string.Create(CultureInfo.InvariantCulture, $"The deploy script's pre-flight check fails on it: correct or remove its files ({ApiKeyFiles.Prefix}{refused.Index}__*), then run the installer again."));
+    }
+
+    private async Task<StepCheck> CheckChangeAsync(InstallContext context, CancellationToken cancellationToken)
     {
         _deployKeyFile = null;
         OnlyCertificateDiffers = false;
@@ -268,6 +332,16 @@ public sealed class ControllerStep(
         {
             reason = certificateReason;
             OnlyCertificateDiffers = true;
+        }
+
+        if (container.State is "paused" or "restarting")
+        {
+            // Neither answers a Stop, and the deploy script's verified Stop needs one before it replaces a controller.
+            return new StepCheck(
+                StepChange.Blocked,
+                container.State == "paused"
+                    ? $"it is paused, and the deploy script's verified Stop needs it to answer: unpause it (docker unpause {Target}), or stop it yourself once the roof is idle (docker stop {Target}), then run the installer again"
+                    : $"it is restarting, and the deploy script's verified Stop needs it to answer: wait until it runs, or stop it yourself (docker stop {Target}), then run the installer again");
         }
 
         if (!container.IsRunning)
@@ -427,7 +501,9 @@ public sealed class ControllerStep(
 
             if (probe is not { IsAccepted: true })
             {
-                reason ??= "redeployed to read the installer's new API keys (a controller reads its keys when it starts)";
+                const string NewKeys = "to read the installer's new API keys (a controller reads its keys when it starts)";
+                reason = reason is null ? $"redeployed {NewKeys}" : OnlyCertificateDiffers ? $"{reason}, and {NewKeys}" : reason;
+                OnlyCertificateDiffers = false;
             }
         }
 
@@ -512,19 +588,57 @@ public sealed class ControllerStep(
             ["REMOTE_CA_CERT"] = trust ?? string.Empty,
             ["SKIP_REMOTE_CHECK"] = "false",
 
+            // The script's Stop refuses a roof that moves, or that its Status cannot show idle, before it replaces the controller.
+            ["REQUIRE_IDLE_ROOF"] = "true",
+
             // The key for the Stop and Status checks, as a file only root reads; never the key itself.
             ["OPERATOR_KEY_FILE"] = _deployKeyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),
             ["ROOF_OPERATOR_API_KEY"] = string.Empty
         };
 
-        await DeployScript.RunAsync(context, work, environment, cancellationToken).ConfigureAwait(false);
-        var deployed = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
+        // Once started, the script runs to its end. A Ctrl-C at the terminal reaches it too, and it puts the old controller
+        // back itself (its EXIT trap); killing it part-way through the switch would leave the old one stopped.
+        using (cancellationToken.Register(() => context.Progress?.Invoke("Stopping once the deploy script finishes: it puts the old controller back if it cannot finish.")))
+        {
+            try
+            {
+                await DeployScript.RunAsync(context, work, environment, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (InstallerException error)
+            {
+                throw new InstallerException($"{error.Message} {await NowAsync(context).ConfigureAwait(false)}", error.ExitCode);
+            }
+        }
+
+        var deployed = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
         if (deployed is not { IsRunning: true } || deployed.ImageDigest != release.Controller.Digest)
         {
             throw new InstallerException($"The deploy script finished, but {Target} does not run release {release.Version}'s image: see docker ps and the install log.");
         }
 
         context.Log.Write($"Deployed {Target}: release {release.Version}, verified by the deploy script.");
+    }
+
+    /// <summary>What runs as the controller now, as a sentence: after the deploy script stopped, or the install did.</summary>
+    internal static async Task<string> NowAsync(InstallContext context)
+    {
+        const string Target = MachineSurveyor.ControllerContainer;
+        ContainerSurvey? now;
+        try
+        {
+            now = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is InstallerException or IOException or InvalidOperationException)
+        {
+            return $"Docker did not say what runs now ({error.Message}): `docker ps` shows it.";
+        }
+
+        return now switch
+        {
+            null => $"There is no {Target} now.",
+            { IsRunning: true } => $"{Target} runs now{(now.Version is { } version ? $", version {version}" : string.Empty)}.",
+            _ => $"{Target} is {now.State} now."
+        };
     }
 
     // The name the deploy script checks the controller by: the first of its names that its certificate has (the person's

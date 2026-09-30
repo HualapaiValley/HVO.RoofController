@@ -120,6 +120,38 @@ public sealed class InstallerSettingsImportTests
     }
 
     [TestMethod]
+    [DataRow("{ \"RoofControllerSecurity\": { \"ApiKeys\": [ { \"Name\": \"old\", \"Role\": \"RoofAdmin\", \"Key\": \"VALUE-FROM-THE-BACKUP\" } ] } }", "RoofControllerSecurity:ApiKeys:0:Key")]
+    [DataRow("{ \"BlueIris\": { \"BaseUrl\": \"http://camera\", \"PASSWORD\": \"VALUE-FROM-THE-BACKUP\" } }", "BlueIris:PASSWORD")]
+    [DataRow("{ \"BlueIris\": { \"UserName\": \"VALUE-FROM-THE-BACKUP\" } }", "BlueIris:UserName")]
+    [DataRow("{ \"Mqtt:Password\": \"VALUE-FROM-THE-BACKUP\" }", "Mqtt:Password")]
+    public async Task ABackupThatSetsASecret_IsRefused_NamingTheSettingButNotItsValue(string content, string setting)
+    {
+        using var pi = new FakeMachine().WithPi();
+        pi.Write(Backup, content);
+
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(Answers()));
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.ToString().Should().Contain($"{Backup} sets {setting}, which is a secret: the controller refuses a settings file with one")
+            .And.Contain("put it in a file in /etc/hvo-roof/secrets instead")
+            .And.NotContain("VALUE-FROM-THE-BACKUP");
+        pi.Exists("/etc/hvo-roof").Should().BeFalse("nothing was changed");
+    }
+
+    [TestMethod]
+    public async Task ABackupWhoseSettingsOnlyNameKeys_IsImported()
+    {
+        using var pi = new FakeMachine().WithPi();
+        const string content = "{ \"RoofControllerSecurity\": { \"ApiKeys\": [ { \"Name\": \"old\", \"Role\": \"RoofAdmin\" } ], \"KeyPerFile\": true } }";
+        pi.Write(Backup, content);
+
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(Answers()));
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Read(SettingsFile).Should().Be(content);
+    }
+
+    [TestMethod]
     public async Task ABackupGivenWithoutItsFullPath_IsRefused()
     {
         using var pi = new FakeMachine().WithPi();

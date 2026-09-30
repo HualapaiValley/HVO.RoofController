@@ -199,6 +199,12 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What the deploy script says when it fails; null for a deploy that succeeds.</summary>
     public string? DeployFailure { get; set; }
 
+    /// <summary>What happens while the deploy script runs (a Ctrl-C, say), before it finishes.</summary>
+    public Action? DuringDeploy { get; set; }
+
+    /// <summary>For each run of the deploy script, in order: whether the installer could have stopped it part-way.</summary>
+    public List<bool> DeploysCancellable { get; } = [];
+
     /// <summary>What the HAT emulator's health check says once it is started.</summary>
     public string EmulatorHealth { get; set; } = "healthy";
 
@@ -450,11 +456,14 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     };
 
     /// <summary>Runs hvo-roof-install with <paramref name="args"/> on this machine.</summary>
-    public async Task<InstallerRun> RunAsync(params string[] args)
+    public Task<InstallerRun> RunAsync(params string[] args) => RunAsync(CancellationToken.None, args);
+
+    /// <summary>Runs hvo-roof-install with <paramref name="args"/> on this machine, stopped as a Ctrl-C stops it when <paramref name="interrupt"/> is cancelled.</summary>
+    public async Task<InstallerRun> RunAsync(CancellationToken interrupt, params string[] args)
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var exit = await HVO.RoofControllerV4.Installer.Installer.RunAsync(args, Host(output, error)).ConfigureAwait(false);
+        var exit = await HVO.RoofControllerV4.Installer.Installer.RunAsync(args, Host(output, error), interrupt).ConfigureAwait(false);
         return new InstallerRun(exit, output.ToString(), error.ToString());
     }
 
@@ -524,7 +533,7 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
                 : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
             "docker" when arguments is ["rm", var name] => Docker(() => Containers.Remove(name) ? Answer(name) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
             "docker" when arguments is ["run", "-d", "--name", MachineSurveyor.HatEmulatorContainer, ..] => Docker(() => RunEmulator(arguments)),
-            "bash" when arguments is [var script] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, command),
+            "bash" when arguments is [var script] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, command, cancellationToken),
             "systemctl" when arguments is ["is-enabled", MachineSurveyor.KioskUnit] => Answer(Kiosk.Enabled ? "enabled" : "disabled", Kiosk.Enabled ? 0 : 1),
             "systemctl" when arguments is ["is-active", MachineSurveyor.KioskUnit] => Answer(Kiosk.Active ? "active" : "inactive", Kiosk.Active ? 0 : 3),
             "sw_vers" when arguments is ["-productVersion"] && Os == InstallerOs.MacOS => Answer("15.6.1"),
@@ -675,10 +684,12 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     // The deploy script, as far as the installer sees it: it stops the running controller only with a key it knows,
     // reads its key file as the script does, and leaves the new controller running with the settings it was given.
-    private CommandResult Deploy(string script, CommandLine command)
+    private CommandResult Deploy(string script, CommandLine command, CancellationToken cancellationToken)
     {
         var environment = command.Environment ?? new Dictionary<string, string>();
         Deploys.Add(environment);
+        DeploysCancellable.Add(cancellationToken.CanBeCanceled);
+        DuringDeploy?.Invoke();
         File.Exists(OnDisk(script)).Should().BeTrue("the installer writes the deploy script before it runs it");
         if (DeployFailure is { } failure)
         {

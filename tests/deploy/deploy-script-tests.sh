@@ -623,6 +623,73 @@ test_unverified_stop_aborts_without_stopping() {
   [[ -z "$(docker_calls stop)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "the controller was stopped or replaced"
 }
 
+# --- REQUIRE_IDLE_ROOF --------------------------------------------------------------------------------------------
+
+test_require_idle_roof_refuses_a_moving_roof_without_stopping() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF=true FAKE_OLD_MOTION=Opening
+
+  assert_status 1
+  assert_output_contains "The roof is moving (commandedMotion=Opening, isMoving=true)"
+  assert_output_contains "Nothing was changed; run again once the roof is idle."
+  assert_output_not_contains "Requesting a verified roof stop"
+  assert_old_controller_untouched
+  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested of a moving roof"
+}
+
+test_require_idle_roof_refuses_a_rollback_while_the_roof_moves() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF=true FAKE_CURRENT_MOTION=Closing -- --rollback
+
+  assert_status 1
+  assert_output_contains "The roof is moving (commandedMotion=Closing, isMoving=true)"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+  [[ -z "$(docker_calls stop)$(docker_calls rename)" ]] || fail_test "the rollback stopped or renamed a container"
+  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested of a moving roof"
+}
+
+test_require_idle_roof_with_an_idle_roof_deploys() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF=true
+
+  assert_status 0
+  assert_output_contains "The roof is idle (isMoving=false, commandedMotion=None)."
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false no
+  local i_status i_stop_request
+  i_status=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Status"')
+  i_stop_request=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')
+  (( i_status > 0 && i_status < i_stop_request )) \
+    || fail_test "expected the Status before the Stop: status=${i_status} stop-request=${i_stop_request}"
+}
+
+test_without_require_idle_roof_a_moving_roof_is_stopped_and_replaced() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_MOTION=Opening
+
+  assert_status 0
+  assert_output_not_contains "The roof is moving"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false no
+  [[ "$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')" != "0" ]] || fail_test "no verified Stop before the swap"
+}
+
+test_invalid_require_idle_roof_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local value
+  for value in yes TRUE 1 " true"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF="${value}"
+    assert_status 1
+    assert_output_contains "REQUIRE_IDLE_ROOF must be true or false, got '${value}'. Nothing was changed."
+    assert_no_docker_calls "REQUIRE_IDLE_ROOF=${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
 # --- --force-unverified-stop --------------------------------------------------------------------------------------
 
 # assert_old_controller_untouched: the old controller runs as before, and nothing was stopped, renamed or run.

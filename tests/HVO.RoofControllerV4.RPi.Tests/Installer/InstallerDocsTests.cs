@@ -66,8 +66,8 @@ public sealed partial class InstallerDocsTests
         page.Should().Contain($"| `controller.httpsPort` | The controller's API over HTTPS (the deploy script's `HTTPS_HOST_PORT`) | `{ControllerSettings.DefaultHttpsPort}` |");
         page.Should().Contain($"| `controller.httpPort` | The controller's API over HTTP, with `http` (`HOST_PORT`) | `{ControllerSettings.DefaultHttpPort}` |");
         page.Should().Contain($"| `controller.webPort` | The web UI (`WEB_HOST_PORT`) | `{ControllerSettings.DefaultWebPort}` |");
-        page.Should().Contain(FormattableString.Invariant($"| A rig only: how many times as fast as real time the emulated roof runs, from `{RigSettings.MinimumTimeScale}` to `{RigSettings.MaximumTimeScale}` | `{RigSettings.DefaultTimeScale}`, or the running emulator's |"));
-        page.Should().Contain(FormattableString.Invariant($"| A rig only: the emulated camera's frame rate, from `{RigSettings.MinimumCameraFramesPerSecond}` to `{RigSettings.MaximumCameraFramesPerSecond}` | `{RigSettings.DefaultCameraFramesPerSecond}`, or the running emulator's |"));
+        page.Should().Contain(FormattableString.Invariant($"| A rig only: how many times as fast as real time the emulated roof runs, from `{RigSettings.MinimumTimeScale}` to `{RigSettings.MaximumTimeScale}` | `{RigSettings.DefaultTimeScale}` (the wizard offers the running emulator's) |"));
+        page.Should().Contain(FormattableString.Invariant($"| A rig only: the emulated camera's frame rate, from `{RigSettings.MinimumCameraFramesPerSecond}` to `{RigSettings.MaximumCameraFramesPerSecond}` | `{RigSettings.DefaultCameraFramesPerSecond}` (the wizard offers the running emulator's) |"));
         page.Should().Contain($"| `cli.folder` | `{CliSettings.HomeFolder}` or `{CliSettings.SharedFolder}` | `{new CliSettings().Folder}` |");
         page.Should().Contain($"| `macApp.folder` | `{MacAppSettings.SharedFolder}` or `{MacAppSettings.HomeFolder}` | `{new MacAppSettings().Folder}` |");
     }
