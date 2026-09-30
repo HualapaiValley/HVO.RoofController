@@ -5,7 +5,8 @@ name: Scenarios
 #   scenarios            every [TestCategory("Scenario")] test, the short C14 and kiosk soaks included
 #   browser              the web UI in Chromium with phone, tablet and desktop emulation ([TestCategory("Browser")])
 #   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
-#                        rollback, and the Compose migration (tests/emulator/deploy-scenarios.sh)
+#                        rollback, the Compose migration, and a deploy of a pulled image
+#                        (tests/emulator/deploy-scenarios.sh)
 #   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results
 #   kiosk-soak           nightly and on demand: the touchscreen kiosk against the emulated roof for
 #                        HVO_KIOSK_SOAK_DURATION, with its heap, threads and reconnects
@@ -151,7 +152,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Lifecycle, supervisor, C12 deploy and rollback, Compose migration
+      - name: Lifecycle, supervisor, C12 deploy and rollback, Compose migration, pulled image
         run: tests/emulator/deploy-scenarios.sh
 
       - name: Summary

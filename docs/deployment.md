@@ -3,7 +3,8 @@
 This page covers:
 
 - preparing the Pi (secrets, TLS certificate, identity store, settings directories)
-- deploying with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` or `docker-compose.yaml`
+- deploying with `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` or `docker-compose.yaml`, from this
+  checkout or from a release's images
 - the deployment check (`--validate-deployment`) both of them run first
 - how the controller is stopped safely during a deploy, verified afterwards and rolled back
 - the container's two processes, the controller and the web UI, and the supervisor that runs them
@@ -248,8 +249,9 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 |----------|---------|---------|
 | `PI_HOST` | (required) | Host name of the Pi, used for the remote check |
 | `DOCKER_CONTEXT` | `rpi-remote` | Docker context that targets the Pi |
-| `IMAGE_TAG` | `hvov9/roof-controller:v4` | Image tag |
-| `BUILD_PLATFORM` | `linux/arm64` | Platform the image is built for: the Pi's. `linux/amd64` is accepted only in [HAT emulator mode](#hat-emulator-mode-test-rigs), for a test rig on a PC. |
+| `IMAGE_TAG` | `hvov9/roof-controller:v4` | Tag of the image built from this checkout |
+| `IMAGE_REF` | (empty) | A released image by its digest, `<registry>/<name>[:<tag>]@sha256:<digest>`. The Pi's Docker pulls it instead of the script building one. See [Deploying a released image](#deploying-a-released-image). |
+| `BUILD_PLATFORM` | `linux/arm64` | Platform the image is built or pulled for: the Pi's. `linux/amd64` is accepted only in [HAT emulator mode](#hat-emulator-mode-test-rigs), for a test rig on a PC. |
 | `CONTAINER_NAME` | `roof-controller` | Container name. The previous version is kept as `<name>-previous`. |
 | `HTTPS_HOST_PORT` | `8443` | Published HTTPS port of the controller's API (with `WEB_HOST_PORT`, the only published ports in HTTPS mode) |
 | `HOST_PORT` | `8080` | Published HTTP port, only with `ALLOW_INSECURE_HTTP=true` |
@@ -298,7 +300,8 @@ anything.
      drive the HAT. Stop it and retry.
    - neither `<name>` nor `<name>-previous` was created by Docker Compose. The script replaces and restores only
      controllers it created; see [Moving between Compose and the deploy script](#moving-between-compose-and-the-deploy-script).
-2. **Builds** the image for `BUILD_PLATFORM` (the Pi's, `linux/arm64`) and loads it on the Pi. The image carries the
+2. **Builds** the image for `BUILD_PLATFORM` (the Pi's, `linux/arm64`) and loads it on the Pi, or with `IMAGE_REF`
+   **pulls** a released image instead ([Deploying a released image](#deploying-a-released-image)). The image carries the
    product version as a workstation build (`4.0.0-dev`), the checkout's commit and the time it was built, in its labels
    and in its programs ([Versions and releases](releasing.md#images)); the line
    `[build] Building <image> (4.0.0-dev, commit 0123abcd4567) for linux/arm64...` names them.
@@ -363,6 +366,55 @@ anything.
    and failed writes to the terminal are skipped. The last line is `[deploy] ERROR: Deployment failed (<reason>). <outcome>`; the outcome starts with
    `Rolled back:` when the old controller is back. The script exits 1, or 129, 130 or 143 after SIGHUP, SIGINT or
    SIGTERM. With no previous controller (a first deploy), the outcome says the roof controller is not running.
+
+### Deploying a released image
+
+A release publishes the controller's image on GHCR, for `linux/arm64` and `linux/amd64`, and lists each image's digest
+in the release's `release.json` ([Versions and releases](releasing.md)). With `IMAGE_REF` set to the image by its
+digest, the Pi's Docker pulls it and the script builds nothing, so it needs no checkout: the script from the release's
+assets is enough.
+
+```bash
+PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
+  IMAGE_REF=ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:<the digest in release.json> \
+  ./deploy-roofcontroller-rpi.sh
+```
+
+- `IMAGE_REF` must end with `@sha256:` and the digest's 64 hex digits. A tag alone is refused, and nothing is
+  changed: a tag can be moved to another image, a digest cannot.
+- The Pi's Docker pulls the image for `BUILD_PLATFORM`
+  (`[pull] Pulling <image> for linux/arm64 into Docker context 'rpi-remote'...`). A digest the registry does not hold,
+  or an image with nothing for that platform, fails the pull. The script then checks what Docker reports for the image:
+  its platform, and the digest among its repository digests, which also covers an image that was already on the Pi or
+  came through a mirror. It prints the version and commit from the image's labels:
+  `[pull] sha256:... for linux/arm64: version 4.0.0, commit 0123abcd4567`. Any failure stops the deploy before the
+  pre-flight, with the running controller untouched.
+- From the pre-flight on, the deploy is the same as for a built image, and the pre-flight and the new controller run
+  the checked platform's image. `--dry-run` shows the pull in its plan and pulls nothing.
+- `--rollback` and `--verify-remote` ignore `IMAGE_REF`, and do not check it: a rollback restores `<name>-previous`
+  however it was deployed, even with a reference a deploy would refuse still in the environment.
+- The released images are public once a maintainer has made the GHCR packages public, a step of the first release
+  ([Versions and releases](releasing.md)); then the Pi needs no registry login. Until then, or for a registry that
+  needs one, an anonymous pull fails with `unauthorized` or `denied`: run `docker login ghcr.io` in the Pi's Docker
+  first, with a token that can read packages.
+
+**On the Pi itself.** The script can also run on the Pi, with `DOCKER_CONTEXT=default` for the Pi's own Docker:
+
+```bash
+DOCKER_CONTEXT=default PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
+  IMAGE_REF=ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:<the digest in release.json> \
+  ./deploy-roofcontroller-rpi.sh
+```
+
+The Pi then needs what the machine that runs the script needs (above) and the operator key, and `PI_HOST` must still be
+a name in the certificate that resolves on the Pi. The remote check of step 7 then runs from the Pi: it proves the
+certificate, `AllowedHosts` and the key at `PI_HOST`, but not that other machines can reach the published ports. Check
+that from another machine afterwards, with `--verify-remote` (its Stop stops the roof) or with
+`hvo-roof status` ([cli.md](cli.md)).
+
+`tests/emulator/deploy-scenarios.sh pull` deploys a pulled image this way on a PC: the scenario pushes its controller
+image to a registry of its own on loopback and deploys it by its digest (C12 step 11 in
+[commissioning.md](commissioning.md#c12-deployment-script-stop-gate-pre-flight-remote-check-and-rollback)).
 
 ### HAT emulator mode (test rigs)
 
@@ -520,6 +572,23 @@ An image Compose builds carries `4.0.0-dev` with no commit, unless `HVO_ROOF_VER
 HVO_ROOF_VERSION=$(build/version.sh --dev) HVO_ROOF_REVISION=$(git rev-parse HEAD) \
   HVO_ROOF_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose --profile pi build
 ```
+
+**From a release.** Each release has a compose file of its own among its assets, `docker-compose.yaml`: this file with
+the release's images from GHCR (`ghcr.io/hualapaivalley/roof-controller` and `ghcr.io/hualapaivalley/roof-hat-emulator`,
+at the release's version and pinned to their digests) in place of the images it builds. It has the same profiles,
+settings and mounts, and builds nothing, so it needs no checkout: put it in a directory of its own on the Pi and use
+`pull` where the commands above use `build`:
+
+```bash
+export HVO_ROOF_ALLOWED_HOSTS="roof-pi;roof-pi.local;localhost"
+docker compose --profile pi pull
+docker compose --profile pi run --rm roof-controller-check   # the deployment check on its own
+docker compose --profile pi up -d                             # only if the check passed
+```
+
+Its `emulator` profile runs the released controller against the released HAT emulator on any machine with Docker, amd64
+or arm64 ([emulator.md](emulator.md)). `build/release-compose.py` makes the file from this one, and CI checks, profile
+by profile, that the two differ only in their images.
 
 Compose does **not** perform the verified stop, keep the previous container, check the published URLs or roll back.
 Prefer the script. With Compose, the script's `--verify-remote` does the stop and the URL check, as described below.

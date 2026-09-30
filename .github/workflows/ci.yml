@@ -338,7 +338,8 @@ jobs:
             bash -n "${script}"
           done
           python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py tests/mac/test_bundle.py \
-            src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py
+            src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py \
+            build/release-compose.py tests/releasing/test_release_compose.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh \
@@ -356,6 +357,11 @@ jobs:
       # publish folders (docs/mac.md).
       - name: Mac bundle script tests
         run: python3 -m unittest discover -s tests/mac -p 'test_*.py' -v
+
+      # build/release-compose.py: the release compose file, and the sources it refuses. The Compose profiles step
+      # checks the file it makes with Compose.
+      - name: Release compose script tests
+        run: python3 -m unittest discover -s tests/releasing -p 'test_*.py' -v
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
@@ -461,6 +467,52 @@ jobs:
             echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the pi and pi-lan-http profiles can be enabled together"
             exit 1
           fi
+          # The release compose file (build/release-compose.py, docs/releasing.md). Profile by profile it must be this
+          # file with the release's images in place of the ones this file builds, and nothing else changed, so every
+          # check above holds for it too.
+          version=$(../../build/version.sh)
+          release="${RUNNER_TEMP}/release-compose/docker-compose.yaml"
+          mkdir -p "$(dirname "${release}")"
+          ../../build/release-compose.py --version "${version}" -o "${release}"
+          same='with_entries(select(.key | startswith("x-") | not)) | del(.services[].build, .services[].image, .services[].pull_policy)'
+          for profile in pi pi-lan-http emulator; do
+            docker compose -f "${release}" --profile "${profile}" config --quiet
+            if ! diff <(docker compose -p hvo-roof -f docker-compose.yaml --profile "${profile}" config --format json | jq -S "${same}") \
+                      <(docker compose -p hvo-roof -f "${release}" --profile "${profile}" config --format json | jq -S "${same}"); then
+              echo "::error file=build/release-compose.py::the release compose file's ${profile} profile differs from docker-compose.yaml's in more than its images (above)"
+              exit 1
+            fi
+            docker compose -f "${release}" --profile "${profile}" config --format json | jq -e --arg version "${version}" '
+              [.services[]
+                | .build == null and .pull_policy == null
+                  and (.image == "ghcr.io/hualapaivalley/roof-controller:\($version)"
+                    or .image == "ghcr.io/hualapaivalley/roof-hat-emulator:\($version)")]
+              | length == 2 and all' >/dev/null || {
+              echo "::error file=build/release-compose.py::a service of the release compose file's ${profile} profile builds, is never pulled, or names another image than the release's ${version}"
+              exit 1
+            }
+          done
+          if docker compose -f "${release}" --profile pi --profile pi-lan-http config --quiet 2>/dev/null; then
+            echo "::error file=build/release-compose.py::the release compose file's pi and pi-lan-http profiles can be enabled together"
+            exit 1
+          fi
+          # A release pins both images to their digests: Compose must read that file too, with each image pinned.
+          pinned="${RUNNER_TEMP}/release-compose/pinned.yaml"
+          controller_digest="sha256:$(printf controller | sha256sum | cut -c1-64)"
+          emulator_digest="sha256:$(printf emulator | sha256sum | cut -c1-64)"
+          ../../build/release-compose.py --version "${version}" --controller-digest "${controller_digest}" \
+            --emulator-digest "${emulator_digest}" -o "${pinned}"
+          for profile in pi pi-lan-http emulator; do
+            docker compose -f "${pinned}" --profile "${profile}" config --format json | jq -e --arg version "${version}" \
+                --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" '
+              [.services[]
+                | .image == "ghcr.io/hualapaivalley/roof-controller:\($version)@\($controller)"
+                  or .image == "ghcr.io/hualapaivalley/roof-hat-emulator:\($version)@\($emulator)"]
+              | length == 2 and all' >/dev/null || {
+              echo "::error file=build/release-compose.py::a service of the digest-pinned release compose file's ${profile} profile names another image than the release's, pinned"
+              exit 1
+            }
+          done
           # The local development compose file (the controller against the emulator container). Its controller runs the
           # same supervisor, so its stop grace period must cover the same waits.
           docker compose -f ../docker-compose.yml config --format json | jq -e --argjson grace "${grace}" '

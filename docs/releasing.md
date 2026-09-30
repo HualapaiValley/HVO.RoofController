@@ -72,6 +72,17 @@ build/check-image-labels.sh image.tar 4.0.0-ci.123 "$(git rev-parse HEAD)"
 build/check-image-labels.sh image.tar 4.0.0-ci.123 "$(git rev-parse HEAD)" linux/amd64,linux/arm64
 ```
 
+[`build/release-compose.py`](../build/release-compose.py) makes a release's compose file
+([Deployment](deployment.md#deploying-with-compose)) from `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`: the same
+profiles, services, settings and mounts, with the release's images on GHCR, each pinned to its digest when one is
+given, in place of the images that file builds, and nothing built. A line of the source it does not recognise, such as
+a new image or a `build:` it cannot remove, fails it:
+
+```bash
+build/release-compose.py --version 4.0.0 -o docker-compose.yaml
+build/release-compose.py --version 4.0.0 --controller-digest sha256:<hex> --emulator-digest sha256:<hex> -o docker-compose.yaml
+```
+
 ## Images
 
 Both Dockerfiles take three build arguments, and set the labels and the programs' version from them:
@@ -86,8 +97,8 @@ An image built without them carries `4.0.0-dev` with no commit and empty labels.
 before the step that uses them (the publish, and the labels after the last `RUN`): every `RUN` after an `ARG` sees it,
 so a new version or build time would otherwise restore the packages and install the image's own packages again. The deploy script passes all three
 ([Deployment](deployment.md)); Compose passes `HVO_ROOF_VERSION`, `HVO_ROOF_REVISION` and `HVO_ROOF_CREATED` from the
-environment. The `Pi image` and `Emulator image` workflows build each image with its CI version and check its labels,
-and its platforms, with `check-image-labels.sh`.
+environment. The `Pi image` and `Emulator image` workflows build each image for `linux/amd64` and `linux/arm64` with its CI
+version, and check its labels and its platforms with `check-image-labels.sh`.
 
 ## Tests
 
@@ -97,3 +108,6 @@ and its platforms, with `check-image-labels.sh`.
   it, and `RoofControllerApiTests` that the controller's `System/info` reports it. The tests of each System page read
   the versions back.
 - `tests/mac/test_bundle.py` checks `bundle.py`'s `--version` ([Mac app](mac.md#build-it-yourself)).
+- `tests/releasing/test_release_compose.py` checks `release-compose.py` against the real compose file and damaged copies
+  of it, and CI's "Compose profiles" step checks, profile by profile with Compose, that the file it makes differs from
+  the source only in its images.

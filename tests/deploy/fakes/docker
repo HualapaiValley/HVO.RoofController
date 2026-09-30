@@ -36,6 +36,14 @@ Other switches:
                                    restarts it: restarted is running again, and each inspect finds it restarted once
                                    more (a crash loop); restarting is waiting to restart; exited is stopped, as when
                                    Docker cannot start it again (a device has gone).
+  FAKE_PULL_FAIL=true              `pull` fails (the registry cannot be reached), and pulls nothing
+  FAKE_PULLED_DIGEST=sha256:<hex>  the digest `pull` records for the image (default: the digest in the reference)
+  FAKE_PULLED_PLATFORM=<os/arch>   the platform `pull` gets (default: its --platform), as from a reference that names a
+                                   single image of another platform
+  FAKE_IMAGE_STORE=containerd      `image inspect --platform` for a platform the image store does not hold prints empty
+                                   fields ("/"), as Docker's containerd store does; by default it fails, as the classic
+                                   store does
+  FAKE_INSPECT_PLATFORM=false      the CLI has no `image inspect --platform` (Docker before 28)
   FAKE_STOP_FAIL=true              `stop` fails
   FAKE_STOP_CUT_OFF=true           the first `stop` loses its connection: the client fails and the daemon finishes the
                                    stop by itself FAKE_ASYNC_STOP_SECONDS (default 1) later
@@ -54,6 +62,9 @@ Other switches:
                                    other request is dropped. A call in its own session is not reached.
 A container whose stop the daemon is still finishing stays running until then; `start` does nothing to it and `stop`
 waits for it.
+Images pulled with `pull [--platform <p>] <ref>` are kept by reference, with a digest, a platform and version labels;
+`image inspect` supports --help, --platform and three --format templates: the RepoDigests, '{{.Os}}/{{.Architecture}}'
+and the version and revision labels.
 Containers created by `run -d` have kind "new". Authenticated calls must send FAKE_EXPECTED_KEY on stdin (-H @-),
 otherwise they get 401. Output errors (closed or broken stdout/stderr) are ignored, as they would not change Docker.
 """
@@ -175,6 +186,77 @@ def inspect(state, args):
         else:
             # println ends each value with a newline, and docker adds one after the template.
             out("".join(f"{e}\n" for e in env_of(c)))
+
+
+IMAGE_FORMATS = {
+    "{{range .RepoDigests}}{{println .}}{{end}}": "digests",
+    "{{.Os}}/{{.Architecture}}": "platform",
+    '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} '
+    '{{index .Labels "org.opencontainers.image.revision"}}{{end}}': "labels",
+}
+
+
+def pull(state, args):
+    platform, ref = None, args[-1]
+    if "--platform" in args:
+        platform = args[args.index("--platform") + 1]
+    if os.environ.get("FAKE_PULL_FAIL") == "true":
+        die(f"Get \"https://{ref.split('/')[0]}/v2/\": dial tcp: lookup {ref.split('/')[0]}: no such host")
+    name, _, digest = ref.partition("@")
+    repository = name if ":" not in name.rsplit("/", 1)[-1] else name.rsplit(":", 1)[0]
+    digest = os.environ.get("FAKE_PULLED_DIGEST") or digest
+    state.setdefault("images", {})[ref] = {
+        "repo_digests": [f"{repository}@{digest}"],
+        "platform": os.environ.get("FAKE_PULLED_PLATFORM") or platform or "linux/amd64",
+        "version": "4.0.0",
+        "revision": "0123456789abcdef0123456789abcdef01234567",
+    }
+    save(state)
+    out(f"{digest.split(':')[1][:12]}: Pull complete")
+    out(f"Digest: {digest}")
+    out(f"Status: Downloaded newer image for {ref}")
+
+
+def image_inspect(state, args):
+    if "--help" in args:
+        out("Usage:  docker image inspect [OPTIONS] IMAGE [IMAGE...]")
+        out("  -f, --format string     Format output using a custom template")
+        if os.environ.get("FAKE_INSPECT_PLATFORM") != "false":
+            out("      --platform string   Inspect a specific platform of the multi-platform image.")
+        return
+    fmt, platform, refs, i = None, None, [], 0
+    while i < len(args):
+        if args[i] in ("--format", "-f"):
+            fmt, i = args[i + 1], i + 2
+        elif args[i] == "--platform":
+            if os.environ.get("FAKE_INSPECT_PLATFORM") == "false":
+                err("unknown flag: --platform")
+                sys.exit(125)
+            platform, i = args[i + 1], i + 2
+        else:
+            refs.append(args[i])
+            i += 1
+    field = IMAGE_FORMATS.get(fmt)
+    if field is None:
+        die(f"fake docker: unsupported image inspect format: {fmt}")
+    for ref in refs:
+        image = state.get("images", {}).get(ref)
+        if image is None:
+            die(f"No such image: {ref}")
+        if platform is not None and platform != image["platform"]:
+            if os.environ.get("FAKE_IMAGE_STORE") != "containerd":
+                die(f"image with reference {ref} was found but does not match the specified platform: "
+                    f"wanted {platform}, actual: {image['platform']}")
+            # The image's own record (its digests) is still there; the platform's fields are empty.
+            if field != "digests":
+                out({"platform": "/", "labels": ""}[field])
+                continue
+        if field == "digests":
+            out("".join(f"{d}\n" for d in image["repo_digests"]))
+        elif field == "platform":
+            out(image["platform"])
+        else:
+            out(f"{image['version']} {image['revision']}")
 
 
 def docker_state(c):
@@ -506,7 +588,7 @@ def main():
 
     state = load()
     command, args = argv[0], argv[1:]
-    image = os.environ["IMAGE_TAG"]
+    image = os.environ.get("IMAGE_REF") or os.environ["IMAGE_TAG"]
 
     if interrupted:
         if command == "stop":
@@ -606,6 +688,12 @@ def main():
 
     if command == "inspect":
         inspect(state, args)
+        return
+    if command == "image" and args[:1] == ["inspect"]:
+        image_inspect(state, args[1:])
+        return
+    if command == "pull":
+        pull(state, args)
         return
     if command == "ps":
         ps(state, args)
