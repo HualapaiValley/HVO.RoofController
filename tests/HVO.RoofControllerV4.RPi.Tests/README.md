@@ -157,6 +157,13 @@ models exactly that register.
 | `Kiosk/KioskRenderTests` | The kiosk's screens drawn headless at 1280 x 720 (8.2 px/mm) and 800 x 480 (5.2 px/mm), and the screenshots in `docs/kiosk.md` ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
 | `Kiosk/MacConsoleTests`, `MacScreenTests`, `MacProgramTests`, `MacAppTests` | The Mac app (#48): the screens with a plain viewer key and a password sign-in, the idle sign-out and the session the controller ends, the sign-in page and a setting typed in a text box drawn headless at 1280 x 800 and 960 x 600 (the screenshots in `docs/mac.md`), the program's settings folder, settings, device key and exit code 78, the refusal window, `--check`, the bundle's `Info.plist`, and the icon, drawn in code, against `bundle/AppIcon.icns` |
 | `Kiosk/KioskSoakScenarios`, `KioskSoakResultsTests` | The kiosk and its screen against the emulated roof through controller restarts, with its heap, threads and reconnects, and the soak's results when it fails ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
+| `Installer/InstallerSurveyTests` | What the installer (#67) finds on a fake machine (`FakeMachine`): the Pi and the HAT's devices, Docker and Compose, the containers and who made them, the kiosk's service, `hvo-roof`, the Mac app, the install records and `/etc/hvo-roof` set up by hand |
+| `Installer/InstallerGuardTests` | Which roles each machine may have and why not: the real HAT only on a 64-bit Pi with its devices, never a rig where the real HAT is, the rig's typed host name, root for the machine's roles and never for the person's, the kiosk with its controller, Docker |
+| `Installer/InstallerPlanTests` | The plan for each role on a Pi, a Linux workstation and a Mac; the container adopted, a Compose container, a busy port and a file where a folder goes blocking it; applying it, then a second run that changes nothing; a step not yet built refused before anything changes; only reading commands, and never moving the roof |
+| `Installer/InstallerAnswersTests` | Answers files round-trip, in camelCase and kebab-case, without the rig's confirmation; files the installer cannot read; the install record and a record it cannot read |
+| `Installer/InstallerCommandTests` | `hvo-roof-install`'s `--version`, `--help`, `--plan` and `--answers`, and their exit codes; a second install that changes nothing; no secret printed, logged or written |
+| `Installer/InstallerWizardTests` | The wizard (#67) on Terminal.Gui's in-memory driver: each page in HVO Dark and with `NO_COLOR`, the keys, the rig's confirmation, the review and its saved answers, the install's progress and Done, 80 x 24, and wrapping; the screenshots in `docs/install.md` ([Installer renders](#installer-renders)) |
+| `Installer/InstallerDocsTests` | `docs/install.md` and the installer agree: the exit codes, roles, connections and defaults, the answers file example, and a screenshot for each page the wizard's tests draw |
 
 ## Emulated plant
 
@@ -264,6 +271,16 @@ three samples within 10 % and 4 MB of the first three) and the process's threads
 `HVO_SOAK_RESULTS_DIR`, or the test's results (`kiosk-soak/`), before the checks fail it; the last screen (the pump's
 draws, then a render with the layout and Stop checks) is one of the checks, so a fault there is written with the rest
 (`KioskSoakResultsTests`).
+
+## Installer renders
+
+`Installer/InstallerWizardTests` draws each page of the installer's wizard on Terminal.Gui's ANSI driver in memory, at
+100 x 30, with a virtual clock for the interface and a fake machine: the machine, the roles and the rig's confirmation,
+the choices, the review and a blocked review, the install part way through, Done and a refusal. The install page is
+drawn while the install is held (`HeldClock`) at the record's step, so its progress shows. Each page is saved as ANSI
+to `HVO_INSTALLER_RENDERS_DIR`, or to the test's results (`installer/`). CI draws each as SVG with
+`tests/cli/ansi-to-svg.py` and uploads them as `installer-renders-<run>`, and `docs/images/install` holds copies
+([Refreshing the screenshots](../../docs/install.md#refreshing-the-screenshots)).
 
 ## Adding new tests
 

@@ -4,16 +4,17 @@ using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
 
-namespace HVO.RoofControllerV4.Cli.Ui;
+namespace HVO.RoofControllerV4.TerminalUi;
 
 /// <summary>
-/// The terminal interface in HVO Dark, the web UI's theme (<see cref="RoofUiPalette"/>): text on the page's dark
-/// background, the focused control in the accent blue, Stop yellow, Open green and Close red, and a stale status or an
-/// error in the theme's warning and danger colours. Terminal.Gui draws the colours as the terminal allows: true colour,
-/// or the nearest of 256 or 16 colours. With <c>NO_COLOR</c> set (https://no-color.org) the interface is drawn in the
-/// terminal's own colours instead (<see cref="NoColour"/>); Terminal.Gui alone would still draw 16 colours.
+/// The terminal programs (<c>hvo-roof ui</c> and the installer) in HVO Dark, the web UI's theme
+/// (<see cref="RoofUiPalette"/>): text on the page's dark background, the focused control in the accent blue, Stop yellow,
+/// Open green and Close red, and a stale status or an error in the theme's warning and danger colours. Terminal.Gui draws
+/// the colours as the terminal allows: true colour, or the nearest of 256 or 16 colours. With <c>NO_COLOR</c> set
+/// (https://no-color.org) the interface is drawn in the terminal's own colours instead (<see cref="NoColour"/>);
+/// Terminal.Gui alone would still draw 16 colours.
 /// </summary>
-internal sealed class RoofUiTheme
+public sealed class RoofUiTheme
 {
     private readonly bool _colour;
     private readonly Scheme _stopSent;
@@ -130,6 +131,24 @@ internal sealed class RoofUiTheme
         RoofStopOutcome.Failed => _stopFailed,
         _ => Base
     };
+
+    /// <summary>The key bar at the foot of a window: each key in the accent colour, and what it does, on the navigation bar's grey.</summary>
+    public View CreateKeyBar(IEnumerable<(string Key, string Name)> keys)
+    {
+        var bar = new View { X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
+        bar.SetScheme(KeyName);
+        View? previous = null;
+        foreach (var (key, name) in keys)
+        {
+            var keyLabel = new Label { Text = key, X = previous is null ? 0 : Pos.Right(previous) + 2, Y = 0 };
+            keyLabel.SetScheme(Key);
+            var nameLabel = new Label { Text = name, X = Pos.Right(keyLabel) + 1, Y = 0 };
+            bar.Add(keyLabel, nameLabel);
+            previous = nameLabel;
+        }
+
+        return bar;
+    }
 
     /// <summary>Draws the frame of <paramref name="view"/> in <paramref name="scheme"/> (<see cref="Frame"/> by default).</summary>
     public void SetFrame(View view, Scheme? scheme = null)

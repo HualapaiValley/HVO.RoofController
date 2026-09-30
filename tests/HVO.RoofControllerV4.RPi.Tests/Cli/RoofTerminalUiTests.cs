@@ -13,6 +13,7 @@ using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using TestSecrets = HVO.RoofControllerV4.RPi.Tests.Security.TestSecrets;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
+using HVO.RoofControllerV4.TerminalUi;
 using HVO.Core.Results;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;

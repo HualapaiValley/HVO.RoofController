@@ -102,7 +102,7 @@ internal sealed class RoofTerminalUi : IDisposable
         _message = Wrapping(new Label { X = 0, Y = Pos.AnchorEnd() - 1 });
         _content = new FrameView { X = 0, Y = Pos.Bottom(_banner), Width = Dim.Fill(), Height = Dim.Fill(_message) };
         Theme.SetFrame(_content);
-        Window.Add(StopButton, _stopResult, _header, _banner, _content, _message, CreateKeyBar());
+        Window.Add(StopButton, _stopResult, _header, _banner, _content, _message, Theme.CreateKeyBar(Keys));
 
         _pages =
         [
@@ -128,24 +128,6 @@ internal sealed class RoofTerminalUi : IDisposable
         label.Height = Dim.Auto(DimAutoStyle.Text, minimumContentDim: 1);
         label.TextFormatter.WordWrap = true;
         return label;
-    }
-
-    /// <summary>The key bar: each key in the accent colour, and what it does, on the navigation bar's grey.</summary>
-    private View CreateKeyBar()
-    {
-        var bar = new View { X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
-        bar.SetScheme(Theme.KeyName);
-        View? previous = null;
-        foreach (var (key, name) in Keys)
-        {
-            var keyLabel = new Label { Text = key, X = previous is null ? 0 : Pos.Right(previous) + 2, Y = 0 };
-            keyLabel.SetScheme(Theme.Key);
-            var nameLabel = new Label { Text = name, X = Pos.Right(keyLabel) + 1, Y = 0 };
-            bar.Add(keyLabel, nameLabel);
-            previous = nameLabel;
-        }
-
-        return bar;
     }
 
     public Button StopButton { get; }

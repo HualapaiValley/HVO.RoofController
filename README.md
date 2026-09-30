@@ -118,6 +118,8 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 | `HVO.RoofControllerV4.Screens` | The screens and view models of the kiosk and the Mac app: Avalonia controls in HVO Dark, over the client library |
 | `HVO.RoofControllerV4.Kiosk` | `hvo-roof-kiosk`: the touchscreen kiosk, drawing the screens through DRM ([docs/kiosk.md](docs/kiosk.md)) |
 | `HVO.RoofControllerV4.Mac` | `HVO Roof.app`: the Mac app, the screens in a window, and its bundle scripts ([docs/mac.md](docs/mac.md)) |
+| `HVO.RoofControllerV4.TerminalUi` | HVO Dark for Terminal.Gui, shared by `hvo-roof ui` and the installer |
+| `HVO.RoofControllerV4.Installer` | `hvo-roof-install`: the installer's wizard and its answers files, plans and install records ([docs/install.md](docs/install.md)) |
 | `HVO.RoofControllerV4.Simulation` | Emulated roof plant: SMVector drive, ME-8108 limit switches, SM-I-010 HAT and the wiring |
 | `HVO.RoofControllerV4.Emulator` | HAT emulator: serves the emulated plant's HAT registers over TCP, with a fault-injection API ([docs/emulator.md](docs/emulator.md)) |
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
@@ -197,6 +199,7 @@ with the roof mechanism isolated.
 | [Web UI](docs/web.md) | The browser interface: signing in, the pages, Stop, its settings and screenshots |
 | [Kiosk](docs/kiosk.md) | The touchscreen at the roof: the screens, unlocking with a PIN, Stop, installing it on the Pi, its settings and screenshots |
 | [Mac app](docs/mac.md) | The kiosk's screens in a window on a Mac: signing in with a password, Stop, installing it and its device key, its settings, building and signing it on Linux, and screenshots |
+| [Installing](docs/install.md) | `hvo-roof-install`: the roles and where each runs, the guards, the wizard, answers files, `--plan`, the install record and the log, exit codes and screenshots |
 | [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
 | [Command line](docs/cli.md) | `hvo-roof`: install, setup and credentials, the commands, exit codes and the terminal interface |
 | [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |
