@@ -312,6 +312,44 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         return this;
     }
 
+    /// <summary>
+    /// An API key in the controller's secrets folder, one file per setting as docs/deployment.md sets one up, with a random
+    /// key; <paramref name="key"/> false leaves only its name and role.
+    /// </summary>
+    public FakeMachine WithApiKey(int index, string name, string role, bool kiosk = false, bool local = false, bool key = true)
+    {
+        var secrets = ControllerLayout.For(Machine).Secrets;
+        Machine.CreateDirectory(secrets, Modes.PrivateFolder);
+        void Setting(string field, string value) => Machine.WriteAtomically(Path.Join(secrets, ApiKeyFiles.FileName(index, field)), value, Modes.PrivateFile);
+        Setting("Name", name);
+        Setting("Role", role);
+        if (kiosk)
+        {
+            Setting("Kiosk", "true");
+        }
+
+        if (local)
+        {
+            Setting("Local", "true");
+        }
+
+        if (key)
+        {
+            Setting("Key", ApiKeyFiles.NewKey());
+        }
+
+        return this;
+    }
+
+    /// <summary>The keys' values in the secrets folder, to prove they appear nowhere else.</summary>
+    public IReadOnlyList<string> ApiKeyValues()
+    {
+        var secrets = OnDisk(ControllerLayout.For(Machine).Secrets);
+        return Directory.Exists(secrets)
+            ? [.. Directory.GetFiles(secrets, $"{ApiKeyFiles.Prefix}*__Key").Select(File.ReadAllText)]
+            : [];
+    }
+
     /// <summary>hvo-roof, on the PATH at <paramref name="path"/>.</summary>
     public FakeMachine WithCli(string path)
     {

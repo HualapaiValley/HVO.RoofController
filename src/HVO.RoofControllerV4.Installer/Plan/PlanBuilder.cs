@@ -51,6 +51,9 @@ public sealed record ControllerLayout(
     /// <summary>The controller's certificate and key (PKCS#12), as the deploy script mounts it (HTTPS_CERT_FILE).</summary>
     public string Pfx => Path.Join(Https, "roof-controller.pfx");
 
+    /// <summary>The controller's identity store: its people and managed API keys, as hashes.</summary>
+    public string IdentityFile => Path.Join(Identity, "identity.json");
+
     /// <summary>The PKCS#12 file's password, a secret the controller reads.</summary>
     public string PfxPassword => Path.Join(Secrets, "Kestrel__Certificates__Default__Password");
 }
@@ -90,6 +93,7 @@ public static class PlanBuilder
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
             var certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
+            steps.AddRange(AllocateKeys(machine, survey, layout, roles).Select(key => new ApiKeyStep(layout, key)));
             if (rig)
             {
                 steps.Add(new ContainerStep(MachineSurveyor.HatEmulatorContainer, null, "the HAT emulator: the roof, drive and limit switches the rig drives"));
@@ -229,6 +233,43 @@ public static class PlanBuilder
         var certificate = new CertificateStep(layout, names, connection, replacingAuthority, renew);
         steps.Add(certificate);
         return certificate;
+    }
+
+    /// <summary>
+    /// The API keys the controller needs from the installer: the operator key (the deploy script's verified Stop), the
+    /// admin key (the first admin), the web UI's Stop key, and the kiosk's when the kiosk runs here too. Keys already in
+    /// the secrets folder are reused. Without root, the plan says what each is for, not which entry it takes.
+    /// </summary>
+    public static IReadOnlyList<ApiKeyAllocation> AllocateKeys(InstallerMachine machine, MachineSurvey survey, ControllerLayout layout, IReadOnlyCollection<InstallRole> roles)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(survey);
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(roles);
+        ApiKeyUse[] uses = roles.Contains(InstallRole.Kiosk)
+            ? [ApiKeyUse.Operator, ApiKeyUse.Admin, ApiKeyUse.WebStop, ApiKeyUse.Kiosk]
+            : [ApiKeyUse.Operator, ApiKeyUse.Admin, ApiKeyUse.WebStop];
+        try
+        {
+            var existing = ApiKeyFiles.Read(machine, layout.Secrets);
+            return ApiKeyFiles.Allocate(existing, uses, ApiKeyFiles.IndexOfContainerKeyFile(survey.Controller?.WebStopKeyFile), ManagedKeyNames(machine, layout));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return [.. ApiKeyFiles.Allocate([], uses, null).Select(key => key with { Index = -1 })];
+        }
+    }
+
+    private static IEnumerable<string> ManagedKeyNames(InstallerMachine machine, ControllerLayout layout)
+    {
+        try
+        {
+            return ControllerIdentity.Read(machine, layout.IdentityFile).ApiKeys.Select(key => key.Name);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or InstallerException)
+        {
+            return [];
+        }
     }
 
     // A rig on a Mac keeps its data in its configuration folder: each folder once.

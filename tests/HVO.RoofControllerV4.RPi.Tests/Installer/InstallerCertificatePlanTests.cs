@@ -334,8 +334,9 @@ public sealed class InstallerCertificatePlanTests
 
         plan.HasChanges.Should().BeTrue("the record is new");
         Change(plan, MachineSurveyor.ControllerContainer).Change.Should().Be(StepChange.Unchanged);
-        plan.Steps.Where(step => step.Step.Target.StartsWith("/etc/hvo-roof/", StringComparison.Ordinal) && step.Step.Kind == StepKind.File && step.Step.Target != "/etc/hvo-roof/install.json")
-            .Should().OnlyContain(step => step.Check.Change == StepChange.Unchanged);
+        plan.Steps.Where(step => step.Step is CertificateAuthorityStep or CertificatePasswordStep or CertificateStep)
+            .Should().HaveCount(3).And.OnlyContain(step => step.Check.Change == StepChange.Unchanged);
+        Change(plan, "/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__0__Key").Should().Be(StepCheck.Unchanged("reuses roof-operator (RoofOperator)"));
     }
 
     [TestMethod]

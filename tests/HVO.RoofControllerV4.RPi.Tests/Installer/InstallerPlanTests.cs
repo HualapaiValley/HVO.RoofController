@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -19,6 +20,14 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 [UnsupportedOSPlatform("windows")]
 public sealed class InstallerPlanTests
 {
+    /// <summary>The installer's keys on a machine that had none: its operator key, its admin key and the web UI's Stop key.</summary>
+    internal static readonly string[] NewKeys =
+    [
+        "/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__0__Key",
+        "/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__1__Key",
+        "/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__2__Key"
+    ];
+
     private static readonly string[] ControllerFolders =
     [
         "/etc/hvo-roof", "/etc/hvo-roof/secrets", "/etc/hvo-roof/https", "/etc/hvo-roof/ca", "/etc/hvo-roof/config",
@@ -40,10 +49,11 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.Port).Should().Equal("8443", "8088");
         Change(plan, "8443").Detail.Should().Be("free; roof-controller will listen on it");
         Steps(plan, StepKind.File).Should().Equal(
-            "/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", InstallPaths.SystemRecord);
+            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, InstallPaths.SystemRecord]);
+        Change(plan, NewKeys[0]).Should().Be(new StepCheck(StepChange.Create, "installer-operator (RoofOperator): a new random key, never shown"));
         Change(plan, InstallPaths.SystemRecord).Should().Be(new StepCheck(StepChange.Create, "0644"));
         plan.Steps[^1].Step.Should().BeOfType<RecordStep>("the record says the roles are installed once they are");
-        PlanText.Summary(plan).Should().Be("13 to create, 0 to change, 0 unchanged.");
+        PlanText.Summary(plan).Should().Be("16 to create, 0 to change, 0 unchanged.");
     }
 
     [TestMethod]
@@ -54,7 +64,7 @@ public sealed class InstallerPlanTests
         var lines = PlanText.Lines(await CheckAsync(pi, InstallRole.Controller));
 
         lines.Where(line => !line.StartsWith(' ') && line.Length > 0).Should().Equal(
-            "Folders", "Files", "Containers", "Ports", "13 to create, 0 to change, 0 unchanged.");
+            "Folders", "Files", "Containers", "Ports", "16 to create, 0 to change, 0 unchanged.");
         lines.Should().Contain(line => line.StartsWith("  create     /etc/hvo-roof/secrets ", StringComparison.Ordinal) && line.EndsWith("secrets the controller reads, one file per setting (0700)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  info       8443 ", StringComparison.Ordinal) && line.Contains("the controller's API (HTTPS)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  create     roof-controller ", StringComparison.Ordinal) && line.Contains("the controller, driving the real HAT (deployed by digest", StringComparison.Ordinal));
@@ -197,7 +207,7 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.Container).Should().Equal(MachineSurveyor.HatEmulatorContainer, MachineSurveyor.ControllerContainer);
         plan.Steps.Single(step => step.Step.Target == MachineSurveyor.ControllerContainer).Step.Purpose.Should().Be("the controller, against the HAT emulator");
         Steps(plan, StepKind.File).Should().Equal(
-            "/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", InstallPaths.SystemRecord);
+            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, InstallPaths.SystemRecord]);
     }
 
     [TestMethod]
@@ -225,7 +235,9 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.Folder).Should().Equal(
             root, $"{root}/secrets", $"{root}/https", $"{root}/ca", $"{root}/config", $"{root}/identity", $"{root}/settings-secrets");
         Steps(plan, StepKind.File).Should().Equal(
-            $"{root}/ca.crt", $"{root}/secrets/Kestrel__Certificates__Default__Password", $"{root}/https/roof-controller.pfx", "/Users/roy/.config/hvo-roof/install.json");
+            $"{root}/ca.crt", $"{root}/secrets/Kestrel__Certificates__Default__Password", $"{root}/https/roof-controller.pfx",
+            $"{root}/secrets/RoofControllerSecurity__ApiKeys__0__Key", $"{root}/secrets/RoofControllerSecurity__ApiKeys__1__Key", $"{root}/secrets/RoofControllerSecurity__ApiKeys__2__Key",
+            "/Users/roy/.config/hvo-roof/install.json");
         Change(plan, "/Users/roy/.config/hvo-roof/install.json").Detail.Should().Be("0600", "the person's record is theirs alone");
     }
 
@@ -414,7 +426,8 @@ public sealed class InstallerPlanTests
     /// <summary>A Pi with the HAT, where the deploy script already runs the controller: the installer adopts it.</summary>
     internal static FakeMachine AdoptablePi()
     {
-        var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false }).WithCertificates();
+        var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false }).WithCertificates()
+            .WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
         pi.PortsInUse.UnionWith([8443, 8088]);
         return pi;
     }

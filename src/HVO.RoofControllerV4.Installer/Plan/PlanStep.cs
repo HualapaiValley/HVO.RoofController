@@ -66,9 +66,19 @@ public sealed class InstallContext
     /// <summary>Where a long step (a deploy) says how it is getting on, a line at a time; null when nobody is watching.</summary>
     public Action<string>? Progress { get; init; }
 
+    private readonly HashSet<PlanStep> applied = [];
+
     /// <summary>The release this installer installs: its release.json, read once a run.</summary>
     public Task<ReleaseManifest> ReleaseAsync(CancellationToken cancellationToken)
         => Release.GetAsync(Machine, Log, Version, cancellationToken);
+
+    /// <summary>
+    /// Whether <paramref name="step"/> made a change in this run: a step that depends on another (the controller on its
+    /// keys and certificate) makes its own change when that one did.
+    /// </summary>
+    public bool HasApplied(PlanStep step) => applied.Contains(step);
+
+    internal void MarkApplied(PlanStep step) => applied.Add(step);
 }
 
 /// <summary>

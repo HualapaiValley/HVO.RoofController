@@ -76,6 +76,7 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
                 doing = $"{PlanText.Verb(check.Change)} {PlanText.Noun(step.Kind)} {step.Target}";
                 progress?.Invoke($"{doing}…");
                 await step.ApplyAsync(context, check, cancellationToken).ConfigureAwait(false);
+                context.MarkApplied(step);
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
