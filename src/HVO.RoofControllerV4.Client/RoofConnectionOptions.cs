@@ -27,13 +27,23 @@ public sealed class RoofConnectionOptions
     /// <summary>
     /// The SHA-256 of the controller's certificate, as hex (colons and spaces are ignored). When set, a certificate with
     /// this hash is accepted even if it is self-signed or names another host; any other certificate must still be
-    /// trusted normally.
+    /// trusted normally. Not with <see cref="ServerCaCertificate"/>.
     /// </summary>
     public string? ServerCertificateSha256 { get; init; }
 
     /// <summary>
+    /// The private CA that issued the controller's certificate, such as the one the installer makes (#65). When set, the
+    /// controller's certificate must chain to this CA, and the system's CAs are not used. The host name is checked as
+    /// usual, and the CA's name constraints apply. The controller's certificate can be reissued under the same CA with
+    /// no change here. A refused certificate fails the request with a <see cref="RoofCertificateRefusedException"/>
+    /// that says why. Not with <see cref="ServerCertificateSha256"/>.
+    /// </summary>
+    public X509Certificate2? ServerCaCertificate { get; init; }
+
+    /// <summary>
     /// Creates the innermost HTTP handler. Null uses a <see cref="SocketsHttpHandler"/> that honours
-    /// <see cref="ServerCertificateSha256"/>. Called once for requests, once for Stop, and once per status hub connection.
+    /// <see cref="ServerCertificateSha256"/> and <see cref="ServerCaCertificate"/>. Called once for requests, once for
+    /// Stop, and once per status hub connection.
     /// </summary>
     public Func<HttpMessageHandler>? CreateHandler { get; init; }
 
@@ -64,6 +74,19 @@ public sealed class RoofConnectionOptions
             _ = RoofCertificatePin.Parse(ServerCertificateSha256);
         }
 
+        if (ServerCaCertificate is not null)
+        {
+            if (ServerCertificateSha256 is not null)
+            {
+                throw new ArgumentException("Set a certificate pin or a CA certificate, not both.", nameof(ServerCaCertificate));
+            }
+
+            if (!RoofCertificateAuthority.IsCertificateAuthority(ServerCaCertificate))
+            {
+                throw new ArgumentException("The CA certificate is not a CA's: its basic constraints do not say CA.", nameof(ServerCaCertificate));
+            }
+        }
+
         StatusFeed.Validate();
     }
 
@@ -84,13 +107,25 @@ public sealed class RoofConnectionOptions
             UseCookies = false
         };
 
-        if (ServerCertificateSha256 is not null)
+        if (CertificateValidator is { } validator)
         {
-            handler.SslOptions.RemoteCertificateValidationCallback = RoofCertificatePin.CreateValidator(ServerCertificateSha256);
+            handler.SslOptions.RemoteCertificateValidationCallback = validator;
         }
 
         return handler;
     }
+
+    private RemoteCertificateValidationCallback? _validator;
+
+    /// <summary>
+    /// The check of the controller's certificate for <see cref="ServerCaCertificate"/> or
+    /// <see cref="ServerCertificateSha256"/>, made once; null leaves it to the platform. Used for requests, Stop and the
+    /// status hub's WebSocket alike.
+    /// </summary>
+    internal RemoteCertificateValidationCallback? CertificateValidator
+        => _validator ??= ServerCaCertificate is { } authority ? RoofCertificateAuthority.CreateValidator(authority)
+            : ServerCertificateSha256 is { } pin ? RoofCertificatePin.CreateValidator(pin)
+            : null;
 }
 
 /// <summary>Reconnection and staleness settings for <see cref="RoofStatusFeed"/>.</summary>
@@ -179,11 +214,21 @@ public static class RoofCertificatePin
         }
     }
 
+    /// <summary>
+    /// A TLS callback that accepts a certificate the platform trusts or one with the pinned hash, and throws
+    /// <see cref="RoofCertificateRefusedException"/> for any other.
+    /// </summary>
     internal static RemoteCertificateValidationCallback CreateValidator(string pin)
     {
         var expected = Parse(pin);
         return (_, certificate, _, errors) =>
             errors == SslPolicyErrors.None
-            || (certificate is not null && CryptographicOperations.FixedTimeEquals(SHA256.HashData(certificate.GetRawCertData()), expected));
+            || (certificate is not null && CryptographicOperations.FixedTimeEquals(SHA256.HashData(certificate.GetRawCertData()), expected))
+                ? true
+                : throw (certificate is null
+                    ? new RoofCertificateRefusedException(RoofCertificateRefusal.NoCertificate, "The controller sent no certificate.")
+                    : new RoofCertificateRefusedException(
+                        RoofCertificateRefusal.NotPinned,
+                        "The controller's certificate is not the pinned one, and this computer does not trust it."));
     }
 }
