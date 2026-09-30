@@ -369,7 +369,7 @@ public sealed class InstallerCertificateCommandTests
                 var run = await pi.RunAsync("cert", "import", "their.crt", "--key", file);
 
                 run.ExitCode.Should().Be((int)InstallerExitCode.Usage, run.ToString());
-                run.Error.Should().Contain($"The key in /root/{file} needs 700000 iterations to derive its password's key, more than the 600000 the installer allows: export it again with fewer.");
+                run.Error.Should().Contain($"The key in /root/{file} needs 700000 iterations to derive its password's key, more than the 300000 the installer allows: export it again with fewer.");
             }
 
             pi.Asked.Should().BeEmpty("it is refused before a password is asked for");
@@ -458,6 +458,119 @@ public sealed class InstallerCertificateCommandTests
     }
 
     [TestMethod]
+    public async Task Cert_AndCertImport_RefuseARecordTheyCannotRead_AndCertShowWarnsOfIt()
+    {
+        using var pi = new FakeMachine().WithPi().WithCertificates();
+        pi.Write(InstallPaths.SystemRecord, "{ not json");
+        var (their, theirs) = TheirCertificate();
+        using (their)
+        using (theirs)
+        {
+            WriteBytes(pi, "/root/their.pfx", theirs.Export(X509ContentType.Pkcs12));
+            pi.Folder("/var/log");
+            var before = pi.Snapshot(InstallPaths.SystemLog);
+
+            var cert = await pi.RunAsync("cert");
+            var import = await pi.RunAsync("cert", "import", "/root/their.pfx");
+            var shown = await pi.RunAsync("cert", "show");
+
+            foreach (var run in new[] { cert, import })
+            {
+                run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+                run.Error.Should().Contain("/etc/hvo-roof/install.json is not a valid install record")
+                    .And.Contain("Fix it or remove it first: it may say how the controller serves HTTPS.");
+            }
+
+            pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before, "neither changes anything while the record cannot say what the controller serves");
+            shown.ExitCode.Should().Be(0, shown.ToString());
+            shown.Error.Should().Contain("Warning: /etc/hvo-roof/install.json is not a valid install record");
+        }
+    }
+
+    [TestMethod]
+    public async Task CertPlan_WithoutRoot_AndNothingRecorded_SaysToUseSudo()
+    {
+        if (Environment.UserName == "root")
+        {
+            Assert.Inconclusive("root reads a file whatever its mode");
+        }
+
+        using var pi = new FakeMachine(root: false).WithPi().WithCertificates();
+        File.SetUnixFileMode(pi.OnDisk(Layout.Pfx), UnixFileMode.None);
+        try
+        {
+            var run = await pi.RunAsync("cert", "--plan");
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+            run.Error.Should().Contain("Nothing here is recorded, and only root can read the certificate in place to tell whether it is yours: run it with sudo, sudo hvo-roof-install cert --plan.");
+        }
+        finally
+        {
+            File.SetUnixFileMode(pi.OnDisk(Layout.Pfx), Modes.PrivateFile);
+        }
+    }
+
+    [TestMethod]
+    public async Task Cert_WithTheClockBeforeTheCasStart_IsBlocked_AndANewCaIsTheWayOut()
+    {
+        using var pi = Recorded(new FakeMachine().WithPi().WithCertificates());
+        pi.RunsAt = new FixedClock(FakeMachine.Today.AddDays(-2));
+        pi.Folder("/var/log");
+        var before = pi.Snapshot(InstallPaths.SystemLog);
+        const string Problem = "this machine's clock (2026-09-29 09:00 UTC) is before its CA's start (2026-10-01 08:00 UTC): if the clock is wrong, set the time (NTP) and run it again; "
+            + "if it is right, make a new CA with sudo hvo-roof-install cert --new-ca, which every client must then trust";
+
+        var plan = await pi.RunAsync("cert", "--renew", "--plan");
+        var renew = await pi.RunAsync("cert", "--renew");
+
+        plan.ExitCode.Should().Be((int)InstallerExitCode.Refused, plan.ToString());
+        plan.Output.Should().Contain("  blocked    /etc/hvo-roof/https/roof-controller.pfx").And.Contain(Problem);
+        renew.ExitCode.Should().Be((int)InstallerExitCode.Refused, renew.ToString());
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
+
+        var newCa = await pi.RunAsync("cert", "--new-ca");
+
+        newCa.ExitCode.Should().Be(0, newCa.ToString());
+        newCa.Output.Should().Contain("Changing file /etc/hvo-roof/https/roof-controller.pfx: done.");
+    }
+
+    [TestMethod]
+    public async Task CertCommands_AsRootOnAMac_AreRefused()
+    {
+        using var mac = new FakeMachine(InstallerOs.MacOS, hostName: "roys-mac", userName: "roy");
+
+        foreach (var args in new[] { new[] { "cert" }, ["cert", "show"], ["cert", "import", "/Users/roy/their.pfx"] })
+        {
+            var run = await mac.RunAsync(args);
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+            run.Error.Should().Contain("On a Mac the rig's files are yours: run it without sudo, hvo-roof-install cert");
+        }
+
+        mac.Asked.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task CertImport_APfxThatTakesTooLongToOpen_IsRefused_BeforeItAsksForAPassword()
+    {
+        using var pi = new FakeMachine().WithPi();
+        pi.Types = _ => TheirPassword;
+        var (their, theirs) = TheirCertificate();
+        using (their)
+        using (theirs)
+        {
+            WriteBytes(pi, "/root/their.pfx", theirs.ExportPkcs12(new PbeParameters(PbeEncryptionAlgorithm.Aes256Cbc, HashAlgorithmName.SHA256, 400_000), TheirPassword));
+
+            var run = await pi.RunAsync("cert", "import", "/root/their.pfx");
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Usage, run.ToString());
+            run.Error.Should().Contain("/root/their.pfx needs more iterations to derive its password's keys than the 300000 the installer allows: export it again with fewer.");
+            pi.Asked.Should().BeEmpty("it is refused before a password is asked for");
+            pi.Exists(Layout.Pfx).Should().BeFalse();
+        }
+    }
+
+    [TestMethod]
     public async Task Help_ListsTheCertCommands()
     {
         using var pi = new FakeMachine();
@@ -469,7 +582,7 @@ public sealed class InstallerCertificateCommandTests
         cert.Output.Should().Contain("show").And.Contain("import").And.Contain("--renew").And.Contain("--new-ca").And.Contain("--plan");
     }
 
-    private static FakeMachine Recorded(FakeMachine machine, ControllerSettings? settings = null)
+    internal static FakeMachine Recorded(FakeMachine machine, ControllerSettings? settings = null)
     {
         var record = InstallerGuardTests.Record(InstallRole.Controller, null) with { Controller = settings ?? new ControllerSettings() };
         machine.Write(InstallPaths.SystemRecord, record.ToJson());

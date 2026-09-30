@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
+using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
+using HVO.RoofControllerV4.Installer.Roles;
 
 namespace HVO.RoofControllerV4.Installer.Survey;
 
@@ -43,6 +45,10 @@ public sealed record MachineSurvey
 
     /// <summary>This user's install record: hvo-roof, the Mac app, or a rig on a Mac.</summary>
     public InstallRecord? UserRecord { get; init; }
+
+    /// <summary>The controller's (or a rig's) recorded choices: the machine's record's, else the person's; null when neither records it.</summary>
+    public ControllerSettings? RecordedController
+        => new[] { SystemRecord, UserRecord }.FirstOrDefault(record => record is { Controller: not null } && InstallRoles.RunsController(record.Roles))?.Controller;
 
     /// <summary>Why an install record could not be read, when one is there but is not valid.</summary>
     public IReadOnlyList<string> RecordProblems { get; init; } = [];
@@ -207,14 +213,15 @@ public sealed record CertificateSurvey
 
     /// <summary>
     /// True when a CA the installer made issued it, going by the issuer's name, even when that CA is no longer this
-    /// machine's (its files were removed, or a new one made).
+    /// machine's (its files were removed, or a new one made, or it was imported from another machine).
     /// </summary>
     public bool FromInstallerCa { get; init; }
 
     /// <summary>
-    /// True when it is the person's own: another CA issued it, so they renew it, and the installer never replaces it unasked.
+    /// True when a CA other than this machine's issued it. With nothing recorded it is taken to be the person's own, so the
+    /// installer never replaces it unasked; the record, when there is one, says whose it is.
     /// </summary>
-    public bool IsTheirs => Issuer is not null && !FromAuthority && !FromInstallerCa;
+    public bool IsTheirs => Issuer is not null && !FromAuthority;
 
     /// <summary>The DNS names and addresses it is for.</summary>
     public IReadOnlyList<string> Names { get; init; } = [];

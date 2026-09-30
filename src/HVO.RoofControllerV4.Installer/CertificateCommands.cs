@@ -77,10 +77,18 @@ internal static class CertificateCommands
     private static async Task<int> RenewAsync(InstallerHost host, bool planOnly, bool renew, bool newCa, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
+        RefuseRootOnMac(machine, "cert");
         var log = planOnly || NeedsRoot(machine) ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time);
         var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
         Installer.WriteWarnings(host, session);
-        var record = Recorded(machine, session.Survey)?.Record;
+        var record = RecordedOrRefuse(machine, session.Survey)?.Record;
+        if (record is null && session.Survey.Certificate is { NeedsRoot: true })
+        {
+            // Whether the certificate in place is the person's own decides what the defaults are: only root can tell.
+            throw new InstallerRefusedException(
+                $"Nothing here is recorded, and only root can read the certificate in place to tell whether it is yours: run it with sudo, sudo {Installer.CommandName} cert{(planOnly ? " --plan" : string.Empty)}.");
+        }
+
         var settings = record?.Controller ?? session.DefaultController;
         if (settings.Connection == ConnectionMode.Http)
         {
@@ -117,8 +125,10 @@ internal static class CertificateCommands
     private static int Show(InstallerHost host)
     {
         var machine = host.Machine;
-        var recorded = new[] { (InstallScope.System, InstallPaths.SystemRecord), (InstallScope.User, InstallPaths.UserRecord(machine)) }
-            .Select(entry => InstallRecord.Load(machine, entry.Item2).Record)
+        RefuseRootOnMac(machine, "cert show");
+        var loaded = new[] { InstallPaths.SystemRecord, InstallPaths.UserRecord(machine) }.Select(path => InstallRecord.Load(machine, path)).ToArray();
+        var recorded = loaded
+            .Select(entry => entry.Record)
             .FirstOrDefault(record => record is { Controller: not null } && InstallRoles.RunsController(record.Roles));
         var settings = recorded?.Controller;
         var now = host.Time.GetUtcNow();
@@ -128,7 +138,12 @@ internal static class CertificateCommands
             host.Out.WriteLine(line);
         }
 
-        foreach (var warning in InstallerSession.CertificateWarnings(certificate, authority, now))
+        foreach (var problem in loaded.Select(entry => entry.Problem).OfType<string>())
+        {
+            host.Error.WriteLine($"Warning: {problem}");
+        }
+
+        foreach (var warning in InstallerSession.CertificateWarnings(certificate, authority, now, settings?.Connection))
         {
             host.Error.WriteLine($"Warning: {warning}");
         }
@@ -140,9 +155,11 @@ internal static class CertificateCommands
     private static async Task<int> ImportAsync(InstallerHost host, string file, string? keyFile, string? passwordFile, bool planOnly, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
+        RefuseRootOnMac(machine, "cert import FILE");
         var log = planOnly || NeedsRoot(machine) ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time);
         var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
         RefuseWithoutRoot(machine, planOnly, "cert import FILE");
+        var recorded = RecordedOrRefuse(machine, session.Survey);
 
         var path = Path.GetFullPath(InstallPaths.Expand(machine, file), machine.CurrentDirectory);
         var keyPath = keyFile is null ? null : Path.GetFullPath(InstallPaths.Expand(machine, keyFile), machine.CurrentDirectory);
@@ -172,7 +189,6 @@ internal static class CertificateCommands
             return (int)InstallerExitCode.Refused;
         }
 
-        var recorded = Recorded(machine, session.Survey);
         var settings = recorded?.Record.Controller ?? session.DefaultController;
         foreach (var warning in imported.Warnings(CertificateNames.For(machine, settings.Normalised())))
         {
@@ -319,6 +335,31 @@ internal static class CertificateCommands
         }
 
         return null;
+    }
+
+    // The record of the controller here, refused when one cannot be read: it may say how the controller serves HTTPS, and
+    // the defaults could then replace a certificate it says to keep.
+    private static (InstallScope Scope, string Path, InstallRecord Record)? RecordedOrRefuse(InstallerMachine machine, MachineSurvey survey)
+    {
+        // On Linux the machine's record says it; on a Mac, the person's.
+        var recorded = Recorded(machine, survey);
+        var problems = machine.Os == InstallerOs.MacOS ? survey.RecordProblems : [.. new[] { survey.SystemRecordProblem }.OfType<string>()];
+        if (recorded is null && problems.Count > 0)
+        {
+            throw new InstallerRefusedException(
+                $"{string.Join(" ", problems)} Fix it or remove it first: it may say how the controller serves HTTPS.");
+        }
+
+        return recorded;
+    }
+
+    // A rig on a Mac is the person's (its record and files), as every role there is: never root's.
+    private static void RefuseRootOnMac(InstallerMachine machine, string command)
+    {
+        if (machine.IsRoot && machine.Os == InstallerOs.MacOS)
+        {
+            throw new InstallerRefusedException($"On a Mac the rig's files are yours: run it without sudo, {Installer.CommandName} {command}.");
+        }
     }
 
     // The controller's files on Linux are root's: only a plan runs without it, and a run refused for it logs nothing.

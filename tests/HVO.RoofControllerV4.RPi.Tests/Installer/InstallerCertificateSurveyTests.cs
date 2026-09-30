@@ -91,7 +91,7 @@ public sealed class InstallerCertificateSurveyTests
     }
 
     [TestMethod]
-    public async Task ACertificateAnInstallersCaIssued_IsTheInstallers_EvenWhenThatCaIsGone()
+    public async Task ACertificateAnInstallersCaIssued_WhenThatCaIsNotThisMachines_IsKept_UnlessTheRecordSaysTheInstallerMadeIt()
     {
         using var pi = new FakeMachine().WithPi().WithCertificates();
         File.Delete(pi.OnDisk(Layout.CaCertificate));
@@ -102,14 +102,37 @@ public sealed class InstallerCertificateSurveyTests
 
         survey.Certificate!.FromAuthority.Should().BeFalse("this machine has no CA now");
         survey.Certificate.FromInstallerCa.Should().BeTrue();
-        survey.Certificate.IsTheirs.Should().BeFalse();
-        session.DefaultController.Connection.Should().Be(ConnectionMode.PrivateCa, "the installer made it, so it makes a new CA and issues it again");
+        survey.Certificate.IsTheirs.Should().BeTrue("with nothing recorded, a certificate this machine's CA did not issue may be one the person brought");
+        session.DefaultController.Connection.Should().Be(ConnectionMode.OwnCertificate, "the installer never replaces a certificate unasked");
         InstallerSession.CertificateWarnings(survey, FakeMachine.Today.AddDays(370)).Should().Equal(
-            "The certificate expires on 2027-11-02, in 27 days. Renew it with: sudo hvo-roof-install cert");
+            "The certificate expires on 2027-11-02, in 27 days. Put a new one in place with: sudo hvo-roof-install cert import FILE");
 
         var shown = await pi.RunAsync("cert", "show");
 
         shown.Output.Should().Contain("  Issued by: HVO Roof CA (roofpi, 2026-10-01), an installer's CA that is not this machine's");
+
+        InstallerCertificateCommandTests.Recorded(pi, new ControllerSettings { Connection = ConnectionMode.PrivateCa });
+        var recorded = await MachineSurveyor.SurveyAsync(pi.Machine);
+
+        InstallerSession.CertificateWarnings(recorded, FakeMachine.Today.AddDays(370)).Should().Equal(
+            "The certificate expires on 2027-11-02, in 27 days. Renew it with: sudo hvo-roof-install cert");
+    }
+
+    [TestMethod]
+    public async Task TheWarnings_FollowTheRecord_NotTheCertificatesIssuer()
+    {
+        using var pi = InstallerCertificateCommandTests.Recorded(
+            new FakeMachine().WithPi().WithCertificates(), new ControllerSettings { Connection = ConnectionMode.OwnCertificate });
+
+        pi.RunsAt = new FixedClock(FakeMachine.Today.AddDays(370));
+
+        var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
+        var shown = await pi.RunAsync("cert", "show");
+
+        survey.Certificate!.FromAuthority.Should().BeTrue();
+        InstallerSession.CertificateWarnings(survey, FakeMachine.Today.AddDays(370)).Should().Equal(
+            "The certificate expires on 2027-11-02, in 27 days. Put a new one in place with: sudo hvo-roof-install cert import FILE");
+        shown.Error.Should().Contain("Put a new one in place with: sudo hvo-roof-install cert import FILE", "the record says the certificate is the person's own");
     }
 
     [TestMethod]

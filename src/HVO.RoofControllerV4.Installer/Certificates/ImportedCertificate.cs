@@ -20,10 +20,10 @@ public sealed class ImportedCertificate : IDisposable
 
     private static readonly string[] KeyLabels = ["PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"];
 
-    // The most iterations an encrypted key's password may need (PBKDF2's, or PKCS#12's own derivation's), as .NET's PKCS#12
-    // loader allows: .NET opens an encrypted PEM key with no limit, so a key asking for more would keep the installer
-    // busy for as long as its maker chose.
-    private const int MostIterations = 600_000;
+    // The most iterations an encrypted key's password may need (PBKDF2's, or PKCS#12's own derivation's): what .NET's
+    // PKCS#12 loader allows (Pkcs12LoaderLimits.Defaults, for the MAC and each key). .NET opens an encrypted PEM key with no
+    // limit, so a key asking for more would keep the installer busy for as long as its maker chose.
+    private const int MostIterations = 300_000;
 
     private const string Pbes2 = "1.2.840.113549.1.5.13";
     private const string Pbkdf2 = "1.2.840.113549.1.5.12";
@@ -163,12 +163,20 @@ public sealed class ImportedCertificate : IDisposable
             // Many files have no password: only ask when this one does.
             loaded = X509CertificateLoader.LoadPkcs12Collection(content, null, ControllerCertificates.KeyStorage);
         }
+        catch (Pkcs12LoadLimitExceededException)
+        {
+            throw TooMuchWork(name);
+        }
         catch (CryptographicException)
         {
             var given = password($"{name}'s password") ?? throw NoPassword(name);
             try
             {
                 loaded = X509CertificateLoader.LoadPkcs12Collection(content, given, ControllerCertificates.KeyStorage);
+            }
+            catch (Pkcs12LoadLimitExceededException)
+            {
+                throw TooMuchWork(name);
             }
             catch (CryptographicException)
             {
@@ -335,6 +343,9 @@ public sealed class ImportedCertificate : IDisposable
 
     private static InstallerUsageException NoPassword(string name)
         => new($"{name} needs a password: give it with --password-file FILE, or run the installer in a terminal to type it.");
+
+    private static InstallerUsageException TooMuchWork(string name)
+        => new($"{name} needs more iterations to derive its password's keys than the {MostIterations} the installer allows: export it again with fewer.");
 
     private static bool IsAuthority(X509Certificate2 certificate)
         => certificate.Extensions.OfType<X509BasicConstraintsExtension>().FirstOrDefault() is { CertificateAuthority: true };

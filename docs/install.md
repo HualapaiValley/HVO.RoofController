@@ -377,9 +377,14 @@ Every run of the installer, `--plan` included, warns when one of these applies:
 - **The modes** of the files, when they differ.
 
 With nothing recorded yet, such as a controller the deploy script runs, it uses the defaults: the installer's CA,
-unless your own certificate from another CA is in place. It then says which connection to choose when you install the
-controller, so the certificate is kept. It refuses to issue while this machine's clock is before the CA's start: set
-the time (NTP) first.
+unless a certificate that this machine's CA did not issue is in place, which it keeps as yours. It then says which
+connection to choose when you install the controller, so the certificate is kept. Without root it cannot read the
+certificate to tell, so with nothing recorded even `cert --plan` needs `sudo`. When a record is there but cannot be
+read, it refuses until the record is fixed or removed, since the record may say to keep the certificate.
+
+It refuses to issue while this machine's clock is before the CA's start, and `--plan` shows it as blocked. If the clock
+is wrong, set the time (NTP) and run it again. If the clock is right, the CA was made while it was ahead: make a new one
+with `cert --new-ca`.
 
 It prints the plan, each step, and the certificate as `cert show` does. It never restarts the controller or moves the
 roof. The controller serves a new certificate once it is deployed again: when the roof is idle, run the deploy script
@@ -399,9 +404,10 @@ own. The file is one of these:
 When the file or the key has a password, the installer asks for it, or reads it from `--password-file FILE`. The
 password opens the file only: the installer writes the controller's own file with a new random password. It refuses a
 certificate that has expired, is not yet valid, is a CA's, or is not for a server, and a key whose password needs more
-than 600,000 iterations to derive its key (export it again with fewer). It warns when the certificate is not for a name
-or address clients use, and when it lasts longer than Apple's platforms accept. Importing the same certificate again
-changes nothing, unless its chain has changed. `--plan` checks the file and shows what would change.
+than 300,000 iterations to derive its key, the most that .NET opens in a PKCS#12 file (export it again with fewer). It
+warns when the certificate is not for a name or address clients use, and when it lasts longer than Apple's platforms
+accept. Importing the same certificate again changes nothing, unless its chain has changed. `--plan` checks the file and
+shows what would change.
 
 The installer never renews your certificate. Before it expires, import the new one.
 

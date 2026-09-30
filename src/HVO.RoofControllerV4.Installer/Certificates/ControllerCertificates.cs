@@ -61,18 +61,18 @@ public static class ControllerCertificates
     /// A certificate for <paramref name="names"/>, with its key, issued by <paramref name="authority"/> (which holds its
     /// key). It lasts <see cref="IssuedLifetime"/>, or until the CA expires if sooner, and never starts before the CA.
     /// </summary>
-    /// <exception cref="InstallerException">This machine's clock is before the CA's start.</exception>
+    /// <exception cref="InstallerException">This machine's clock is outside the CA's dates (<see cref="ClockProblem"/>).</exception>
     public static X509Certificate2 Issue(X509Certificate2 authority, CertificateNames names, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(authority);
         ArgumentNullException.ThrowIfNull(names);
+        if (ClockProblem(authority, now) is { } problem)
+        {
+            throw new InstallerException($"T{problem[1..]}.");
+        }
+
         var authorityStarts = new DateTimeOffset(authority.NotBefore);
         var authorityEnds = new DateTimeOffset(authority.NotAfter);
-        if (now < authorityStarts || now >= authorityEnds)
-        {
-            throw new InstallerException(
-                $"This machine's clock ({AuthorityAssessment.Date(now.UtcDateTime)}) is outside its CA's dates ({AuthorityAssessment.Date(authority.NotBefore)} to {AuthorityAssessment.Date(authority.NotAfter)}): set the time (NTP) and run it again.");
-        }
 
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var request = ServerRequest(key, names);
@@ -81,6 +81,22 @@ public static class ControllerCertificates
         var notAfter = now + IssuedLifetime < authorityEnds ? now + IssuedLifetime : authorityEnds;
         using var issued = request.Create(authority, notBefore, notAfter, SerialNumber());
         return issued.CopyWithPrivateKey(key);
+    }
+
+    /// <summary>
+    /// Why <paramref name="authority"/> cannot issue a certificate at <paramref name="now"/>, by this machine's clock, or
+    /// null when it can: the clock is before the CA's start (the CA was made while the clock was ahead, or the clock is
+    /// behind now), or after its end.
+    /// </summary>
+    public static string? ClockProblem(X509Certificate2 authority, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        const string NewCa = "make a new CA with sudo hvo-roof-install cert --new-ca, which every client must then trust";
+        return now < new DateTimeOffset(authority.NotBefore)
+                ? $"this machine's clock ({AuthorityAssessment.Time(now.UtcDateTime)}) is before its CA's start ({AuthorityAssessment.Time(authority.NotBefore)}): if the clock is wrong, set the time (NTP) and run it again; if it is right, {NewCa}"
+            : now >= new DateTimeOffset(authority.NotAfter)
+                ? $"this machine's clock ({AuthorityAssessment.Time(now.UtcDateTime)}) is after its CA's end ({AuthorityAssessment.Time(authority.NotAfter)}): {NewCa}"
+            : null;
     }
 
     /// <summary>A self-signed certificate for <paramref name="names"/>, with its key: each client must trust it alone.</summary>

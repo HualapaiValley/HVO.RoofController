@@ -64,9 +64,9 @@ public sealed class InstallerSession
     public IReadOnlyList<RoleOption> Options => RoleGuards.Options(Survey);
 
     /// <summary>
-    /// The controller's choices when nothing is recorded: the person's own certificate when one is in place that another
-    /// CA issued (so it is never replaced unasked), otherwise a private CA (in place of a self-signed one, or one that
-    /// cannot be opened). No domain is listed unasked: each one lets the CA sign for any name in it, so the wizard only
+    /// The controller's choices when nothing is recorded: the person's own certificate when one is in place that this
+    /// machine's CA did not issue (so it is never replaced unasked, even when an installer's CA elsewhere issued it),
+    /// otherwise a private CA (in place of a self-signed one, or one that cannot be opened). No domain is listed unasked: each one lets the CA sign for any name in it, so the wizard only
     /// suggests those this machine seems to be in.
     /// </summary>
     public ControllerSettings DefaultController => new()
@@ -313,17 +313,21 @@ public sealed class InstallerSession
     public static IReadOnlyList<string> CertificateWarnings(MachineSurvey survey, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(survey);
-        return CertificateWarnings(survey.Certificate, survey.Authority, now);
+        return CertificateWarnings(survey.Certificate, survey.Authority, now, survey.RecordedController?.Connection);
     }
 
-    /// <summary>What needs doing about <paramref name="certificate"/> and <paramref name="authority"/> at <paramref name="now"/>, a sentence each.</summary>
-    public static IReadOnlyList<string> CertificateWarnings(CertificateSurvey? certificate, AuthoritySurvey? authority, DateTimeOffset now)
+    /// <summary>
+    /// What needs doing about <paramref name="certificate"/> and <paramref name="authority"/> at <paramref name="now"/>, a
+    /// sentence each. <paramref name="recorded"/> is how the record says the controller serves HTTPS, when it says.
+    /// </summary>
+    public static IReadOnlyList<string> CertificateWarnings(CertificateSurvey? certificate, AuthoritySurvey? authority, DateTimeOffset now, ConnectionMode? recorded = null)
     {
         var warnings = new List<string>();
         if (certificate is not null)
         {
-            // Your own certificate is renewed by whoever issued it; the installer renews the ones it makes.
-            var own = certificate.IsTheirs;
+            // Your own certificate is renewed by whoever issued it; the installer renews the ones it makes. The record says
+            // which it is; with nothing recorded, one this machine's CA did not issue is taken to be yours.
+            var own = recorded is { } connection ? connection == ConnectionMode.OwnCertificate : certificate.IsTheirs;
             var renew = own ? "Put a new one in place with: sudo hvo-roof-install cert import FILE" : "Renew it with: sudo hvo-roof-install cert";
             if (certificate.Problem is { } problem)
             {

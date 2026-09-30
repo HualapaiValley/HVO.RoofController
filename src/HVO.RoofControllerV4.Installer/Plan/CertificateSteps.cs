@@ -237,9 +237,13 @@ public sealed class CertificateStep(ControllerLayout layout, CertificateNames na
             return (new StepCheck(StepChange.Info, assessment.Detail), false);
         }
 
+        // A kept CA whose dates this machine's clock is outside cannot issue: the plan says so, rather than the run stopping.
+        var clock = assessment?.Authority is { } kept ? ControllerCertificates.ClockProblem(kept, now) : null;
+        (StepCheck, bool) Issuing(StepCheck check) => clock is null ? (check, true) : (new StepCheck(StepChange.Blocked, clock), false);
+
         if (pfx is null)
         {
-            return (new StepCheck(StepChange.Create, $"for {names.DnsNames.Count} names and {names.Addresses.Count} addresses, until {AuthorityAssessment.Date((now + Lifetime).UtcDateTime)}"), true);
+            return Issuing(new StepCheck(StepChange.Create, $"for {names.DnsNames.Count} names and {names.Addresses.Count} addresses, until {AuthorityAssessment.Date((now + Lifetime).UtcDateTime)}"));
         }
 
         if (assessment is { Authority: null })
@@ -249,13 +253,13 @@ public sealed class CertificateStep(ControllerLayout layout, CertificateNames na
 
         if (string.IsNullOrEmpty(password))
         {
-            return (new StepCheck(issueAs, "issued again, with a new password"), true);
+            return Issuing(new StepCheck(issueAs, "issued again, with a new password"));
         }
 
         using var current = ControllerCertificates.LoadPfx(pfx, password);
         if (current is null)
         {
-            return (new StepCheck(issueAs, "its password does not open it: issued again"), true);
+            return Issuing(new StepCheck(issueAs, "its password does not open it: issued again"));
         }
 
         var (missing, extra) = ControllerCertificates.CompareNames(current, names);
@@ -271,7 +275,7 @@ public sealed class CertificateStep(ControllerLayout layout, CertificateNames na
                 ? $"issued again, as asked (--renew): it was valid until {AuthorityAssessment.Date(current.NotAfter)}"
             : null;
         return reason is not null
-            ? (new StepCheck(StepChange.Change, reason), true)
+            ? Issuing(new StepCheck(StepChange.Change, reason))
             : ModeCheck(machine) ?? (StepCheck.Unchanged($"kept: {Describe(current)}"), false);
     }
 

@@ -156,13 +156,15 @@ the roof against this server; use the web UI (port 8088) for operator access.
   private addresses. It issues the controller's certificate (397 days) for the host name, the names and domains you
   give, `.local`, `localhost` and the machine's private addresses, and writes it as `roof-controller.pfx` with a random
   password that is never shown. `sudo hvo-roof-install cert` renews what needs it (within 30 days of expiry, a name
-  that changed, a CA that no longer covers it; `--renew`, `--new-ca`), `cert show` prints what is served and the
-  SHA-256 fingerprints, and `cert import FILE` puts your own certificate in place (PKCS#12, or PEM with its chain and
-  key), refusing one that has expired, is not yet valid, is a CA's or is not for a server. Each has `--plan`, and none
-  restarts the controller: the output says to redeploy when the roof is idle. The wizard's settings page asks for the
-  names and domains, listing no domain unasked and naming those the machine's resolver searches as a hint. Done shows
-  where clients get the CA and its fingerprint. The controller serves its CA at the
-  anonymous `GET /ca.crt` (the handshake leaves a self-signed root out), and `/health` reports `https_certificate`:
+  that changed, a CA that no longer covers it; `--renew`, `--new-ca`), with the defaults when nothing is recorded yet
+  (keeping a certificate this machine's CA did not issue), and refuses while the clock is before the CA's start or a
+  record cannot be read. `cert show` prints what is served and the SHA-256 fingerprints, and `cert import FILE` puts
+  your own certificate in place (PKCS#12, or PEM with its chain and key), refusing one that has expired, is not yet
+  valid, is a CA's or is not for a server, and a key needing more than 300,000 iterations to open. Each has `--plan`,
+  and none restarts the controller: the output says to redeploy when the roof is idle. The wizard's settings page asks
+  for the names and domains, listing no domain unasked and naming those the machine's resolver searches as a hint.
+  Done shows where clients get the CA and its fingerprint. The controller serves its CA at the anonymous `GET /ca.crt`
+  (the handshake leaves a self-signed root out), and `/health` reports `https_certificate`:
   Degraded within 30 days of expiry, Unhealthy when it has expired or cannot be read. See
   [docs/install.md](docs/install.md#certificates).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current

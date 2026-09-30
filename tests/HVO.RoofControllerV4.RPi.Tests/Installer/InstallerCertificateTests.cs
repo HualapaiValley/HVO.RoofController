@@ -125,7 +125,19 @@ public sealed class InstallerCertificateTests
 
         early.NotBefore.Should().Be(authority.NotBefore, "a CA cannot sign for a time before its own start, even within the clock's allowance");
         behind.Should().Throw<InstallerException>().WithMessage(
-            "This machine's clock (2026-09-29) is outside its CA's dates (2026-10-01 to 2036-09-28): set the time (NTP) and run it again.");
+            "This machine's clock (2026-09-29 09:00 UTC) is before its CA's start (2026-10-01 08:00 UTC): if the clock is wrong, set the time (NTP) and run it again; " +
+            "if it is right, make a new CA with sudo hvo-roof-install cert --new-ca, which every client must then trust.");
+    }
+
+    [TestMethod]
+    public void AClockAfterTheCasEnd_IsRefused_WithANewCaAsTheWayOut()
+    {
+        using var authority = ControllerCertificates.CreateAuthority(InstallerCertificates.Names, Today);
+
+        var after = () => ControllerCertificates.Issue(authority, InstallerCertificates.Names, Today.AddDays(3651));
+
+        after.Should().Throw<InstallerException>().WithMessage(
+            "This machine's clock (2036-09-29 09:00 UTC) is after its CA's end (2036-09-28 09:00 UTC): make a new CA with sudo hvo-roof-install cert --new-ca, which every client must then trust.");
     }
 
     [TestMethod]

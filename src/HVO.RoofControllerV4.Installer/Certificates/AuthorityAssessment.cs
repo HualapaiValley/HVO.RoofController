@@ -111,6 +111,9 @@ public sealed class AuthorityAssessment : IDisposable
     /// <summary>The date as the installer writes it: 2027-10-31.</summary>
     public static string Date(DateTime date) => date.ToUniversalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
+    /// <summary>The time as the installer writes it, where the hour matters: 2027-10-31 14:05 UTC.</summary>
+    public static string Time(DateTime time) => time.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture);
+
     public void Dispose() => Authority?.Dispose();
 
     private static AuthorityAssessment Remake(string reason)
