@@ -47,8 +47,13 @@
 <text x="138.00" y="235.50" fill="#f8fafc" textLength="184.80" lengthAdjust="spacingAndGlyphs">27.3.1, Compose 2.29.7</text>
 <text x="28.80" y="253.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">Recorded:</text>
 <text x="138.00" y="253.50" fill="#f8fafc" textLength="462.00" lengthAdjust="spacingAndGlyphs">nothing in the machine's record; nothing in your record</text>
-<text x="28.80" y="271.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Container:</text>
-<text x="138.00" y="271.50" fill="#f8fafc" textLength="613.20" lengthAdjust="spacingAndGlyphs">roof-controller: running, 4.0.0, the real HAT (made by the deploy script)</text>
+<text x="28.80" y="271.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">Found:</text>
+<text x="138.00" y="271.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof, set up without the installer</text>
+<text x="28.80" y="289.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Container:</text>
+<text x="138.00" y="289.50" fill="#f8fafc" textLength="613.20" lengthAdjust="spacingAndGlyphs">roof-controller: running, 4.0.0, the real HAT (made by the deploy script)</text>
+<text x="28.80" y="307.50" fill="#f8fafc" textLength="680.40" lengthAdjust="spacingAndGlyphs">Certificate: roofpi, until 2027-11-02, issued by HVO Roof CA (roofpi, 2026-10-01)</text>
+<text x="28.80" y="325.50" fill="#f8fafc" textLength="25.20" lengthAdjust="spacingAndGlyphs">CA:</text>
+<text x="138.00" y="325.50" fill="#f8fafc" textLength="420.00" lengthAdjust="spacingAndGlyphs">HVO Roof CA (roofpi, 2026-10-01), until 2036-09-28</text>
 <text x="20.40" y="541.50" fill="#aeb9c8" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Next ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>

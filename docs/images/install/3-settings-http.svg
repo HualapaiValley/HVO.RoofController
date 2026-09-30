@@ -16,6 +16,9 @@
 <rect x="28.80" y="276" width="202.00" height="18.4" fill="#0e1628"/>
 <rect x="247.20" y="294" width="336.40" height="18.4" fill="#0e1628"/>
 <rect x="247.20" y="312" width="336.40" height="18.4" fill="#0e1628"/>
+<rect x="28.80" y="384" width="806.80" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="402" width="806.80" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="420" width="101.20" height="18.4" fill="#0e1628"/>
 <rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="196.80" y="537.00" width="4.50" height="9.30" fill="#000000"/>
@@ -41,10 +44,10 @@
 <text x="20.40" y="73.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 3 of 6: Choices</text>
 <text x="37.20" y="91.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Choices</text>
 <text x="28.80" y="109.50" fill="#f8fafc" textLength="243.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">How the controller is reached</text>
-<text x="45.60" y="127.50" fill="#f8fafc" textLength="714.00" lengthAdjust="spacingAndGlyphs">◉ HTTPS, with a certificate from this installer's certificate authority (recommended)</text>
+<text x="45.60" y="127.50" fill="#f8fafc" textLength="714.00" lengthAdjust="spacingAndGlyphs">○ HTTPS, with a certificate from this installer's certificate authority (recommended)</text>
 <text x="45.60" y="145.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">○ HTTPS, with your own certificate</text>
 <text x="45.60" y="163.50" fill="#f8fafc" textLength="512.40" lengthAdjust="spacingAndGlyphs">○ HTTPS, with a self-signed certificate that each client pins</text>
-<text x="45.60" y="181.50" fill="#f8fafc" textLength="470.40" lengthAdjust="spacingAndGlyphs">○ HTTP, with no encryption (only on a network you trust)</text>
+<text x="45.60" y="181.50" fill="#f8fafc" textLength="470.40" lengthAdjust="spacingAndGlyphs">◉ HTTP, with no encryption (only on a network you trust)</text>
 <text x="45.60" y="217.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">HTTPS port (the API):</text>
 <text x="247.20" y="217.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">8443</text>
 <text x="45.60" y="235.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">HTTP port (the API):</text>
@@ -55,7 +58,10 @@
 <text x="45.60" y="307.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">Other host names:</text>
 <text x="45.60" y="325.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Domains:</text>
 <text x="45.60" y="343.50" fill="#f8fafc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Separate them with spaces. The controller answers to roofpi and each of these, alone, under</text>
-<text x="45.60" y="361.50" fill="#f8fafc" textLength="554.40" lengthAdjust="spacingAndGlyphs">.local and under each domain, and its certificate is for them all.</text>
+<text x="45.60" y="361.50" fill="#f8fafc" textLength="243.60" lengthAdjust="spacingAndGlyphs">.local and under each domain.</text>
+<text x="28.80" y="397.50" fill="#fef9c3" textLength="772.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Over HTTP, API keys, session tokens and PINs cross the network unencrypted: anyone on it can</text>
+<text x="28.80" y="415.50" fill="#fef9c3" textLength="588.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">read and use them. Type http to confirm this network is one you trust.</text>
+<text x="28.80" y="433.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">http</text>
 <text x="20.40" y="541.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Next ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>

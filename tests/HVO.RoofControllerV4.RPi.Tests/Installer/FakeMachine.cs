@@ -1,12 +1,16 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Machine;
+using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Survey;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Installer;
@@ -35,6 +39,9 @@ internal sealed record FakeContainer
 
     /// <summary>The port the web UI is published on.</summary>
     public int WebPort { get; init; } = ControllerSettings.DefaultWebPort;
+
+    /// <summary>The host names it answers to (AllowedHosts); null when the deploy script left it unset (any).</summary>
+    public string? AllowedHosts { get; init; }
 }
 
 /// <summary>
@@ -46,6 +53,12 @@ internal sealed record FakeContainer
 [UnsupportedOSPlatform("windows")]
 internal sealed class FakeMachine : ICommandRunner, IDisposable
 {
+    /// <summary>When the tests' installs happen: certificates' dates, and the screenshots that show them, never change.</summary>
+    public static readonly DateTimeOffset Today = new(2026, 10, 1, 9, 0, 0, TimeSpan.Zero);
+
+    /// <summary>A clock that always reads <see cref="Today"/>, which the installer runs with in these tests.</summary>
+    public static TimeProvider Clock { get; } = new FixedClock(Today);
+
     public FakeMachine(InstallerOs os = InstallerOs.Linux, Architecture architecture = Architecture.Arm64, bool root = true, string hostName = "roofpi", string userName = "pi")
     {
         Root = Path.Combine(Path.GetTempPath(), "hvo-roof-installer-tests", Guid.NewGuid().ToString("N"));
@@ -97,6 +110,17 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     /// <summary>TCP ports something on the machine listens on.</summary>
     public HashSet<int> PortsInUse { get; } = [];
 
+    /// <summary>The machine's addresses, by interface: its LAN's, a link-local one, and Docker's bridge.</summary>
+    public List<NetworkAddress> Addresses { get; } =
+    [
+        new("eth0", IPAddress.Parse("192.168.1.50")),
+        new("eth0", IPAddress.Parse("fe80::1")),
+        new("docker0", IPAddress.Parse("172.17.0.1"))
+    ];
+
+    /// <summary>The certificate something presents on a loopback port, by port (as the controller would).</summary>
+    public Dictionary<int, X509Certificate2> ServedCertificates { get; } = [];
+
     public Dictionary<string, string> Environment { get; } = new(StringComparer.Ordinal) { ["PATH"] = "/usr/local/bin:/usr/bin:/bin" };
 
     /// <summary>Programs on the PATH, by name: their full paths.</summary>
@@ -118,7 +142,9 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         HostName = HostName,
         Environment = name => Environment.GetValueOrDefault(name),
         CurrentDirectory = CurrentDirectory,
-        IsPortInUse = PortsInUse.Contains
+        IsPortInUse = PortsInUse.Contains,
+        NetworkAddresses = () => Addresses.ToArray(),
+        ServedCertificateAsync = (port, _) => Task.FromResult(ServedCertificates.TryGetValue(port, out var served) ? X509CertificateLoader.LoadCertificate(served.RawData) : null)
     };
 
     public string OnDisk(string path) => Path.Join(Root, path);
@@ -170,6 +196,53 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         return this;
     }
 
+    /// <summary>
+    /// The certificate files an earlier install left, made by the installer's own code for <paramref name="settings"/>
+    /// (a private CA by default): the CA, the file's password and the certificate, each with its mode (none over HTTP).
+    /// The controller's container, when there is one, answers to the controller's names and serves the certificate.
+    /// </summary>
+    public FakeMachine WithCertificates(ControllerSettings? settings = null)
+    {
+        settings ??= new ControllerSettings();
+        var layout = ControllerLayout.For(Machine);
+        var names = CertificateNames.For(Machine, settings);
+        var now = Today;
+        if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var controller))
+        {
+            Containers[MachineSurveyor.ControllerContainer] = controller with { AllowedHosts = names.AllowedHosts };
+        }
+
+        if (settings.Connection == ConnectionMode.Http)
+        {
+            return this;
+        }
+
+        foreach (var folder in new[] { layout.Configuration, layout.Secrets, layout.Https })
+        {
+            Machine.CreateDirectory(folder, folder == layout.Configuration ? Modes.Folder : Modes.PrivateFolder);
+        }
+
+        using var authority = settings.Connection == ConnectionMode.PrivateCa ? ControllerCertificates.CreateAuthority(names, now) : null;
+        if (authority is not null)
+        {
+            Machine.CreateDirectory(layout.Ca, Modes.PrivateFolder);
+            using var key = authority.GetECDsaPrivateKey()!;
+            Machine.WriteAtomically(layout.CaKey, key.ExportPkcs8PrivateKeyPem(), Modes.PrivateFile);
+            Machine.WriteAtomically(layout.CaCertificate, authority.ExportCertificatePem() + "\n", Modes.File);
+        }
+
+        var password = ControllerCertificates.NewPassword();
+        Machine.WriteAtomically(layout.PfxPassword, password, Modes.PrivateFile);
+        using var certificate = authority is null ? ControllerCertificates.SelfSigned(names, now) : ControllerCertificates.Issue(authority, names, now);
+        Machine.WriteAtomically(layout.Pfx, ControllerCertificates.ExportPfx(certificate, authority, password), Modes.PrivateFile);
+        if (controller is not null)
+        {
+            ServedCertificates[controller.ApiPort ?? settings.ApiPort] = X509CertificateLoader.LoadCertificate(certificate.RawData);
+        }
+
+        return this;
+    }
+
     /// <summary>hvo-roof, on the PATH at <paramref name="path"/>.</summary>
     public FakeMachine WithCli(string path)
     {
@@ -186,14 +259,28 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         return path;
     }
 
+    /// <summary>The clock hvo-roof-install runs with: <see cref="Clock"/> unless a test moves it.</summary>
+    public TimeProvider RunsAt { get; set; } = Clock;
+
+    /// <summary>What the person types when the installer asks for a secret, by what it asks for; null when no one can be asked.</summary>
+    public Func<string, string?> Types { get; set; } = _ => null;
+
+    /// <summary>What the installer asked the person to type, in order.</summary>
+    public List<string> Asked { get; } = [];
+
     public InstallerHost Host(TextWriter output, TextWriter error, bool interactive = false, TimeProvider? time = null) => new()
     {
         Out = output,
         Error = error,
         Machine = Machine,
         IsInteractive = interactive,
-        Time = time ?? TimeProvider.System,
-        Version = "4.0.0+0123456789abcdef0123456789abcdef01234567"
+        Time = time ?? RunsAt,
+        Version = "4.0.0+0123456789abcdef0123456789abcdef01234567",
+        ReadSecret = what =>
+        {
+            Asked.Add(what);
+            return Types(what);
+        }
     };
 
     /// <summary>Runs hvo-roof-install with <paramref name="args"/> on this machine.</summary>
@@ -274,6 +361,11 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     public void Dispose()
     {
+        foreach (var served in ServedCertificates.Values)
+        {
+            served.Dispose();
+        }
+
         try
         {
             Directory.Delete(Root, recursive: true);
@@ -320,6 +412,11 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             }
         }
 
+        if (container.AllowedHosts is { } allowed)
+        {
+            environment.Add($"AllowedHosts={allowed}");
+        }
+
         if (container.Secret is { } secret)
         {
             environment.Add($"RoofControllerSecurity__ApiKeys__0__Key={secret}");
@@ -343,4 +440,10 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 internal sealed record InstallerRun(int ExitCode, string Output, string Error)
 {
     public override string ToString() => $"exit {ExitCode}\n--- out\n{Output}\n--- error\n{Error}";
+}
+
+/// <summary>A clock stopped at one moment; its timers still run on the system's.</summary>
+internal sealed class FixedClock(DateTimeOffset now) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => now;
 }

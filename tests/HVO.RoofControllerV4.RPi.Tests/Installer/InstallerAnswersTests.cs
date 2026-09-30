@@ -46,7 +46,7 @@ public sealed class InstallerAnswersTests
         root.GetProperty("roles").EnumerateArray().Select(role => role.GetString()).Should().Equal("rig", "mac-app");
         root.GetProperty("controller").GetProperty("connection").GetString().Should().Be("own-certificate");
         root.GetProperty("controller").EnumerateObject().Select(member => member.Name).Should().Equal(
-            ["connection", "httpsPort", "httpPort", "webPort"], "only the choices are saved, not what follows from them");
+            ["connection", "httpsPort", "httpPort", "webPort", "hostNames", "domains"], "only the choices are saved, not what follows from them");
         root.GetProperty("controller").GetProperty("httpsPort").GetInt32().Should().Be(8443);
         root.GetProperty("macApp").GetProperty("folder").GetString().Should().Be("/Applications");
         root.TryGetProperty("cli", out _).Should().BeFalse("a role not chosen has no section");
@@ -190,9 +190,9 @@ public sealed class InstallerAnswersTests
         using var pi = new FakeMachine().WithPi();
         pi.Write(InstallPaths.SystemRecord, "[]");
 
-        var session = await InstallerSession.StartAsync(pi.Machine, InstallLog.None, "4.0.0", TimeProvider.System);
+        var session = await InstallerSession.StartAsync(pi.Machine, InstallLog.None, "4.0.0", FakeMachine.Clock);
 
         session.Survey.SystemRecord.Should().BeNull();
-        InstallerSession.DescribeSurvey(session.Survey).Should().Contain(line => line.StartsWith("             /etc/hvo-roof/install.json is not a valid install record", StringComparison.Ordinal));
+        InstallerSession.DescribeSurvey(session.Survey, FakeMachine.Today).Should().Contain(line => line.StartsWith("             /etc/hvo-roof/install.json is not a valid install record", StringComparison.Ordinal));
     }
 }

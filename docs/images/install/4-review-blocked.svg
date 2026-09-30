@@ -13,19 +13,15 @@
 <rect x="112.80" y="528" width="109.60" height="18.4" fill="#1c2028"/>
 <rect x="247.20" y="528" width="596.80" height="18.4" fill="#422226"/>
 <rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
-<rect x="826.80" y="114.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="132.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="150.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="168.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="186.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="204.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="222.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="240.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="258.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="826.80" y="276.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="826.80" y="294.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="826.80" y="312.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="826.80" y="330.00" width="8.70" height="18.30" fill="#3b82f6"/>
+<rect x="826.80" y="348.00" width="8.70" height="18.30" fill="#3b82f6"/>
+<rect x="826.80" y="366.00" width="8.70" height="18.30" fill="#3b82f6"/>
+<rect x="826.80" y="384.00" width="8.70" height="18.30" fill="#3b82f6"/>
+<rect x="826.80" y="402.00" width="8.70" height="18.30" fill="#3b82f6"/>
+<rect x="826.80" y="420.00" width="8.70" height="18.30" fill="#3b82f6"/>
 <rect x="818.40" y="501.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="222.00" y="537.00" width="4.50" height="9.30" fill="#000000"/>
@@ -50,49 +46,46 @@
 <text x="28.80" y="55.50" fill="#abb0b7" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
 <text x="20.40" y="73.50" fill="#f8fafc" textLength="235.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 4 of 6: Review the plan</text>
 <text x="37.20" y="91.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Review the plan</text>
-<text x="28.80" y="109.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Installing the controller on roofpi, 4.0.0:</text>
+<text x="138.00" y="109.50" fill="#f8fafc" textLength="646.80" lengthAdjust="spacingAndGlyphs">trust (its key stays in /etc/hvo-roof/ca) (a new CA, which may issue only for</text>
 <text x="826.80" y="109.50" fill="#f8fafc">▲</text>
-<text x="28.80" y="145.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Folders</text>
-<text x="45.60" y="163.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="163.50" fill="#f8fafc" textLength="109.20" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof</text>
-<text x="440.40" y="163.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">the controller's configuration (0755)</text>
+<text x="138.00" y="127.50" fill="#f8fafc" textLength="478.80" lengthAdjust="spacingAndGlyphs">names in local, localhost, roofpi, and private addresses)</text>
+<text x="826.80" y="127.50" fill="#f8fafc">░</text>
+<text x="45.60" y="145.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
+<text x="138.00" y="145.50" fill="#f8fafc" textLength="520.80" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password</text>
+<text x="675.60" y="145.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">the certificate</text>
+<text x="826.80" y="145.50" fill="#f8fafc">░</text>
+<text x="138.00" y="163.50" fill="#f8fafc" textLength="369.60" lengthAdjust="spacingAndGlyphs">file's password (random, never shown) (0600)</text>
+<text x="826.80" y="163.50" fill="#f8fafc">░</text>
 <text x="45.60" y="181.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="181.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/secrets</text>
-<text x="440.40" y="181.50" fill="#f8fafc" textLength="352.80" lengthAdjust="spacingAndGlyphs">secrets the controller reads, one file per</text>
-<text x="138.00" y="199.50" fill="#f8fafc" textLength="117.60" lengthAdjust="spacingAndGlyphs">setting (0700)</text>
+<text x="138.00" y="181.50" fill="#f8fafc" textLength="327.60" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/https/roof-controller.pfx</text>
+<text x="524.40" y="181.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">the controller's certificate, from</text>
+<text x="826.80" y="181.50" fill="#f8fafc">░</text>
+<text x="138.00" y="199.50" fill="#f8fafc" textLength="554.40" lengthAdjust="spacingAndGlyphs">its CA, for roofpi (for 3 names and 3 addresses, until 2027-11-02)</text>
+<text x="826.80" y="199.50" fill="#f8fafc">░</text>
 <text x="45.60" y="217.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="217.50" fill="#f8fafc" textLength="159.60" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/https</text>
-<text x="440.40" y="217.50" fill="#f8fafc" textLength="344.40" lengthAdjust="spacingAndGlyphs">the controller's HTTPS certificate (0700)</text>
-<text x="45.60" y="235.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="235.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/config</text>
-<text x="440.40" y="235.50" fill="#f8fafc" textLength="352.80" lengthAdjust="spacingAndGlyphs">settings files the controller reads (0755)</text>
-<text x="45.60" y="253.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="253.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof</text>
-<text x="440.40" y="253.50" fill="#f8fafc" textLength="235.20" lengthAdjust="spacingAndGlyphs">the controller's data (0755)</text>
-<text x="45.60" y="271.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="271.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof/identity</text>
-<text x="440.40" y="271.50" fill="#f8fafc" textLength="302.40" lengthAdjust="spacingAndGlyphs">people, sessions and API keys (0700)</text>
-<text x="45.60" y="289.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="289.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">/var/lib/hvo-roof/settings-secrets</text>
-<text x="440.40" y="289.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">secrets set through the API (0700)</text>
-<text x="28.80" y="307.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Files</text>
-<text x="45.60" y="325.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">create</text>
-<text x="138.00" y="325.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/install.json</text>
-<text x="440.40" y="325.50" fill="#f8fafc" textLength="352.80" lengthAdjust="spacingAndGlyphs">the install record: the roles, choices and</text>
-<text x="138.00" y="343.50" fill="#f8fafc" textLength="235.20" lengthAdjust="spacingAndGlyphs">versions (no secrets) (0644)</text>
-<text x="28.80" y="361.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Containers</text>
-<text x="826.80" y="361.50" fill="#f8fafc">░</text>
-<text x="45.60" y="379.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">blocked</text>
-<text x="138.00" y="379.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">roof-controller</text>
-<text x="440.40" y="379.50" fill="#f8fafc" textLength="302.40" lengthAdjust="spacingAndGlyphs">the controller, driving the real HAT</text>
-<text x="826.80" y="379.50" fill="#f8fafc">░</text>
-<text x="138.00" y="397.50" fill="#f8fafc" textLength="663.60" lengthAdjust="spacingAndGlyphs">Docker Compose made it (project hvo-roofcontroller-rpi), and the installer does</text>
-<text x="826.80" y="397.50" fill="#f8fafc">░</text>
-<text x="138.00" y="415.50" fill="#f8fafc" textLength="672.00" lengthAdjust="spacingAndGlyphs">not replace it. To move it to the installer, see "Moving between Compose and the</text>
-<text x="826.80" y="415.50" fill="#f8fafc">░</text>
-<text x="138.00" y="433.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">deploy script" in docs/deployment.md.</text>
-<text x="826.80" y="433.50" fill="#f8fafc">░</text>
-<text x="28.80" y="451.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Ports</text>
+<text x="138.00" y="217.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/install.json</text>
+<text x="524.40" y="217.50" fill="#f8fafc" textLength="252.00" lengthAdjust="spacingAndGlyphs">the install record: the roles,</text>
+<text x="826.80" y="217.50" fill="#f8fafc">░</text>
+<text x="138.00" y="235.50" fill="#f8fafc" textLength="336.00" lengthAdjust="spacingAndGlyphs">choices and versions (no secrets) (0644)</text>
+<text x="826.80" y="235.50" fill="#f8fafc">░</text>
+<text x="28.80" y="253.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Containers</text>
+<text x="826.80" y="253.50" fill="#f8fafc">░</text>
+<text x="45.60" y="271.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">blocked</text>
+<text x="138.00" y="271.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">roof-controller</text>
+<text x="524.40" y="271.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">the controller, driving the real HAT░</text>
+<text x="138.00" y="289.50" fill="#f8fafc" textLength="663.60" lengthAdjust="spacingAndGlyphs">Docker Compose made it (project hvo-roofcontroller-rpi), and the installer does</text>
+<text x="138.00" y="307.50" fill="#f8fafc" textLength="672.00" lengthAdjust="spacingAndGlyphs">not replace it. To move it to the installer, see "Moving between Compose and the</text>
+<text x="138.00" y="325.50" fill="#f8fafc" textLength="310.80" lengthAdjust="spacingAndGlyphs">deploy script" in docs/deployment.md.</text>
+<text x="28.80" y="343.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Ports</text>
+<text x="45.60" y="361.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">info</text>
+<text x="138.00" y="361.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">8443</text>
+<text x="524.40" y="361.50" fill="#f8fafc" textLength="294.00" lengthAdjust="spacingAndGlyphs">the controller's API (HTTPS) (free;</text>
+<text x="138.00" y="379.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">roof-controller will listen on it)</text>
+<text x="45.60" y="397.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">info</text>
+<text x="138.00" y="397.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">8088</text>
+<text x="524.40" y="397.50" fill="#f8fafc" textLength="277.20" lengthAdjust="spacingAndGlyphs">the web UI (free; roof-controller</text>
+<text x="138.00" y="415.50" fill="#f8fafc" textLength="151.20" lengthAdjust="spacingAndGlyphs">will listen on it)</text>
+<text x="28.80" y="451.50" fill="#f8fafc" textLength="520.80" lengthAdjust="spacingAndGlyphs">Blocked: 1 step cannot go ahead, so nothing will be installed.</text>
 <text x="826.80" y="451.50" fill="#f8fafc">▼</text>
 <text x="28.80" y="487.50" fill="#f8fafc" textLength="294.00" lengthAdjust="spacingAndGlyphs">Save these answers (no secrets) to:</text>
 <text x="28.80" y="505.50" fill="#f8fafc" textLength="226.80" lengthAdjust="spacingAndGlyphs">/root/hvo-roof-answers.json</text>

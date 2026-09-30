@@ -1,4 +1,5 @@
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -116,9 +117,17 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
 /// </summary>
 /// <remarks>
 /// Given the controller's <paramref name="settings"/>, the container is also compared with them: the ports it publishes
-/// and whether it serves HTTPS.
+/// and whether it serves HTTPS. Given its <paramref name="names"/>, the host names it answers to (AllowedHosts) are too,
+/// and given its <paramref name="certificate"/>'s step, it is redeployed when the step makes a new certificate, or when
+/// it serves another one than the file holds.
 /// </remarks>
-public sealed class ContainerStep(string name, HatMode? hat, string purpose, ControllerSettings? settings = null) : PlanStep
+public sealed class ContainerStep(
+    string name,
+    HatMode? hat,
+    string purpose,
+    ControllerSettings? settings = null,
+    CertificateNames? names = null,
+    CertificateStep? certificate = null) : PlanStep
 {
     public override StepKind Kind => StepKind.Container;
 
@@ -158,10 +167,49 @@ public sealed class ContainerStep(string name, HatMode? hat, string purpose, Con
             return new StepCheck(StepChange.Change, $"redeployed on ports {settings.ApiPort} and {settings.WebPort} (it publishes {now})");
         }
 
+        if (names is not null && !SameHosts(container.AllowedHosts, names.AllowedHosts))
+        {
+            return new StepCheck(StepChange.Change, container.AllowedHosts is null
+                ? "redeployed to answer only to its names (it answers to any)"
+                : "redeployed to answer to its names as they are now");
+        }
+
+        if (certificate is not null)
+        {
+            if (certificate.WillIssue(context))
+            {
+                return new StepCheck(StepChange.Change, "redeployed with the new certificate");
+            }
+
+            if (settings is { UsesHttps: true } && container.IsRunning && await ServesAnotherCertificateAsync(context, settings.ApiPort, cancellationToken).ConfigureAwait(false))
+            {
+                return new StepCheck(StepChange.Change, $"redeployed: it serves another certificate than {certificate.Target}");
+            }
+        }
+
         return StepCheck.Unchanged($"adopted: {container.State}{(container.Version is { } version ? $", version {version}" : string.Empty)}");
     }
 
     public override bool CanApply => false;
+
+    // AllowedHosts compared as a set: unset is any host (*).
+    private static bool SameHosts(string? current, string wanted)
+        => current is not null
+            && current.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                .SetEquals(wanted.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    // The certificate the controller presents on its API's port, against the one in the file; false when either cannot be had.
+    private async Task<bool> ServesAnotherCertificateAsync(InstallContext context, int port, CancellationToken cancellationToken)
+    {
+        using var inFile = certificate!.Current(context.Machine);
+        if (inFile is null)
+        {
+            return false;
+        }
+
+        using var served = await context.Machine.ServedCertificateAsync(port, cancellationToken).ConfigureAwait(false);
+        return served is not null && !served.RawData.AsSpan().SequenceEqual(inFile.RawData);
+    }
 
     public override Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
         => throw new InstallerException($"This installer cannot deploy {name} yet. Deploy it with the deploy script (docs/deployment.md), then run the installer again: it adopts it.");

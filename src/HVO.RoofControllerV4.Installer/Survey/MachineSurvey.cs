@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
+using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
+using HVO.RoofControllerV4.Installer.Roles;
 
 namespace HVO.RoofControllerV4.Installer.Survey;
 
@@ -44,6 +46,10 @@ public sealed record MachineSurvey
     /// <summary>This user's install record: hvo-roof, the Mac app, or a rig on a Mac.</summary>
     public InstallRecord? UserRecord { get; init; }
 
+    /// <summary>The controller's (or a rig's) recorded choices: the machine's record's, else the person's; null when neither records it.</summary>
+    public ControllerSettings? RecordedController
+        => new[] { SystemRecord, UserRecord }.FirstOrDefault(record => record is { Controller: not null } && InstallRoles.RunsController(record.Roles))?.Controller;
+
     /// <summary>Why an install record could not be read, when one is there but is not valid.</summary>
     public IReadOnlyList<string> RecordProblems { get; init; } = [];
 
@@ -72,6 +78,12 @@ public sealed record MachineSurvey
 
     /// <summary>The Mac app, when it is in /Applications or ~/Applications.</summary>
     public ProgramSurvey? MacApp { get; init; }
+
+    /// <summary>The controller's HTTPS certificate (the file the deploy script mounts), when there is one.</summary>
+    public CertificateSurvey? Certificate { get; init; }
+
+    /// <summary>The installer's certificate authority (the certificate clients trust), when there is one.</summary>
+    public AuthoritySurvey? Authority { get; init; }
 
     public bool IsPi => PiModel is not null;
 
@@ -162,6 +174,9 @@ public sealed record ContainerSurvey
     /// <summary>Whether it serves HTTPS (from ASPNETCORE_URLS, as the deploy script sets it); null when that is not set.</summary>
     public bool? ServesHttps { get; init; }
 
+    /// <summary>The host names it answers to (AllowedHosts, as the deploy script's ALLOWED_HOSTS sets it); null for any (<c>*</c>).</summary>
+    public string? AllowedHosts { get; init; }
+
     public bool IsRunning => State == "running";
 }
 
@@ -170,3 +185,67 @@ public sealed record ServiceSurvey(string Unit, bool Enabled, bool Active);
 
 /// <summary>A program the installer put in place, or found.</summary>
 public sealed record ProgramSurvey(string Path, string? Version);
+
+/// <summary>The controller's certificate, as the installer found it: what it says, never its key or password.</summary>
+public sealed record CertificateSurvey
+{
+    public required string Path { get; init; }
+
+    /// <summary>Why it cannot be checked: only root reads it, or its password does not open it.</summary>
+    public string? Problem { get; init; }
+
+    /// <summary>True when it could not be read because only root reads it: nothing is known about it.</summary>
+    public bool NeedsRoot { get; init; }
+
+    /// <summary>Its subject's common name.</summary>
+    public string? Subject { get; init; }
+
+    public DateTimeOffset? NotAfter { get; init; }
+
+    /// <summary>Its SHA-256 fingerprint.</summary>
+    public string? Fingerprint { get; init; }
+
+    /// <summary>The common name of the CA that issued it, or null when it signed itself.</summary>
+    public string? Issuer { get; init; }
+
+    /// <summary>True when this machine's CA (<see cref="MachineSurvey.Authority"/>) issued it.</summary>
+    public bool FromAuthority { get; init; }
+
+    /// <summary>
+    /// True when a CA the installer made issued it, going by the issuer's name, even when that CA is no longer this
+    /// machine's (its files were removed, or a new one made, or it was imported from another machine).
+    /// </summary>
+    public bool FromInstallerCa { get; init; }
+
+    /// <summary>
+    /// True when a CA other than this machine's issued it. With nothing recorded it is taken to be the person's own, so the
+    /// installer never replaces it unasked; the record, when there is one, says whose it is.
+    /// </summary>
+    public bool IsTheirs => Issuer is not null && !FromAuthority;
+
+    /// <summary>The DNS names and addresses it is for.</summary>
+    public IReadOnlyList<string> Names { get; init; } = [];
+
+    /// <summary>The names clients use for the controller (as recorded, or by default) that it is not for.</summary>
+    public IReadOnlyList<string> Uncovered { get; init; } = [];
+}
+
+/// <summary>The installer's certificate authority, as the installer found its certificate (its key is not read).</summary>
+public sealed record AuthoritySurvey
+{
+    public required string Path { get; init; }
+
+    /// <summary>Why it cannot be read.</summary>
+    public string? Problem { get; init; }
+
+    /// <summary>Its subject's common name.</summary>
+    public string? Subject { get; init; }
+
+    public DateTimeOffset? NotAfter { get; init; }
+
+    /// <summary>Its SHA-256 fingerprint: what a person checks when a client asks them to trust it.</summary>
+    public string? Fingerprint { get; init; }
+
+    /// <summary>The names and networks it may issue for (its name constraints); empty when it does not limit them.</summary>
+    public IReadOnlyList<string> Permits { get; init; } = [];
+}

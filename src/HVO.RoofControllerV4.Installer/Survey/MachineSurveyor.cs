@@ -1,7 +1,12 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Machine;
+using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
 
 namespace HVO.RoofControllerV4.Installer.Survey;
@@ -40,6 +45,7 @@ public static partial class MachineSurveyor
         var docker = await SurveyDockerAsync(machine, cancellationToken).ConfigureAwait(false);
         var controller = docker.IsUsable ? await SurveyContainerAsync(machine, ControllerContainer, cancellationToken).ConfigureAwait(false) : null;
         var emulator = docker.IsUsable ? await SurveyContainerAsync(machine, HatEmulatorContainer, cancellationToken).ConfigureAwait(false) : null;
+        var (certificate, authority) = SurveyCertificates(machine, systemRecord?.Controller ?? userRecord?.Controller);
 
         return new MachineSurvey
         {
@@ -64,7 +70,107 @@ public static partial class MachineSurveyor
             HatEmulator = emulator,
             Kiosk = await SurveyKioskAsync(machine, cancellationToken).ConfigureAwait(false),
             Cli = await SurveyCliAsync(machine, cancellationToken).ConfigureAwait(false),
-            MacApp = SurveyMacApp(machine)
+            MacApp = SurveyMacApp(machine),
+            Certificate = certificate,
+            Authority = authority
+        };
+    }
+
+    /// <summary>
+    /// The controller's certificate and the installer's CA on this machine, and the names clients use for the controller
+    /// (with <paramref name="settings"/>, as recorded, or the defaults) that the certificate is not for.
+    /// </summary>
+    public static (CertificateSurvey? Certificate, AuthoritySurvey? Authority) SurveyCertificates(InstallerMachine machine, ControllerSettings? settings)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        var layout = ControllerLayout.For(machine);
+        using var authority = LoadAuthority(machine, layout, out var authoritySurvey);
+        return (SurveyCertificate(machine, layout, (settings ?? new ControllerSettings()).Normalised(), authority), authoritySurvey);
+    }
+
+    private static X509Certificate2? LoadAuthority(InstallerMachine machine, ControllerLayout layout, out AuthoritySurvey? survey)
+    {
+        string? pem;
+        try
+        {
+            pem = machine.ReadText(layout.CaCertificate);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+        {
+            survey = new AuthoritySurvey { Path = layout.CaCertificate, Problem = "it cannot be read" };
+            return null;
+        }
+
+        if (pem is null)
+        {
+            survey = null;
+            return null;
+        }
+
+        X509Certificate2 authority;
+        try
+        {
+            authority = X509Certificate2.CreateFromPem(pem);
+        }
+        catch (Exception error) when (error is CryptographicException or ArgumentException)
+        {
+            survey = new AuthoritySurvey { Path = layout.CaCertificate, Problem = "it is not a certificate" };
+            return null;
+        }
+
+        var constraints = NameConstraints.Of(authority);
+        survey = new AuthoritySurvey
+        {
+            Path = layout.CaCertificate,
+            Subject = authority.GetNameInfo(X509NameType.SimpleName, false),
+            NotAfter = new DateTimeOffset(authority.NotAfter.ToUniversalTime()),
+            Fingerprint = ControllerCertificates.Fingerprint(authority),
+            Permits = constraints is null ? [] : [.. constraints.DnsNames, .. constraints.Networks.Select(network => network.ToString())]
+        };
+        return authority;
+    }
+
+    private static CertificateSurvey? SurveyCertificate(InstallerMachine machine, ControllerLayout layout, ControllerSettings settings, X509Certificate2? authority)
+    {
+        byte[]? pfx;
+        string? password;
+        try
+        {
+            pfx = machine.ReadBytes(layout.Pfx);
+            if (pfx is null)
+            {
+                return null;
+            }
+
+            password = machine.ReadText(layout.PfxPassword);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+        {
+            return new CertificateSurvey { Path = layout.Pfx, Problem = "only root can read it", NeedsRoot = true };
+        }
+
+        using var certificate = string.IsNullOrEmpty(password) ? null : ControllerCertificates.LoadPfx(pfx, password);
+        if (certificate is null)
+        {
+            return new CertificateSurvey
+            {
+                Path = layout.Pfx,
+                Problem = string.IsNullOrEmpty(password) ? $"there is no password for it in {layout.PfxPassword}" : $"the password in {layout.PfxPassword} does not open it"
+            };
+        }
+
+        var (dnsNames, addresses) = ControllerCertificates.NamesIn(certificate);
+        return new CertificateSurvey
+        {
+            Path = layout.Pfx,
+            Subject = certificate.GetNameInfo(X509NameType.SimpleName, false),
+            NotAfter = new DateTimeOffset(certificate.NotAfter.ToUniversalTime()),
+            Fingerprint = ControllerCertificates.Fingerprint(certificate),
+            Issuer = ControllerCertificates.IsSelfSigned(certificate) ? null : certificate.GetNameInfo(X509NameType.SimpleName, true),
+            FromAuthority = authority is not null && ControllerCertificates.IsIssuedBy(certificate, authority),
+            FromInstallerCa = certificate.GetNameInfo(X509NameType.SimpleName, true).StartsWith(ControllerCertificates.AuthorityNamePrefix, StringComparison.Ordinal),
+            Names = [.. dnsNames, .. addresses.Select(address => address.ToString())],
+            Uncovered = ControllerCertificates.CompareNames(certificate, CertificateNames.For(machine, settings)).Missing
         };
     }
 
@@ -170,6 +276,7 @@ public static partial class MachineSurveyor
                 Name = name,
                 PublishedPorts = published,
                 ServesHttps = urls is null ? null : urls.Contains("https://", StringComparison.OrdinalIgnoreCase),
+                AllowedHosts = environment.GetValueOrDefault("AllowedHosts") is { Length: > 0 } allowed && allowed != "*" ? allowed : null,
                 Image = config.TryGetProperty("Image", out var image) ? image.GetString() ?? string.Empty : string.Empty,
                 State = container.TryGetProperty("State", out var state) && state.TryGetProperty("Status", out var status) ? status.GetString() ?? "unknown" : "unknown",
                 Origin = string.IsNullOrEmpty(composeProject) ? ContainerOrigin.DeployScript : ContainerOrigin.Compose,

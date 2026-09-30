@@ -21,7 +21,7 @@ public sealed class InstallerPlanTests
 {
     private static readonly string[] ControllerFolders =
     [
-        "/etc/hvo-roof", "/etc/hvo-roof/secrets", "/etc/hvo-roof/https", "/etc/hvo-roof/config",
+        "/etc/hvo-roof", "/etc/hvo-roof/secrets", "/etc/hvo-roof/https", "/etc/hvo-roof/ca", "/etc/hvo-roof/config",
         "/var/lib/hvo-roof", "/var/lib/hvo-roof/identity", "/var/lib/hvo-roof/settings-secrets"
     ];
 
@@ -34,15 +34,16 @@ public sealed class InstallerPlanTests
 
         Steps(plan, StepKind.Folder).Should().Equal(ControllerFolders);
         plan.Steps.Where(step => step.Step.Kind == StepKind.Folder).Select(step => step.Check.Detail).Should().Equal(
-            "0755", "0700", "0700", "0755", "0755", "0700", "0700");
+            "0755", "0700", "0700", "0700", "0755", "0755", "0700", "0700");
         Steps(plan, StepKind.Container).Should().Equal(MachineSurveyor.ControllerContainer);
         Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Create, "deployed by digest with the deploy script"));
         Steps(plan, StepKind.Port).Should().Equal("8443", "8088");
         Change(plan, "8443").Detail.Should().Be("free; roof-controller will listen on it");
-        Steps(plan, StepKind.File).Should().Equal(InstallPaths.SystemRecord);
+        Steps(plan, StepKind.File).Should().Equal(
+            "/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", InstallPaths.SystemRecord);
         Change(plan, InstallPaths.SystemRecord).Should().Be(new StepCheck(StepChange.Create, "0644"));
         plan.Steps[^1].Step.Should().BeOfType<RecordStep>("the record says the roles are installed once they are");
-        PlanText.Summary(plan).Should().Be("9 to create, 0 to change, 0 unchanged.");
+        PlanText.Summary(plan).Should().Be("13 to create, 0 to change, 0 unchanged.");
     }
 
     [TestMethod]
@@ -53,7 +54,7 @@ public sealed class InstallerPlanTests
         var lines = PlanText.Lines(await CheckAsync(pi, InstallRole.Controller));
 
         lines.Where(line => !line.StartsWith(' ') && line.Length > 0).Should().Equal(
-            "Folders", "Files", "Containers", "Ports", "9 to create, 0 to change, 0 unchanged.");
+            "Folders", "Files", "Containers", "Ports", "13 to create, 0 to change, 0 unchanged.");
         lines.Should().Contain(line => line.StartsWith("  create     /etc/hvo-roof/secrets ", StringComparison.Ordinal) && line.EndsWith("secrets the controller reads, one file per setting (0700)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  info       8443 ", StringComparison.Ordinal) && line.Contains("the controller's API (HTTPS)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  create     roof-controller ", StringComparison.Ordinal) && line.Contains("the controller, driving the real HAT (deployed by digest", StringComparison.Ordinal));
@@ -77,7 +78,7 @@ public sealed class InstallerPlanTests
     [TestMethod]
     public async Task TheDeployScriptsContainer_IsAdopted_AndItsPortsAreItsOwn()
     {
-        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false, Version = "3.9.1" });
+        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false, Version = "3.9.1" }).WithCertificates();
         pi.PortsInUse.UnionWith([8443, 8088]);
 
         var plan = await CheckAsync(pi, InstallRole.Controller);
@@ -109,7 +110,8 @@ public sealed class InstallerPlanTests
     [TestMethod]
     public async Task AnAdoptedContainer_ServingHttp_IsRedeployed_ForHttps()
     {
-        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Https = false });
+        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Https = false })
+            .WithCertificates(new ControllerSettings { Connection = ConnectionMode.Http });
 
         Change(await CheckAsync(pi, InstallRole.Controller), MachineSurveyor.ControllerContainer)
             .Should().Be(new StepCheck(StepChange.Change, "redeployed to serve HTTPS"));
@@ -194,7 +196,8 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.Folder).Should().Equal(ControllerFolders);
         Steps(plan, StepKind.Container).Should().Equal(MachineSurveyor.HatEmulatorContainer, MachineSurveyor.ControllerContainer);
         plan.Steps.Single(step => step.Step.Target == MachineSurveyor.ControllerContainer).Step.Purpose.Should().Be("the controller, against the HAT emulator");
-        Steps(plan, StepKind.File).Should().Equal(InstallPaths.SystemRecord);
+        Steps(plan, StepKind.File).Should().Equal(
+            "/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", InstallPaths.SystemRecord);
     }
 
     [TestMethod]
@@ -220,8 +223,9 @@ public sealed class InstallerPlanTests
         var plan = await CheckAsync(mac, InstallRole.Rig);
 
         Steps(plan, StepKind.Folder).Should().Equal(
-            root, $"{root}/secrets", $"{root}/https", $"{root}/config", $"{root}/identity", $"{root}/settings-secrets");
-        Steps(plan, StepKind.File).Should().Equal("/Users/roy/.config/hvo-roof/install.json");
+            root, $"{root}/secrets", $"{root}/https", $"{root}/ca", $"{root}/config", $"{root}/identity", $"{root}/settings-secrets");
+        Steps(plan, StepKind.File).Should().Equal(
+            $"{root}/ca.crt", $"{root}/secrets/Kestrel__Certificates__Default__Password", $"{root}/https/roof-controller.pfx", "/Users/roy/.config/hvo-roof/install.json");
         Change(plan, "/Users/roy/.config/hvo-roof/install.json").Detail.Should().Be("0600", "the person's record is theirs alone");
     }
 
@@ -293,7 +297,7 @@ public sealed class InstallerPlanTests
 
         foreach (var folder in ControllerFolders)
         {
-            pi.Mode(folder).Should().Be(folder.EndsWith("secrets", StringComparison.Ordinal) || folder.EndsWith("https", StringComparison.Ordinal) || folder.EndsWith("identity", StringComparison.Ordinal)
+            pi.Mode(folder).Should().Be(folder.EndsWith("secrets", StringComparison.Ordinal) || folder.EndsWith("https", StringComparison.Ordinal) || folder.EndsWith("identity", StringComparison.Ordinal) || folder.EndsWith("/ca", StringComparison.Ordinal)
                 ? Modes.PrivateFolder
                 : Modes.Folder, folder);
         }
@@ -410,14 +414,14 @@ public sealed class InstallerPlanTests
     /// <summary>A Pi with the HAT, where the deploy script already runs the controller: the installer adopts it.</summary>
     internal static FakeMachine AdoptablePi()
     {
-        var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false });
+        var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false }).WithCertificates();
         pi.PortsInUse.UnionWith([8443, 8088]);
         return pi;
     }
 
     internal static async Task<InstallerSession> StartAsync(FakeMachine machine, params InstallRole[] roles)
     {
-        var session = await InstallerSession.StartAsync(machine.Machine, InstallLog.None, "4.0.0+0123456789abcdef", TimeProvider.System);
+        var session = await InstallerSession.StartAsync(machine.Machine, InstallLog.None, "4.0.0+0123456789abcdef", FakeMachine.Clock);
         session.Answers = new InstallAnswers { Roles = roles }.Normalised();
         return session;
     }
@@ -427,7 +431,7 @@ public sealed class InstallerPlanTests
 
     private static async Task<CheckedPlan> CheckAsync(FakeMachine machine, InstallAnswers answers)
     {
-        var session = await InstallerSession.StartAsync(machine.Machine, InstallLog.None, "4.0.0+0123456789abcdef", TimeProvider.System);
+        var session = await InstallerSession.StartAsync(machine.Machine, InstallLog.None, "4.0.0+0123456789abcdef", FakeMachine.Clock);
         session.Answers = answers.Normalised();
         return await session.CheckAsync();
     }

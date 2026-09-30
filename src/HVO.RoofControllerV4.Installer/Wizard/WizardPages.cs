@@ -1,5 +1,6 @@
 using System.Globalization;
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Roles;
 using Terminal.Gui.ViewBase;
@@ -77,7 +78,7 @@ internal sealed class MachinePage : WizardPage
             Y = 0
         });
         intro.SetScheme(_problem is null ? Wizard.Theme.Base : Wizard.Theme.Danger);
-        _lines = InstallerSession.DescribeSurvey(Session.Survey);
+        _lines = InstallerSession.DescribeSurvey(Session.Survey, Session.Time.GetUtcNow());
         var text = Lines(Pos.Bottom(intro) + 1);
         text.Show(_lines);
         Add(intro, text);
@@ -152,7 +153,7 @@ internal sealed class RolesPage : WizardPage
         {
             Roles = roles,
             RigConfirmation = _confirmation.Visible ? _confirmation.Text : null
-        }).Normalised();
+        }).Normalised(Session.DefaultController);
         var problems = Session.Problems();
         return problems.Count == 0 ? null : string.Join(" ", problems);
     }
@@ -186,6 +187,11 @@ internal sealed class SettingsPage : WizardPage
     private TextField? _httpsPort;
     private TextField? _httpPort;
     private TextField? _webPort;
+    private TextField? _hostNames;
+    private TextField? _domains;
+    private Label? _namesHint;
+    private Label? _httpPrompt;
+    private TextField? _httpConfirmation;
     private OptionSelector? _cliFolder;
     private OptionSelector? _macAppFolder;
     private readonly List<string> _description = [];
@@ -203,6 +209,15 @@ internal sealed class SettingsPage : WizardPage
 
     public TextField? WebPort => _webPort;
 
+    /// <summary>Other short names clients use for the controller, separated by spaces.</summary>
+    public TextField? HostNames => _hostNames;
+
+    /// <summary>The domains clients reach it under, separated by spaces.</summary>
+    public TextField? Domains => _domains;
+
+    /// <summary>Where the person types http to confirm plain HTTP; shown only when that needs confirming.</summary>
+    public TextField? HttpConfirmation => _httpConfirmation;
+
     public OptionSelector? CliFolder => _cliFolder;
 
     public OptionSelector? MacAppFolder => _macAppFolder;
@@ -216,7 +231,8 @@ internal sealed class SettingsPage : WizardPage
         }
 
         _connection = _cliFolder = _macAppFolder = null;
-        _httpsPort = _httpPort = _webPort = null;
+        _httpsPort = _httpPort = _webPort = _hostNames = _domains = _httpConfirmation = null;
+        _namesHint = _httpPrompt = null;
         _description.Clear();
         var answers = Session.Answers.Normalised();
         View? previous = null;
@@ -226,10 +242,19 @@ internal sealed class SettingsPage : WizardPage
             previous = Heading(previous, "How the controller is reached");
             _connection = Selector(previous, Connections.Select(ControllerSettings.Describe), Array.IndexOf(Connections, controller.Connection));
             previous = _connection;
-            _httpsPort = Field(ref previous, "HTTPS port (the API)", controller.HttpsPort);
-            _httpPort = Field(ref previous, "HTTP port (the API)", controller.HttpPort);
-            _webPort = Field(ref previous, "Web UI port", controller.WebPort);
+            _connection.ValueChanged += (_, _) => UpdateConnection();
+            _httpsPort = Field(ref previous, "HTTPS port (the API)", Number(controller.HttpsPort), 8);
+            _httpPort = Field(ref previous, "HTTP port (the API)", Number(controller.HttpPort), 8);
+            _webPort = Field(ref previous, "Web UI port", Number(controller.WebPort), 8);
             _description.Add($"Connection: {ControllerSettings.Describe(controller.Connection)}; ports {controller.HttpsPort} (HTTPS), {controller.HttpPort} (HTTP), {controller.WebPort} (web UI)");
+
+            previous = Heading(previous, "Names clients use for it");
+            _hostNames = Field(ref previous, "Other host names", string.Join(' ', controller.HostNames), 40);
+            _domains = Field(ref previous, "Domains", string.Join(' ', controller.Domains), 40);
+            _namesHint = Wrapping(new Label { Text = NamesHint(controller.Connection), X = 2, Y = Pos.Bottom(previous) });
+            Add(_namesHint);
+            previous = _namesHint;
+            _description.Add($"Names: {Listed(controller.HostNames)}; domains: {Listed(controller.Domains)}");
         }
 
         if (answers.Cli is { } cli)
@@ -244,7 +269,19 @@ internal sealed class SettingsPage : WizardPage
         {
             previous = Heading(previous, "Where the Mac app goes");
             _macAppFolder = Selector(previous, MacAppSettings.Folders.Select(folder => folder == MacAppSettings.HomeFolder ? $"{folder} (yours)" : $"{folder} (everyone's)"), Index(MacAppSettings.Folders, macApp.Folder));
+            previous = _macAppFolder;
             _description.Add($"Mac app: {macApp.Folder}");
+        }
+
+        if (answers.Controller is not null && previous is not null)
+        {
+            // Last on the page, so the page does not move when it shows.
+            _httpPrompt = Wrapping(new Label { Text = RoleGuards.HttpConfirmationPrompt, X = 0, Y = Pos.Bottom(previous) + 1 });
+            _httpPrompt.SetScheme(Wizard.Theme.Warning);
+            _httpConfirmation = new TextField { X = 0, Y = Pos.Bottom(_httpPrompt), Width = 12, Text = answers.HttpConfirmation ?? string.Empty };
+            _httpConfirmation.TextChanged += (_, _) => Edited();
+            Add(_httpPrompt, _httpConfirmation);
+            UpdateHttpConfirmation();
         }
 
         if (previous is null)
@@ -267,8 +304,11 @@ internal sealed class SettingsPage : WizardPage
                     Connection = Connections[Math.Clamp(_connection.Value ?? 0, 0, Connections.Length - 1)],
                     HttpsPort = Port(_httpsPort!, "The HTTPS port", problems) ?? controller.HttpsPort,
                     HttpPort = Port(_httpPort!, "The HTTP port", problems) ?? controller.HttpPort,
-                    WebPort = Port(_webPort!, "The web UI port", problems) ?? controller.WebPort
-                }
+                    WebPort = Port(_webPort!, "The web UI port", problems) ?? controller.WebPort,
+                    HostNames = Names(_hostNames!.Text),
+                    Domains = Names(_domains!.Text)
+                },
+                HttpConfirmation = _httpConfirmation is { Visible: true } confirmation ? confirmation.Text : null
             };
         }
 
@@ -282,17 +322,58 @@ internal sealed class SettingsPage : WizardPage
             answers = answers with { MacApp = new MacAppSettings { Folder = MacAppSettings.Folders[Math.Clamp(_macAppFolder.Value ?? 0, 0, MacAppSettings.Folders.Count - 1)] } };
         }
 
-        problems.AddRange(answers.Problems());
+        problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised()));
         if (problems.Count > 0)
         {
             return string.Join(" ", problems);
         }
 
-        Session.Answers = answers;
+        Session.Answers = answers.Normalised();
         return null;
     }
 
-    public override IReadOnlyList<string> Describe() => _description;
+    public override IReadOnlyList<string> Describe()
+        => _httpConfirmation is { Visible: true } ? [.. _description, _httpPrompt!.Text] : _description;
+
+    /// <summary>The connection chosen now, or null when the controller is not being installed.</summary>
+    private ConnectionMode? ChosenConnection
+        => _connection is null ? null : Connections[Math.Clamp(_connection.Value ?? 0, 0, Connections.Length - 1)];
+
+    private void UpdateConnection()
+    {
+        if (ChosenConnection is { } connection && _namesHint is not null)
+        {
+            _namesHint.Text = NamesHint(connection);
+        }
+
+        UpdateHttpConfirmation();
+    }
+
+    // The names are those the controller answers to (AllowedHosts), and those on the certificate the installer makes. The
+    // domains this machine seems to be in are named, not filled in: each domain listed lets the private CA sign for any
+    // name in it.
+    private string NamesHint(ConnectionMode connection)
+    {
+        var host = CertificateNames.ShortName(Session.Survey.HostName) ?? "localhost";
+        var hint = $"Separate them with spaces. The controller answers to {host} and each of these, alone, under .local and under each domain";
+        hint = connection is ConnectionMode.PrivateCa or ConnectionMode.SelfSigned ? $"{hint}, and its certificate is for them all." : $"{hint}.";
+        var suggested = CertificateNames.SuggestedDomains(Session.Machine);
+        return suggested.Count == 0 ? hint : $"{hint} This machine is in {string.Join(", ", suggested)}: add a domain only if clients use names in it.";
+    }
+
+    private void UpdateHttpConfirmation()
+    {
+        if (_httpPrompt is null || _httpConfirmation is null)
+        {
+            return;
+        }
+
+        var answers = Session.Answers.Normalised();
+        var needed = ChosenConnection is { } connection
+            && RoleGuards.NeedsHttpConfirmation(Session.Survey, answers with { Controller = answers.Controller! with { Connection = connection } });
+        _httpPrompt.Visible = needed;
+        _httpConfirmation.Visible = needed;
+    }
 
     private View Heading(View? previous, string text)
     {
@@ -310,15 +391,23 @@ internal sealed class SettingsPage : WizardPage
         return selector;
     }
 
-    private TextField Field(ref View previous, string label, int value)
+    private TextField Field(ref View previous, string label, string value, int width)
     {
         var caption = new Label { Text = $"{label}:", X = 2, Y = Pos.Bottom(previous) + (previous is OptionSelector ? 1 : 0) };
-        var field = new TextField { X = 26, Y = Pos.Top(caption), Width = 8, Text = value.ToString(CultureInfo.InvariantCulture) };
+        var field = new TextField { X = 26, Y = Pos.Top(caption), Width = width, Text = value };
         field.TextChanged += (_, _) => Edited();
         Add(caption, field);
         previous = caption;
         return field;
     }
+
+    private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static string Listed(IReadOnlyList<string> names) => names.Count == 0 ? "none" : string.Join(", ", names);
+
+    // Names as a person types them: separated by spaces, commas or semicolons.
+    private static IReadOnlyList<string> Names(string text)
+        => text.Split([' ', ',', ';', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static int Index(IReadOnlyList<string> folders, string folder) => Math.Max(0, folders.ToList().IndexOf(folder));
 
@@ -411,6 +500,8 @@ internal sealed class ReviewPage : WizardPage
                     Show([$"Installing {InstallRoles.Describe(Session.Answers.Roles)} on {Session.Survey.HostName}, {Session.Version}:", string.Empty, .. PlanText.Lines(plan!)]);
                     if (plan!.IsBlocked)
                     {
+                        // The first step that blocks it, in view: a long plan would otherwise hide it below.
+                        _plan.Reveal(_lines.ToList().FindIndex(line => line.StartsWith($"  {PlanText.Word(StepChange.Blocked)} ", StringComparison.Ordinal)));
                         Wizard.Say("Something here blocks the plan: see above.", error: true);
                     }
                 }

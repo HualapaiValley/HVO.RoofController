@@ -47,8 +47,19 @@ does not redirect them. Two exceptions remain on plain HTTP:
 Give Kestrel a PFX certificate whose subject alternative names include every name and IP clients use (for example
 `roof-pi`, `roof-pi.local`, `192.168.x.y`).
 
-A private CA is best: clients trust the CA once, and certificates can then be reissued freely. For a quick
-self-signed certificate:
+A private CA is best: clients trust the CA once, and certificates can then be reissued freely. The installer makes
+one, with the certificate, its password file and the folders, at the paths used here:
+
+```bash
+sudo hvo-roof-install cert --plan   # what it would make or change
+sudo hvo-roof-install cert          # make it, and print the CA's fingerprint
+```
+
+The CA may issue only for the controller's names and private addresses, and its key never leaves the Pi. To import a
+certificate of your own instead, use `sudo hvo-roof-install cert import FILE`. See
+[Certificates](install.md#certificates).
+
+To make one by hand, for example a quick self-signed certificate:
 
 ```bash
 sudo install -d -m 700 /etc/hvo-roof/https
@@ -67,7 +78,31 @@ the certificate and its password (see [The container's two processes](#the-conta
 
 Install `roof.crt`, or your CA certificate, as trusted on browsers that use the web UI. Keep a copy on the machine
 that runs the deploy script too: pass it as `REMOTE_CA_CERT` so the script can check the HTTPS endpoint after a deploy
-(not needed when that machine already trusts the CA).
+(not needed when that machine already trusts the CA). With the installer's CA, that is `/etc/hvo-roof/ca.crt`.
+
+The controller serves the CA that issued its certificate at `GET /ca.crt`, anonymously, as
+`application/x-x509-ca-cert`: the certificate only, never a key. It is the self-signed root at the top of the chain in
+the PFX file, which the TLS handshake leaves out. A certificate that signed itself, or a PFX without its root, gives
+404. A client that fetches it must check its SHA-256 fingerprint against the one the installer printed (or
+`sudo hvo-roof-install cert show`) before trusting it:
+
+```bash
+curl -sSk https://roof-pi:8443/ca.crt -o roof-ca.crt   # -k only for this one download
+openssl x509 -in roof-ca.crt -noout -fingerprint -sha256
+```
+
+#### Renewing the certificate
+
+The installer's certificate lasts 397 days. Every run of the installer warns within 30 days of its expiry, and the
+`https_certificate` health check reports Degraded ([Health and readiness](#health-and-readiness)). Then:
+
+```bash
+sudo hvo-roof-install cert       # renews what needs it, and nothing else
+```
+
+The CA stays the same, so clients need nothing. The controller and the web UI serve the new certificate once the
+container is deployed again: when the roof is idle, run the deploy script again as you did before. A certificate of
+your own is renewed by importing the new one.
 
 The deployment check loads the certificate as Kestrel does, with its password, before anything is replaced. It fails
 when the file is missing or unreadable, the password is wrong, the private key is missing, the certificate is not for
@@ -821,15 +856,25 @@ the controller with them, in the supervisor's place, and exits with its exit cod
 
 ## Health and readiness
 
-One health check, `roof_controller`, backs three endpoints:
+Three health checks run:
+
+- `roof_controller`: the roof and the HAT. It is the only check tagged `hardware`, so the only one readiness and
+  deploys wait for.
+- `identity_store`: the file of people, sessions and managed keys ([The identity store](security.md#the-identity-store)).
+- `https_certificate`: the certificate the controller serves. Unhealthy when it cannot be read or has expired, Degraded
+  within 30 days of its expiry, and Healthy otherwise, or when no certificate file is configured. Its data holds the
+  certificate's subject, expiry, days left and SHA-256 fingerprint, and those of the CA that issued it.
+
+`identity_store` and `https_certificate` show only in `/health`, so they never fail readiness or a deploy. The
+endpoints:
 
 | Endpoint | Access | Answers |
 |----------|--------|---------|
 | `/health/live` | anonymous | 200 whenever the process answers. No check runs. |
-| `/health/ready` | anonymous, status text only | 200 for Healthy or Degraded, 503 for Unhealthy. The container's health check and the deploy script's readiness wait use it, from inside the container. |
-| `/health` | Viewer key or a person's session | The same result with its description and data (`HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 for Unhealthy. |
+| `/health/ready` | anonymous, status text only | `roof_controller` only: 200 for Healthy or Degraded, 503 for Unhealthy. The container's health check and the deploy script's readiness wait use it, from inside the container. |
+| `/health` | Viewer key or a person's session | Every check, each with its description and data (for `roof_controller`: `HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 when any check is Unhealthy. |
 
-The check reports the first of these that applies:
+`roof_controller` reports the first of these that applies:
 
 - **Unhealthy:** the service is disposed, shutting down or not initialized; the relay register state is unverified; a
   safety fault is latched; the safety inputs are not healthy; relay register reads are failing or stale; the

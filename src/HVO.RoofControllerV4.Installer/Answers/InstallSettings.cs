@@ -36,6 +36,19 @@ public sealed record ControllerSettings
     /// <summary>The port of the web UI (WEB_HOST_PORT).</summary>
     public int WebPort { get; init; } = DefaultWebPort;
 
+    /// <summary>
+    /// Other short names clients use for the controller, besides this machine's host name (roof, observatory-roof). The
+    /// certificate names each, each under <c>.local</c> and under each domain, and the private CA may issue for them.
+    /// </summary>
+    public IReadOnlyList<string> HostNames { get; init; } = [];
+
+    /// <summary>
+    /// DNS domains clients reach the controller under (observatory.example). The certificate names each host name under
+    /// each, and the private CA may issue for anything in them. Only these: the wizard offers the domains this machine's
+    /// resolver searches, but none is added unless listed here.
+    /// </summary>
+    public IReadOnlyList<string> Domains { get; init; } = [];
+
     [JsonIgnore]
     public bool UsesHttps => Connection != ConnectionMode.Http;
 
@@ -58,7 +71,35 @@ public sealed record ControllerSettings
         {
             yield return $"The web UI needs a port of its own: {WebPort} is the controller's API's port too.";
         }
+
+        foreach (var name in HostNames.Where(name => !DnsName.IsLabel(name)))
+        {
+            yield return $"'{name}' is not a host name: give a single name of letters, digits and hyphens (roof), not an address or a name with dots.";
+        }
+
+        foreach (var domain in Domains.Where(domain => !DnsName.IsDomain(domain)))
+        {
+            yield return $"'{domain}' is not a domain: give names of letters, digits and hyphens joined by dots (observatory.example).";
+        }
     }
+
+    /// <summary>These choices with the names and domains in lower case, each once, in order.</summary>
+    public ControllerSettings Normalised() => this with
+    {
+        HostNames = DnsName.Distinct(HostNames),
+        Domains = DnsName.Distinct(Domains.Select(domain => domain.TrimEnd('.')))
+    };
+
+    public bool Equals(ControllerSettings? other)
+        => other is not null
+            && Connection == other.Connection
+            && HttpsPort == other.HttpsPort
+            && HttpPort == other.HttpPort
+            && WebPort == other.WebPort
+            && HostNames.SequenceEqual(other.HostNames, StringComparer.OrdinalIgnoreCase)
+            && Domains.SequenceEqual(other.Domains, StringComparer.OrdinalIgnoreCase);
+
+    public override int GetHashCode() => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count);
 
     public static string Describe(ConnectionMode mode) => mode switch
     {
@@ -68,6 +109,36 @@ public sealed record ControllerSettings
         ConnectionMode.Http => "HTTP, with no encryption (only on a network you trust)",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
     };
+}
+
+/// <summary>Host names and domains, as a certificate and its CA's name constraints hold them.</summary>
+public static class DnsName
+{
+    /// <summary>
+    /// True for a host name of one DNS label: 1 to 63 letters, digits and hyphens, not starting or ending with a hyphen,
+    /// and not only digits.
+    /// </summary>
+    public static bool IsLabel(string? name) => IsDnsLabel(name) && !name!.All(char.IsAsciiDigit);
+
+    /// <summary>
+    /// True for a domain: DNS labels joined by dots (a trailing dot allowed), at most 253 characters, the last not only
+    /// digits (so never an address).
+    /// </summary>
+    public static bool IsDomain(string? domain)
+        => domain is { Length: > 0 }
+            && domain.TrimEnd('.') is { Length: > 0 and <= 253 } trimmed
+            && trimmed.Split('.') is var labels
+            && labels.All(IsDnsLabel)
+            && !labels[^1].All(char.IsAsciiDigit);
+
+    /// <summary>The names in lower case, each once, in the order first given.</summary>
+    public static IReadOnlyList<string> Distinct(IEnumerable<string> names)
+        => names.Select(name => name.Trim().ToLowerInvariant()).Where(name => name.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
+
+    private static bool IsDnsLabel(string? label)
+        => label is { Length: > 0 and <= 63 }
+            && label.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')
+            && label[0] != '-' && label[^1] != '-';
 }
 
 /// <summary>Where hvo-roof goes.</summary>

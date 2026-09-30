@@ -92,7 +92,7 @@ public sealed class InstallerCommandTests
         run.ExitCode.Should().Be(0, run.ToString());
         var lines = run.Output.Split(Environment.NewLine);
         lines[0].Should().Be("The plan for the controller on roofpi, 4.0.0:");
-        lines.Should().Contain("Folders").And.Contain("Containers").And.Contain("9 to create, 0 to change, 0 unchanged.")
+        lines.Should().Contain("Folders").And.Contain("Containers").And.Contain("13 to create, 0 to change, 0 unchanged.")
             .And.Contain("Installing the controller needs root: run the installer with sudo.");
         run.Error.Should().BeEmpty();
         pi.Snapshot().Should().Equal(before, "--plan changes nothing and writes no log");
@@ -146,7 +146,7 @@ public sealed class InstallerCommandTests
         var first = await pi.RunAsync("--answers", answers);
 
         first.ExitCode.Should().Be(0, first.ToString());
-        first.Output.Should().Contain("Creating folder /etc/hvo-roof/secrets…").And.Contain("Creating file /etc/hvo-roof/install.json: done.");
+        first.Output.Should().Contain("Creating folder /var/lib/hvo-roof/identity…").And.Contain("Creating file /etc/hvo-roof/install.json: done.");
         first.Output.Should().Contain("Installed the controller (4.0.0) on roofpi.")
             .And.Contain("The controller's API:  https://roofpi.local:8443/")
             .And.Contain("The web UI:            https://roofpi.local:8088/")
@@ -157,7 +157,7 @@ public sealed class InstallerCommandTests
         pi.Mode(InstallPaths.SystemLog).Should().Be(Modes.GroupFile);
         var log = pi.Read(InstallPaths.SystemLog);
         log.Should().Contain($"hvo-roof-install {Version} on roofpi (linux-arm64), as root.")
-            .And.Contain("Made /etc/hvo-roof/secrets (0700).")
+            .And.Contain("Made /var/lib/hvo-roof/identity (0700).")
             .And.Contain("Wrote /etc/hvo-roof/install.json: the controller, version 4.0.0.")
             .And.Contain("Installed the controller.");
 
@@ -204,12 +204,12 @@ public sealed class InstallerCommandTests
     public async Task Answers_ThatAreBlocked_AreRefused_AndLogged()
     {
         using var pi = InstallerPlanTests.AdoptablePi();
-        pi.Write("/etc/hvo-roof", string.Empty);
+        pi.Write("/var/lib/hvo-roof", string.Empty);
 
         var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-        run.Output.Should().Contain("/etc/hvo-roof is a file, not a folder");
+        run.Output.Should().Contain("/var/lib/hvo-roof is a file, not a folder");
         pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: Blocked:");
     }
 
@@ -252,7 +252,8 @@ public sealed class InstallerCommandTests
     {
         var secret = $"not-a-real-secret-{Guid.NewGuid():N}";
         using var pi = new FakeMachine().WithPi()
-            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Secret = secret });
+            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Secret = secret })
+            .WithCertificates();
         pi.PortsInUse.UnionWith([8443, 8088]);
         var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
 

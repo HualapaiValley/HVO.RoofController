@@ -37,7 +37,9 @@ public sealed partial class InstallerDocsTests
         var answers = InstallAnswers.Parse(example.Groups[1].Value);
 
         answers.Roles.Should().Equal(InstallRole.Controller);
-        answers.Controller.Should().Be(new ControllerSettings(), "the example shows the defaults");
+        answers.Controller.Should().BeEquivalentTo(
+            new ControllerSettings { HostNames = ["roof"], Domains = ["observatory.example"] },
+            "the example shows the defaults, with a name and a domain for the certificate");
     }
 
     [TestMethod]

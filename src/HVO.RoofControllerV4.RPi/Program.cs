@@ -36,6 +36,12 @@ public class Program
     /// <summary>Docker secrets directory: each file becomes the configuration key it is named after.</summary>
     internal const string SecretsDirectory = "/run/secrets";
 
+    /// <summary>Where the controller serves the CA that issued its certificate.</summary>
+    internal const string CaCertificatePath = "/ca.crt";
+
+    /// <summary>The CA certificate's media type, which browsers offer to install.</summary>
+    internal const string CaCertificateContentType = "application/x-x509-ca-cert";
+
     public static int Main(string[] args)
     {
         if (args.Contains(DeploymentValidator.CommandLineSwitch, StringComparer.Ordinal))
@@ -194,9 +200,11 @@ public class Program
         // - /health/ready (readiness probes for load balancers)  
         // - /health/live (liveness probes for container orchestration)
         // Do NOT create duplicate HealthController - use the built-in functionality
+        services.AddSingleton<RoofServerCertificate>();
         services.AddHealthChecks()
             .AddCheck<RoofControllerHealthCheck>("roof_controller", tags: ["roof", "hardware"])
-            .AddCheck<RoofIdentityStoreHealthCheck>("identity_store", tags: ["security"]);
+            .AddCheck<RoofIdentityStoreHealthCheck>("identity_store", tags: ["security"])
+            .AddCheck<RoofCertificateHealthCheck>("https_certificate", tags: ["security"]);
 
         // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
         // NOTE: Use built-in OpenAPI/Swagger functionality instead of custom documentation endpoints
@@ -420,6 +428,13 @@ public class Program
         {
             Predicate = _ => false
         }).AllowAnonymous();
+
+        // The CA that issued the served certificate (its certificate only), for clients to trust: the TLS handshake leaves
+        // a self-signed root out. Anonymous, since a client asks before it has a key; it confirms the fingerprint.
+        app.MapGet(CaCertificatePath, (RoofServerCertificate certificate) =>
+            certificate.Read().AuthorityPem is { } pem
+                ? Results.Text(pem + "\n", CaCertificateContentType)
+                : Results.NotFound()).AllowAnonymous().ExcludeFromDescription();
 
         app.MapControllers();
 

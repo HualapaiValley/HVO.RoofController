@@ -1,7 +1,8 @@
 # Roof Controller V4 security
 
 The controller drives a real roof motor, so its HTTP surface is closed by default. Every roof command, status read,
-configuration change, health detail and camera stream needs an API key or a person's session. The anonymous endpoints are the liveness and readiness probes (the readiness, with the container supervisor's state, also gives the web UI's sign-in page its one-line controller status), signing in with a name and password, and how the roof is driven (`GET /api/v4.0/RoofControl/Mode`, for the mode banner on the web UI's sign-in page).
+configuration change, health detail and camera stream needs an API key or a person's session. The anonymous endpoints are the liveness and readiness probes (the readiness, with the container supervisor's state, also gives the web UI's sign-in page its one-line controller status), signing in with a name and password, how the roof is driven (`GET /api/v4.0/RoofControl/Mode`, for the mode banner on the web UI's sign-in page), and the CA
+certificate clients trust (`GET /ca.crt`, public by nature).
 
 This page covers:
 
@@ -12,7 +13,8 @@ This page covers:
 - how the web UI and the camera authenticate
 - the transport settings
 
-For TLS certificates and the deploy script, see [deployment.md](deployment.md).
+For TLS certificates and the deploy script, see [deployment.md](deployment.md). The installer makes a private CA and
+the controller's certificate, renews them and imports your own; see [install.md](install.md#certificates).
 
 ## Roles
 
@@ -69,6 +71,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | `GET  /openapi/v4.json`                                  | Admin (API key or session) outside Development | 200 | 401, 403 |
 | `GET  /health`                                           | Viewer (API key or session) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
 | `GET  /health/live`, `GET /health/ready`                 | anonymous         | 200 / 503 | none |
+| `GET  /ca.crt`                                           | anonymous         | 200 `application/x-x509-ca-cert`: the PEM of the self-signed CA at the top of the served certificate's chain, never a key | 404 when the certificate has no CA with it; 403 (`https_required`) over plain HTTP from another host |
 | `/hubs/roof` (SignalR status hub, with `/hubs/roof/negotiate`) | Viewer (API key or session) | status messages ([Status hub](#status-hub)) | 401, 403 (`https_required`) |
 
 When a request has no key or an unknown key, the response is 401 with `WWW-Authenticate: ApiKey`. When a session
@@ -633,6 +636,15 @@ The first two are the `security` [settings](#settings) group, so admins can chan
 redeploy changes it. `AllowedHosts` is not in the catalogue.
 
 HSTS is sent only when an HTTPS endpoint is configured.
+
+`/health` reports the served certificate as `https_certificate`: Unhealthy when it cannot be read or has expired,
+Degraded within 30 days of expiry, Healthy otherwise or when there is no HTTPS listener. Like `identity_store`, it is not
+a hardware check, so readiness and deploys do not fail on it. The installer renews the certificate
+([install.md](install.md#renewing)).
+
+Plain HTTP is a choice the installer asks you to confirm by typing `http`: over it, API keys, passwords and session tokens
+cross the network readable. An unattended install gives it as `httpConfirmation` in its answers file; the wizard never
+saves it, so each machine is confirmed on its own ([install.md](install.md#answers-files)).
 
 Because `/health/ready` is exempt, readiness passes even when every remote API request would get 403. The deployment
 check (`--validate-deployment`, run first by the deploy script and by both Pi compose profiles, `pi` and

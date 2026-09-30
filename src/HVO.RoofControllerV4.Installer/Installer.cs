@@ -66,6 +66,7 @@ public static class Installer
         root.Options.Add(answers);
         root.Options.Add(plan);
         root.Options.Add(version);
+        root.Subcommands.Add(CertificateCommands.Create(host));
         root.SetAction((parseResult, token) =>
         {
             if (parseResult.GetValue(version))
@@ -100,26 +101,36 @@ public static class Installer
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<int> RunAsync(InstallerHost host, string? answersFile, bool planOnly, CancellationToken cancellationToken)
+    private static Task<int> RunAsync(InstallerHost host, string? answersFile, bool planOnly, CancellationToken cancellationToken)
+        => GuardAsync(
+            host,
+            () =>
+            {
+                if (planOnly)
+                {
+                    return PlanAsync(host, answersFile, cancellationToken);
+                }
+
+                if (answersFile is not null)
+                {
+                    return InstallAsync(host, answersFile, cancellationToken);
+                }
+
+                if (!host.IsInteractive)
+                {
+                    throw new InstallerUsageException($"The wizard needs a terminal. Without one, install from an answers file: {CommandName} --answers FILE.");
+                }
+
+                return WizardAsync(host, cancellationToken);
+            },
+            cancellationToken);
+
+    /// <summary>Runs one of the installer's commands, turning what stops it into a message and an exit code.</summary>
+    internal static async Task<int> GuardAsync(InstallerHost host, Func<Task<int>> run, CancellationToken cancellationToken)
     {
         try
         {
-            if (planOnly)
-            {
-                return await PlanAsync(host, answersFile, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (answersFile is not null)
-            {
-                return await InstallAsync(host, answersFile, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (!host.IsInteractive)
-            {
-                throw new InstallerUsageException($"The wizard needs a terminal. Without one, install from an answers file: {CommandName} --answers FILE.");
-            }
-
-            return await WizardAsync(host, cancellationToken).ConfigureAwait(false);
+            return await run().ConfigureAwait(false);
         }
         catch (InstallerException error)
         {
@@ -143,6 +154,7 @@ public static class Installer
     private static async Task<int> PlanAsync(InstallerHost host, string? answersFile, CancellationToken cancellationToken)
     {
         var session = await InstallerSession.StartAsync(host.Machine, InstallLog.None, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
+        WriteWarnings(host, session);
         session.Answers = answersFile is not null
             ? ReadAnswers(host, answersFile)
             : InstallerSession.RecordedAnswers(session.Survey, includeSystem: true)
@@ -178,6 +190,7 @@ public static class Installer
         var answers = ReadAnswers(host, answersFile);
         var log = InstallLog.Open(host.Machine, InstallPaths.Log(host.Machine), host.Time);
         var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
+        WriteWarnings(host, session);
         session.Answers = answers;
         log.Write($"Installing from {Path.GetFullPath(answersFile, host.Machine.CurrentDirectory)}: {InstallRoles.Describe(answers.Roles)}.");
 
@@ -267,7 +280,7 @@ public static class Installer
         return (int)wizard.Result;
     }
 
-    private static InstallAnswers ReadAnswers(InstallerHost host, string answersFile)
+    internal static InstallAnswers ReadAnswers(InstallerHost host, string answersFile)
     {
         var path = Path.GetFullPath(answersFile, host.Machine.CurrentDirectory);
         string? json;
@@ -283,7 +296,16 @@ public static class Installer
         return InstallAnswers.Parse(json ?? throw new InstallerUsageException($"There is no answers file {path}."));
     }
 
-    private static void WriteRefusal(InstallerHost host, IReadOnlyList<string> problems)
+    // What needs doing about the certificate: the wizard shows it on its first page, and every other run says it too.
+    internal static void WriteWarnings(InstallerHost host, InstallerSession session)
+    {
+        foreach (var warning in InstallerSession.CertificateWarnings(session.Survey, host.Time.GetUtcNow()))
+        {
+            host.Error.WriteLine($"Warning: {warning}");
+        }
+    }
+
+    internal static void WriteRefusal(InstallerHost host, IReadOnlyList<string> problems)
     {
         host.Error.WriteLine("The installer cannot go ahead:");
         foreach (var problem in problems)
