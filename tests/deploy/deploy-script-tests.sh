@@ -452,6 +452,58 @@ test_insecure_http_mode_publishes_8080_with_https_disabled() {
   assert_container roof-controller-previous old false no
 }
 
+test_publish_address_keeps_the_published_ports_to_that_address() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=127.0.0.1 PI_HOST=localhost
+
+  assert_status 0
+  assert_output_contains "Deployment complete and verified at https://localhost:8443"
+  local run
+  run=$(controller_run_args)
+  jq -e 'index("127.0.0.1:8443:8443") and index("127.0.0.1:8088:8088") and (index("8443:8443") | not)' <<<"${run}" >/dev/null \
+    || fail_test "the ports are not published on 127.0.0.1 only: ${run}"
+  jq -e 'map(select(startswith("127.0.0.1:"))) | length == 0' <<<"$(preflight_args)" >/dev/null \
+    || fail_test "the pre-flight container publishes ports"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy ALLOW_INSECURE_HTTP=true PUBLISH_ADDRESS=127.000.0.1 PI_HOST=localhost
+  assert_status 0
+  jq -e 'index("127.0.0.1:8080:8080") and index("127.0.0.1:8088:8088")' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "the HTTP ports are not published on 127.0.0.1 only: $(controller_run_args)"
+
+  # Published on loopback, the controller does not answer the remote check at the Pi's name: the deploy is undone.
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=127.0.0.1
+  assert_status 1
+  assert_output_contains "GET Status at https://pi.test:8443 failed from this machine"
+}
+
+test_malformed_publish_address_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local address
+  for address in localhost 127.0.0.256 "::1" "127.0.0.1:8443" "-p" "10.0.0"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS="${address}"
+    assert_status 1
+    assert_output_contains "PUBLISH_ADDRESS must be an IPv4 address such as 127.0.0.1, or empty for every interface, got '${address}'. Nothing was changed."
+    assert_no_docker_calls "PUBLISH_ADDRESS=${address}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_empty_otlp_endpoint_turns_export_off() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  jq -e 'index("OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.1.238:4318")' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "an unset OTEL_EXPORTER_OTLP_ENDPOINT does not default to the observatory's collector"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" OTEL_EXPORTER_OTLP_ENDPOINT=
+  assert_status 0
+  jq -e 'index("OTEL_EXPORTER_OTLP_ENDPOINT=") and (map(select(startswith("OTEL_EXPORTER_OTLP_ENDPOINT=http"))) | length == 0)' \
+    <<<"$(controller_run_args)" >/dev/null || fail_test "an empty OTEL_EXPORTER_OTLP_ENDPOINT does not turn export off"
+}
+
 test_new_controller_never_ready_rolls_back_to_previous() {
   seed_container roof-controller old true 8080:8080
   deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false

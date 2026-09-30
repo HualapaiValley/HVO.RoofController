@@ -50,7 +50,10 @@ def main():
     target = container = None
     for c in containers.values():
         for mapping in c.get("publish", []) if c["running"] else []:
-            host_port, container_port = mapping.split(":")
+            # [<address>:]<host port>:<container port>: a port published on an address answers only there.
+            *address, host_port, container_port = mapping.split(":")
+            if address and url.hostname not in (address[0], "localhost"):
+                continue
             if int(host_port) == url.port:
                 target, container = int(container_port), c
     if target is None:

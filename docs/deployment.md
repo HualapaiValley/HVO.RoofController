@@ -291,6 +291,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `HTTPS_HOST_PORT` | `8443` | Published HTTPS port of the controller's API (with `WEB_HOST_PORT`, the only published ports in HTTPS mode) |
 | `HOST_PORT` | `8080` | Published HTTP port, only with `ALLOW_INSECURE_HTTP=true` |
 | `WEB_HOST_PORT` | `8088` | Published port of the [web UI](#the-containers-two-processes): HTTPS with the controller's certificate, or plain HTTP with `ALLOW_INSECURE_HTTP=true`. It must differ from the controller's published port. |
+| `PUBLISH_ADDRESS` | (empty) | Host address the ports are published on: empty for every interface, or an IPv4 address. `127.0.0.1` keeps the controller and the web UI to the machine itself, for a test rig that is not open to the network; `PI_HOST` must then be `localhost`. |
 | `SECRETS_DIR` | `/etc/hvo-roof/secrets` | Secrets directory on the Pi |
 | `HTTPS_CERT_DIR` | (empty) | Certificate directory on the Pi. Required unless `ALLOW_INSECURE_HTTP=true`. |
 | `HTTPS_CERT_FILE` | `roof-controller.pfx` | PFX file name inside `HTTPS_CERT_DIR` |
@@ -306,6 +307,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
 | `ROOF_OPERATOR_API_KEY` / `OPERATOR_KEY_FILE` | / `~/.config/hvo-roof/operator.key` | Key for the Stop and Status checks |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://192.168.1.238:4318` | The [OTLP collector](telemetry.md#export). An empty value turns export off. |
 | `HAT_EMULATOR_ENDPOINT` | (empty) | Test rigs only: `<host>:<port>` of a HAT emulator the container can reach. The controller uses it in place of the physical HAT. See [HAT emulator mode (test rigs)](#hat-emulator-mode-test-rigs). |
 | `ALLOW_EMULATED_HAT` | `false` | Must be `true` for `HAT_EMULATOR_ENDPOINT` to be accepted, and for `--rollback` to restore a version that uses the HAT emulator |
 

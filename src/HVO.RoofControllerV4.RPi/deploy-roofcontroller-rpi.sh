@@ -48,6 +48,8 @@ set -euo pipefail
 #   rollback checks the restored version's HAT too, before anything is stopped and again once it runs: the emulator is
 #   accepted only with ALLOW_EMULATED_HAT=true. The container then maps no host device or Pi file (no /dev/gpiomem, no
 #   thermal sensor), so a test rig need not be a Pi, and BUILD_PLATFORM=linux/amd64 builds the image for a PC.
+#   PUBLISH_ADDRESS=127.0.0.1 publishes the ports on that address only, for a rig that is not open to the network;
+#   PI_HOST is then localhost.
 # Compose: the script replaces only controllers it created. A <name> or <name>-previous that Docker Compose created is
 #   refused before anything changes; docs/deployment.md describes moving between Compose and the script. Check a
 #   Compose controller from this machine with --verify-remote.
@@ -95,6 +97,9 @@ HOST_PORT=${HOST_PORT:-8080}
 HTTPS_HOST_PORT=${HTTPS_HOST_PORT:-8443}
 # The web UI's published port: HTTPS with the controller's certificate, or plain HTTP with ALLOW_INSECURE_HTTP=true.
 WEB_HOST_PORT=${WEB_HOST_PORT:-8088}
+# The host address the ports are published on: empty for every interface, or an IPv4 address such as 127.0.0.1 to
+# keep them to this machine (a test rig that is not open to the network).
+PUBLISH_ADDRESS=${PUBLISH_ADDRESS:-}
 # Extra `docker run` options for the controller, split on whitespace (no quoting). Also applied to the pre-flight
 # container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports, graceful
 # stop, platform) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and
@@ -104,7 +109,8 @@ HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
 IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-false}
 OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-hvo-roof-controller}
 OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}
-OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://192.168.1.238:4318}
+# The OTLP collector. Unset, the observatory's collector; set to an empty value, export is off.
+OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT-http://192.168.1.238:4318}
 OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
 OTEL_METRIC_EXPORT_INTERVAL=${OTEL_METRIC_EXPORT_INTERVAL:-10000}
 
@@ -225,6 +231,16 @@ require_number STOP_TIMEOUT_SECONDS 30 86400
 require_number HOST_PORT 1 65535
 require_number HTTPS_HOST_PORT 1 65535
 require_number WEB_HOST_PORT 1 65535
+publish_prefix=""
+if [[ -n "${PUBLISH_ADDRESS}" ]]; then
+  address_pattern='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$'
+  if [[ ! "${PUBLISH_ADDRESS}" =~ ${address_pattern} ]] \
+      || (( 10#${BASH_REMATCH[1]} > 255 || 10#${BASH_REMATCH[2]} > 255 || 10#${BASH_REMATCH[3]} > 255 || 10#${BASH_REMATCH[4]} > 255 )); then
+    fail "PUBLISH_ADDRESS must be an IPv4 address such as 127.0.0.1, or empty for every interface, got '${PUBLISH_ADDRESS}'. Nothing was changed."
+  fi
+  PUBLISH_ADDRESS="$((10#${BASH_REMATCH[1]})).$((10#${BASH_REMATCH[2]})).$((10#${BASH_REMATCH[3]})).$((10#${BASH_REMATCH[4]}))"
+  publish_prefix="${PUBLISH_ADDRESS}:"
+fi
 case "${POLL_INTERVAL_SECONDS}" in
   ''|.|*[!0-9.]*|*.*.*) fail "POLL_INTERVAL_SECONDS must be a number of seconds such as 3 or 0.5, got '${POLL_INTERVAL_SECONDS}'." ;;
 esac
@@ -1347,7 +1363,7 @@ fi
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
   # Remote clients use HTTPS only; plain HTTP listens on loopback inside the container (health check, Stop calls, the
   # web UI). The web UI serves the controller's certificate (its supervisor gives it a private copy).
-  publish_args=(-p "${HTTPS_HOST_PORT}:8443" -p "${WEB_HOST_PORT}:8088")
+  publish_args=(-p "${publish_prefix}${HTTPS_HOST_PORT}:8443" -p "${publish_prefix}${WEB_HOST_PORT}:8088")
   container_args+=(
     --mount "type=bind,src=${HTTPS_CERT_DIR},dst=/https,readonly"
     --env "ASPNETCORE_URLS=http://localhost:8080;https://+:8443"
@@ -1356,7 +1372,7 @@ if [[ -n "${HTTPS_CERT_DIR}" ]]; then
     --env "RoofWeb__Urls=https://+:8088"
   )
 else
-  publish_args=(-p "${HOST_PORT}:8080" -p "${WEB_HOST_PORT}:8088")
+  publish_args=(-p "${publish_prefix}${HOST_PORT}:8080" -p "${publish_prefix}${WEB_HOST_PORT}:8088")
   container_args+=(
     --env "ASPNETCORE_URLS=http://+:8080"
     --env "RoofControllerSecurity__RequireHttps=false"
