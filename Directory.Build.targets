@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <!--
+    A build that names its version (-p:Version=..., as a release build does) must name the product version in
+    Directory.Build.props or a prerelease of it, so a tag cannot ship a program that says another version.
+  -->
+  <Target Name="RoofCheckProductVersion" BeforeTargets="BeforeBuild">
+    <Error Condition="'$(Version)' != '$(VersionPrefix)' and !$([System.String]::Copy('$(Version)').StartsWith('$(VersionPrefix)-'))"
+           Text="Version $(Version) is not the product version $(VersionPrefix) (Directory.Build.props) or a prerelease of it. If you did not pass -p:Version, a VERSION environment variable set it (MSBuild reads environment variables as properties, ignoring case): unset it." />
+  </Target>
+</Project>

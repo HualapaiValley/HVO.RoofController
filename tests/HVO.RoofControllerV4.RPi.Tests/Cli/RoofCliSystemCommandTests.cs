@@ -4,12 +4,14 @@ using FluentAssertions;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Settings;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Security;
+using HVO.RoofControllerV4.RPi.Tests.Versioning;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -41,7 +43,8 @@ public sealed class RoofCliSystemCommandTests
         var result = await rig.RunAsync("info");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
-        result.Out.Should().MatchRegex(@"(?m)^Application:\s+\S.* \(Development\)\s*$")
+        result.Out.Should().MatchRegex($@"(?m)^{RoofCli.CommandName}:\s+{Regex.Escape(RoofProductVersion.Describe(typeof(RoofCli).Assembly))}\s*$")
+            .And.MatchRegex($@"(?m)^Application:\s+HVO\.RoofControllerV4\.RPi {Regex.Escape(RoofProductVersion.Describe(typeof(Program).Assembly))} \(Development\)\s*$")
             .And.MatchRegex($@"(?m)^Host:\s+{Regex.Escape(Environment.MachineName)}\s*$")
             .And.MatchRegex(@"(?m)^System:\s+\S")
             .And.MatchRegex(@"(?m)^Runtime:\s+\S")
@@ -51,7 +54,7 @@ public sealed class RoofCliSystemCommandTests
     }
 
     [TestMethod]
-    public async Task Info_Json_HoldsTheInformationAndTheMetrics()
+    public async Task Info_Json_HoldsTheClientsVersionTheInformationAndTheMetrics()
     {
         using var host = RoofClientApiTests.CreateHost();
         using var rig = new CliRig(host);
@@ -60,6 +63,10 @@ public sealed class RoofCliSystemCommandTests
         var result = await rig.RunAsync("info", "--json");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        var client = result.Json.GetProperty("client");
+        client.GetProperty("name").GetString().Should().Be(RoofCli.CommandName);
+        client.GetProperty("version").GetString().Should().Be(RoofProductVersion.Of(typeof(RoofCli).Assembly))
+            .And.StartWith(ProductVersionTests.VersionPrefix());
         var information = result.Json.GetProperty("information");
         information.GetProperty("environmentName").GetString().Should().Be("Development");
         information.GetProperty("machineName").GetString().Should().Be(Environment.MachineName);

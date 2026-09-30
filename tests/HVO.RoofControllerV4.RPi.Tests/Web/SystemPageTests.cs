@@ -1,8 +1,10 @@
 using Bunit;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Settings;
+using HVO.RoofControllerV4.Web;
 using HVO.RoofControllerV4.Web.Components;
 using HVO.RoofControllerV4.Web.Components.Pages;
 using HVO.RoofControllerV4.Web.Supervision;
@@ -30,8 +32,10 @@ public sealed class SystemPageTests
         var cut = Loaded(context);
 
         cut.FindAll("[data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
-            .Should().Equal("Application", "Host", "System", "Runtime", "Started", "Memory", "CPU");
-        Fact(cut, "Application").Should().EndWith("(Development)");
+            .Should().Equal(SystemPage.WebUiLabel, "Application", "Host", "System", "Runtime", "Started", "Memory", "CPU");
+        Fact(cut, SystemPage.WebUiLabel).Should().Be(RoofProductVersion.Describe(typeof(RoofWebOptions).Assembly));
+        Fact(cut, "Application").Should().StartWith($"HVO.RoofControllerV4.RPi {RoofProductVersion.Describe(typeof(Program).Assembly)}")
+            .And.EndWith("(Development)");
         Fact(cut, "Memory").Should().MatchRegex(@"^\d+\.\d (KiB|MiB) working set, \d+\.\d (KiB|MiB) managed$");
         cut.Find("[data-testid=system-information]").TextContent.Should().Contain("Read at 2026-09-29 12:00:00Z.");
         cut.Find("[data-testid=forced-restart-last]").TextContent.Should().Be("The web UI is not running under the container's supervisor.");
@@ -198,7 +202,7 @@ public sealed class SystemPageTests
     }
 
     private static string Fact(IRenderedComponent<SystemPage> cut, string label)
-        => cut.Find($"[data-testid=system-fact][data-label={label}]").TextContent;
+        => cut.Find($"[data-testid=system-fact][data-label='{label}']").TextContent;
 
     private static List<string> Lines(IRenderedComponent<SystemPage> cut)
         => [.. cut.Find("[data-testid=page-message]").QuerySelectorAll("p").Select(line => line.TextContent)];

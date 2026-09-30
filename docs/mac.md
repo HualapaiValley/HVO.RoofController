@@ -72,8 +72,8 @@ What the app offers depends on the person's role, as the controller gives it, an
   value. The change is shown for review before anything is sent, and a safety-critical change needs
   **Confirm and send**. Secrets are not typed here:
   `Secrets are not typed in this app: set them in the web UI or with hvo-roof.`
-- **System**: the controller's health checks and readiness, and for an admin its version, host and resource use, and
-  **Restart**.
+- **System**: the app's own version, the controller's health checks and readiness, and for an admin its version, host
+  and resource use, and **Restart**.
 
 People, API keys and sessions are managed in the web UI and with `hvo-roof`, not here.
 
@@ -220,13 +220,17 @@ python3 HVO.RoofControllerV4.Mac/bundle/bundle.py check "mac/HVO Roof.app"
 
 `make` puts the program, its three native libraries (Avalonia's macOS windowing, Skia and HarfBuzz) and the icon in the
 bundle, fills in `Info.plist` (the version, `--build`'s number, and the oldest macOS the program's files are built for),
-and signs it ad hoc. It checks the program and libraries in the publish folder first: one that is missing, damaged or
+and signs it ad hoc. The version is `--version`'s, such as CI's `4.0.0-ci.123`, or else the one in
+`Directory.Build.props` ([Versions and releases](releasing.md)). macOS reads only its first three numbers, so
+`CFBundleShortVersionString` is `4.0.0`, and a `--version` that is not a product version stops `make` before it does
+anything. It checks the program and libraries in the publish folder first: one that is missing, damaged or
 has no arm64 code stops it with a line naming that file. It builds and signs the new bundle beside the last one, then
 swaps them with two renames (the last bundle moves aside, the new one takes its place), so a `make` that stops at any
 step, rcodesign failing included, leaves the last bundle as it was. If some of the last bundle cannot be deleted
 afterwards (a folder in it that cannot be written), `make` names the folder it is in, to delete by hand. `check` reads
 back what `make` promises: `Info.plist`, arm64 code with a signature in every program file, the icon at each size, and
-nothing else.
+nothing else. Given `--version`, it also checks that `CFBundleShortVersionString` is that version's first three
+numbers.
 
 **Sharing the app** with Macs that are not yours would need it signed with a Developer ID certificate and notarised by
 Apple, which needs an Apple Developer account. rcodesign can do both from Linux (its `sign` with the certificate and

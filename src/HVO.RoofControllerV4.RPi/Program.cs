@@ -11,6 +11,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.HostedServices;
 using HVO.RoofControllerV4.RPi.Middleware;
@@ -78,6 +79,7 @@ public class Program
     {
         // Resolve the signal first: Run disposes the service provider when the host stops.
         var restart = app.Services.GetRequiredService<RoofRestartSignal>();
+        app.Logger.LogInformation("HVO Roof Controller {Version} is starting.", RoofProductVersion.Of(typeof(Program).Assembly));
         app.Run();
         return restart.Requested ? RoofSettingsContract.RestartExitCode : 0;
     }

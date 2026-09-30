@@ -10,11 +10,20 @@
 # Do not use this file to deploy to the observatory Pi. Production uses
 # src/HVO.RoofControllerV4.RPi/docker-compose.yaml through the deployment script, which stops
 # the roof safely before replacing the container; see docs/deployment.md.
+# The product version and commit the images are built for (docs/releasing.md): HVO_ROOF_VERSION (4.0.0-dev, say),
+# HVO_ROOF_REVISION (the commit) and HVO_ROOF_CREATED (an RFC 3339 time). Left empty, an image carries
+# Directory.Build.props's 4.0.0-dev without a commit and has empty version labels.
+x-build-args: &build-args
+  ROOF_VERSION: ${HVO_ROOF_VERSION:-}
+  ROOF_REVISION: ${HVO_ROOF_REVISION:-}
+  ROOF_CREATED: ${HVO_ROOF_CREATED:-}
+
 services:
   hat-emulator:
     build:
       context: ..
       dockerfile: src/HVO.RoofControllerV4.Emulator/Dockerfile
+      args: *build-args
     image: hvo/roof-hat-emulator:dev
     container_name: hvo-roof-hat-emulator
     environment:
@@ -29,6 +38,7 @@ services:
     build:
       context: ..
       dockerfile: src/HVO.RoofControllerV4.RPi/Dockerfile
+      args: *build-args
     image: hvo/roofcontrollerv4:rpi-dev
     container_name: hvo-roofcontrollerv4
     depends_on:

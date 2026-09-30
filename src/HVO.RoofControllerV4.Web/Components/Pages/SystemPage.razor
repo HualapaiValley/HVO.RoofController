@@ -101,6 +101,9 @@
 </section>
 
 @code {
+    /// <summary>The label of the web UI's own version among the controller's facts.</summary>
+    public const string WebUiLabel = "Web UI";
+
     /// <summary>What an admin types to confirm a forced restart.</summary>
     public const string ConfirmWord = "restart";
 
@@ -135,7 +138,8 @@
         {
             var information = await session.Client.System.GetInformationAsync(cancellationToken);
             var metrics = await session.Client.System.GetMetricsAsync(cancellationToken);
-            _information = [.. RoofSystemText.DescribeInformation(information, metrics)];
+            // The web UI's own version first: it runs beside the controller, but is its own program.
+            _information = [RoofSystemText.DescribeClient(WebUiLabel, typeof(RoofWebOptions).Assembly), .. RoofSystemText.DescribeInformation(information, metrics)];
             _readAt = Time.GetUtcNow();
         }))
         {

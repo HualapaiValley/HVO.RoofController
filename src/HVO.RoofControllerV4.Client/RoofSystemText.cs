@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Reflection;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Client;
@@ -22,13 +24,24 @@ public static class RoofSystemText
     {
         ArgumentNullException.ThrowIfNull(information);
         ArgumentNullException.ThrowIfNull(metrics);
-        yield return ("Application", $"{information.ApplicationName} {information.ApplicationVersion} ({information.EnvironmentName})");
+        yield return ("Application", $"{information.ApplicationName} {RoofProductVersion.Describe(information.ApplicationVersion)} ({information.EnvironmentName})");
         yield return ("Host", information.MachineName);
         yield return ("System", information.OperatingSystemDescription);
         yield return ("Runtime", information.FrameworkDescription);
         yield return ("Started", $"{RoofStatusText.Time(information.ProcessStartTimeUtc)} (up {Duration(TimeSpan.FromSeconds(information.UptimeSeconds))})");
         yield return ("Memory", $"{Bytes(metrics.WorkingSetBytes)} working set, {Bytes(metrics.ManagedMemoryBytes)} managed");
         yield return ("CPU", $"{metrics.CpuUsagePercent.ToString("0.0", CultureInfo.InvariantCulture)} %, {metrics.ThreadCount} threads");
+    }
+
+    /// <summary>
+    /// A client's own version, as label and value: the web UI, the terminal UI, the kiosk or the Mac app, which may be
+    /// older or newer than the controller it talks to.
+    /// </summary>
+    public static (string Label, string Value) DescribeClient(string name, Assembly assembly)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(assembly);
+        return (name, RoofProductVersion.Describe(assembly));
     }
 
     public static string Duration(TimeSpan value) => value.TotalDays >= 1

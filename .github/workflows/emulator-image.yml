@@ -19,6 +19,8 @@ on:
       - 'src/global.json'
       - 'src/NuGet.config'
       - 'Directory.Build.props'
+      - 'Directory.Build.targets'
+      - 'build/**'
       - 'Directory.Packages.props'
       - '.dockerignore'
       - 'tests/emulator/**'
@@ -37,6 +39,8 @@ on:
       - 'src/global.json'
       - 'src/NuGet.config'
       - 'Directory.Build.props'
+      - 'Directory.Build.targets'
+      - 'build/**'
       - 'Directory.Packages.props'
       - '.dockerignore'
       - 'tests/emulator/**'
@@ -84,6 +88,14 @@ jobs:
             exit 1
           fi
 
+      # The version, commit and time the image carries (docs/releasing.md): a CI build, 4.0.0-ci.<run>.
+      - name: Product version
+        id: version
+        run: |
+          version=$(build/version.sh --ci "$GITHUB_RUN_NUMBER")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU (arm64 emulation for the runtime stage)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
@@ -102,6 +114,15 @@ jobs:
           pull: true
           no-cache: true
           tags: hvo/roof-hat-emulator:ci-${{ github.sha }}
+          build-args: |
+            ROOF_VERSION=${{ steps.version.outputs.version }}
+            ROOF_REVISION=${{ github.sha }}
+            ROOF_CREATED=${{ steps.version.outputs.created }}
+          # An OCI archive, so the next step can read each platform's labels without pushing or loading the image.
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar
+
+      - name: Check the image's version labels
+        run: build/check-image-labels.sh "$RUNNER_TEMP/image.tar" "${{ steps.version.outputs.version }}" "$GITHUB_SHA" linux/amd64,linux/arm64
 
   # The controller image and the emulator image, built for the runner (linux/amd64) and run together through the
   # compose emulator profile.

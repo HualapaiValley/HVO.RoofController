@@ -1216,6 +1216,14 @@ test_physical_deploy_maps_the_hat_and_turns_the_emulator_off() {
   done
   docker_calls buildx | jq -e -s 'map(select(.[1] == "build")) | length == 1 and (.[0] | .[index("--platform") + 1] == "linux/arm64")' \
     >/dev/null || fail_test "expected one build for linux/arm64: $(docker_calls buildx)"
+  # The image carries the product version as a -dev build, and the checkout's commit (docs/releasing.md).
+  docker_calls buildx | jq -e -s --arg version "ROOF_VERSION=$("${TESTS_DIR}/../../build/version.sh" --dev)" \
+      --arg revision "ROOF_REVISION=$(git -C "${TESTS_DIR}" rev-parse HEAD)" '
+      (map(select(.[1] == "build")) | .[0]) as $build | [$build | indices("--build-arg")[] | $build[. + 1]] as $args
+      | ($args | index($version)) and ($args | index($revision))
+        and ($args | any(test("^ROOF_CREATED=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))' >/dev/null \
+    || fail_test "expected the build to pass the version, commit and creation time: $(docker_calls buildx)"
+  assert_output_contains "($("${TESTS_DIR}/../../build/version.sh" --dev), commit $(git -C "${TESTS_DIR}" rev-parse --short=12 HEAD))"
 }
 
 test_emulator_endpoint_without_the_flag_is_refused_before_any_docker_call() {
@@ -1270,7 +1278,8 @@ test_build_platform_amd64_is_for_the_emulator_only() {
 
   deploy "${HTTPS_ENV[@]}" BUILD_PLATFORM=linux/amd64 HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true
   assert_status 0
-  assert_output_contains "[build] Building ${IMAGE} for linux/amd64..."
+  assert_output_contains "[build] Building ${IMAGE} ($("${TESTS_DIR}/../../build/version.sh" --dev), commit "
+  assert_output_contains ") for linux/amd64..."
   assert_container roof-controller new true unless-stopped
   docker_calls buildx | jq -e -s 'map(select(.[1] == "build")) | length == 1 and (.[0] | .[index("--platform") + 1] == "linux/amd64")' \
     >/dev/null || fail_test "expected one build for linux/amd64: $(docker_calls buildx)"

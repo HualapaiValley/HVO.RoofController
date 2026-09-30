@@ -26,7 +26,7 @@ ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
 # Mirror the repository layout so Directory.*.props and src/global.json resolve exactly as in
 # a local checkout. Every dotnet command runs from /repo/src, where global.json applies.
 WORKDIR /repo/src
-COPY ["Directory.Build.props", "Directory.Packages.props", "/repo/"]
+COPY ["Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "/repo/"]
 COPY ["src/global.json", "src/NuGet.config", "./"]
 COPY ["src/HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj", "HVO.RoofControllerV4.Common/"]
 COPY ["src/HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj", "HVO.RoofControllerV4.Client/"]
@@ -57,18 +57,29 @@ COPY ["src/HVO.WebSite.Themes/", "HVO.WebSite.Themes/"]
 COPY ["src/HVO.RoofControllerV4.RPi/", "HVO.RoofControllerV4.RPi/"]
 COPY ["src/HVO.RoofControllerV4.Web/", "HVO.RoofControllerV4.Web/"]
 
+# The product version and commit (docs/releasing.md). A release passes ROOF_VERSION=4.0.0, CI 4.0.0-ci.<run>, and the
+# deploy script 4.0.0-dev; left empty, the build is Directory.Build.props's 4.0.0-dev. The image has no .git, so the
+# commit comes from ROOF_REVISION. Declared here, after the restore: every RUN after an ARG sees it, so a new version
+# would otherwise restore again.
+ARG ROOF_VERSION=""
+ARG ROOF_REVISION=""
+
 # The controller in /app and its web UI in /app/web: two processes, each with its own dependencies.
 RUN dotnet publish "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
     --no-restore \
     --configuration Release \
     --runtime "$(cat /tmp/rid)" \
     --self-contained false \
+    ${ROOF_VERSION:+-p:Version=$ROOF_VERSION} \
+    ${ROOF_REVISION:+-p:SourceRevisionId=$ROOF_REVISION} \
     --output /app/publish && \
     dotnet publish "HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj" \
     --no-restore \
     --configuration Release \
     --runtime "$(cat /tmp/rid)" \
     --self-contained false \
+    ${ROOF_VERSION:+-p:Version=$ROOF_VERSION} \
+    ${ROOF_REVISION:+-p:SourceRevisionId=$ROOF_REVISION} \
     --output /app/publish/web
 
 # -------------------------
@@ -115,6 +126,19 @@ ENV ASPNETCORE_URLS=http://+:8080 \
 
 # The controller's API, hub, health and OpenAPI (8080, and 8443 for HTTPS), and the web UI (8088)
 EXPOSE 8080 8088
+
+# The image's version, commit and source (OCI labels; build/check-image-labels.sh checks them). The source links a GHCR
+# package to its repository. After the last RUN, so that a new build time or commit invalidates no layer.
+ARG ROOF_VERSION=""
+ARG ROOF_REVISION=""
+ARG ROOF_CREATED=""
+LABEL org.opencontainers.image.title="HVO Roof Controller" \
+      org.opencontainers.image.description="The roll-off roof controller and its web UI: on a Raspberry Pi 5 with its HAT, or anywhere with the HAT emulator." \
+      org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \
+      org.opencontainers.image.vendor="Hualapai Valley Observatory" \
+      org.opencontainers.image.version="${ROOF_VERSION}" \
+      org.opencontainers.image.revision="${ROOF_REVISION}" \
+      org.opencontainers.image.created="${ROOF_CREATED}"
 
 # Healthy exactly when the controller reports ready (anonymous endpoint; loopback is exempt from RequireHttps). The web
 # UI's liveness and the supervisor's view are printed alongside and never change the result.

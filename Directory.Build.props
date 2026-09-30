@@ -8,6 +8,21 @@
     <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
   </PropertyGroup>
 
+  <!--
+    The product version (docs/releasing.md): one version for every program and image, the next release's. A release
+    tag vX.Y.Z must match it (build/version.sh), and a release build sets it with -p:Version=X.Y.Z or X.Y.Z-rc.N.
+    Every other build is a prerelease of it: CI's dotnet builds set the VersionSuffix environment variable to ci.<run>,
+    image builds pass the whole version (ROOF_VERSION, as -p:Version), and anything else gets the -dev default here. The
+    SDK adds the commit to the informational version (4.0.0-dev+<sha>) from the checkout, or from -p:SourceRevisionId in
+    an image.
+  -->
+  <PropertyGroup Label="Product Version">
+    <VersionPrefix>4.0.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == '' and '$(Version)' == ''">dev</VersionSuffix>
+    <Product>HVO Roof Controller</Product>
+    <Company>Hualapai Valley Observatory</Company>
+  </PropertyGroup>
+
   <PropertyGroup Label="Suppressed Warnings">
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <NoWarn>$(NoWarn);CS1030</NoWarn>

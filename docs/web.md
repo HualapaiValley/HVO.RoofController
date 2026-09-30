@@ -58,7 +58,7 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | Health (`/health`) | everyone | Whether the controller is running and ready, the container's supervisor, and the controller's health checks, the worst first. Checked again every `StatusRefreshSeconds`. |
 | Settings (`/settings`) | everyone | The settings by group, from the controller's catalogue: those the person's role may read, and the controller says which of them they may change. |
 | People (`/people`) | Admin | People (add, role, password, kiosk PIN, remove), API keys (add, rotate, change, remove) and sessions (end). |
-| System (`/system`) | Admin | The controller's version, host and resource use, readiness, Restart, and Forced restart. |
+| System (`/system`) | Admin | The web UI's version, the controller's version, host and resource use, readiness, Restart, and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
 
 A Viewer and an Operator see Roof, Health and Settings in the navigation. Opening an admin page without the Admin role
@@ -163,7 +163,7 @@ once, as it is created; neither the page nor the controller shows it again.
 
 ### System
 
-![The System page: the controller's facts, Restart, and Forced restart](images/web/07-system-desktop.jpg)
+![The System page: the web UI's version, the controller's facts, Restart, and Forced restart](images/web/07-system-desktop.jpg)
 
 - **Restart the controller** asks first (`Restart the controller? It stops the roof first, and does not answer until it has started again.`).
   The controller stops the roof, verifies the stop, and exits; the supervisor starts it again. A restart that would

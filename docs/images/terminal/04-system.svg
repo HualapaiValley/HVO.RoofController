@@ -39,29 +39,31 @@
 <text x="196.80" y="73.50" fill="#f8fafc" textLength="210.00" lengthAdjust="spacingAndGlyphs">Stop is always available.</text>
 <text x="20.40" y="91.50" fill="#f8fafc" textLength="378.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">emulator-admin (admin, API key) · status live</text>
 <text x="37.20" y="127.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">F4 System</text>
-<text x="28.80" y="145.50" fill="#f8fafc" textLength="487.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Application: HVO.RoofControllerV4.RPi 1.0.0.0 (Production)</text>
-<text x="28.80" y="163.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Host:</text>
-<text x="138.00" y="163.50" fill="#f8fafc" textLength="100.80" lengthAdjust="spacingAndGlyphs">c82d7fffbd98</text>
-<text x="28.80" y="181.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">System:</text>
-<text x="138.00" y="181.50" fill="#f8fafc" textLength="151.20" lengthAdjust="spacingAndGlyphs">Ubuntu 24.04.5 LTS</text>
-<text x="28.80" y="199.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Runtime:</text>
-<text x="138.00" y="199.50" fill="#f8fafc" textLength="100.80" lengthAdjust="spacingAndGlyphs">.NET 10.0.12</text>
-<text x="28.80" y="217.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Started:</text>
-<text x="138.00" y="217.50" fill="#f8fafc" textLength="268.80" lengthAdjust="spacingAndGlyphs">2026-09-29 07:20:58Z (up 0m 11s)</text>
-<text x="28.80" y="235.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Memory:</text>
-<text x="138.00" y="235.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">140.0 MiB working set, 8.1 MiB managed</text>
-<text x="28.80" y="253.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">CPU:</text>
-<text x="138.00" y="253.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">1.3 %, 33 threads</text>
-<text x="28.80" y="289.50" fill="#f8fafc" textLength="134.40" lengthAdjust="spacingAndGlyphs">Health: Degraded</text>
-<text x="28.80" y="307.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">CHECK</text>
-<text x="171.60" y="307.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">STATUS</text>
-<text x="255.60" y="307.50" fill="#f8fafc" textLength="92.40" lengthAdjust="spacingAndGlyphs">DESCRIPTION</text>
-<text x="28.80" y="325.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">roof_controller</text>
-<text x="171.60" y="325.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Degraded</text>
-<text x="255.60" y="325.50" fill="#f8fafc" textLength="747.60" lengthAdjust="spacingAndGlyphs">Roof controller is running against the HAT emulator (hat-emulator:5291), not the physical</text>
-<text x="28.80" y="343.50" fill="#f8fafc" textLength="117.60" lengthAdjust="spacingAndGlyphs">identity_store</text>
+<text x="28.80" y="145.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">hvo-roof:</text>
+<text x="138.00" y="145.50" fill="#f8fafc" textLength="260.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">4.0.0-dev (commit 12c20cde683f)</text>
+<text x="28.80" y="163.50" fill="#f8fafc" textLength="688.80" lengthAdjust="spacingAndGlyphs">Application: HVO.RoofControllerV4.RPi 4.0.0-dev (commit 12c20cde683f) (Production)</text>
+<text x="28.80" y="181.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Host:</text>
+<text x="138.00" y="181.50" fill="#f8fafc" textLength="100.80" lengthAdjust="spacingAndGlyphs">265c3eed3770</text>
+<text x="28.80" y="199.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">System:</text>
+<text x="138.00" y="199.50" fill="#f8fafc" textLength="151.20" lengthAdjust="spacingAndGlyphs">Ubuntu 24.04.5 LTS</text>
+<text x="28.80" y="217.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Runtime:</text>
+<text x="138.00" y="217.50" fill="#f8fafc" textLength="100.80" lengthAdjust="spacingAndGlyphs">.NET 10.0.12</text>
+<text x="28.80" y="235.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Started:</text>
+<text x="138.00" y="235.50" fill="#f8fafc" textLength="268.80" lengthAdjust="spacingAndGlyphs">2026-09-30 08:50:20Z (up 0m 12s)</text>
+<text x="28.80" y="253.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Memory:</text>
+<text x="138.00" y="253.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">126.5 MiB working set, 5.2 MiB managed</text>
+<text x="28.80" y="271.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">CPU:</text>
+<text x="138.00" y="271.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">1.5 %, 33 threads</text>
+<text x="28.80" y="307.50" fill="#f8fafc" textLength="134.40" lengthAdjust="spacingAndGlyphs">Health: Degraded</text>
+<text x="28.80" y="325.50" fill="#f8fafc" textLength="42.00" lengthAdjust="spacingAndGlyphs">CHECK</text>
+<text x="171.60" y="325.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">STATUS</text>
+<text x="255.60" y="325.50" fill="#f8fafc" textLength="92.40" lengthAdjust="spacingAndGlyphs">DESCRIPTION</text>
+<text x="28.80" y="343.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">roof_controller</text>
 <text x="171.60" y="343.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Degraded</text>
-<text x="255.60" y="343.50" fill="#f8fafc" textLength="747.60" lengthAdjust="spacingAndGlyphs">No identity store file is configured: people, sessions and managed API keys are lost when</text>
+<text x="255.60" y="343.50" fill="#f8fafc" textLength="747.60" lengthAdjust="spacingAndGlyphs">Roof controller is running against the HAT emulator (hat-emulator:5291), not the physical</text>
+<text x="28.80" y="361.50" fill="#f8fafc" textLength="117.60" lengthAdjust="spacingAndGlyphs">identity_store</text>
+<text x="171.60" y="361.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Degraded</text>
+<text x="255.60" y="361.50" fill="#f8fafc" textLength="747.60" lengthAdjust="spacingAndGlyphs">No identity store file is configured: people, sessions and managed API keys are lost when</text>
 <text x="28.80" y="613.50" fill="#f8fafc" textLength="92.40" lengthAdjust="spacingAndGlyphs">⟦ Refresh ⟧</text>
 <text x="138.00" y="613.50" fill="#f8fafc" textLength="109.20" lengthAdjust="spacingAndGlyphs">⟦ Readiness ⟧</text>
 <text x="264.00" y="613.50" fill="#f8fafc" textLength="92.40" lengthAdjust="spacingAndGlyphs">⟦ Restart ⟧</text>
