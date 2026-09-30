@@ -60,7 +60,7 @@ terminal, tmux, or Terminal on a Mac.
 | `hvo-roof-install --plan --answers FILE` | Prints every folder, file, container, service and port the install would make or change, and changes nothing. |
 | `hvo-roof-install --plan` | The same for what is installed here, from its install record: yours, or with `sudo` (or without a record of yours) the machine's. |
 | `hvo-roof-install --version` | Prints the installer's version and the commit it was built from, such as `4.0.0+0123abcd…`. |
-| `hvo-roof-install cert` | Checks the controller's certificate and its CA, and makes or renews what needs it. `--plan` shows what it would do. |
+| `hvo-roof-install cert` | Checks the controller's certificate and its CA, makes or renews what needs it, and redeploys the controller to serve it once the roof is idle and you agree. `--plan` shows what it would do. |
 | `hvo-roof-install cert show` | Shows the controller's certificate and CA: what they are for, until when, and their fingerprints. |
 | `hvo-roof-install cert import FILE` | Puts your own certificate in place for the controller. |
 
@@ -454,12 +454,34 @@ It refuses to issue while this machine's clock is before the CA's start, and `--
 is wrong, set the time (NTP) and run it again. If the clock is right, the CA was made while it was ahead: make a new one
 with `cert --new-ca`.
 
-It prints the plan, each step, and the certificate as `cert show` does. It never restarts the controller or moves the
-roof. The controller serves a new certificate once it is deployed again: when the roof is idle, run the deploy script
-again ([Deploying](deployment.md#deploying-with-the-script)). From #69 the installer does that step.
+It prints the plan, each step, and the certificate as `cert show` does. It never moves the roof.
 
-`cert --plan` shows what `cert` would do, and changes nothing. It runs without root, but then cannot check the files
-that only root can read.
+The controller serves a new certificate once it is deployed again. When the record says the installer runs the
+controller, `cert` then redeploys it, through the deploy script as an install does:
+
+- **Only while the roof is idle.** It reads the controller's status first, and again just before the deploy script
+  runs. While the roof moves, it leaves the controller as it is and says to run `sudo hvo-roof-install cert --redeploy`
+  once the roof is idle.
+- **Only when the certificate is all that would change.** When more would, such as a new release, it leaves the
+  controller as it is and says to run `sudo hvo-roof-install`, which redeploys it with the new certificate.
+- **Only once you agree.** It asks `Redeploy the controller now? [y/N]`. With no one at a terminal, such as in a
+  script, it does not ask and does not redeploy. `--redeploy` redeploys without asking. `--no-redeploy` puts the
+  certificate in place and stops there.
+
+The deploy script stops the roof with a verified Stop before it replaces the controller, and puts the old one back if
+the new one fails a check. A controller that is stopped serves the new certificate when it starts again. One that is not
+deployed yet serves it once `hvo-roof-install` deploys it.
+
+`cert --redeploy` also redeploys a controller that serves another certificate than the one in place, such as after a
+renewal that was not redeployed. It exits with code 3 when it could not redeploy, because the roof moves or more than
+the certificate would change. The certificate is in place either way.
+
+With nothing recorded, such as a controller the deploy script runs, it never redeploys, and `--redeploy` is refused
+before anything changes. When the roof is idle, run the deploy script again
+([Deploying](deployment.md#deploying-with-the-script)).
+
+`cert --plan` shows what `cert` would do, the redeploy included, and changes nothing. It runs without root, but then
+cannot check the files that only root can read.
 
 ### Your own certificate
 
@@ -475,7 +497,8 @@ certificate that has expired, is not yet valid, is a CA's, or is not for a serve
 than 300,000 iterations to derive its key, the most that .NET opens in a PKCS#12 file (export it again with fewer). It
 warns when the certificate is not for a name or address clients use, and when it lasts longer than Apple's platforms
 accept. Importing the same certificate again changes nothing, unless its chain has changed. `--plan` checks the file and
-shows what would change.
+shows what would change. It then redeploys the controller to serve it, as `cert` does ([Renewing](#renewing)), and takes
+`--redeploy` and `--no-redeploy` too.
 
 The installer never renews your certificate. Before it expires, import the new one.
 

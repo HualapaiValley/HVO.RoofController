@@ -190,6 +190,32 @@ public static class PlanBuilder
         return new InstallPlan(steps);
     }
 
+    /// <summary>
+    /// The controller deployed again with the recorded <paramref name="settings"/> and <paramref name="roles"/>, to serve
+    /// the certificate <paramref name="certificate"/> puts in place, as <c>hvo-roof-install cert</c> does once the roof is
+    /// idle: the API keys, the programs the deploy script runs, the HAT emulator for a rig, and the controller.
+    /// </summary>
+    public static InstallPlan BuildRedeploy(InstallerMachine machine, MachineSurvey survey, IReadOnlyCollection<InstallRole> roles, ControllerSettings settings, IControllerCertificateStep certificate)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(roles);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(certificate);
+        var layout = ControllerLayout.For(machine);
+        settings = settings.Normalised();
+        var rig = roles.Contains(InstallRole.Rig);
+        var keys = AllocateKeys(machine, survey, layout, roles);
+        var steps = new List<PlanStep>(keys.Select(key => new ApiKeyStep(layout, key))) { new DeployToolsStep() };
+        var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
+        if (emulator is not null)
+        {
+            steps.Add(emulator);
+        }
+
+        steps.Add(new ControllerStep(layout, settings, CertificateNames.For(machine, settings), rig, certificate, keys, emulator));
+        return new InstallPlan(steps);
+    }
+
     private static List<PlanStep> CertificateFolders(ControllerLayout layout)
     {
         var steps = new List<PlanStep>();

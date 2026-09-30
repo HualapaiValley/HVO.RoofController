@@ -215,7 +215,7 @@ public sealed class ControllerStep(
     ControllerSettings settings,
     CertificateNames names,
     bool rig,
-    CertificateStep? certificate,
+    IControllerCertificateStep? certificate,
     IReadOnlyList<ApiKeyAllocation> keys,
     HatEmulatorStep? emulator = null,
     IReadOnlyList<CameraFileStep>? camera = null,
@@ -237,9 +237,16 @@ public sealed class ControllerStep(
     /// <summary>The one address a rig publishes its ports on, unless it is open to the network; null for every address.</summary>
     public string? PublishAddress => rig && settings.Rig is not { OpenToLan: true } ? HatEmulatorStep.ControlAddress : null;
 
+    /// <summary>
+    /// True when the last check found the certificate is all that differs: a new one is not served yet. <c>hvo-roof-install
+    /// cert</c> redeploys the controller only then.
+    /// </summary>
+    public bool OnlyCertificateDiffers { get; private set; }
+
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
         _deployKeyFile = null;
+        OnlyCertificateDiffers = false;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)
@@ -257,6 +264,12 @@ public sealed class ControllerStep(
         var replacesEmulator = emulator is not null
             && (context.HasApplied(emulator) || (await emulator.CheckAsync(context, cancellationToken).ConfigureAwait(false)).MakesChange);
         var reason = await ReasonAsync(context, container, release, replacesEmulator, cancellationToken).ConfigureAwait(false);
+        if (reason is null && await CertificateReasonAsync(context, container, cancellationToken).ConfigureAwait(false) is { } certificateReason)
+        {
+            reason = certificateReason;
+            OnlyCertificateDiffers = true;
+        }
+
         if (!container.IsRunning)
         {
             // Nothing runs to stop: the deploy script starts the new one without a Stop.
@@ -350,20 +363,25 @@ public sealed class ControllerStep(
             return "redeployed to read the imported settings";
         }
 
-        if (certificate is not null)
-        {
-            if (context.HasApplied(certificate) || certificate.WillIssue(context))
-            {
-                return "redeployed with the new certificate";
-            }
+        return null;
+    }
 
-            if (settings.UsesHttps && container.IsRunning && await ServesAnotherCertificateAsync(context, cancellationToken).ConfigureAwait(false))
-            {
-                return $"redeployed: it serves another certificate than {certificate.Target}";
-            }
+    // Why the container must be deployed again for its certificate: a new one is put in place, or it serves another.
+    private async Task<string?> CertificateReasonAsync(InstallContext context, ContainerSurvey container, CancellationToken cancellationToken)
+    {
+        if (certificate is null)
+        {
+            return null;
         }
 
-        return null;
+        if (certificate.Wrote || certificate.WillWrite(context))
+        {
+            return "redeployed with the new certificate";
+        }
+
+        return settings.UsesHttps && container.IsRunning && await ServesAnotherCertificateAsync(context, cancellationToken).ConfigureAwait(false)
+            ? $"redeployed: it serves another certificate than {certificate.Target}"
+            : null;
     }
 
     // A running controller: whether it knows the installer's keys (it reads new ones only when it starts), and which key

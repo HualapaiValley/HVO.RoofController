@@ -423,6 +423,12 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What the installer asked the person to type, in order.</summary>
     public List<string> Asked { get; } = [];
 
+    /// <summary>The person's answer when the installer asks a yes-or-no question, by the question; null when no one can be asked.</summary>
+    public Func<string, bool?> Replies { get; set; } = _ => null;
+
+    /// <summary>The yes-or-no questions the installer asked, in order.</summary>
+    public List<string> Questions { get; } = [];
+
     public InstallerHost Host(TextWriter output, TextWriter error, bool interactive = false, TimeProvider? time = null) => new()
     {
         Out = output,
@@ -435,6 +441,11 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         {
             Asked.Add(what);
             return Types(what);
+        },
+        Confirm = question =>
+        {
+            Questions.Add(question);
+            return Replies(question);
         }
     };
 
@@ -720,9 +731,19 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             StartedAt = DateTimeOffset.UtcNow
         };
 
-        // The new controller reads the keys in the secrets folder when it starts.
+        // The new controller reads the keys in the secrets folder when it starts, and serves the certificate in its file.
         ControllerKeys.Clear();
         ControllerKeys.UnionWith(ApiKeyValues());
+        var apiPort = Containers[MachineSurveyor.ControllerContainer].ApiPort!.Value;
+        ServedCertificates.Remove(apiPort);
+        if (https
+            && File.Exists(OnDisk(Path.Join(environment["HTTPS_CERT_DIR"], environment["HTTPS_CERT_FILE"])))
+            && ControllerCertificates.LoadPfx(
+                File.ReadAllBytes(OnDisk(Path.Join(environment["HTTPS_CERT_DIR"], environment["HTTPS_CERT_FILE"]))),
+                Read(Path.Join(environment["SECRETS_DIR"], "Kestrel__Certificates__Default__Password"))) is { } served)
+        {
+            ServedCertificates[apiPort] = served;
+        }
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
     }
 

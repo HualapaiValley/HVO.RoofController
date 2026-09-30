@@ -12,12 +12,22 @@ namespace HVO.RoofControllerV4.Installer;
 /// <summary>
 /// <c>hvo-roof-install cert</c>: the controller's HTTPS certificate on its own. With no subcommand it checks the
 /// certificate and makes or renews what needs it (the CA, the file's password, the certificate), as the installer does;
-/// <c>cert show</c> says what is in place; <c>cert import FILE</c> puts a person's own certificate in place. None of
-/// them restarts the controller or moves the roof: it serves a new certificate once it is deployed again.
+/// <c>cert show</c> says what is in place; <c>cert import FILE</c> puts a person's own certificate in place. The
+/// controller serves a new certificate once it is deployed again: for a controller the installer deployed, <c>cert</c>
+/// and <c>cert import</c> then redeploy it through the deploy script, when the roof is idle and the person agrees (or
+/// gave <c>--redeploy</c>). None of them moves the roof.
 /// </summary>
 internal static class CertificateCommands
 {
-    private const string Redeploy = "The controller serves it once it is deployed again: when the roof is idle, run the deploy script again (docs/deployment.md).";
+    private const string DeployScriptRedeploy = "The controller serves it once it is deployed again: when the roof is idle, run the deploy script again (docs/deployment.md).";
+
+    // Whether to redeploy the controller to serve a new certificate: ask the person, or as the options say.
+    private enum RedeployChoice
+    {
+        Ask,
+        Yes,
+        No
+    }
 
     public static Command Create(InstallerHost host)
     {
@@ -27,16 +37,20 @@ internal static class CertificateCommands
         {
             Description = "Make a new certificate authority and issue the certificate from it. Every client must then trust the new CA."
         };
+        var (redeploy, noRedeploy) = RedeployOptions();
         var cert = new Command(
             "cert",
             "Checks the controller's HTTPS certificate and makes or renews what needs it: the CA, the certificate file's password "
-            + "and the certificate. It changes only what differs, and never restarts the controller or moves the roof.");
+            + "and the certificate. It changes only what differs. Then, to serve a new certificate, it redeploys the controller "
+            + "the installer deployed, once the roof is idle and you agree; it never moves the roof.");
         cert.Options.Add(plan);
         cert.Options.Add(renew);
         cert.Options.Add(newCa);
+        cert.Options.Add(redeploy);
+        cert.Options.Add(noRedeploy);
         cert.SetAction((parseResult, token) => Installer.GuardAsync(
             host,
-            () => RenewAsync(host, parseResult.GetValue(plan), parseResult.GetValue(renew), parseResult.GetValue(newCa), token),
+            () => RenewAsync(host, parseResult.GetValue(plan), parseResult.GetValue(renew), parseResult.GetValue(newCa), Choice(parseResult, redeploy, noRedeploy), token),
             token));
 
         var show = new Command("show", "Shows the controller's certificate and CA: what they are for, until when, and their SHA-256 fingerprints. Changes nothing.");
@@ -54,27 +68,55 @@ internal static class CertificateCommands
             HelpName = "FILE"
         };
         var importPlan = new Option<bool>("--plan") { Description = "Check the certificate and print what it would change, and change nothing." };
+        var (importRedeploy, importNoRedeploy) = RedeployOptions();
         var import = new Command(
             "import",
             "Puts your own certificate in place for the controller, with its chain, and records that the controller serves your own. "
-            + "It refuses one that has expired, is not yet valid, is a CA's, or is not for a server.");
+            + "It refuses one that has expired, is not yet valid, is a CA's, or is not for a server. Then, to serve it, it redeploys "
+            + "the controller the installer deployed, once the roof is idle and you agree.");
         import.Arguments.Add(file);
         import.Options.Add(key);
         import.Options.Add(passwordFile);
         import.Options.Add(importPlan);
+        import.Options.Add(importRedeploy);
+        import.Options.Add(importNoRedeploy);
         import.SetAction((parseResult, token) => Installer.GuardAsync(
             host,
-            () => ImportAsync(host, parseResult.GetValue(file)!, parseResult.GetValue(key), parseResult.GetValue(passwordFile), parseResult.GetValue(importPlan), token),
+            () => ImportAsync(
+                host,
+                parseResult.GetValue(file)!,
+                parseResult.GetValue(key),
+                parseResult.GetValue(passwordFile),
+                parseResult.GetValue(importPlan),
+                Choice(parseResult, importRedeploy, importNoRedeploy),
+                token),
             token));
         cert.Subcommands.Add(import);
         return cert;
     }
 
+    private static (Option<bool> Redeploy, Option<bool> NoRedeploy) RedeployOptions()
+        => (new Option<bool>("--redeploy")
+            {
+                Description = "Redeploy the controller to serve the new certificate without asking, once the roof is idle; if it moves, change the certificate and stop there."
+            },
+            new Option<bool>("--no-redeploy") { Description = "Only put the certificate in place: the controller serves it once it is deployed again." });
+
+    // Read inside the installer's guard, so giving both is a usage error as any other.
+    private static RedeployChoice Choice(ParseResult parseResult, Option<bool> redeploy, Option<bool> noRedeploy)
+        => (parseResult.GetValue(redeploy), parseResult.GetValue(noRedeploy)) switch
+        {
+            (true, true) => throw new InstallerUsageException("Give --redeploy or --no-redeploy, not both."),
+            (true, false) => RedeployChoice.Yes,
+            (false, true) => RedeployChoice.No,
+            _ => RedeployChoice.Ask
+        };
+
     /// <summary>
     /// <c>cert</c>: the controller's certificate, checked and made or renewed: as recorded, or with the defaults when nothing
     /// is recorded yet (a controller the deploy script runs, or one not yet installed).
     /// </summary>
-    private static async Task<int> RenewAsync(InstallerHost host, bool planOnly, bool renew, bool newCa, CancellationToken cancellationToken)
+    private static async Task<int> RenewAsync(InstallerHost host, bool planOnly, bool renew, bool newCa, RedeployChoice redeploy, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         RefuseRootOnMac(machine, "cert");
@@ -82,6 +124,7 @@ internal static class CertificateCommands
         var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken: cancellationToken).ConfigureAwait(false);
         Installer.WriteWarnings(host, session);
         var record = RecordedOrRefuse(machine, session.Survey)?.Record;
+        RefuseRedeployUnrecorded(record, redeploy);
         if (record is null && session.Survey.Certificate is { NeedsRoot: true })
         {
             // Whether the certificate in place is the person's own decides what the defaults are: only root can tell.
@@ -110,10 +153,23 @@ internal static class CertificateCommands
         RefuseWithoutRoot(machine, planOnly, "cert");
         session.Answers = record?.ToAnswers() ?? new InstallAnswers();
         var replacing = newCa ? session.Survey.Authority?.Fingerprint : null;
-        var checkedPlan = await PlanBuilder.BuildCertificate(machine, settings, replacing, renew).CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
+        var plan = PlanBuilder.BuildCertificate(machine, settings, replacing, renew);
+        var checkedPlan = await plan.CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
         var exit = await RunPlanAsync(host, session, checkedPlan, planOnly, "the controller's certificate", settings, cancellationToken).ConfigureAwait(false);
-        if (exit == (int)InstallerExitCode.Success && !planOnly && record is null)
+        if (exit != (int)InstallerExitCode.Success)
         {
+            return exit;
+        }
+
+        if (record is not null)
+        {
+            var certificate = plan.Steps.OfType<CertificateStep>().Single();
+            return await RedeployAsync(host, session, record.Roles, settings, certificate, checkedPlan.HasChanges, redeploy, planOnly, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!planOnly)
+        {
+            WriteDeployScriptRedeploy(host, checkedPlan);
             host.Out.WriteLine(
                 $"Nothing here is recorded as running the controller yet: when you install it ({Installer.CommandName}), choose {(settings.Connection == ConnectionMode.OwnCertificate ? "own-certificate" : "private-ca")} to keep this certificate.");
         }
@@ -152,7 +208,7 @@ internal static class CertificateCommands
     }
 
     /// <summary><c>cert import FILE</c>: the person's own certificate, checked and put in place.</summary>
-    private static async Task<int> ImportAsync(InstallerHost host, string file, string? keyFile, string? passwordFile, bool planOnly, CancellationToken cancellationToken)
+    private static async Task<int> ImportAsync(InstallerHost host, string file, string? keyFile, string? passwordFile, bool planOnly, RedeployChoice redeploy, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         RefuseRootOnMac(machine, "cert import FILE");
@@ -160,6 +216,7 @@ internal static class CertificateCommands
         var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken: cancellationToken).ConfigureAwait(false);
         RefuseWithoutRoot(machine, planOnly, "cert import FILE");
         var recorded = RecordedOrRefuse(machine, session.Survey);
+        RefuseRedeployUnrecorded(recorded?.Record, redeploy);
 
         var path = Path.GetFullPath(InstallPaths.Expand(machine, file), machine.CurrentDirectory);
         var keyPath = keyFile is null ? null : Path.GetFullPath(InstallPaths.Expand(machine, keyFile), machine.CurrentDirectory);
@@ -197,16 +254,173 @@ internal static class CertificateCommands
 
         session.Answers = recorded?.Record.ToAnswers() ?? new InstallAnswers();
         log.Write($"Importing {path}: {ImportCertificateStep.Describe(imported)}, SHA-256 {ControllerCertificates.Fingerprint(imported.Certificate)}.");
-        var checkedPlan = await PlanBuilder.BuildImport(machine, imported, path, recorded is var (scope, recordPath, _) ? (scope, recordPath) : null)
-            .CheckAsync(session.Context, cancellationToken)
-            .ConfigureAwait(false);
-        var exit = await RunPlanAsync(host, session, checkedPlan, planOnly, "your certificate", settings with { Connection = ConnectionMode.OwnCertificate }, cancellationToken).ConfigureAwait(false);
-        if (exit == (int)InstallerExitCode.Success && !planOnly && recorded is null)
+        var plan = PlanBuilder.BuildImport(machine, imported, path, recorded is var (scope, recordPath, _) ? (scope, recordPath) : null);
+        var checkedPlan = await plan.CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
+        var own = settings with { Connection = ConnectionMode.OwnCertificate };
+        var exit = await RunPlanAsync(host, session, checkedPlan, planOnly, "your certificate", own, cancellationToken).ConfigureAwait(false);
+        if (exit != (int)InstallerExitCode.Success)
         {
+            return exit;
+        }
+
+        if (recorded is var (_, _, record))
+        {
+            var certificate = plan.Steps.OfType<ImportCertificateStep>().Single();
+            return await RedeployAsync(host, session, record.Roles, own, certificate, checkedPlan.HasChanges, redeploy, planOnly, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!planOnly)
+        {
+            WriteDeployScriptRedeploy(host, checkedPlan);
             host.Out.WriteLine($"Nothing here is recorded as running the controller yet: when you install it ({Installer.CommandName}), choose own-certificate to serve this one.");
         }
 
         return exit;
+    }
+
+    // A controller nothing records (the deploy script runs it, or it is not installed yet) is not the installer's to redeploy.
+    private static void RefuseRedeployUnrecorded(InstallRecord? record, RedeployChoice redeploy)
+    {
+        if (record is null && redeploy == RedeployChoice.Yes)
+        {
+            throw new InstallerRefusedException(
+                "Nothing here is recorded as running the controller, so the installer does not redeploy it (--redeploy). "
+                + "Put the certificate in place without --redeploy, then run the deploy script again when the roof is idle (docs/deployment.md).");
+        }
+    }
+
+    private static void WriteDeployScriptRedeploy(InstallerHost host, CheckedPlan checkedPlan)
+    {
+        if (checkedPlan.HasChanges)
+        {
+            host.Out.WriteLine();
+            host.Out.WriteLine(DeployScriptRedeploy);
+        }
+    }
+
+    /// <summary>
+    /// The controller the installer deployed, redeployed to serve the certificate <paramref name="certificate"/> put in
+    /// place (or would put in place, with <paramref name="planOnly"/>): only when it runs, the roof is idle, the
+    /// certificate is all that differs, and the person agrees or gave <c>--redeploy</c>. The deploy script stops the
+    /// roof with a verified Stop before it replaces the controller, and puts the old one back when the new one fails a
+    /// check. Otherwise it says why not, and how to finish once the roof is idle.
+    /// </summary>
+    private static async Task<int> RedeployAsync(
+        InstallerHost host,
+        InstallerSession session,
+        IReadOnlyCollection<InstallRole> roles,
+        ControllerSettings settings,
+        IControllerCertificateStep certificate,
+        bool changed,
+        RedeployChoice choice,
+        bool planOnly,
+        CancellationToken cancellationToken)
+    {
+        var machine = session.Machine;
+        var sudo = ControllerLayout.For(machine) == ControllerLayout.System ? "sudo " : string.Empty;
+        var retry = $"{sudo}{Installer.CommandName} cert --redeploy";
+        var ok = (int)InstallerExitCode.Success;
+        var notDone = choice == RedeployChoice.Yes ? (int)InstallerExitCode.Refused : ok;
+        var container = await MachineSurveyor.SurveyContainerAsync(machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
+        if (container is not { IsRunning: true })
+        {
+            if (changed)
+            {
+                host.Out.WriteLine();
+                host.Out.WriteLine(container is null
+                    ? $"The controller is not deployed yet: {Installer.CommandName} deploys it, to serve this certificate."
+                    : $"The controller is not running ({container.State}): it serves this certificate when it starts again.");
+            }
+
+            return ok;
+        }
+
+        var plan = PlanBuilder.BuildRedeploy(machine, session.Survey, roles, settings, certificate);
+        var controller = plan.Steps.OfType<ControllerStep>().Single();
+        var checkedPlan = await plan.CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
+        var check = checkedPlan.Steps.Single(step => step.Step == controller).Check;
+        if (!checkedPlan.HasChanges && !checkedPlan.IsBlocked)
+        {
+            // It serves the certificate in place already.
+            return ok;
+        }
+
+        host.Out.WriteLine();
+        if (checkedPlan.Steps.FirstOrDefault(step => step.Check.Change == StepChange.Blocked) is { } blocked)
+        {
+            host.Out.WriteLine($"The controller is not redeployed to serve the new certificate: {blocked.Check.Detail}.");
+            host.Out.WriteLine($"To serve it, run {retry} once the roof is idle.");
+            session.Log.Write($"Not redeployed: {blocked.Check.Detail}");
+            return planOnly ? ok : notDone;
+        }
+
+        var more = checkedPlan.Steps.Where(step => step.Check.MakesChange && step.Step != controller).Select(step => $"{step.Step.Target} ({step.Check.Detail})").ToList();
+        if (check.MakesChange && !controller.OnlyCertificateDiffers)
+        {
+            more.Add($"{controller.Target} ({check.Detail})");
+        }
+
+        if (more.Count > 0)
+        {
+            host.Out.WriteLine($"The controller is not redeployed from here, because more than its certificate would change: {string.Join("; ", more)}.");
+            host.Out.WriteLine($"Run {sudo}{Installer.CommandName} to redeploy it, with the new certificate.");
+            session.Log.Write($"Not redeployed: more than its certificate would change: {string.Join("; ", more)}.");
+            return planOnly ? ok : notDone;
+        }
+
+        if (!check.MakesChange)
+        {
+            // Only without root: whether it serves the new certificate needs its keys.
+            host.Out.WriteLine($"The controller: {check.Detail}.");
+            return ok;
+        }
+
+        const string Safety = "The deploy script stops the roof with a verified Stop before it replaces the controller, and puts the old one back if the new one fails a check; nothing here moves the roof.";
+        if (planOnly)
+        {
+            host.Out.WriteLine(choice == RedeployChoice.No
+                ? $"The controller is not redeployed (--no-redeploy): it serves the new certificate once you run {retry}, when the roof is idle."
+                : $"Then the controller is {check.Detail}{(choice == RedeployChoice.Ask ? ", once the roof is idle and you agree" : ", once the roof is idle")}. {Safety}");
+            return ok;
+        }
+
+        if (choice == RedeployChoice.No)
+        {
+            host.Out.WriteLine($"The controller is not redeployed (--no-redeploy): it serves the new certificate once it is. When the roof is idle, run {retry}.");
+            return ok;
+        }
+
+        host.Out.WriteLine($"To serve it, the controller must be deployed again ({check.Detail}). {Safety}");
+        if (choice == RedeployChoice.Ask)
+        {
+            var agreed = host.Confirm("Redeploy the controller now?");
+            if (agreed is not true)
+            {
+                host.Out.WriteLine(agreed is null
+                    ? $"No one at a terminal could agree to it, so the controller is not redeployed. When the roof is idle, run {retry}."
+                    : $"The controller is not redeployed: it serves the new certificate once it is. When the roof is idle, run {retry}.");
+                session.Log.Write(agreed is null ? "Not redeployed: no one at a terminal could agree to it." : "Not redeployed: the person did not agree.");
+                return ok;
+            }
+        }
+
+        host.Out.WriteLine();
+        session.Log.Write($"Redeploying {controller.Target}: {check.Detail}.");
+        try
+        {
+            // Each step is checked again just before it runs: a roof that started moving stops the redeploy there.
+            await checkedPlan.ApplyAsync(session.Context, host.Out.WriteLine, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InstallerException error) when (error is not InstallerRefusedException)
+        {
+            throw new InstallerException(
+                $"The controller was not redeployed: {error.Message}{Environment.NewLine}The certificate is in place; the log is {session.Log.Path}. To serve it, run {retry} once the roof is idle.",
+                error.ExitCode);
+        }
+
+        session.Log.Write($"Redeployed {controller.Target} to serve the new certificate.");
+        host.Out.WriteLine("The controller serves the new certificate.");
+        return ok;
     }
 
     // The plan's lines; then, unless only planning, the changes and what is in place after them.
@@ -265,8 +479,6 @@ internal static class CertificateCommands
             host.Out.WriteLine(line);
         }
 
-        host.Out.WriteLine();
-        host.Out.WriteLine(Redeploy);
         return (int)InstallerExitCode.Success;
     }
 

@@ -51,7 +51,7 @@ public sealed class InstallerCertificateCommandTests
         lines.Should().ContainInOrder("CA:          /etc/hvo-roof/ca.crt", "  Subject:   HVO Roof CA (roofpi, 2026-10-01)");
         lines.Should().Contain(line => line.StartsWith("  Issues for: local, localhost, roofpi, ", StringComparison.Ordinal));
         lines.Should().Contain("  Clients get it from https://roofpi.local:8443/ca.crt, or from /etc/hvo-roof/ca.crt");
-        run.Output.Should().EndWith("The controller serves it once it is deployed again: when the roof is idle, run the deploy script again (docs/deployment.md).\n");
+        run.Output.Should().EndWith("The controller is not deployed yet: hvo-roof-install deploys it, to serve this certificate.\n");
         run.Error.Should().BeEmpty();
         pi.Read(InstallPaths.SystemLog).Should().Contain("Put the controller's certificate in place.");
         pi.Mode(Layout.CaKey).Should().Be(Modes.PrivateFile);
@@ -60,7 +60,7 @@ public sealed class InstallerCertificateCommandTests
         var again = await pi.RunAsync("cert");
 
         again.ExitCode.Should().Be(0, again.ToString());
-        again.Output.Should().Contain("Nothing to change: the controller's certificate is in place as it should be.").And.NotContain("Creating").And.NotContain("deployed again");
+        again.Output.Should().Contain("Nothing to change: the controller's certificate is in place as it should be.").And.NotContain("Creating").And.NotContain("not deployed yet");
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
         pi.Unexpected.Should().BeEmpty();
     }
@@ -136,7 +136,7 @@ public sealed class InstallerCertificateCommandTests
         var renewed = await pi.RunAsync("cert", "--renew");
 
         renewed.ExitCode.Should().Be(0, renewed.ToString());
-        renewed.Output.Should().Contain("(issued again, as asked (--renew): it was valid until 2027-11-02)").And.Contain("deployed again");
+        renewed.Output.Should().Contain("(issued again, as asked (--renew): it was valid until 2027-11-02)").And.Contain("The controller is not deployed yet");
         pi.Read(Layout.CaCertificate).Should().Be(authority);
 
         var replaced = await pi.RunAsync("cert", "--new-ca");
@@ -257,7 +257,7 @@ public sealed class InstallerCertificateCommandTests
             run.Output.Should().Contain("your certificate for the controller, from /root/their.pfx (roofpi, until 2026-12-30, issued by Their CA)")
                 .And.Contain("Changing file /etc/hvo-roof/https/roof-controller.pfx: done.")
                 .And.Contain("  Issued by: Their CA\n")
-                .And.Contain("deployed again")
+                .And.Contain("The controller is not deployed yet")
                 .And.NotContain("recorded as running");
             run.Error.Should().BeEmpty();
             InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).Controller!.Connection.Should().Be(ConnectionMode.OwnCertificate);
@@ -591,14 +591,14 @@ public sealed class InstallerCertificateCommandTests
 
     private static string[] Lines(string output) => output.Split('\n');
 
-    private static void WriteBytes(FakeMachine machine, string path, byte[] content)
+    internal static void WriteBytes(FakeMachine machine, string path, byte[] content)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(machine.OnDisk(path))!);
         File.WriteAllBytes(machine.OnDisk(path), content);
     }
 
     // "Their CA" and the certificate it issued for roofpi (by default), valid for 90 days from yesterday.
-    private static (X509Certificate2 Authority, X509Certificate2 Certificate) TheirCertificate(string[]? names = null, DateTimeOffset? notAfter = null)
+    internal static (X509Certificate2 Authority, X509Certificate2 Certificate) TheirCertificate(string[]? names = null, DateTimeOffset? notAfter = null)
     {
         using var authorityKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var authorityRequest = new CertificateRequest("CN=Their CA", authorityKey, HashAlgorithmName.SHA256);
