@@ -10,8 +10,13 @@
 #            in the output, the log, the record or the controller's environment.
 #   again    The same answers again: nothing to change, and nothing is replaced.
 #   change   A new time scale: the emulator is replaced and the controller redeployed against it.
+#   cli      hvo-roof from the release, installed for the person running the scenario (not root, in a home of this
+#            run's own) with the rig as its controller, trusting the rig's CA by its fingerprint (#71): a wrong
+#            fingerprint refused with nothing changed, then the program and its connection with their modes, hvo-roof
+#            login with the password on standard input, hvo-roof status reporting the emulated HAT, the same answers
+#            again changing nothing, and no secret shown.
 #   cert     cert --renew --redeploy: a new certificate from the same CA, the CA unchanged, and the controller
-#            redeployed to serve it.
+#            redeployed to serve it; hvo-roof, which trusts the CA, signs in and reads the status from it still.
 # Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
 # and no violation.
 #
@@ -218,6 +223,54 @@ expect_output() {
   grep -qF -- "$2" "${work}/$1.txt" || fail "hvo-roof-install ${1} did not say '$2'"
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# hvo-roof, installed for the person running the scenario: not root, and in a home of this run's own with a clean
+# environment, so the person's own ~/.local/bin, ~/.config and HVO_ROOF_URL are neither used nor touched.
+
+person_home=""
+person_cli=""
+
+as_person() {
+  env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="${person_home}" LANG=C.UTF-8 TERM=dumb "$@"
+}
+
+# person_install <name> <arguments...>: the installer as the person; its output in ${work}/<name>.txt and its exit
+# status in INSTALL_STATUS.
+person_install() {
+  local name=$1
+  shift
+  INSTALL_STATUS=0
+  as_person "${installer}" "$@" > "${work}/${name}.txt" 2>&1 || INSTALL_STATUS=$?
+  sed 's/^/[install] /' "${work}/${name}.txt"
+}
+
+# hvo_roof <name> <arguments...>: the installed hvo-roof as the person, its standard input the caller's; its output in
+# ${work}/<name>.txt, which it prints.
+hvo_roof() {
+  local name=$1 status=0
+  shift
+  as_person "${person_cli}" "$@" > "${work}/${name}.txt" 2>&1 || status=$?
+  sed 's/^/[hvo-roof] /' "${work}/${name}.txt"
+  (( status == 0 )) || fail "hvo-roof $* exited ${status}"
+}
+
+# cli_signs_in: hvo-roof signs in as the first admin with the password on standard input, and reads the status: the
+# emulated HAT. The session it saves is added to the secrets that must not show.
+cli_signs_in() {
+  hvo_roof cli-login login "${admin}" < "${password_file}"
+  grep -qF "Signed in as ${admin}" "${work}/cli-login.txt" || fail "hvo-roof login did not say ${admin} signed in"
+  jq -e '.session.token | length > 0' "${person_home}/.config/hvo-roof/credentials.json" >/dev/null \
+    || fail "hvo-roof login saved no session"
+  jq -r '.session.token' "${person_home}/.config/hvo-roof/credentials.json" >> "${work}/secrets.txt"
+  hvo_roof cli-status --json status
+  jq -e '.hatMode == "Emulated"' "${work}/cli-status.txt" >/dev/null || fail "hvo-roof status does not report the emulated HAT"
+}
+
+# cli_answers <file> <CA fingerprint>: hvo-roof's answers, as docs/install.md has them, with the rig as the controller.
+cli_answers() {
+  jq -n --arg controller "${roof}" --arg fingerprint "$2" '{ roles: ["cli"], client: { controller: $controller, caSha256: $fingerprint } }' > "$1"
+}
+
 # answers <file> <time scale>: a rig's answers, as docs/install.md has them.
 answers() {
   jq -n --arg host "$(hostname)" --argjson https "${https_port}" --argjson web "${web_port}" --argjson scale "$2" '{
@@ -358,9 +411,11 @@ setup() {
   done
   owns_resources=1
 
-  say "Publishing hvo-roof-install for ${rid}"
+  say "Publishing hvo-roof-install and hvo-roof for ${rid}"
   (cd "${repo_root}/src" && dotnet publish HVO.RoofControllerV4.Installer -c Release -r "${rid}" -v quiet -nologo \
     -o "${work}/installer" >/dev/null) || fail "could not publish hvo-roof-install"
+  (cd "${repo_root}/src" && dotnet publish HVO.RoofControllerV4.Cli -c Release -r "${rid}" -v quiet -nologo \
+    -o "${work}/cli" >/dev/null) || fail "could not publish hvo-roof"
   installer="${work}/installer/hvo-roof-install"
   version=$("${installer}" --version)
   version=${version%%+*}
@@ -378,15 +433,22 @@ setup() {
   push_release_image roof-hat-emulator "${repo_root}/src/HVO.RoofControllerV4.Emulator/Dockerfile"
   emulator_digest=${PUSHED_INDEX}
 
+  # The release's files beside its images: hvo-roof for this platform, as build/release-assets.py names it.
   release_dir="${work}/release"
   mkdir -p "${release_dir}"
+  cli_asset="hvo-roof-${rid}"
+  cp "${work}/cli/hvo-roof" "${release_dir}/${cli_asset}"
+  chmod 755 "${release_dir}/${cli_asset}"
+  cli_sha256=$(sha256sum "${release_dir}/${cli_asset}" | cut -d' ' -f1)
   jq -n --arg version "${version}" --arg commit "$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || echo unknown)" \
-    --arg registry "${registry}" --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" '
+    --arg registry "${registry}" --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" \
+    --arg cli "${cli_asset}" --arg rid "${rid}" --argjson size "$(stat -c %s "${release_dir}/${cli_asset}")" --arg sha "${cli_sha256}" '
     def image($name; $digest): { repository: "\($registry)/\($name)", tag: $version, digest: $digest,
       reference: "\($registry)/\($name):\($version)@\($digest)", platforms: ["linux/amd64", "linux/arm64"] };
     { schemaVersion: 1, product: "HVO Roof Controller", version: $version, tag: "v\($version)",
       prerelease: ($version | contains("-")), commit: $commit,
-      images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) } }' \
+      images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) },
+      assets: [{ name: $cli, kind: "cli", platform: $rid, size: $size, sha256: $sha }] }' \
     > "${release_dir}/release.json"
 
   password_file="${work}/admin-password"
@@ -550,16 +612,81 @@ scenario_cert() {
   openssl verify -CAfile "${work}/ca-before.crt" "${work}/served.crt" >/dev/null \
     || fail "the certificate the controller serves is not from the CA it had before the renewal"
   sign_in
-  roof_still
   collect_secrets
+  # hvo-roof trusts the CA, not the certificate: it signs in and reads the status from the renewed controller.
+  cli_signs_in
+  roof_still
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
-  no_secret_in "${work}/cert.txt" "${work}/install-log.txt"
-  pass "a new certificate from the same CA, which is unchanged, served by the redeployed controller; relay register 0 in ${ROOF_SAMPLES} samples"
+  no_secret_in "${work}/cert.txt" "${work}/install-log.txt" "${work}/cli-login.txt" "${work}/cli-status.txt"
+  pass "a new certificate from the same CA, which is unchanged, served by the redeployed controller, and hvo-roof signs in to it trusting the CA; relay register 0 in ${ROOF_SAMPLES} samples"
+}
+
+scenario_cli() {
+  person_home="${work}/home"
+  mkdir -p "${person_home}"
+  person_cli="${person_home}/.local/bin/hvo-roof"
+  local fingerprint wrong credentials="${person_home}/.config/hvo-roof/credentials.json"
+  fingerprint=$(openssl x509 -in "${ca}" -noout -fingerprint -sha256 | cut -d= -f2)
+  [[ "${fingerprint}" =~ ^([0-9A-F]{2}:){31}[0-9A-F]{2}$ ]] || fail "could not read the fingerprint of ${ca}"
+  wrong="00${fingerprint:2}"
+  [[ "${wrong}" != "${fingerprint}" ]] || wrong="11${fingerprint:2}"
+  cli_answers "${work}/cli.json" "${fingerprint}"
+  cli_answers "${work}/cli-wrong.json" "${wrong}"
+  start_relay_monitor
+
+  current_check="cli: a wrong fingerprint"
+  person_install cli-wrong --answers "${work}/cli-wrong.json" --release "${release_dir}"
+  (( INSTALL_STATUS == 3 )) || fail "hvo-roof-install with a wrong fingerprint exited ${INSTALL_STATUS}, not 3 (refused)"
+  expect_output cli-wrong "is not the one whose fingerprint was given"
+  [[ ! -e "${person_cli}" && ! -e "${credentials}" ]] || fail "the refused install left hvo-roof or its connection"
+  pass "refused (exit 3): the CA the rig serves is not the one whose fingerprint was given; nothing installed"
+
+  current_check="cli: the plan"
+  person_install cli-plan --plan --answers "${work}/cli.json" --release "${release_dir}"
+  expect_installed "--plan (hvo-roof)"
+  expect_output cli-plan "trusting its CA (${fingerprint:0:11}…)"
+  [[ ! -e "${person_cli}" && ! -e "${credentials}" ]] || fail "--plan installed hvo-roof or its connection"
+  pass "planned $(grep -oE '^[0-9]+ to create' "${work}/cli-plan.txt") as the person, not root, and changed nothing"
+
+  current_check="cli: installed"
+  person_install cli-install --answers "${work}/cli.json" --release "${release_dir}"
+  expect_installed "--answers (hvo-roof)"
+  [[ "$(stat -c '%a %U' "${person_cli}")" == "755 $(id -un)" ]] || fail "${person_cli} is $(stat -c '%a %U' "${person_cli}"), not 755 $(id -un)"
+  [[ "$(sha256sum "${person_cli}" | cut -d' ' -f1)" == "${cli_sha256}" ]] || fail "${person_cli} is not the release's ${cli_asset}"
+  [[ "$(stat -c '%a %U' "${credentials}")" == "600 $(id -un)" ]] || fail "${credentials} is $(stat -c '%a %U' "${credentials}"), not 600 $(id -un)"
+  jq -e --arg controller "${roof}" '(.controller | rtrimstr("/")) == $controller and .session == null and .apiKey == null' "${credentials}" >/dev/null \
+    || fail "hvo-roof's connection is not the rig's alone: $(jq -c '{controller, signedIn: (.session != null), key: (.apiKey != null)}' "${credentials}")"
+  jq -r '.caCertificate' "${credentials}" | openssl x509 -noout -fingerprint -sha256 | grep -qF "=${fingerprint}" \
+    || fail "hvo-roof's connection does not hold the rig's CA"
+  jq -e '.roles == ["cli"]' "${person_home}/.config/hvo-roof/install.json" >/dev/null || fail "the person's install record does not say hvo-roof"
+  pass "the release's ${cli_asset} in ~/.local/bin (755), and its connection to ${roof} with the rig's CA (600), all the person's"
+
+  current_check="cli: signed in"
+  cli_signs_in
+  hvo_roof cli-whoami --json whoami
+  jq -e --arg name "${admin}" '.caller.name == $name and .caller.role == "RoofAdmin"' "${work}/cli-whoami.txt" >/dev/null \
+    || fail "hvo-roof whoami does not say ${admin}, an admin: $(jq -c '.caller | {name, role}' "${work}/cli-whoami.txt")"
+  pass "hvo-roof login ${admin} with the password on standard input, then status over HTTPS trusting the rig's CA: hatMode Emulated"
+
+  current_check="cli: again"
+  person_install cli-again --answers "${work}/cli.json" --release "${release_dir}"
+  expect_installed "--answers (hvo-roof, again)"
+  expect_output cli-again "Nothing to change"
+  jq -e '.session.token | length > 0' "${credentials}" >/dev/null || fail "the second run removed hvo-roof's session"
+  pass "nothing to change, and the session hvo-roof login saved is kept"
+
+  current_check="cli: no secret shown"
+  cat "${person_home}/.local/state/hvo-roof/install.log" > "${work}/cli-log.txt" || fail "the person's install log is missing"
+  no_secret_in "${work}/cli-wrong.txt" "${work}/cli-plan.txt" "${work}/cli-install.txt" "${work}/cli-login.txt" \
+    "${work}/cli-status.txt" "${work}/cli-whoami.txt" "${work}/cli-again.txt" "${work}/cli-log.txt" "${person_home}/.config/hvo-roof/install.json"
+  roof_still
+  pass "no secret (the password, the keys, the session) in the output, the log or the record; relay register 0 in ${ROOF_SAMPLES} samples"
 }
 
 setup
 scenario_install
 scenario_again
+scenario_cli
 scenario_change
 scenario_cert
 current_check="done"

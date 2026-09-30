@@ -103,4 +103,12 @@ public static class InstallRoles
     /// <summary>True when <paramref name="roles"/> run the controller's container (the controller, or a rig).</summary>
     public static bool RunsController(IEnumerable<InstallRole> roles)
         => roles.Any(role => role is InstallRole.Controller or InstallRole.Rig);
+
+    /// <summary>True when <paramref name="roles"/> set up a client of a controller elsewhere: hvo-roof, or the Mac app.</summary>
+    public static bool UsesController(IEnumerable<InstallRole> roles)
+        => roles.Any(role => role is InstallRole.Cli or InstallRole.MacApp);
+
+    /// <summary>The text with its first letter in upper case; hvo-roof, a command's name, keeps its case.</summary>
+    public static string Capitalise(string text)
+        => text.Length == 0 || text.StartsWith("hvo-roof", StringComparison.Ordinal) ? text : char.ToUpperInvariant(text[0]) + text[1..];
 }

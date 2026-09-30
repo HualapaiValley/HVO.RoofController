@@ -72,6 +72,7 @@ internal sealed class InstallerWizard : IDisposable
             new RolesPage(this),
             new SettingsPage(this),
             new ControllerPage(this),
+            new ClientPage(this),
             new ReviewPage(this),
             new PasswordsPage(this),
             new InstallingPage(this),

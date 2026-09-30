@@ -175,7 +175,7 @@ public sealed class InstallerWizardTests
         wizard.NextTo(2);
         wizard.Session.Answers.RigConfirmation.Should().Be("roofpi");
 
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         var review = (ReviewPage)wizard.Page;
         review.SavePath.SetFocus();
         wizard.Press(Key.Enter);
@@ -214,7 +214,7 @@ public sealed class InstallerWizardTests
 
         settings.HttpsPort.Text = "9443";
         wizard.Wizard.Message.Should().BeEmpty("the port it was about has changed");
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.Controller.Should().Be(new ControllerSettings { HttpsPort = 9443 });
     }
 
@@ -249,7 +249,7 @@ public sealed class InstallerWizardTests
         // Names as a person types them: commas or spaces, any case, each once.
         settings.HostNames.Text = "Roof, roof dome";
         settings.Domains.Text = "Observatory.Example.";
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.Controller!.HostNames.Should().Equal("roof", "dome");
         wizard.Session.Answers.Controller.Domains.Should().Equal("observatory.example");
 
@@ -275,7 +275,7 @@ public sealed class InstallerWizardTests
         settings.Domains!.Text.Should().BeEmpty("each domain listed lets the CA sign for any name in it, so none is listed unasked");
         wizard.Screen.Should().Contain("This machine is in").And.Contain("observatory.example: add a domain only if clients use names in it.");
 
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.Controller!.Domains.Should().BeEmpty();
     }
 
@@ -310,7 +310,7 @@ public sealed class InstallerWizardTests
 
         settings.HttpConfirmation.Text = "http";
         wizard.Render(TestContext, "3-settings-http");
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.Controller!.Connection.Should().Be(ConnectionMode.Http);
         wizard.Session.Answers.HttpConfirmation.Should().Be("http");
 
@@ -321,7 +321,7 @@ public sealed class InstallerWizardTests
         settings.Connection.Value = Array.IndexOf(Enum.GetValues<ConnectionMode>(), ConnectionMode.PrivateCa);
         wizard.Pump();
         settings.HttpConfirmation.Visible.Should().BeFalse();
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.HttpConfirmation.Should().BeNull();
     }
 
@@ -357,7 +357,7 @@ public sealed class InstallerWizardTests
 
         settings.HideCursor.Value = CheckState.UnChecked;
         settings.Pins.Text = "olga, Ben olga";
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.Kiosk.Should().Be(new KioskSettings { HideCursor = false, Pins = ["olga", "Ben"] });
         wizard.Session.Answers.Kiosk!.Pins.Should().Equal("olga", "Ben");
 
@@ -421,7 +421,7 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         var review = (ReviewPage)wizard.Page;
         pi.Snapshot().Should().Equal(before, "nothing is changed before Install");
 
@@ -450,7 +450,7 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(4);
+        wizard.NextTo(5);
 
         var review = (ReviewPage)wizard.Page;
         review.Plan!.IsBlocked.Should().BeTrue();
@@ -476,7 +476,7 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi, log);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(4);
+        wizard.NextTo(5);
 
         // Install, with what it does on its way: it comes back when the loop runs.
         wizard.PressOnly(Key.Enter);
@@ -525,32 +525,6 @@ public sealed class InstallerWizardTests
 
         wizard.Press(Key.Enter);
         wizard.Closed.Should().BeTrue();
-    }
-
-    [TestMethod]
-    public async Task AnInstallTheInstallerCannotDoYet_IsRefused_AndChangesNothing()
-    {
-        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
-        var path = InstallPaths.Log(laptop.Machine);
-        laptop.Folder(Path.GetDirectoryName(path)!);
-        var log = InstallLog.Open(laptop.Machine, path, TimeProvider.System);
-        using var wizard = await WizardDriver.StartAsync(laptop, log);
-        wizard.NextTo(1);
-        ((RolesPage)wizard.Page).Choices[InstallRole.Cli].Value = CheckState.Checked;
-        ((RolesPage)wizard.Page).Chosen.Should().Equal(InstallRole.Cli);
-        wizard.NextTo(4);
-        var before = laptop.Snapshot(path);
-
-        wizard.Press(Key.Enter);
-        wizard.WaitIdle("the install", () => wizard.Page is DonePage);
-
-        wizard.Wizard.Result.Should().Be(InstallerExitCode.Refused);
-        wizard.Wizard.Failure.Should().StartWith("This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed.");
-        wizard.Page.Describe().Should().Equal(wizard.Wizard.Failure, "Nothing was changed.", $"The log: {path}");
-        ShouldHaveColours(wizard.ColoursOf("This installer cannot install"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
-        laptop.Snapshot(path).Should().Equal(before);
-        laptop.Read(path).Should().Contain("Refused: This installer cannot install /home/roy/.local/bin/hvo-roof yet");
-        wizard.Render(TestContext, "8-refused");
     }
 
     [TestMethod]

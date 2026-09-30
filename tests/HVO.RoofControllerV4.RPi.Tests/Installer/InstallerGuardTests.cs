@@ -100,9 +100,22 @@ public sealed class InstallerGuardTests
         using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
         using var rootMac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: true, hostName: "studio");
 
+        RoleGuards.Check(await MachineSurveyor.SurveyAsync(mac.Machine), Rig).Should().BeEmpty("a rig on a Mac runs in the person's Docker Desktop");
         RoleGuards.Check(await MachineSurveyor.SurveyAsync(mac.Machine), new InstallAnswers { Roles = [InstallRole.Rig, InstallRole.Cli, InstallRole.MacApp] })
-            .Should().BeEmpty("a rig on a Mac runs in the person's Docker Desktop, with the person's hvo-roof and Mac app");
+            .Should().Equal("hvo-roof and the Mac app are set up against a running controller: install the rig first, then run the installer again for them.");
         RoleGuards.Check(await MachineSurveyor.SurveyAsync(rootMac.Machine), Rig).Should().ContainSingle().Which.Should().Contain("without sudo");
+    }
+
+    [TestMethod]
+    public async Task TheKeychain_IsAMacs_AndRefusedOnLinux()
+    {
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
+        using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
+        var answers = new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers with { TrustInKeychain = true } };
+
+        RoleGuards.Check(await MachineSurveyor.SurveyAsync(laptop.Machine), answers).Should()
+            .Equal("The controller's CA is trusted in the keychain on a Mac only: docs/install.md says how to add it to a browser on Linux.");
+        RoleGuards.Check(await MachineSurveyor.SurveyAsync(mac.Machine), answers).Should().BeEmpty();
     }
 
     [TestMethod]

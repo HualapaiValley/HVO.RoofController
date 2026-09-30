@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using HVO.RoofControllerV4.Client;
 
 namespace HVO.RoofControllerV4.Installer.Machine;
 
@@ -66,6 +67,7 @@ public sealed class InstallerMachine
         ServedCertificateAsync = ServedCertificateAsync,
         DownloadTextAsync = DownloadTextAsync,
         DownloadToAsync = DownloadToAsync,
+        FetchCaAsync = FetchCaAsync,
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory
     };
@@ -97,6 +99,14 @@ public sealed class InstallerMachine
     /// followed.
     /// </summary>
     public Func<Uri, Stream, long, CancellationToken, Task> DownloadToAsync { get; init; } = DownloadStreamAsync;
+
+    /// <summary>
+    /// The CA a controller serves at <c>GET /ca.crt</c>, checked against the certificate it presents (see
+    /// <see cref="RoofCertificateAuthority.FetchAsync"/>): what hvo-roof and the Mac app trust once its fingerprint is the
+    /// one the person gave.
+    /// </summary>
+    public Func<Uri, CancellationToken, Task<X509Certificate2>> FetchCaAsync { get; init; }
+        = (controller, cancellationToken) => RoofCertificateAuthority.FetchAsync(controller, TimeSpan.FromSeconds(15), cancellationToken);
 
     /// <summary>
     /// The innermost handler for the controller's API, or null for the client's own. A test puts a fake controller
@@ -383,6 +393,12 @@ public sealed class InstallerMachine
     /// <summary>Renames <paramref name="source"/> over <paramref name="destination"/>, in one step.</summary>
     public void MoveFile(string source, string destination) => File.Move(OnDisk(source), OnDisk(destination), overwrite: true);
 
+    /// <summary>Renames the folder <paramref name="source"/> to <paramref name="destination"/>, which must not be there.</summary>
+    public void MoveDirectory(string source, string destination) => Directory.Move(OnDisk(source), OnDisk(destination));
+
+    /// <summary>True when the installer may make files in the folder (or change the file): the system says it may write there.</summary>
+    public bool IsWritable(string path) => access(OnDisk(path), WriteAccess) == 0;
+
     /// <summary>Deletes the file; nothing when it is not there.</summary>
     public void DeleteFile(string path) => File.Delete(OnDisk(path));
 
@@ -538,6 +554,12 @@ public sealed class InstallerMachine
 
     [DllImport("libc", SetLastError = false)]
     private static extern uint geteuid();
+
+    // W_OK, the same on Linux and macOS.
+    private const int WriteAccess = 2;
+
+    [DllImport("libc", SetLastError = false, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int access(string path, int mode);
 }
 
 /// <summary>An address of the machine, and the network interface it is on (eth0, wlan0, docker0).</summary>

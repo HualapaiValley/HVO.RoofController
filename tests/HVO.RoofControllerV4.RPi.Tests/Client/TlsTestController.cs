@@ -19,7 +19,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Client;
 /// <summary>
 /// Only what the TLS tests need from a controller, over real HTTPS on a loopback port: liveness, who am I, Stop, and a status hub
 /// that offers WebSockets only, so a connected feed proves the certificate check reached the WebSocket as well as the
-/// negotiate request. <see cref="Present"/> changes the certificate for the connections that follow.
+/// negotiate request. <see cref="Present"/> changes the certificate for the connections that follow, and
+/// <see cref="ServedAuthority"/> is the CA it serves at <c>GET /ca.crt</c>.
 /// </summary>
 internal sealed class TlsTestController : IAsyncDisposable
 {
@@ -49,6 +50,15 @@ internal sealed class TlsTestController : IAsyncDisposable
     /// <summary>The thumbprint of the certificate each TLS handshake presented.</summary>
     public ConcurrentQueue<string> Presented { get; } = new();
 
+    /// <summary>The CA <c>GET /ca.crt</c> serves as PEM, as the controller does; null answers 404.</summary>
+    public X509Certificate2? ServedAuthority { get; set; }
+
+    /// <summary>What <c>GET /ca.crt</c> serves instead of <see cref="ServedAuthority"/>, when set.</summary>
+    public string? ServedCaText { get; set; }
+
+    /// <summary>For each <c>GET /ca.crt</c>, whether it carried a credential (an API key or a bearer token).</summary>
+    public ConcurrentQueue<bool> CaRequestCredentials { get; } = new();
+
     /// <summary>
     /// Starts on a free loopback port with <paramref name="certificate"/>, sending <paramref name="intermediates"/> with
     /// it.
@@ -73,6 +83,14 @@ internal sealed class TlsTestController : IAsyncDisposable
 
         var app = builder.Build();
         app.MapGet(RoofApiRoutes.HealthLive, () => Results.Text("Healthy"));
+        app.MapGet("ca.crt", (HttpRequest request) =>
+        {
+            controller!.CaRequestCredentials.Enqueue(
+                request.Headers.ContainsKey(RoofControllerApiContract.ApiKeyHeaderName) || request.Headers.ContainsKey("Authorization"));
+            return controller.ServedCaText is { } text ? Results.Text(text, "application/x-x509-ca-cert")
+                : controller.ServedAuthority is { } authority ? Results.Text(authority.ExportCertificatePem() + "\n", "application/x-x509-ca-cert")
+                : Results.NotFound();
+        });
         app.MapGet("api/v4.0/Auth/Me", () => Results.Json(
             new RoofCallerResponse(CallerName, RoofControllerApiContract.ViewerRole, RoofCredentialKind.ApiKey, null, null, null, false),
             RoofClientJson.Options));

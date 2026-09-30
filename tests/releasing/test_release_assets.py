@@ -163,7 +163,7 @@ class TheAssets(ReleaseTestCase):
             self.assertEqual((asset["kind"], asset["platform"]), self.EXPECTED[asset["name"]], asset["name"])
             self.assertEqual(asset["size"], path.stat().st_size, asset["name"])
             self.assertEqual(asset["sha256"], sha256(path), asset["name"])
-            self.assertEqual("files" in asset, asset["kind"] == "kiosk", asset["name"])
+            self.assertEqual("files" in asset, asset["kind"] in ("kiosk", "mac-app"), asset["name"])
 
     def test_release_json_lists_the_sha256_of_each_file_in_the_kiosk_s_tarball(self):
         kiosk = next(asset for asset in self.manifest["assets"] if asset["kind"] == "kiosk")
@@ -189,6 +189,11 @@ class TheAssets(ReleaseTestCase):
 
     def test_the_mac_app_is_ci_s_zip_renamed(self):
         self.assertEqual((self.out / "HVO-Roof-4.0.0.zip").read_bytes(), self.release.mac.read_bytes())
+
+    def test_the_mac_app_lists_its_program_s_hash(self):
+        mac = next(asset for asset in self.manifest["assets"] if asset["kind"] == "mac-app")
+        self.assertEqual(mac["files"], {
+            "hvo-roof-mac": hashlib.sha256(mach_o_arm64()).hexdigest()})
 
     def test_the_compose_file_pins_both_images(self):
         images = set(re.findall(r"^\s*image: (\S+)$", (self.out / "docker-compose.yaml").read_text(), re.MULTILINE))

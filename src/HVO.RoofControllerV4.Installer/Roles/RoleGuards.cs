@@ -108,6 +108,18 @@ public static class RoleGuards
             problems.Add("The controller and a test rig cannot share a machine: both run as the roof-controller container.");
         }
 
+        var clients = roles.Where(role => role is InstallRole.Cli or InstallRole.MacApp).ToArray();
+        if (roles.Contains(InstallRole.Rig) && clients.Length > 0 && survey.Os == InstallerOs.MacOS)
+        {
+            // Their trust is in the rig's CA, which is made in the same run, before anyone can compare its fingerprint.
+            problems.Add($"{Capitalise(InstallRoles.Describe(clients))} {Are(clients)} set up against a running controller: install the rig first, then run the installer again for {(clients.Length == 1 ? "it" : "them")}.");
+        }
+
+        if (answers.Client is { TrustInKeychain: true } && survey.Os != InstallerOs.MacOS)
+        {
+            problems.Add("The controller's CA is trusted in the keychain on a Mac only: docs/install.md says how to add it to a browser on Linux.");
+        }
+
         var system = roles.Where(role => InstallRoles.ScopeOf(role, survey.Os) == InstallScope.System).ToArray();
         var user = roles.Where(role => InstallRoles.ScopeOf(role, survey.Os) == InstallScope.User).ToArray();
         if (system.Length > 0 && user.Length > 0)
@@ -221,7 +233,5 @@ public static class RoleGuards
 
     private static string Are(IReadOnlyCollection<InstallRole> roles) => roles.Count == 1 ? "is" : "are";
 
-    // hvo-roof is a command's name, and keeps its case at the start of a sentence.
-    private static string Capitalise(string text)
-        => text.Length == 0 || text.StartsWith("hvo-roof", StringComparison.Ordinal) ? text : char.ToUpperInvariant(text[0]) + text[1..];
+    private static string Capitalise(string text) => InstallRoles.Capitalise(text);
 }

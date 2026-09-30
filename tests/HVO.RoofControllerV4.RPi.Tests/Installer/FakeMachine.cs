@@ -79,7 +79,7 @@ internal sealed record FakePinRequest(string Name, string Role, string Pin, stri
 /// installer only reads with commands in this issue, so a test can prove it ran nothing else.
 /// </summary>
 [UnsupportedOSPlatform("windows")]
-internal sealed class FakeMachine : ICommandRunner, IDisposable
+internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 {
     /// <summary>The digest of the controller's image in the fake release.</summary>
     public static readonly string ControllerDigest = "sha256:" + new string('c', 64);
@@ -108,6 +108,10 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         CurrentDirectory = Home;
         Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = ReleaseJson();
         FileDownloads[ReleaseManifest.DownloadUri("4.0.0", KioskAssetName("4.0.0")).ToString()] = KioskTarball("4.0.0");
+        foreach (var (name, content) in ClientAssets("4.0.0"))
+        {
+            FileDownloads[ReleaseManifest.DownloadUri("4.0.0", name).ToString()] = content;
+        }
         foreach (var program in new[] { "bash", "curl", "setsid", "jq" })
         {
             Programs[program] = $"/usr/bin/{program}";
@@ -305,6 +309,12 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
             await stream.WriteAsync(content, cancellationToken).ConfigureAwait(false);
         },
+        FetchCaAsync = (controller, cancellationToken) =>
+        {
+            CaFetches.Enqueue(controller);
+            return FetchCa(controller, cancellationToken);
+        },
+        ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory
     };
 
@@ -373,8 +383,8 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
                 controller = Image("roof-controller", controllerDigest ?? ControllerDigest),
                 hatEmulator = Image("roof-hat-emulator", emulatorDigest ?? EmulatorDigest)
             },
-            assets = new object[]
-            {
+            assets = ((object[])
+            [
                 new
                 {
                     name = KioskAssetName(version),
@@ -383,8 +393,9 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
                     size = KioskTarball(version).LongLength,
                     sha256 = Convert.ToHexStringLower(SHA256.HashData(KioskTarball(version))),
                     files = new Dictionary<string, string> { ["hvo-roof-kiosk"] = Convert.ToHexStringLower(SHA256.HashData(KioskProgram(version))) }
-                }
-            }
+                },
+                .. ClientAssetEntries(version)
+            ])
         });
     }
 
@@ -739,7 +750,7 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             "chown" when arguments is [var owner, "--", var path] => Chown(owner, path),
             "sw_vers" when arguments is ["-productVersion"] && Os == InstallerOs.MacOS => Answer("15.6.1"),
             _ when Programs.GetValueOrDefault("hvo-roof") == command.Program && arguments is ["--version"] => Answer("4.0.0+0123456789abcdef"),
-            _ => null
+            _ => ClientCommand(command)
         };
 
         if (result is null)

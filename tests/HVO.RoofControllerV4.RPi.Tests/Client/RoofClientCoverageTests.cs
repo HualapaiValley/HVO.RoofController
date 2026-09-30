@@ -28,7 +28,7 @@ public sealed class RoofClientCoverageTests
         ["GET /scalar/favicon.svg"] = ApiDocs,
         ["GET /scalar/scalar.aspnetcore.js"] = ApiDocs,
         ["GET /scalar/scalar.js"] = ApiDocs,
-        ["GET /ca.crt"] = "the CA a client fetches before it trusts the controller, with no key or session; hvo-roof's setup reads it (#71)"
+        ["GET /ca.crt"] = "fetched by RoofCertificateAuthority.FetchAsync over a connection of its own, which trusts nothing yet and sends no key or session (RoofCertificateAuthorityTests)"
     };
 
     private const string ApiDocs = "the API description and its viewer, read by people and tools, not by clients";

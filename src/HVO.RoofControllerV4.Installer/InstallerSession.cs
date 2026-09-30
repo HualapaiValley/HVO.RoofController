@@ -241,7 +241,8 @@ public sealed class InstallerSession
         {
             var folder = InstallPaths.Expand(Machine, cli.Folder);
             lines.Add(string.Empty);
-            lines.Add($"hvo-roof: {Path.Join(folder, "hvo-roof")}. Next, connect it to the controller: hvo-roof setup");
+            lines.Add($"hvo-roof: {Path.Join(folder, ClientSteps.CliProgramName)}, connected to {answers.Client?.Controller} ({ClientSteps.CredentialsFile(Machine)}).");
+            lines.Add("Next, sign in as yourself: hvo-roof login NAME");
             if (!(Machine.Environment("PATH") ?? string.Empty).Split(':').Contains(folder))
             {
                 lines.Add($"{folder} is not on your PATH: add it (export PATH=\"{folder}:$PATH\" in your shell's profile), or run hvo-roof by its full path.");
@@ -251,7 +252,15 @@ public sealed class InstallerSession
         if (answers.MacApp is { } macApp)
         {
             lines.Add(string.Empty);
-            lines.Add($"The Mac app: {Path.Join(InstallPaths.Expand(Machine, macApp.Folder), MachineSurveyor.MacAppBundle)}. Open it and sign in.");
+            lines.Add($"The Mac app: {Path.Join(InstallPaths.Expand(Machine, macApp.Folder), MachineSurveyor.MacAppBundle)}, connected to {answers.Client?.Controller}.");
+            lines.Add($"It shows the roof with its own device key (a viewer's, {MacDeviceKeyStep.KeyName(Machine)}); sign in there with your name and password to open or close it.");
+            lines.Add($"Its settings and key: {ClientSteps.MacSettingsFolder(Machine)}");
+        }
+
+        if (answers.Client is { CaSha256: not null } client && (answers.Roles.Contains(InstallRole.Cli) || answers.Roles.Contains(InstallRole.MacApp)))
+        {
+            lines.Add(string.Empty);
+            lines.AddRange(BrowserLines(answers, client));
         }
 
         lines.Add(string.Empty);
@@ -266,6 +275,31 @@ public sealed class InstallerSession
         }
 
         return lines;
+    }
+
+    // How a browser here comes to trust the controller's CA: the keychain (Safari and Chrome on a Mac), and Firefox's own
+    // list. The CA is the Mac app's copy when there is one, else the controller's own.
+    private IEnumerable<string> BrowserLines(InstallAnswers answers, ClientSettings client)
+    {
+        var ca = answers.Roles.Contains(InstallRole.MacApp)
+            ? Path.Join(ClientSteps.MacSettingsFolder(Machine), ClientSteps.MacCaFile)
+            : $"{client.Controller.TrimEnd('/')}/ca.crt";
+        if (Machine.Os != InstallerOs.MacOS)
+        {
+            yield return $"For the web UI in your browser, trust the controller's CA ({ca}): install.md, \"Trusting the controller in a browser\".";
+        }
+        else if (client.TrustInKeychain)
+        {
+            yield return "Safari and Chrome trust the controller's CA: it is in your login keychain.";
+        }
+        else
+        {
+            yield return $"For the web UI in Safari and Chrome, trust the controller's CA ({ca}) in your login keychain: "
+                + "run the installer again and choose the keychain, or see install.md, \"Trusting the controller in a browser\".";
+        }
+
+        yield return $"Firefox may use its own list: if it warns, import the CA ({ca}) in Settings → Privacy & Security → View Certificates → Authorities, "
+            + "and tick 'Trust this CA to identify websites'.";
     }
 
     // What clients trust, and the fingerprint a person checks when one asks: the CA's, or the self-signed certificate's.

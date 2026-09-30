@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Serialization;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Installer.Answers;
@@ -258,13 +259,14 @@ public static class WebAddress
     /// <summary>
     /// Why <paramref name="address"/> is not an absolute http or https address the installer may record, ending a
     /// sentence that starts with what it is; null when it is one. It may not carry a user name or password, which would
-    /// be a secret in a file that is not one, nor a query or fragment.
+    /// be a secret in a file that is not one, nor a query or fragment. <paramref name="example"/> is the address the
+    /// sentence gives as an example.
     /// </summary>
-    public static string? Problem(string? address, bool allowPath)
+    public static string? Problem(string? address, bool allowPath, string example = "http://192.168.0.4:81")
     {
         if (!Uri.TryCreate(address?.Trim(), UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) || uri.Host.Length == 0)
         {
-            return "must be an absolute http or https address (http://192.168.0.4:81).";
+            return $"must be an absolute http or https address ({example}).";
         }
 
         if (uri.UserInfo.Length > 0)
@@ -323,7 +325,7 @@ public sealed record CliSettings
     public static IReadOnlyList<string> Folders { get; } = [HomeFolder, SharedFolder];
 }
 
-/// <summary>Where the Mac app goes.</summary>
+/// <summary>Where the Mac app goes, and who makes its device key.</summary>
 public sealed record MacAppSettings
 {
     public const string SharedFolder = "/Applications";
@@ -331,7 +333,112 @@ public sealed record MacAppSettings
 
     public string Folder { get; init; } = SharedFolder;
 
+    /// <summary>
+    /// An admin on the controller, by the name they sign in with: they sign in once, with a password typed or given in a
+    /// file, so the installer can add the Mac's device key (a viewer's). Their session ends as soon as the key is made.
+    /// </summary>
+    public string Admin { get; init; } = string.Empty;
+
     public static IReadOnlyList<string> Folders { get; } = [SharedFolder, HomeFolder];
+
+    public IEnumerable<string> Problems()
+    {
+        if (!Folders.Contains(Folder))
+        {
+            yield return $"The Mac app's folder must be {string.Join(" or ", Folders)}, not '{Folder}'.";
+        }
+
+        if (Admin.Length > 0 && !RoofIdentityContract.IsValidName(Admin))
+        {
+            yield return $"'{Admin}' is not a name the controller takes: give the admin who makes the Mac's device key by the name they sign in with.";
+        }
+    }
+
+    public MacAppSettings Normalised() => this with { Admin = Admin.Trim() };
+}
+
+/// <summary>
+/// The controller hvo-roof and the Mac app on this machine use, and how they trust its certificate: by its CA (a private
+/// CA, fetched from the controller and saved only when its fingerprint is the one given here), by a pin on its own
+/// certificate (a self-signed one), or as the machine trusts any website (a certificate of your own, or plain HTTP).
+/// </summary>
+public sealed record ClientSettings
+{
+    /// <summary>The controller's address, as clients reach it: https://roof.local:8443.</summary>
+    public string Controller { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The SHA-256 fingerprint of the controller's CA, as the controller's installer showed it on its Done page and
+    /// <c>hvo-roof-install cert show</c> shows it: the CA the controller serves is trusted only when it matches.
+    /// </summary>
+    public string? CaSha256 { get; init; }
+
+    /// <summary>The SHA-256 fingerprint of the controller's self-signed certificate, which each connection is pinned to.</summary>
+    public string? CertificateSha256 { get; init; }
+
+    /// <summary>
+    /// On a Mac, true to trust the CA in the login keychain too, so Safari and Chrome open the web UI without a warning.
+    /// Firefox keeps its own list: the installer says how to add the CA to it.
+    /// </summary>
+    public bool TrustInKeychain { get; init; }
+
+    /// <summary>The controller's address, when it is one.</summary>
+    [JsonIgnore]
+    public Uri? Address => WebAddress.Problem(Controller, allowPath: false) is null ? new Uri(Controller.Trim()) : null;
+
+    public IEnumerable<string> Problems()
+    {
+        if (WebAddress.Problem(Controller, allowPath: false, "https://roof.local:8443") is { } problem)
+        {
+            yield return $"The controller's address {problem}";
+        }
+
+        foreach (var (name, value) in new[] { ("CA's", CaSha256), ("certificate's", CertificateSha256) })
+        {
+            if (value is not null && Colons(value) is null)
+            {
+                yield return $"The controller's {name} fingerprint must be 64 hex digits (colons between pairs allowed), not '{value}'.";
+            }
+        }
+
+        if (CaSha256 is not null && CertificateSha256 is not null)
+        {
+            yield return "Give the controller's CA's fingerprint or its certificate's, not both: a private CA's, or a self-signed certificate's.";
+        }
+
+        if (Address is { } address && address.Scheme == Uri.UriSchemeHttp && (CaSha256 is not null || CertificateSha256 is not null))
+        {
+            yield return "A controller reached over plain HTTP has no certificate to trust: give its https address, or no fingerprint.";
+        }
+
+        if (TrustInKeychain && CaSha256 is null)
+        {
+            yield return "Only the controller's CA can be trusted in the keychain: give its fingerprint too.";
+        }
+    }
+
+    /// <summary>These choices with the address trimmed, and each fingerprint as colon-separated upper-case pairs.</summary>
+    public ClientSettings Normalised() => this with
+    {
+        Controller = Controller.Trim(),
+        CaSha256 = string.IsNullOrWhiteSpace(CaSha256) ? null : Colons(CaSha256) ?? CaSha256.Trim(),
+        CertificateSha256 = string.IsNullOrWhiteSpace(CertificateSha256) ? null : Colons(CertificateSha256) ?? CertificateSha256.Trim()
+    };
+
+    /// <summary>
+    /// A SHA-256 fingerprint as colon-separated upper-case pairs (as <c>hvo-roof-install cert show</c> gives it), from 64
+    /// hex digits in either case with colons, spaces or dashes between them; null when it is not one.
+    /// </summary>
+    public static string? Colons(string? text)
+    {
+        if (!RoofCertificatePin.IsValid(text?.Trim()))
+        {
+            return null;
+        }
+
+        var hex = new string(text!.Where(char.IsAsciiHexDigit).ToArray()).ToUpperInvariant();
+        return string.Join(':', hex.Chunk(2).Select(pair => new string(pair)));
+    }
 }
 
 /// <summary>The kiosk's choices: the touchscreen on the controller's own Pi.</summary>

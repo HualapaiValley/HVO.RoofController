@@ -11,9 +11,10 @@ using HVO.RoofControllerV4.RPi.Tests.Security;
 namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
 /// <summary>
-/// <c>hvo-roof</c> trusting a private CA instead of pinning the certificate (#65): <c>setup --ca-certificate</c> and
-/// <c>HVO_ROOF_CA_CERT</c>, over real HTTPS to a controller whose certificate a CA made here issued. The pin and the CA
-/// are never both in force, and every refusal says why.
+/// <c>hvo-roof</c> trusting a private CA instead of pinning the certificate (#65): <c>setup --ca-certificate</c>,
+/// <c>setup --ca-sha256</c> (#71), which fetches the CA from the controller, and <c>HVO_ROOF_CA_CERT</c>, over real HTTPS to
+/// a controller whose certificate a CA made here issued. The pin and the CA are never both in force, a fetched CA is
+/// saved only when its SHA-256 is the one given or confirmed, and every refusal says why.
 /// </summary>
 [TestClass]
 public sealed class RoofCliCaCertificateTests
@@ -67,7 +68,7 @@ public sealed class RoofCliCaCertificateTests
         setup.Code.Should().Be(RoofExitCode.Unreachable, setup.ToString());
         setup.Out.Should().Contain(
             $"Not reachable: The controller's certificate was not issued by the CA this client trusts ({AuthorityName}). "
-            + "If the controller's CA was replaced on purpose, save the new one with --ca-certificate.");
+            + "If the controller's CA was replaced on purpose, save the new one with --ca-sha256 or --ca-certificate.");
         whoami.Code.Should().Be(RoofExitCode.Unreachable, whoami.ToString());
         whoami.Error.Should().Contain($"The controller's certificate was not issued by the CA this client trusts ({AuthorityName}).");
     }
@@ -85,7 +86,7 @@ public sealed class RoofCliCaCertificateTests
         setup.Code.Should().Be(RoofExitCode.Unreachable, setup.ToString());
         setup.Out.Should().Contain(
             "Not reachable: The controller's certificate is not the pinned one, and this computer does not trust it. "
-            + "If the controller's certificate was replaced on purpose, save its SHA-256 with --certificate-sha256, or the CA that issued it with --ca-certificate.");
+            + "If the controller's certificate was replaced on purpose, save its SHA-256 with --certificate-sha256, or the CA that issued it with --ca-sha256 or --ca-certificate.");
     }
 
     [TestMethod]
@@ -100,7 +101,7 @@ public sealed class RoofCliCaCertificateTests
 
         setup.Code.Should().Be(RoofExitCode.Unreachable, setup.ToString());
         setup.Out.Should().Contain(
-            "The certificate was not accepted: save the CA that issued it with --ca-certificate, or, for a self-signed certificate, its SHA-256 with --certificate-sha256.");
+            "The certificate was not accepted: save the CA that issued it with --ca-sha256 or --ca-certificate, or, for a self-signed certificate, its SHA-256 with --certificate-sha256.");
     }
 
     [TestMethod]
@@ -132,6 +133,150 @@ public sealed class RoofCliCaCertificateTests
         var whoami = await rig.RunAsync("whoami");
 
         whoami.Code.Should().Be(RoofExitCode.Success, whoami.ToString());
+    }
+
+    // ---- setup: fetching the CA (#71) ------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task Setup_WithTheCasSha256_FetchesTheCa_ReplacesAPin_AndConnects()
+    {
+        using var authority = TestCertificates.CreateAuthority(AuthorityName);
+        using var issued = TestCertificates.Issue(authority);
+        await using var controller = await TlsTestController.StartAsync(issued);
+        controller.ServedAuthority = authority;
+        using var rig = new CliRig((RoofApiTestHost?)null);
+        RoofCredentialStore.Save(rig.CredentialsPath, new RoofStoredCredentials { Controller = controller.BaseAddress, CertificateSha256 = Pin });
+        var sha = RoofCertificateAuthority.Fingerprint(authority).Replace(":", string.Empty).ToLowerInvariant();
+
+        var setup = await rig.RunAsync("setup", "--controller", controller.BaseAddress.ToString(), "--ca-sha256", sha);
+
+        setup.Code.Should().Be(RoofExitCode.Success, setup.ToString());
+        setup.Out.Should().Contain($"Fetched the CA {AuthorityName} from the controller: its SHA-256 is the one given.")
+            .And.Contain($"{controller.BaseAddress}, CA {AuthorityName} trusted.")
+            .And.Contain("The saved certificate pin was removed: the CA is trusted instead.")
+            .And.Contain("Reachable: the controller says it is healthy.");
+        rig.Stored!.CaCertificate.Should().Be(RoofCertificateAuthority.ToPem(authority));
+        rig.Stored.CertificateSha256.Should().BeNull();
+        controller.CaRequestCredentials.Should().Equal([false], "the CA is fetched with no credential");
+
+        using var reissued = TestCertificates.Issue(authority);
+        controller.Present(reissued);
+        (await rig.RunAsync("whoami")).Code.Should().Be(RoofExitCode.Success);
+    }
+
+    [TestMethod]
+    public async Task Setup_WithTheCasSha256_AsJson_GivesTheSha256()
+    {
+        using var authority = TestCertificates.CreateAuthority(AuthorityName);
+        using var issued = TestCertificates.Issue(authority);
+        await using var controller = await TlsTestController.StartAsync(issued);
+        controller.ServedAuthority = authority;
+        using var rig = new CliRig((RoofApiTestHost?)null);
+
+        var result = await rig.RunAsync(
+            "setup", "--json", "--controller", controller.BaseAddress.ToString(), "--ca-sha256", RoofCertificateAuthority.Fingerprint(authority));
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        using var json = JsonDocument.Parse(result.Out);
+        json.RootElement.GetProperty("caCertificate").GetString().Should().Be(AuthorityName);
+        json.RootElement.GetProperty("caCertificateSha256").GetString().Should().Be(RoofCertificateAuthority.Fingerprint(authority));
+    }
+
+    [TestMethod]
+    [DataRow("other", "The CA the controller serves (HVO Roof test CA, SHA-256 *) is not the one given, so it is not saved. Compare it with 'hvo-roof-install cert show' on the controller.", DisplayName = "another SHA-256")]
+    [DataRow("remade", "The CA the controller serves (HVO Roof test CA) did not issue the certificate it presents, so it is not saved.", DisplayName = "a CA that did not issue the certificate")]
+    [DataRow("none", "The controller serves no CA at *ca.crt: a private CA did not issue its certificate, *", DisplayName = "no CA")]
+    [DataRow("name", "The controller's certificate is not for 127.0.0.1; it names roof.example.", DisplayName = "a certificate for another name")]
+    public async Task Setup_WithTheCasSha256_SavesNothing_UnlessTheCaIsTheOneGiven_AndIssuedTheCertificate(string served, string message)
+    {
+        using var authority = TestCertificates.CreateAuthority(AuthorityName);
+        using var remade = TestCertificates.CreateAuthority(AuthorityName);
+        using var issued = TestCertificates.Issue(authority, served == "name" ? ["roof.example"] : null);
+        await using var controller = await TlsTestController.StartAsync(issued);
+        controller.ServedAuthority = served switch { "remade" => remade, "none" => null, _ => authority };
+        using var rig = new CliRig((RoofApiTestHost?)null);
+        var sha = served == "other" ? new string('0', 64) : RoofCertificateAuthority.Fingerprint(served == "remade" ? remade : authority);
+
+        var setup = await rig.RunAsync("setup", "--controller", controller.BaseAddress.ToString(), "--ca-sha256", sha);
+
+        setup.Code.Should().Be(RoofExitCode.Refused, setup.ToString());
+        setup.Error.Should().Match(message + Environment.NewLine);
+        File.Exists(rig.CredentialsPath).Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow("--ca-certificate", DisplayName = "with a CA file")]
+    [DataRow("--certificate-sha256", DisplayName = "with a pin")]
+    [DataRow("http", DisplayName = "over http")]
+    [DataRow("short", DisplayName = "not a SHA-256")]
+    public async Task Setup_WithTheCasSha256_IsAUsageError_WithAnotherTrustOrOverHttpOrMalformed(string kind)
+    {
+        using var rig = new CliRig((RoofApiTestHost?)null);
+        using var authority = TestCertificates.CreateAuthority(AuthorityName);
+        string[] arguments = kind switch
+        {
+            "--ca-certificate" => ["--controller", "https://127.0.0.1:9/", "--ca-sha256", Pin, "--ca-certificate", WriteCa(rig, authority)],
+            "--certificate-sha256" => ["--controller", "https://127.0.0.1:9/", "--ca-sha256", Pin, "--certificate-sha256", Pin],
+            "http" => ["--controller", Plain.ToString(), "--ca-sha256", Pin],
+            _ => ["--controller", "https://127.0.0.1:9/", "--ca-sha256", "AB:CD"]
+        };
+
+        var result = await rig.RunAsync(["setup", .. arguments]);
+
+        result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
+        result.Error.Should().Contain(kind switch
+        {
+            "http" => $"The CA is fetched over HTTPS, and {Plain} is not an https address.",
+            "short" => "The CA's SHA-256 must be 64 hex digits (colons allowed).",
+            _ => "--ca-sha256 fetches the CA to save, so give it without --ca-certificate or --certificate-sha256."
+        });
+        File.Exists(rig.CredentialsPath).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task Setup_WithTheCasSha256_WhenTheControllerCannotBeReached_IsUnreachable()
+    {
+        using var rig = new CliRig((RoofApiTestHost?)null);
+
+        var result = await rig.RunAsync("setup", "--controller", "https://127.0.0.1:9/", "--ca-sha256", Pin);
+
+        result.Code.Should().Be(RoofExitCode.Unreachable, result.ToString());
+        File.Exists(rig.CredentialsPath).Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow("y", DisplayName = "confirmed")]
+    [DataRow("", DisplayName = "not confirmed")]
+    public async Task Setup_InATerminal_FetchesTheCa_ShowsItsSha256_AndSavesItOnlyWhenConfirmed(string answer)
+    {
+        using var authority = TestCertificates.CreateAuthority(AuthorityName);
+        using var issued = TestCertificates.Issue(authority);
+        await using var controller = await TlsTestController.StartAsync(issued);
+        controller.ServedAuthority = authority;
+        using var rig = new CliRig((RoofApiTestHost?)null) { Interactive = true };
+        rig.Input.Enqueue("fetch");
+        rig.Input.Enqueue(answer);
+        rig.Input.Enqueue(string.Empty);
+
+        var result = await rig.RunAsync("setup", "--controller", controller.BaseAddress.ToString());
+
+        rig.Prompts.Select(prompt => prompt.Prompt).Should().StartWith(
+        [
+            "CA certificate file, or 'fetch' to get it from the controller, when a private CA such as the installer's issued the controller's certificate (Enter keeps none; 'none' removes it): ",
+            "Is that the SHA-256 on the installer's Done page, or from 'hvo-roof-install cert show' on the controller? [y/N] "
+        ]);
+        result.Out.Should().Contain($"The controller serves the CA {AuthorityName}, SHA-256:{Environment.NewLine}  {RoofCertificateAuthority.Fingerprint(authority)}");
+        if (answer == "y")
+        {
+            result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+            rig.Stored!.CaCertificate.Should().Be(RoofCertificateAuthority.ToPem(authority));
+        }
+        else
+        {
+            result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+            result.Error.Should().Contain("The CA was not saved: its SHA-256 was not confirmed.");
+            File.Exists(rig.CredentialsPath).Should().BeFalse();
+        }
     }
 
     // ---- setup: saving ---------------------------------------------------------------------------------------------
@@ -236,7 +381,7 @@ public sealed class RoofCliCaCertificateTests
         var result = await rig.RunAsync("setup", "--controller", "https://localhost/");
 
         rig.Prompts.Should().Equal(
-            ("CA certificate file, when a private CA such as the installer's issued the controller's certificate (Enter keeps none; 'none' removes it): ", false),
+            ("CA certificate file, or 'fetch' to get it from the controller, when a private CA such as the installer's issued the controller's certificate (Enter keeps none; 'none' removes it): ", false),
             ("API key (Enter to skip, and sign in later with 'hvo-roof login NAME'): ", true));
         result.Out.Should().Contain($"https://localhost/, CA {AuthorityName} trusted.");
         rig.Stored!.CaCertificate.Should().Be(RoofCertificateAuthority.ToPem(authority));
@@ -258,7 +403,7 @@ public sealed class RoofCliCaCertificateTests
 
         rig.Prompts.Select(prompt => prompt.Prompt).Should().Equal(
             "Controller address [https://localhost/]: ",
-            "CA certificate file, when a private CA such as the installer's issued the controller's certificate (Enter keeps the saved one; 'none' removes it): ",
+            "CA certificate file, or 'fetch' to get it from the controller, when a private CA such as the installer's issued the controller's certificate (Enter keeps the saved one; 'none' removes it): ",
             "API key (Enter to skip, and sign in later with 'hvo-roof login NAME'): ");
         rig.Stored!.CaCertificate.Should().Be(pem);
     }

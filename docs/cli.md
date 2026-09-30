@@ -11,6 +11,34 @@ settings, people and keys, the controller's health and restart, and setup, with 
 
 `hvo-roof` is one self-contained file, so the machine needs no .NET runtime.
 
+### With the installer
+
+On a Linux machine or a Mac that reaches the controller, `hvo-roof-install` installs the release's build for the
+machine and saves the controller's address and how to trust it
+([install.md](install.md#hvo-roof-and-the-mac-app)). Run it as you, not with `sudo`. In the wizard, choose `hvo-roof`
+on the Roles page. Then, on the Client page, give the controller's address, fetch its CA, and check that the fingerprint
+shown is the one on the controller's installer's Done page, or from `sudo hvo-roof-install cert show` on the
+controller. Or give the same in an answers file:
+
+```json
+{
+  "roles": ["cli"],
+  "client": { "controller": "https://roof.local:8443", "caSha256": "<the CA's SHA-256 fingerprint>" }
+}
+```
+
+```bash
+hvo-roof-install --answers cli.json
+hvo-roof login ada
+```
+
+It puts `hvo-roof` in `~/.local/bin` (or `/usr/local/bin`, when you may write there without `sudo`) and saves the
+controller's CA in the credentials file, as `hvo-roof setup --ca-certificate` would ([Setup](#setup)). A CA whose
+fingerprint is not the one given is refused, and nothing is changed. Run it again, and it changes only what differs;
+the sign-in you saved is kept.
+
+### By hand
+
 | Where | Build | Notes |
 |-------|-------|-------|
 | The Pi | `linux-arm64` | Runs next to the controller, over SSH or at the Pi's console. |

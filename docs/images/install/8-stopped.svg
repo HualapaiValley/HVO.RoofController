@@ -11,6 +11,7 @@
 <rect x="37.20" y="78" width="34.00" height="18.4" fill="#2563eb"/>
 <rect x="28.80" y="96" width="806.80" height="18.4" fill="#422226"/>
 <rect x="28.80" y="114" width="806.80" height="18.4" fill="#422226"/>
+<rect x="28.80" y="132" width="806.80" height="18.4" fill="#422226"/>
 <rect x="20.40" y="528" width="67.60" height="18.4" fill="#1c2028"/>
 <rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
@@ -34,12 +35,14 @@
 <path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <path d="M839.40,510.00 Q839.40,519.00 835.20,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <text x="28.80" y="55.50" fill="#abb0b7" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
-<text x="20.40" y="73.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 6 of 6: Done</text>
+<text x="20.40" y="73.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 7 of 7: Done</text>
 <text x="37.20" y="91.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">Done</text>
-<text x="28.80" y="109.50" fill="#fecaca" textLength="789.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed. The</text>
-<text x="28.80" y="127.50" fill="#fecaca" textLength="369.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">plan (--plan) shows what an install will do.</text>
-<text x="28.80" y="163.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">Nothing was changed.</text>
-<text x="28.80" y="181.50" fill="#f8fafc" textLength="436.80" lengthAdjust="spacingAndGlyphs">The log: /home/roy/.local/state/hvo-roof/install.log</text>
+<text x="28.80" y="109.50" fill="#fecaca" textLength="781.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">The install stopped: Creating file /home/roy/.config/hvo-roof/credentials.json: the installer</text>
+<text x="28.80" y="127.50" fill="#fecaca" textLength="730.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">could not fetch the controller's CA from https://roofpi.local:8443/: Connection refused</text>
+<text x="28.80" y="145.50" fill="#fecaca" textLength="168.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">(roofpi.local:8443).</text>
+<text x="28.80" y="181.50" fill="#f8fafc" textLength="302.40" lengthAdjust="spacingAndGlyphs">Nothing after that step was changed.</text>
+<text x="28.80" y="199.50" fill="#f8fafc" textLength="436.80" lengthAdjust="spacingAndGlyphs">The log: /home/roy/.local/state/hvo-roof/install.log</text>
+<text x="28.80" y="217.50" fill="#f8fafc" textLength="554.40" lengthAdjust="spacingAndGlyphs">Run the installer again to carry on: it changes only what is left.</text>
 <text x="20.40" y="541.50" fill="#aeb9c8" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Quit ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>

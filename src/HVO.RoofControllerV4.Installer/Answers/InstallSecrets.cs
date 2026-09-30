@@ -17,7 +17,13 @@ public enum InstallSecretKind
     CameraPassword,
 
     /// <summary>A person's PIN for the kiosk (<see cref="InstallSecret.Person"/>), given when the kiosk is installed.</summary>
-    Pin
+    Pin,
+
+    /// <summary>
+    /// The password of the admin who signs in once to make the Mac app's device key: one they have already, so it is
+    /// typed once.
+    /// </summary>
+    SignInPassword
 }
 
 /// <summary>
@@ -32,8 +38,10 @@ public readonly record struct InstallSecret(InstallSecretKind Kind, string? Pers
 
     public static InstallSecret CameraPassword => new(InstallSecretKind.CameraPassword);
 
+    public static InstallSecret SignInPassword => new(InstallSecretKind.SignInPassword);
+
     /// <summary>The secrets with an option of their own (<c>--admin-password-file</c> and the others).</summary>
-    public static IReadOnlyList<InstallSecret> WithOwnOption { get; } = [AdminPassword, AdminPin, CameraPassword];
+    public static IReadOnlyList<InstallSecret> WithOwnOption { get; } = [AdminPassword, AdminPin, CameraPassword, SignInPassword];
 
     /// <summary><paramref name="person"/>'s PIN, for the kiosk.</summary>
     public static InstallSecret PinFor(string person)
@@ -44,6 +52,9 @@ public readonly record struct InstallSecret(InstallSecretKind Kind, string? Pers
 
     /// <summary>True for a PIN: digits, typed on the kiosk's keypad.</summary>
     public bool IsPin => Kind is InstallSecretKind.AdminPin or InstallSecretKind.Pin;
+
+    /// <summary>True for a secret a person has already (a password they sign in with): typed once, not twice.</summary>
+    public bool IsExisting => Kind == InstallSecretKind.SignInPassword;
 
     public bool Equals(InstallSecret other)
         => Kind == other.Kind && string.Equals(Person, other.Person, StringComparison.OrdinalIgnoreCase);
@@ -91,6 +102,7 @@ public sealed class InstallSecrets
         InstallSecretKind.AdminPin => "the first admin's PIN",
         InstallSecretKind.CameraPassword => "the camera's password",
         InstallSecretKind.Pin => $"{secret.Person}'s PIN",
+        InstallSecretKind.SignInPassword => "the Mac app's admin's password",
         _ => throw new ArgumentOutOfRangeException(nameof(secret), secret, null)
     };
 
@@ -104,6 +116,7 @@ public sealed class InstallSecrets
         InstallSecretKind.AdminPin => "--admin-pin-file",
         InstallSecretKind.CameraPassword => "--camera-password-file",
         InstallSecretKind.Pin => PinFileOption,
+        InstallSecretKind.SignInPassword => "--sign-in-password-file",
         _ => throw new ArgumentOutOfRangeException(nameof(secret), secret, null)
     };
 
@@ -118,6 +131,9 @@ public sealed class InstallSecrets
         InstallSecretKind.AdminPin or InstallSecretKind.Pin => RoofIdentityContract.IsValidPin(value) ? null : RoofIdentityText.PinRule,
         InstallSecretKind.CameraPassword => string.IsNullOrEmpty(value) ? "The camera's password may not be empty."
             : value.Any(char.IsControl) ? "The camera's password may not hold a control character."
+            : null,
+        InstallSecretKind.SignInPassword => string.IsNullOrEmpty(value) ? "The password may not be empty."
+            : value.Any(char.IsControl) ? "The password may not hold a control character."
             : null,
         _ => throw new ArgumentOutOfRangeException(nameof(secret), secret, null)
     };

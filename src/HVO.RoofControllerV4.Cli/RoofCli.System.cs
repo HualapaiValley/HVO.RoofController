@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Security.Cryptography.X509Certificates;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
@@ -119,6 +120,11 @@ public static partial class RoofCli
                 Description = "A file holding the private CA that issued the controller's certificate, such as the installer's (PEM or DER): only that CA is trusted, and the certificate can be reissued under it with no change here. 'none' removes a saved one. Replaces a saved pin.",
                 HelpName = "file"
             };
+            var authoritySha = new Option<string?>("--ca-sha256")
+            {
+                Description = "Fetch the private CA from the controller and save it when its SHA-256 is this one, as the installer's Done page and 'hvo-roof-install cert show' give it (64 hex digits, colons allowed). Instead of --ca-certificate; replaces a saved pin.",
+                HelpName = "fingerprint"
+            };
             var apiKey = new Option<bool>("--api-key")
             {
                 Description = "Save an API key, read from the terminal without echo or as one line of standard input."
@@ -133,6 +139,7 @@ public static partial class RoofCli
             {
                 pin,
                 authority,
+                authoritySha,
                 apiKey,
                 createAdmin
             };
@@ -143,7 +150,8 @@ public static partial class RoofCli
                 _ = RoofCredentialStore.FromEnvironment(context.Host.GetEnvironmentVariable);
                 var setup = new RoofCliSetup(context);
                 var adminName = parseResult.GetValue(createAdmin) is { } requested ? RequireName(requested) : null;
-                var saved = setup.Prompt(parseResult.GetValue(pin), parseResult.GetValue(authority), parseResult.GetValue(apiKey));
+                var saved = await setup.PromptAsync(
+                    parseResult.GetValue(pin), parseResult.GetValue(authority), parseResult.GetValue(authoritySha), parseResult.GetValue(apiKey), cancellationToken).ConfigureAwait(false);
                 WriteSetupLines(context, saved.Notes);
                 var check = await setup.CheckAsync(saved.Connection, cancellationToken).ConfigureAwait(false);
                 WriteSetupLines(context, check.Lines);
@@ -170,6 +178,7 @@ public static partial class RoofCli
                         credentialsFile = context.CredentialsPath,
                         certificatePinned = saved.Connection.CertificateSha256 is not null,
                         caCertificate = saved.Connection.CaCertificate is { } trusted ? RoofCertificateAuthority.Describe(trusted) : null,
+                        caCertificateSha256 = saved.Connection.CaCertificate is { } fingerprinted ? RoofCertificateAuthority.Fingerprint(fingerprinted) : null,
                         credential = saved.Connection.Credential?.ToString(),
                         reachable = check.Reachable,
                         live = check.Live,
@@ -234,10 +243,16 @@ internal sealed class RoofCliSetup(RoofCliContext context)
     /// <summary>What the credentials file holds now (nothing when there is no file).</summary>
     public RoofStoredCredentials Load() => RoofCredentialStore.Load(context.CredentialsPath) ?? new RoofStoredCredentials();
 
+    /// <summary>How long fetching the CA may take.</summary>
+    internal static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(15);
+
     /// <summary>
     /// The command line's setup: asks for what the options leave out (in a terminal), then writes the credentials file.
+    /// <paramref name="authorityShaOption"/> fetches the CA from the controller and saves it when its SHA-256 is that one;
+    /// in a terminal, 'fetch' at the CA prompt fetches it and asks the person to compare its SHA-256.
     /// </summary>
-    public RoofCliSetupResult Prompt(string? pinOption, string? authorityOption, bool readApiKey)
+    public async Task<RoofCliSetupResult> PromptAsync(
+        string? pinOption, string? authorityOption, string? authorityShaOption, bool readApiKey, CancellationToken cancellationToken)
     {
         var stored = Load();
         var interactive = context.Host.IsInteractive && !context.Json;
@@ -259,7 +274,27 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         // A pin and a CA are never both saved: the one given replaces the other.
         var certificate = stored.CertificateSha256;
         var authority = stored.CaCertificate;
-        if (pinOption is not null || authorityOption is not null)
+        var notes = new List<string>();
+        if (authorityShaOption is not null)
+        {
+            if (pinOption is not null || authorityOption is not null)
+            {
+                throw new RoofCliUsageException(FetchAlone);
+            }
+
+            var expected = ParseFingerprint(authorityShaOption);
+            using var fetched = await FetchCaAsync(controller, cancellationToken).ConfigureAwait(false);
+            if (!RoofCertificateAuthority.HasFingerprint(fetched, expected))
+            {
+                throw new RoofCliRefusedException(
+                    $"The CA the controller serves ({RoofCertificateAuthority.Describe(fetched)}, SHA-256 {RoofCertificateAuthority.Fingerprint(fetched)}) is not the one given, so it is not saved. "
+                    + "Compare it with 'hvo-roof-install cert show' on the controller.");
+            }
+
+            (authority, certificate) = (RoofCertificateAuthority.ToPem(fetched), null);
+            notes.Add($"Fetched the CA {RoofCertificateAuthority.Describe(fetched)} from the controller: its SHA-256 is the one given.");
+        }
+        else if (pinOption is not null || authorityOption is not null)
         {
             var givenPin = pinOption is null ? null : ParsePin(pinOption);
             var givenAuthority = authorityOption is null ? null : ParseCaCertificate(authorityOption);
@@ -274,9 +309,14 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         else if (interactive && controller.Scheme == Uri.UriSchemeHttps)
         {
             var text = context.Host.ReadLine(
-                $"CA certificate file, when a private CA such as the installer's issued the controller's certificate (Enter keeps {(authority is null ? "none" : "the saved one")}; 'none' removes it): ",
+                $"CA certificate file, or 'fetch' to get it from the controller, when a private CA such as the installer's issued the controller's certificate (Enter keeps {(authority is null ? "none" : "the saved one")}; 'none' removes it): ",
                 false)?.Trim();
-            if (!string.IsNullOrEmpty(text))
+            if (string.Equals(text, "fetch", StringComparison.OrdinalIgnoreCase))
+            {
+                authority = await ConfirmFetchedCaAsync(controller, cancellationToken).ConfigureAwait(false);
+                certificate = null;
+            }
+            else if (!string.IsNullOrEmpty(text))
             {
                 authority = ParseCaCertificate(text);
                 certificate = authority is null ? certificate : null;
@@ -308,7 +348,47 @@ internal sealed class RoofCliSetup(RoofCliContext context)
                 true)?.Trim();
         }
 
-        return Save(controller, certificate, authority, string.IsNullOrEmpty(apiKey) ? null : apiKey);
+        var result = Save(controller, certificate, authority, string.IsNullOrEmpty(apiKey) ? null : apiKey);
+        return result with { Notes = [.. notes, .. result.Notes] };
+    }
+
+    /// <summary>
+    /// Fetches the CA from the controller, shows its SHA-256, and returns it as PEM once the person says it is the one
+    /// the controller's installer showed.
+    /// </summary>
+    private async Task<string> ConfirmFetchedCaAsync(Uri controller, CancellationToken cancellationToken)
+    {
+        using var fetched = await FetchCaAsync(controller, cancellationToken).ConfigureAwait(false);
+        context.Out.WriteLine($"The controller serves the CA {RoofCertificateAuthority.Describe(fetched)}, SHA-256:");
+        context.Out.WriteLine($"  {RoofCertificateAuthority.Fingerprint(fetched)}");
+        var answer = context.Host.ReadLine(
+            "Is that the SHA-256 on the installer's Done page, or from 'hvo-roof-install cert show' on the controller? [y/N] ", false)?.Trim();
+        return string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase) || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase)
+            ? RoofCertificateAuthority.ToPem(fetched)
+            : throw new RoofCliRefusedException(
+                "The CA was not saved: its SHA-256 was not confirmed. If it differs from the controller's, something between here and the controller may be answering for it.");
+    }
+
+    /// <summary>The CA the controller serves, with its refusals as the command line's.</summary>
+    private static async Task<X509Certificate2> FetchCaAsync(Uri controller, CancellationToken cancellationToken)
+    {
+        if (controller.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new RoofCliUsageException($"The CA is fetched over HTTPS, and {controller} is not an https address.");
+        }
+
+        try
+        {
+            return await RoofCertificateAuthority.FetchAsync(controller, FetchTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RoofCaFetchException ex)
+        {
+            throw new RoofCliRefusedException(ex.Message, RoofExitCode.Refused, ex);
+        }
+        catch (RoofCertificateRefusedException ex)
+        {
+            throw new RoofCliRefusedException(ex.Message, RoofExitCode.Refused, ex);
+        }
     }
 
     /// <summary>
@@ -549,6 +629,15 @@ internal sealed class RoofCliSetup(RoofCliContext context)
             : throw new RoofCliUsageException("The certificate SHA-256 must be 64 hex digits (colons allowed), or 'none'.");
     }
 
+    /// <summary>A CA's SHA-256: 64 hex digits, colons, spaces or dashes allowed between them.</summary>
+    internal static string ParseFingerprint(string text)
+    {
+        var hex = new string(text.Where(c => c is not (':' or ' ' or '-')).ToArray());
+        return hex.Length == 64 && hex.All(char.IsAsciiHexDigit)
+            ? hex.ToUpperInvariant()
+            : throw new RoofCliUsageException("The CA's SHA-256 must be 64 hex digits (colons allowed).");
+    }
+
     /// <summary>
     /// The CA certificate in the file at <paramref name="text"/>, as PEM, checked to be a CA's; 'none' is null.
     /// </summary>
@@ -571,6 +660,9 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         }
     }
 
+    private const string FetchAlone
+        = "--ca-sha256 fetches the CA to save, so give it without --ca-certificate or --certificate-sha256.";
+
     private const string BothRefused
         = "Give a certificate SHA-256 or a CA certificate, not both: the pin is for a self-signed certificate, the CA for one it issued.";
 
@@ -581,9 +673,9 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         switch (RoofCertificateRefusedException.Find(error)?.Reason)
         {
             case RoofCertificateRefusal.NotPinned:
-                return " If the controller's certificate was replaced on purpose, save its SHA-256 with --certificate-sha256, or the CA that issued it with --ca-certificate.";
+                return " If the controller's certificate was replaced on purpose, save its SHA-256 with --certificate-sha256, or the CA that issued it with --ca-sha256 or --ca-certificate.";
             case RoofCertificateRefusal.OtherAuthority:
-                return " If the controller's CA was replaced on purpose, save the new one with --ca-certificate.";
+                return " If the controller's CA was replaced on purpose, save the new one with --ca-sha256 or --ca-certificate.";
             case null:
                 break;
             default:
@@ -594,7 +686,7 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         {
             if (current is System.Security.Authentication.AuthenticationException)
             {
-                return " The certificate was not accepted: save the CA that issued it with --ca-certificate, or, for a self-signed certificate, its SHA-256 with --certificate-sha256.";
+                return " The certificate was not accepted: save the CA that issued it with --ca-sha256 or --ca-certificate, or, for a self-signed certificate, its SHA-256 with --certificate-sha256.";
             }
         }
 

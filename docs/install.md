@@ -24,11 +24,11 @@ anything, from an answers file that the wizard saves.
 > - deploys the controller, or a test rig with its HAT emulator, from the release's images by their digests, through
 >   the deploy script ([Deploying](deployment.md#deploying-with-the-script)), and adds the first admin;
 > - sets up the touchscreen kiosk on the controller's Pi ([The kiosk](#the-kiosk));
+> - installs `hvo-roof` and the Mac app on other machines, connected to the controller and trusting its CA once you
+>   have checked its fingerprint ([hvo-roof and the Mac app](#hvo-roof-and-the-mac-app));
 > - writes the install record.
 >
-> It adopts a controller that the deploy script already runs. A later installer issue, #71, makes `hvo-roof` and the
-> Mac app. Until then, an install that needs one of those is refused, with exit code 3, before anything changes.
-> `--plan` shows what such an install will do.
+> It adopts a controller that the deploy script already runs.
 
 ## Getting it
 
@@ -71,8 +71,8 @@ It refuses to mix the two in one run, and refuses the wrong one for a role. `--p
 the controller or a rig needs Docker access (on Linux, root or the `docker` group).
 
 Keys are made on the machine, straight into files that only their user can read, and never shown. The only secrets a
-person gives are the first admin's password and PIN, the camera's password, and the password of a certificate you
-import ([Passwords and PINs](#passwords-and-pins)). The installer never shows, keeps or logs one. An answers file, the
+person gives are the first admin's password and PIN, the camera's password, the password of the admin who makes the
+Mac app's device key, and the password of a certificate you import ([Passwords and PINs](#passwords-and-pins)). The installer never shows, keeps or logs one. An answers file, the
 plan, the record and the log never hold a secret.
 
 ### The release it installs
@@ -183,7 +183,8 @@ choices.
 ## The wizard
 
 The wizard has up to eight steps. A step with nothing to ask for the roles chosen is passed over, and not counted:
-only the controller and a rig have step 4, and step 6 comes only when the plan needs a password. The key bar says
+step 4 asks about the controller for the controller or a rig, and about the connection to it for `hvo-roof` and the
+Mac app; step 6 comes only when the plan needs a password. The key bar says
 what the keys do:
 
 - **Enter** does what the highlighted button says, even from a list of options (**Space** chooses an option).
@@ -244,6 +245,29 @@ rate, and whether other machines may use it (over HTTPS only).
 
 ![Step 4 for a test rig: the first admin, and the HAT emulator's time scale, camera frame rate and whether it is open to the network](images/install/4-rig.svg)
 
+**4. Connecting to the controller.** For `hvo-roof` and the Mac app:
+
+- **The address:** the controller as this machine reaches it, with its port, such as `https://roof.local:8443`.
+- **How they trust it,** as the controller serves it ([Certificates](#certificates)):
+  - **Its private CA.** **Fetch its CA** gets the CA from the controller and shows its name and SHA-256 fingerprint.
+    Compare the fingerprint with the one on the Done page of the controller's installer, or from
+    `sudo hvo-roof-install cert show` on the controller, and tick that it is the same. Next stays on the page until
+    you do, and a changed address needs its CA fetched again.
+  - **Its self-signed certificate:** give the certificate's SHA-256 fingerprint, from the same places. Each
+    connection is pinned to it.
+  - **As this machine trusts any website:** a certificate of your own from a CA this machine already trusts, or
+    plain HTTP.
+- **The keychain** (on a Mac, with the CA): trust the CA in your login keychain too, so Safari and Chrome open the web
+  UI without a warning.
+- **The admin who makes the Mac app's device key** (the Mac app only), by the name they sign in with
+  ([The Mac app's device key](#the-mac-apps-device-key)).
+
+![Step 4 for hvo-roof: the controller's address, its private CA fetched from it with the CA's name and fingerprint, and the box ticked to say it is the fingerprint the controller shows](images/install/4-client.svg)
+
+For the Mac app, the page also offers the keychain and asks for the admin:
+
+![Step 4 for the Mac app: the controller's CA and its fingerprint checked, the login keychain chosen, and ada as the admin who makes the Mac's device key](images/install/4-client-mac.svg)
+
 **5. Review the plan.** Every change the install would make, checked against the machine, as `--plan` prints it
 ([The plan](#the-plan)). Install goes ahead only when nothing blocks the plan. **Save answers** writes the answers
 file, which installs the same way elsewhere with `--answers`. When the plan needs a password, the button says Next.
@@ -255,8 +279,9 @@ A blocked step says why, and Install stays off:
 ![Step 5 with a blocked plan: a container made by Docker Compose, with the reason and a pointer to the docs](images/install/5-review-blocked.svg)
 
 **6. Passwords.** Only the passwords and PINs the plan needs ([Passwords and PINs](#passwords-and-pins)): the first
-admin's, when the controller has no admin yet, and the camera's, when its files are made or its user changes. Each is
-typed twice and shown only as dots. None is saved, in the answers or anywhere else, or logged, and the fields are
+admin's, when the controller has no admin yet, the camera's, when its files are made or its user changes, and the
+password of the admin who makes the Mac app's device key, when the Mac needs one. A new password or PIN is typed
+twice; the admin's, which they already have, once. Each is shown only as dots. None is saved, in the answers or anywhere else, or logged, and the fields are
 cleared once the install has them.
 
 ![Step 6: Passwords, with the first admin's password and PIN and the camera's password each typed twice and shown as dots, and a message that the two PINs differ](images/install/6-passwords.svg)
@@ -271,9 +296,11 @@ after the wizard closes.
 
 ![Step 8: Done, with the controller's API and web UI addresses, its log, the backup reminder, its CA with the CA's fingerprint, the record and the log](images/install/8-done.svg)
 
-When the install is refused, or a step fails, the Done page says why. It also says what was changed, if anything.
+When a step fails, the Done page says why, and where the log is. Nothing after that step was changed, and running
+the installer again carries on from there ([Running it again](#running-it-again)). An install refused before it
+started says that nothing was changed.
 
-![Step 8 after a refusal: the installer cannot install hvo-roof yet, and nothing was changed](images/install/8-refused.svg)
+![Step 8 after a step failed: hvo-roof's connection was not written because the controller's CA could not be fetched, nothing after that step was changed, the log, and that running the installer again carries on](images/install/8-stopped.svg)
 
 ## Answers files
 
@@ -320,6 +347,20 @@ With the kiosk, a `kiosk` section:
 }
 ```
 
+For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who makes the Mac app's device key:
+
+```json
+{
+  "roles": ["cli", "mac-app"],
+  "client": {
+    "controller": "https://roofpi.local:8443",
+    "caSha256": "FB:26:8B:E2:34:20:52:AF:FB:D8:05:14:87:EB:B5:D6:4A:D8:6D:4E:65:BC:35:26:C7:D2:31:11:2A:D1:C0:76",
+    "trustInKeychain": true
+  },
+  "macApp": { "admin": "ada" }
+}
+```
+
 | Member | Values | Default |
 |--------|--------|---------|
 | `schema` | `1` | `1` |
@@ -343,6 +384,11 @@ With the kiosk, a `kiosk` section:
 | `kiosk.pins` | People on the controller, operators or admins, by the name they sign in with, to give a PIN for signing in at the kiosk. Someone who has one keeps it. Not recorded. | None |
 | `cli.folder` | `~/.local/bin` or `/usr/local/bin` | `~/.local/bin` |
 | `macApp.folder` | `/Applications` or `~/Applications` | `/Applications` |
+| `macApp.admin` | An admin on the controller, by the name they sign in with, who signs in once so the installer can make the Mac app's device key. Their password is typed, or given in a file. | Required for the Mac app |
+| `client.controller` | The controller `hvo-roof` and the Mac app connect to, as this machine reaches it, with its port, such as `https://roof.local:8443` | Required for either |
+| `client.caSha256` | The SHA-256 fingerprint of the controller's private CA, as its installer's Done page or `cert show` gives it: the CA is fetched from the controller and trusted only when it matches. Colons between the pairs are optional. | None |
+| `client.certificateSha256` | The SHA-256 fingerprint of the controller's self-signed certificate, which each connection is pinned to | None |
+| `client.trustInKeychain` | On a Mac, `true` to trust the CA in your login keychain too, for Safari and Chrome ([Trusting the controller in a browser](#trusting-the-controller-in-a-browser)). Needs `client.caSha256`. | `false` |
 | `rigConfirmation` | This machine's host name, for a rig on a machine with `/dev/i2c-1` | None |
 | `httpConfirmation` | `http`, to serve plain HTTP where the controller does not already | None |
 
@@ -358,11 +404,13 @@ only when a step needs one:
 - the first admin's password, typed twice, when the controller has no admin yet;
 - the first admin's PIN, typed twice, with `"pin": true`;
 - the camera's password, when its files are made or its user changes;
-- the kiosk's PIN for each person in `kiosk.pins` who has none yet, typed twice.
+- the kiosk's PIN for each person in `kiosk.pins` who has none yet, typed twice;
+- the password of `macApp.admin`, typed once, when the Mac needs a new device key.
 
 Without a terminal (`--answers` in a script), give each in a file that only you can read, and the installer reads
-its first line: `--admin-password-file FILE`, `--admin-pin-file FILE`, `--camera-password-file FILE`, and
-`--pin-file NAME=FILE` for each person's PIN (`--pin-file olga=/root/olga-pin`). When a
+its first line: `--admin-password-file FILE`, `--admin-pin-file FILE`, `--camera-password-file FILE`,
+`--sign-in-password-file FILE` for the Mac app's admin, and `--pin-file NAME=FILE` for each person's PIN
+(`--pin-file olga=/root/olga-pin`). When a
 step needs one that was not given, the installer stops with exit code 2 and changes nothing.
 
 ### Settings from a backup
@@ -485,6 +533,117 @@ On the controller's Pi, the installer sets up the touchscreen kiosk ([kiosk.md](
 `hvo-roof-install cert` keeps the kiosk's settings with the certificate: renewing a self-signed certificate re-pins
 it, and restarts the kiosk. A certificate from the installer's CA needs no change.
 
+## hvo-roof and the Mac app
+
+On your own Linux machine or Apple silicon Mac, the installer sets up `hvo-roof` ([cli.md](cli.md)) and the Mac app
+([mac.md](mac.md)), connected to a controller that already runs. Run it as yourself, without `sudo`. For example, for
+both on a Mac, with the answers above:
+
+```text
+$ hvo-roof-install --plan --answers mac.json
+The plan for hvo-roof and the Mac app on studio, 4.0.0:
+
+Folders
+  unchanged  /Users/roy/.local/bin                         your programs (there already, and kept as it is)
+  create     /Users/roy/Library/Application Support/HVO Roof  the Mac app's settings and device key: yours alone (0700)
+Files
+  create     /Users/roy/.local/bin/hvo-roof                hvo-roof: the roof from the command line, and its terminal UI (release 4.0.0's, 0755)
+  create     /Users/roy/.config/hvo-roof/credentials.json  hvo-roof's connection: the controller and how it is trusted (you sign in with hvo-roof login) (https://roofpi.local:8443, trusting its CA (FB:26:8B:E2…))
+  create     /Applications/HVO Roof.app                    the Mac app (release 4.0.0's, without macOS's quarantine mark)
+  create     /Users/roy/Library/Application Support/HVO Roof/ca.crt  the controller's CA: the Mac app trusts the controller's certificate by it (https://roofpi.local:8443, trusting its CA (FB:26:8B:E2…))
+  create     /Users/roy/Library/Application Support/HVO Roof/device-key  the Mac app's device key: a Viewer's, which shows the roof and offers Stop when no one is signed in (a Viewer key (mac-studio-roy) made by ada, who signs in once; 0600, yours alone)
+  create     /Users/roy/Library/Application Support/HVO Roof/appsettings.Local.json  the Mac app's settings: the controller's address, how it trusts it, and its key (https://roofpi.local:8443, trusting its CA (FB:26:8B:E2…))
+  change     /Users/roy/Library/Keychains/login.keychain-db  trusts the controller's CA in your login keychain: Safari and Chrome open the web UI without a warning (HVO Roof CA (roofpi, 2026-10-01), trusted for websites: macOS asks for your password)
+  create     /Users/roy/.config/hvo-roof/install.json      the install record: the roles, choices and versions (no secrets) (0600)
+Checks
+  run        HVO Roof.app --check                          opens the app's window once, and closes it: it starts with these settings (after the changes above)
+
+8 to create, 1 to change, 1 unchanged, 1 check to run.
+
+The install asks for the Mac app's admin's password (or give it with --sign-in-password-file FILE).
+```
+
+### Trusting the controller
+
+With a private CA, the installer fetches the CA from the controller's `/ca.crt`, which anyone may read, and checks
+that the certificate the controller presents was issued by it. It keeps the CA only when the CA's SHA-256 fingerprint
+is the one you gave: the one on the Done page of the controller's installer, or from `sudo hvo-roof-install cert show`
+on the controller. A CA with another fingerprint blocks the plan, and nothing is changed. Check the fingerprint on
+the controller itself, not in a message that could have been changed on its way.
+
+With a self-signed certificate, `hvo-roof` and the Mac app pin it instead. With a certificate of your own, or plain
+HTTP, they trust the controller as this machine trusts any website.
+
+### hvo-roof
+
+- **The program:** the release's `hvo-roof` for this machine (linux-x64, linux-arm64 or osx-arm64), checked against
+  the SHA-256 in `release.json`, in `~/.local/bin` or `/usr/local/bin`. `/usr/local/bin` is offered only when you may
+  write to it without `sudo`. The program it replaces is kept as `hvo-roof.previous`.
+- **The connection:** `~/.config/hvo-roof/credentials.json` (or under `$XDG_CONFIG_HOME`), `0600`, with the
+  controller's address and its CA or pin. A sign-in saved there for the same controller is kept; one for another
+  controller is removed.
+
+Then sign in with `hvo-roof login`. Put `~/.local/bin` on your `PATH` if it is not.
+
+### The Mac app
+
+- **The app:** `HVO Roof.app` from the release's zip, checked against the SHA-256 in `release.json`, in
+  `/Applications` or `~/Applications`. The app is signed but not notarised, so the installer unpacks it without macOS's
+  quarantine mark (`ditto --noqtn`), and removes a mark that is there: macOS then opens it without a warning. The app
+  it replaces is kept as `HVO Roof.app.previous` in the settings folder.
+- **Its settings folder:** `~/Library/Application Support/HVO Roof`, `0700`, with:
+  - `ca.crt`, the controller's CA, with a private CA;
+  - `device-key`, `0600` ([The Mac app's device key](#the-mac-apps-device-key));
+  - `appsettings.Local.json`, with the controller's address, the CA's file or the certificate's pin, and the key's
+    file. Settings you change there by hand are kept.
+- **The check:** once the rest is in place, the installer opens the app with `--check`, which opens its window with
+  these settings and closes it. It stops the install when the app cannot start. Over SSH, where the app cannot open a
+  window, the plan says so, and you open HVO Roof on the Mac to check it.
+- **The keychain,** with `client.trustInKeychain`: the CA is trusted for websites in your login keychain. macOS asks
+  for your password, on the Mac's own screen: over SSH, the plan is blocked.
+
+### The Mac app's device key
+
+The Mac app shows the roof, and offers Stop, with a device key of its own: an API key with the Viewer role, named
+`mac-HOST-USER` after the Mac and you. People sign in in the app to open or close the roof.
+
+To make the key, the admin in `macApp.admin` signs in to the controller's API once, with their password typed in the
+wizard or given with `--sign-in-password-file FILE`. The installer adds the key, writes it straight to `device-key`
+(`0600`, yours alone), and ends the admin's session. The key is never shown, logged, or put on the clipboard, and the
+password is not kept.
+
+A later run checks the key with the controller, and keeps one it takes: it needs no password then. A key the
+controller refuses is replaced, and a Mac that had a key of its name gets a new secret for it. A key of that name that
+is not a Mac's (a kiosk key, another role's, or one from the secrets folder) is left alone: the install stops there,
+with no key written, until you remove it on the web UI's People page.
+
+### Trusting the controller in a browser
+
+The web UI is served with the same certificate as the API, so a browser warns until it trusts the controller's CA
+too. Get the CA, and check its fingerprint before you trust it:
+
+```bash
+curl -fsSk -o hvo-roof-ca.crt https://roof.local:8443/ca.crt   # -k: the fingerprint is checked next
+openssl x509 -in hvo-roof-ca.crt -noout -subject -fingerprint -sha256
+```
+
+On a Mac, the installer's settings folder already holds it, checked: `~/Library/Application Support/HVO Roof/ca.crt`.
+
+- **Safari and Chrome on a Mac:** tick the keychain in the wizard, or give `client.trustInKeychain`. By hand:
+  `security add-trusted-cert -r trustRoot -p ssl -k ~/Library/Keychains/login.keychain-db hvo-roof-ca.crt`, which asks
+  for your password.
+- **Chrome and Chromium on Linux** read the NSS database in your home folder:
+  `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "HVO Roof CA" -i hvo-roof-ca.crt` (from `libnss3-tools`). Restart
+  the browser.
+- **Command-line tools on Linux** (`curl`, `wget`) read the system's store: on Debian, Ubuntu and Raspberry Pi OS,
+  `sudo cp hvo-roof-ca.crt /usr/local/share/ca-certificates/hvo-roof-ca.crt && sudo update-ca-certificates`.
+- **Firefox** may keep its own list: if it warns, open Settings → Privacy & Security → View Certificates →
+  Authorities, import `hvo-roof-ca.crt`, and tick "Trust this CA to identify websites".
+
+If the controller makes a new CA (`cert --new-ca`), remove the old one and trust the new one the same way. Running
+the installer again with the new fingerprint replaces the CA in `hvo-roof`'s connection and the Mac app's settings,
+and trusts the new one in the keychain; remove the old one there with Keychain Access.
+
 ## Certificates
 
 The controller serves its API and the web UI over HTTPS, unless you choose plain HTTP. `controller.connection` says
@@ -535,7 +694,9 @@ with `HTTPS_CERT_DIR=/etc/hvo-roof/https` and the default `HTTPS_CERT_FILE`.
 The Done page, `cert` and `cert show` print the CA's SHA-256 fingerprint. A client gets the CA from the controller at
 `https://<host>.local:<HTTPS port>/ca.crt`, or as a copy of `/etc/hvo-roof/ca.crt`. Check the fingerprint the client shows
 against the one the installer printed before trusting it. The TLS handshake cannot give the CA: the server leaves a
-self-signed root out of it.
+self-signed root out of it. The installer does this for `hvo-roof` and the Mac app
+([Trusting the controller](#trusting-the-controller)); for a browser, see
+[Trusting the controller in a browser](#trusting-the-controller-in-a-browser).
 
 ### Renewing
 
@@ -670,6 +831,10 @@ machine has files, modes, containers and ports, and its programs are stubbed. Th
   chain, and refusing a certificate the controller could not serve;
 - the kiosk's steps (`InstallerKioskTests`): its files, modes and owners, its settings for each way the controller is
   reached, its PINs, a rollback copy on update, and its settings following a renewed certificate;
+- `hvo-roof` and the Mac app (`InstallerClientTests`): the release's program for each platform, the controller's CA
+  saved only when its fingerprint is the one given, a connection to another controller replacing the old sign-in, the
+  Mac app without its quarantine mark, its device key made through the controller's API (a real one, in process), its
+  settings kept when you changed them, `--check`, and the login keychain;
 - the exit codes.
 
 The controller's side, `GET /ca.crt` and the `https_certificate` health check, has its own tests
@@ -695,9 +860,15 @@ that names them by digest. The script checks:
    answers, and the first admin signs in with the password from the file. No key or password is in the output, the
    log, the record or the containers' configuration.
 2. **Again.** The same answers change nothing and replace nothing.
-3. **Change.** A new time scale replaces the emulator and redeploys the controller against it.
-4. **Certificate.** `cert --renew --redeploy` serves a new certificate that the CA from before the renewal verifies,
-   and leaves that CA unchanged.
+3. **hvo-roof.** The installer, run as you and not as root (in a home of the run's own, so yours is untouched),
+   installs the release's `hvo-roof` with the rig as its controller, trusting the rig's CA by its fingerprint. A wrong
+   fingerprint is refused (exit 3) with nothing installed. Then `hvo-roof` is in `~/.local/bin` (`0755`) and is the
+   release's, and its connection holds the rig's CA (`0600`). `hvo-roof login` signs in with the password on standard
+   input, and `hvo-roof status` reports the emulated HAT. The same answers again change nothing and keep the session. No
+   password, key or session is in the output, the log or the record.
+4. **Change.** A new time scale replaces the emulator and redeploys the controller against it.
+5. **Certificate.** `cert --renew --redeploy` serves a new certificate that the CA from before the renewal verifies,
+   and leaves that CA unchanged. `hvo-roof`, which trusts the CA rather than the certificate, still signs in.
 
 Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
 and no violation.
@@ -719,6 +890,17 @@ where it draws, and that a second run changes nothing; then it removes what it m
 container, and the redeploy that gives it the kiosk's key) needs the Pi's HAT, so the fake machine's tests cover it. The
 runner has no screen or touchscreen, so the kiosk's display stays one of its assumptions
 ([kiosk.md](kiosk.md#assumptions)). Anywhere without `HVO_KIOSK_INSTALL=1` and `HVO_KIOSK_PROGRAM` the test is skipped.
+
+### The Mac app end to end
+
+The CI workflow's `installer-mac` job installs the Mac app for real on GitHub's macOS runner, as the person
+(`InstallerMacSystemTests`). It takes the app the build zipped, marks the zip as a browser marks a download, and
+installs it from a release folder into `~/Applications` in a home of the test's own. The controller is its API in
+process, so the device key is really made through it by an admin who signs in once. The test checks that the app
+carries no quarantine mark and is still signed, the settings folder is `0700`, the device key is `0600` and is a
+viewer's key the controller takes, the CA's fingerprint is the one given, the settings are valid, `--check` opens the
+app's window with them, and a second run changes nothing. No key or password is in the output or the log. Anywhere
+without `HVO_MAC_INSTALL=1` and `HVO_MAC_APP_ZIP` the test is skipped.
 
 ### Refreshing the screenshots
 

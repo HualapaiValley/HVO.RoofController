@@ -404,6 +404,49 @@ jobs:
             --filter "TestCategory=KioskInstall" --logger "console;verbosity=normal" | tee kiosk-install.txt
           grep -q '^  Passed TheKiosk_IsInstalled_AndStartedBySystemd_AndASecondRunChangesNothing ' kiosk-install.txt
 
+  # The installer's Mac app install (#71) for real on a Mac, as the person (InstallerMacSystemTests): the app the build
+  # zipped, marked as downloaded, put in ~/Applications of a home of the test's own without the quarantine mark, its
+  # device key made through the controller's API in process, its settings, and --check.
+  installer-mac:
+    needs: build-and-test
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Download HVO Roof.app
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hvo-roof-mac-${{ github.run_id }}.zip
+          path: ${{ runner.temp }}/mac
+          skip-decompress: true
+
+      - name: Build the tests
+        run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release -v minimal
+
+      # The test is skipped without HVO_MAC_INSTALL, so the summary must show it passed, not skipped.
+      - name: Install the Mac app
+        run: |
+          HVO_MAC_INSTALL=1 HVO_MAC_APP_ZIP="$RUNNER_TEMP/mac/hvo-roof-mac-${GITHUB_RUN_ID}.zip" \
+            dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build \
+            --filter "TestCategory=MacInstall" --logger "console;verbosity=normal" | tee mac-install.txt
+          grep -q '^  Passed TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing ' mac-install.txt
+
   mac-app:
     needs: build-and-test
     runs-on: macos-latest

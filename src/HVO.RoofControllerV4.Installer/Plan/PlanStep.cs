@@ -1,3 +1,4 @@
+using System.Security.Cryptography.X509Certificates;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -14,7 +15,10 @@ public enum StepKind
     Package,
     Container,
     Service,
-    Port
+    Port,
+
+    /// <summary>Something run once the rest is in place, to show it works (the Mac app opened with <c>--check</c>).</summary>
+    Check
 }
 
 /// <summary>What a step would do on this machine.</summary>
@@ -70,10 +74,41 @@ public sealed class InstallContext
     public InstallSecrets Secrets { get; init; } = new();
 
     private readonly HashSet<PlanStep> applied = [];
+    private readonly Dictionary<Uri, Task<X509Certificate2>> authorities = [];
 
     /// <summary>The release this installer installs: its release.json, read once a run.</summary>
     public Task<ReleaseManifest> ReleaseAsync(CancellationToken cancellationToken)
         => Release.GetAsync(Machine, Log, Version, cancellationToken);
+
+    /// <summary>
+    /// The CA the controller at <paramref name="controller"/> serves, checked against the certificate it presents: fetched
+    /// once a run, the first time a step needs it (see <see cref="InstallerMachine.FetchCaAsync"/>). A controller that does
+    /// not answer in time fails with a <see cref="TimeoutException"/>, which is kept for the run too, so each step does not
+    /// wait for it again; a fetch the run itself cancelled is tried again.
+    /// </summary>
+    public Task<X509Certificate2> ControllerCaAsync(Uri controller, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(controller);
+        if (!authorities.TryGetValue(controller, out var fetch) || fetch.IsCanceled)
+        {
+            fetch = FetchCaAsync(controller, cancellationToken);
+            authorities[controller] = fetch;
+        }
+
+        return fetch;
+    }
+
+    private async Task<X509Certificate2> FetchCaAsync(Uri controller, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await Machine.FetchCaAsync(controller, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"{controller} did not answer in time.", error);
+        }
+    }
 
     /// <summary>
     /// Whether <paramref name="step"/> made a change in this run: a step that depends on another (the controller on its
@@ -100,9 +135,6 @@ public abstract class PlanStep
     public abstract string Purpose { get; }
 
     public abstract Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken);
-
-    /// <summary>False for a step this installer can plan but not carry out yet: an install that needs it is refused first.</summary>
-    public virtual bool CanApply => true;
 
     /// <summary>
     /// The secrets the change <paramref name="check"/> found needs (the first admin's password): the installer asks for

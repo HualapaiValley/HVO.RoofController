@@ -9,9 +9,10 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 
 /// <summary>
 /// A folder with its mode, and its owner when one is given: made when missing, its mode and owner set when they differ.
-/// Its contents are never touched.
+/// Its contents are never touched. With <paramref name="keepsMode"/>, a folder that is there is left as it is: one of the
+/// person's own, such as <c>~/.local/bin</c>, which the installer only makes when it is missing.
 /// </summary>
-public sealed class FolderStep(string path, UnixFileMode mode, string purpose, string? owner = null) : PlanStep
+public sealed class FolderStep(string path, UnixFileMode mode, string purpose, string? owner = null, bool keepsMode = false) : PlanStep
 {
     public override StepKind Kind => StepKind.Folder;
 
@@ -37,6 +38,11 @@ public sealed class FolderStep(string path, UnixFileMode mode, string purpose, s
         if (context.Machine.FileExists(path))
         {
             return new StepCheck(StepChange.Blocked, $"{path} is a file, not a folder");
+        }
+
+        if (keepsMode)
+        {
+            return StepCheck.Unchanged("there already, and kept as it is");
         }
 
         var changes = new List<string>();
@@ -186,26 +192,4 @@ public sealed class PortStep(int port, string purpose, string container) : PlanS
     }
 
     public override Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken) => Task.CompletedTask;
-}
-
-/// <summary>
-/// A part of a role that a later installer issue builds (the kiosk's service, hvo-roof, the Mac app). It is shown in the
-/// plan as what it will be, found when already there, and the install is refused before anything changes when it would
-/// have to be made.
-/// </summary>
-public sealed class LaterStep(StepKind kind, string target, string purpose, Func<InstallContext, bool> isThere) : PlanStep
-{
-    public override bool CanApply => false;
-
-    public override StepKind Kind => kind;
-
-    public override string Target => target;
-
-    public override string Purpose => purpose;
-
-    public override Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
-        => Task.FromResult(isThere(context) ? StepCheck.Unchanged("already there") : new StepCheck(StepChange.Create));
-
-    public override Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
-        => throw new InstallerException($"This installer cannot install {target} yet.");
 }

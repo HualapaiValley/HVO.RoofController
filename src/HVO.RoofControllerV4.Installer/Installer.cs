@@ -421,8 +421,8 @@ public static class Installer
     }
 
     /// <summary>
-    /// The passwords and PINs <paramref name="plan"/> needs that no file gave: each typed twice at the terminal, and never
-    /// shown. Without a terminal, the install is refused before anything changes.
+    /// The passwords and PINs <paramref name="plan"/> needs that no file gave: each typed at the terminal (a new one twice),
+    /// and never shown. Without a terminal, the install is refused before anything changes.
     /// </summary>
     internal static void AskForSecrets(InstallerHost host, InstallerSession session, CheckedPlan plan)
     {
@@ -455,6 +455,11 @@ public static class Installer
         {
             var typed = host.ReadSecret(what) ?? throw NoTerminal(missing);
             var problem = InstallSecrets.Problem(secret, typed);
+            if (problem is null && secret.IsExisting)
+            {
+                return typed;
+            }
+
             if (problem is null)
             {
                 var again = host.ReadSecret($"{what} again") ?? throw NoTerminal(missing);

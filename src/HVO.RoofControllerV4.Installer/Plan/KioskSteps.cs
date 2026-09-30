@@ -303,7 +303,7 @@ public sealed class KioskProgramStep : PlanStep
         }
 
         using var work = new DeployScript.WorkFolder(machine);
-        var tarball = await TarballAsync(context, release, asset, work, cancellationToken).ConfigureAwait(false);
+        var tarball = await ReleaseFiles.GetAsync(context, release, asset, work, cancellationToken).ConfigureAwait(false);
         var staged = $"{Target}.new";
         try
         {
@@ -331,49 +331,6 @@ public sealed class KioskProgramStep : PlanStep
     {
         var asset = release.Assets.FirstOrDefault(candidate => candidate.Kind == KioskSteps.AssetKind && candidate.Platform == KioskSteps.AssetPlatform);
         return asset is not null && asset.Files.TryGetValue(KioskSteps.ProgramName, out var sha256) ? (asset, sha256) : null;
-    }
-
-    // The release's kiosk tarball: from the release's folder (--release DIR), or downloaded; checked either way.
-    private static async Task<string> TarballAsync(InstallContext context, ReleaseManifest release, ReleaseAsset asset, DeployScript.WorkFolder work, CancellationToken cancellationToken)
-    {
-        string path;
-        if (context.Release.FolderPath is { } folder)
-        {
-            path = Path.Join(folder, asset.Name);
-            if (!context.Machine.FileExists(path))
-            {
-                throw new InstallerException($"There is no {asset.Name} in {folder}: download it with the release's other files from {ReleaseManifest.ReleasesUrl}.");
-            }
-        }
-        else
-        {
-            path = Path.Join(work.Path, asset.Name);
-            var uri = ReleaseManifest.DownloadUri(release.Version, asset.Name);
-            context.Progress?.Invoke($"Downloading {asset.Name} ({asset.Size / (1024 * 1024)} MB)…");
-            try
-            {
-                await context.Machine.DownloadFileAsync(uri, path, asset.Size, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException
-                || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested))
-            {
-                throw new InstallerException(
-                    $"The installer could not download {asset.Name} from {uri}: {error.Message} "
-                    + $"Download the release's files from {ReleaseManifest.ReleasesUrl} on a machine that can, and give their folder: --release DIR.");
-            }
-        }
-
-        var stream = context.Machine.OpenRead(path) ?? throw new InstallerException($"{path} is not there.");
-        await using (stream.ConfigureAwait(false))
-        {
-            var sha256 = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
-            if (stream.Length != asset.Size || sha256 != asset.Sha256)
-            {
-                throw new InstallerException($"{path} is not the release's {asset.Name}: its size or SHA-256 differs from {ReleaseManifest.FileName}'s.");
-            }
-        }
-
-        return path;
     }
 
     // The program from the tarball, checked against its SHA-256 as it is written: a program that differs is never used.
