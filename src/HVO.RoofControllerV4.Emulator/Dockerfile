@@ -26,12 +26,17 @@
 # The build stage runs on the builder's native platform and cross-compiles for the target.
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
 ARG TARGETARCH
+# The product version and commit (docs/releasing.md). A release passes ROOF_VERSION=4.0.0, CI 4.0.0-ci.<run>, and the
+# deploy script 4.0.0-dev; left empty, the build is Directory.Build.props's 4.0.0-dev. The image has no .git, so the
+# commit comes from ROOF_REVISION.
+ARG ROOF_VERSION=""
+ARG ROOF_REVISION=""
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
 
 # Mirror the repository layout so Directory.*.props and src/global.json resolve exactly as in a local checkout.
 WORKDIR /repo/src
-COPY ["Directory.Build.props", "Directory.Packages.props", "/repo/"]
+COPY ["Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "/repo/"]
 COPY ["src/global.json", "src/NuGet.config", "./"]
 COPY ["src/HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj", "HVO.RoofControllerV4.Common/"]
 COPY ["src/HVO.RoofControllerV4.Simulation/HVO.RoofControllerV4.Simulation.csproj", "HVO.RoofControllerV4.Simulation/"]
@@ -58,12 +63,27 @@ RUN dotnet publish "HVO.RoofControllerV4.Emulator/HVO.RoofControllerV4.Emulator.
     --configuration Release \
     --runtime "$(cat /tmp/rid)" \
     --self-contained false \
+    ${ROOF_VERSION:+-p:Version=$ROOF_VERSION} \
+    ${ROOF_REVISION:+-p:SourceRevisionId=$ROOF_REVISION} \
     --output /app/publish
 
 # -------------------------
 # Runtime image
 # -------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.12 AS runtime
+# The image's version, commit and source (OCI labels; build/check-image-labels.sh checks them). The source links a GHCR
+# package to its repository.
+ARG ROOF_VERSION=""
+ARG ROOF_REVISION=""
+ARG ROOF_CREATED=""
+LABEL org.opencontainers.image.title="HVO Roof Controller HAT emulator" \
+      org.opencontainers.image.description="The emulated roof, drive, limit switches and HAT, for testing the roof controller without hardware." \
+      org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \
+      org.opencontainers.image.vendor="Hualapai Valley Observatory" \
+      org.opencontainers.image.version="${ROOF_VERSION}" \
+      org.opencontainers.image.revision="${ROOF_REVISION}" \
+      org.opencontainers.image.created="${ROOF_CREATED}"
+
 WORKDIR /app
 
 # curl for the health check only.

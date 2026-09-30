@@ -1185,11 +1185,18 @@ if ! docker buildx version >/dev/null 2>&1; then
   fail "docker buildx is required but not available. Install Docker Buildx and try again."
 fi
 
-echo "[build] Building ${IMAGE_TAG} for ${BUILD_PLATFORM}..."
+# The product version and commit the image carries (docs/releasing.md): a deploy from a checkout is a -dev build.
+ROOF_VERSION=$("${REPO_ROOT}/build/version.sh" --dev) || fail "could not read the product version from Directory.Build.props."
+ROOF_REVISION=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)
+
+echo "[build] Building ${IMAGE_TAG} (${ROOF_VERSION}${ROOF_REVISION:+, commit ${ROOF_REVISION:0:12}}) for ${BUILD_PLATFORM}..."
 docker buildx build \
   --platform "${BUILD_PLATFORM}" \
   -f "${DOCKERFILE_PATH}" \
   -t "${IMAGE_TAG}" \
+  --build-arg "ROOF_VERSION=${ROOF_VERSION}" \
+  --build-arg "ROOF_REVISION=${ROOF_REVISION}" \
+  --build-arg "ROOF_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --load \
   "${REPO_ROOT}"
 

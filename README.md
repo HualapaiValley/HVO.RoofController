@@ -201,6 +201,7 @@ with the roof mechanism isolated.
 | [Command line](docs/cli.md) | `hvo-roof`: install, setup and credentials, the commands, exit codes and the terminal interface |
 | [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |
 | [CI runners](docs/ci-runners.md) | Active CI workflows and runner security settings |
+| [Versions and releases](docs/releasing.md) | The product version, where it shows, and the scripts that read and check it |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines and development workflow |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
 | [copilot-instructions.md](.github/copilot-instructions.md) | Architecture and coding standards |

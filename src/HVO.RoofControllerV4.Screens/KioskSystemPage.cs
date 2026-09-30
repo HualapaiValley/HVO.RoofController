@@ -57,14 +57,14 @@ public sealed class KioskSystemPage : UserControl
 
         page.Children.Add(KioskPageParts.Row(_metrics, [.. actions]));
 
-        if (_panel.Information.Count > 0)
+        var information = new StackPanel { Spacing = _metrics.Gap };
+        information.Children.Add(Rows([_panel.Self, .. _panel.Information]));
+        if (_panel.Information.Count == 0 && _panel.Health is not null && !_console.View.IsAdmin)
         {
-            page.Children.Add(KioskTheme.Card(Rows(_panel.Information), _metrics));
+            information.Children.Add(KioskTheme.Label(KioskSystemPanel.InformationNeedsAdmin, _metrics.Font, KioskTheme.MutedWeak));
         }
-        else if (_panel.Health is not null && !_console.View.IsAdmin)
-        {
-            page.Children.Add(KioskTheme.Label(KioskSystemPanel.InformationNeedsAdmin, _metrics.Font, KioskTheme.MutedWeak));
-        }
+
+        page.Children.Add(KioskTheme.Card(information, _metrics));
 
         if (_panel.Health is { } health)
         {

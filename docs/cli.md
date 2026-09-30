@@ -33,6 +33,9 @@ ssh pi@roof.local 'sudo install -m 0755 /tmp/hvo-roof /usr/local/bin/hvo-roof &&
 hvo-roof --version
 ```
 
+`--version` prints the product version and the commit it was built from, such as `4.0.0-dev+0123abcd…`
+([Versions and releases](releasing.md)).
+
 `hvo-roof ui` needs a terminal of at least 80 × 24 that sends function keys: the Linux console, SSH from any common
 terminal, or tmux.
 
@@ -103,7 +106,7 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). |
 | `keys list\|add\|set\|rotate\|remove` | admin | API keys. Keys from the controller's configuration are read-only. |
 | `sessions list\|end` | admin | People's sessions. Tokens are never shown. |
-| `info` | admin | The controller's version, host and resource use. |
+| `info` | admin | `hvo-roof`'s own version, then the controller's version, host and resource use. |
 | `restart [--force] [--confirm-safety-critical]` | admin | Restarts the controller, so that settings read at startup take effect. The controller stops the roof and verifies the stop first, and refuses when it cannot. `health --probe ready` says when it is back. |
 | `setup` | none | See [Setup](#setup). |
 | `ui` | any | The terminal interface (see [The terminal interface](#the-terminal-interface)). |
@@ -257,7 +260,7 @@ and the Settings page's header then says the file was edited by hand.
 | F1 | Roof | The status, with Open, Close, Clear fault and Refresh. Each button that cannot be used says why, for example "the roof is already closed". |
 | F2 | Settings | The settings by group, built from the controller's catalogue. Change, Clear secret, Reload, and review of a hand edit. A group's secrets are set and cleared together: Change on the camera's user name or password asks for both, each typed twice, and Clear secret clears both. |
 | F3 | People | People, API keys and sessions (admin). |
-| F4 | System | Health, readiness, the version and resource use (admin), and Restart (admin). |
+| F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's version, host and resource use (admin), and Restart (admin). |
 | F5 | Setup | Connection, a connection check, Sign in, Sign out, and First admin. |
 
 ![hvo-roof ui on the Roof page: the Stop roof (F9) button and who is signed in above the page, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)

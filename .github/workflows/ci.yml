@@ -25,6 +25,9 @@ jobs:
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
       AVALONIA_TELEMETRY_OPTOUT: 1
       TEST_PROJECT: ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+      # Every program built here is 4.0.0-ci.<run> (docs/releasing.md): MSBuild reads the variable as a property, so
+      # every restore, build and publish below gets it. The SDK adds the commit (+<sha>) from the checkout.
+      VersionSuffix: ci.${{ github.run_number }}
     defaults:
       run:
         # The dotnet host resolves global.json from the working directory upward, not from
@@ -134,7 +137,14 @@ jobs:
             test -x "hvo-roof/$rid/hvo-roof"
           done
           file hvo-roof/linux-arm64/hvo-roof | grep -q 'ARM aarch64'
-          ./hvo-roof/linux-x64/hvo-roof --version
+          # The product version and this commit, as build/version.sh names a CI build.
+          expected="$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")+${GITHUB_SHA}"
+          actual=$(./hvo-roof/linux-x64/hvo-roof --version)
+          echo "hvo-roof --version: ${actual}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error file=Directory.Build.props::hvo-roof --version printed ${actual}, not ${expected}"
+            exit 1
+          fi
 
       # hvo-roof-kiosk as one self-contained file for the Pi (docs/kiosk.md), and for linux-x64 to check that the file
       # runs: with no device key it refuses its settings (exit 78) before it opens a display.
@@ -193,8 +203,10 @@ jobs:
           echo "${APPLE_CODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
           rcodesign="$RUNNER_TEMP/$archive/rcodesign"
-          python3 HVO.RoofControllerV4.Mac/bundle/bundle.py make hvo-roof-mac/osx-arm64 mac-artifact --build "$GITHUB_RUN_NUMBER" --rcodesign "$rcodesign"
-          python3 HVO.RoofControllerV4.Mac/bundle/bundle.py check "mac-artifact/HVO Roof.app"
+          version=$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")
+          python3 HVO.RoofControllerV4.Mac/bundle/bundle.py make hvo-roof-mac/osx-arm64 mac-artifact \
+            --version "$version" --build "$GITHUB_RUN_NUMBER" --rcodesign "$rcodesign"
+          python3 HVO.RoofControllerV4.Mac/bundle/bundle.py check "mac-artifact/HVO Roof.app" --version "$version"
           "$rcodesign" print-signature-info "mac-artifact/HVO Roof.app/Contents/MacOS/hvo-roof-mac" > mac-signature.txt
           grep -E '^ +(flags|identifier): ' mac-signature.txt
           grep -q 'flags: CodeSignatureFlags(ADHOC)' mac-signature.txt
@@ -319,6 +331,9 @@ jobs:
           bash -n tests/emulator/compose-smoke-test.sh
           bash -n tests/emulator/deploy-scenarios.sh
           bash -n tests/cli/terminal-smoke.sh
+          for script in build/*.sh tests/versioning/*.sh; do
+            bash -n "${script}"
+          done
           for script in src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-*; do
             bash -n "${script}"
           done
@@ -327,7 +342,12 @@ jobs:
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh \
-            src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-*
+            src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-* \
+            build/*.sh tests/versioning/*.sh
+
+      # build/version.sh (the product version and the release tag's check) and build/check-image-labels.sh.
+      - name: Version script tests
+        run: tests/versioning/version-tests.sh
 
       - name: Screenshot converter tests
         run: python3 -m unittest discover -s tests/cli -p 'test_*.py' -v

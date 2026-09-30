@@ -137,6 +137,14 @@ x-thermal-mount: &thermal-mount
   target: /sys/class/thermal/thermal_zone0/temp
   read_only: true
 
+# The product version and commit the images are built for (docs/releasing.md): HVO_ROOF_VERSION (4.0.0-dev, say),
+# HVO_ROOF_REVISION (the commit) and HVO_ROOF_CREATED (an RFC 3339 time). Left empty, an image carries
+# Directory.Build.props's 4.0.0-dev without a commit and has empty version labels.
+x-build-args: &build-args
+  ROOF_VERSION: ${HVO_ROOF_VERSION:-}
+  ROOF_REVISION: ${HVO_ROOF_REVISION:-}
+  ROOF_CREATED: ${HVO_ROOF_CREATED:-}
+
 # Log rotation for the long-running services (the Pi controllers and the emulator rig, which a soak runs).
 x-logging: &logging
   driver: local
@@ -149,6 +157,7 @@ x-roof-controller: &roof-controller
   build:
     context: ../..
     dockerfile: "src/HVO.RoofControllerV4.RPi/Dockerfile"
+    args: *build-args
     platforms:
       - linux/arm64
   container_name: roof-controller
@@ -278,6 +287,7 @@ services:
     build:
       context: ../..
       dockerfile: "src/HVO.RoofControllerV4.Emulator/Dockerfile"
+      args: *build-args
     environment:
       Emulator__TimeScale: ${HVO_EMULATOR_TIME_SCALE:-1}
       Emulator__CameraFramesPerSecond: ${HVO_EMULATOR_CAMERA_FPS:-5}
@@ -296,6 +306,7 @@ services:
     build:
       context: ../..
       dockerfile: "src/HVO.RoofControllerV4.RPi/Dockerfile"
+      args: *build-args
     depends_on:
       hat-emulator:
         condition: service_healthy

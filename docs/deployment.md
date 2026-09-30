@@ -298,7 +298,10 @@ anything.
      drive the HAT. Stop it and retry.
    - neither `<name>` nor `<name>-previous` was created by Docker Compose. The script replaces and restores only
      controllers it created; see [Moving between Compose and the deploy script](#moving-between-compose-and-the-deploy-script).
-2. **Builds** the image for `BUILD_PLATFORM` (the Pi's, `linux/arm64`) and loads it on the Pi.
+2. **Builds** the image for `BUILD_PLATFORM` (the Pi's, `linux/arm64`) and loads it on the Pi. The image carries the
+   product version as a workstation build (`4.0.0-dev`), the checkout's commit and the time it was built, in its labels
+   and in its programs ([Versions and releases](releasing.md#images)); the line
+   `[build] Building <image> (4.0.0-dev, commit 0123abcd4567) for linux/arm64...` names them.
 3. **Runs the pre-flight check** on the Pi: the new image with `--validate-deployment` and exactly the environment,
    devices and mounts the controller will get (see [The deployment check](#the-deployment-check)), plus the SHA-256 of
    the script's key. Docker also fails here on a missing `/dev/gpiomem`, `/dev/i2c-1` or thermal file (none of them
@@ -509,6 +512,13 @@ exits 0. But `up` stops and replaces a running controller before the check runs,
 leaves **no** controller running. That is why the commands above run the check on its own first, with the same
 `HVO_ROOF_*` variables, and run `up` only if it passes. Read the report of the check that `up` ran with
 `docker compose --profile pi logs roof-controller-check`.
+
+An image Compose builds carries `4.0.0-dev` with no commit, unless `HVO_ROOF_VERSION`, `HVO_ROOF_REVISION` and
+`HVO_ROOF_CREATED` are set; Compose passes them to the build ([Versions and releases](releasing.md#images)):
+
+```bash
+HVO_ROOF_REVISION=$(git rev-parse HEAD) HVO_ROOF_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose --profile pi build
+```
 
 Compose does **not** perform the verified stop, keep the previous container, check the published URLs or roll back.
 Prefer the script. With Compose, the script's `--verify-remote` does the stop and the URL check, as described below.

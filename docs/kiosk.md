@@ -105,11 +105,12 @@ an operator the UI group (for example `KioskScreenTimeout`), an admin the rest.
 
 ### System
 
-The controller's health checks and readiness, and for an admin its version, host and resource use, and **Restart**:
+The kiosk's own version, the controller's health checks and readiness, and for an admin its version, host and
+resource use, and **Restart**:
 the controller stops the roof, verifies the stop, and exits, and its supervisor starts it again. A restart that would
 load a pending hand edit shows it first.
 
-![The System page for an admin: health, readiness, the version and host, and Restart](images/kiosk/admin-system-1280x720.png)
+![The System page for an admin: the kiosk's and the controller's versions, the host, health, readiness, and Restart](images/kiosk/admin-system-1280x720.png)
 
 ## The status
 

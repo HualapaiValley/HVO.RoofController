@@ -7,6 +7,7 @@ using Asp.Versioning;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -27,13 +28,14 @@ public class SystemController : ControllerBase
 {
     private readonly ILogger<SystemController> _logger;
     private readonly IHostEnvironment _environment;
-    private readonly Assembly _entryAssembly;
+    private readonly Assembly _controllerAssembly;
 
     public SystemController(ILogger<SystemController> logger, IHostEnvironment environment)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _environment = environment ?? throw new ArgumentNullException(nameof(environment));
-        _entryAssembly = Assembly.GetEntryAssembly() ?? typeof(Program).Assembly;
+        // The controller's own assembly, not the entry assembly: under a test host that is the test runner.
+        _controllerAssembly = typeof(Program).Assembly;
     }
 
     /// <summary>
@@ -50,7 +52,7 @@ public class SystemController : ControllerBase
             var generatedAtUtc = DateTimeOffset.UtcNow;
             var startTimeUtc = process.StartTime.ToUniversalTime();
             var uptimeSeconds = Math.Max((generatedAtUtc - startTimeUtc).TotalSeconds, 0d);
-            var assemblyName = _entryAssembly.GetName();
+            var assemblyName = _controllerAssembly.GetName();
 
             var response = new SystemInformationResponse(
                 ApplicationName: _environment.ApplicationName ?? assemblyName.Name ?? "Unknown",
@@ -58,7 +60,7 @@ public class SystemController : ControllerBase
                 MachineName: Environment.MachineName,
                 OperatingSystemDescription: RuntimeInformation.OSDescription,
                 FrameworkDescription: RuntimeInformation.FrameworkDescription,
-                ApplicationVersion: assemblyName.Version?.ToString() ?? "Unknown",
+                ApplicationVersion: RoofProductVersion.Of(_controllerAssembly),
                 ProcessStartTimeUtc: startTimeUtc,
                 UptimeSeconds: uptimeSeconds,
                 GeneratedAtUtc: generatedAtUtc);

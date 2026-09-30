@@ -58,16 +58,18 @@ internal sealed class RoofUiSystemPage : RoofUiPage
         _ = Ui.Run("Reading the controller's health…", async (client, cancellationToken) =>
         {
             var report = await client.Health.GetReportAsync(cancellationToken).ConfigureAwait(false);
+            // This program's own version for everyone: it may be older or newer than the controller's.
+            (string, string)[] self = [RoofSystemText.DescribeClient(RoofCli.CommandName, typeof(RoofCli).Assembly)];
             string[] information;
             if (admin)
             {
                 var info = await client.System.GetInformationAsync(cancellationToken).ConfigureAwait(false);
                 var metrics = await client.System.GetMetricsAsync(cancellationToken).ConfigureAwait(false);
-                information = Rows(RoofSystemText.DescribeInformation(info, metrics)).Split('\n');
+                information = Rows(self.Concat(RoofSystemText.DescribeInformation(info, metrics))).Split('\n');
             }
             else
             {
-                information = ["The version, host and resource use need the Admin role."];
+                information = [.. Rows(self).Split('\n'), "The controller's version, host and resource use need the Admin role."];
             }
 
             var health = Table(

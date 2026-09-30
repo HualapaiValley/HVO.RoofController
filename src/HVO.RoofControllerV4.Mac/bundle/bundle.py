@@ -2,21 +2,24 @@
 """Makes and checks the Mac app's bundle, HVO Roof.app, on Linux or a Mac, with the standard library and rcodesign
 (https://github.com/indygreg/apple-platform-rs) to sign it. No Xcode.
 
-    bundle.py make <publish dir> <out dir> [--build N] [--rcodesign PATH]
-    bundle.py check <HVO Roof.app> [--unsigned]
+    bundle.py make <publish dir> <out dir> [--version X.Y.Z[-suffix]] [--build N] [--rcodesign PATH]
+    bundle.py check <HVO Roof.app> [--version X.Y.Z[-suffix]] [--unsigned]
 
 make: the program and native libraries from `dotnet publish -r osx-arm64` go in Contents/MacOS, the icon in
 Contents/Resources, and Info.plist (the template beside this script) gets the version, the build number and the oldest
-macOS that every Mach-O file in the bundle runs on. With --rcodesign the bundle is then signed ad hoc: with no
-certificate, which is enough for your own Macs (docs/mac.md).
+macOS that every Mach-O file in the bundle runs on. The version is the product version the app was published with
+(docs/releasing.md), by default the VersionPrefix in Directory.Build.props; macOS shows only its X.Y.Z
+(CFBundleShortVersionString), so a prerelease such as 4.0.0-ci.12 is told apart by the build number (CFBundleVersion).
+With --rcodesign the bundle is then signed ad hoc: with no certificate, which is enough for your own Macs (docs/mac.md).
 
-check: reads back what make promises: Info.plist's keys, the program and native libraries built for arm64 and (unless
---unsigned) each carrying a code signature, the icon's images, and nothing else in the bundle. It exits 1 with a
-message per problem.
+check: reads back what make promises: Info.plist's keys (with --version, the X.Y.Z of that version), the program and
+native libraries built for arm64 and (unless --unsigned) each carrying a code signature, the icon's images, and nothing
+else in the bundle. It exits 1 with a message per problem.
 """
 import argparse
 import os
 import plistlib
+import re
 import shutil
 import struct
 import subprocess
@@ -26,7 +29,8 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_NAME = "HVO Roof.app"
 EXECUTABLE = "hvo-roof-mac"
-VERSION = "1.0.0"
+# A product version: X.Y.Z, then an optional prerelease (-ci.12) and commit (+0123abcd), as the assemblies carry it.
+PRODUCT_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
 BUNDLE_ID = "io.github.hualapaivalley.roof"
 # The native libraries the program loads from beside it: Avalonia's macOS windowing, Skia and HarfBuzz.
 LIBRARIES = ["libAvaloniaNative.dylib", "libHarfBuzzSharp.dylib", "libSkiaSharp.dylib"]
@@ -102,7 +106,36 @@ def version_text(encoded):
     return f"{major}.{minor}.{patch}" if patch else f"{major}.{minor}"
 
 
-def make(publish, out, build, rcodesign):
+def product_version():
+    """The VersionPrefix in the repository's Directory.Build.props (docs/releasing.md)."""
+    directory = HERE
+    while not os.path.isfile(os.path.join(directory, "Directory.Build.props")):
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            sys.exit(f"{HERE}: no Directory.Build.props above it; give the version with --version")
+        directory = parent
+    with open(os.path.join(directory, "Directory.Build.props"), encoding="utf-8") as file:
+        prefixes = re.findall(r"<VersionPrefix>([^<]*)</VersionPrefix>", file.read())
+    if len(prefixes) != 1:
+        sys.exit(f"{directory}/Directory.Build.props: holds {len(prefixes)} VersionPrefix, not 1; "
+                 "give the version with --version")
+    return prefixes[0].strip()
+
+
+def short_version(version):
+    """The X.Y.Z of a product version, which CFBundleShortVersionString holds: 4.0.0 for 4.0.0-ci.12+0123abcd."""
+    match = PRODUCT_VERSION.match(version)
+    if not match:
+        raise ValueError(f"{version!r} is not a product version such as 4.0.0 or 4.0.0-ci.12")
+    return ".".join(match.groups()[:3])
+
+
+def make(publish, out, build, rcodesign, version=None):
+    try:
+        short = short_version(product_version() if version is None else version)
+    except ValueError as error:
+        sys.exit(f"--version: {error}")
+
     # The program and the native libraries it loads; nothing else from the publish folder (no symbols, no settings).
     # Each is checked first, so a file make cannot use is named where it was published.
     publish_again = "publish again with: dotnet publish HVO.RoofControllerV4.Mac -c Release -r osx-arm64"
@@ -136,7 +169,7 @@ def make(publish, out, build, rcodesign):
         shutil.copyfile(os.path.join(HERE, "AppIcon.icns"), os.path.join(resources, "AppIcon.icns"))
         with open(os.path.join(HERE, "Info.plist"), encoding="utf-8") as file:
             plist = file.read()
-        plist = (plist.replace("@VERSION@", VERSION).replace("@BUILD@", str(build))
+        plist = (plist.replace("@VERSION@", short).replace("@BUILD@", str(build))
                  .replace("@MINIMUM_SYSTEM@", version_text(minimum) if minimum else "12.0"))
         with open(os.path.join(new, "Contents", "Info.plist"), "w", encoding="utf-8") as file:
             file.write(plist)
@@ -172,7 +205,7 @@ def make(publish, out, build, rcodesign):
     print(app)
 
 
-def check(app, unsigned):
+def check(app, unsigned, version=None):
     problems = []
     contents = os.path.join(app, "Contents")
     expected = {"Info.plist", "PkgInfo", "MacOS/" + EXECUTABLE, "Resources/AppIcon.icns"}
@@ -191,7 +224,7 @@ def check(app, unsigned):
     plist_path = os.path.join(contents, "Info.plist")
     minimum = None
     if os.path.isfile(plist_path):
-        plist_problems, minimum = check_plist(plist_path)
+        plist_problems, minimum = check_plist(plist_path, version)
         problems.extend(plist_problems)
 
     for name in [EXECUTABLE] + LIBRARIES:
@@ -225,8 +258,9 @@ def check(app, unsigned):
     return 0
 
 
-def check_plist(path):
-    """Info.plist's keys, as problems, and the oldest macOS it names (as a Mach-O version), or None."""
+def check_plist(path, version=None):
+    """Info.plist's keys, as problems, and the oldest macOS it names (as a Mach-O version), or None. With a version,
+    CFBundleShortVersionString must be its X.Y.Z; without one, any X.Y.Z."""
     try:
         with open(path, "rb") as file:
             plist = plistlib.load(file)
@@ -236,10 +270,15 @@ def check_plist(path):
         return ["Info.plist is not a dictionary"], None
     problems = []
     wanted = {"CFBundleExecutable": EXECUTABLE, "CFBundleIdentifier": BUNDLE_ID, "CFBundlePackageType": "APPL",
-              "CFBundleIconFile": "AppIcon", "CFBundleShortVersionString": VERSION, "NSHighResolutionCapable": True}
+              "CFBundleIconFile": "AppIcon", "NSHighResolutionCapable": True}
+    if version is not None:
+        wanted["CFBundleShortVersionString"] = short_version(version)
     for key, value in wanted.items():
         if plist.get(key) != value:
             problems.append(f"Info.plist {key} is {plist.get(key)!r}, not {value!r}")
+    if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", str(plist.get("CFBundleShortVersionString", ""))):
+        short = plist.get("CFBundleShortVersionString")
+        problems.append(f"Info.plist CFBundleShortVersionString is {short!r}, not X.Y.Z")
     if not str(plist.get("CFBundleVersion", "")).isdigit():
         problems.append(f"Info.plist CFBundleVersion is {plist.get('CFBundleVersion')!r}, not a build number")
     minimum_text = str(plist.get("LSMinimumSystemVersion", ""))
@@ -284,16 +323,23 @@ def main():
     make_command = commands.add_parser("make")
     make_command.add_argument("publish")
     make_command.add_argument("out")
+    make_command.add_argument("--version")
     make_command.add_argument("--build", type=int, default=1)
     make_command.add_argument("--rcodesign")
     check_command = commands.add_parser("check")
     check_command.add_argument("app")
+    check_command.add_argument("--version")
     check_command.add_argument("--unsigned", action="store_true")
     args = parser.parse_args()
     if args.command == "make":
-        make(args.publish, args.out, args.build, args.rcodesign)
+        make(args.publish, args.out, args.build, args.rcodesign, args.version)
         return 0
-    return check(args.app, args.unsigned)
+    if args.version is not None:
+        try:
+            short_version(args.version)
+        except ValueError as error:
+            parser.error(f"--version: {error}")
+    return check(args.app, args.unsigned, args.version)
 
 
 if __name__ == "__main__":

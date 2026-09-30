@@ -20,13 +20,18 @@
 # so an arm64 image built on an x64 machine does not run the SDK under emulation.
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
 ARG TARGETARCH
+# The product version and commit (docs/releasing.md). A release passes ROOF_VERSION=4.0.0, CI 4.0.0-ci.<run>, and the
+# deploy script 4.0.0-dev; left empty, the build is Directory.Build.props's 4.0.0-dev. The image has no .git, so the
+# commit comes from ROOF_REVISION.
+ARG ROOF_VERSION=""
+ARG ROOF_REVISION=""
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
 
 # Mirror the repository layout so Directory.*.props and src/global.json resolve exactly as in
 # a local checkout. Every dotnet command runs from /repo/src, where global.json applies.
 WORKDIR /repo/src
-COPY ["Directory.Build.props", "Directory.Packages.props", "/repo/"]
+COPY ["Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "/repo/"]
 COPY ["src/global.json", "src/NuGet.config", "./"]
 COPY ["src/HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj", "HVO.RoofControllerV4.Common/"]
 COPY ["src/HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj", "HVO.RoofControllerV4.Client/"]
@@ -63,18 +68,35 @@ RUN dotnet publish "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
     --configuration Release \
     --runtime "$(cat /tmp/rid)" \
     --self-contained false \
+    ${ROOF_VERSION:+-p:Version=$ROOF_VERSION} \
+    ${ROOF_REVISION:+-p:SourceRevisionId=$ROOF_REVISION} \
     --output /app/publish && \
     dotnet publish "HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj" \
     --no-restore \
     --configuration Release \
     --runtime "$(cat /tmp/rid)" \
     --self-contained false \
+    ${ROOF_VERSION:+-p:Version=$ROOF_VERSION} \
+    ${ROOF_REVISION:+-p:SourceRevisionId=$ROOF_REVISION} \
     --output /app/publish/web
 
 # -------------------------
 # Runtime image
 # -------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.12 AS runtime
+# The image's version, commit and source (OCI labels; build/check-image-labels.sh checks them). The source links a GHCR
+# package to its repository.
+ARG ROOF_VERSION=""
+ARG ROOF_REVISION=""
+ARG ROOF_CREATED=""
+LABEL org.opencontainers.image.title="HVO Roof Controller" \
+      org.opencontainers.image.description="The roll-off roof controller and its web UI: on a Raspberry Pi 5 with its HAT, or anywhere with the HAT emulator." \
+      org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \
+      org.opencontainers.image.vendor="Hualapai Valley Observatory" \
+      org.opencontainers.image.version="${ROOF_VERSION}" \
+      org.opencontainers.image.revision="${ROOF_REVISION}" \
+      org.opencontainers.image.created="${ROOF_CREATED}"
+
 ARG HVO_FORCE_RASPBERRY_PI=false
 ARG HVO_CONTAINER_RPI_HINT=""
 WORKDIR /app

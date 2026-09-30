@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for bundle.py's reading of the Mac app's bundle (#48): Mach-O files, Info.plist and AppIcon.icns, whole and
-damaged. A damaged file is a problem in check's report (exit 1), or a line naming it when make stops; never a hang or a
+damaged, and the product version it carries (#62). A damaged file is a problem in check's report (exit 1), or a line naming it when make stops; never a hang or a
 traceback. From the repository root:
 
     python3 -m unittest discover -s tests/mac -p 'test_*.py'
@@ -13,13 +13,15 @@ import io
 import os
 import pathlib
 import plistlib
+import re
 import signal
 import struct
 import tempfile
 import unittest
 from unittest import mock
 
-BUNDLE_DIR = pathlib.Path(__file__).resolve().parents[2] / "src" / "HVO.RoofControllerV4.Mac" / "bundle"
+REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
+BUNDLE_DIR = REPOSITORY / "src" / "HVO.RoofControllerV4.Mac" / "bundle"
 _spec = importlib.util.spec_from_file_location("bundle", BUNDLE_DIR / "bundle.py")
 bundle = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bundle)
@@ -97,11 +99,11 @@ class BundleTestCase(unittest.TestCase):
         path.write_bytes(data)
         return str(path)
 
-    def check(self, app):
+    def check(self, app, version=None):
         """bundle.py check of an unsigned bundle: its exit code and what it wrote to stderr."""
         output, errors = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            code = bundle.check(str(app), unsigned=True)
+            code = bundle.check(str(app), unsigned=True, version=version)
         return code, errors.getvalue()
 
 
@@ -207,7 +209,7 @@ class CheckTests(BundleTestCase):
         self.write(f"{bundle.APP_NAME}/Contents/PkgInfo", b"APPL????")
         self.write(f"{bundle.APP_NAME}/Contents/Info.plist", plistlib.dumps({
             "CFBundleExecutable": bundle.EXECUTABLE, "CFBundleIdentifier": bundle.BUNDLE_ID,
-            "CFBundlePackageType": "APPL", "CFBundleIconFile": "AppIcon", "CFBundleShortVersionString": bundle.VERSION,
+            "CFBundlePackageType": "APPL", "CFBundleIconFile": "AppIcon", "CFBundleShortVersionString": "4.0.0",
             "CFBundleVersion": "7", "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "12.0"}))
         return app
 
@@ -233,6 +235,21 @@ class CheckTests(BundleTestCase):
                 self.assertEqual(code, 1)
                 self.assertIn(reason, errors)
 
+    def test_the_version_is_checked_against_the_one_given_or_as_x_y_z(self):
+        app = self.make_bundle()
+        self.assertEqual(self.check(app, version="4.0.0-ci.12+0123abcd"), (0, ""))
+        code, errors = self.check(app, version="4.1.0")
+        self.assertEqual(code, 1)
+        self.assertIn("Info.plist CFBundleShortVersionString is '4.0.0', not '4.1.0'", errors)
+        for short in ["1.0", "4.0.0-ci.12", "v4.0.0", ""]:
+            with self.subTest(short):
+                plist = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+                plist["CFBundleShortVersionString"] = short
+                (app / "Contents/Info.plist").write_bytes(plistlib.dumps(plist))
+                code, errors = self.check(app)
+                self.assertEqual(code, 1)
+                self.assertIn(f"Info.plist CFBundleShortVersionString is {short!r}, not X.Y.Z", errors)
+
     def test_a_program_newer_than_the_plist_says_is_reported(self):
         app = self.make_bundle()
         (app / "Contents/MacOS/libSkiaSharp.dylib").write_bytes(thin([build_version(MACOS_13)]))
@@ -255,9 +272,9 @@ class MakeTests(BundleTestCase):
             self.write(f"publish/{library[0]}", library[1])
         return str(self.directory / "publish")
 
-    def make(self, publish, build=7, rcodesign=None):
+    def make(self, publish, build=7, rcodesign=None, version="4.0.0-ci.7"):
         with contextlib.redirect_stdout(io.StringIO()):
-            bundle.make(publish, str(self.directory / "out"), build, rcodesign)
+            bundle.make(publish, str(self.directory / "out"), build, rcodesign, version)
         return self.directory / "out" / bundle.APP_NAME
 
     def rcodesign(self, script):
@@ -274,9 +291,25 @@ class MakeTests(BundleTestCase):
         app = self.make(self.publish(("libSkiaSharp.dylib", thin([build_version(MACOS_13)]))))
         with (app / "Contents/Info.plist").open("rb") as file:
             plist = plistlib.load(file)
-        self.assertEqual((plist["CFBundleVersion"], plist["LSMinimumSystemVersion"]), ("7", "13.0"))
-        self.assertEqual(self.check(app), (0, ""))
+        self.assertEqual((plist["CFBundleShortVersionString"], plist["CFBundleVersion"], plist["LSMinimumSystemVersion"]),
+                         ("4.0.0", "7", "13.0"))
+        self.assertEqual(self.check(app, version="4.0.0-ci.7"), (0, ""))
         self.assertEqual(self.out(), [bundle.APP_NAME])
+
+    def test_the_version_defaults_to_the_product_version_in_directory_build_props(self):
+        prefix = re.search(r"<VersionPrefix>([^<]*)</VersionPrefix>", (REPOSITORY / "Directory.Build.props").read_text())
+        app = self.make(self.publish(), version=None)
+        with (app / "Contents/Info.plist").open("rb") as file:
+            self.assertEqual(plistlib.load(file)["CFBundleShortVersionString"], prefix.group(1))
+
+    def test_a_version_that_is_not_a_product_version_stops_make_before_anything_is_made(self):
+        for version in ["4.0", "v4.0.0", "4.0.0-", "04.0.0", "4.0.0 beta", ""]:
+            with self.subTest(version):
+                with self.assertRaises(SystemExit) as stopped:
+                    self.make(self.publish(), version=version)
+                self.assertEqual(stopped.exception.code,
+                                 f"--version: {version!r} is not a product version such as 4.0.0 or 4.0.0-ci.12")
+                self.assertFalse((self.directory / "out").exists())
 
     def test_rcodesign_signs_the_new_bundle_before_it_takes_the_last_ones_place(self):
         signed = self.directory / "signed"

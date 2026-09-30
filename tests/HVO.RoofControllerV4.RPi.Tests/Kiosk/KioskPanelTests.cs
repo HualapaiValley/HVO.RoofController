@@ -1,5 +1,6 @@
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Settings;
@@ -520,6 +521,8 @@ public sealed class KioskPanelTests
         system.Health.Should().NotBeNullOrWhiteSpace();
         system.Checks.Should().NotBeEmpty();
         system.Information.Should().BeEmpty();
+        system.Self.Should().Be(("This kiosk", RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly)),
+            "everyone may see the kiosk's own version, but not the controller's");
         system.Message!.Text.Should().Be($"Health: {system.Health}.");
 
         await system.AskRestartAsync();

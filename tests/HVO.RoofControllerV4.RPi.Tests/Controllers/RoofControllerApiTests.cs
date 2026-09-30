@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using HVO.Core.Results;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using Microsoft.AspNetCore.Mvc;
@@ -798,6 +799,18 @@ public sealed class RoofControllerApiTests
         var response = await client.GetAsync("/api/v1.0/System/info");
 
         Assert.AreEqual(expected, response.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task SystemInfo_ReportsTheControllersProductVersion()
+    {
+        using var client = _host.CreateApiClient(TestApiKeys.Admin);
+
+        var information = await client.GetFromJsonAsync<SystemInformationResponse>("/api/v1.0/System/info");
+
+        information!.ApplicationVersion.Should().Be(RoofProductVersion.Of(typeof(Program).Assembly),
+            "the controller reports its own version, not the test runner's");
+        information.ApplicationVersion.Should().StartWith(Versioning.ProductVersionTests.VersionPrefix());
     }
 
     [TestMethod]

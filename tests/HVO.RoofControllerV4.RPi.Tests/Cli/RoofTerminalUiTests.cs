@@ -5,6 +5,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Settings;
@@ -1709,7 +1710,9 @@ public sealed class RoofTerminalUiTests
         tui.Press(Key.F4);
         tui.WaitIdle("the health report", () => tui.Ui.Message.StartsWith("Health:", StringComparison.Ordinal));
 
-        tui.Ui.CurrentPage.Describe().Should().StartWith("The version, host and resource use need the Admin role.");
+        tui.Ui.CurrentPage.Describe().Should().StartWith($"{RoofCli.CommandName}")
+            .And.Contain(RoofProductVersion.Describe(typeof(RoofCli).Assembly))
+            .And.Contain("The controller's version, host and resource use need the Admin role.");
         Click(tui, "Restart");
 
         tui.Ui.Panel.Should().BeNull();

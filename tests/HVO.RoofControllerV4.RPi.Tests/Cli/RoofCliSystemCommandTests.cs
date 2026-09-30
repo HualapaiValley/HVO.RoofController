@@ -4,6 +4,7 @@ using FluentAssertions;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Settings;
@@ -41,7 +42,8 @@ public sealed class RoofCliSystemCommandTests
         var result = await rig.RunAsync("info");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
-        result.Out.Should().MatchRegex(@"(?m)^Application:\s+\S.* \(Development\)\s*$")
+        result.Out.Should().MatchRegex($@"(?m)^{RoofCli.CommandName}:\s+{Regex.Escape(RoofProductVersion.Describe(typeof(RoofCli).Assembly))}\s*$")
+            .And.MatchRegex($@"(?m)^Application:\s+HVO\.RoofControllerV4\.RPi {Regex.Escape(RoofProductVersion.Describe(typeof(Program).Assembly))} \(Development\)\s*$")
             .And.MatchRegex($@"(?m)^Host:\s+{Regex.Escape(Environment.MachineName)}\s*$")
             .And.MatchRegex(@"(?m)^System:\s+\S")
             .And.MatchRegex(@"(?m)^Runtime:\s+\S")

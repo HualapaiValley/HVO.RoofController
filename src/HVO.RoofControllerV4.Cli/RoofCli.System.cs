@@ -22,7 +22,9 @@ public static partial class RoofCli
                 }
                 else
                 {
-                    RoofCliFormat.WriteRows(context.Out, RoofSystemText.DescribeInformation(information, metrics));
+                    RoofCliFormat.WriteRows(
+                        context.Out,
+                        RoofSystemText.DescribeInformation(information, metrics).Prepend(RoofSystemText.DescribeClient(CommandName, typeof(RoofCli).Assembly)));
                 }
 
                 return (int)RoofExitCode.Success;

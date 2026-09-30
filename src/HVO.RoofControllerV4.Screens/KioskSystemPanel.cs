@@ -10,7 +10,7 @@ namespace HVO.RoofControllerV4.Screens;
 /// <remarks>Used on the UI thread only; <see cref="Changed"/> is raised there.</remarks>
 public sealed class KioskSystemPanel
 {
-    public const string InformationNeedsAdmin = "The version, host and resource use need the Admin role.";
+    public const string InformationNeedsAdmin = "The controller's version, host and resource use need the Admin role.";
 
     public const string RestartNeedsAdmin = "Restarting the controller needs the Admin role.";
 
@@ -22,6 +22,12 @@ public sealed class KioskSystemPanel
         ArgumentNullException.ThrowIfNull(console);
         _console = console;
     }
+
+    /// <summary>
+    /// This kiosk's or app's own version, as label and value, shown to everyone: it may be older or newer than the
+    /// controller's.
+    /// </summary>
+    public (string Label, string Value) Self => RoofSystemText.DescribeClient($"This {_console.Wording.Device}", typeof(KioskSystemPanel).Assembly);
 
     /// <summary>The overall health ("Healthy"…), or null before it is read.</summary>
     public string? Health { get; private set; }
