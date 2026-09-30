@@ -10,6 +10,7 @@ name: Scenarios
 #   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results
 #   kiosk-soak           nightly and on demand: the touchscreen kiosk against the emulated roof for
 #                        HVO_KIOSK_SOAK_DURATION, with its heap, threads and reconnects
+# The release workflow runs this workflow as a gate (docs/releasing.md), without the soaks.
 on:
   push:
     branches: [ main ]
@@ -27,13 +28,15 @@ on:
         description: 'Kiosk soak duration, hh:mm:ss from 00:01:00 to 00:45:00 (the job times out at 60 minutes)'
         required: false
         default: '00:30:00'
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  # The event is part of the group so a push to main does not cancel the nightly soak.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  # The event is part of the group so a push to main does not cancel the nightly soak. The first part is literal: in a
+  # called workflow github.workflow is the caller's name, and a group equal to the caller's would deadlock the two.
+  group: scenarios-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -172,7 +175,8 @@ jobs:
           retention-days: 7
 
   soak:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # A run of this workflow itself: a release's manual run is workflow_dispatch too, and calls this one as its gate.
+    if: github.workflow == 'Scenarios' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     defaults:
@@ -245,7 +249,8 @@ jobs:
   # unlock, Open, Stop in mid-travel, Close, lock, with a controller restart every fourth cycle. It fails if a Stop is not
   # acknowledged, a restart is not one reconnect, or the heap or the threads grow after the warm-up.
   kiosk-soak:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # As the C14 soak: not when a release calls this workflow.
+    if: github.workflow == 'Scenarios' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:

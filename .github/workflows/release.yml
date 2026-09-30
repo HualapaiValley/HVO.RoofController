@@ -1,0 +1,315 @@
+name: Release
+
+# A release (docs/releasing.md). A tag vX.Y.Z, or vX.Y.Z-rc.N for a release candidate, on a commit on main runs CI and
+# the scenarios for that commit, CI building every program with the tag's version. When both pass, the release job
+# builds the controller and HAT emulator images for linux/amd64 and linux/arm64, checks their labels, pushes them to
+# GHCR with the version as their tag, and attests them; gathers the programs CI built and tested, with the compose file
+# and the deploy script, into the release's assets, with release.json and SHA256SUMS (build/release-assets.py);
+# attests the assets; and makes a draft release of them. Nothing is published here: a person checks the draft and
+# publishes it, and publishing a final release moves the images' latest tag (release-latest.yml).
+#
+# A manual run is a dry run of all of it, for the commit it runs on: version X.Y.Z-dryrun.<run>, images with that tag,
+# and a draft release to delete afterwards, with those images (docs/releasing.md#a-dry-run).
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One release run per tag (or branch, for a dry run) at a time, and none cancelled halfway through a push.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The release's version and tag, and the checks that need no build: a tag names the version in Directory.Build.props
+  # and is on main, and a final release has its upgrade notes and its CHANGELOG section.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${EVENT}" = push ]; then
+            version=$(build/version.sh --tag "${GITHUB_REF_NAME}")
+            tag=${GITHUB_REF_NAME}
+            # The tagged commit is main's, or one before it: compared with main it is identical or behind.
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${GITHUB_SHA}" --jq .status)
+            if [ "${status}" != identical ] && [ "${status}" != behind ]; then
+              echo "::error::The tag ${tag} is on ${GITHUB_SHA}, which is not on main (${status}). Tag a commit on main."
+              exit 1
+            fi
+          else
+            version=$(build/version.sh --dry-run "${GITHUB_RUN_NUMBER}")
+            tag="v${version}"
+          fi
+          if [[ "${version}" != *-* ]]; then
+            if [ ! -s "docs/upgrade-notes/${version}.md" ]; then
+              echo "::error::docs/upgrade-notes/${version}.md is missing: a final release's notes start with it (docs/releasing.md)."
+              exit 1
+            fi
+            if ! grep -qE "^## \[${version//./\\.}\]" CHANGELOG.md; then
+              echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## [${version}]' section: move Unreleased to it first."
+              exit 1
+            fi
+          fi
+          echo "Release ${version}, tag ${tag}, commit ${GITHUB_SHA}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  # The gates: CI (built with the release's version: its programs are the release's) and the scenarios, for this commit.
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  scenarios:
+    needs: version
+    uses: ./.github/workflows/scenarios.yml
+
+  release:
+    needs: [ version, ci, scenarios ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The only job that writes: the draft release (contents), the images (packages) and the attestations (id-token for
+    # the signing certificate, attestations to store them). The release environment's protection rules, which no
+    # commit can change, decide who may run it and from which refs (docs/releasing.md#the-first-release).
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+      REGISTRY: ghcr.io/hualapaivalley
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # A release for this tag, even a draft left by a run that failed, means this run would push its images over the
+      # release's: stop first. GitHub would take a second draft for the tag, and gh release create refuses only a
+      # published release. Delete a failed run's draft to run again (docs/releasing.md).
+      - name: No release for this tag yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" --jq ".[] | select(.tag_name == \"${TAG}\") | .html_url")
+          if [ -n "${existing}" ]; then
+            echo "::error::A release for ${TAG} already exists (${existing}). Delete it if it is a failed run's draft, then run again."
+            exit 1
+          fi
+          skopeo --version
+
+      - name: Release time
+        id: created
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # What CI built and tested in this run, with the release's version.
+      - name: Download hvo-roof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hvo-roof-${{ github.run_id }}
+          path: ${{ runner.temp }}/ci/cli
+
+      - name: Download hvo-roof-kiosk
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hvo-roof-kiosk-${{ github.run_id }}
+          path: ${{ runner.temp }}/ci/kiosk
+
+      # CI uploads the zip as it is; kept as it is here.
+      - name: Download HVO Roof.app
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hvo-roof-mac-${{ github.run_id }}.zip
+          path: ${{ runner.temp }}/ci/mac
+          skip-decompress: true
+
+      # CI's hvo-roof names the release's version and commit. Run before anything logs in, with no token and an empty
+      # home: the released copy is checked to be this one when the assets are gathered.
+      - name: Check hvo-roof's version
+        run: |
+          cli="${RUNNER_TEMP}/ci/cli/linux-x64/hvo-roof"
+          chmod +x "${cli}"
+          actual=$(env -i HOME="$(mktemp -d)" PATH=/usr/bin:/bin "${cli}" --version)
+          if [ "${actual}" != "${VERSION}+${GITHUB_SHA}" ]; then
+            echo "::error::hvo-roof --version printed '${actual}', not '${VERSION}+${GITHUB_SHA}'."
+            exit 1
+          fi
+
+      - name: Set up QEMU (arm64 emulation for the runtime stage)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Each image to an OCI archive, checked, then pushed as it is: the digest pushed is the digest checked. No
+      # BuildKit provenance: the attestation below is the image's provenance, and GHCR would list BuildKit's as an
+      # unknown/unknown platform.
+      - name: Build the controller image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: src/HVO.RoofControllerV4.RPi/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          pull: true
+          no-cache: true
+          provenance: false
+          sbom: false
+          build-args: |
+            ROOF_VERSION=${{ env.VERSION }}
+            ROOF_REVISION=${{ github.sha }}
+            ROOF_CREATED=${{ steps.created.outputs.created }}
+          outputs: type=oci,dest=${{ runner.temp }}/roof-controller.tar
+
+      - name: Build the HAT emulator image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: src/HVO.RoofControllerV4.Emulator/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          pull: true
+          no-cache: true
+          provenance: false
+          sbom: false
+          build-args: |
+            ROOF_VERSION=${{ env.VERSION }}
+            ROOF_REVISION=${{ github.sha }}
+            ROOF_CREATED=${{ steps.created.outputs.created }}
+          outputs: type=oci,dest=${{ runner.temp }}/roof-hat-emulator.tar
+
+      - name: Check the images' labels and platforms
+        run: |
+          for image in roof-controller roof-hat-emulator; do
+            build/check-image-labels.sh "${RUNNER_TEMP}/${image}.tar" "${VERSION}" "${GITHUB_SHA}" linux/amd64,linux/arm64
+          done
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the images
+        id: push
+        run: |
+          controller=$(build/push-image.sh "${RUNNER_TEMP}/roof-controller.tar" "${REGISTRY}/roof-controller:${VERSION}")
+          emulator=$(build/push-image.sh "${RUNNER_TEMP}/roof-hat-emulator.tar" "${REGISTRY}/roof-hat-emulator:${VERSION}")
+          echo "controller=${controller}" >> "$GITHUB_OUTPUT"
+          echo "emulator=${emulator}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the controller image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/roof-controller
+          subject-digest: ${{ steps.push.outputs.controller }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest the HAT emulator image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/roof-hat-emulator
+          subject-digest: ${{ steps.push.outputs.emulator }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Gather the assets
+        env:
+          CREATED: ${{ steps.created.outputs.created }}
+          CONTROLLER_DIGEST: ${{ steps.push.outputs.controller }}
+          EMULATOR_DIGEST: ${{ steps.push.outputs.emulator }}
+        run: |
+          mapfile -t mac < <(find "${RUNNER_TEMP}/ci/mac" -type f)
+          if [ "${#mac[@]}" -ne 1 ]; then
+            echo "::error::CI's HVO Roof.app artifact holds ${#mac[@]} files, not its one zip."
+            exit 1
+          fi
+          build/release-assets.py --version "${VERSION}" --commit "${GITHUB_SHA}" --created "${CREATED}" \
+            --controller-digest "${CONTROLLER_DIGEST}" --emulator-digest "${EMULATOR_DIGEST}" \
+            --cli "${RUNNER_TEMP}/ci/cli" --kiosk "${RUNNER_TEMP}/ci/kiosk" --mac-zip "${mac[0]}" \
+            -o "${RUNNER_TEMP}/dist"
+          cmp "${RUNNER_TEMP}/ci/cli/linux-x64/hvo-roof" "${RUNNER_TEMP}/dist/hvo-roof-linux-x64"
+          (cd "${RUNNER_TEMP}/dist" && sha256sum --check --strict SHA256SUMS)
+          jq . "${RUNNER_TEMP}/dist/release.json"
+
+      # One attestation for every file in SHA256SUMS: the assets and release.json.
+      - name: Attest the assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/dist/SHA256SUMS
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="${RUNNER_TEMP}/notes.md"
+          {
+            if [ "${GITHUB_EVENT_NAME}" != push ]; then
+              echo "A dry run of the release workflow, from ${GITHUB_REF_NAME}: delete this draft and its images (docs/releasing.md)."
+              echo
+            fi
+            upgrade="docs/upgrade-notes/${VERSION%%-*}.md"
+            if [ -s "${upgrade}" ]; then
+              echo "## Upgrade notes"
+              echo
+              cat "${upgrade}"
+              echo
+            fi
+            cat <<EOF
+          ## Images
+
+          - \`${REGISTRY}/roof-controller:${VERSION}\`
+          - \`${REGISTRY}/roof-hat-emulator:${VERSION}\`
+
+          Both for linux/amd64 and linux/arm64. \`release.json\` names each image's digest, and the compose file pins them.
+
+          ## Checking the files
+
+          \`SHA256SUMS\` lists every file's SHA-256, and each file and image has a build provenance attestation:
+
+          \`\`\`bash
+          sha256sum --check --ignore-missing SHA256SUMS
+          gh attestation verify hvo-roof-linux-arm64 --repo ${GITHUB_REPOSITORY} \\
+            --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml --source-ref ${GITHUB_REF}
+          gh attestation verify oci://${REGISTRY}/roof-controller:${VERSION} --repo ${GITHUB_REPOSITORY} \\
+            --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml --source-ref ${GITHUB_REF}
+          \`\`\`
+
+          EOF
+          } > "${notes}"
+          args=(--draft --generate-notes --notes-file "${notes}" --title "HVO Roof Controller ${VERSION}")
+          if [ "${GITHUB_EVENT_NAME}" = push ]; then
+            args+=(--verify-tag)
+          else
+            args+=(--target "${GITHUB_SHA}")
+          fi
+          if [[ "${VERSION}" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          url=$(gh release create "${TAG}" "${RUNNER_TEMP}"/dist/* "${args[@]}")
+          echo "Draft release ${TAG}: ${url}" | tee -a "$GITHUB_STEP_SUMMARY"
