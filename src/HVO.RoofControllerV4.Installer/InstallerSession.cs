@@ -81,7 +81,8 @@ public sealed class InstallerSession
     /// machine's CA did not issue (so it is never replaced unasked, even when an installer's CA elsewhere issued it),
     /// otherwise a private CA (in place of a self-signed one, or one that cannot be opened). No domain is listed unasked:
     /// each one lets the CA sign for any name in it, so the wizard only suggests those this machine seems to be in. A
-    /// controller already running keeps its telemetry, and a rig's emulator its pace.
+    /// controller already running keeps its telemetry, a rig's emulator its pace, and a rig published on every address stays
+    /// open to the network.
     /// </summary>
     public ControllerSettings DefaultController => new()
     {
@@ -90,7 +91,8 @@ public sealed class InstallerSession
         Rig = new RigSettings
         {
             TimeScale = Number(Survey.HatEmulator?.EmulatorTimeScale) ?? RigSettings.DefaultTimeScale,
-            CameraFramesPerSecond = Number(Survey.HatEmulator?.EmulatorCameraFramesPerSecond) ?? RigSettings.DefaultCameraFramesPerSecond
+            CameraFramesPerSecond = Number(Survey.HatEmulator?.EmulatorCameraFramesPerSecond) ?? RigSettings.DefaultCameraFramesPerSecond,
+            OpenToLan = Survey.Controller is { HatEmulator: not null, PublishAddress: null, PublishedPorts.Count: > 0 }
         }
     };
 

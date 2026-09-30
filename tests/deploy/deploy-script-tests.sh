@@ -477,6 +477,22 @@ test_publish_address_keeps_the_published_ports_to_that_address() {
   assert_output_contains "GET Status at https://pi.test:8443 failed from this machine"
 }
 
+test_remote_connect_to_checks_the_certificates_name_at_another_address() {
+  seed_container roof-controller old true 8443:8443
+  # On the Pi itself: the certificate names roofpi.local, which the Pi need not resolve, and not localhost.
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=127.0.0.1 PI_HOST=roofpi.local REMOTE_CONNECT_TO=::127.0.0.1: FAKE_CERT_NAMES=roofpi.local
+  assert_status 0
+  assert_output_contains "Deployment complete and verified at https://roofpi.local:8443"
+  grep -q '"--connect-to", "::127.0.0.1:"' "${FAKE_STATE_DIR}/remote.log" \
+    || fail_test "the checks from this machine did not use --connect-to: $(cat "${FAKE_STATE_DIR}/remote.log")"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" PI_HOST=roofpi.local REMOTE_CONNECT_TO='::127.0.0.1:; rm -rf /'
+  assert_status 1
+  assert_output_contains "REMOTE_CONNECT_TO must be HOST1:PORT1:HOST2:PORT2"
+  assert_no_docker_calls "a malformed REMOTE_CONNECT_TO"
+}
+
 test_malformed_publish_address_is_refused_before_any_docker_call() {
   seed_container roof-controller old true 8443:8443
   local address

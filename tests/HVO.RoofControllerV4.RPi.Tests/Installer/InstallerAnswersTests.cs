@@ -242,7 +242,11 @@ public sealed class InstallerAnswersTests
         var session = await InstallerSession.StartAsync(bench.Machine, InstallLog.None, "4.0.0", FakeMachine.Clock);
 
         session.DefaultController.TelemetryEndpoint.Should().Be("http://collector:4317", "adopting a controller keeps its telemetry");
-        session.DefaultController.Rig.Should().Be(new RigSettings { TimeScale = 10, CameraFramesPerSecond = 2.5 });
+        session.DefaultController.Rig.Should().Be(new RigSettings { TimeScale = 10, CameraFramesPerSecond = 2.5, OpenToLan = true }, "a rig published on every address stays open to the network");
+
+        bench.Containers[MachineSurveyor.ControllerContainer] = bench.Containers[MachineSurveyor.ControllerContainer] with { PublishAddress = "127.0.0.1" };
+        var local = await InstallerSession.StartAsync(bench.Machine, InstallLog.None, "4.0.0", FakeMachine.Clock);
+        local.DefaultController.Rig!.OpenToLan.Should().BeFalse("a rig on 127.0.0.1 stays there");
 
         using var bare = new FakeMachine();
         var fresh = await InstallerSession.StartAsync(bare.Machine, InstallLog.None, "4.0.0", FakeMachine.Clock);

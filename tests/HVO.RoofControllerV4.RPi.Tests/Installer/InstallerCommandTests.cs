@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -172,19 +173,20 @@ public sealed class InstallerCommandTests
     }
 
     [TestMethod]
-    public async Task Answers_ThatNeedAContainerMade_AreRefused_BeforeAnythingChanges()
+    public async Task Answers_ThatNeedWhatThisInstallerCannotInstallYet_AreRefused_BeforeAnythingChanges()
     {
         using var pi = new FakeMachine().WithPi();
-        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
+        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller, InstallRole.Kiosk] });
         var before = pi.Snapshot();
 
         var run = await pi.RunAsync("--answers", answers);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-        run.Error.Should().Be("This installer cannot install roof-controller yet, so nothing was installed. The plan (--plan) shows what an install will do." + Environment.NewLine);
+        run.Error.Should().Be("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed. The plan (--plan) shows what an install will do." + Environment.NewLine);
         run.Output.Should().NotContain("Creating");
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before, "only the log is written");
-        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install roof-controller yet");
+        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet");
+        pi.Deploys.Should().BeEmpty();
     }
 
     [TestMethod]
@@ -253,7 +255,8 @@ public sealed class InstallerCommandTests
         var secret = $"not-a-real-secret-{Guid.NewGuid():N}";
         using var pi = new FakeMachine().WithPi()
             .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Secret = secret })
-            .WithCertificates();
+            .WithCertificates()
+            .WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
         pi.PortsInUse.UnionWith([8443, 8088]);
         var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
 
@@ -265,13 +268,27 @@ public sealed class InstallerCommandTests
             await pi.RunAsync("--plan")
         };
 
-        runs.Select(run => run.ExitCode).Should().Equal(0, 0, 0, 0);
+        runs.Select(run => run.ExitCode).Should().Equal([0, 0, 0, 0], string.Join('\n', runs.Select(run => run.ToString())));
+        pi.Deploys.Should().ContainSingle();
+        var keys = pi.ApiKeyValues();
+        keys.Should().HaveCount(3);
         foreach (var run in runs)
         {
             run.ToString().Should().NotContain(secret);
+            foreach (var key in keys)
+            {
+                run.ToString().Should().NotContain(key);
+            }
         }
 
         pi.AllText().Should().NotContain(secret, "not in the log, the record or the answers");
+        foreach (var key in keys)
+        {
+            pi.Read(InstallPaths.SystemLog).Should().NotContain(key);
+            pi.Ran.SelectMany(command => command.Arguments).Should().NotContain(argument => argument.Contains(key, StringComparison.Ordinal), "a key goes to curl on its standard input");
+            pi.Deploys.SelectMany(environment => environment.Values).Should().NotContain(value => value.Contains(key, StringComparison.Ordinal), "the deploy script gets a key file's path");
+        }
+
         var log = pi.Read(InstallPaths.SystemLog);
         log.Should().Contain("$ docker container inspect roof-controller").And.Contain("exit 0 (secret: output not logged)");
         pi.Ran.Should().Contain(command => command.Secret && command.Arguments.Contains("inspect"), "the container's description holds its environment");

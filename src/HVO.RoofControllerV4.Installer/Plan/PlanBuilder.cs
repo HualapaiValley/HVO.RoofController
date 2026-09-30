@@ -93,19 +93,16 @@ public static class PlanBuilder
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
             var certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
-            steps.AddRange(AllocateKeys(machine, survey, layout, roles).Select(key => new ApiKeyStep(layout, key)));
-            if (rig)
+            var keys = AllocateKeys(machine, survey, layout, roles);
+            steps.AddRange(keys.Select(key => new ApiKeyStep(layout, key)));
+            steps.Add(new DeployToolsStep());
+            var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
+            if (emulator is not null)
             {
-                steps.Add(new ContainerStep(MachineSurveyor.HatEmulatorContainer, null, "the HAT emulator: the roof, drive and limit switches the rig drives"));
+                steps.Add(emulator);
             }
 
-            steps.Add(new ContainerStep(
-                MachineSurveyor.ControllerContainer,
-                rig ? HatMode.Emulated : HatMode.Real,
-                rig ? "the controller, against the HAT emulator" : "the controller, driving the real HAT",
-                settings,
-                names,
-                certificate));
+            steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator));
             steps.Add(new PortStep(settings.ApiPort, settings.UsesHttps ? "the controller's API (HTTPS)" : "the controller's API (HTTP)", MachineSurveyor.ControllerContainer));
             steps.Add(new PortStep(settings.WebPort, "the web UI", MachineSurveyor.ControllerContainer));
         }

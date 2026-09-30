@@ -5,7 +5,8 @@ Appends argv (as JSON) to $FAKE_STATE_DIR/remote.log. The request reaches the ru
 URL's port (from state.json); HTTPS must hit container port 8443 and HTTP container port 8080, otherwise the call fails
 as curl would. The key (FAKE_EXPECTED_KEY) must arrive on stdin (-H @-), otherwise the call gets 401.
 FAKE_REMOTE_STATUS_CODE overrides the Status response code, FAKE_REMOTE_STOP=unverified the Stop result, and
-FAKE_REQUIRE_CACERT=true fails HTTPS without --cacert. The Status and the Stop report the container's hatMode as the fake
+FAKE_REQUIRE_CACERT=true fails HTTPS without --cacert. --connect-to HOST1:PORT1:HOST2:PORT2 reaches HOST2 (and PORT2) for
+HOST1 (and PORT1), as curl does; FAKE_CERT_NAMES (comma-separated) fails HTTPS to a name the certificate does not have. The Status and the Stop report the container's hatMode as the fake
 docker does (FAKE_<KIND>_HAT_MODE, otherwise from its HatEmulator__Enabled setting, and FAKE_<KIND>_PHYSICAL).
 The web UI's /health/live must hit container port 8088 with the scheme of the container's RoofWeb__Urls (the image's
 default is http); it needs no key, and FAKE_REMOTE_WEB_LIVE=false fails it (HTTP 503).
@@ -41,6 +42,14 @@ def main():
         log.write(json.dumps(args) + "\n")
 
     url = urlparse(args[-1])
+    host, port = url.hostname, url.port
+    if "--connect-to" in args:
+        from_host, from_port, to_host, to_port = args[args.index("--connect-to") + 1].split(":")
+        if from_host in ("", host) and from_port in ("", str(port)):
+            host, port = to_host or host, int(to_port) if to_port else port
+    names = os.environ.get("FAKE_CERT_NAMES", "")
+    if url.scheme == "https" and names and url.hostname not in names.split(","):
+        fail(60, f"SSL: no alternative certificate subject name matches target host name '{url.hostname}'")
     method = args[args.index("-X") + 1] if "-X" in args else "GET"
     stdin_text = sys.stdin.read() if "@-" in args else ""
 
@@ -52,12 +61,12 @@ def main():
         for mapping in c.get("publish", []) if c["running"] else []:
             # [<address>:]<host port>:<container port>: a port published on an address answers only there.
             *address, host_port, container_port = mapping.split(":")
-            if address and url.hostname not in (address[0], "localhost"):
+            if address and host not in (address[0], "localhost"):
                 continue
-            if int(host_port) == url.port:
+            if int(host_port) == port:
                 target, container = int(container_port), c
     if target is None:
-        fail(7, f"Failed to connect to {url.hostname} port {url.port}: Connection refused")
+        fail(7, f"Failed to connect to {host} port {port}: Connection refused")
     if url.path.endswith("/health/live"):
         web_urls = [o for o in container.get("options", []) if o.startswith("RoofWeb__Urls=")]
         scheme = (web_urls[-1].split("=", 1)[1] if web_urls else "http://+:8088").split("://")[0]

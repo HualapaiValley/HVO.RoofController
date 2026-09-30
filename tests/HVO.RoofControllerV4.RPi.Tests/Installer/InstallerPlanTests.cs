@@ -4,6 +4,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
@@ -45,7 +46,8 @@ public sealed class InstallerPlanTests
         plan.Steps.Where(step => step.Step.Kind == StepKind.Folder).Select(step => step.Check.Detail).Should().Equal(
             "0755", "0700", "0700", "0700", "0755", "0755", "0700", "0700");
         Steps(plan, StepKind.Container).Should().Equal(MachineSurveyor.ControllerContainer);
-        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Create, "deployed by digest with the deploy script"));
+        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Create, "release 4.0.0 by digest, through the deploy script"));
+        Change(plan, "bash, curl, setsid or perl, jq or python3").Should().Be(new StepCheck(StepChange.Info, "found bash, curl, setsid, jq"));
         Steps(plan, StepKind.Port).Should().Equal("8443", "8088");
         Change(plan, "8443").Detail.Should().Be("free; roof-controller will listen on it");
         Steps(plan, StepKind.File).Should().Equal(
@@ -64,10 +66,10 @@ public sealed class InstallerPlanTests
         var lines = PlanText.Lines(await CheckAsync(pi, InstallRole.Controller));
 
         lines.Where(line => !line.StartsWith(' ') && line.Length > 0).Should().Equal(
-            "Folders", "Files", "Containers", "Ports", "16 to create, 0 to change, 0 unchanged.");
+            "Folders", "Files", "Packages", "Containers", "Ports", "16 to create, 0 to change, 0 unchanged.");
         lines.Should().Contain(line => line.StartsWith("  create     /etc/hvo-roof/secrets ", StringComparison.Ordinal) && line.EndsWith("secrets the controller reads, one file per setting (0700)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  info       8443 ", StringComparison.Ordinal) && line.Contains("the controller's API (HTTPS)", StringComparison.Ordinal));
-        lines.Should().Contain(line => line.StartsWith("  create     roof-controller ", StringComparison.Ordinal) && line.Contains("the controller, driving the real HAT (deployed by digest", StringComparison.Ordinal));
+        lines.Should().Contain(line => line.StartsWith("  create     roof-controller ", StringComparison.Ordinal) && line.Contains("the controller, driving the real HAT (release 4.0.0 by digest, through the deploy script)", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -88,20 +90,43 @@ public sealed class InstallerPlanTests
     [TestMethod]
     public async Task TheDeployScriptsContainer_IsAdopted_AndItsPortsAreItsOwn()
     {
-        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false, Version = "3.9.1" }).WithCertificates();
-        pi.PortsInUse.UnionWith([8443, 8088]);
+        using var pi = InstalledPi();
 
         var plan = await CheckAsync(pi, InstallRole.Controller);
 
-        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(StepCheck.Unchanged("adopted: running, version 3.9.1"));
+        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(StepCheck.Unchanged("adopted: running, version 4.0.0"));
         Change(plan, "8443").Should().Be(new StepCheck(StepChange.Info, "roof-controller listens on it"));
+        plan.Steps.Where(step => step.Check.MakesChange).Select(step => step.Step.Target).Should().Equal([InstallPaths.SystemRecord], "it already runs the release, with the installer's keys");
+    }
+
+    [TestMethod]
+    public async Task AnOlderRelease_IsRedeployed_WithTheKeyItKnows()
+    {
+        using var pi = InstalledPi();
+        pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { Version = "3.9.1", Digest = "sha256:" + new string('b', 64) };
+
+        var plan = await CheckAsync(pi, InstallRole.Controller);
+
+        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed as release 4.0.0 (it runs version 3.9.1)"));
         plan.IsBlocked.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task TheDeployScriptsContainer_WithoutTheInstallersKeys_IsRedeployedToReadThem()
+    {
+        using var pi = AdoptablePi();
+
+        var plan = await CheckAsync(pi, InstallRole.Controller);
+
+        Change(plan, "/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__0__Key").Should().Be(StepCheck.Unchanged("reuses roof-operator (RoofOperator)"));
+        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed so the web UI's Stop has a key of its own"));
     }
 
     [TestMethod]
     public async Task AnAdoptedContainer_OnOtherPorts_IsRedeployed_AndTheAnswersPortsAreChecked()
     {
-        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { ApiPort = 7151 });
+        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { ApiPort = 7151 })
+            .WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
         pi.PortsInUse.UnionWith([7151, 8088]);
 
         var plan = await CheckAsync(pi, InstallRole.Controller);
@@ -114,14 +139,15 @@ public sealed class InstallerPlanTests
         Change(await CheckAsync(pi, InstallRole.Controller), "8443").Change.Should().Be(StepChange.Blocked, "something else has the port the answers give");
 
         var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
-        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, "the installer does not redeploy a container yet: {0}", run);
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, "something else has 8443: {0}", run);
+        pi.Deploys.Should().BeEmpty();
     }
 
     [TestMethod]
     public async Task AnAdoptedContainer_ServingHttp_IsRedeployed_ForHttps()
     {
-        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Https = false })
-            .WithCertificates(new ControllerSettings { Connection = ConnectionMode.Http });
+        using var pi = Installed(new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Https = false })
+            .WithCertificates(new ControllerSettings { Connection = ConnectionMode.Http }));
 
         Change(await CheckAsync(pi, InstallRole.Controller), MachineSurveyor.ControllerContainer)
             .Should().Be(new StepCheck(StepChange.Change, "redeployed to serve HTTPS"));
@@ -215,13 +241,14 @@ public sealed class InstallerPlanTests
     {
         using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench")
             .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false })
-            .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer());
+            .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer { Network = HatEmulatorStep.Network, PublishAddress = HatEmulatorStep.ControlAddress })
+            .WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
         bench.Write(InstallPaths.SystemRecord, InstallerGuardTests.Record(InstallRole.Rig, HatMode.Emulated).ToJson());
 
         var plan = await CheckAsync(bench, InstallRole.Rig);
 
         Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed against the HAT emulator"));
-        Change(plan, MachineSurveyor.HatEmulatorContainer).Change.Should().Be(StepChange.Unchanged);
+        Change(plan, MachineSurveyor.HatEmulatorContainer).Should().Be(StepCheck.Unchanged("adopted: running, version 4.0.0"));
     }
 
     [TestMethod]
@@ -350,13 +377,13 @@ public sealed class InstallerPlanTests
     public async Task AStepThisInstallerCannotCarryOutYet_RefusesTheInstallBeforeAnythingChanges()
     {
         using var pi = new FakeMachine().WithPi();
-        var session = await StartAsync(pi, InstallRole.Controller);
+        var session = await StartAsync(pi, InstallRole.Controller, InstallRole.Kiosk);
         var before = pi.Snapshot();
 
         var install = async () => await session.ApplyAsync(await session.CheckAsync());
 
         (await install.Should().ThrowAsync<InstallerRefusedException>()).Which.Message.Should()
-            .Be("This installer cannot install roof-controller yet, so nothing was installed. The plan (--plan) shows what an install will do.");
+            .Be("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed. The plan (--plan) shows what an install will do.");
         pi.Snapshot().Should().Equal(before);
     }
 
@@ -419,8 +446,16 @@ public sealed class InstallerPlanTests
         await session.ApplyAsync(await session.CheckAsync());
 
         pi.Unexpected.Should().BeEmpty();
-        pi.Ran.Select(command => $"{command.Program} {command.Arguments.FirstOrDefault()}").Distinct().Should()
-            .BeSubsetOf(["docker version", "docker compose", "docker container"], "it asks Docker and changes nothing through it");
+        pi.Deploys.Should().ContainSingle("the controller is replaced through the deploy script, which stops the roof first");
+        var ran = pi.Ran.ToArray();
+        ran.Where(command => command.Program != "docker").Should().OnlyContain(
+            command => command.Program == "bash" && command.Arguments.Count == 1 && command.Arguments[0].EndsWith("/deploy-roofcontroller-rpi.sh", StringComparison.Ordinal));
+        ran.Where(command => command.Program == "docker").Select(command => command.Arguments[0]).Distinct().Should()
+            .BeSubsetOf(["version", "compose", "container", "context", "exec"], "it asks Docker, and leaves the controller's container to the deploy script");
+        ran.Where(command => command.Arguments.FirstOrDefault() == "exec").Should().OnlyContain(
+            command => command.Arguments.Last() == $"http://localhost:8080/{ControllerProbe.StatusPath}", "the only request it makes of the controller is its Status");
+        ran.SelectMany(command => command.Arguments).Should().NotContain(
+            argument => argument.Contains("/Open", StringComparison.OrdinalIgnoreCase) || argument.Contains("/Close", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>A Pi with the HAT, where the deploy script already runs the controller: the installer adopts it.</summary>
@@ -429,6 +464,41 @@ public sealed class InstallerPlanTests
         var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false }).WithCertificates()
             .WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
         pi.PortsInUse.UnionWith([8443, 8088]);
+        return pi;
+    }
+
+    /// <summary>
+    /// <see cref="AdoptablePi"/> once the installer has installed it: its operator, admin and web UI Stop keys, which the
+    /// running controller knows, its web UI reading its Stop key, and no telemetry.
+    /// </summary>
+    internal static FakeMachine InstalledPi() => Installed(AdoptablePi());
+
+    /// <summary>
+    /// The installer's admin and web UI Stop keys beside the operator key at entry 0, and the controller's settings and
+    /// data folders, as an install leaves them.
+    /// </summary>
+    internal static FakeMachine Installed(FakeMachine pi)
+    {
+        var layout = ControllerLayout.For(pi.Machine);
+        pi.Machine.CreateDirectory(layout.Settings, Modes.Folder);
+        pi.Machine.CreateDirectory(layout.Data, Modes.Folder);
+        pi.Machine.CreateDirectory(layout.Identity, Modes.PrivateFolder);
+        pi.Machine.CreateDirectory(layout.SettingsSecrets, Modes.PrivateFolder);
+        pi.WithApiKey(1, ApiKeyFiles.AdminName, RoofControllerApiContract.AdminRole).WithApiKey(2, ApiKeyFiles.WebStopName, RoofControllerApiContract.ViewerRole);
+        if (!File.Exists(pi.OnDisk(ApiKeyFiles.KeyFile(layout.Secrets, 0))))
+        {
+            pi.WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
+        }
+
+        var controller = pi.Containers[MachineSurveyor.ControllerContainer];
+        pi.Containers[MachineSurveyor.ControllerContainer] = controller with
+        {
+            Settings = new Dictionary<string, string>(controller.Settings)
+            {
+                [MachineSurveyor.WebStopKeyFileSetting] = ApiKeyFiles.ContainerKeyFile(2),
+                [MachineSurveyor.TelemetryEndpointSetting] = string.Empty
+            }
+        };
         return pi;
     }
 

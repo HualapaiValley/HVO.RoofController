@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using FluentAssertions;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
@@ -53,6 +54,9 @@ internal sealed record FakeContainer
     /// <summary>The Docker network it is on; null for Docker's default bridge.</summary>
     public string? Network { get; init; }
 
+    /// <summary>The HAT emulator an emulated controller uses (HAT_EMULATOR_ENDPOINT).</summary>
+    public string HatEmulatorEndpoint { get; init; } = HatEmulatorStep.Endpoint;
+
     /// <summary>Its environment's other settings (never a secret): RoofWeb__StopKeyFile, OTEL_EXPORTER_OTLP_ENDPOINT…</summary>
     public IReadOnlyDictionary<string, string> Settings { get; init; } = new Dictionary<string, string>();
 }
@@ -92,6 +96,11 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         Directory.CreateDirectory(OnDisk(TemporaryDirectory));
         CurrentDirectory = Home;
         Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = ReleaseJson();
+        foreach (var program in new[] { "bash", "curl", "setsid", "jq" })
+        {
+            Programs[program] = $"/usr/bin/{program}";
+        }
+
         if (os == InstallerOs.Linux)
         {
             Write("/etc/os-release", "NAME=\"Debian GNU/Linux\"\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n");
@@ -159,6 +168,24 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     public string TemporaryDirectory { get; } = "/tmp";
 
     public ConcurrentQueue<CommandLine> Unexpected { get; } = new();
+
+    /// <summary>The API keys the running controller knows: those it read when it started.</summary>
+    public HashSet<string> ControllerKeys { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>What the controller's Status says to a key it knows; null when it does not answer.</summary>
+    public string? StatusJson { get; set; } = "{\"isMoving\":false,\"commandedMotion\":\"None\",\"hatMode\":\"Physical\"}";
+
+    /// <summary>Docker's networks.</summary>
+    public HashSet<string> Networks { get; } = new(StringComparer.Ordinal) { "bridge" };
+
+    /// <summary>The environment of each run of the deploy script, in order.</summary>
+    public List<IReadOnlyDictionary<string, string>> Deploys { get; } = [];
+
+    /// <summary>What the deploy script says when it fails; null for a deploy that succeeds.</summary>
+    public string? DeployFailure { get; set; }
+
+    /// <summary>What the HAT emulator's health check says once it is started.</summary>
+    public string EmulatorHealth { get; set; } = "healthy";
 
     public InstallerMachine Machine => new()
     {
@@ -314,9 +341,10 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     /// <summary>
     /// An API key in the controller's secrets folder, one file per setting as docs/deployment.md sets one up, with a random
-    /// key; <paramref name="key"/> false leaves only its name and role.
+    /// key; <paramref name="key"/> false leaves only its name and role. The running controller knows it unless
+    /// <paramref name="known"/> is false (it was added after the controller started).
     /// </summary>
-    public FakeMachine WithApiKey(int index, string name, string role, bool kiosk = false, bool local = false, bool key = true)
+    public FakeMachine WithApiKey(int index, string name, string role, bool kiosk = false, bool local = false, bool key = true, bool known = true)
     {
         var secrets = ControllerLayout.For(Machine).Secrets;
         Machine.CreateDirectory(secrets, Modes.PrivateFolder);
@@ -335,7 +363,12 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
         if (key)
         {
-            Setting("Key", ApiKeyFiles.NewKey());
+            var value = ApiKeyFiles.NewKey();
+            Setting("Key", value);
+            if (known)
+            {
+                ControllerKeys.Add(value);
+            }
         }
 
         return this;
@@ -450,6 +483,22 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             "docker" when arguments is ["container", "inspect", var name] => Docker(() => Containers.TryGetValue(name, out var container)
                 ? Answer(Inspect(name, container))
                 : new CommandResult(1, "[]\n", $"Error response from daemon: No such container: {name}\n")),
+            "docker" when arguments is ["container", "inspect", "--format", _, var name] => Docker(() => Containers.TryGetValue(name, out var container)
+                ? Answer(container.State == "running" ? EmulatorHealth : container.State)
+                : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
+            "docker" when arguments is ["exec", "-i", var name, "curl", ..] => Docker(() => Status(name, command)),
+            "docker" when arguments is ["context", "show"] => Docker(() => Answer("default")),
+            "docker" when arguments is ["pull", "--platform", _, _] => Docker(() => Answer("Status: Downloaded newer image")),
+            "docker" when arguments is ["network", "inspect", var network] => Docker(() => Networks.Contains(network)
+                ? Answer("[]")
+                : new CommandResult(1, "[]\n", $"Error response from daemon: network {network} not found\n")),
+            "docker" when arguments is ["network", "create", var network] => Docker(() => Networks.Add(network) ? Answer(new string('n', 64)) : new CommandResult(1, string.Empty, "already exists\n")),
+            "docker" when arguments is ["stop", var name] => Docker(() => Containers.TryGetValue(name, out var container)
+                ? Answer(name, after: () => Containers[name] = container with { State = "exited" })
+                : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
+            "docker" when arguments is ["rm", var name] => Docker(() => Containers.Remove(name) ? Answer(name) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
+            "docker" when arguments is ["run", "-d", "--name", MachineSurveyor.HatEmulatorContainer, ..] => Docker(() => RunEmulator(arguments)),
+            "bash" when arguments is [var script] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, command),
             "systemctl" when arguments is ["is-enabled", MachineSurveyor.KioskUnit] => Answer(Kiosk.Enabled ? "enabled" : "disabled", Kiosk.Enabled ? 0 : 1),
             "systemctl" when arguments is ["is-active", MachineSurveyor.KioskUnit] => Answer(Kiosk.Active ? "active" : "inactive", Kiosk.Active ? 0 : 3),
             "sw_vers" when arguments is ["-productVersion"] && Os == InstallerOs.MacOS => Answer("15.6.1"),
@@ -489,6 +538,111 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     private static CommandResult Answer(string output, int exitCode = 0) => new(exitCode, output + "\n", string.Empty);
 
+    private static CommandResult Answer(string output, Action after)
+    {
+        after();
+        return Answer(output);
+    }
+
+    // The controller's Status from inside its container, as curl prints it with -w '\n%{http_code}'.
+    private CommandResult Status(string name, CommandLine command)
+    {
+        if (!Containers.TryGetValue(name, out var container) || container.State != "running")
+        {
+            return new CommandResult(1, string.Empty, $"Error response from daemon: container {name} is not running\n");
+        }
+
+        if (StatusJson is null)
+        {
+            return new CommandResult(7, "\n000", "curl: (7) Failed to connect to localhost port 8080\n");
+        }
+
+        var key = (command.Input ?? string.Empty).Replace("X-Api-Key: ", string.Empty, StringComparison.Ordinal).TrimEnd('\n');
+        return ControllerKeys.Contains(key)
+            ? new CommandResult(0, StatusJson + "\n200", string.Empty)
+            : new CommandResult(0, "{\"title\":\"Unauthorized\"}\n401", string.Empty);
+    }
+
+    private CommandResult RunEmulator(IReadOnlyList<string> arguments)
+    {
+        string? Option(string name) => arguments.Select((argument, index) => (argument, index)).Where(pair => pair.argument == name).Select(pair => arguments[pair.index + 1]).FirstOrDefault();
+        var settings = arguments.Select((argument, index) => (argument, index)).Where(pair => pair.argument == "--env")
+            .Select(pair => arguments[pair.index + 1].Split('=', 2))
+            .ToDictionary(pair => pair[0], pair => pair[1]);
+        var image = arguments[^1];
+        Containers[MachineSurveyor.HatEmulatorContainer] = new FakeContainer
+        {
+            Network = Option("--network"),
+            PublishAddress = Option("-p")!.Split(':')[0],
+            Digest = image[(image.IndexOf('@', StringComparison.Ordinal) + 1)..],
+            Settings = settings
+        };
+        return Answer(new string('f', 64));
+    }
+
+    // The deploy script, as far as the installer sees it: it stops the running controller only with a key it knows,
+    // reads its key file as the script does, and leaves the new controller running with the settings it was given.
+    private CommandResult Deploy(string script, CommandLine command)
+    {
+        var environment = command.Environment ?? new Dictionary<string, string>();
+        Deploys.Add(environment);
+        File.Exists(OnDisk(script)).Should().BeTrue("the installer writes the deploy script before it runs it");
+        if (DeployFailure is { } failure)
+        {
+            return new CommandResult(1, "[deploy] Pre-flight\n", failure + "\n");
+        }
+
+        var keyFile = environment["OPERATOR_KEY_FILE"];
+        if (!File.Exists(OnDisk(keyFile)) || (Mode(keyFile) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)) != 0)
+        {
+            return new CommandResult(1, string.Empty, $"[deploy] ERROR: OPERATOR_KEY_FILE '{keyFile}' must exist with mode 600.\n");
+        }
+
+        var key = Read(keyFile).TrimEnd('\n', '\r');
+        if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var running) && running.State == "running" && !ControllerKeys.Contains(key))
+        {
+            return new CommandResult(1, string.Empty, "[deploy] ERROR: the running controller did not accept the Stop: HTTP 401. Nothing was changed.\n");
+        }
+
+        var image = environment["IMAGE_REF"];
+        var extra = environment["EXTRA_DOCKER_ARGS"].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal) { [MachineSurveyor.TelemetryEndpointSetting] = environment["OTEL_EXPORTER_OTLP_ENDPOINT"] };
+        string? network = null;
+        for (var index = 0; index < extra.Length - 1; index++)
+        {
+            if (extra[index] == "--env")
+            {
+                var setting = extra[index + 1].Split('=', 2);
+                settings[setting[0]] = setting[1];
+            }
+            else if (extra[index] == "--network")
+            {
+                network = extra[index + 1];
+            }
+        }
+
+        var https = environment["HTTPS_CERT_DIR"].Length > 0;
+        Containers[MachineSurveyor.ControllerContainer] = new FakeContainer
+        {
+            Emulated = environment["HAT_EMULATOR_ENDPOINT"].Length > 0,
+            HatEmulatorEndpoint = environment["HAT_EMULATOR_ENDPOINT"] is { Length: > 0 } endpoint ? endpoint : HatEmulatorStep.Endpoint,
+            Version = image[(image.LastIndexOf(':', image.IndexOf('@', StringComparison.Ordinal)) + 1)..image.IndexOf('@', StringComparison.Ordinal)],
+            Digest = image[(image.IndexOf('@', StringComparison.Ordinal) + 1)..],
+            Https = https,
+            ApiPort = int.Parse(environment[https ? "HTTPS_HOST_PORT" : "HOST_PORT"], System.Globalization.CultureInfo.InvariantCulture),
+            WebPort = int.Parse(environment["WEB_HOST_PORT"], System.Globalization.CultureInfo.InvariantCulture),
+            PublishAddress = environment["PUBLISH_ADDRESS"] is { Length: > 0 } address ? address : null,
+            Network = network,
+            AllowedHosts = environment["ALLOWED_HOSTS"] is { Length: > 0 } hosts ? hosts : null,
+            Settings = settings
+        };
+
+        // The new controller reads the keys in the secrets folder when it starts.
+        ControllerKeys.Clear();
+        ControllerKeys.UnionWith(ApiKeyValues());
+        return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
+    }
+
     private static string Inspect(string name, FakeContainer container)
     {
         var labels = new Dictionary<string, string>();
@@ -514,9 +668,15 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             environment.Add($"HatEmulator__Enabled={(container.Emulated ? "true" : "false")}");
             if (container.Emulated)
             {
-                environment.Add("HatEmulator__Host=hat-emulator");
-                environment.Add("HatEmulator__Port=5555");
+                var endpoint = container.HatEmulatorEndpoint.Split(':');
+                environment.Add($"HatEmulator__Host={endpoint[0]}");
+                environment.Add($"HatEmulator__Port={endpoint[1]}");
             }
+        }
+        else if (name == MachineSurveyor.HatEmulatorContainer)
+        {
+            // As the installer publishes it: its control API only.
+            ports["5290/tcp"] = [new { HostIp = container.PublishAddress ?? string.Empty, HostPort = "5290" }];
         }
 
         if (container.AllowedHosts is { } allowed)

@@ -484,6 +484,10 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi, log);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
+        wizard.Press(Key.CursorDown);
+        wizard.Press(Key.CursorDown);
+        wizard.Press(Key.Space);
+        ((RolesPage)wizard.Page).Chosen.Should().Equal(InstallRole.Controller, InstallRole.Kiosk);
         wizard.NextTo(3);
         var before = pi.Snapshot(InstallPaths.SystemLog);
 
@@ -491,11 +495,11 @@ public sealed class InstallerWizardTests
         wizard.WaitIdle("the install", () => wizard.Page is DonePage);
 
         wizard.Wizard.Result.Should().Be(InstallerExitCode.Refused);
-        wizard.Wizard.Failure.Should().StartWith("This installer cannot install roof-controller yet, so nothing was installed.");
+        wizard.Wizard.Failure.Should().StartWith("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed.");
         wizard.Page.Describe().Should().Equal(wizard.Wizard.Failure, "Nothing was changed.", "The log: /var/log/hvo-roof-install.log");
         ShouldHaveColours(wizard.ColoursOf("This installer cannot install"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
-        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install roof-controller yet");
+        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet");
         wizard.Render(TestContext, "6-refused");
     }
 

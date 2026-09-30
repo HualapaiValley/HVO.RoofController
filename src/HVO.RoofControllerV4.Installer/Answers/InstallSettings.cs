@@ -64,7 +64,7 @@ public sealed record ControllerSettings
     public CameraSettings? Camera { get; init; }
 
     /// <summary>
-    /// Where the controller exports its telemetry: an OTLP endpoint (http://collector:4317). None turns export off.
+    /// Where the controller exports its telemetry: an OTLP/HTTP endpoint (http://collector:4318). None turns export off.
     /// </summary>
     public string? TelemetryEndpoint { get; init; }
 

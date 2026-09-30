@@ -63,7 +63,7 @@ public sealed class InstallerSurveyTests
             Image = $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}",
             State = "running",
             Origin = ContainerOrigin.DeployScript,
-            HatEmulator = "hat-emulator:5555",
+            HatEmulator = "hat-emulator:5291",
             Version = "4.0.0",
             PublishedPorts = [8088, 8443],
             ServesHttps = true

@@ -49,7 +49,7 @@ set -euo pipefail
 #   accepted only with ALLOW_EMULATED_HAT=true. The container then maps no host device or Pi file (no /dev/gpiomem, no
 #   thermal sensor), so a test rig need not be a Pi, and BUILD_PLATFORM=linux/amd64 builds the image for a PC.
 #   PUBLISH_ADDRESS=127.0.0.1 publishes the ports on that address only, for a rig that is not open to the network;
-#   PI_HOST is then localhost.
+#   PI_HOST is then localhost, or a name its certificate has with REMOTE_CONNECT_TO=::127.0.0.1:.
 # Compose: the script replaces only controllers it created. A <name> or <name>-previous that Docker Compose created is
 #   refused before anything changes; docs/deployment.md describes moving between Compose and the script. Check a
 #   Compose controller from this machine with --verify-remote.
@@ -152,6 +152,9 @@ POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-3}
 # Remote check from this machine after the switch. REMOTE_CA_CERT is a PEM file (on this machine) that verifies the
 # Pi's certificate when it is not signed by a CA this machine trusts, e.g. the self-signed certificate itself.
 REMOTE_CA_CERT=${REMOTE_CA_CERT:-}
+# REMOTE_CONNECT_TO goes to curl's --connect-to for those checks (HOST1:PORT1:HOST2:PORT2): '::127.0.0.1:' checks PI_HOST's
+# name and certificate at this machine's loopback, for a name this machine cannot resolve, such as the Pi's own on the Pi.
+REMOTE_CONNECT_TO=${REMOTE_CONNECT_TO:-}
 SKIP_REMOTE_CHECK=${SKIP_REMOTE_CHECK:-false}
 
 # Key for the Stop and Status checks (normally the operator key). Passed to curl on stdin, never as an argument.
@@ -419,6 +422,9 @@ fi
 if [[ -n "${REMOTE_CA_CERT}" && ! -r "${REMOTE_CA_CERT}" ]]; then
   fail "REMOTE_CA_CERT '${REMOTE_CA_CERT}' is not a readable file on this machine."
 fi
+if [[ -n "${REMOTE_CONNECT_TO}" && ! "${REMOTE_CONNECT_TO}" =~ ^[A-Za-z0-9.-]*:[0-9]*:[A-Za-z0-9.-]*:[0-9]*$ ]]; then
+  fail "REMOTE_CONNECT_TO must be HOST1:PORT1:HOST2:PORT2 as curl's --connect-to takes it (such as ::127.0.0.1:), got '${REMOTE_CONNECT_TO}'. Nothing was changed."
+fi
 
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
   REMOTE_BASE_URL="https://${PI_HOST}:${HTTPS_HOST_PORT}"
@@ -559,15 +565,24 @@ container_api() {
         -w '\n%{http_code}' "http://localhost:8080/${API_PATH}/${path}"
 }
 
+# curl's options for the checks from this machine: REMOTE_CA_CERT and REMOTE_CONNECT_TO, in the caller's remote_args.
+set_remote_args() {
+  remote_args=()
+  if [[ -n "${REMOTE_CA_CERT}" ]]; then
+    remote_args+=(--cacert "${REMOTE_CA_CERT}")
+  fi
+  if [[ -n "${REMOTE_CONNECT_TO}" ]]; then
+    remote_args+=(--connect-to "${REMOTE_CONNECT_TO}")
+  fi
+}
+
 # Calls the API from this machine at the published URL, as a remote client would. Same output as container_api.
 remote_api() {
   local method=$1 path=$2
-  local tls_args=()
-  if [[ -n "${REMOTE_CA_CERT}" ]]; then
-    tls_args=(--cacert "${REMOTE_CA_CERT}")
-  fi
+  local remote_args
+  set_remote_args
   printf 'X-Api-Key: %s\n' "${OPERATOR_KEY}" \
-    | curl -sS --max-time 15 ${tls_args[@]+"${tls_args[@]}"} -X "${method}" -H @- -H 'Accept: application/json' \
+    | curl -sS --max-time 15 ${remote_args[@]+"${remote_args[@]}"} -X "${method}" -H @- -H 'Accept: application/json' \
         -w '\n%{http_code}' "${REMOTE_BASE_URL}/${API_PATH}/${path}"
 }
 
@@ -731,11 +746,9 @@ wait_web_ui() {
 
 # The web UI's liveness from this machine at REMOTE_WEB_URL, as a browser would reach it (anonymous).
 remote_web_ui_live() {
-  local tls_args=()
-  if [[ -n "${REMOTE_CA_CERT}" ]]; then
-    tls_args=(--cacert "${REMOTE_CA_CERT}")
-  fi
-  curl -fsS --max-time 15 ${tls_args[@]+"${tls_args[@]}"} -o /dev/null "${REMOTE_WEB_URL}/health/live"
+  local remote_args
+  set_remote_args
+  curl -fsS --max-time 15 ${remote_args[@]+"${remote_args[@]}"} -o /dev/null "${REMOTE_WEB_URL}/health/live"
 }
 
 # The HAT a Status body on $2 reports, against the one this run deploys: Physical, or Emulated in HAT emulator mode.
