@@ -136,6 +136,23 @@ public sealed class InstallerCertificateSurveyTests
     }
 
     [TestMethod]
+    public async Task ACertificateLeftInPlace_WhenTheControllerServesPlainHttp_IsNotWarnedOf()
+    {
+        using var pi = InstallerCertificateCommandTests.Recorded(
+            new FakeMachine().WithPi().WithCertificates(), new ControllerSettings { Connection = ConnectionMode.Http });
+        pi.RunsAt = new FixedClock(FakeMachine.Today.AddDays(370));
+
+        var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
+        var shown = await pi.RunAsync("cert", "show");
+
+        survey.Certificate.Should().NotBeNull("the file is still there");
+        InstallerSession.CertificateWarnings(survey, FakeMachine.Today.AddDays(370)).Should().BeEmpty("the controller does not serve it");
+        shown.ExitCode.Should().Be(0, shown.ToString());
+        shown.Output.Should().StartWith("Certificate: /etc/hvo-roof/https/roof-controller.pfx");
+        shown.Error.Should().BeEmpty();
+    }
+
+    [TestMethod]
     public async Task ACertificateNotForANameClientsUse_IsWarnedOf()
     {
         using var pi = new FakeMachine().WithPi().WithCertificates();

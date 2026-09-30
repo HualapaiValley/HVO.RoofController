@@ -66,8 +66,8 @@ public sealed class InstallerSession
     /// <summary>
     /// The controller's choices when nothing is recorded: the person's own certificate when one is in place that this
     /// machine's CA did not issue (so it is never replaced unasked, even when an installer's CA elsewhere issued it),
-    /// otherwise a private CA (in place of a self-signed one, or one that cannot be opened). No domain is listed unasked: each one lets the CA sign for any name in it, so the wizard only
-    /// suggests those this machine seems to be in.
+    /// otherwise a private CA (in place of a self-signed one, or one that cannot be opened). No domain is listed unasked:
+    /// each one lets the CA sign for any name in it, so the wizard only suggests those this machine seems to be in.
     /// </summary>
     public ControllerSettings DefaultController => new()
     {
@@ -318,11 +318,17 @@ public sealed class InstallerSession
 
     /// <summary>
     /// What needs doing about <paramref name="certificate"/> and <paramref name="authority"/> at <paramref name="now"/>, a
-    /// sentence each. <paramref name="recorded"/> is how the record says the controller serves HTTPS, when it says.
+    /// sentence each. <paramref name="recorded"/> is how the record says the controller serves HTTPS, when it says; when
+    /// it says plain HTTP there are none, since the controller serves no certificate (one left in place is not used).
     /// </summary>
     public static IReadOnlyList<string> CertificateWarnings(CertificateSurvey? certificate, AuthoritySurvey? authority, DateTimeOffset now, ConnectionMode? recorded = null)
     {
         var warnings = new List<string>();
+        if (recorded == ConnectionMode.Http)
+        {
+            return warnings;
+        }
+
         if (certificate is not null)
         {
             // Your own certificate is renewed by whoever issued it; the installer renews the ones it makes. The record says

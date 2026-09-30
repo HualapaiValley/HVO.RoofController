@@ -367,6 +367,9 @@ Every run of the installer, `--plan` included, warns when one of these applies:
 - the certificate is not for a name or address clients use;
 - the certificate's password does not open it.
 
+It says none of these when the controller is recorded as serving plain HTTP, since a certificate left in place is not
+served then.
+
 `sudo hvo-roof-install cert` then makes what needs making, and changes only what differs:
 
 - **A new CA** when the CA is missing or cannot be read, expires within 400 days, may not issue for a name the
