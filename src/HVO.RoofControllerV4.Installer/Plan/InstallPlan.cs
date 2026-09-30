@@ -62,6 +62,12 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
             try
             {
                 var check = await step.CheckAsync(context, cancellationToken).ConfigureAwait(false);
+                if (check.Change == StepChange.Blocked)
+                {
+                    // The machine changed since the plan was checked: stop, not skip (earlier steps may have run).
+                    throw new InstallerException($"{doing}: {check.Detail ?? "it can no longer go ahead"}");
+                }
+
                 if (!check.MakesChange)
                 {
                     continue;

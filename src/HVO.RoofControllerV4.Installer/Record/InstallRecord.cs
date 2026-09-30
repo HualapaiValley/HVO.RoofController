@@ -76,12 +76,16 @@ public sealed record InstallRecord
         // The schema first: a newer installer's record may not have what this one's needs.
         if (SchemaIn(json) is > CurrentSchema and var schema)
         {
-            throw new JsonException($"It was written by a newer installer (schema {schema}); this one reads schema {CurrentSchema}.");
+            throw NewerSchema(schema);
         }
 
-        return JsonSerializer.Deserialize<InstallRecord>(json, InstallerJson.Options)
+        var record = JsonSerializer.Deserialize<InstallRecord>(json, InstallerJson.Options)
             ?? throw new JsonException("The record is empty.");
+        return record.Schema > CurrentSchema ? throw NewerSchema(record.Schema) : record;
     }
+
+    private static JsonException NewerSchema(int schema)
+        => new($"It was written by a newer installer (schema {schema}); this one reads schema {CurrentSchema}.");
 
     /// <summary>
     /// The schema of the record at <paramref name="path"/>, read on its own: null when there is no record, or it has no
@@ -103,7 +107,8 @@ public sealed record InstallRecord
     {
         try
         {
-            using var document = JsonDocument.Parse(json);
+            // Read as the record itself is (InstallerJson.Options): with comments skipped.
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
             return document.RootElement.ValueKind == JsonValueKind.Object
                 && document.RootElement.TryGetProperty("schema", out var schema)
                 && schema.TryGetInt32(out var number)

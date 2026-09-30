@@ -136,6 +136,10 @@ public sealed class InstallerPlanTests
             "a newer installer wrote it (schema 2), and this one does not replace it: install with that installer, or a newer one"));
         plan.IsBlocked.Should().BeTrue();
 
+        // Read as the record itself is, with its comments skipped.
+        pi.Write(InstallPaths.SystemRecord, "{ /* kept by hand */ \"schema\": 2, \"scope\": \"system\", \"roles\": [\"controller\"]}");
+        Change(await CheckAsync(pi, InstallRole.Controller), InstallPaths.SystemRecord).Change.Should().Be(StepChange.Blocked, "a comment does not hide the schema");
+
         pi.Write(InstallPaths.SystemRecord, "{ damaged");
         Change(await CheckAsync(pi, InstallRole.Controller), InstallPaths.SystemRecord)
             .Should().Be(new StepCheck(StepChange.Change, "replaces the record that could not be read"), "a damaged record is replaced");
@@ -353,6 +357,25 @@ public sealed class InstallerPlanTests
 
         await install.Should().ThrowAsync<InstallerRefusedException>();
         pi.Snapshot().Should().Equal(before);
+    }
+
+    [TestMethod]
+    public async Task AStepBlockedSinceThePlanWasChecked_StopsTheInstall_AsAFailure()
+    {
+        using var pi = AdoptablePi();
+        var session = await StartAsync(pi, InstallRole.Controller);
+        var plan = await session.CheckAsync();
+        Change(plan, InstallPaths.SystemRecord).Change.Should().Be(StepChange.Create);
+
+        // A newer installer writes its record while the review page is open.
+        const string Newer = "{\"schema\": 2, \"scope\": \"system\", \"roles\": [\"controller\"]}";
+        pi.Write(InstallPaths.SystemRecord, Newer);
+        var install = async () => await session.ApplyAsync(plan);
+
+        var failure = (await install.Should().ThrowAsync<InstallerException>()).Which;
+        failure.Should().NotBeOfType<InstallerRefusedException>("the folders before it were made: this is a failure, not a refusal");
+        failure.Message.Should().Be($"Creating file {InstallPaths.SystemRecord}: a newer installer wrote it (schema 2), and this one does not replace it: install with that installer, or a newer one");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(Newer, "the newer record is kept");
     }
 
     [TestMethod]

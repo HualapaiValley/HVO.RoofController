@@ -177,6 +177,11 @@ public sealed class InstallerAnswersTests
         var (record, problem) = InstallRecord.Load(pi.Machine, InstallPaths.SystemRecord);
         record.Should().BeNull();
         problem.Should().Contain("written by a newer installer (schema 2); this one reads schema 1");
+
+        // A comment, which the record's own reading skips, does not hide the schema.
+        pi.Write(InstallPaths.SystemRecord, "{ /* kept by hand */ \"schema\": 2, \"scope\": \"system\", \"roles\": [\"controller\"] }");
+        InstallRecord.SchemaOf(pi.Machine, InstallPaths.SystemRecord).Should().Be(2);
+        InstallRecord.Load(pi.Machine, InstallPaths.SystemRecord).Problem.Should().Contain("written by a newer installer (schema 2)");
     }
 
     [TestMethod]
