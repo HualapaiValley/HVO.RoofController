@@ -51,6 +51,12 @@ public sealed record ControllerLayout(
     /// <summary>The controller's certificate and key (PKCS#12), as the deploy script mounts it (HTTPS_CERT_FILE).</summary>
     public string Pfx => Path.Join(Https, "roof-controller.pfx");
 
+    /// <summary>The controller's settings file: the settings changed from the shipped defaults, through the API or by hand.</summary>
+    public string SettingsFile => Path.Join(Settings, "appsettings.Local.json");
+
+    /// <summary>The controller's identity store: its people and managed API keys, as hashes.</summary>
+    public string IdentityFile => Path.Join(Identity, "identity.json");
+
     /// <summary>The PKCS#12 file's password, a secret the controller reads.</summary>
     public string PfxPassword => Path.Join(Secrets, "Kestrel__Certificates__Default__Password");
 }
@@ -90,18 +96,29 @@ public static class PlanBuilder
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
             var certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
-            if (rig)
+            var keys = AllocateKeys(machine, survey, layout, roles);
+            steps.AddRange(keys.Select(key => new ApiKeyStep(layout, key)));
+            var camera = CameraSteps.For(layout, rig, settings.Camera);
+            steps.AddRange(camera);
+            var import = settings.ImportSettingsFrom is { } backup ? new SettingsImportStep(layout, backup) : null;
+            if (import is not null)
             {
-                steps.Add(new ContainerStep(MachineSurveyor.HatEmulatorContainer, null, "the HAT emulator: the roof, drive and limit switches the rig drives"));
+                steps.Add(import);
             }
 
-            steps.Add(new ContainerStep(
-                MachineSurveyor.ControllerContainer,
-                rig ? HatMode.Emulated : HatMode.Real,
-                rig ? "the controller, against the HAT emulator" : "the controller, driving the real HAT",
-                settings,
-                names,
-                certificate));
+            steps.Add(new DeployToolsStep());
+            var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
+            if (emulator is not null)
+            {
+                steps.Add(emulator);
+            }
+
+            steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator, camera, import));
+            if (settings.FirstAdmin is { } admin)
+            {
+                steps.Add(new FirstAdminStep(layout, admin, keys.First(key => key.Use == ApiKeyUse.Admin)));
+            }
+
             steps.Add(new PortStep(settings.ApiPort, settings.UsesHttps ? "the controller's API (HTTPS)" : "the controller's API (HTTP)", MachineSurveyor.ControllerContainer));
             steps.Add(new PortStep(settings.WebPort, "the web UI", MachineSurveyor.ControllerContainer));
         }
@@ -173,6 +190,37 @@ public static class PlanBuilder
         return new InstallPlan(steps);
     }
 
+    /// <summary>
+    /// The controller deployed again with the recorded <paramref name="settings"/> and <paramref name="roles"/>, to serve
+    /// the certificate <paramref name="certificate"/> puts in place, as <c>hvo-roof-install cert</c> does once the roof is
+    /// idle: the API keys, the programs the deploy script runs, the HAT emulator for a rig, and the controller.
+    /// </summary>
+    public static InstallPlan BuildRedeploy(InstallerMachine machine, MachineSurvey survey, IReadOnlyCollection<InstallRole> roles, ControllerSettings settings, IControllerCertificateStep certificate)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(roles);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(certificate);
+        var layout = ControllerLayout.For(machine);
+        settings = settings.Normalised();
+        var rig = roles.Contains(InstallRole.Rig);
+        var keys = AllocateKeys(machine, survey, layout, roles);
+        var steps = new List<PlanStep>(keys.Select(key => new ApiKeyStep(layout, key))) { new DeployToolsStep() };
+
+        // The camera's files as the record has them: a change to one, or one written by an install that stopped before it
+        // redeployed the controller, is more than the certificate.
+        var camera = CameraSteps.For(layout, rig, settings.Camera);
+        steps.AddRange(camera);
+        var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
+        if (emulator is not null)
+        {
+            steps.Add(emulator);
+        }
+
+        steps.Add(new ControllerStep(layout, settings, CertificateNames.For(machine, settings), rig, certificate, keys, emulator, camera));
+        return new InstallPlan(steps);
+    }
+
     private static List<PlanStep> CertificateFolders(ControllerLayout layout)
     {
         var steps = new List<PlanStep>();
@@ -201,7 +249,8 @@ public static class PlanBuilder
             InstallerVersion = context.Version,
             InstalledAt = existing?.InstalledAt ?? default,
             UpdatedAt = existing?.UpdatedAt ?? default,
-            Controller = InstallRoles.RunsController(roles) ? answers.Controller : InstallRoles.RunsController(all) ? existing?.Controller : null,
+            // An import is done once: the record keeps the settings, not where they came from.
+            Controller = InstallRoles.RunsController(roles) ? answers.Controller! with { ImportSettingsFrom = null } : InstallRoles.RunsController(all) ? existing?.Controller : null,
             Cli = roles.Contains(InstallRole.Cli) ? answers.Cli : all.Contains(InstallRole.Cli) ? existing?.Cli : null,
             MacApp = roles.Contains(InstallRole.MacApp) ? answers.MacApp : all.Contains(InstallRole.MacApp) ? existing?.MacApp : null
         };
@@ -229,6 +278,43 @@ public static class PlanBuilder
         var certificate = new CertificateStep(layout, names, connection, replacingAuthority, renew);
         steps.Add(certificate);
         return certificate;
+    }
+
+    /// <summary>
+    /// The API keys the controller needs from the installer: the operator key (the deploy script's verified Stop), the
+    /// admin key (the first admin), the web UI's Stop key, and the kiosk's when the kiosk runs here too. Keys already in
+    /// the secrets folder are reused. Without root, the plan says what each is for, not which entry it takes.
+    /// </summary>
+    public static IReadOnlyList<ApiKeyAllocation> AllocateKeys(InstallerMachine machine, MachineSurvey survey, ControllerLayout layout, IReadOnlyCollection<InstallRole> roles)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(survey);
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(roles);
+        ApiKeyUse[] uses = roles.Contains(InstallRole.Kiosk)
+            ? [ApiKeyUse.Operator, ApiKeyUse.Admin, ApiKeyUse.WebStop, ApiKeyUse.Kiosk]
+            : [ApiKeyUse.Operator, ApiKeyUse.Admin, ApiKeyUse.WebStop];
+        try
+        {
+            var existing = ApiKeyFiles.Read(machine, layout.Secrets);
+            return ApiKeyFiles.Allocate(existing, uses, ApiKeyFiles.IndexOfContainerKeyFile(survey.Controller?.WebStopKeyFile), ManagedKeyNames(machine, layout));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return [.. ApiKeyFiles.Allocate([], uses, null).Select(key => key with { Index = -1 })];
+        }
+    }
+
+    private static IEnumerable<string> ManagedKeyNames(InstallerMachine machine, ControllerLayout layout)
+    {
+        try
+        {
+            return ControllerIdentity.Read(machine, layout.IdentityFile).ApiKeys.Select(key => key.Name);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or InstallerException)
+        {
+            return [];
+        }
     }
 
     // A rig on a Mac keeps its data in its configuration folder: each folder once.

@@ -1,5 +1,7 @@
+using System.Globalization;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
+using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
@@ -17,21 +19,29 @@ public sealed class InstallerSession
     /// <summary>The file the wizard offers to save the answers to, in the folder the installer was started in.</summary>
     public const string AnswersFileName = "hvo-roof-answers.json";
 
-    private InstallerSession(InstallerMachine machine, InstallLog log, string version, MachineSurvey survey, TimeProvider time)
+    private InstallerSession(InstallerMachine machine, InstallLog log, string version, MachineSurvey survey, TimeProvider time, ReleaseSource release)
     {
         Machine = machine;
         Log = log;
         Version = version;
         Survey = survey;
         Time = time;
+        Release = release;
         Answers = RecordedAnswers(survey, includeSystem: survey.IsRoot) ?? new InstallAnswers();
     }
 
     /// <summary>
     /// Looks at the machine (every command logged) and starts a session there, with the answers of what was installed
-    /// before (<see cref="RecordedAnswers"/>) as the starting point.
+    /// before (<see cref="RecordedAnswers"/>) as the starting point. The release comes from <paramref name="release"/>,
+    /// GitHub unless it says otherwise.
     /// </summary>
-    public static async Task<InstallerSession> StartAsync(InstallerMachine machine, InstallLog log, string version, TimeProvider time, CancellationToken cancellationToken = default)
+    public static async Task<InstallerSession> StartAsync(
+        InstallerMachine machine,
+        InstallLog log,
+        string version,
+        TimeProvider time,
+        ReleaseSource? release = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(log);
@@ -44,7 +54,7 @@ public sealed class InstallerSession
             log.Write(line);
         }
 
-        return new InstallerSession(logged, log, RoofVersion(version), survey, time);
+        return new InstallerSession(logged, log, RoofVersion(version), survey, time, release ?? ReleaseSource.GitHub());
     }
 
     public InstallerMachine Machine { get; }
@@ -58,8 +68,38 @@ public sealed class InstallerSession
 
     public TimeProvider Time { get; }
 
+    /// <summary>Where the release's release.json comes from.</summary>
+    public ReleaseSource Release { get; }
+
     /// <summary>The answers so far: the roles and choices.</summary>
     public InstallAnswers Answers { get; set; }
+
+    /// <summary>The passwords and PINs given so far (<see cref="GiveSecret"/>): never saved, logged or shown.</summary>
+    public InstallSecrets Secrets { get; } = new();
+
+    /// <summary>
+    /// Keeps a password or PIN for this run, and keeps it out of the log. Throws <see cref="InstallerUsageException"/>
+    /// when it is not one the step takes.
+    /// </summary>
+    public void GiveSecret(InstallSecret secret, string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (InstallSecrets.Problem(secret, value) is { } problem)
+        {
+            throw new InstallerUsageException(problem);
+        }
+
+        Log.AddSecret(value);
+        Secrets.Set(secret, value);
+    }
+
+    /// <summary>The secrets <paramref name="plan"/> needs that were not given yet.</summary>
+    public IReadOnlyList<InstallSecret> MissingSecrets(CheckedPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        // Asked for in one order, the admin's before the camera's, whatever the order of the steps that need them.
+        return [.. plan.NeededSecrets().Where(secret => !Secrets.Has(secret)).Distinct().Order()];
+    }
 
     public IReadOnlyList<RoleOption> Options => RoleGuards.Options(Survey);
 
@@ -67,24 +107,42 @@ public sealed class InstallerSession
     /// The controller's choices when nothing is recorded: the person's own certificate when one is in place that this
     /// machine's CA did not issue (so it is never replaced unasked, even when an installer's CA elsewhere issued it),
     /// otherwise a private CA (in place of a self-signed one, or one that cannot be opened). No domain is listed unasked:
-    /// each one lets the CA sign for any name in it, so the wizard only suggests those this machine seems to be in.
+    /// each one lets the CA sign for any name in it, so the wizard only suggests those this machine seems to be in. A
+    /// controller already running keeps its telemetry, a rig's emulator its pace, and a rig published on every address stays
+    /// open to the network.
     /// </summary>
     public ControllerSettings DefaultController => new()
     {
-        Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa
+        Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa,
+        TelemetryEndpoint = Survey.Controller?.TelemetryEndpoint is { Length: > 0 } endpoint ? endpoint : null,
+        Rig = new RigSettings
+        {
+            TimeScale = Number(Survey.HatEmulator?.EmulatorTimeScale) ?? RigSettings.DefaultTimeScale,
+            CameraFramesPerSecond = Number(Survey.HatEmulator?.EmulatorCameraFramesPerSecond) ?? RigSettings.DefaultCameraFramesPerSecond,
+            OpenToLan = Survey.Controller is { HatEmulator: not null, PublishAddress: null, PublishedPorts.Count: > 0 }
+        }
     };
+
+    private static double? Number(string? text)
+        => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number) ? number : null;
 
     /// <summary>Why the installer refuses the answers here; empty when it may go ahead.</summary>
     public IReadOnlyList<string> Problems(bool planOnly = false) => RoleGuards.Check(Survey, Answers, planOnly);
 
-    public InstallContext Context => new()
+    public InstallContext Context => ContextFor(null);
+
+    /// <summary>A context whose long steps (a deploy) say how they are getting on through <paramref name="progress"/>.</summary>
+    public InstallContext ContextFor(Action<string>? progress) => new()
     {
         Machine = Machine,
         Log = Log,
         Survey = Survey,
         Answers = Answers.Normalised(),
         Version = Version,
-        Time = Time
+        Time = Time,
+        Release = Release,
+        Secrets = Secrets,
+        Progress = progress
     };
 
     /// <summary>What the answers make and change here: it only looks.</summary>
@@ -102,7 +160,7 @@ public sealed class InstallerSession
         }
 
         Log.Write($"Installing {InstallRoles.Describe(Answers.Roles)}: {PlanText.Summary(plan)}");
-        await plan.ApplyAsync(Context, progress, cancellationToken).ConfigureAwait(false);
+        await plan.ApplyAsync(ContextFor(progress), progress, cancellationToken).ConfigureAwait(false);
         Log.Write($"Installed {InstallRoles.Describe(Answers.Roles)}.");
     }
 
@@ -150,9 +208,17 @@ public sealed class InstallerSession
             lines.Add(string.Empty);
             lines.Add($"The controller's API:  {scheme}://{host}:{controller.ApiPort}/");
             lines.Add($"The web UI:            {scheme}://{host}:{controller.WebPort}/");
+            lines.Add($"Its log:               docker logs {MachineSurveyor.ControllerContainer}");
             lines.Add(rig
                 ? "This is a test rig: the controller drives the HAT emulator, and nothing here moves a roof."
                 : "The roof has not moved. Confirm the installation assumptions in commissioning.md on site before the first move.");
+            if (!rig)
+            {
+                var layout = ControllerLayout.For(Machine);
+                lines.Add($"Back up {layout.Configuration} and {layout.Data} now, and after each change: they hold its keys, certificates, "
+                    + "people and settings (commissioning.md, \"Backing up\").");
+            }
+
             var trust = TrustLines(controller, $"{scheme}://{host}:{controller.ApiPort}/ca.crt").ToArray();
             if (trust.Length > 0)
             {

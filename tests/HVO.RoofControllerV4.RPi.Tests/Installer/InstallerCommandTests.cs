@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -92,7 +93,7 @@ public sealed class InstallerCommandTests
         run.ExitCode.Should().Be(0, run.ToString());
         var lines = run.Output.Split(Environment.NewLine);
         lines[0].Should().Be("The plan for the controller on roofpi, 4.0.0:");
-        lines.Should().Contain("Folders").And.Contain("Containers").And.Contain("13 to create, 0 to change, 0 unchanged.")
+        lines.Should().Contain("Folders").And.Contain("Containers").And.Contain("16 to create, 0 to change, 0 unchanged.")
             .And.Contain("Installing the controller needs root: run the installer with sudo.");
         run.Error.Should().BeEmpty();
         pi.Snapshot().Should().Equal(before, "--plan changes nothing and writes no log");
@@ -172,19 +173,20 @@ public sealed class InstallerCommandTests
     }
 
     [TestMethod]
-    public async Task Answers_ThatNeedAContainerMade_AreRefused_BeforeAnythingChanges()
+    public async Task Answers_ThatNeedWhatThisInstallerCannotInstallYet_AreRefused_BeforeAnythingChanges()
     {
         using var pi = new FakeMachine().WithPi();
-        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
+        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller, InstallRole.Kiosk] });
         var before = pi.Snapshot();
 
         var run = await pi.RunAsync("--answers", answers);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-        run.Error.Should().Be("This installer cannot install roof-controller yet, so nothing was installed. The plan (--plan) shows what an install will do." + Environment.NewLine);
+        run.Error.Should().Be("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed. The plan (--plan) shows what an install will do." + Environment.NewLine);
         run.Output.Should().NotContain("Creating");
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before, "only the log is written");
-        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install roof-controller yet");
+        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet");
+        pi.Deploys.Should().BeEmpty();
     }
 
     [TestMethod]
@@ -253,7 +255,8 @@ public sealed class InstallerCommandTests
         var secret = $"not-a-real-secret-{Guid.NewGuid():N}";
         using var pi = new FakeMachine().WithPi()
             .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Secret = secret })
-            .WithCertificates();
+            .WithCertificates()
+            .WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
         pi.PortsInUse.UnionWith([8443, 8088]);
         var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
 
@@ -265,16 +268,45 @@ public sealed class InstallerCommandTests
             await pi.RunAsync("--plan")
         };
 
-        runs.Select(run => run.ExitCode).Should().Equal(0, 0, 0, 0);
+        runs.Select(run => run.ExitCode).Should().Equal([0, 0, 0, 0], string.Join('\n', runs.Select(run => run.ToString())));
+        pi.Deploys.Should().ContainSingle();
+        var keys = pi.ApiKeyValues();
+        keys.Should().HaveCount(3);
         foreach (var run in runs)
         {
             run.ToString().Should().NotContain(secret);
+            foreach (var key in keys)
+            {
+                run.ToString().Should().NotContain(key);
+            }
         }
 
         pi.AllText().Should().NotContain(secret, "not in the log, the record or the answers");
+        foreach (var key in keys)
+        {
+            pi.Read(InstallPaths.SystemLog).Should().NotContain(key);
+            pi.Ran.SelectMany(command => command.Arguments).Should().NotContain(argument => argument.Contains(key, StringComparison.Ordinal), "a key goes to curl on its standard input");
+            pi.Deploys.SelectMany(environment => environment.Values).Should().NotContain(value => value.Contains(key, StringComparison.Ordinal), "the deploy script gets a key file's path");
+        }
+
         var log = pi.Read(InstallPaths.SystemLog);
         log.Should().Contain("$ docker container inspect roof-controller").And.Contain("exit 0 (secret: output not logged)");
         pi.Ran.Should().Contain(command => command.Secret && command.Arguments.Contains("inspect"), "the container's description holds its environment");
+    }
+
+    [TestMethod]
+    public void APinOfDigits_IsRedacted_OnlyWhereItStandsAlone()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var log = InstallLog.Open(pi.Machine, InstallPaths.SystemLog, FakeMachine.Clock);
+        log.AddSecret("844312");
+        log.AddSecret("s3cret");
+
+        log.Redact("pin 844312, \"844312\" and pin=844312")
+            .Should().Be("pin [secret], \"[secret]\" and pin=[secret]");
+        log.Redact("size 18443120 bytes, digest a844312f, build 2844312")
+            .Should().Be("size 18443120 bytes, digest a844312f, build 2844312", "a [secret] inside another number would show where the PIN's digits are");
+        log.Redact("xs3cretx").Should().Be("x[secret]x", "any other secret is replaced wherever it is");
     }
 
     [TestMethod]
@@ -304,6 +336,31 @@ public sealed class InstallerCommandTests
         {
             folder.Delete(recursive: true);
         }
+    }
+
+    [TestMethod]
+    public async Task ACommandThatDoesNotInherit_GetsOnlyTheKeptVariables_AndItsOwn()
+    {
+        var env = new ProcessCommandRunner().Find("env");
+        env.Should().NotBeNull("env is on every Linux and macOS PATH");
+        var runner = new ProcessCommandRunner(name => name switch
+        {
+            "PATH" => Environment.GetEnvironmentVariable("PATH"),
+            "HOME" => "/home/roy",
+            "DOCKER_HOST" => "unix:///run/docker.sock",
+            "IMAGE_TAG" => "not-this",
+            _ => null
+        });
+
+        var result = await runner.RunAsync(new CommandLine(env!) { InheritEnvironment = false, Environment = new Dictionary<string, string> { ["CONTAINER_NAME"] = "roof-controller" } });
+
+        result.ExitCode.Should().Be(0, result.Reason);
+        var names = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Split('=', 2)[0]).ToList();
+        names.Should().BeEquivalentTo(["PATH", "HOME", "DOCKER_HOST", "LC_ALL", "CONTAINER_NAME"], "IMAGE_TAG is not a kept variable, and nothing else of the test's own environment is passed");
+        result.Output.Should().Contain("HOME=/home/roy\n").And.Contain("CONTAINER_NAME=roof-controller\n");
+
+        var inherited = await new ProcessCommandRunner().RunAsync(new CommandLine(env!));
+        inherited.Output.Split('\n').Length.Should().BeGreaterThan(names.Count, "a command inherits the installer's environment unless it says otherwise");
     }
 
     [TestMethod]

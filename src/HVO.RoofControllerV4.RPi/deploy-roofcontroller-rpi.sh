@@ -11,7 +11,9 @@ set -euo pipefail
 #    listener and certificate). If it fails, the running controller is not touched.
 # 2. The running controller is replaced only after a VERIFIED stop: POST /Stop (from inside the container, over
 #    loopback) must return 200 with relayRegisterState=Verified, relayRegisterMask=0 and commandedMotion=None.
-#    Anything else aborts, unless --force-unverified-stop is given AND the operator types a confirmation. The old
+#    Anything else aborts, unless --force-unverified-stop is given AND the operator types a confirmation. With
+#    REQUIRE_IDLE_ROOF=true, an authenticated Status inside the container must first report the roof idle (isMoving
+#    false, commandedMotion None); a moving roof, or a Status that says nothing, aborts with nothing changed. The old
 #    container is stopped gracefully (SIGTERM) and kept, not started, as <name>-previous; an older stopped
 #    <name>-previous is removed only once that stop has succeeded.
 # 3. The new controller must become ready, answer an authenticated Status inside the container, and answer an
@@ -48,6 +50,8 @@ set -euo pipefail
 #   rollback checks the restored version's HAT too, before anything is stopped and again once it runs: the emulator is
 #   accepted only with ALLOW_EMULATED_HAT=true. The container then maps no host device or Pi file (no /dev/gpiomem, no
 #   thermal sensor), so a test rig need not be a Pi, and BUILD_PLATFORM=linux/amd64 builds the image for a PC.
+#   PUBLISH_ADDRESS=127.0.0.1 publishes the ports on that address only, for a rig that is not open to the network;
+#   PI_HOST is then localhost, or a name its certificate has with REMOTE_CONNECT_TO=::127.0.0.1:.
 # Compose: the script replaces only controllers it created. A <name> or <name>-previous that Docker Compose created is
 #   refused before anything changes; docs/deployment.md describes moving between Compose and the script. Check a
 #   Compose controller from this machine with --verify-remote.
@@ -95,6 +99,9 @@ HOST_PORT=${HOST_PORT:-8080}
 HTTPS_HOST_PORT=${HTTPS_HOST_PORT:-8443}
 # The web UI's published port: HTTPS with the controller's certificate, or plain HTTP with ALLOW_INSECURE_HTTP=true.
 WEB_HOST_PORT=${WEB_HOST_PORT:-8088}
+# The host address the ports are published on: empty for every interface, or an IPv4 address such as 127.0.0.1 to
+# keep them to this machine (a test rig that is not open to the network).
+PUBLISH_ADDRESS=${PUBLISH_ADDRESS:-}
 # Extra `docker run` options for the controller, split on whitespace (no quoting). Also applied to the pre-flight
 # container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports, graceful
 # stop, platform) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and
@@ -104,7 +111,8 @@ HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
 IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-false}
 OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-hvo-roof-controller}
 OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}
-OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://192.168.1.238:4318}
+# The OTLP collector. Unset, the observatory's collector; set to an empty value, export is off.
+OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT-http://192.168.1.238:4318}
 OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
 OTEL_METRIC_EXPORT_INTERVAL=${OTEL_METRIC_EXPORT_INTERVAL:-10000}
 
@@ -140,12 +148,19 @@ ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
 # 2 s for the web UI, so it must be 30 or more: a shorter one would let Docker kill the controller before its shutdown
 # ends.
 STOP_TIMEOUT_SECONDS=${STOP_TIMEOUT_SECONDS:-30}
+# true: a running controller is replaced only while its roof is idle. Before the verified Stop, an authenticated Status
+# inside the container must report isMoving false and commandedMotion None, or nothing is changed. The installer sets
+# it, so a roof that began to move after the installer last looked is not stopped halfway by the Stop.
+REQUIRE_IDLE_ROOF=${REQUIRE_IDLE_ROOF:-false}
 READY_TIMEOUT_SECONDS=${READY_TIMEOUT_SECONDS:-120}
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-3}
 
 # Remote check from this machine after the switch. REMOTE_CA_CERT is a PEM file (on this machine) that verifies the
 # Pi's certificate when it is not signed by a CA this machine trusts, e.g. the self-signed certificate itself.
 REMOTE_CA_CERT=${REMOTE_CA_CERT:-}
+# REMOTE_CONNECT_TO goes to curl's --connect-to for those checks (HOST1:PORT1:HOST2:PORT2): '::127.0.0.1:' checks PI_HOST's
+# name and certificate at this machine's loopback, for a name this machine cannot resolve, such as the Pi's own on the Pi.
+REMOTE_CONNECT_TO=${REMOTE_CONNECT_TO:-}
 SKIP_REMOTE_CHECK=${SKIP_REMOTE_CHECK:-false}
 
 # Key for the Stop and Status checks (normally the operator key). Passed to curl on stdin, never as an argument.
@@ -225,6 +240,20 @@ require_number STOP_TIMEOUT_SECONDS 30 86400
 require_number HOST_PORT 1 65535
 require_number HTTPS_HOST_PORT 1 65535
 require_number WEB_HOST_PORT 1 65535
+case "${REQUIRE_IDLE_ROOF}" in
+  true|false) ;;
+  *) fail "REQUIRE_IDLE_ROOF must be true or false, got '${REQUIRE_IDLE_ROOF}'. Nothing was changed." ;;
+esac
+publish_prefix=""
+if [[ -n "${PUBLISH_ADDRESS}" ]]; then
+  address_pattern='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$'
+  if [[ ! "${PUBLISH_ADDRESS}" =~ ${address_pattern} ]] \
+      || (( 10#${BASH_REMATCH[1]} > 255 || 10#${BASH_REMATCH[2]} > 255 || 10#${BASH_REMATCH[3]} > 255 || 10#${BASH_REMATCH[4]} > 255 )); then
+    fail "PUBLISH_ADDRESS must be an IPv4 address such as 127.0.0.1, or empty for every interface, got '${PUBLISH_ADDRESS}'. Nothing was changed."
+  fi
+  PUBLISH_ADDRESS="$((10#${BASH_REMATCH[1]})).$((10#${BASH_REMATCH[2]})).$((10#${BASH_REMATCH[3]})).$((10#${BASH_REMATCH[4]}))"
+  publish_prefix="${PUBLISH_ADDRESS}:"
+fi
 case "${POLL_INTERVAL_SECONDS}" in
   ''|.|*[!0-9.]*|*.*.*) fail "POLL_INTERVAL_SECONDS must be a number of seconds such as 3 or 0.5, got '${POLL_INTERVAL_SECONDS}'." ;;
 esac
@@ -403,6 +432,9 @@ fi
 if [[ -n "${REMOTE_CA_CERT}" && ! -r "${REMOTE_CA_CERT}" ]]; then
   fail "REMOTE_CA_CERT '${REMOTE_CA_CERT}' is not a readable file on this machine."
 fi
+if [[ -n "${REMOTE_CONNECT_TO}" && ! "${REMOTE_CONNECT_TO}" =~ ^[A-Za-z0-9.-]*:[0-9]*:[A-Za-z0-9.-]*:[0-9]*$ ]]; then
+  fail "REMOTE_CONNECT_TO must be HOST1:PORT1:HOST2:PORT2 as curl's --connect-to takes it (such as ::127.0.0.1:), got '${REMOTE_CONNECT_TO}'. Nothing was changed."
+fi
 
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
   REMOTE_BASE_URL="https://${PI_HOST}:${HTTPS_HOST_PORT}"
@@ -543,15 +575,24 @@ container_api() {
         -w '\n%{http_code}' "http://localhost:8080/${API_PATH}/${path}"
 }
 
+# curl's options for the checks from this machine: REMOTE_CA_CERT and REMOTE_CONNECT_TO, in the caller's remote_args.
+set_remote_args() {
+  remote_args=()
+  if [[ -n "${REMOTE_CA_CERT}" ]]; then
+    remote_args+=(--cacert "${REMOTE_CA_CERT}")
+  fi
+  if [[ -n "${REMOTE_CONNECT_TO}" ]]; then
+    remote_args+=(--connect-to "${REMOTE_CONNECT_TO}")
+  fi
+}
+
 # Calls the API from this machine at the published URL, as a remote client would. Same output as container_api.
 remote_api() {
   local method=$1 path=$2
-  local tls_args=()
-  if [[ -n "${REMOTE_CA_CERT}" ]]; then
-    tls_args=(--cacert "${REMOTE_CA_CERT}")
-  fi
+  local remote_args
+  set_remote_args
   printf 'X-Api-Key: %s\n' "${OPERATOR_KEY}" \
-    | curl -sS --max-time 15 ${tls_args[@]+"${tls_args[@]}"} -X "${method}" -H @- -H 'Accept: application/json' \
+    | curl -sS --max-time 15 ${remote_args[@]+"${remote_args[@]}"} -X "${method}" -H @- -H 'Accept: application/json' \
         -w '\n%{http_code}' "${REMOTE_BASE_URL}/${API_PATH}/${path}"
 }
 
@@ -611,7 +652,47 @@ confirm_unverified_stop() {
   [[ "${answer}" == "STOP-UNVERIFIED" ]] || fail "Confirmation not given; deployment aborted."
 }
 
+# Prints "<isMoving>\t<commandedMotion>" from a status JSON on stdin, with "null" for a missing field.
+parse_motion() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '[(.isMoving | if . == null then "null" else tostring end), (.commandedMotion // "null")] | @tsv'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print("null" if d.get("isMoving") is None else json.dumps(d.get("isMoving")), "null" if d.get("commandedMotion") is None else str(d.get("commandedMotion")), sep="\t")'
+  else
+    return 1
+  fi
+}
+
+# REQUIRE_IDLE_ROOF=true: fails, with nothing changed, unless an authenticated Status inside the container reports the
+# roof idle (isMoving false and commandedMotion None). Anything it cannot read counts as not idle.
+require_idle_roof() {
+  local response http_status body parsed moving motion
+  [[ "${REQUIRE_IDLE_ROOF}" == "true" ]] || return 0
+  if ! response=$(container_api GET Status); then
+    fail "REQUIRE_IDLE_ROOF=true: could not ask ${CONTAINER_NAME} for its Status, so the roof is not known to be idle. Nothing was changed; run again once the roof is idle."
+  fi
+  http_status=$(tail -n 1 <<<"${response}")
+  body=$(sed '$d' <<<"${response}")
+  if [[ "${http_status}" != "200" ]]; then
+    fail "REQUIRE_IDLE_ROOF=true: ${CONTAINER_NAME}'s Status returned HTTP ${http_status:-<none>}, so the roof is not known to be idle. Nothing was changed; run again once the roof is idle."
+  fi
+  if ! parsed=$(parse_motion <<<"${body}"); then
+    fail "REQUIRE_IDLE_ROOF=true: cannot parse ${CONTAINER_NAME}'s Status (install jq or python3), so the roof is not known to be idle. Nothing was changed; run again once the roof is idle."
+  fi
+  IFS=$'\t' read -r moving motion <<<"${parsed}"
+  if [[ "${moving}" == "true" || ( "${motion}" != "None" && "${motion}" != "null" ) ]]; then
+    fail "The roof is moving (commandedMotion=${motion}, isMoving=${moving}), and REQUIRE_IDLE_ROOF=true, so ${CONTAINER_NAME} was neither stopped nor replaced. Nothing was changed; run again once the roof is idle."
+  fi
+  if [[ "${moving}" != "false" || "${motion}" != "None" ]]; then
+    fail "REQUIRE_IDLE_ROOF=true: ${CONTAINER_NAME}'s Status does not say whether the roof is moving (isMoving=${moving}, commandedMotion=${motion}). Nothing was changed; run again once the roof is idle."
+  fi
+  echo "[deploy] The roof is idle (isMoving=false, commandedMotion=None)."
+}
+
 stop_roof_before_replacing() {
+  require_idle_roof
   echo "[deploy] Requesting a verified roof stop from ${CONTAINER_NAME}"
   local response
   if ! response=$(container_api POST Stop); then
@@ -715,11 +796,9 @@ wait_web_ui() {
 
 # The web UI's liveness from this machine at REMOTE_WEB_URL, as a browser would reach it (anonymous).
 remote_web_ui_live() {
-  local tls_args=()
-  if [[ -n "${REMOTE_CA_CERT}" ]]; then
-    tls_args=(--cacert "${REMOTE_CA_CERT}")
-  fi
-  curl -fsS --max-time 15 ${tls_args[@]+"${tls_args[@]}"} -o /dev/null "${REMOTE_WEB_URL}/health/live"
+  local remote_args
+  set_remote_args
+  curl -fsS --max-time 15 ${remote_args[@]+"${remote_args[@]}"} -o /dev/null "${REMOTE_WEB_URL}/health/live"
 }
 
 # The HAT a Status body on $2 reports, against the one this run deploys: Physical, or Emulated in HAT emulator mode.
@@ -1347,7 +1426,7 @@ fi
 if [[ -n "${HTTPS_CERT_DIR}" ]]; then
   # Remote clients use HTTPS only; plain HTTP listens on loopback inside the container (health check, Stop calls, the
   # web UI). The web UI serves the controller's certificate (its supervisor gives it a private copy).
-  publish_args=(-p "${HTTPS_HOST_PORT}:8443" -p "${WEB_HOST_PORT}:8088")
+  publish_args=(-p "${publish_prefix}${HTTPS_HOST_PORT}:8443" -p "${publish_prefix}${WEB_HOST_PORT}:8088")
   container_args+=(
     --mount "type=bind,src=${HTTPS_CERT_DIR},dst=/https,readonly"
     --env "ASPNETCORE_URLS=http://localhost:8080;https://+:8443"
@@ -1356,7 +1435,7 @@ if [[ -n "${HTTPS_CERT_DIR}" ]]; then
     --env "RoofWeb__Urls=https://+:8088"
   )
 else
-  publish_args=(-p "${HOST_PORT}:8080" -p "${WEB_HOST_PORT}:8088")
+  publish_args=(-p "${publish_prefix}${HOST_PORT}:8080" -p "${publish_prefix}${WEB_HOST_PORT}:8088")
   container_args+=(
     --env "ASPNETCORE_URLS=http://+:8080"
     --env "RoofControllerSecurity__RequireHttps=false"
@@ -1429,8 +1508,11 @@ NEW_CONTAINER_ID=$(dockerc run -d --cidfile "${NEW_CIDFILE}" --name "${CONTAINER
   || abort_switch "docker run failed for the new controller"
 
 verify_controller "${CONTAINER_NAME}" || abort_switch "${FAILURE}"
+# The switch is complete and verified, and what is left only reports it: from here neither a signal nor a lost terminal
+# ends the script with an error while the new controller runs.
+trap '' HUP INT TERM PIPE
 RESTORE_MODE=""
 
-echo "[deploy] Container status"
+echo "[deploy] Container status" || true
 show_containers
-echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. HAT: ${HAT_SUMMARY}. The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it."
+echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. HAT: ${HAT_SUMMARY}. The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it." || true

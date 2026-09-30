@@ -207,6 +207,31 @@ public sealed class InstallerCertificateTests
     }
 
     [TestMethod]
+    public void TemporaryAndDeprecatedAddresses_AreLeftOut_AsTheyDoNotLast()
+    {
+        var passing = NetworkAddress.PassingIn(
+            "00000000000000000000000000000001 01 80 10 80       lo\n"
+            + "fd000000000000000000000000000050 02 40 00 80     eth0\n"
+            + "fd0000000000000011223344556677aa 02 40 00 01     eth0\n"
+            + "fd0000000000000000000000000000bb 02 40 00 20     eth0\n"
+            + "fe80000000000000be2411fffe4f1e2a 02 40 20 80     eth0\n");
+
+        passing.Should().BeEquivalentTo([("eth0", IPAddress.Parse("fd00::1122:3344:5566:77aa")), ("eth0", IPAddress.Parse("fd00::bb"))]);
+
+        using var pi = new FakeMachine();
+        pi.Addresses.AddRange(
+        [
+            new NetworkAddress("eth0", IPAddress.Parse("fd00::50")),
+            new NetworkAddress("eth0", IPAddress.Parse("fd00::1122:3344:5566:77aa")) { Temporary = true }
+        ]);
+
+        var names = CertificateNames.For(pi.Machine, new ControllerSettings().Normalised());
+
+        names.Addresses.Select(address => address.ToString()).Should().Equal("192.168.1.50", "fd00::50", "127.0.0.1", "::1");
+        names.LeftOut.Should().BeEmpty("a temporary address is not one to name, nor one to warn about");
+    }
+
+    [TestMethod]
     public void AHostNameThatIsNotALabel_LeavesLocalhost()
     {
         using var odd = new FakeMachine(hostName: "_odd_");

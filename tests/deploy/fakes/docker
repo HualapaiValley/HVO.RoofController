@@ -13,6 +13,8 @@ restarting one changes nothing, and starting a paused one fails.
 Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
   FAKE_<KIND>_READY=false          /health/ready fails
   FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
+  FAKE_<KIND>_MOTION=<motion>      commandedMotion of the in-container GET Status (default None); isMoving is true when
+                                   it is not None
   FAKE_<KIND>_STOP=unverified      the in-container POST Stop is not verified (error: the exec fails)
   FAKE_<KIND>_HAT_MODE=<mode>      hatMode of the in-container Status and Stop (absent: no hatMode, as before emulator
                                    mode). By default Emulated when the container was run with HatEmulator__Enabled=true
@@ -424,7 +426,9 @@ def exec_curl(state, ref, curl_args, stdin_text):
 
     if url.endswith("/Status") and method == "GET":
         code = behaviour(kind, "STATUS_CODE", "200")
-        out(json.dumps(with_hat_mode(c, VERIFIED)) + "\n" + code, end="")
+        motion = behaviour(kind, "MOTION", "None")
+        body = dict(VERIFIED, commandedMotion=motion, isMoving=motion != "None")
+        out(json.dumps(with_hat_mode(c, body)) + "\n" + code, end="")
     elif url.endswith("/Stop") and method == "POST":
         stop = behaviour(kind, "STOP", "verified")
         if stop == "error":

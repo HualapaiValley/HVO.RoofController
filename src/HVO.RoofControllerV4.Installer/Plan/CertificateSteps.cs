@@ -123,6 +123,26 @@ public sealed class CertificatePasswordStep(ControllerLayout layout) : PlanStep
 }
 
 /// <summary>
+/// A step that puts the controller's certificate in its PKCS#12 file: <see cref="CertificateStep"/>, or a person's own with
+/// <see cref="ImportCertificateStep"/>. The controller reads the file when it starts, so it serves a new certificate once
+/// it is deployed again (<see cref="ControllerStep"/>).
+/// </summary>
+public interface IControllerCertificateStep
+{
+    /// <summary>The PKCS#12 file.</summary>
+    string Target { get; }
+
+    /// <summary>True when the step would put a new certificate in the file (not only set its mode).</summary>
+    bool WillWrite(InstallContext context);
+
+    /// <summary>True once the step has put a new certificate in the file.</summary>
+    bool Wrote { get; }
+
+    /// <summary>The certificate in the file (with its key), or null when there is none, or it cannot be read or opened.</summary>
+    X509Certificate2? Current(InstallerMachine machine);
+}
+
+/// <summary>
 /// The controller's certificate (the PKCS#12 file the deploy script mounts). With <see cref="ConnectionMode.PrivateCa"/>
 /// the installer's CA issues it, and with <see cref="ConnectionMode.SelfSigned"/> it signs itself; either way it is
 /// issued again when the CA is new, its password is new or does not open it, its names differ from the controller's, or
@@ -130,7 +150,7 @@ public sealed class CertificatePasswordStep(ControllerLayout layout) : PlanStep
 /// <see cref="ConnectionMode.OwnCertificate"/> the person's certificate is kept as it is: <c>hvo-roof-install cert
 /// import</c> puts it in place.
 /// </summary>
-public sealed class CertificateStep(ControllerLayout layout, CertificateNames names, ConnectionMode mode, string? replacingAuthority = null, bool renew = false) : PlanStep
+public sealed class CertificateStep(ControllerLayout layout, CertificateNames names, ConnectionMode mode, string? replacingAuthority = null, bool renew = false) : PlanStep, IControllerCertificateStep
 {
     public override StepKind Kind => StepKind.File;
 
@@ -148,11 +168,14 @@ public sealed class CertificateStep(ControllerLayout layout, CertificateNames na
     public override Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
         => Task.FromResult(Evaluate(context).Check);
 
-    /// <summary>True when the step would put a new certificate in the file (not only set its mode).</summary>
-    public bool WillIssue(InstallContext context) => Evaluate(context).Issue;
+    public bool WillWrite(InstallContext context) => Evaluate(context).Issue;
 
-    /// <summary>The certificate in the file (with its key), or null when there is none, or it cannot be read or opened.</summary>
-    public X509Certificate2? Current(InstallerMachine machine)
+    public bool Wrote { get; private set; }
+
+    public X509Certificate2? Current(InstallerMachine machine) => InFile(machine, layout);
+
+    /// <summary>The certificate in the controller's PKCS#12 file (with its key), or null when there is none, or it cannot be read or opened.</summary>
+    internal static X509Certificate2? InFile(InstallerMachine machine, ControllerLayout layout)
     {
         ArgumentNullException.ThrowIfNull(machine);
         try
@@ -289,6 +312,7 @@ public sealed class CertificateStep(ControllerLayout layout, CertificateNames na
     private void Write(InstallContext context, byte[] pfx, X509Certificate2 certificate, string issuer)
     {
         context.Machine.WriteAtomically(layout.Pfx, pfx, Modes.PrivateFile);
+        Wrote = true;
         context.Log.Write($"Wrote {layout.Pfx}: {Describe(certificate)}, {issuer}, SHA-256 {ControllerCertificates.Fingerprint(certificate)}.");
     }
 
@@ -308,7 +332,7 @@ public sealed class CertificateStep(ControllerLayout layout, CertificateNames na
 /// certificates that chain it, under the password the installer made; the file it came from is left as it is. Unchanged
 /// when that certificate is already in place.
 /// </summary>
-public sealed class ImportCertificateStep(ControllerLayout layout, ImportedCertificate imported, string source) : PlanStep
+public sealed class ImportCertificateStep(ControllerLayout layout, ImportedCertificate imported, string source) : PlanStep, IControllerCertificateStep
 {
     public override StepKind Kind => StepKind.File;
 
@@ -360,9 +384,27 @@ public sealed class ImportCertificateStep(ControllerLayout layout, ImportedCerti
         }
 
         machine.WriteAtomically(layout.Pfx, ControllerCertificates.ExportPfxWithChain(imported.Certificate, imported.Chain, password), Modes.PrivateFile);
+        Wrote = true;
         context.Log.Write($"Wrote {layout.Pfx} from {source}: {Describe(imported)}, SHA-256 {ControllerCertificates.Fingerprint(imported.Certificate)}.");
         return Task.CompletedTask;
     }
+
+    public bool WillWrite(InstallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        try
+        {
+            return context.Machine.ReadBytes(layout.Pfx) is not { } pfx || !InPlace(pfx, context.Machine.ReadText(layout.PfxPassword));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    public bool Wrote { get; private set; }
+
+    public X509Certificate2? Current(InstallerMachine machine) => CertificateStep.InFile(machine, layout);
 
     /// <summary>"{subject}, until {date}, issued by {issuer}".</summary>
     public static string Describe(ImportedCertificate certificate)

@@ -38,7 +38,7 @@
 <path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <path d="M839.40,510.00 Q839.40,519.00 835.20,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <text x="28.80" y="55.50" fill="#abb0b7" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
-<text x="20.40" y="73.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 3 of 6: Choices</text>
+<text x="20.40" y="73.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 3 of 7: Choices</text>
 <text x="37.20" y="91.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Choices</text>
 <text x="28.80" y="109.50" fill="#f8fafc" textLength="243.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">How the controller is reached</text>
 <text x="45.60" y="127.50" fill="#f8fafc" textLength="714.00" lengthAdjust="spacingAndGlyphs">◉ HTTPS, with a certificate from this installer's certificate authority (recommended)</text>

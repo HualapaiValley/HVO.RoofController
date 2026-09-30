@@ -2,6 +2,7 @@ using System.Net;
 using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
@@ -296,7 +297,8 @@ public sealed class InstallerCertificateSurveyTests
     // A controller serving plain HTTP, set up by the deploy script: the installer can adopt it.
     private static FakeMachine HttpPi()
     {
-        var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false, Https = false }).WithCertificates(Http);
+        var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = false, Https = false }).WithCertificates(Http)
+            .WithApiKey(0, "roof-operator", RoofControllerApiContract.OperatorRole);
         pi.PortsInUse.UnionWith([8080, 8088]);
         return pi;
     }

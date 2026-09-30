@@ -328,20 +328,21 @@ public sealed class InstallerCertificatePlanTests
     [TestMethod]
     public async Task TheInstallPlan_KeepsTheAdoptedController_WhileItsCertificateAndNamesAreAsTheyShouldBe()
     {
-        using var pi = InstallerPlanTests.AdoptablePi();
+        using var pi = InstallerPlanTests.InstalledPi();
 
         var plan = await BuildAsync(pi);
 
         plan.HasChanges.Should().BeTrue("the record is new");
         Change(plan, MachineSurveyor.ControllerContainer).Change.Should().Be(StepChange.Unchanged);
-        plan.Steps.Where(step => step.Step.Target.StartsWith("/etc/hvo-roof/", StringComparison.Ordinal) && step.Step.Kind == StepKind.File && step.Step.Target != "/etc/hvo-roof/install.json")
-            .Should().OnlyContain(step => step.Check.Change == StepChange.Unchanged);
+        plan.Steps.Where(step => step.Step is CertificateAuthorityStep or CertificatePasswordStep or CertificateStep)
+            .Should().HaveCount(3).And.OnlyContain(step => step.Check.Change == StepChange.Unchanged);
+        Change(plan, "/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__0__Key").Should().Be(StepCheck.Unchanged("reuses roof-operator (RoofOperator)"));
     }
 
     [TestMethod]
     public async Task TheController_IsRedeployed_ToServeANewCertificate()
     {
-        using var pi = InstallerPlanTests.AdoptablePi();
+        using var pi = InstallerPlanTests.InstalledPi();
 
         var plan = await BuildAsync(pi, new FixedClock(FakeMachine.Today.AddDays(370)));
 
@@ -352,7 +353,7 @@ public sealed class InstallerCertificatePlanTests
     [TestMethod]
     public async Task TheController_IsRedeployed_WhenItServesAnotherCertificate()
     {
-        using var pi = InstallerPlanTests.AdoptablePi();
+        using var pi = InstallerPlanTests.InstalledPi();
         pi.ServedCertificates[8443].Dispose();
         pi.ServedCertificates[8443] = ControllerCertificates.SelfSigned(CertificateNames.For(pi.Machine, new ControllerSettings()), FakeMachine.Today);
 
@@ -365,9 +366,9 @@ public sealed class InstallerCertificatePlanTests
     [TestMethod]
     public async Task TheController_IsRedeployed_ToAnswerOnlyToItsNames()
     {
-        using var any = InstallerPlanTests.AdoptablePi();
+        using var any = InstallerPlanTests.InstalledPi();
         any.Containers[MachineSurveyor.ControllerContainer] = any.Containers[MachineSurveyor.ControllerContainer] with { AllowedHosts = null };
-        using var moved = InstallerPlanTests.AdoptablePi();
+        using var moved = InstallerPlanTests.InstalledPi();
         moved.Addresses[0] = new NetworkAddress("eth0", IPAddress.Parse("192.168.1.60"));
 
         Change(await BuildAsync(any), MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed to answer only to its names (it answers to any)"));
@@ -377,7 +378,7 @@ public sealed class InstallerCertificatePlanTests
     [TestMethod]
     public async Task AllowedHosts_AreComparedAsASet()
     {
-        using var pi = InstallerPlanTests.AdoptablePi();
+        using var pi = InstallerPlanTests.InstalledPi();
         var hosts = CertificateNames.For(pi.Machine, new ControllerSettings()).AllowedHosts.Split(';').Reverse().Select(host => host.ToUpperInvariant());
         pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { AllowedHosts = string.Join(" ; ", hosts) };
 

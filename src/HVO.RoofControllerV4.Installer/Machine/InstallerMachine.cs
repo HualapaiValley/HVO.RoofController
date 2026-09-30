@@ -62,7 +62,10 @@ public sealed class InstallerMachine
         CurrentDirectory = CurrentDirectory,
         IsPortInUse = IsPortInUse,
         NetworkAddresses = NetworkAddresses,
-        ServedCertificateAsync = ServedCertificateAsync
+        ServedCertificateAsync = ServedCertificateAsync,
+        DownloadTextAsync = DownloadTextAsync,
+        ApiHandler = ApiHandler,
+        TemporaryDirectory = TemporaryDirectory
     };
 
     /// <summary>
@@ -79,6 +82,21 @@ public sealed class InstallerMachine
     /// with TLS within a few seconds. Nothing is sent but the handshake.
     /// </summary>
     public Func<int, CancellationToken, Task<X509Certificate2?>> ServedCertificateAsync { get; init; } = PresentedOnLoopbackAsync;
+
+    /// <summary>
+    /// Downloads a small text file over HTTPS (release.json): its text, or an <see cref="HttpRequestException"/> saying
+    /// why not. Redirects are followed; anything over a megabyte is refused.
+    /// </summary>
+    public Func<Uri, CancellationToken, Task<string>> DownloadTextAsync { get; init; } = DownloadAsync;
+
+    /// <summary>
+    /// The innermost handler for the controller's API, or null for the client's own. A test puts a fake controller
+    /// here; the installer never changes how the certificate is checked.
+    /// </summary>
+    public Func<HttpMessageHandler>? ApiHandler { get; init; }
+
+    /// <summary>The folder for the installer's temporary files, as a path on this machine.</summary>
+    public string TemporaryDirectory { get; init; } = Path.GetTempPath();
 
     /// <summary>The platform as release assets name it: linux-arm64, linux-x64 or osx-arm64 (or another the installer refuses).</summary>
     public string RuntimeIdentifier => $"{(Os == InstallerOs.MacOS ? "osx" : "linux")}-{Architecture.ToString().ToLowerInvariant()}";
@@ -129,6 +147,32 @@ public sealed class InstallerMachine
     {
         var onDisk = OnDisk(path);
         return File.Exists(onDisk) || Directory.Exists(onDisk) ? File.GetUnixFileMode(onDisk) : null;
+    }
+
+    /// <summary>When the file was last written, or null when there is no such file (or it cannot be seen).</summary>
+    public DateTimeOffset? LastWritten(string path)
+    {
+        var onDisk = OnDisk(path);
+        return File.Exists(onDisk) ? new DateTimeOffset(File.GetLastWriteTimeUtc(onDisk), TimeSpan.Zero) : null;
+    }
+
+    /// <summary>The files in the folder (not in the folders within it), as paths on this machine; none when it is not there.</summary>
+    public IReadOnlyList<string> ListFiles(string path)
+    {
+        var onDisk = OnDisk(path);
+        return Directory.Exists(onDisk)
+            ? [.. Directory.EnumerateFiles(onDisk).Select(file => Path.Join(path, Path.GetFileName(file))).Order(StringComparer.Ordinal)]
+            : [];
+    }
+
+    /// <summary>Deletes the folder and everything in it; nothing when it is not there.</summary>
+    public void DeleteDirectory(string path)
+    {
+        var onDisk = OnDisk(path);
+        if (Directory.Exists(onDisk))
+        {
+            Directory.Delete(onDisk, recursive: true);
+        }
     }
 
     public void SetMode(string path, UnixFileMode mode) => File.SetUnixFileMode(OnDisk(path), mode);
@@ -217,6 +261,20 @@ public sealed class InstallerMachine
         };
     }
 
+    private static async Task<string> DownloadAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        const int limit = 1024 * 1024;
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30), MaxResponseContentBufferSize = limit };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("hvo-roof-install");
+        using var response = await client.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}.", null, response.StatusCode);
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static bool AnswersOnLoopback(int port)
     {
         using var client = new System.Net.Sockets.TcpClient();
@@ -231,11 +289,31 @@ public sealed class InstallerMachine
     }
 
     private static IReadOnlyList<NetworkAddress> CurrentAddresses()
-        => NetworkInterface.GetAllNetworkInterfaces()
+    {
+        var passing = PassingAddresses();
+        return NetworkInterface.GetAllNetworkInterfaces()
             .Where(network => network.OperationalStatus is OperationalStatus.Up or OperationalStatus.Unknown
                 && network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-            .SelectMany(network => network.GetIPProperties().UnicastAddresses.Select(unicast => new NetworkAddress(network.Name, unicast.Address)))
+            .SelectMany(network => network.GetIPProperties().UnicastAddresses.Select(unicast => new NetworkAddress(network.Name, unicast.Address)
+            {
+                Temporary = passing.Contains((network.Name, unicast.Address))
+            }))
             .ToArray();
+    }
+
+    // Linux says which IPv6 addresses are temporary or deprecated in /proc/net/if_inet6; .NET does not. macOS has no such
+    // file, and its addresses count as lasting.
+    private static IReadOnlySet<(string Interface, IPAddress Address)> PassingAddresses()
+    {
+        try
+        {
+            return File.Exists("/proc/net/if_inet6") ? NetworkAddress.PassingIn(File.ReadAllText("/proc/net/if_inet6")) : new HashSet<(string, IPAddress)>();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return new HashSet<(string, IPAddress)>();
+        }
+    }
 
     private static async Task<X509Certificate2?> PresentedOnLoopbackAsync(int port, CancellationToken cancellationToken)
     {
@@ -275,7 +353,46 @@ public sealed class InstallerMachine
 }
 
 /// <summary>An address of the machine, and the network interface it is on (eth0, wlan0, docker0).</summary>
-public sealed record NetworkAddress(string Interface, IPAddress Address);
+public sealed record NetworkAddress(string Interface, IPAddress Address)
+{
+    // The kernel's address flags (linux/if_addr.h): a temporary (privacy) address, and one that is on its way out.
+    private const int TemporaryFlag = 0x01;
+    private const int DeprecatedFlag = 0x20;
+
+    /// <summary>
+    /// A temporary (privacy) or deprecated IPv6 address: the machine drops it within a day or so, so a certificate that
+    /// named it would name an address the controller no longer has.
+    /// </summary>
+    public bool Temporary { get; init; }
+
+    /// <summary>The temporary and deprecated addresses in <c>/proc/net/if_inet6</c>'s text, with their interfaces.</summary>
+    public static IReadOnlySet<(string Interface, IPAddress Address)> PassingIn(string ifInet6)
+    {
+        ArgumentNullException.ThrowIfNull(ifInet6);
+        var passing = new HashSet<(string, IPAddress)>();
+
+        // Each line: the address in 32 hex digits, the interface's index, the prefix length, the scope, the flags, the name.
+        foreach (var line in ifInet6.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (fields is [var hex, _, _, _, var flags, var name]
+                && hex.Length == 32
+                && int.TryParse(flags, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var value)
+                && (value & (TemporaryFlag | DeprecatedFlag)) != 0)
+            {
+                try
+                {
+                    passing.Add((name, new IPAddress(Convert.FromHexString(hex))));
+                }
+                catch (FormatException)
+                {
+                }
+            }
+        }
+
+        return passing;
+    }
+}
 
 /// <summary>The permissions the installer gives what it makes.</summary>
 public static class Modes

@@ -7,8 +7,9 @@ namespace HVO.RoofControllerV4.Installer.Wizard;
 
 /// <summary>
 /// The installer's wizard, in HVO Dark: what the machine is, the roles to install, their questions, the plan to review
-/// (and save as answers), the install, and what was done. A person types nothing but a confirmation here: no secret is
-/// asked for, shown or saved.
+/// (and save as answers), the passwords it needs, the install, and what was done. A page with nothing to ask for the roles
+/// chosen is passed over. Passwords and PINs are asked for only after the review, once the plan says it needs them: typed
+/// twice, masked, and never shown, saved or logged.
 /// </summary>
 internal sealed class InstallerWizard : IDisposable
 {
@@ -70,7 +71,9 @@ internal sealed class InstallerWizard : IDisposable
             new MachinePage(this),
             new RolesPage(this),
             new SettingsPage(this),
+            new ControllerPage(this),
             new ReviewPage(this),
+            new PasswordsPage(this),
             new InstallingPage(this),
             new DonePage(this)
         ];
@@ -125,7 +128,6 @@ internal sealed class InstallerWizard : IDisposable
         }
 
         _index = index;
-        _header.Text = $"Step {index + 1} of {_pages.Count}: {Page.PageTitle}";
         _content.Title = Page.PageTitle;
         Say(string.Empty);
         _content.Add(Page);
@@ -137,10 +139,13 @@ internal sealed class InstallerWizard : IDisposable
     /// <summary>Brings the buttons up to date with the page: what Next does, and whether Back and Next may be used.</summary>
     public void Refresh()
     {
+        // Counted over the pages that apply to what was chosen, so the count can grow once the roles are known.
+        var shown = _pages.Where(page => page == Page || page.Applies).ToList();
+        _header.Text = $"Step {shown.IndexOf(Page) + 1} of {shown.Count}: {Page.PageTitle}";
         _next.Text = Page.NextLabel;
         _enterName.Text = Page.NextLabel;
         _next.Enabled = Page.CanGoNext;
-        _back.Enabled = _index > 0 && Page.CanGoBack;
+        _back.Enabled = Previous() is not null && Page.CanGoBack;
 
         // The key bar dims a key that does nothing here.
         foreach (var label in _enterKey)
@@ -168,18 +173,45 @@ internal sealed class InstallerWizard : IDisposable
             return;
         }
 
-        if (_index < _pages.Count - 1)
+        if (Following() is { } next)
         {
-            ShowPage(_index + 1);
+            ShowPage(next);
         }
     }
 
     public void Back()
     {
-        if (_index > 0 && Page.CanGoBack)
+        if (Previous() is { } previous && Page.CanGoBack)
         {
-            ShowPage(_index - 1);
+            ShowPage(previous);
         }
+    }
+
+    /// <summary>The next page that applies, or null on the last.</summary>
+    public int? Following()
+    {
+        for (var index = _index + 1; index < _pages.Count; index++)
+        {
+            if (_pages[index].Applies)
+            {
+                return index;
+            }
+        }
+
+        return null;
+    }
+
+    private int? Previous()
+    {
+        for (var index = _index - 1; index >= 0; index--)
+        {
+            if (_pages[index].Applies)
+            {
+                return index;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Closes the wizard, unless the install is running: that finishes (or stops) first.</summary>
@@ -276,6 +308,14 @@ internal sealed class InstallerWizard : IDisposable
         {
             key.Handled = true;
             Quit();
+            return;
+        }
+
+        if (key == Key.Enter && Page.MostFocused?.SuperView is OptionSelector)
+        {
+            // An option list takes Enter for itself; Space chooses an option, and Enter is Next, as the key bar says.
+            key.Handled = true;
+            Next();
         }
     }
 

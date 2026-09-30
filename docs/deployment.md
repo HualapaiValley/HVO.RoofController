@@ -101,8 +101,9 @@ sudo hvo-roof-install cert       # renews what needs it, and nothing else
 ```
 
 The CA stays the same, so clients need nothing. The controller and the web UI serve the new certificate once the
-container is deployed again: when the roof is idle, run the deploy script again as you did before. A certificate of
-your own is renewed by importing the new one.
+container is deployed again. For a controller the installer runs, `cert` does that, through this script, once the roof
+is idle and you agree ([Renewing](install.md#renewing)). For one you deployed with the script yourself, run the script
+again as you did before, when the roof is idle. A certificate of your own is renewed by importing the new one.
 
 The deployment check loads the certificate as Kestrel does, with its password, before anything is replaced. It fails
 when the file is missing or unreadable, the password is wrong, the private key is missing, the certificate is not for
@@ -291,6 +292,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `HTTPS_HOST_PORT` | `8443` | Published HTTPS port of the controller's API (with `WEB_HOST_PORT`, the only published ports in HTTPS mode) |
 | `HOST_PORT` | `8080` | Published HTTP port, only with `ALLOW_INSECURE_HTTP=true` |
 | `WEB_HOST_PORT` | `8088` | Published port of the [web UI](#the-containers-two-processes): HTTPS with the controller's certificate, or plain HTTP with `ALLOW_INSECURE_HTTP=true`. It must differ from the controller's published port. |
+| `PUBLISH_ADDRESS` | (empty) | Host address the ports are published on: empty for every interface, or an IPv4 address. `127.0.0.1` keeps the controller and the web UI to the machine itself, for a test rig that is not open to the network. `PI_HOST` is then `localhost`, or a name the certificate has with `REMOTE_CONNECT_TO=::127.0.0.1:`. |
 | `SECRETS_DIR` | `/etc/hvo-roof/secrets` | Secrets directory on the Pi |
 | `HTTPS_CERT_DIR` | (empty) | Certificate directory on the Pi. Required unless `ALLOW_INSECURE_HTTP=true`. |
 | `HTTPS_CERT_FILE` | `roof-controller.pfx` | PFX file name inside `HTTPS_CERT_DIR` |
@@ -300,12 +302,15 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `ALLOW_INSECURE_HTTP` | `false` | Plain HTTP on `HOST_PORT` with `RoofControllerSecurity__RequireHttps=false` |
 | `ALLOWED_HOSTS` | (empty; image default `*`) | Sets `AllowedHosts`. A list must include `localhost`: the health check and the script's in-container calls use it. |
 | `REMOTE_CA_CERT` | (empty) | PEM file on this machine that verifies the Pi's certificate, for the remote check |
+| `REMOTE_CONNECT_TO` | (empty) | curl's `--connect-to` for the remote check, `HOST1:PORT1:HOST2:PORT2`. `::127.0.0.1:` checks `PI_HOST`'s name and certificate at this machine's loopback, for a name this machine cannot resolve, such as the Pi's own name when the script runs on the Pi. |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
 | `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them (use `HTTPS_HOST_PORT`, `HOST_PORT` and `WEB_HOST_PORT` for the ports), and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device`, `--privileged` and a mount of the host's `/` or `/dev` are refused as well. |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 25 s for the controller's shutdown, then 2 s for the web UI ([Shutdown timing](#shutdown-timing)). |
+| `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
 | `ROOF_OPERATOR_API_KEY` / `OPERATOR_KEY_FILE` | / `~/.config/hvo-roof/operator.key` | Key for the Stop and Status checks |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://192.168.1.238:4318` | The [OTLP collector](telemetry.md#export). An empty value turns export off. |
 | `HAT_EMULATOR_ENDPOINT` | (empty) | Test rigs only: `<host>:<port>` of a HAT emulator the container can reach. The controller uses it in place of the physical HAT. See [HAT emulator mode (test rigs)](#hat-emulator-mode-test-rigs). |
 | `ALLOW_EMULATED_HAT` | `false` | Must be `true` for `HAT_EMULATOR_ENDPOINT` to be accepted, and for `--rollback` to restore a version that uses the HAT emulator |
 
@@ -323,8 +328,8 @@ anything.
 ### What the script does, in order
 
 1. **Checks what it needs.** The script stops at the first failure:
-   - the settings above and `EXTRA_DOCKER_ARGS` are valid, and `REMOTE_CA_CERT` is readable. This is checked before
-     the script contacts Docker.
+   - the settings above and `EXTRA_DOCKER_ARGS` are valid, `REMOTE_CA_CERT` is readable, and `REMOTE_CONNECT_TO` has
+     the form curl takes. This is checked before the script contacts Docker.
    - either an HTTPS certificate directory is set or insecure HTTP was chosen explicitly
    - the Docker context is available and connects without prompting (checked in its own session, as the switch runs
      docker)
@@ -357,6 +362,10 @@ anything.
    you can see the roof and that it is not moving, or that the drive is isolated. The script reads the confirmation
    from the terminal (`/dev/tty`), not from standard input. Without a terminal, or with any other answer, the deploy
    aborts and the old controller keeps running.
+
+   With `REQUIRE_IDLE_ROOF=true`, the script first sends `GET /api/v4.0/RoofControl/Status` the same way. Unless it
+   returns 200 with `isMoving` `false` and `commandedMotion` `None`, the deploy stops before the Stop, with nothing
+   changed. Run it again once the roof is idle.
 5. **Stops the old container gracefully** with `docker stop -t 30` (SIGTERM). The container's supervisor stops the
    controller first, whose shutdown path stops the roof again and ends camera streams, then the web UI. The old container is renamed `<name>-previous` with restart policy `no`, so it can
    be restored but never starts by itself. An older, stopped `<name>-previous` is removed only after this stop has
@@ -401,6 +410,10 @@ anything.
    and failed writes to the terminal are skipped. The last line is `[deploy] ERROR: Deployment failed (<reason>). <outcome>`; the outcome starts with
    `Rolled back:` when the old controller is back. The script exits 1, or 129, 130 or 143 after SIGHUP, SIGINT or
    SIGTERM. With no previous controller (a first deploy), the outcome says the roof controller is not running.
+
+   Once the new controller passes every check in step 7, there is nothing left to undo: the script ignores signals
+   and a lost terminal while it shows the containers, and ends with `[done] Deployment complete and verified` and
+   exit code 0.
 
 ### Deploying a released image
 

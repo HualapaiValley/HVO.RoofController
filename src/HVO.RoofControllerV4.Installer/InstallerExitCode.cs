@@ -40,6 +40,12 @@ public class InstallerException : Exception
     public InstallerExitCode ExitCode { get; }
 }
 
+/// <summary>
+/// A step that found, when checked again just before it ran, that it can no longer go ahead (the roof started moving):
+/// the steps before it may have run, so an install fails (1).
+/// </summary>
+public sealed class StepBlockedException(string message) : InstallerException(message);
+
 /// <summary>The command line or the answers file was not valid.</summary>
 public sealed class InstallerUsageException(string message) : InstallerException(message, InstallerExitCode.Usage);
 

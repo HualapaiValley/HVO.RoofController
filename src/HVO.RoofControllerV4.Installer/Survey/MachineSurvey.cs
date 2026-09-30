@@ -177,7 +177,31 @@ public sealed record ContainerSurvey
     /// <summary>The host names it answers to (AllowedHosts, as the deploy script's ALLOWED_HOSTS sets it); null for any (<c>*</c>).</summary>
     public string? AllowedHosts { get; init; }
 
+    /// <summary>The one address it publishes its ports on (the deploy script's PUBLISH_ADDRESS); null for every address.</summary>
+    public string? PublishAddress { get; init; }
+
+    /// <summary>The Docker network it is on (the rig's hvo-emulator); null for Docker's default.</summary>
+    public string? Network { get; init; }
+
+    /// <summary>The key file the web UI's Stop reads (RoofWeb__StopKeyFile), as the container names it; null when none is set.</summary>
+    public string? WebStopKeyFile { get; init; }
+
+    /// <summary>Where it exports telemetry (OTEL_EXPORTER_OTLP_ENDPOINT): empty when export is off; null when it is not set.</summary>
+    public string? TelemetryEndpoint { get; init; }
+
+    /// <summary>The HAT emulator's time scale (Emulator__TimeScale), when set.</summary>
+    public string? EmulatorTimeScale { get; init; }
+
+    /// <summary>The HAT emulator's camera frame rate (Emulator__CameraFramesPerSecond), when set.</summary>
+    public string? EmulatorCameraFramesPerSecond { get; init; }
+
+    /// <summary>When it last started (State.StartedAt); null when it never has. It read its secrets then.</summary>
+    public DateTimeOffset? StartedAt { get; init; }
+
     public bool IsRunning => State == "running";
+
+    /// <summary>The digest of the image it runs (sha256:…), when it was deployed by one; null for a tag alone.</summary>
+    public string? ImageDigest => Image.LastIndexOf('@') is > 0 and var at && Image[(at + 1)..].StartsWith("sha256:", StringComparison.Ordinal) ? Image[(at + 1)..] : null;
 }
 
 /// <summary>A systemd service.</summary>

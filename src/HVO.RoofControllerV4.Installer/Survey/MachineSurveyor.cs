@@ -34,6 +34,18 @@ public static partial class MachineSurveyor
 
     public const string VersionLabel = "org.opencontainers.image.version";
 
+    /// <summary>The web UI's setting that names the key file its Stop sends.</summary>
+    public const string WebStopKeyFileSetting = "RoofWeb__StopKeyFile";
+
+    /// <summary>Where the controller exports telemetry; empty for none.</summary>
+    public const string TelemetryEndpointSetting = "OTEL_EXPORTER_OTLP_ENDPOINT";
+
+    /// <summary>The HAT emulator's time scale.</summary>
+    public const string EmulatorTimeScaleSetting = "Emulator__TimeScale";
+
+    /// <summary>The HAT emulator's camera frame rate.</summary>
+    public const string EmulatorCameraFramesSetting = "Emulator__CameraFramesPerSecond";
+
     public static async Task<MachineSurvey> SurveyAsync(InstallerMachine machine, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(machine);
@@ -256,19 +268,25 @@ public static partial class MachineSurveyor
                 emulator = $"{environment.GetValueOrDefault("HatEmulator__Host") ?? "?"}:{environment.GetValueOrDefault("HatEmulator__Port") ?? "?"}";
             }
 
-            var published = container.TryGetProperty("HostConfig", out var hostConfig)
-                && hostConfig.ValueKind == JsonValueKind.Object
+            var hasHostConfig = container.TryGetProperty("HostConfig", out var hostConfig) && hostConfig.ValueKind == JsonValueKind.Object;
+            var hostBindings = hasHostConfig
                 && hostConfig.TryGetProperty("PortBindings", out var bindings)
                 && bindings.ValueKind == JsonValueKind.Object
                     ? bindings.EnumerateObject()
                         .Where(binding => binding.Value.ValueKind == JsonValueKind.Array)
                         .SelectMany(binding => binding.Value.EnumerateArray())
-                        .Select(host => host.TryGetProperty("HostPort", out var port) && int.TryParse(port.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)
-                        .Where(port => port > 0)
-                        .Distinct()
-                        .Order()
+                        .Select(host => (
+                            Port: host.TryGetProperty("HostPort", out var port) && int.TryParse(port.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0,
+                            Address: host.TryGetProperty("HostIp", out var address) ? address.GetString() ?? string.Empty : string.Empty))
+                        .Where(binding => binding.Port > 0)
                         .ToArray()
                     : [];
+            var published = hostBindings.Select(binding => binding.Port).Distinct().Order().ToArray();
+            var addresses = hostBindings.Select(binding => binding.Address is "0.0.0.0" or "::" ? string.Empty : binding.Address).Distinct().ToArray();
+            var network = hasHostConfig && hostConfig.TryGetProperty("NetworkMode", out var mode) && mode.GetString() is { Length: > 0 } networkMode
+                && networkMode is not ("default" or "bridge")
+                    ? networkMode
+                    : null;
             var urls = environment.GetValueOrDefault("ASPNETCORE_URLS");
 
             return new ContainerSurvey
@@ -282,7 +300,14 @@ public static partial class MachineSurveyor
                 Origin = string.IsNullOrEmpty(composeProject) ? ContainerOrigin.DeployScript : ContainerOrigin.Compose,
                 ComposeProject = string.IsNullOrEmpty(composeProject) ? null : composeProject,
                 HatEmulator = emulator,
-                Version = labels.GetValueOrDefault(VersionLabel) is { Length: > 0 } version ? version : null
+                Version = labels.GetValueOrDefault(VersionLabel) is { Length: > 0 } version ? version : null,
+                PublishAddress = addresses is [{ Length: > 0 } only] ? only : null,
+                Network = network,
+                WebStopKeyFile = environment.GetValueOrDefault(WebStopKeyFileSetting) is { Length: > 0 } stopKey ? stopKey : null,
+                TelemetryEndpoint = environment.GetValueOrDefault(TelemetryEndpointSetting),
+                EmulatorTimeScale = environment.GetValueOrDefault(EmulatorTimeScaleSetting),
+                EmulatorCameraFramesPerSecond = environment.GetValueOrDefault(EmulatorCameraFramesSetting),
+                StartedAt = container.TryGetProperty("State", out var started) ? StartedAt(started) : null
             };
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)
@@ -291,6 +316,25 @@ public static partial class MachineSurveyor
             throw new InstallerException($"docker container inspect {name} gave an answer the installer cannot read.");
         }
     }
+
+    // Docker's State.StartedAt: RFC 3339 with up to nine digits of the second, and the year 1 for a container never started.
+    private static DateTimeOffset? StartedAt(JsonElement state)
+    {
+        if (state.ValueKind != JsonValueKind.Object || !state.TryGetProperty("StartedAt", out var element) || element.ValueKind != JsonValueKind.String || element.GetString() is not { } text)
+        {
+            return null;
+        }
+
+        var match = StartedAtPattern().Match(text);
+        return match.Success
+            && DateTimeOffset.TryParse(match.Groups["time"].Value + match.Groups["fraction"].Value + match.Groups["zone"].Value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time)
+            && time.Year > 1
+                ? time
+                : null;
+    }
+
+    [GeneratedRegex(@"^(?<time>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?<fraction>\.\d{1,7})?\d*(?<zone>Z|[+-]\d{2}:\d{2})$", RegexOptions.CultureInvariant)]
+    private static partial Regex StartedAtPattern();
 
     private static async Task<ServiceSurvey?> SurveyKioskAsync(InstallerMachine machine, CancellationToken cancellationToken)
     {

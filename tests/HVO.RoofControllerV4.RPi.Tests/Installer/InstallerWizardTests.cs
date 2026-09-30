@@ -174,7 +174,7 @@ public sealed class InstallerWizardTests
         wizard.NextTo(2);
         wizard.Session.Answers.RigConfirmation.Should().Be("roofpi");
 
-        wizard.NextTo(3);
+        wizard.NextTo(4);
         var review = (ReviewPage)wizard.Page;
         review.SavePath.SetFocus();
         wizard.Press(Key.Enter);
@@ -213,7 +213,7 @@ public sealed class InstallerWizardTests
 
         settings.HttpsPort.Text = "9443";
         wizard.Wizard.Message.Should().BeEmpty("the port it was about has changed");
-        wizard.NextTo(3);
+        wizard.NextTo(4);
         wizard.Session.Answers.Controller.Should().Be(new ControllerSettings { HttpsPort = 9443 });
     }
 
@@ -248,10 +248,12 @@ public sealed class InstallerWizardTests
         // Names as a person types them: commas or spaces, any case, each once.
         settings.HostNames.Text = "Roof, roof dome";
         settings.Domains.Text = "Observatory.Example.";
-        wizard.NextTo(3);
+        wizard.NextTo(4);
         wizard.Session.Answers.Controller!.HostNames.Should().Equal("roof", "dome");
         wizard.Session.Answers.Controller.Domains.Should().Equal("observatory.example");
 
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().BeOfType<ControllerPage>();
         wizard.Press(Key.Esc);
         wizard.Page.Should().BeSameAs(settings);
         settings.HostNames.Text.Should().Be("roof dome");
@@ -272,7 +274,7 @@ public sealed class InstallerWizardTests
         settings.Domains!.Text.Should().BeEmpty("each domain listed lets the CA sign for any name in it, so none is listed unasked");
         wizard.Screen.Should().Contain("This machine is in").And.Contain("observatory.example: add a domain only if clients use names in it.");
 
-        wizard.NextTo(3);
+        wizard.NextTo(4);
         wizard.Session.Answers.Controller!.Domains.Should().BeEmpty();
     }
 
@@ -307,16 +309,18 @@ public sealed class InstallerWizardTests
 
         settings.HttpConfirmation.Text = "http";
         wizard.Render(TestContext, "3-settings-http");
-        wizard.NextTo(3);
+        wizard.NextTo(4);
         wizard.Session.Answers.Controller!.Connection.Should().Be(ConnectionMode.Http);
         wizard.Session.Answers.HttpConfirmation.Should().Be("http");
 
         // Back to HTTPS: the confirmation is no longer asked for, or kept.
         wizard.Press(Key.Esc);
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().BeSameAs(settings);
         settings.Connection.Value = Array.IndexOf(Enum.GetValues<ConnectionMode>(), ConnectionMode.PrivateCa);
         wizard.Pump();
         settings.HttpConfirmation.Visible.Should().BeFalse();
-        wizard.NextTo(3);
+        wizard.NextTo(4);
         wizard.Session.Answers.HttpConfirmation.Should().BeNull();
     }
 
@@ -328,7 +332,7 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi, commands: held);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(2);
+        wizard.NextTo(3);
 
         held.Hold();
         wizard.Press(Key.Enter);
@@ -361,7 +365,7 @@ public sealed class InstallerWizardTests
         var screen = wizard.Screen;
         screen.Should().Contain("Installing the controller on roofpi, 4.0.0:").And.Contain("  unchanged  /etc/hvo-roof ");
         screen.Should().Contain("Save these answers (no secrets) to:").And.Contain("/root/hvo-roof-answers.json");
-        wizard.Render(TestContext, "4-review");
+        wizard.Render(TestContext, "5-review");
     }
 
     [TestMethod]
@@ -372,7 +376,7 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(3);
+        wizard.NextTo(4);
         var review = (ReviewPage)wizard.Page;
         pi.Snapshot().Should().Equal(before, "nothing is changed before Install");
 
@@ -401,7 +405,7 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(3);
+        wizard.NextTo(4);
 
         var review = (ReviewPage)wizard.Page;
         review.Plan!.IsBlocked.Should().BeTrue();
@@ -410,7 +414,7 @@ public sealed class InstallerWizardTests
         ShouldHaveColours(wizard.ColoursOf("Something here blocks"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
         var screen = wizard.Screen;
         screen.Should().Contain("  blocked    roof-controller").And.Contain("Docker Compose made it (project hvo-roofcontroller-rpi)");
-        wizard.Render(TestContext, "4-review-blocked");
+        wizard.Render(TestContext, "5-review-blocked");
 
         wizard.Press(Key.Enter);
         wizard.Page.Should().BeSameAs(review);
@@ -427,7 +431,7 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi, log);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(3);
+        wizard.NextTo(4);
 
         // Install, with what it does on its way: it comes back when the loop runs.
         wizard.PressOnly(Key.Enter);
@@ -441,7 +445,7 @@ public sealed class InstallerWizardTests
         wizard.PressOnly(Key.F10);
         wizard.Closed.Should().BeFalse("the install finishes or stops first");
         wizard.Wizard.Message.Should().Be(InstallerWizard.WaitForInstallText);
-        wizard.Screen.Should().Contain("Step 5 of 6: Installing").And.Contain("Installing the controller…");
+        wizard.Screen.Should().Contain("Step 6 of 7: Installing").And.Contain("Installing the controller…");
 
         // Each step as it is made, while the install is on its way.
         var installing = wizard.PageOf<InstallingPage>();
@@ -449,7 +453,7 @@ public sealed class InstallerWizardTests
         wizard.Page.Should().BeSameAs(installing);
         wizard.Wizard.Installing.Should().BeTrue();
         wizard.Screen.Should().Contain("Creating folder /var/lib/hvo-roof/settings-secrets: done.").And.Contain(InstallerWizard.WaitForInstallText);
-        wizard.Render(TestContext, "5-installing");
+        wizard.Render(TestContext, "7-installing");
 
         clock.Release();
         wizard.WaitIdle("the install", () => wizard.Page is DonePage);
@@ -461,12 +465,14 @@ public sealed class InstallerWizardTests
         ShouldHaveColours(wizard.ColoursOf("The install finished."), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton);
         wizard.Screen.Should().Contain("The controller's API:  https://roofpi.local:8443/")
             .And.Contain("Clients trust its CA:  /etc/hvo-roof/ca.crt, or https://roofpi.local:8443/ca.crt")
-            .And.Contain(ControllerCertificates.Fingerprint(X509Certificate2.CreateFromPem(pi.Read("/etc/hvo-roof/ca.crt"))));
+            .And.Contain(ControllerCertificates.Fingerprint(X509Certificate2.CreateFromPem(pi.Read("/etc/hvo-roof/ca.crt"))))
+            .And.Contain("Its log:               docker logs roof-controller")
+            .And.Contain("Back up /etc/hvo-roof and /var/lib/hvo-roof now, and after each change");
         wizard.Wizard.NextButton.Text.Should().Be("Quit");
         wizard.Screen.Should().Contain("Enter Quit");
         wizard.Wizard.BackButton.Enabled.Should().BeFalse();
         ShouldHaveColours(wizard.ColoursOf("Esc Back"), RoofUiPalette.MutedWeak, RoofUiPalette.Badge, "there is no going back from Done");
-        wizard.Render(TestContext, "6-done");
+        wizard.Render(TestContext, "8-done");
 
         InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).Roles.Should().Equal(InstallRole.Controller);
         pi.Read(InstallPaths.SystemLog).Should().Contain("Installed the controller.");
@@ -484,19 +490,23 @@ public sealed class InstallerWizardTests
         using var wizard = await WizardDriver.StartAsync(pi, log);
         wizard.NextTo(1);
         wizard.Press(Key.Space);
-        wizard.NextTo(3);
+        wizard.Press(Key.CursorDown);
+        wizard.Press(Key.CursorDown);
+        wizard.Press(Key.Space);
+        ((RolesPage)wizard.Page).Chosen.Should().Equal(InstallRole.Controller, InstallRole.Kiosk);
+        wizard.NextTo(4);
         var before = pi.Snapshot(InstallPaths.SystemLog);
 
         wizard.Press(Key.Enter);
         wizard.WaitIdle("the install", () => wizard.Page is DonePage);
 
         wizard.Wizard.Result.Should().Be(InstallerExitCode.Refused);
-        wizard.Wizard.Failure.Should().StartWith("This installer cannot install roof-controller yet, so nothing was installed.");
+        wizard.Wizard.Failure.Should().StartWith("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed.");
         wizard.Page.Describe().Should().Equal(wizard.Wizard.Failure, "Nothing was changed.", "The log: /var/log/hvo-roof-install.log");
         ShouldHaveColours(wizard.ColoursOf("This installer cannot install"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
-        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install roof-controller yet");
-        wizard.Render(TestContext, "6-refused");
+        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet");
+        wizard.Render(TestContext, "8-refused");
     }
 
     [TestMethod]
@@ -519,7 +529,7 @@ public sealed class InstallerWizardTests
         using var pi = AdoptablePi();
         using var wizard = await WizardDriver.StartAsync(pi, width: 80, height: 24);
 
-        foreach (var page in new[] { 0, 1, 2, 3 })
+        foreach (var page in new[] { 0, 1, 2, 3, 4 })
         {
             if (page == 2)
             {
@@ -549,7 +559,8 @@ public sealed class InstallerWizardTests
             Until(app, window, screen => screen.Contains("Step 1 of 6", StringComparison.Ordinal));
             Press(app, window, Key.Enter, screen => screen.Contains("Step 2 of 6", StringComparison.Ordinal));
             Press(app, window, Key.Space, screen => screen.Contains("☑ Controller", StringComparison.Ordinal));
-            Press(app, window, Key.Enter, screen => screen.Contains("Step 3 of 6", StringComparison.Ordinal));
+            Press(app, window, Key.Enter, screen => screen.Contains("Step 3 of 7", StringComparison.Ordinal));
+            Press(app, window, Key.Enter, screen => screen.Contains("Step 4 of 7: The controller", StringComparison.Ordinal));
             Press(app, window, Key.Enter, screen => screen.Contains("Installing the controller on roofpi, 4.0.0:", StringComparison.Ordinal));
             Press(app, window, Key.Enter, screen => screen.Contains("The install finished.", StringComparison.Ordinal));
             Press(app, window, Key.Enter, _ => window.StopRequested);
@@ -621,7 +632,7 @@ public sealed class InstallerWizardTests
 
     private static string[] Words(string text) => text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-    private static FakeMachine AdoptablePi(string? secret = null)
+    internal static FakeMachine AdoptablePi(string? secret = null)
     {
         var pi = InstallerPlanTests.AdoptablePi();
         pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { Secret = secret };
@@ -689,7 +700,7 @@ public sealed class InstallerWizardTests
         }
     }
 
-    private static void ShouldHaveColours(TuiAttribute drawn, string foreground, string background, string because = "")
+    internal static void ShouldHaveColours(TuiAttribute drawn, string foreground, string background, string because = "")
     {
         drawn.Foreground.Should().Be(new Color(foreground), because);
         drawn.Background.Should().Be(new Color(background), because);

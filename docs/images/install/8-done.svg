@@ -9,8 +9,7 @@
 <text x="432.00" y="20.0" fill="#cccccc" text-anchor="middle" font-size="13">hvo-roof-install</text>
 <rect x="20.40" y="60" width="823.60" height="18.4" fill="#0e1628"/>
 <rect x="37.20" y="78" width="34.00" height="18.4" fill="#2563eb"/>
-<rect x="28.80" y="96" width="806.80" height="18.4" fill="#422226"/>
-<rect x="28.80" y="114" width="806.80" height="18.4" fill="#422226"/>
+<rect x="28.80" y="96" width="806.80" height="18.4" fill="#198754"/>
 <rect x="20.40" y="528" width="67.60" height="18.4" fill="#1c2028"/>
 <rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
@@ -34,12 +33,26 @@
 <path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <path d="M839.40,510.00 Q839.40,519.00 835.20,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <text x="28.80" y="55.50" fill="#abb0b7" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
-<text x="20.40" y="73.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 6 of 6: Done</text>
+<text x="20.40" y="73.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 7 of 7: Done</text>
 <text x="37.20" y="91.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">Done</text>
-<text x="28.80" y="109.50" fill="#fecaca" textLength="789.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">This installer cannot install roof-controller yet, so nothing was installed. The plan (--plan)</text>
-<text x="28.80" y="127.50" fill="#fecaca" textLength="252.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">shows what an install will do.</text>
-<text x="28.80" y="163.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">Nothing was changed.</text>
-<text x="28.80" y="181.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">The log: /var/log/hvo-roof-install.log</text>
+<text x="28.80" y="109.50" fill="#ffffff" textLength="176.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">The install finished.</text>
+<text x="28.80" y="145.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Installed the controller (4.0.0) on roofpi.</text>
+<text x="28.80" y="181.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">The controller's API:</text>
+<text x="222.00" y="181.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">https://roofpi.local:8443/</text>
+<text x="28.80" y="199.50" fill="#f8fafc" textLength="92.40" lengthAdjust="spacingAndGlyphs">The web UI:</text>
+<text x="222.00" y="199.50" fill="#f8fafc" textLength="218.40" lengthAdjust="spacingAndGlyphs">https://roofpi.local:8088/</text>
+<text x="28.80" y="217.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Its log:</text>
+<text x="222.00" y="217.50" fill="#f8fafc" textLength="226.80" lengthAdjust="spacingAndGlyphs">docker logs roof-controller</text>
+<text x="28.80" y="235.50" fill="#f8fafc" textLength="798.00" lengthAdjust="spacingAndGlyphs">The roof has not moved. Confirm the installation assumptions in commissioning.md on site before</text>
+<text x="28.80" y="253.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">the first move.</text>
+<text x="28.80" y="271.50" fill="#f8fafc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Back up /etc/hvo-roof and /var/lib/hvo-roof now, and after each change: they hold its keys,</text>
+<text x="28.80" y="289.50" fill="#f8fafc" textLength="562.80" lengthAdjust="spacingAndGlyphs">certificates, people and settings (commissioning.md, "Backing up").</text>
+<text x="28.80" y="325.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">Clients trust its CA:</text>
+<text x="222.00" y="325.50" fill="#f8fafc" textLength="478.80" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof/ca.crt, or https://roofpi.local:8443/ca.crt</text>
+<text x="28.80" y="343.50" fill="#f8fafc" textLength="579.60" lengthAdjust="spacingAndGlyphs">Its SHA-256 fingerprint, to check when a client asks you to trust it:</text>
+<text x="28.80" y="361.50" fill="#f8fafc" textLength="798.00" lengthAdjust="spacingAndGlyphs">8B:F9:EA:B7:28:16:14:E8:A8:6B:52:09:BC:92:11:5D:A3:3E:12:2B:0F:CF:C1:61:14:11:E0:FC:37:54:2F:42</text>
+<text x="28.80" y="397.50" fill="#f8fafc" textLength="386.40" lengthAdjust="spacingAndGlyphs">The install record: /etc/hvo-roof/install.json</text>
+<text x="28.80" y="415.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">The log: /var/log/hvo-roof-install.log</text>
 <text x="20.40" y="541.50" fill="#aeb9c8" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Quit ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>

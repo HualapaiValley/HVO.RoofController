@@ -45,6 +45,12 @@ public sealed class InstallerHost
     /// </summary>
     public Func<string, string?> ReadSecret { get; init; } = _ => null;
 
+    /// <summary>
+    /// Asks the person at the terminal a yes-or-no question, its argument: true for yes, false for anything else. Null
+    /// when no one can be asked: the input is not a terminal.
+    /// </summary>
+    public Func<string, bool?> Confirm { get; init; } = _ => null;
+
     /// <summary>This process, on the machine it runs on.</summary>
     public static InstallerHost System() => new()
     {
@@ -52,8 +58,22 @@ public sealed class InstallerHost
         Error = Console.Error,
         Machine = InstallerMachine.Current(),
         IsInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected,
-        ReadSecret = ReadSecretFromTerminal
+        ReadSecret = ReadSecretFromTerminal,
+        Confirm = ConfirmAtTerminal
     };
+
+    // y or yes goes ahead; anything else, Enter alone, or the end of the input does not.
+    private static bool? ConfirmAtTerminal(string question)
+    {
+        if (Console.IsInputRedirected)
+        {
+            return null;
+        }
+
+        Console.Error.Write($"{question} [y/N] ");
+        var answer = Console.ReadLine()?.Trim();
+        return string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase) || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase);
+    }
 
     // Each key read without echo; Backspace takes one back, Ctrl+C stops the installer before anything changes.
     private static string? ReadSecretFromTerminal(string what)

@@ -1,3 +1,5 @@
+using HVO.RoofControllerV4.Installer.Answers;
+
 namespace HVO.RoofControllerV4.Installer.Plan;
 
 /// <summary>The steps of an install, in the order they are carried out.</summary>
@@ -32,6 +34,10 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
 
     public int Count(StepChange change) => Steps.Count(step => step.Check.Change == change);
 
+    /// <summary>The secrets the changes need, each once, in the order the steps need them.</summary>
+    public IReadOnlyList<InstallSecret> NeededSecrets()
+        => [.. Steps.Where(step => step.Check.MakesChange).SelectMany(step => step.Step.SecretsNeeded(step.Check)).Distinct()];
+
     /// <summary>
     /// Makes the changes, step by step in order. Each step is checked again just before it runs, so one that an earlier
     /// step already took care of is skipped. A failure stops the install there; running it again carries on.
@@ -50,6 +56,13 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
                 $"This installer cannot install {string.Join(", ", notYet)} yet, so nothing was installed. The plan (--plan) shows what an install will do.");
         }
 
+        var missing = NeededSecrets().Where(secret => !context.Secrets.Has(secret)).ToArray();
+        if (missing.Length > 0)
+        {
+            throw new InstallerRefusedException(
+                $"The install needs {string.Join(" and ", missing.Select(InstallSecrets.Describe))}, which {(missing.Length == 1 ? "was" : "were")} not given, so nothing was installed.");
+        }
+
         foreach (var (step, planned) in Steps)
         {
             if (!planned.MakesChange)
@@ -65,7 +78,7 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
                 if (check.Change == StepChange.Blocked)
                 {
                     // The machine changed since the plan was checked: stop, not skip (earlier steps may have run).
-                    throw new InstallerException($"{doing}: {check.Detail ?? "it can no longer go ahead"}");
+                    throw new StepBlockedException($"{doing}: {check.Detail ?? "it can no longer go ahead"}");
                 }
 
                 if (!check.MakesChange)
@@ -76,6 +89,7 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
                 doing = $"{PlanText.Verb(check.Change)} {PlanText.Noun(step.Kind)} {step.Target}";
                 progress?.Invoke($"{doing}…");
                 await step.ApplyAsync(context, check, cancellationToken).ConfigureAwait(false);
+                context.MarkApplied(step);
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {

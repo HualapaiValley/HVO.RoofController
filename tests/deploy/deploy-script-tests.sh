@@ -452,6 +452,74 @@ test_insecure_http_mode_publishes_8080_with_https_disabled() {
   assert_container roof-controller-previous old false no
 }
 
+test_publish_address_keeps_the_published_ports_to_that_address() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=127.0.0.1 PI_HOST=localhost
+
+  assert_status 0
+  assert_output_contains "Deployment complete and verified at https://localhost:8443"
+  local run
+  run=$(controller_run_args)
+  jq -e 'index("127.0.0.1:8443:8443") and index("127.0.0.1:8088:8088") and (index("8443:8443") | not)' <<<"${run}" >/dev/null \
+    || fail_test "the ports are not published on 127.0.0.1 only: ${run}"
+  jq -e 'map(select(startswith("127.0.0.1:"))) | length == 0' <<<"$(preflight_args)" >/dev/null \
+    || fail_test "the pre-flight container publishes ports"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy ALLOW_INSECURE_HTTP=true PUBLISH_ADDRESS=127.000.0.1 PI_HOST=localhost
+  assert_status 0
+  jq -e 'index("127.0.0.1:8080:8080") and index("127.0.0.1:8088:8088")' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "the HTTP ports are not published on 127.0.0.1 only: $(controller_run_args)"
+
+  # Published on loopback, the controller does not answer the remote check at the Pi's name: the deploy is undone.
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=127.0.0.1
+  assert_status 1
+  assert_output_contains "GET Status at https://pi.test:8443 failed from this machine"
+}
+
+test_remote_connect_to_checks_the_certificates_name_at_another_address() {
+  seed_container roof-controller old true 8443:8443
+  # On the Pi itself: the certificate names roofpi.local, which the Pi need not resolve, and not localhost.
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=127.0.0.1 PI_HOST=roofpi.local REMOTE_CONNECT_TO=::127.0.0.1: FAKE_CERT_NAMES=roofpi.local
+  assert_status 0
+  assert_output_contains "Deployment complete and verified at https://roofpi.local:8443"
+  grep -q '"--connect-to", "::127.0.0.1:"' "${FAKE_STATE_DIR}/remote.log" \
+    || fail_test "the checks from this machine did not use --connect-to: $(cat "${FAKE_STATE_DIR}/remote.log")"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" PI_HOST=roofpi.local REMOTE_CONNECT_TO='::127.0.0.1:; rm -rf /'
+  assert_status 1
+  assert_output_contains "REMOTE_CONNECT_TO must be HOST1:PORT1:HOST2:PORT2"
+  assert_no_docker_calls "a malformed REMOTE_CONNECT_TO"
+}
+
+test_malformed_publish_address_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local address
+  for address in localhost 127.0.0.256 "::1" "127.0.0.1:8443" "-p" "10.0.0"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS="${address}"
+    assert_status 1
+    assert_output_contains "PUBLISH_ADDRESS must be an IPv4 address such as 127.0.0.1, or empty for every interface, got '${address}'. Nothing was changed."
+    assert_no_docker_calls "PUBLISH_ADDRESS=${address}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_empty_otlp_endpoint_turns_export_off() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  jq -e 'index("OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.1.238:4318")' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "an unset OTEL_EXPORTER_OTLP_ENDPOINT does not default to the observatory's collector"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" OTEL_EXPORTER_OTLP_ENDPOINT=
+  assert_status 0
+  jq -e 'index("OTEL_EXPORTER_OTLP_ENDPOINT=") and (map(select(startswith("OTEL_EXPORTER_OTLP_ENDPOINT=http"))) | length == 0)' \
+    <<<"$(controller_run_args)" >/dev/null || fail_test "an empty OTEL_EXPORTER_OTLP_ENDPOINT does not turn export off"
+}
+
 test_new_controller_never_ready_rolls_back_to_previous() {
   seed_container roof-controller old true 8080:8080
   deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
@@ -553,6 +621,73 @@ test_unverified_stop_aborts_without_stopping() {
   assert_output_contains "The roof stop could not be verified"
   assert_container roof-controller old true unless-stopped
   [[ -z "$(docker_calls stop)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "the controller was stopped or replaced"
+}
+
+# --- REQUIRE_IDLE_ROOF --------------------------------------------------------------------------------------------
+
+test_require_idle_roof_refuses_a_moving_roof_without_stopping() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF=true FAKE_OLD_MOTION=Opening
+
+  assert_status 1
+  assert_output_contains "The roof is moving (commandedMotion=Opening, isMoving=true)"
+  assert_output_contains "Nothing was changed; run again once the roof is idle."
+  assert_output_not_contains "Requesting a verified roof stop"
+  assert_old_controller_untouched
+  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested of a moving roof"
+}
+
+test_require_idle_roof_refuses_a_rollback_while_the_roof_moves() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF=true FAKE_CURRENT_MOTION=Closing -- --rollback
+
+  assert_status 1
+  assert_output_contains "The roof is moving (commandedMotion=Closing, isMoving=true)"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+  [[ -z "$(docker_calls stop)$(docker_calls rename)" ]] || fail_test "the rollback stopped or renamed a container"
+  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested of a moving roof"
+}
+
+test_require_idle_roof_with_an_idle_roof_deploys() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF=true
+
+  assert_status 0
+  assert_output_contains "The roof is idle (isMoving=false, commandedMotion=None)."
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false no
+  local i_status i_stop_request
+  i_status=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Status"')
+  i_stop_request=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')
+  (( i_status > 0 && i_status < i_stop_request )) \
+    || fail_test "expected the Status before the Stop: status=${i_status} stop-request=${i_stop_request}"
+}
+
+test_without_require_idle_roof_a_moving_roof_is_stopped_and_replaced() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_MOTION=Opening
+
+  assert_status 0
+  assert_output_not_contains "The roof is moving"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false no
+  [[ "$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')" != "0" ]] || fail_test "no verified Stop before the swap"
+}
+
+test_invalid_require_idle_roof_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local value
+  for value in yes TRUE 1 " true"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF="${value}"
+    assert_status 1
+    assert_output_contains "REQUIRE_IDLE_ROOF must be true or false, got '${value}'. Nothing was changed."
+    assert_no_docker_calls "REQUIRE_IDLE_ROOF=${value}"
+  done
+  assert_container roof-controller old true unless-stopped
 }
 
 # --- --force-unverified-stop --------------------------------------------------------------------------------------
@@ -1977,6 +2112,28 @@ test_interrupt_after_rename_restores_old_controller() {
   assert_container roof-controller old true unless-stopped
   assert_container roof-controller-previous missing false
   [[ -z "$(controller_run_args)" ]] || fail_test "the new controller was started after the interrupt"
+}
+
+test_interrupt_after_the_switch_is_complete_leaves_the_new_controller() {
+  seed_container roof-controller old true 8443:8443
+  # A Ctrl-C once the new controller is verified, while the script shows the containers: nothing is left to undo.
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="{{.Status}}" FAKE_SIGNAL=INT FAKE_SIGNAL_GROUP=true
+
+  assert_status_is 0
+  assert_output_contains "[done] Deployment complete and verified"
+  assert_output_not_contains "Rolled back"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+test_hangup_after_the_switch_is_complete_leaves_the_new_controller() {
+  seed_container roof-controller old true 8443:8443
+  # The terminal goes away once the new controller is verified: SIGHUP, and every later write fails with EIO.
+  deploy_on_terminal "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="{{.Status}}" FAKE_SIGNAL=HUP FAKE_SIGNAL_KILLS_OUTPUT=true
+
+  assert_status_is 0
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false
 }
 
 test_stop_gate_abort_keeps_older_previous() {

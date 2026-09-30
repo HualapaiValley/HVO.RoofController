@@ -60,16 +60,66 @@ public sealed class InstallerSurveyTests
         survey.Controller.Should().BeEquivalentTo(new ContainerSurvey
         {
             Name = MachineSurveyor.ControllerContainer,
-            Image = $"ghcr.io/hualapaivalley/roof-controller@sha256:{new string('a', 64)}",
+            Image = $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}",
             State = "running",
             Origin = ContainerOrigin.DeployScript,
-            HatEmulator = "hat-emulator:5555",
+            HatEmulator = "hat-emulator:5291",
             Version = "4.0.0",
             PublishedPorts = [8088, 8443],
             ServesHttps = true
         });
         survey.HatEmulator!.IsRunning.Should().BeFalse();
         survey.HatEmulator.Version.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task ARigsController_SaysItsDigest_Address_Network_AndSettings()
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench")
+            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer
+            {
+                Emulated = true,
+                Digest = "sha256:" + new string('1', 64),
+                PublishAddress = "127.0.0.1",
+                Network = "hvo-emulator",
+                Secret = "the-key-that-stays-in-the-container",
+                Settings = new Dictionary<string, string>
+                {
+                    [MachineSurveyor.WebStopKeyFileSetting] = "/run/secrets/RoofControllerSecurity__ApiKeys__2__Key",
+                    [MachineSurveyor.TelemetryEndpointSetting] = string.Empty
+                }
+            })
+            .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer
+            {
+                Settings = new Dictionary<string, string>
+                {
+                    [MachineSurveyor.EmulatorTimeScaleSetting] = "10",
+                    [MachineSurveyor.EmulatorCameraFramesSetting] = "2"
+                }
+            });
+
+        var survey = await MachineSurveyor.SurveyAsync(bench.Machine);
+
+        survey.Controller!.ImageDigest.Should().Be("sha256:" + new string('1', 64));
+        survey.Controller.PublishAddress.Should().Be("127.0.0.1");
+        survey.Controller.Network.Should().Be("hvo-emulator");
+        survey.Controller.WebStopKeyFile.Should().Be("/run/secrets/RoofControllerSecurity__ApiKeys__2__Key");
+        survey.Controller.TelemetryEndpoint.Should().BeEmpty("export is off");
+        survey.HatEmulator!.ImageDigest.Should().Be(FakeMachine.EmulatorDigest);
+        survey.HatEmulator.PublishAddress.Should().BeNull("its ports are on every address");
+        survey.HatEmulator.Network.Should().BeNull();
+        survey.HatEmulator.EmulatorTimeScale.Should().Be("10");
+        survey.HatEmulator.EmulatorCameraFramesPerSecond.Should().Be("2");
+        survey.Controller.ToString().Should().NotContain("the-key-that-stays-in-the-container");
+    }
+
+    [TestMethod]
+    public void AContainerByTagAlone_HasNoDigest()
+    {
+        var container = new ContainerSurvey { Name = "roof-controller", Image = "hvo/roof-controller:dev", State = "running", Origin = ContainerOrigin.DeployScript };
+
+        container.ImageDigest.Should().BeNull();
+        (container with { Image = "localhost:5000/roof-controller@sha256:" + new string('2', 64) }).ImageDigest.Should().Be("sha256:" + new string('2', 64));
     }
 
     [TestMethod]
