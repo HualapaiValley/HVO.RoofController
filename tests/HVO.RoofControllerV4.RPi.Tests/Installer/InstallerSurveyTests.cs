@@ -64,7 +64,9 @@ public sealed class InstallerSurveyTests
             State = "running",
             Origin = ContainerOrigin.DeployScript,
             HatEmulator = "hat-emulator:5555",
-            Version = "4.0.0"
+            Version = "4.0.0",
+            PublishedPorts = [8088, 8443],
+            ServesHttps = true
         });
         survey.HatEmulator!.IsRunning.Should().BeFalse();
         survey.HatEmulator.Version.Should().BeNull();

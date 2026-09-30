@@ -275,4 +275,45 @@ public sealed class InstallerCommandTests
         log.Should().Contain("$ docker container inspect roof-controller").And.Contain("exit 0 (secret: output not logged)");
         pi.Ran.Should().Contain(command => command.Secret && command.Arguments.Contains("inspect"), "the container's description holds its environment");
     }
+
+    [TestMethod]
+    public async Task AProgramThatCannotBeRun_IsAFailedCommand_NotACrash()
+    {
+        var folder = Directory.CreateTempSubdirectory("hvo-install-programs-");
+        try
+        {
+            // hvo-roof downloaded without chmod +x, and a program built for another machine (an ELF header and nothing else).
+            var notExecutable = Path.Join(folder.FullName, "hvo-roof");
+            File.WriteAllText(notExecutable, "#!/bin/sh\necho 4.0.0\n");
+            File.SetUnixFileMode(notExecutable, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            var otherMachine = Path.Join(folder.FullName, "hvo-roof-other");
+            File.WriteAllBytes(otherMachine, [0x7f, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            File.SetUnixFileMode(otherMachine, Modes.Program);
+            var runner = new ProcessCommandRunner(name => name == "PATH" ? folder.FullName : null);
+
+            runner.Find("hvo-roof").Should().BeNull("a file that is not executable is not a program");
+            runner.Find(notExecutable).Should().BeNull("by its path either");
+            (await runner.RunAsync(new CommandLine(notExecutable, "--version"))).ExitCode.Should().Be(CommandResult.NotFound);
+
+            var result = await runner.RunAsync(new CommandLine(otherMachine, "--version"));
+            result.ExitCode.Should().Be(CommandResult.CannotRun);
+            result.Error.Should().StartWith($"{otherMachine} could not be run: ");
+        }
+        finally
+        {
+            folder.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task AFileTheInstallerCannotWrite_OutsideAStep_EndsInFailed_NotACrash()
+    {
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy").WithCli("/home/roy/.local/bin/hvo-roof");
+        laptop.Write("/home/roy/.local/state", "a file where the log's folder goes");
+
+        var run = await laptop.RunAsync("--answers", laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli] }));
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().StartWith("The installer stopped: ");
+    }
 }

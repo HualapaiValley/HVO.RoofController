@@ -58,7 +58,7 @@ terminal, tmux, or Terminal on a Mac.
 | `hvo-roof-install` | Opens the wizard. |
 | `hvo-roof-install --answers FILE` | Installs from an answers file without asking anything, printing the plan and each step. |
 | `hvo-roof-install --plan --answers FILE` | Prints every folder, file, container, service and port the install would make or change, and changes nothing. |
-| `hvo-roof-install --plan` | The same for what is installed here, from the install records. |
+| `hvo-roof-install --plan` | The same for what is installed here, from its install record: yours, or with `sudo` (or without a record of yours) the machine's. |
 | `hvo-roof-install --version` | Prints the installer's version and the commit it was built from, such as `4.0.0+0123abcd…`. |
 
 The installer runs as root for the machine's roles, and as you for your own ([Roles](#roles)).
@@ -66,7 +66,8 @@ The installer runs as root for the machine's roles, and as you for your own ([Ro
 - **The controller, a rig on Linux or the kiosk:** run it with `sudo`.
 - **`hvo-roof`, the Mac app or a rig on a Mac:** run it as yourself, without `sudo`.
 
-It refuses to mix the two in one run, and refuses the wrong one for a role. `--plan` does not need root.
+It refuses to mix the two in one run, and refuses the wrong one for a role. `--plan` does not need root, but planning
+the controller or a rig needs Docker access (on Linux, root or the `docker` group).
 
 It asks for no secret. Keys are made on the machine, straight into files that only their user can read. From #69, a
 person types the first administrator's password. An answers file, the plan, the record and the log never hold a
@@ -136,7 +137,9 @@ Before asking anything, and without changing anything, the installer looks at th
 - **The machine:** the platform, the host name, who runs the installer, the operating system and the Pi's model.
 - **The HAT's devices:** `/dev/i2c-1`, `/dev/gpiomem` and `/sys/class/thermal/thermal_zone0/temp`.
 - **Docker:** its version, and Compose v2's version.
-- **The install records:** the machine's, and yours. A record the installer cannot read is reported and replaced.
+- **The install records:** the machine's, and yours. A record the installer cannot read is reported and replaced, and
+  until then a test rig is refused, since the record may say the machine drives the real HAT. A record from a newer
+  installer is never replaced: install with that installer, or a newer one.
 - **`/etc/hvo-roof`,** when it was set up without the installer.
 - **The containers:** `roof-controller` and `hat-emulator`. For each, the installer finds:
   - its state and version;
@@ -306,7 +309,7 @@ writes no log.
 
 | Run as | Log | Mode |
 |--------|-----|------|
-| root | `/var/log/hvo-roof-install.log` | `0640` (root and the `adm` group, like other logs in `/var/log`) |
+| root | `/var/log/hvo-roof-install.log` | `0640`, owned by root |
 | you, on Linux | `$XDG_STATE_HOME/hvo-roof/install.log`, or `~/.local/state/hvo-roof/install.log` | `0600` |
 | you, on a Mac | `~/Library/Logs/hvo-roof-install.log` | `0600` |
 

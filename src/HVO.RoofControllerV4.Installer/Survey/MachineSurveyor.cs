@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -56,6 +57,7 @@ public static partial class MachineSurveyor
             SystemRecord = systemRecord,
             UserRecord = userRecord,
             RecordProblems = problems,
+            SystemRecordProblem = systemProblem,
             HasSystemConfiguration = machine.DirectoryExists("/etc/hvo-roof"),
             Docker = docker,
             Controller = controller,
@@ -148,9 +150,26 @@ public static partial class MachineSurveyor
                 emulator = $"{environment.GetValueOrDefault("HatEmulator__Host") ?? "?"}:{environment.GetValueOrDefault("HatEmulator__Port") ?? "?"}";
             }
 
+            var published = container.TryGetProperty("HostConfig", out var hostConfig)
+                && hostConfig.ValueKind == JsonValueKind.Object
+                && hostConfig.TryGetProperty("PortBindings", out var bindings)
+                && bindings.ValueKind == JsonValueKind.Object
+                    ? bindings.EnumerateObject()
+                        .Where(binding => binding.Value.ValueKind == JsonValueKind.Array)
+                        .SelectMany(binding => binding.Value.EnumerateArray())
+                        .Select(host => host.TryGetProperty("HostPort", out var port) && int.TryParse(port.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0)
+                        .Where(port => port > 0)
+                        .Distinct()
+                        .Order()
+                        .ToArray()
+                    : [];
+            var urls = environment.GetValueOrDefault("ASPNETCORE_URLS");
+
             return new ContainerSurvey
             {
                 Name = name,
+                PublishedPorts = published,
+                ServesHttps = urls is null ? null : urls.Contains("https://", StringComparison.OrdinalIgnoreCase),
                 Image = config.TryGetProperty("Image", out var image) ? image.GetString() ?? string.Empty : string.Empty,
                 State = container.TryGetProperty("State", out var state) && state.TryGetProperty("Status", out var status) ? status.GetString() ?? "unknown" : "unknown",
                 Origin = string.IsNullOrEmpty(composeProject) ? ContainerOrigin.DeployScript : ContainerOrigin.Compose,

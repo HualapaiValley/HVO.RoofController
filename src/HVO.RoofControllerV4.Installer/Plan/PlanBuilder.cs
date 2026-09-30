@@ -71,7 +71,8 @@ public static class PlanBuilder
             steps.Add(new ContainerStep(
                 MachineSurveyor.ControllerContainer,
                 rig ? HatMode.Emulated : HatMode.Real,
-                rig ? "the controller, against the HAT emulator" : "the controller, driving the real HAT"));
+                rig ? "the controller, against the HAT emulator" : "the controller, driving the real HAT",
+                settings));
             steps.Add(new PortStep(settings.ApiPort, settings.UsesHttps ? "the controller's API (HTTPS)" : "the controller's API (HTTP)", MachineSurveyor.ControllerContainer));
             steps.Add(new PortStep(settings.WebPort, "the web UI", MachineSurveyor.ControllerContainer));
         }

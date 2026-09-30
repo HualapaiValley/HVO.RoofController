@@ -24,6 +24,8 @@ internal sealed class InstallerWizard : IDisposable
     private readonly Button _back;
     private readonly Button _next;
     private readonly Label _enterName;
+    private readonly Label[] _enterKey;
+    private readonly Label[] _escKey;
     private readonly List<WizardPage> _pages;
     private int _index = -1;
     private int _pending;
@@ -57,7 +59,10 @@ internal sealed class InstallerWizard : IDisposable
         _content = new FrameView { X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(2) };
         Theme.SetFrame(_content);
         var keyBar = Theme.CreateKeyBar(Keys);
-        _enterName = keyBar.SubViews.OfType<Label>().ElementAt(1);
+        var keyLabels = keyBar.SubViews.OfType<Label>().ToArray();
+        _enterName = keyLabels[1];
+        _enterKey = keyLabels[0..2];
+        _escKey = keyLabels[2..4];
         Window.Add(_header, _content, _back, _next, _message, keyBar);
 
         _pages =
@@ -136,6 +141,17 @@ internal sealed class InstallerWizard : IDisposable
         _enterName.Text = Page.NextLabel;
         _next.Enabled = Page.CanGoNext;
         _back.Enabled = _index > 0 && Page.CanGoBack;
+
+        // The key bar dims a key that does nothing here.
+        foreach (var label in _enterKey)
+        {
+            label.Enabled = _next.Enabled;
+        }
+
+        foreach (var label in _escKey)
+        {
+            label.Enabled = _back.Enabled;
+        }
     }
 
     public void Next()

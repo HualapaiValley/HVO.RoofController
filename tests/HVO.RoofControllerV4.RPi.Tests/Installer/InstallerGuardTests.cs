@@ -131,6 +131,24 @@ public sealed class InstallerGuardTests
     }
 
     [TestMethod]
+    [DataRow("{\"schema\": 2, \"scope\": \"system\"}", "written by a newer installer (schema 2)", DisplayName = "a newer installer's")]
+    [DataRow("{ not json", "is not a valid install record", DisplayName = "a damaged one")]
+    public async Task ARig_WhereTheRecordCannotBeRead_IsRefused_UntilItIsFixed(string record, string problem)
+    {
+        // No controller container either: the record is all that could say this is the observatory's Pi.
+        using var pi = new FakeMachine().WithPi();
+        pi.Write(InstallPaths.SystemRecord, record);
+
+        var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
+
+        var option = RoleGuards.Option(InstallRole.Rig, survey);
+        option.Available.Should().BeFalse("an unreadable record may say the machine drives the real HAT");
+        option.Reason.Should().Contain(InstallPaths.SystemRecord).And.Contain(problem).And.Contain("fixed or removed");
+        RoleGuards.Check(survey, Rig with { RigConfirmation = "roofpi" }).Should().Contain(option.Reason!);
+        RoleGuards.Option(InstallRole.Controller, survey).Available.Should().BeTrue("the controller is the real HAT's role");
+    }
+
+    [TestMethod]
     public async Task ARig_OverAControllerDrivingTheRealHat_IsRefused()
     {
         using var machine = new FakeMachine(architecture: Architecture.X64, hostName: "bench")

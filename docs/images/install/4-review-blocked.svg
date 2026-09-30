@@ -100,8 +100,8 @@
 <text x="20.40" y="541.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#aeb9c8" textLength="109.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦► Install ◄⟧</text>
 <text x="247.20" y="541.50" fill="#fecaca" textLength="352.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Something here blocks the plan: see above.</text>
-<text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>
-<text x="70.80" y="559.50" fill="#abb0b7" textLength="58.80" lengthAdjust="spacingAndGlyphs">Install</text>
+<text x="20.40" y="559.50" fill="#aeb9c8" textLength="42.00" lengthAdjust="spacingAndGlyphs" opacity="0.6">Enter</text>
+<text x="70.80" y="559.50" fill="#aeb9c8" textLength="58.80" lengthAdjust="spacingAndGlyphs" opacity="0.6">Install</text>
 <text x="146.40" y="559.50" fill="#3b82f6" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Esc</text>
 <text x="180.00" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Back</text>
 <text x="230.40" y="559.50" fill="#3b82f6" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">F10</text>

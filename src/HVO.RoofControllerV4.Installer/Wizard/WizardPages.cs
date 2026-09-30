@@ -346,6 +346,7 @@ internal sealed class ReviewPage : WizardPage
     private IReadOnlyList<string> _lines = [];
     private CheckedPlan? _checked;
     private bool _checking;
+    private int _visit;
 
     public ReviewPage(InstallerWizard wizard)
         : base(wizard, "Review the plan")
@@ -372,6 +373,9 @@ internal sealed class ReviewPage : WizardPage
 
     public override bool CanGoNext => !_checking && _checked is { IsBlocked: false };
 
+    // Back waits for the check, so the plan Install carries out is the one checked for the answers shown.
+    public override bool CanGoBack => !_checking;
+
     public CheckedPlan? Plan => _checked;
 
     public TextField SavePath => _savePath;
@@ -383,11 +387,18 @@ internal sealed class ReviewPage : WizardPage
         _savePath.Text = Session.DefaultAnswersPath;
         _checked = null;
         _checking = true;
+        var visit = ++_visit;
         Show(["Checking this machine against the plan…"]);
         Wizard.Run(
             () => Session.CheckAsync(),
             (plan, error) =>
             {
+                if (visit != _visit)
+                {
+                    // A check from an earlier visit, for answers that may since have changed.
+                    return;
+                }
+
                 _checking = false;
                 if (error is not null)
                 {

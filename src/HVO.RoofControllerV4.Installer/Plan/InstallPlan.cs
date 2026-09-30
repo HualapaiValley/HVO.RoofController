@@ -58,16 +58,17 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var check = await step.CheckAsync(context, cancellationToken).ConfigureAwait(false);
-            if (!check.MakesChange)
-            {
-                continue;
-            }
-
-            var doing = $"{PlanText.Verb(check.Change)} {PlanText.Noun(step.Kind)} {step.Target}";
-            progress?.Invoke($"{doing}…");
+            var doing = $"{PlanText.Verb(planned.Change)} {PlanText.Noun(step.Kind)} {step.Target}";
             try
             {
+                var check = await step.CheckAsync(context, cancellationToken).ConfigureAwait(false);
+                if (!check.MakesChange)
+                {
+                    continue;
+                }
+
+                doing = $"{PlanText.Verb(check.Change)} {PlanText.Noun(step.Kind)} {step.Target}";
+                progress?.Invoke($"{doing}…");
                 await step.ApplyAsync(context, check, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OperationCanceledException)

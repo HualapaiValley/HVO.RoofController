@@ -49,8 +49,8 @@
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Quit ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>
 <text x="70.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Quit</text>
-<text x="121.20" y="559.50" fill="#3b82f6" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Esc</text>
-<text x="154.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Back</text>
+<text x="121.20" y="559.50" fill="#aeb9c8" textLength="25.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">Esc</text>
+<text x="154.80" y="559.50" fill="#aeb9c8" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Back</text>
 <text x="205.20" y="559.50" fill="#3b82f6" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">F10</text>
 <text x="238.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Quit</text>
 </g>

@@ -12,6 +12,7 @@ using HVO.RoofControllerV4.Installer.Survey;
 namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 
 /// <summary>A container the fake machine's Docker reports.</summary>
+[UnsupportedOSPlatform("windows")]
 internal sealed record FakeContainer
 {
     public bool Emulated { get; init; }
@@ -25,6 +26,15 @@ internal sealed record FakeContainer
 
     /// <summary>A value in its environment that must never reach the log, the plan or the answers.</summary>
     public string? Secret { get; init; }
+
+    /// <summary>The controller serves HTTPS, as the deploy script deploys it by default.</summary>
+    public bool Https { get; init; } = true;
+
+    /// <summary>The port the controller's API is published on: by default, the deploy script's for HTTPS or HTTP.</summary>
+    public int? ApiPort { get; init; }
+
+    /// <summary>The port the web UI is published on.</summary>
+    public int WebPort { get; init; } = ControllerSettings.DefaultWebPort;
 }
 
 /// <summary>
@@ -294,8 +304,14 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         }
 
         var environment = new List<string> { "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" };
+        var ports = new Dictionary<string, object[]>();
         if (name == MachineSurveyor.ControllerContainer)
         {
+            // As the deploy script publishes them.
+            var apiPort = container.ApiPort ?? (container.Https ? ControllerSettings.DefaultHttpsPort : ControllerSettings.DefaultHttpPort);
+            environment.Add(container.Https ? "ASPNETCORE_URLS=http://localhost:8080;https://+:8443" : "ASPNETCORE_URLS=http://+:8080");
+            ports[container.Https ? "8443/tcp" : "8080/tcp"] = [new { HostIp = string.Empty, HostPort = apiPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
+            ports["8088/tcp"] = [new { HostIp = string.Empty, HostPort = container.WebPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
             environment.Add($"HatEmulator__Enabled={(container.Emulated ? "true" : "false")}");
             if (container.Emulated)
             {
@@ -316,6 +332,7 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             {
                 Name = "/" + name,
                 Config = new { Image = image, Labels = labels, Env = environment },
+                HostConfig = new { PortBindings = ports },
                 State = new { Status = container.State }
             }
         });

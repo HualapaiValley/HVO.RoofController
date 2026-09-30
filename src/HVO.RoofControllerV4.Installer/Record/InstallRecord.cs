@@ -73,14 +73,47 @@ public sealed record InstallRecord
 
     public static InstallRecord Parse(string json)
     {
-        var record = JsonSerializer.Deserialize<InstallRecord>(json, InstallerJson.Options)
-            ?? throw new JsonException("The record is empty.");
-        if (record.Schema > CurrentSchema)
+        // The schema first: a newer installer's record may not have what this one's needs.
+        if (SchemaIn(json) is > CurrentSchema and var schema)
         {
-            throw new JsonException($"It was written by a newer installer (schema {record.Schema}); this one reads schema {CurrentSchema}.");
+            throw new JsonException($"It was written by a newer installer (schema {schema}); this one reads schema {CurrentSchema}.");
         }
 
-        return record;
+        return JsonSerializer.Deserialize<InstallRecord>(json, InstallerJson.Options)
+            ?? throw new JsonException("The record is empty.");
+    }
+
+    /// <summary>
+    /// The schema of the record at <paramref name="path"/>, read on its own: null when there is no record, or it has no
+    /// schema this installer can read.
+    /// </summary>
+    public static int? SchemaOf(InstallerMachine machine, string path)
+    {
+        try
+        {
+            return machine.ReadText(path) is { } json ? SchemaIn(json) : null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static int? SchemaIn(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("schema", out var schema)
+                && schema.TryGetInt32(out var number)
+                    ? number
+                    : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The record at <paramref name="path"/>: null when there is none, or its problem when it cannot be read.</summary>

@@ -235,9 +235,17 @@ public sealed class InstallerWizardTests
         wizard.Wizard.NextButton.Enabled.Should().BeFalse();
         wizard.Press(Key.Enter);
         wizard.Page.Should().BeOfType<ReviewPage>("Install waits for the check");
+        wizard.Wizard.BackButton.Enabled.Should().BeFalse("Back waits for the check too, so Install carries out the plan checked for the answers shown");
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().BeOfType<ReviewPage>();
+        ShouldHaveColours(wizard.ColoursOf("Esc Back"), RoofUiPalette.MutedWeak, RoofUiPalette.Badge, "the key bar dims a key that does nothing");
+        ShouldHaveColours(wizard.ColoursOf("Enter Install"), RoofUiPalette.MutedWeak, RoofUiPalette.Badge);
 
         held.Release();
         wizard.WaitIdle("the plan's check");
+        wizard.Wizard.BackButton.Enabled.Should().BeTrue();
+        ShouldHaveColours(wizard.ColoursOf("Esc Back"), RoofUiPalette.Accent, RoofUiPalette.Badge);
+        ShouldHaveColours(wizard.ColoursOf("Enter Install"), RoofUiPalette.Accent, RoofUiPalette.Badge);
 
         var review = (ReviewPage)wizard.Page;
         review.Plan.Should().NotBeNull();
@@ -350,6 +358,7 @@ public sealed class InstallerWizardTests
         wizard.Wizard.NextButton.Text.Should().Be("Quit");
         wizard.Screen.Should().Contain("Enter Quit");
         wizard.Wizard.BackButton.Enabled.Should().BeFalse();
+        ShouldHaveColours(wizard.ColoursOf("Esc Back"), RoofUiPalette.MutedWeak, RoofUiPalette.Badge, "there is no going back from Done");
         wizard.Render(TestContext, "6-done");
 
         InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).Roles.Should().Equal(InstallRole.Controller);

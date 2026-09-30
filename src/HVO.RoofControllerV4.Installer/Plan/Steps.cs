@@ -1,3 +1,4 @@
+using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -62,6 +63,13 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
     public override Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
         var (existing, problem) = InstallRecord.Load(context.Machine, path);
+        if (problem is not null && InstallRecord.SchemaOf(context.Machine, path) is > InstallRecord.CurrentSchema and var schema)
+        {
+            return Task.FromResult(new StepCheck(
+                StepChange.Blocked,
+                $"a newer installer wrote it (schema {schema}), and this one does not replace it: install with that installer, or a newer one"));
+        }
+
         var record = build(context, existing);
         var mode = ModeFor(scope);
         return Task.FromResult(
@@ -106,7 +114,11 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
 /// made is explained and never replaced. This installer does not deploy one yet (by digest, through the deploy script):
 /// the step says what it would make, and the install is refused before anything changes when it would have to.
 /// </summary>
-public sealed class ContainerStep(string name, HatMode? hat, string purpose) : PlanStep
+/// <remarks>
+/// Given the controller's <paramref name="settings"/>, the container is also compared with them: the ports it publishes
+/// and whether it serves HTTPS.
+/// </remarks>
+public sealed class ContainerStep(string name, HatMode? hat, string purpose, ControllerSettings? settings = null) : PlanStep
 {
     public override StepKind Kind => StepKind.Container;
 
@@ -134,6 +146,18 @@ public sealed class ContainerStep(string name, HatMode? hat, string purpose) : P
             return new StepCheck(StepChange.Change, wanted == HatMode.Real ? "redeployed for the real HAT" : "redeployed against the HAT emulator");
         }
 
+        if (settings is not null && container.ServesHttps is { } https && https != settings.UsesHttps)
+        {
+            return new StepCheck(StepChange.Change, settings.UsesHttps ? "redeployed to serve HTTPS" : "redeployed to serve HTTP");
+        }
+
+        int[] ports = settings is null ? [] : [.. new[] { settings.ApiPort, settings.WebPort }.Order()];
+        if (settings is not null && !container.PublishedPorts.SequenceEqual(ports))
+        {
+            var now = container.PublishedPorts.Count == 0 ? "none" : string.Join(" and ", container.PublishedPorts);
+            return new StepCheck(StepChange.Change, $"redeployed on ports {settings.ApiPort} and {settings.WebPort} (it publishes {now})");
+        }
+
         return StepCheck.Unchanged($"adopted: {container.State}{(container.Version is { } version ? $", version {version}" : string.Empty)}");
     }
 
@@ -155,7 +179,7 @@ public sealed class PortStep(int port, string purpose, string container) : PlanS
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
         var owner = await MachineSurveyor.SurveyContainerAsync(context.Machine, container, cancellationToken).ConfigureAwait(false);
-        if (owner is { IsRunning: true, Origin: ContainerOrigin.DeployScript })
+        if (owner is { IsRunning: true, Origin: ContainerOrigin.DeployScript } && owner.PublishedPorts.Contains(port))
         {
             return new StepCheck(StepChange.Info, $"{container} listens on it");
         }

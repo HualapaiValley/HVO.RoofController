@@ -145,6 +145,12 @@ public static class RoleGuards
             return $"This machine's install record ({InstallPaths.SystemRecord}) says it drives the real HAT: a test rig is never installed here.";
         }
 
+        if (survey.SystemRecord is null && survey.SystemRecordProblem is { } problem)
+        {
+            // It may say the machine drives the real HAT: never assume it does not.
+            return $"{problem} A test rig is not installed until it is fixed or removed, since it may say this machine drives the real HAT.";
+        }
+
         if (survey.Controller is { HatEmulator: null } controller && survey.SystemRecord?.Roles.Contains(InstallRole.Rig) != true)
         {
             return $"The {controller.Name} container on this machine drives the real HAT: a test rig is never installed over it.";

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 
@@ -42,6 +43,9 @@ public sealed record CommandResult(int ExitCode, string Output, string Error)
 {
     public const int NotFound = 127;
 
+    /// <summary>The program is there, but it could not be run (as a shell says, 126).</summary>
+    public const int CannotRun = 126;
+
     public bool Succeeded => ExitCode == 0;
 
     /// <summary>The error output, or the output when there is none: what to show when the command failed.</summary>
@@ -71,13 +75,13 @@ public sealed class ProcessCommandRunner : ICommandRunner
     {
         if (program.Contains('/', StringComparison.Ordinal))
         {
-            return File.Exists(program) ? program : null;
+            return IsProgram(program) ? program : null;
         }
 
         foreach (var folder in (_environment("PATH") ?? string.Empty).Split(':', StringSplitOptions.RemoveEmptyEntries))
         {
             var candidate = Path.Combine(folder, program);
-            if (File.Exists(candidate) && (File.GetUnixFileMode(candidate) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0)
+            if (IsProgram(candidate))
             {
                 return candidate;
             }
@@ -85,6 +89,9 @@ public sealed class ProcessCommandRunner : ICommandRunner
 
         return null;
     }
+
+    private static bool IsProgram(string path)
+        => File.Exists(path) && (File.GetUnixFileMode(path) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
 
     public async Task<CommandResult> RunAsync(CommandLine command, CancellationToken cancellationToken = default)
     {
@@ -157,7 +164,16 @@ public sealed class ProcessCommandRunner : ICommandRunner
             }
         };
 
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (Win32Exception startError)
+        {
+            // There, but not a program this machine can run: one built for another processor, say.
+            return new CommandResult(CommandResult.CannotRun, output.ToString(), $"{command.Program} could not be run: {startError.Message}");
+        }
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         try

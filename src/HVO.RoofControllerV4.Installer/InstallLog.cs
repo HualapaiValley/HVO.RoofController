@@ -30,8 +30,8 @@ public sealed class InstallLog
     public static InstallLog None { get; } = new(null, null, TimeProvider.System);
 
     /// <summary>
-    /// Opens the log at <paramref name="path"/>, making its folder when needed. As root the file is 0640 (root and the adm
-    /// group, as other logs in /var/log); for a person, 0600.
+    /// Opens the log at <paramref name="path"/>, making its folder when needed. As root the file is 0640, owned by root;
+    /// for a person, 0600.
     /// </summary>
     public static InstallLog Open(InstallerMachine machine, string path, TimeProvider time)
     {

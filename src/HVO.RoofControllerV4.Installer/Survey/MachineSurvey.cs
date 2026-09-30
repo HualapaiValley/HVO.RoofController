@@ -47,6 +47,12 @@ public sealed record MachineSurvey
     /// <summary>Why an install record could not be read, when one is there but is not valid.</summary>
     public IReadOnlyList<string> RecordProblems { get; init; } = [];
 
+    /// <summary>
+    /// Why the machine's record cannot be read, when it is there but cannot be: it may say the machine drives the real
+    /// HAT, so a test rig is not installed until it is fixed.
+    /// </summary>
+    public string? SystemRecordProblem { get; init; }
+
     /// <summary>/etc/hvo-roof exists: a controller set up by hand, or by an earlier installer.</summary>
     public bool HasSystemConfiguration { get; init; }
 
@@ -149,6 +155,12 @@ public sealed record ContainerSurvey
 
     /// <summary>The image's version label (org.opencontainers.image.version), when it has one.</summary>
     public string? Version { get; init; }
+
+    /// <summary>The ports it publishes on the host, in order.</summary>
+    public IReadOnlyList<int> PublishedPorts { get; init; } = [];
+
+    /// <summary>Whether it serves HTTPS (from ASPNETCORE_URLS, as the deploy script sets it); null when that is not set.</summary>
+    public bool? ServesHttps { get; init; }
 
     public bool IsRunning => State == "running";
 }

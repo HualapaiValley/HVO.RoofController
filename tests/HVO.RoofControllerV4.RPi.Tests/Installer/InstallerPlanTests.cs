@@ -88,6 +88,60 @@ public sealed class InstallerPlanTests
     }
 
     [TestMethod]
+    public async Task AnAdoptedContainer_OnOtherPorts_IsRedeployed_AndTheAnswersPortsAreChecked()
+    {
+        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { ApiPort = 7151 });
+        pi.PortsInUse.UnionWith([7151, 8088]);
+
+        var plan = await CheckAsync(pi, InstallRole.Controller);
+
+        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed on ports 8443 and 8088 (it publishes 7151 and 8088)"));
+        Change(plan, "8443").Should().Be(new StepCheck(StepChange.Info, "free; roof-controller will listen on it"), "the container does not publish 8443, so 8443 is checked");
+        Change(plan, "8088").Should().Be(new StepCheck(StepChange.Info, "roof-controller listens on it"));
+
+        pi.PortsInUse.Add(8443);
+        Change(await CheckAsync(pi, InstallRole.Controller), "8443").Change.Should().Be(StepChange.Blocked, "something else has the port the answers give");
+
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, "the installer does not redeploy a container yet: {0}", run);
+    }
+
+    [TestMethod]
+    public async Task AnAdoptedContainer_ServingHttp_IsRedeployed_ForHttps()
+    {
+        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Https = false });
+
+        Change(await CheckAsync(pi, InstallRole.Controller), MachineSurveyor.ControllerContainer)
+            .Should().Be(new StepCheck(StepChange.Change, "redeployed to serve HTTPS"));
+
+        var overHttp = await CheckAsync(pi, new InstallAnswers
+        {
+            Roles = [InstallRole.Controller],
+            Controller = new ControllerSettings { Connection = ConnectionMode.Http }
+        });
+        Change(overHttp, MachineSurveyor.ControllerContainer).Should().Be(StepCheck.Unchanged("adopted: running, version 4.0.0"));
+        Change(overHttp, "8080").Should().Be(new StepCheck(StepChange.Info, "roof-controller listens on it"));
+    }
+
+    [TestMethod]
+    public async Task ARecordFromANewerInstaller_IsNeverReplaced()
+    {
+        using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer());
+        pi.Write(InstallPaths.SystemRecord, "{\"schema\": 2, \"scope\": \"system\", \"roles\": [\"controller\"]}");
+
+        var plan = await CheckAsync(pi, InstallRole.Controller);
+
+        Change(plan, InstallPaths.SystemRecord).Should().Be(new StepCheck(
+            StepChange.Blocked,
+            "a newer installer wrote it (schema 2), and this one does not replace it: install with that installer, or a newer one"));
+        plan.IsBlocked.Should().BeTrue();
+
+        pi.Write(InstallPaths.SystemRecord, "{ damaged");
+        Change(await CheckAsync(pi, InstallRole.Controller), InstallPaths.SystemRecord)
+            .Should().Be(new StepCheck(StepChange.Change, "replaces the record that could not be read"), "a damaged record is replaced");
+    }
+
+    [TestMethod]
     public async Task AComposeContainer_IsExplained_AndBlocksTheInstall()
     {
         using var pi = new FakeMachine().WithPi().WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { ComposeProject = "hvo-roofcontroller-rpi" });

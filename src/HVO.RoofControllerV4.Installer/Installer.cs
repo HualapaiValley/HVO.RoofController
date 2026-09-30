@@ -131,6 +131,12 @@ public static class Installer
             host.Error.WriteLine("Stopped. Run the installer again to carry on: it changes only what is left.");
             return (int)InstallerExitCode.Cancelled;
         }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // A file the installer could not read or write, outside a step (which says which step it was).
+            host.Error.WriteLine($"The installer stopped: {error.Message}");
+            return (int)InstallerExitCode.Failed;
+        }
     }
 
     /// <summary><c>--plan</c>: what the answers (or what is installed) would make and change here. Nothing is logged or changed.</summary>
