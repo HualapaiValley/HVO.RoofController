@@ -7,6 +7,7 @@ name: Scenarios
 #   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
 #                        rollback, the Compose migration, and a deploy of a pulled image
 #                        (tests/emulator/deploy-scenarios.sh)
+#   installer-rig        hvo-roof-install's rig role end to end against the HAT emulator (tests/installer/rig-scenario.sh)
 #   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results
 #   kiosk-soak           nightly and on demand: the touchscreen kiosk against the emulated roof for
 #                        HVO_KIOSK_SOAK_DURATION, with its heap, threads and reconnects
@@ -171,6 +172,43 @@ jobs:
         with:
           name: deploy-scenario-results-${{ github.run_id }}
           path: deploy-scenario-results/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  # hvo-roof-install's rig role end to end (#69): the installer as published, a release as the release workflow
+  # publishes one (in a registry on loopback), installed as root, run again, changed, and its certificate renewed.
+  installer-rig:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RIG_RESULTS_DIR: ${{ github.workspace }}/rig-scenario-results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Install, again, change, renew the certificate
+        run: tests/installer/rig-scenario.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$RIG_RESULTS_DIR/rig-scenario.md" ]; then
+            cat "$RIG_RESULTS_DIR/rig-scenario.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rig-scenario-results-${{ github.run_id }}
+          path: rig-scenario-results/**
           if-no-files-found: warn
           retention-days: 7
 

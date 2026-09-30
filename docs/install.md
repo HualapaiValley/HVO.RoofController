@@ -602,6 +602,31 @@ in a terminal.
 CI publishes the three builds and checks that each is the right platform. It also checks what the linux-x64 build
 prints for `--version` and `--plan`.
 
+### The rig end to end
+
+`tests/installer/rig-scenario.sh`, the Scenarios workflow's `installer-rig` job, installs a test rig for real. It
+uses the published installer, real Docker and the HAT emulator. The release is built as the release workflow builds
+one: the controller's and the emulator's images, each an index of two platforms. They go in a registry of the run's
+own on loopback, with the `release.json` that names them by digest. The script checks:
+
+1. **Install.** `--plan` changes nothing. The install as root with `--answers`, `--release` and
+   `--admin-password-file` then runs the release's images by digest, published on loopback only. The folders and files
+   have their modes. The controller answers over HTTPS with the installer's CA and reports the emulated HAT, the web UI
+   answers, and the first admin signs in with the password from the file. No key or password is in the output, the
+   log, the record or the containers' configuration.
+2. **Again.** The same answers change nothing and replace nothing.
+3. **Change.** A new time scale replaces the emulator and redeploys the controller against it.
+4. **Certificate.** `cert --renew --redeploy` serves a new certificate from the same CA.
+
+Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
+and no violation.
+
+It needs Docker with buildx, the .NET SDK, `curl`, `jq`, `openssl`, and `sudo` without a password. It refuses to run
+on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`, `/var/lib/hvo-roof`,
+the installer's log, or its containers or network. It removes all of them when it ends. `RIG_HTTPS_PORT` and
+`RIG_WEB_PORT` move the controller off ports 8443 and 8088. `RIG_RESULTS_DIR` writes each check's result and timing to
+`rig-scenario.md`.
+
 ### Refreshing the screenshots
 
 The wizard's tests save each page as ANSI. CI draws the pages as SVG and keeps them as the `installer-renders-<run id>`

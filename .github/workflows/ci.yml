@@ -513,6 +513,7 @@ jobs:
           bash -n tests/deploy/deploy-script-tests.sh
           bash -n tests/emulator/compose-smoke-test.sh
           bash -n tests/emulator/deploy-scenarios.sh
+          bash -n tests/installer/rig-scenario.sh
           bash -n tests/cli/terminal-smoke.sh
           bash -n tests/cli/dotnet-run-smoke.sh
           for script in build/*.sh tests/versioning/*.sh tests/releasing/*.sh; do
@@ -527,7 +528,7 @@ jobs:
             tests/releasing/test_release_assets.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
-            tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh \
+            tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/installer/rig-scenario.sh tests/cli/terminal-smoke.sh \
             tests/cli/dotnet-run-smoke.sh src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-* \
             build/*.sh tests/versioning/*.sh tests/releasing/*.sh
 
