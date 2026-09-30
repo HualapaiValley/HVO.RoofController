@@ -4,7 +4,10 @@ using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Screens;
 
-/// <summary>The kiosk's own wording. The roof, Stop and the settings use the wording every client shares.</summary>
+/// <summary>
+/// The kiosk's own wording. The roof, Stop and the settings use the wording every client shares; the words that differ in
+/// the Mac app are <see cref="KioskWording"/>'s.
+/// </summary>
 public static class KioskText
 {
     /// <summary>A block reason before the console started.</summary>
@@ -18,8 +21,6 @@ public static class KioskText
     public const string StopStillTried = "Stop is still tried; its answer shows whether it arrived.";
 
     public const string NoStatusYet = "No status from the controller yet.";
-
-    public const string KeyRefused = "The controller refused this kiosk's device key, so there is no live status.";
 
     public const string LockedNotice = "Locked.";
 
@@ -57,13 +58,6 @@ public static class KioskText
         return RoofStatusText.Seconds(value.TotalSeconds);
     }
 
-    public static string Unlocked(string name, string role) => $"Unlocked by {name} ({DescribeRole(role)}).";
-
-    public static string IdleLocked(TimeSpan idle) => $"Locked after {Duration(idle)} without a touch.";
-
-    public static string SessionIdleLocked(TimeSpan idle)
-        => $"Locked: the controller ends a PIN session after {Duration(idle)} without a request.";
-
     /// <summary>
     /// The banner for a controller that cannot be reached: since when the status shown is only the last known state
     /// (<paramref name="staleSince"/>), or null when there is none yet.
@@ -72,10 +66,4 @@ public static class KioskText
         => staleSince is { } since
             ? $"{Unreachable} No status since {RoofStatusText.Time(since)}: showing the last known state. {StopStillTried}"
             : $"{Unreachable} There is no status yet. {StopStillTried}";
-
-    /// <summary>The banner for a refused device key, like <see cref="DescribeUnreachable"/>.</summary>
-    public static string DescribeKeyRefused(DateTimeOffset? staleSince)
-        => staleSince is { } since
-            ? $"{KeyRefused} No status since {RoofStatusText.Time(since)}: showing the last known state. {StopStillTried}"
-            : $"{KeyRefused} {StopStillTried}";
 }

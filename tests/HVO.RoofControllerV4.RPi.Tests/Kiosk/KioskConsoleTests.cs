@@ -33,7 +33,7 @@ public sealed class KioskConsoleTests
     public async Task Started_ShowsTheLiveStatus_Locked_AndOffersOnlyStop()
     {
         await using var harness = await KioskHarness.CreateAsync();
-        harness.Console.View.Should().BeSameAs(KioskView.NotStarted);
+        harness.Console.View.Should().Be(KioskView.NotStarted);
 
         await harness.StartLiveAsync();
 
@@ -212,7 +212,7 @@ public sealed class KioskConsoleTests
         await harness.AdvanceAsync(TimeSpan.FromSeconds(10));
 
         await harness.WaitForAsync(view => !view.IsUnlocked, "the idle lock");
-        harness.Console.View.Notices[0].Text.Should().Be(KioskText.IdleLocked(options.IdleLock)).And.Be("Locked after 30 s without a touch.");
+        harness.Console.View.Notices[0].Text.Should().Be(KioskWording.Kiosk.IdleSignedOutAfter(options.IdleLock)).And.Be("Locked after 30 s without a touch.");
         await ClientTestSupport.WaitUntilAsync(() => harness.Credential.PinSession is null, "the PIN session to end");
     }
 
@@ -248,7 +248,7 @@ public sealed class KioskConsoleTests
         await harness.AdvanceAsync(TimeSpan.FromSeconds(61));
 
         await harness.WaitForAsync(view => !view.IsUnlocked, "the session idle lock");
-        harness.Console.View.Notices[0].Text.Should().Be(KioskText.SessionIdleLocked(TimeSpan.FromMinutes(1)));
+        harness.Console.View.Notices[0].Text.Should().Be(KioskWording.Kiosk.SessionIdleSignedOut(TimeSpan.FromMinutes(1)));
     }
 
     [TestMethod]
@@ -612,7 +612,7 @@ public sealed class KioskConsoleTests
 
         await harness.WaitForAsync(view => view.FeedRefused, "the refused key");
         harness.Console.View.FeedLabel.Should().Be("refused");
-        harness.Console.View.FeedBanner.Should().Be(KioskText.DescribeKeyRefused(null));
+        harness.Console.View.FeedBanner.Should().Be(KioskWording.Kiosk.DescribeKeyRefused(null));
 
         await harness.Console.StopAsync();
 

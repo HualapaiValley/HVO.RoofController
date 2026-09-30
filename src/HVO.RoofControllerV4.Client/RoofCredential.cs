@@ -163,7 +163,8 @@ public sealed class RoofSessionCredential : RoofCredential
 /// A kiosk: a device key (<c>X-Api-Key</c>) that is always sent, plus the session of the person who unlocked it with a
 /// PIN. Requests carry both; the status hub and PIN sign-in use the device key alone. When the controller refuses the
 /// PIN session, it is dropped and <see cref="PinSessionChanged"/> is raised, and the device key still works, so Stop and
-/// the status view keep working when a PIN session times out.
+/// the status view keep working when a PIN session times out. The Mac app uses it the same way, with the session of the
+/// person who signed in with their password (<see cref="RoofAuthApi.SignInOnDeviceAsync"/>).
 /// </summary>
 public sealed class RoofKioskCredential : RoofCredential
 {

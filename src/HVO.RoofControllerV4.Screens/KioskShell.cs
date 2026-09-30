@@ -20,9 +20,11 @@ public enum KioskPage
 }
 
 /// <summary>
-/// The kiosk's screen: a header with where the status comes from and who unlocked the kiosk, the banners, a rail of pages
-/// at the left, the page, and Stop at the right of every page, never disabled and never behind the PIN. A blank screen
-/// is black; the touch that wakes it goes no further.
+/// The kiosk's screen, and the Mac app's: a header with where the status comes from and who unlocked the kiosk (or signed
+/// in to the app), the banners, a rail of pages at the left, the page, and Stop at the right of every page, never disabled
+/// and never behind the PIN or the password. A blank screen is black; the touch that wakes it goes no further. The kiosk
+/// is unlocked with a PIN (<see cref="PinPage"/>); the app is signed in to with a name and password
+/// (<see cref="SignInPage"/>), as <see cref="KioskConsole.Wording"/> says.
 /// </summary>
 public sealed class KioskShell : UserControl
 {
@@ -52,6 +54,8 @@ public sealed class KioskShell : UserControl
         System = new KioskSystemPanel(console);
         RoofPage = new KioskRoofPage(console, metrics);
         PinPage = new KioskPinPage(PinPad, metrics, () => ShowPage(KioskPage.Roof));
+        PasswordForm = new KioskPasswordForm(console);
+        SignInPage = new KioskSignInPage(PasswordForm, metrics, () => ShowPage(KioskPage.Roof));
         SettingsPage = new KioskSettingsPage(Settings, console, metrics);
         SystemPage = new KioskSystemPage(System, console, metrics);
         Background = KioskTheme.Background;
@@ -88,7 +92,7 @@ public sealed class KioskShell : UserControl
         _navRoof = Nav("Roof", "nav-roof", () => ShowPage(KioskPage.Roof));
         _navSettings = Nav("Settings", "nav-settings", () => ShowPage(KioskPage.Settings));
         _navSystem = Nav("System", "nav-system", () => ShowPage(KioskPage.System));
-        _navLock = Nav("Unlock", "nav-lock", LockOrUnlock);
+        _navLock = Nav(console.Wording.SignInAction, "nav-lock", LockOrUnlock);
         var navTop = new StackPanel { Spacing = metrics.Gap, Children = { _navRoof, _navSettings, _navSystem } };
         var nav = new DockPanel { Width = metrics.NavWidth, Margin = new Thickness(metrics.Gap) };
         DockPanel.SetDock(_navLock, Dock.Bottom);
@@ -159,6 +163,12 @@ public sealed class KioskShell : UserControl
 
     public KioskPinPage PinPage { get; }
 
+    /// <summary>The Mac app's name and password.</summary>
+    public KioskPasswordForm PasswordForm { get; }
+
+    /// <summary>The Mac app's sign-in page: the kiosk's <see cref="PinPage"/>, with a name and password.</summary>
+    public KioskSignInPage SignInPage { get; }
+
     public KioskSettingsPage SettingsPage { get; }
 
     public KioskSystemPage SystemPage { get; }
@@ -168,7 +178,7 @@ public sealed class KioskShell : UserControl
 
     /// <summary>
     /// Shows a page. Settings and System need the kiosk unlocked, and Unlock needs it locked; each reads what it shows
-    /// when it opens.
+    /// when it opens. Unlock is the PIN pad on the kiosk and the name and password in the app.
     /// </summary>
     public void ShowPage(KioskPage page)
     {
@@ -181,6 +191,7 @@ public sealed class KioskShell : UserControl
         Page = page;
         _scroller.Content = page switch
         {
+            KioskPage.Unlock when _console.Wording.SignIn == KioskSignIn.Password => SignInPage,
             KioskPage.Unlock => PinPage,
             KioskPage.Settings => SettingsPage,
             KioskPage.System => SystemPage,
@@ -189,6 +200,9 @@ public sealed class KioskShell : UserControl
         _scroller.Offset = default;
         switch (page)
         {
+            case KioskPage.Unlock when _console.Wording.SignIn == KioskSignIn.Password:
+                PasswordForm.Clear();
+                break;
             case KioskPage.Unlock:
                 PinPad.Select(PinPad.Users.Count == 1 ? PinPad.Selected : null);
                 _ = PinPad.LoadUsersAsync();
@@ -301,7 +315,7 @@ public sealed class KioskShell : UserControl
     {
         _navSettings.IsVisible = view.IsUnlocked;
         _navSystem.IsVisible = view.IsUnlocked;
-        KioskTheme.SetText(_navLock, view.IsUnlocked ? "Lock" : "Unlock");
+        KioskTheme.SetText(_navLock, view.IsUnlocked ? _console.Wording.SignOutAction : _console.Wording.SignInAction);
         foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navLock, KioskPage.Unlock) })
         {
             if (page == Page)
@@ -335,7 +349,7 @@ public sealed class KioskShell : UserControl
         // name is in the notice "Unlocked by …".
         _badges.Children.Add(view.UnlockedBy is { } by
             ? KioskTheme.Pill(by, KioskTheme.Colours(KioskNoticeLevel.Info), _metrics, "unlocked-by", _metrics.Touch * 3, $" ({KioskText.DescribeRole(view.Role)})")
-            : KioskTheme.Pill("Locked", (KioskTheme.Muted, KioskTheme.Badge, KioskTheme.Frame), _metrics, "locked"));
+            : KioskTheme.Pill(_console.Wording.SignedOutBadge, (KioskTheme.Muted, KioskTheme.Badge, KioskTheme.Frame), _metrics, "locked"));
     }
 
     private void UpdateBanners(KioskView view)

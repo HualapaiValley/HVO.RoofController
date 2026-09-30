@@ -155,6 +155,7 @@ models exactly that register.
 | `Browser/*BrowserTests` | The web UI in Chromium on phones and tablets, each upright and sideways, and a desktop window, and the screenshots in `docs/web.md` ([Browser tests](#browser-tests)) |
 | `Kiosk/KioskConsoleTests`, `KioskPanelTests`, `KioskProgramTests` | The touchscreen kiosk (#47) against the controller's API in process (`KioskHarness`): the PIN lock and its idle lock, the lease, Stop when the controller answers, refuses or cannot be reached, the stale and unreachable feed, the screen timeout, the admin's settings and restart, answers that arrive after the lock, the program's settings, device key, display and backlight, and the install steps in `docs/kiosk.md` against the files they install |
 | `Kiosk/KioskRenderTests` | The kiosk's screens drawn headless at 1280 x 720 (8.2 px/mm) and 800 x 480 (5.2 px/mm), and the screenshots in `docs/kiosk.md` ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
+| `Kiosk/MacConsoleTests`, `MacScreenTests`, `MacProgramTests`, `MacAppTests` | The Mac app (#48): the screens with a plain viewer key and a password sign-in, the idle sign-out and the session the controller ends, the sign-in page and a setting typed in a text box drawn headless at 1280 x 800 and 960 x 600 (the screenshots in `docs/mac.md`), the program's settings folder, settings, device key and exit code 78, the refusal window, `--check`, the bundle's `Info.plist`, and the icon, drawn in code, against `bundle/AppIcon.icns` |
 | `Kiosk/KioskSoakScenarios`, `KioskSoakResultsTests` | The kiosk and its screen against the emulated roof through controller restarts, with its heap, threads and reconnects, and the soak's results when it fails ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
 
 ## Emulated plant
@@ -248,7 +249,9 @@ which ends in an ellipsis within its bounds), and Stop on screen, enabled, at le
 centre reaches, and drawn in Stop's colour. A touch on Stop as the screen blanks, before it is drawn black, still stops
 the roof. The renders are saved as PNG to `HVO_KIOSK_RENDERS_DIR`, or to the test's results
 (`kiosk/`); CI uploads them as `kiosk-renders-<run>`, and `docs/images/kiosk` holds copies. One headless session serves
-the test process (`KioskAvalonia`); a test runs its UI work through `OnUiAsync`, which pumps the UI thread first.
+the test process (`KioskAvalonia`), the Mac app's tests too; a test runs its UI work through `OnUiAsync`, which pumps
+the UI thread first, and goes on off Avalonia's thread afterwards (otherwise the test would hold that thread, and MSTest
+could stop the session on it after the last test, waiting for itself).
 
 `Kiosk/KioskSoakScenarios` runs the kiosk's console and its screen against an `EmulatedRoofRig` with the production
 settings and the status feed's production reconnect delays. Each cycle unlocks with a PIN, touches Open, touches Stop in
@@ -298,3 +301,12 @@ restore's report when Docker cannot be read, `--rollback` and its undo, HAT emul
 the verified `hatMode`, and the HAT a rollback restores), and that the key never appears in an argument list. An
 unknown test name counts as a failure. Run `tests/deploy/deploy-script-tests.sh [test_name ...]` from the
 repository root.
+
+The Mac app's bundle script has its own tests too, `tests/mac/test_bundle.py` (`python3` alone). They check that
+`bundle.py` reads whole Mach-O files (thin, and universal in both forms), `Info.plist` and `AppIcon.icns`, and that
+`check` reports damaged ones with exit code 1. `make` checks only the program and libraries: one that is missing,
+damaged or has no arm64 code stops it with a line naming the publish file. Whether `make` stops there, on rcodesign
+failing, or on the new bundle not taking the last one's place, it leaves the last bundle as it was. `make` can remake
+the bundle from its own program folder, and an unsigned bundle that `make` builds passes `check --unsigned`
+([docs/mac.md](../../docs/mac.md)). Run `python3 -m unittest discover -s tests/mac -p 'test_*.py'` from the repository
+root.

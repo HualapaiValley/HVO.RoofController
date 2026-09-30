@@ -25,7 +25,7 @@ public enum KioskEditorKind
 public sealed class KioskSettingsPanel
 {
     /// <summary>Said instead of an editor for a secret: secrets are not typed on a screen others can watch.</summary>
-    public const string SecretsElsewhere = "Secrets are not typed on the kiosk: set them in the web UI or with hvo-roof.";
+    public string SecretsElsewhere => _console.Wording.SecretsElsewhere;
 
     /// <summary>The value of the "no value" choice of a nullable setting.</summary>
     public const string NoValue = "(none)";
@@ -263,6 +263,23 @@ public sealed class KioskSettingsPanel
         Shift = false;
         EditError = null;
         Raise();
+    }
+
+    /// <summary>
+    /// Sets the whole value, as a text box does while the person types in it (<see cref="KioskWording.KeyboardTyping"/>).
+    /// <see cref="Changed"/> is not raised: the box already shows the text, and a page rebuilt under the typing would lose
+    /// the keyboard's place.
+    /// </summary>
+    public void SetText(string? text)
+    {
+        if (Editing is null || Busy is not null)
+        {
+            return;
+        }
+
+        EditText = text ?? string.Empty;
+        Shift = false;
+        EditError = null;
     }
 
     /// <summary>Removes the last key typed.</summary>

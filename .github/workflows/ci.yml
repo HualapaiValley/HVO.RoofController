@@ -88,8 +88,8 @@ jobs:
 
       # Every unit and API test, including the WebApplicationFactory API tests, runs here. The
       # emulated commissioning scenarios, the browser tests and the soak run in scenarios.yml.
-      # TreatNoTestsAsError fails the step if discovery finds nothing. The kiosk's render tests save each screen, as the
-      # touchscreens show it, to HVO_KIOSK_RENDERS_DIR (uploaded below).
+      # TreatNoTestsAsError fails the step if discovery finds nothing. The render tests save each screen, as the kiosk's
+      # touchscreens and the Mac app's window show it, to HVO_KIOSK_RENDERS_DIR (uploaded below).
       - name: Test
         env:
           HVO_KIOSK_RENDERS_DIR: ${{ github.workspace }}/src/TestResults/kiosk-renders
@@ -166,6 +166,42 @@ jobs:
           done
           ls -l kiosk-artifact
 
+      # HVO Roof.app (docs/mac.md): published for osx-arm64 and made into the bundle, signed ad hoc by rcodesign (no
+      # Xcode; its release is checked against a pinned SHA-256), and published for linux-x64 to check that the program
+      # refuses missing settings (exit 78) before it opens a window. The mac-app job runs the bundle on a Mac.
+      - name: Publish HVO Roof.app
+        # Not RCODESIGN_*: rcodesign reads those variables as its own settings, and refuses ones it does not know.
+        env:
+          APPLE_CODESIGN_VERSION: 0.29.0
+          APPLE_CODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+        run: |
+          for rid in osx-arm64 linux-x64; do
+            dotnet publish HVO.RoofControllerV4.Mac -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof-mac/$rid"
+            test -x "hvo-roof-mac/$rid/hvo-roof-mac"
+          done
+          file hvo-roof-mac/osx-arm64/hvo-roof-mac | grep -q 'Mach-O 64-bit arm64'
+          status=0
+          HVO_ROOF_MAC_SETTINGS="$RUNNER_TEMP/no-mac-settings" ./hvo-roof-mac/linux-x64/hvo-roof-mac --check 2> mac-stderr.txt || status=$?
+          cat mac-stderr.txt
+          if [ "$status" -ne 78 ] || ! grep -q 'HVO Roof did not start' mac-stderr.txt; then
+            echo "::error file=src/HVO.RoofControllerV4.Mac/Program.cs::hvo-roof-mac without settings exited ${status}, not 78 with its settings message"
+            exit 1
+          fi
+          archive="apple-codesign-${APPLE_CODESIGN_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive.tar.gz" \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${APPLE_CODESIGN_VERSION}/$archive.tar.gz"
+          echo "${APPLE_CODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
+          rcodesign="$RUNNER_TEMP/$archive/rcodesign"
+          python3 HVO.RoofControllerV4.Mac/bundle/bundle.py make hvo-roof-mac/osx-arm64 mac-artifact --build "$GITHUB_RUN_NUMBER" --rcodesign "$rcodesign"
+          python3 HVO.RoofControllerV4.Mac/bundle/bundle.py check "mac-artifact/HVO Roof.app"
+          "$rcodesign" print-signature-info "mac-artifact/HVO Roof.app/Contents/MacOS/hvo-roof-mac" > mac-signature.txt
+          grep -E '^ +(flags|identifier): ' mac-signature.txt
+          grep -q 'flags: CodeSignatureFlags(ADHOC)' mac-signature.txt
+          grep -q 'identifier: io.github.hualapaivalley.roof$' mac-signature.txt
+          # Zipped here, as the Finder would, so the programs keep their execute bits and the bundle its signature.
+          (cd mac-artifact && zip -qry "hvo-roof-mac-${GITHUB_RUN_ID}.zip" "HVO Roof.app")
+
       - name: Upload hvo-roof
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -183,7 +219,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # The kiosk's screens at 1280x720 (the Pi Touch Display 2) and 800x480 (the original 7-inch touchscreen).
+      # The zip as it is (archive: false): its name is the artifact's.
+      - name: Upload HVO Roof.app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: src/mac-artifact/hvo-roof-mac-${{ github.run_id }}.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      # The kiosk's screens at 1280x720 (the Pi Touch Display 2) and 800x480 (the original 7-inch touchscreen), and the
+      # Mac app's (mac-*) at 1280x800 and 960x600.
       - name: Upload kiosk renders
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -201,6 +247,59 @@ jobs:
           path: src/TestResults/**
           if-no-files-found: warn
           retention-days: 7
+
+  # HVO Roof.app on a Mac (Apple silicon): its signature, and the program opening and drawing its window (--check) with
+  # settings, and refusing without them. Nothing here reaches a controller: the settings name a closed port.
+  mac-app:
+    needs: build-and-test
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download HVO Roof.app
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hvo-roof-mac-${{ github.run_id }}.zip
+          skip-decompress: true
+
+      - name: Check the signature
+        run: |
+          ditto -x -k "hvo-roof-mac-${GITHUB_RUN_ID}.zip" .
+          codesign --verify --deep --strict --verbose=2 "HVO Roof.app"
+          codesign -dv "HVO Roof.app" 2> codesign.txt
+          cat codesign.txt
+          grep -q '^Identifier=io.github.hualapaivalley.roof$' codesign.txt
+          grep -q '^Signature=adhoc$' codesign.txt
+
+      - name: Open and draw the window
+        timeout-minutes: 3
+        run: |
+          settings="$RUNNER_TEMP/hvo-roof-mac"
+          mkdir -p "$settings"
+          printf '{ "Mac": { "ControllerUrl": "http://127.0.0.1:9/" } }\n' > "$settings/appsettings.Local.json"
+          # Not a key any controller has: the one the settings name is not there.
+          printf 'ci-mac-check-not-a-real-key\n' > "$settings/device-key"
+          chmod 600 "$settings/device-key"
+          # The exit code as well as the line: the app must also quit cleanly (sign out, close) after drawing.
+          # stdout has the console log and the check's line; stderr has its refusals and anything the runtime or macOS
+          # writes there.
+          status=0
+          HVO_ROOF_MAC_SETTINGS="$settings" "HVO Roof.app/Contents/MacOS/hvo-roof-mac" --check > check.txt 2> check-stderr.txt || status=$?
+          cat check-stderr.txt check.txt
+          if [ "$status" -ne 0 ] || ! grep -q '^HVO Roof check: the window opened and was drawn' check.txt; then
+            echo "::error file=src/HVO.RoofControllerV4.Mac/MacCheck.cs::hvo-roof-mac --check exited ${status}; it must draw the window and exit 0"
+            exit 1
+          fi
+
+      - name: Refuse without settings
+        timeout-minutes: 2
+        run: |
+          status=0
+          HVO_ROOF_MAC_SETTINGS="$RUNNER_TEMP/no-mac-settings" "HVO Roof.app/Contents/MacOS/hvo-roof-mac" --check 2> refusal.txt || status=$?
+          cat refusal.txt
+          if [ "$status" -ne 78 ] || ! grep -q 'HVO Roof did not start' refusal.txt; then
+            echo "::error file=src/HVO.RoofControllerV4.Mac/Program.cs::hvo-roof-mac without settings exited ${status}, not 78 with its settings message"
+            exit 1
+          fi
 
   # The Pi deploy path: the deploy script (against fake docker/curl, see tests/deploy), the container's supervisor
   # (tests/container) and the compose profiles.
@@ -223,7 +322,8 @@ jobs:
           for script in src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-*; do
             bash -n "${script}"
           done
-          python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py
+          python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py tests/mac/test_bundle.py \
+            src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh \
@@ -231,6 +331,11 @@ jobs:
 
       - name: Screenshot converter tests
         run: python3 -m unittest discover -s tests/cli -p 'test_*.py' -v
+
+      # bundle.py reading whole and damaged Mach-O files, Info.plist and AppIcon.icns, and make on whole and damaged
+      # publish folders (docs/mac.md).
+      - name: Mac bundle script tests
+        run: python3 -m unittest discover -s tests/mac -p 'test_*.py' -v
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh

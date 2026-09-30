@@ -275,10 +275,12 @@ The kiosk's settings are the `Kiosk` section of `appsettings.Local.json` next to
 The logging level is `Logging:LogLevel:Default` (`Information`); the log goes to the journal. The device key never
 appears in the log or on the screen.
 
-To try the kiosk on a workstation against a development controller:
+To try the kiosk on a workstation, start a development controller ([emulator.md](emulator.md#development)), which
+listens on `http://localhost:5195`, then, from `src/`:
 
 ```bash
-dotnet run --project src/HVO.RoofControllerV4.Kiosk -- --window --Kiosk:DeviceKeyFile=/path/to/kiosk-key
+dotnet run --project HVO.RoofControllerV4.Kiosk -- --window --Kiosk:ControllerUrl=http://localhost:5195/ \
+  --Kiosk:DeviceKeyFile=/path/to/kiosk-key
 ```
 
 ## Assumptions

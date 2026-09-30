@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>hvo-roof-mac</AssemblyName>
+    <RootNamespace>HVO.RoofControllerV4.Mac</RootNamespace>
+    <Description>The roof controller's Mac app: the roof, Stop, and an operator and admin view after signing in with a name and password, in a window on a Mac.</Description>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RuntimeIdentifiers>osx-arm64;linux-x64</RuntimeIdentifiers>
+    <!-- Avalonia's build statistics (Avalonia.BuildServices) are not sent: nothing is reported from a build of this repository. -->
+    <UsedAvaloniaProducts />
+  </PropertyGroup>
+
+  <!--
+    dotnet publish -r osx-arm64 (a Mac with Apple silicon) or -r linux-x64 (development) gives one self-contained
+    program, with the native libraries beside it: in the Mac's app bundle each is signed in place (bundle/bundle.py).
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Skia" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Screens/HVO.RoofControllerV4.Screens.csproj" />
+    <InternalsVisibleTo Include="HVO.RoofControllerV4.RPi.Tests" />
+  </ItemGroup>
+
+</Project>

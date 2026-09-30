@@ -247,6 +247,31 @@ the roof against this server; use the web UI (port 8088) for operator access.
   least 44 x 44 CSS pixels and 8 CSS pixels from its neighbours on each screen tested. The
   pages are tested with bUnit against a fake controller, and in Chromium against the emulated
   roof, which also takes the screenshots in [docs/web.md](docs/web.md).
+- Touchscreen kiosk (#47). `hvo-roof-kiosk` (`HVO.RoofControllerV4.Kiosk`) shows the roof full
+  screen on a Raspberry Pi touch display, drawn through DRM with libinput touch and no desktop,
+  a client of the controller's API and status hub with a device key of its own (a `RoofViewer`
+  key marked `Kiosk`). Anyone can watch the roof and press Stop; a person unlocks it with their
+  name and PIN for the operator's and admin's pages (Roof, Settings with a keypad and keyboard
+  drawn on the screen, System and Restart). It locks after `IdleLockSeconds` without a touch,
+  when the controller ends the PIN session, and on SIGTERM, and stops renewing the lease when it
+  locks. The screen goes black after the controller's `KioskScreenTimeout`, and the touch that
+  wakes it goes no further. Every button is at least 12 mm. Its screens
+  (`HVO.RoofControllerV4.Screens`) are Avalonia controls in HVO Dark, drawn headless at
+  1280x720 and 800x480 in the tests, which check the layout and Stop and take the screenshots in
+  [docs/kiosk.md](docs/kiosk.md); a nightly soak runs it against the emulated roof through
+  controller restarts. See [docs/kiosk.md](docs/kiosk.md).
+- Mac app (#48). `HVO Roof.app` (`HVO.RoofControllerV4.Mac`) is the kiosk's screens in a window
+  on a Mac with Apple silicon, with the Mac's own device key (an ordinary `RoofViewer` key, not a
+  kiosk key). Anyone at the Mac can watch the roof and press Stop; a person signs in with their
+  name and password, and the app signs them out after `IdleLockSeconds` without use (15 minutes
+  by default), when the controller ends the session, and when it quits. Settings are typed in a
+  text box. Its settings and device key are in `~/Library/Application Support/HVO Roof`;
+  settings it cannot start with open a window that says why and where they are (exit code 78).
+  It is built on Linux without Xcode: `bundle/bundle.py` makes the bundle from the osx-arm64
+  publish and signs it ad hoc with rcodesign, and checks it; the icon is drawn in code. CI keeps
+  the signed bundle as the `hvo-roof-mac-<run id>.zip` artifact, and a macOS job checks its
+  signature with `codesign` and runs it with `--check`, which opens and draws the window. See
+  [docs/mac.md](docs/mac.md).
 - Fault latch: watchdog expiry, VFD fault (IN3), relay verification failure, repeated input
   read failures, contradictory limits and a reasserted start limit latch a fault that blocks
   Open and Close until `ClearFault` succeeds with healthy inputs. Stop is never blocked.

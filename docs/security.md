@@ -227,6 +227,9 @@ API in its identity store.
   `PinSessionLifetime` (default 12 hours) in any case. It also ends when its kiosk key is removed or is no longer a
   kiosk key. `GET /api/v4.0/Auth/Pin/Users` lists the people who can sign in with a PIN, for the kiosk's picker.
   Between sessions a kiosk shows status and offers Stop with its own key, which has the `RoofViewer` role.
+- **The Mac app** ([mac.md](mac.md)) signs people in with a password, as above. Between sessions it shows status and
+  offers Stop with the device key made for that Mac: an ordinary `RoofViewer` key, not a kiosk key, so a Mac's key that
+  is lost cannot be used to try PINs. Removing the key at the controller cuts that Mac off at once.
 - **Who am I.** `GET /api/v4.0/Auth/Me` returns the caller's name, role and kind (`ApiKey`, `Session` or `Pin`).
 - **Sign out.** `DELETE /api/v4.0/Auth/Session` ends the session that sent it.
 - **Own password.** `POST /api/v4.0/Auth/Password` with `currentPassword` and `newPassword` changes a signed-in

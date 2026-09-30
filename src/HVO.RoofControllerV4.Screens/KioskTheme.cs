@@ -47,9 +47,20 @@ public static class KioskTheme
         application.Styles.Add(new FluentTheme());
         var resources = application.Resources;
         SetButton(resources, RoofUiPalette.Badge, RoofUiPalette.Text, RoofUiPalette.Border);
-        resources["TextControlBackground"] = Surface;
-        resources["TextControlForeground"] = Text;
+        // A text box keeps the surface it has as it is pointed at and typed in (Fluent's dark variant turns it black),
+        // as the web UI's inputs do, and shows it has the keyboard by its accent edge.
+        foreach (var state in new[] { "", "PointerOver", "Focused" })
+        {
+            resources[$"TextControlBackground{state}"] = Surface;
+            resources[$"TextControlForeground{state}"] = Text;
+        }
+
         resources["TextControlBorderBrush"] = Frame;
+        resources["TextControlBorderBrushPointerOver"] = Frame;
+        resources["TextControlBorderBrushFocused"] = Accent;
+        resources["TextControlPlaceholderForeground"] = Muted;
+        resources["TextControlPlaceholderForegroundPointerOver"] = Muted;
+        resources["TextControlPlaceholderForegroundFocused"] = Muted;
         resources["SystemControlFocusVisualPrimaryBrush"] = FocusRing;
         resources["ScrollBarThumbFill"] = Frame;
     }

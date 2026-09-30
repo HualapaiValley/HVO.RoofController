@@ -309,7 +309,7 @@ public sealed class KioskPanelTests
         settings.BeginEdit();
 
         settings.Editing.Should().BeNull();
-        settings.Message.Should().Be(new KioskNotice(KioskSettingsPanel.SecretsElsewhere, KioskNoticeLevel.Info, KioskHarness.Start));
+        settings.Message.Should().Be(new KioskNotice(KioskWording.Kiosk.SecretsElsewhere, KioskNoticeLevel.Info, KioskHarness.Start));
         KioskSettingsPanel.Describe(settings.Field)[0].Should().NotContain("default");
     }
 
