@@ -40,6 +40,13 @@ LC_BUILD_VERSION = 0x32
 PLATFORM_MACOS = 1
 
 
+def read(layout, data, at, what):
+    """struct.unpack_from, or ValueError saying what is cut short: a damaged file is a problem to report, not a crash."""
+    if at < 0 or at + struct.calcsize(layout) > len(data):
+        raise ValueError(f"{what} is cut short")
+    return struct.unpack_from(layout, data, at)
+
+
 class MachO:
     """What check and make need from a Mach-O file: its architectures, and for each whether it is signed and the
     oldest macOS it runs on."""
@@ -51,17 +58,16 @@ class MachO:
         magic = struct.unpack(">I", data[:4])[0] if len(data) >= 4 else 0
         if magic in (0xCAFEBABE, 0xCAFEBABF):  # universal: a big-endian table of slices
             wide = magic == 0xCAFEBABF
-            count = struct.unpack(">I", data[4:8])[0]
+            count = read(">I", data, 4, f"{path}: the universal header")[0]
             entry = 32 if wide else 20
             for index in range(count):
-                start = 8 + index * entry
-                if wide:
-                    cpu, _, offset, size = struct.unpack(">iiQQ", data[start:start + 24])
-                else:
-                    cpu, _, offset, size = struct.unpack(">iiII", data[start:start + 16])
+                cpu, _, offset, size = read(">iiQQ" if wide else ">iiII", data, 8 + index * entry,
+                                            f"{path}: the universal header")
+                if offset + size > len(data):
+                    raise ValueError(f"{path}: a slice is cut short")
                 self.slices[cpu & 0xFFFFFFFF] = self._thin(data[offset:offset + size], path)
         elif data[:4] == b"\xcf\xfa\xed\xfe":
-            cpu = struct.unpack("<I", data[4:8])[0]
+            cpu = read("<I", data, 4, f"{path}: the Mach-O header")[0]
             self.slices[cpu] = self._thin(data, path)
         else:
             raise ValueError(f"{path}: not a 64-bit Mach-O file")
@@ -70,18 +76,21 @@ class MachO:
     def _thin(data, path):
         if data[:4] != b"\xcf\xfa\xed\xfe":
             raise ValueError(f"{path}: a slice is not a 64-bit little-endian Mach-O image")
-        count = struct.unpack("<I", data[16:20])[0]
+        count = read("<I", data, 16, f"{path}: the Mach-O header")[0]
         at, signed, minimum = 32, False, None
         for _ in range(count):
-            command, size = struct.unpack("<II", data[at:at + 8])
+            command, size = read("<II", data, at, f"{path}: a load command")
+            if size < 8 or at + size > len(data):
+                raise ValueError(f"{path}: the load command at byte {at} has a bad size, {size}")
+            body = data[at:at + size]
             if command == LC_CODE_SIGNATURE:
                 signed = True
             elif command == LC_BUILD_VERSION:
-                platform, version = struct.unpack("<II", data[at + 8:at + 16])
+                platform, version = read("<II", body, 8, f"{path}: a build version")
                 if platform == PLATFORM_MACOS:
                     minimum = version
             elif command == LC_VERSION_MIN_MACOSX:
-                minimum = struct.unpack("<I", data[at + 8:at + 12])[0]
+                minimum = read("<I", body, 8, f"{path}: a minimum version")[0]
             at += size
         return {"signed": signed, "minimum": minimum}
 
@@ -146,25 +155,10 @@ def check(app, unsigned):
         problems.append(f"Contents/{extra} should not be in the bundle")
 
     plist_path = os.path.join(contents, "Info.plist")
+    minimum = None
     if os.path.isfile(plist_path):
-        with open(plist_path, "rb") as file:
-            plist = plistlib.load(file)
-        wanted = {"CFBundleExecutable": EXECUTABLE, "CFBundleIdentifier": BUNDLE_ID, "CFBundlePackageType": "APPL",
-                  "CFBundleIconFile": "AppIcon", "CFBundleShortVersionString": VERSION, "NSHighResolutionCapable": True}
-        for key, value in wanted.items():
-            if plist.get(key) != value:
-                problems.append(f"Info.plist {key} is {plist.get(key)!r}, not {value!r}")
-        if not str(plist.get("CFBundleVersion", "")).isdigit():
-            problems.append(f"Info.plist CFBundleVersion is {plist.get('CFBundleVersion')!r}, not a build number")
-        minimum_text = str(plist.get("LSMinimumSystemVersion", ""))
-        try:
-            parts = [int(part) for part in minimum_text.split(".")] + [0, 0]
-            minimum = (parts[0] << 16) | (parts[1] << 8) | parts[2]
-        except ValueError:
-            problems.append(f"Info.plist LSMinimumSystemVersion is {minimum_text!r}, not a macOS version")
-            minimum = None
-    else:
-        minimum = None
+        plist_problems, minimum = check_plist(plist_path)
+        problems.extend(plist_problems)
 
     for name in [EXECUTABLE] + LIBRARIES:
         path = os.path.join(contents, "MacOS", name)
@@ -197,18 +191,51 @@ def check(app, unsigned):
     return 0
 
 
+def check_plist(path):
+    """Info.plist's keys, as problems, and the oldest macOS it names (as a Mach-O version), or None."""
+    try:
+        with open(path, "rb") as file:
+            plist = plistlib.load(file)
+    except Exception as error:  # plistlib raises several kinds, expat's among them
+        return [f"Info.plist cannot be read: {error}"], None
+    if not isinstance(plist, dict):
+        return ["Info.plist is not a dictionary"], None
+    problems = []
+    wanted = {"CFBundleExecutable": EXECUTABLE, "CFBundleIdentifier": BUNDLE_ID, "CFBundlePackageType": "APPL",
+              "CFBundleIconFile": "AppIcon", "CFBundleShortVersionString": VERSION, "NSHighResolutionCapable": True}
+    for key, value in wanted.items():
+        if plist.get(key) != value:
+            problems.append(f"Info.plist {key} is {plist.get(key)!r}, not {value!r}")
+    if not str(plist.get("CFBundleVersion", "")).isdigit():
+        problems.append(f"Info.plist CFBundleVersion is {plist.get('CFBundleVersion')!r}, not a build number")
+    minimum_text = str(plist.get("LSMinimumSystemVersion", ""))
+    try:
+        parts = [int(part) for part in minimum_text.split(".")] + [0, 0]
+        return problems, (parts[0] << 16) | (parts[1] << 8) | parts[2]
+    except ValueError:
+        problems.append(f"Info.plist LSMinimumSystemVersion is {minimum_text!r}, not a macOS version")
+        return problems, None
+
+
 def check_icon(path):
     with open(path, "rb") as file:
         data = file.read()
-    if data[:4] != b"icns" or struct.unpack(">I", data[4:8])[0] != len(data):
+    if len(data) < 8 or data[:4] != b"icns" or struct.unpack(">I", data[4:8])[0] != len(data):
         return ["AppIcon.icns is not an icon file"]
     problems, seen, at = [], set(), 8
     while at < len(data):
+        if at + 8 > len(data):
+            problems.append(f"AppIcon.icns is cut short at byte {at}")
+            break
         kind, size = data[at:at + 4], struct.unpack(">I", data[at + 4:at + 8])[0]
+        if size < 8 or at + size > len(data):
+            problems.append(f"AppIcon.icns element {kind.decode('latin-1')!r} at byte {at} has a bad size, {size}")
+            break
         image = data[at + 8:at + size]
         if kind in ICON_ELEMENTS:
             seen.add(kind)
-            width, height = struct.unpack(">II", image[16:24]) if image[:8] == b"\x89PNG\r\n\x1a\n" else (0, 0)
+            png = image[:8] == b"\x89PNG\r\n\x1a\n" and len(image) >= 24
+            width, height = struct.unpack(">II", image[16:24]) if png else (0, 0)
             if (width, height) != (ICON_ELEMENTS[kind],) * 2:
                 problems.append(f"AppIcon.icns {kind.decode()} is {width}x{height}, not {ICON_ELEMENTS[kind]} pixels")
         at += size

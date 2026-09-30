@@ -176,7 +176,8 @@ give `HVO Roof did not start: …` and exit code 78:
 ```
 
 `--check` opens the window, draws it, writes `HVO Roof check: the window opened and was drawn at …` and exits 0, or
-exits 1 if the window is not drawn within 60 s; settings it cannot start with are then only written, with exit code 78.
+exits 1 if no window opens or it is not drawn within 60 s; settings it cannot start with are then only written, with
+exit code 78.
 The device key never appears in the log or on the screen.
 
 ## Settings
@@ -196,11 +197,12 @@ controller, from Terminal: an app opened from the Finder does not get Terminal's
 
 The logging level is `Logging:LogLevel:Default` (`Information`).
 
-To try the app on a Linux desktop against a development controller, put a Viewer key in
-`~/.config/hvo-roof-mac/device-key` (or under `$XDG_CONFIG_HOME/hvo-roof-mac`), then:
+To try the app on a Linux desktop, start a development controller ([emulator.md](emulator.md#development)), which
+listens on `http://localhost:5195`. Put a Viewer key in `~/.config/hvo-roof-mac/device-key` (or under
+`$XDG_CONFIG_HOME/hvo-roof-mac`), then, from `src/`:
 
 ```bash
-dotnet run --project src/HVO.RoofControllerV4.Mac -- --Mac:ControllerUrl=http://localhost:8080/
+dotnet run --project HVO.RoofControllerV4.Mac -- --Mac:ControllerUrl=http://localhost:5195/
 ```
 
 ## Build it yourself
@@ -254,8 +256,12 @@ Nothing here needs a Mac, the controller's Pi or the roof.
 - **The program** (`MacProgramTests`): the settings and where they are read from, the device key, exit code 78 and
   the refusal, `--check`'s flag, and the bundle's `Info.plist`. CI runs the published program without settings to
   check that code.
-- **The app** (`MacAppTests`): `--check` exits 0 once the window is drawn and 1 when it is not, the refusal window, and
-  the icon: it is drawn in code (`MacIcon`), at each size macOS uses, and `bundle/AppIcon.icns` must hold that drawing.
+- **The app** (`MacAppTests`): `--check` exits 0 once the window is drawn and 1 when it is not or there is none, the
+  refusal window, and the icon: it is drawn in code (`MacIcon`), at each size macOS uses, and `bundle/AppIcon.icns`
+  must hold that drawing.
+- **The bundle script** (`tests/mac/test_bundle.py`): `bundle.py` reads whole Mach-O files (thin and universal),
+  `Info.plist` and `AppIcon.icns`, and reports damaged ones (cut short, or with a size of 0) as problems, with exit
+  code 1, not a hang or a traceback. Run it with `python3 -m unittest discover -s tests/mac -p 'test_*.py'`.
 - **The bundle**: CI makes it from the osx-arm64 publish, signs it with rcodesign, checks it with `bundle.py check`
   and rcodesign's `print-signature-info`, and keeps it as the `hvo-roof-mac-<run id>.zip` artifact for 14 days.
 

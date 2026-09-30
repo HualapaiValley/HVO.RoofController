@@ -97,6 +97,25 @@ public sealed class MacAppTests
         output.ToString().Should().Be($"HVO Roof check: the window was not drawn within 1 s.{Environment.NewLine}");
     }
 
+    [TestMethod]
+    public async Task TheCheck_ExitsWith1_AtOnce_WhenThereIsNoWindow_AndOnlyOnce()
+    {
+        var lifetime = new Lifetime();
+        using var output = new StringWriter();
+        await OnUiAsync(() =>
+        {
+            MacCheck.Watch(null, lifetime.Shutdown, output, TimeSpan.FromSeconds(1));
+            lifetime.ExitCodes.Should().BeEmpty("the lifetime is not yet running its loop, and would lose the shutdown");
+        });
+
+        await UntilAsync(() => lifetime.ExitCodes.Count > 0, "the check to end");
+        lifetime.ExitCodes.Should().Equal([MacCheck.NotDrawnExitCode]);
+        await RunForAsync(TimeSpan.FromSeconds(1.5));
+
+        lifetime.ExitCodes.Should().Equal([MacCheck.NotDrawnExitCode], "the time allowed ran out after the check ended, and changes nothing");
+        output.ToString().Should().Be($"HVO Roof check: no window was opened.{Environment.NewLine}");
+    }
+
     // ---- The refusal ----------------------------------------------------------------------------------------------------
 
     /// <summary>A Mac's settings folder (<see cref="MacSettingsFolder"/>), for the paths the refusal shows.</summary>

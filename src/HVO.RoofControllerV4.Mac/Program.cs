@@ -112,12 +112,7 @@ public static class Program
                     if (check)
                     {
                         lifetime.Startup += (_, _) =>
-                        {
-                            if (lifetime.MainWindow is { } window)
-                            {
-                                MacCheck.Watch(window, code => lifetime.Shutdown(code), output, CheckTimeout);
-                            }
-                        };
+                            MacCheck.Watch(lifetime.MainWindow, code => lifetime.Shutdown(code), output, CheckTimeout);
                     }
                 });
         }

@@ -170,9 +170,10 @@ jobs:
       # Xcode; its release is checked against a pinned SHA-256), and published for linux-x64 to check that the program
       # refuses missing settings (exit 78) before it opens a window. The mac-app job runs the bundle on a Mac.
       - name: Publish HVO Roof.app
+        # Not RCODESIGN_*: rcodesign reads those variables as its own settings, and refuses ones it does not know.
         env:
-          RCODESIGN_VERSION: 0.29.0
-          RCODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+          APPLE_CODESIGN_VERSION: 0.29.0
+          APPLE_CODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
         run: |
           for rid in osx-arm64 linux-x64; do
             dotnet publish HVO.RoofControllerV4.Mac -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof-mac/$rid"
@@ -186,10 +187,10 @@ jobs:
             echo "::error file=src/HVO.RoofControllerV4.Mac/Program.cs::hvo-roof-mac without settings exited ${status}, not 78 with its settings message"
             exit 1
           fi
-          archive="apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl"
+          archive="apple-codesign-${APPLE_CODESIGN_VERSION}-x86_64-unknown-linux-musl"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive.tar.gz" \
-            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${RCODESIGN_VERSION}/$archive.tar.gz"
-          echo "${RCODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${APPLE_CODESIGN_VERSION}/$archive.tar.gz"
+          echo "${APPLE_CODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
           rcodesign="$RUNNER_TEMP/$archive/rcodesign"
           python3 HVO.RoofControllerV4.Mac/bundle/bundle.py make hvo-roof-mac/osx-arm64 mac-artifact --build "$GITHUB_RUN_NUMBER" --rcodesign "$rcodesign"
@@ -278,8 +279,14 @@ jobs:
           # Not a key any controller has: the one the settings name is not there.
           printf 'ci-mac-check-not-a-real-key\n' > "$settings/device-key"
           chmod 600 "$settings/device-key"
-          HVO_ROOF_MAC_SETTINGS="$settings" "HVO Roof.app/Contents/MacOS/hvo-roof-mac" --check | tee check.txt
-          grep -q '^HVO Roof check: the window opened and was drawn' check.txt
+          # The exit code as well as the line: the app must also quit cleanly (sign out, close) after drawing.
+          status=0
+          HVO_ROOF_MAC_SETTINGS="$settings" "HVO Roof.app/Contents/MacOS/hvo-roof-mac" --check > check.txt 2> check-log.txt || status=$?
+          cat check-log.txt check.txt
+          if [ "$status" -ne 0 ] || ! grep -q '^HVO Roof check: the window opened and was drawn' check.txt; then
+            echo "::error file=src/HVO.RoofControllerV4.Mac/MacCheck.cs::hvo-roof-mac --check exited ${status}; it must draw the window and exit 0"
+            exit 1
+          fi
 
       - name: Refuse without settings
         timeout-minutes: 2
@@ -313,7 +320,8 @@ jobs:
           for script in src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-*; do
             bash -n "${script}"
           done
-          python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py
+          python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py tests/mac/test_bundle.py \
+            src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh \
@@ -321,6 +329,10 @@ jobs:
 
       - name: Screenshot converter tests
         run: python3 -m unittest discover -s tests/cli -p 'test_*.py' -v
+
+      # bundle.py reading whole and damaged Mach-O files, Info.plist and AppIcon.icns (docs/mac.md).
+      - name: Mac bundle script tests
+        run: python3 -m unittest discover -s tests/mac -p 'test_*.py' -v
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
