@@ -106,7 +106,7 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). |
 | `keys list\|add\|set\|rotate\|remove` | admin | API keys. Keys from the controller's configuration are read-only. |
 | `sessions list\|end` | admin | People's sessions. Tokens are never shown. |
-| `info` | admin | `hvo-roof`'s own version, then the controller's version, host and resource use. |
+| `info` | admin | `hvo-roof`'s own version, then the controller's version, host and resource use. With `--json`, `client.version` is `hvo-roof`'s full version (with its commit), as `information.applicationVersion` is the controller's. |
 | `restart [--force] [--confirm-safety-critical]` | admin | Restarts the controller, so that settings read at startup take effect. The controller stops the roof and verifies the stop first, and refuses when it cannot. `health --probe ready` says when it is back. |
 | `setup` | none | See [Setup](#setup). |
 | `ui` | any | The terminal interface (see [The terminal interface](#the-terminal-interface)). |

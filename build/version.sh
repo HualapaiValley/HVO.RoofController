@@ -7,7 +7,8 @@
 #   build/version.sh --tag <tag>         the version a release tag names, checked: v4.0.0 gives 4.0.0 and v4.0.0-rc.1
 #                                        gives 4.0.0-rc.1; any other tag, or one for another version, fails
 #
-# A release is built with -p:Version=<the --tag output>, every other build with -p:VersionSuffix=dev or ci.<run>, and
+# A release and every image are built with -p:Version=<this output> (an image through ROOF_VERSION); CI's dotnet builds
+# set the VersionSuffix environment variable to ci.<run>, and any other build gets -dev from Directory.Build.props.
 # Directory.Build.targets refuses a version that is neither the prefix nor a prerelease of it.
 set -euo pipefail
 

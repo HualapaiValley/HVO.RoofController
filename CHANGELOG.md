@@ -93,8 +93,8 @@ the roof against this server; use the web UI (port 8088) for operator access.
   `hvo-roof --version`, the controller's startup log and the System pages of the web UI, the terminal interface, the
   kiosk and the Mac app show it; both images carry it in their OCI labels (`org.opencontainers.image.version`,
   `.revision`, `.created`, `.source`), which the image workflows check; the Mac app's `Info.plist` has `4.0.0`
-  (`bundle.py --version`). `build/version.sh` reads it, and checks that a release tag names it. See
-  [docs/releasing.md](docs/releasing.md).
+  (`bundle.py --version`); `hvo-roof info --json` gives `hvo-roof`'s own in `client.version`. `build/version.sh`
+  reads it, and checks that a release tag names it. See [docs/releasing.md](docs/releasing.md).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`

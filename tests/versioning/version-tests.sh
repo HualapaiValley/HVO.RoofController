@@ -141,7 +141,36 @@ check "missing archive" 1 "was not found" "${labels_sh}" "${WORK}/none.tar" 4.0.
 printf 'not a tar' > "${WORK}/bad.tar"
 check "not an archive" 1 "is not an OCI archive" "${labels_sh}" "${WORK}/bad.tar" 4.0.0 "${REVISION}"
 check "empty version argument" 1 "must not be empty" "${labels_sh}" "${a}" "" "${REVISION}"
-check "missing arguments" 2 "check-image-labels.sh <oci-archive> <version> <revision>" "${labels_sh}" "${a}"
+check "missing arguments" 2 "check-image-labels.sh <oci-archive> <version> <revision> [<platforms>]" "${labels_sh}" "${a}"
+
+# The platforms the archive must hold, in any order.
+a=$(archive platforms "${good}" linux/amd64 linux/arm64)
+check "expected platforms" 0 "linux/arm64: HVO Roof Controller 4.0.0" "${labels_sh}" "${a}" 4.0.0 "${REVISION}" linux/amd64,linux/arm64
+check "expected platforms in another order" 0 "linux/amd64: HVO Roof Controller 4.0.0" "${labels_sh}" "${a}" 4.0.0 "${REVISION}" linux/arm64,linux/amd64
+check "a platform not expected" 1 "holds images for linux/amd64,linux/arm64, not linux/arm64" "${labels_sh}" "${a}" 4.0.0 "${REVISION}" linux/arm64
+a=$(archive one-platform "${good}" linux/amd64)
+check "an expected platform missing" 1 "holds images for linux/amd64, not linux/amd64,linux/arm64" "${labels_sh}" "${a}" 4.0.0 "${REVISION}" linux/amd64,linux/arm64
+check "platforms not a list" 1 "the platforms must be a list such as linux/amd64,linux/arm64, not 'arm64'" "${labels_sh}" "${a}" 4.0.0 "${REVISION}" arm64
+
+# with_entry <archive> <name> <entry-json>: a copy of the archive whose top-level index also lists the entry.
+with_entry() {
+  local dir="${WORK}/$2"
+  rm -rf "${dir}" && mkdir -p "${dir}" && tar -xf "$1" -C "${dir}"
+  jq -c --argjson entry "$3" '.manifests += [$entry]' "${dir}/index.json" > "${dir}/index.json.new"
+  mv "${dir}/index.json.new" "${dir}/index.json"
+  tar -cf "${dir}.tar" -C "${dir}" index.json blobs
+  echo "${dir}.tar"
+}
+missing=sha256:$(printf 'missing' | sha256)
+a=$(with_entry "${WORK}/platforms.tar" missing-index \
+  "{\"mediaType\": \"application/vnd.oci.image.index.v1+json\", \"digest\": \"${missing}\"}")
+check "a nested index missing" 1 "blob ${missing} is missing from the archive" "${labels_sh}" "${a}" 4.0.0 "${REVISION}"
+a=$(with_entry "${WORK}/platforms.tar" missing-manifest \
+  "{\"mediaType\": \"application/vnd.oci.image.manifest.v1+json\", \"digest\": \"${missing}\"}")
+check "an image manifest missing" 1 "blob ${missing} is missing from the archive" "${labels_sh}" "${a}" 4.0.0 "${REVISION}"
+a=$(with_entry "${WORK}/platforms.tar" other-type \
+  "{\"mediaType\": \"application/vnd.example.thing+json\", \"digest\": \"${missing}\"}")
+check "an unknown media type" 1 "has the media type 'application/vnd.example.thing+json'" "${labels_sh}" "${a}" 4.0.0 "${REVISION}"
 
 # ---------------------------------------------------------------------------------------------------------------------
 

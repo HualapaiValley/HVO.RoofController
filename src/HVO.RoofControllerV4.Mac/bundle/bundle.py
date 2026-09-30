@@ -134,7 +134,7 @@ def make(publish, out, build, rcodesign, version=None):
     try:
         short = short_version(product_version() if version is None else version)
     except ValueError as error:
-        sys.exit(f"--version: {error}")
+        sys.exit(f"{'--version' if version is not None else 'Directory.Build.props (VersionPrefix)'}: {error}")
 
     # The program and the native libraries it loads; nothing else from the publish folder (no symbols, no settings).
     # Each is checked first, so a file make cannot use is named where it was published.

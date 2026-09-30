@@ -311,6 +311,14 @@ class MakeTests(BundleTestCase):
                                  f"--version: {version!r} is not a product version such as 4.0.0 or 4.0.0-ci.12")
                 self.assertFalse((self.directory / "out").exists())
 
+    def test_a_version_prefix_that_is_not_a_product_version_is_blamed_on_directory_build_props(self):
+        with mock.patch.object(bundle, "product_version", return_value="4.0"):
+            with self.assertRaises(SystemExit) as stopped:
+                self.make(self.publish(), version=None)
+        self.assertEqual(stopped.exception.code,
+                         "Directory.Build.props (VersionPrefix): '4.0' is not a product version such as 4.0.0 or 4.0.0-ci.12")
+        self.assertFalse((self.directory / "out").exists())
+
     def test_rcodesign_signs_the_new_bundle_before_it_takes_the_last_ones_place(self):
         signed = self.directory / "signed"
         # What rcodesign was asked to sign, the start of the folder it was in, and whether it was already whole.

@@ -517,7 +517,8 @@ An image Compose builds carries `4.0.0-dev` with no commit, unless `HVO_ROOF_VER
 `HVO_ROOF_CREATED` are set; Compose passes them to the build ([Versions and releases](releasing.md#images)):
 
 ```bash
-HVO_ROOF_REVISION=$(git rev-parse HEAD) HVO_ROOF_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose --profile pi build
+HVO_ROOF_VERSION=$(build/version.sh --dev) HVO_ROOF_REVISION=$(git rev-parse HEAD) \
+  HVO_ROOF_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) docker compose --profile pi build
 ```
 
 Compose does **not** perform the verified stop, keep the previous container, check the published URLs or roll back.

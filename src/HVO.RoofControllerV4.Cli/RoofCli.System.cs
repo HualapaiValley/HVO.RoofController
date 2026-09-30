@@ -1,5 +1,6 @@
 using System.CommandLine;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Cli;
@@ -10,7 +11,7 @@ public static partial class RoofCli
     {
         private Command CreateInfoCommand()
         {
-            var command = new Command("info", "Show the controller's version, host and resource use (admin).");
+            var command = new Command("info", "Show hvo-roof's own version, then the controller's version, host and resource use (admin).");
             SetAction(command, async (context, _, cancellationToken) =>
             {
                 using var client = context.Connect();
@@ -18,7 +19,9 @@ public static partial class RoofCli
                 var metrics = await client.System.GetMetricsAsync(cancellationToken).ConfigureAwait(false);
                 if (context.Json)
                 {
-                    context.WriteJson(new { information, metrics });
+                    // hvo-roof's full version (with its commit), as the controller's applicationVersion is given.
+                    var self = new { name = CommandName, version = RoofProductVersion.Of(typeof(RoofCli).Assembly) };
+                    context.WriteJson(new { client = self, information, metrics });
                 }
                 else
                 {

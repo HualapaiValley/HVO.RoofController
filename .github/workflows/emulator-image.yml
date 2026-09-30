@@ -122,7 +122,7 @@ jobs:
           outputs: type=oci,dest=${{ runner.temp }}/image.tar
 
       - name: Check the image's version labels
-        run: build/check-image-labels.sh "$RUNNER_TEMP/image.tar" "${{ steps.version.outputs.version }}" "$GITHUB_SHA"
+        run: build/check-image-labels.sh "$RUNNER_TEMP/image.tar" "${{ steps.version.outputs.version }}" "$GITHUB_SHA" linux/amd64,linux/arm64
 
   # The controller image and the emulator image, built for the runner (linux/amd64) and run together through the
   # compose emulator profile.

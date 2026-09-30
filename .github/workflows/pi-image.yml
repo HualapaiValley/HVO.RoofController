@@ -100,4 +100,4 @@ jobs:
           outputs: type=oci,dest=${{ runner.temp }}/image.tar
 
       - name: Check the image's version labels
-        run: build/check-image-labels.sh "$RUNNER_TEMP/image.tar" "${{ steps.version.outputs.version }}" "$GITHUB_SHA"
+        run: build/check-image-labels.sh "$RUNNER_TEMP/image.tar" "${{ steps.version.outputs.version }}" "$GITHUB_SHA" linux/arm64

@@ -6,6 +6,6 @@
   -->
   <Target Name="RoofCheckProductVersion" BeforeTargets="BeforeBuild">
     <Error Condition="'$(Version)' != '$(VersionPrefix)' and !$([System.String]::Copy('$(Version)').StartsWith('$(VersionPrefix)-'))"
-           Text="Version $(Version) is not the product version $(VersionPrefix) (Directory.Build.props) or a prerelease of it." />
+           Text="Version $(Version) is not the product version $(VersionPrefix) (Directory.Build.props) or a prerelease of it. If you did not pass -p:Version, a VERSION environment variable set it (MSBuild reads environment variables as properties, ignoring case): unset it." />
   </Target>
 </Project>
