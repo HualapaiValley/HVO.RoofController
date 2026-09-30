@@ -47,6 +47,7 @@ v=$(version_sh '    <VersionPrefix>4.2.1</VersionPrefix>')
 check "prefix" 0 "4.2.1" "${v}"
 check "dev" 0 "4.2.1-dev" "${v}" --dev
 check "ci" 0 "4.2.1-ci.57" "${v}" --ci 57
+check "dry run" 0 "4.2.1-dryrun.8" "${v}" --dry-run 8
 check "release tag" 0 "4.2.1" "${v}" --tag v4.2.1
 check "release candidate tag" 0 "4.2.1-rc.3" "${v}" --tag v4.2.1-rc.3
 check "tag for another version" 1 "the tag 'v4.3.0' is for 4.3.0, but Directory.Build.props holds 4.2.1" "${v}" --tag v4.3.0
@@ -58,6 +59,10 @@ check "tag with build metadata" 1 "is not a release tag" "${v}" --tag v4.2.1+abc
 check "ci zero" 1 "is not a positive whole number" "${v}" --ci 0
 check "ci not a number" 1 "is not a positive whole number" "${v}" --ci 5a
 check "ci without a number" 2 "build/version.sh --ci <run>" "${v}" --ci
+check "dry run zero" 1 "the release run number '0' is not a positive whole number" "${v}" --dry-run 0
+check "dry run not a number" 1 "is not a positive whole number" "${v}" --dry-run 8b
+check "dry run without a number" 2 "build/version.sh --dry-run <run>" "${v}" --dry-run
+check "dry run tag" 1 "is not a release tag" "${v}" --tag v4.2.1-dryrun.8
 check "unknown option" 2 "build/version.sh --tag <tag>" "${v}" --release
 check "extra argument" 2 "build/version.sh --dev" "${v}" --dev extra
 

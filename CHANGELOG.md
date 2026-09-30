@@ -104,6 +104,16 @@ the roof against this server; use the web UI (port 8088) for operator access.
   with and without the digests. The controller's image is now built for `linux/amd64` as well as `linux/arm64`. The
   container scenarios deploy a two-platform image index from a local registry by its digest (C12 step 11). See
   [docs/deployment.md](docs/deployment.md#deploying-a-released-image).
+- The release workflow (#64). A tag `vX.Y.Z`, or `vX.Y.Z-rc.N`, on main runs CI (building every program with the
+  release's version) and the scenarios for that commit; then builds both images for `linux/amd64` and `linux/arm64`,
+  pushes them to `ghcr.io/hualapaivalley` with the version as their tag and attests them, and makes a draft release of
+  `hvo-roof` for Linux arm64 and x64, the kiosk's tarball, the Mac app's zip, the release compose file and the deploy
+  script, with `release.json` (the version, the commit, each image's digest and each asset's SHA-256), `SHA256SUMS` and
+  a build provenance attestation. A final release needs `docs/upgrade-notes/X.Y.Z.md` and its CHANGELOG section; its
+  notes start with the upgrade notes. Publishing a final release that is the latest moves each image's `latest` tag
+  (`release-latest.yml`); a release candidate leaves it. A manual run is a dry run, `X.Y.Z-dryrun.<run>`, ending in a
+  draft to delete. `build/release-assets.py` gathers the assets and `build/push-image.sh` pushes an image from its OCI
+  archive with the digest it was checked with; CI tests both. See [docs/releasing.md](docs/releasing.md).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`
