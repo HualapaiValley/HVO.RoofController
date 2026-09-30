@@ -373,9 +373,10 @@ Nothing here needs the Pi, the HAT or the roof.
   - stops, with F9, a roof that another client started, and checks with `status --json` that the roof stopped short of
     the open limit;
   - checks that Esc leaves the interface open and that F10 exits 0;
-  - closes the terminal of `hvo-roof open` (a tmux window killed under its shell, which delivers SIGHUP twice) and sends
-    SIGTERM to `hvo-roof close` while each follows the roof, and checks that each sent Stop, that the controller verified
-    it and that the roof stopped short of the limit, and that `close` exited 130.
+  - closes the terminal of `hvo-roof open` (a tmux window killed under its shell, which delivers SIGHUP twice) and,
+    after opening the roof to the limit, sends SIGTERM to `hvo-roof close`, while each follows the roof, and checks that
+    each sent Stop, that the controller verified it and that the roof stopped short of the limit, and that `close`
+    exited 130.
 
   The `Emulator image` workflow keeps the screens as the `terminal-screens-<run id>` artifact: each as text, with its
   colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The screenshots above are those images.
