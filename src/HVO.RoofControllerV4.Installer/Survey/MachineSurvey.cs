@@ -126,9 +126,10 @@ public static class HatDevices
 /// A machine's display outputs, as its kernel lists them (<c>/sys/class/drm/card1-DSI-1</c>), and whether a desktop has
 /// the screen: the kiosk draws on it itself, and cannot while a display manager does.
 /// </summary>
-/// <param name="Outputs">Each output (DSI-1, HDMI-A-1) and what its status says: connected, disconnected or unknown.</param>
+/// <param name="Outputs">Each output (DSI-1, HDMI-A-1) and what its status says: connected, disconnected or unknown. None when the kernel lists none.</param>
 /// <param name="DisplayManagerActive">True when display-manager.service (a desktop's login screen) is running.</param>
-public sealed record DisplaySurvey(IReadOnlyList<(string Name, string Status)> Outputs, bool DisplayManagerActive)
+/// <param name="DisplayManagerAtBoot">True when it is enabled and the Pi boots to graphical.target, so it starts at the next boot.</param>
+public sealed record DisplaySurvey(IReadOnlyList<(string Name, string Status)> Outputs, bool DisplayManagerActive, bool DisplayManagerAtBoot = false)
 {
     /// <summary>The outputs with a screen on them, or that cannot tell (a panel may say unknown).</summary>
     public IReadOnlyList<string> Screens => [.. Outputs.Where(output => output.Status is "connected" or "unknown").Select(output => output.Name)];

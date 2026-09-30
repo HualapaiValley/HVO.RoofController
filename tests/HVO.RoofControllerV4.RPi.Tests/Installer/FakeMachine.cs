@@ -167,6 +167,12 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     /// <summary>A desktop's display manager has the screen (display-manager.service is active).</summary>
     public bool DisplayManagerActive { get; set; }
 
+    /// <summary>A desktop's display manager is enabled: it starts at boot when <see cref="DefaultTarget"/> is graphical.target.</summary>
+    public bool DisplayManagerEnabled { get; set; }
+
+    /// <summary>What systemd boots to (systemctl get-default).</summary>
+    public string DefaultTarget { get; set; } = MachineSurveyor.GraphicalTarget;
+
     /// <summary>The Debian packages installed, as dpkg knows them; null for a machine without dpkg.</summary>
     public HashSet<string>? Packages { get; set; } = new(StringComparer.Ordinal);
 
@@ -175,6 +181,9 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     /// <summary>The machine's users, by name: the groups each is in (their own first).</summary>
     public Dictionary<string, List<string>> Users { get; } = new(StringComparer.Ordinal) { ["root"] = ["root"], ["pi"] = ["pi", "sudo", "video"] };
+
+    /// <summary>The machine's groups, by name.</summary>
+    public HashSet<string> Groups { get; } = new(StringComparer.Ordinal) { "root", "pi", "sudo", "video", "input", "render", "nogroup" };
 
     /// <summary>Each file's owner and group (user:group), by path, as chown left them; root:root for one not here.</summary>
     public Dictionary<string, string> Owners { get; } = new(StringComparer.Ordinal);
@@ -675,6 +684,10 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
                 !Exists(MachineSurveyor.KioskUnitFile) ? "inactive" : KioskRestarting ? "activating" : Kiosk.Active ? "active" : "inactive",
                 Exists(MachineSurveyor.KioskUnitFile) && Kiosk.Active && !KioskRestarting ? 0 : 3),
             "systemctl" when arguments is ["is-active", MachineSurveyor.DisplayManagerUnit] => Answer(DisplayManagerActive ? "active" : "inactive", DisplayManagerActive ? 0 : 3),
+            "systemctl" when arguments is ["is-enabled", MachineSurveyor.DisplayManagerUnit] => DisplayManagerEnabled
+                ? Answer("alias")
+                : new CommandResult(1, string.Empty, $"Failed to get unit file state for {MachineSurveyor.DisplayManagerUnit}: No such file or directory\n"),
+            "systemctl" when arguments is ["get-default"] => Answer(DefaultTarget),
             "systemctl" when arguments is ["show", "-p", "NeedDaemonReload", "--value", MachineSurveyor.KioskUnit]
                 => Answer(_loadedKioskUnit is not null && Exists(MachineSurveyor.KioskUnitFile) && Read(MachineSurveyor.KioskUnitFile) != _loadedKioskUnit ? "yes" : "no"),
             "systemctl" when arguments is ["show", "-p", "ActiveEnterTimestamp", "--timestamp=us+utc", "--value", MachineSurveyor.KioskUnit]
@@ -705,12 +718,21 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             "id" when arguments is ["-nG", var name] => Users.TryGetValue(name, out var groups)
                 ? Answer(string.Join(' ', groups))
                 : new CommandResult(1, string.Empty, $"id: '{name}': no such user\n"),
-            "useradd" when arguments is ["--system", "--user-group", "--no-create-home", "--shell", "/usr/sbin/nologin", var name] => Users.TryAdd(name, [name])
+            "getent" when arguments is ["group", var name] => Groups.Contains(name)
+                ? Answer($"{name}:x:998:")
+                : new CommandResult(2, string.Empty, string.Empty),
+            "useradd" when arguments is ["--system", "--user-group", "--no-create-home", "--shell", "/usr/sbin/nologin", var name] => AddUser(name, makeGroup: true),
+            "useradd" when arguments is ["--system", "--gid", var group, "--no-create-home", "--shell", "/usr/sbin/nologin", var name] => Groups.Contains(group)
+                ? AddUser(name, makeGroup: false)
+                : new CommandResult(6, string.Empty, $"useradd: group '{group}' does not exist\n"),
+            "groupadd" when arguments is ["--system", var name] => Groups.Add(name)
                 ? Answer(string.Empty)
-                : new CommandResult(9, string.Empty, $"useradd: user '{name}' already exists\n"),
-            "usermod" when arguments is ["-aG", var groups, var name] => Users.TryGetValue(name, out var memberOf)
-                ? Answer(string.Empty, after: () => memberOf.AddRange(groups.Split(',').Where(group => !memberOf.Contains(group))))
-                : new CommandResult(6, string.Empty, $"usermod: user '{name}' does not exist\n"),
+                : new CommandResult(9, string.Empty, $"groupadd: group '{name}' already exists\n"),
+            "usermod" when arguments is ["-aG", var groups, var name] => !Users.TryGetValue(name, out var memberOf)
+                ? new CommandResult(6, string.Empty, $"usermod: user '{name}' does not exist\n")
+                : groups.Split(',').FirstOrDefault(group => !Groups.Contains(group)) is { } unknown
+                ? new CommandResult(6, string.Empty, $"usermod: group '{unknown}' does not exist\n")
+                : Answer(string.Empty, after: () => memberOf.AddRange(groups.Split(',').Where(group => !memberOf.Contains(group)))),
             "stat" when arguments is ["-c", "%U:%G", "--", var path] => Exists(path)
                 ? Answer(Owners.GetValueOrDefault(path, "root:root"))
                 : new CommandResult(1, string.Empty, $"stat: cannot statx '{path}': No such file or directory\n"),
@@ -769,13 +791,35 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             string.Concat(unknown.Select(name => $"dpkg-query: no packages found matching {name}\n")));
     }
 
-    // chown user:group: both must be known (a user's group is named for them), and so must the file.
+    // useradd: --user-group makes a group named for the user, and refuses when one is there already.
+    private CommandResult AddUser(string name, bool makeGroup)
+    {
+        if (Users.ContainsKey(name))
+        {
+            return new CommandResult(9, string.Empty, $"useradd: user '{name}' already exists\n");
+        }
+
+        if (makeGroup && !Groups.Add(name))
+        {
+            return new CommandResult(9, string.Empty, $"useradd: group {name} exists - if you want to add this user to that group, use -g.\n");
+        }
+
+        Users.Add(name, [name]);
+        return Answer(string.Empty);
+    }
+
+    // chown user:group: both must be known, and so must the file.
     private CommandResult Chown(string owner, string path)
     {
         var parts = owner.Split(':');
-        if (parts.Length != 2 || !Users.ContainsKey(parts[0]) || !Users.ContainsKey(parts[1]))
+        if (parts.Length != 2 || !Users.ContainsKey(parts[0]))
         {
             return new CommandResult(1, string.Empty, $"chown: invalid user: '{owner}'\n");
+        }
+
+        if (!Groups.Contains(parts[1]))
+        {
+            return new CommandResult(1, string.Empty, $"chown: invalid group: '{owner}'\n");
         }
 
         if (!Exists(path))

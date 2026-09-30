@@ -51,10 +51,21 @@ public sealed class CertificateAuthorityStep(ControllerLayout layout, Certificat
 
         machine.WriteAtomically(layout.CaKey, key.ExportPkcs8PrivateKeyPem(), Modes.PrivateFile);
         machine.WriteAtomically(layout.CaCertificate, authority.ExportCertificatePem() + "\n", Modes.File);
+        Wrote = true;
         context.Log.Write(
             $"Made the certificate authority {authority.GetNameInfo(X509NameType.SimpleName, false)}, until {AuthorityAssessment.Date(authority.NotAfter)}, "
             + $"SHA-256 {ControllerCertificates.Fingerprint(authority)}: clients trust {layout.CaCertificate}.");
         return Task.CompletedTask;
+    }
+
+    /// <summary>True once the step has made a new CA.</summary>
+    public bool Wrote { get; private set; }
+
+    /// <summary>True when the step would make a new CA (not only set its files' modes).</summary>
+    public bool WillWrite(InstallContext context)
+    {
+        using var assessment = Assess(context);
+        return assessment.Verdict is AuthorityVerdict.Missing or AuthorityVerdict.Remake;
     }
 
     private AuthorityAssessment Assess(InstallContext context)

@@ -78,6 +78,7 @@ public static class PlanBuilder
         var steps = new List<PlanStep>();
         var layout = ControllerLayout.For(machine);
         IReadOnlyList<ApiKeyAllocation> keys = [];
+        CertificateStep? certificate = null;
 
         // The kiosk installed on its own brings the recorded controller along: the controller gives it a key, and is
         // deployed again to read one that is new. The first admin and an import were done once, and are not again.
@@ -115,7 +116,7 @@ public static class PlanBuilder
             AddFolder(steps, layout.Data, Modes.Folder, "the controller's data");
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
-            var certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
+            certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
             keys = AllocateKeys(machine, survey, layout, roles);
             steps.AddRange(keys.Select(key => new ApiKeyStep(layout, key)));
             var camera = CameraSteps.For(layout, rig, settings.Camera);
@@ -151,7 +152,9 @@ public static class PlanBuilder
                 answers.Kiosk!,
                 keys.First(key => key.Use == ApiKeyUse.Kiosk),
                 keys.First(key => key.Use == ApiKeyUse.Admin),
-                controller!.FirstAdmin));
+                controller!.FirstAdmin,
+                certificate,
+                steps.OfType<CertificateAuthorityStep>().SingleOrDefault()));
         }
 
         if (roles.Contains(InstallRole.Cli))
