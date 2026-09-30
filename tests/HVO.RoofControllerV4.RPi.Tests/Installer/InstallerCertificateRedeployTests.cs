@@ -195,6 +195,59 @@ public sealed class InstallerCertificateRedeployTests
     }
 
     [TestMethod]
+    public async Task Renew_WhenTheReleaseCannotBeRead_SaysTheCertificateIsInPlace_AndHowToFinish()
+    {
+        using var pi = await InstalledAsync();
+        pi.Downloads.Clear();
+
+        var run = await pi.RunAsync("cert", "--renew", "--redeploy");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Output.Should().Contain("Changing file /etc/hvo-roof/https/roof-controller.pfx: done.");
+        run.Error.Should().Contain("The controller was not redeployed: The installer could not get release.json for 4.0.0")
+            .And.Contain("give their folder: --release DIR.")
+            .And.Contain("The certificate is in place; the log is /var/log/hvo-roof-install.log. To serve it, run sudo hvo-roof-install cert --redeploy once the roof is idle.");
+        pi.Deploys.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task Renew_WithAReleaseFolder_RedeploysFromIt_AndSaysToUseItAgain()
+    {
+        using var pi = await InstalledAsync();
+        pi.Downloads.Clear();
+        pi.Downloaded.Clear();
+        pi.Write("/root/release files/release.json", FakeMachine.ReleaseJson());
+        var idle = pi.StatusJson;
+        pi.StatusJson = Moving;
+
+        var moving = await pi.RunAsync("cert", "--renew", "--redeploy", "--release", "/root/release files");
+
+        moving.ExitCode.Should().Be((int)InstallerExitCode.Refused, moving.ToString());
+        moving.Output.Should().EndWith("To serve it, run sudo hvo-roof-install cert --redeploy --release '/root/release files' once the roof is idle.\n");
+
+        pi.StatusJson = idle;
+        var run = await pi.RunAsync("cert", "--redeploy", "--release", "/root/release files");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().EndWith("The controller serves the new certificate.\n");
+        pi.Deploys.Should().HaveCount(2);
+        pi.Downloaded.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task AReleaseFolderThatIsNotThere_IsAUsageError()
+    {
+        using var pi = await InstalledAsync();
+        var before = pi.Snapshot();
+
+        var run = await pi.RunAsync("cert", "import", "/root/their.pfx", "--release", "/root/nowhere");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Usage, run.ToString());
+        run.Error.Should().Contain("There is no folder /root/nowhere for --release.");
+        pi.Snapshot().Should().Equal(before);
+    }
+
+    [TestMethod]
     public async Task Renew_ForAStoppedController_SaysItServesItWhenItStarts()
     {
         using var pi = await InstalledAsync();

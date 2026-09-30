@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
 using FluentAssertions;
@@ -87,6 +88,19 @@ public sealed partial class InstallerDocsTests
         shown.Should().BeEquivalentTo(drawn, "docs/install.md shows each screenshot once");
     }
 
+    [TestMethod]
+    public async Task ThePlanExample_IsWhatTheInstallerPrints()
+    {
+        var example = PlanExample().Match(Page);
+        example.Success.Should().BeTrue("docs/install.md shows --plan for a test rig");
+        using var rig1 = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "rig1", userName: "roy");
+        var answers = rig1.WriteAnswers(InstallAnswers.Parse(JsonBlock().Matches(Page)[1].Groups[1].Value), "rig.json");
+
+        var run = await rig1.RunAsync("--plan", "--answers", answers);
+
+        (run.Output + run.Error).Should().Be(example.Groups[1].Value.Replace("rig.json", answers, StringComparison.Ordinal));
+    }
+
     [GeneratedRegex(@"^\| (\d+) \|", RegexOptions.Multiline)]
     private static partial Regex ExitCodeRow();
 
@@ -95,6 +109,9 @@ public sealed partial class InstallerDocsTests
 
     [GeneratedRegex(@"\.Render\(TestContext, ""([^""]+)""\)")]
     private static partial Regex RenderCall();
+
+    [GeneratedRegex(@"```text\n\$ hvo-roof-install --plan --answers rig\.json\n(.*?)```", RegexOptions.Singleline)]
+    private static partial Regex PlanExample();
 
     [GeneratedRegex(@"\]\(images/install/([^)]+)\.svg\)")]
     private static partial Regex Screenshot();

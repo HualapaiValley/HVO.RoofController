@@ -1,6 +1,7 @@
 using System.CommandLine;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
+using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
@@ -38,6 +39,7 @@ internal static class CertificateCommands
             Description = "Make a new certificate authority and issue the certificate from it. Every client must then trust the new CA."
         };
         var (redeploy, noRedeploy) = RedeployOptions();
+        var release = Installer.ReleaseOption("Redeploy the controller from the release");
         var cert = new Command(
             "cert",
             "Checks the controller's HTTPS certificate and makes or renews what needs it: the CA, the certificate file's password "
@@ -48,9 +50,17 @@ internal static class CertificateCommands
         cert.Options.Add(newCa);
         cert.Options.Add(redeploy);
         cert.Options.Add(noRedeploy);
+        cert.Options.Add(release);
         cert.SetAction((parseResult, token) => Installer.GuardAsync(
             host,
-            () => RenewAsync(host, parseResult.GetValue(plan), parseResult.GetValue(renew), parseResult.GetValue(newCa), Choice(parseResult, redeploy, noRedeploy), token),
+            () => RenewAsync(
+                host,
+                parseResult.GetValue(plan),
+                parseResult.GetValue(renew),
+                parseResult.GetValue(newCa),
+                Choice(parseResult, redeploy, noRedeploy),
+                Installer.Release(host, parseResult.GetValue(release)),
+                token),
             token));
 
         var show = new Command("show", "Shows the controller's certificate and CA: what they are for, until when, and their SHA-256 fingerprints. Changes nothing.");
@@ -69,6 +79,7 @@ internal static class CertificateCommands
         };
         var importPlan = new Option<bool>("--plan") { Description = "Check the certificate and print what it would change, and change nothing." };
         var (importRedeploy, importNoRedeploy) = RedeployOptions();
+        var importRelease = Installer.ReleaseOption("Redeploy the controller from the release");
         var import = new Command(
             "import",
             "Puts your own certificate in place for the controller, with its chain, and records that the controller serves your own. "
@@ -80,6 +91,7 @@ internal static class CertificateCommands
         import.Options.Add(importPlan);
         import.Options.Add(importRedeploy);
         import.Options.Add(importNoRedeploy);
+        import.Options.Add(importRelease);
         import.SetAction((parseResult, token) => Installer.GuardAsync(
             host,
             () => ImportAsync(
@@ -89,6 +101,7 @@ internal static class CertificateCommands
                 parseResult.GetValue(passwordFile),
                 parseResult.GetValue(importPlan),
                 Choice(parseResult, importRedeploy, importNoRedeploy),
+                Installer.Release(host, parseResult.GetValue(importRelease)),
                 token),
             token));
         cert.Subcommands.Add(import);
@@ -116,12 +129,12 @@ internal static class CertificateCommands
     /// <c>cert</c>: the controller's certificate, checked and made or renewed: as recorded, or with the defaults when nothing
     /// is recorded yet (a controller the deploy script runs, or one not yet installed).
     /// </summary>
-    private static async Task<int> RenewAsync(InstallerHost host, bool planOnly, bool renew, bool newCa, RedeployChoice redeploy, CancellationToken cancellationToken)
+    private static async Task<int> RenewAsync(InstallerHost host, bool planOnly, bool renew, bool newCa, RedeployChoice redeploy, ReleaseSource release, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         RefuseRootOnMac(machine, "cert");
         var log = planOnly || NeedsRoot(machine) ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time);
-        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, release, cancellationToken).ConfigureAwait(false);
         Installer.WriteWarnings(host, session);
         var record = RecordedOrRefuse(machine, session.Survey)?.Record;
         RefuseRedeployUnrecorded(record, redeploy);
@@ -208,12 +221,20 @@ internal static class CertificateCommands
     }
 
     /// <summary><c>cert import FILE</c>: the person's own certificate, checked and put in place.</summary>
-    private static async Task<int> ImportAsync(InstallerHost host, string file, string? keyFile, string? passwordFile, bool planOnly, RedeployChoice redeploy, CancellationToken cancellationToken)
+    private static async Task<int> ImportAsync(
+        InstallerHost host,
+        string file,
+        string? keyFile,
+        string? passwordFile,
+        bool planOnly,
+        RedeployChoice redeploy,
+        ReleaseSource release,
+        CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         RefuseRootOnMac(machine, "cert import FILE");
         var log = planOnly || NeedsRoot(machine) ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time);
-        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, release, cancellationToken).ConfigureAwait(false);
         RefuseWithoutRoot(machine, planOnly, "cert import FILE");
         var recorded = RecordedOrRefuse(machine, session.Survey);
         RefuseRedeployUnrecorded(recorded?.Record, redeploy);
@@ -318,7 +339,8 @@ internal static class CertificateCommands
     {
         var machine = session.Machine;
         var sudo = ControllerLayout.For(machine) == ControllerLayout.System ? "sudo " : string.Empty;
-        var retry = $"{sudo}{Installer.CommandName} cert --redeploy";
+        string[] again = session.Release.FolderPath is { } folder ? ["cert", "--redeploy", "--release", folder] : ["cert", "--redeploy"];
+        var retry = sudo + new CommandLine(Installer.CommandName, again);
         var ok = (int)InstallerExitCode.Success;
         var notDone = choice == RedeployChoice.Yes ? (int)InstallerExitCode.Refused : ok;
         var container = await MachineSurveyor.SurveyContainerAsync(machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
@@ -337,7 +359,17 @@ internal static class CertificateCommands
 
         var plan = PlanBuilder.BuildRedeploy(machine, session.Survey, roles, settings, certificate);
         var controller = plan.Steps.OfType<ControllerStep>().Single();
-        var checkedPlan = await plan.CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
+        CheckedPlan checkedPlan;
+        try
+        {
+            checkedPlan = await plan.CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InstallerException error)
+        {
+            // Such as a release.json it could not get: the certificate is in place all the same.
+            throw NotRedeployed(error, session, retry);
+        }
+
         var check = checkedPlan.Steps.Single(step => step.Step == controller).Check;
         if (!checkedPlan.HasChanges && !checkedPlan.IsBlocked)
         {
@@ -411,17 +443,21 @@ internal static class CertificateCommands
             // Each step is checked again just before it runs: a roof that started moving stops the redeploy there.
             await checkedPlan.ApplyAsync(session.Context, host.Out.WriteLine, cancellationToken).ConfigureAwait(false);
         }
-        catch (InstallerException error) when (error is not InstallerRefusedException)
+        catch (InstallerException error)
         {
-            throw new InstallerException(
-                $"The controller was not redeployed: {error.Message}{Environment.NewLine}The certificate is in place; the log is {session.Log.Path}. To serve it, run {retry} once the roof is idle.",
-                error.ExitCode);
+            throw NotRedeployed(error, session, retry);
         }
 
         session.Log.Write($"Redeployed {controller.Target} to serve the new certificate.");
         host.Out.WriteLine("The controller serves the new certificate.");
         return ok;
     }
+
+    private static InstallerException NotRedeployed(InstallerException error, InstallerSession session, string retry)
+        => new(
+            $"The controller was not redeployed: {error.Message}{Environment.NewLine}"
+            + $"The certificate is in place{(session.Log.Path is { } log ? $"; the log is {log}" : string.Empty)}. To serve it, run {retry} once the roof is idle.",
+            error.ExitCode);
 
     // The plan's lines; then, unless only planning, the changes and what is in place after them.
     private static async Task<int> RunPlanAsync(InstallerHost host, InstallerSession session, CheckedPlan checkedPlan, bool planOnly, string what, ControllerSettings settings, CancellationToken cancellationToken)

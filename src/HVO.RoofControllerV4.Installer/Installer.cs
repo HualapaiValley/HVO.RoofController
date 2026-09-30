@@ -50,11 +50,7 @@ public static class Installer
         {
             Description = "Print every folder, file, container, service and port the install would make or change, and change nothing. Uses --answers, or what is installed."
         };
-        var release = new Option<string?>("--release")
-        {
-            Description = $"Read the release (its {ReleaseManifest.FileName}) from this folder, not from GitHub: for a machine that cannot reach GitHub.",
-            HelpName = "DIR"
-        };
+        var release = ReleaseOption("Read the release");
         var version = new Option<bool>("--version")
         {
             Description = "Print the installer's version (the release it installs) and change nothing."
@@ -136,8 +132,26 @@ public static class Installer
         /// <summary><c>--admin-password-file</c> and the others: the files that hold the passwords and PINs.</summary>
         public IReadOnlyDictionary<InstallSecret, string> SecretFiles { get; init; } = new Dictionary<InstallSecret, string>();
 
-        public ReleaseSource Release(InstallerHost host)
-            => ReleaseFolder is { } folder ? ReleaseSource.Folder(Path.GetFullPath(folder, host.Machine.CurrentDirectory)) : ReleaseSource.GitHub();
+        public ReleaseSource Release(InstallerHost host) => Installer.Release(host, ReleaseFolder);
+    }
+
+    /// <summary><c>--release DIR</c>, for the install and for the redeploy after <c>cert</c>.</summary>
+    internal static Option<string?> ReleaseOption(string what) => new("--release")
+    {
+        Description = $"{what} (its {ReleaseManifest.FileName}) from this folder, not from GitHub: for a machine that cannot reach GitHub.",
+        HelpName = "DIR"
+    };
+
+    /// <summary>The release in <c>--release</c>'s <paramref name="folder"/>, or on GitHub. A folder that is not there is a usage error.</summary>
+    internal static ReleaseSource Release(InstallerHost host, string? folder)
+    {
+        if (folder is null)
+        {
+            return ReleaseSource.GitHub();
+        }
+
+        var full = Path.GetFullPath(folder, host.Machine.CurrentDirectory);
+        return host.Machine.DirectoryExists(full) ? ReleaseSource.Folder(full) : throw new InstallerUsageException($"There is no folder {folder} for --release.");
     }
 
     private static Task<int> RunAsync(InstallerHost host, RunOptions options, CancellationToken cancellationToken)
@@ -145,11 +159,8 @@ public static class Installer
             host,
             () =>
             {
-                if (options.ReleaseFolder is { } folder && !host.Machine.DirectoryExists(Path.GetFullPath(folder, host.Machine.CurrentDirectory)))
-                {
-                    throw new InstallerUsageException($"There is no folder {folder} for --release.");
-                }
-
+                // A --release folder that is not there is a usage error before anything else.
+                _ = options.Release(host);
                 if (options.PlanOnly)
                 {
                     return PlanAsync(host, options, cancellationToken);

@@ -19,13 +19,14 @@ anything, from an answers file that the wizard saves.
 > - offers only the roles the machine can have, and refuses the rest;
 > - works out and shows the plan;
 > - saves answers files;
-> - makes the controller's folders, its certificate authority and its HTTPS certificate ([Certificates](#certificates));
+> - makes the controller's folders, its keys, its certificate authority and its HTTPS certificate
+>   ([Certificates](#certificates));
+> - deploys the controller, or a test rig with its HAT emulator, from the release's images by their digests, through
+>   the deploy script ([Deploying](deployment.md#deploying-with-the-script)), and adds the first admin;
 > - writes the install record.
 >
-> It adopts a controller that the deploy script already runs ([Deploying](deployment.md#deploying-with-the-script)).
-> The later installer issues make the rest:
+> It adopts a controller that the deploy script already runs. The later installer issues make the rest:
 >
-> - #69: deploying the controller and a rig;
 > - #70: the kiosk;
 > - #71: `hvo-roof` and the Mac app.
 >
@@ -72,9 +73,19 @@ The installer runs as root for the machine's roles, and as you for your own ([Ro
 It refuses to mix the two in one run, and refuses the wrong one for a role. `--plan` does not need root, but planning
 the controller or a rig needs Docker access (on Linux, root or the `docker` group).
 
-It asks for no secret, except the password of a certificate you import, which it never shows, keeps or logs. Keys are
-made on the machine, straight into files that only their user can read. From #69, a person types the first
-administrator's password. An answers file, the plan, the record and the log never hold a secret.
+Keys are made on the machine, straight into files that only their user can read, and never shown. The only secrets a
+person gives are the first admin's password and PIN, the camera's password, and the password of a certificate you
+import ([Passwords and PINs](#passwords-and-pins)). The installer never shows, keeps or logs one. An answers file, the
+plan, the record and the log never hold a secret.
+
+### The release it installs
+
+Each installer installs its own release: `--version` names it. It reads that release's `release.json` from GitHub,
+which names the controller's and the HAT emulator's images on GHCR, each by its digest. Docker pulls those images by
+their digests, and no others: the deploy script deploys the controller's image only when Docker reports that digest.
+
+For a machine that cannot reach GitHub, download `release.json` from the release's page on a machine that can, and give
+its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 
 ### Exit codes
 
@@ -206,8 +217,11 @@ Choosing HTTP asks you to type `http`, to confirm that keys, session tokens and 
 - **The camera** (the controller only): the Blue Iris server and a user that may only view. Leave the server empty
   to leave the camera as it is. The page reminds you that earlier versions held a Blue Iris credential in their
   source, and that the old user's password must change ([security.md](security.md), "Rotate the Blue Iris credential").
+  The installer writes the camera's settings to the secrets folder, so they take precedence over the camera settings
+  in the web UI, which cannot change them then. Run the installer again to change the camera.
 - **Telemetry:** the OTLP/HTTP endpoint the controller exports to. Empty turns the export off.
-- **Settings from a backup:** the full path of an `appsettings.Local.json`, for a controller that has no settings yet.
+- **Settings from a backup:** the full path of an `appsettings.Local.json`, for a controller that has no settings yet
+  ([Settings from a backup](#settings-from-a-backup)).
 
 ![Step 4: The controller, with the first admin roy and a PIN, the Blue Iris server and its view-only user with the reminder, a telemetry endpoint and a backup's settings](images/install/4-controller.svg)
 
@@ -297,6 +311,7 @@ A rig's `controller` section has no `camera`. It has a `rig` section instead:
 | `controller.camera.baseUrl` | The Blue Iris server the controller shows the camera from, such as `http://192.168.0.4:81`. It must have no path, and no user name or password. | None: the camera is left as it is. |
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
+| `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1`, or the running emulator's |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5`, or the running emulator's |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
@@ -321,6 +336,22 @@ only when a step needs one:
 Without a terminal (`--answers` in a script), give each in a file that only you can read, and the installer reads
 its first line: `--admin-password-file FILE`, `--admin-pin-file FILE` and `--camera-password-file FILE`. When a
 step needs one that was not given, the installer refuses and changes nothing.
+
+### Settings from a backup
+
+`controller.importSettingsFrom`, the wizard's **Settings from a backup**, starts a controller with the settings saved
+from another one. Give the full path of the saved `appsettings.Local.json`, such as a copy from a backup of
+`/etc/hvo-roof/config` ([commissioning.md](commissioning.md#the-settings-file)).
+
+- The installer copies it to `/etc/hvo-roof/config/appsettings.Local.json` as it is, and only while the controller has
+  no settings file there. It never changes the settings of a controller that has them: change those in the web UI, or
+  with `hvo-roof settings`.
+- A controller that runs is redeployed to read them.
+- The installer checks that the file holds a JSON object, and refuses the install before anything changes when it
+  does not. The deploy script's [deployment check](deployment.md#the-deployment-check) then reads it as the
+  controller will, before the controller is replaced.
+- The path is not recorded in the install record, since an import is done once. Running the same answers again
+  changes nothing.
 
 ## The plan
 
@@ -351,15 +382,27 @@ Files
   create     /etc/hvo-roof/ca.crt                          the certificate authority clients trust (its key stays in /etc/hvo-roof/ca) (a new CA, which may issue only for names in local, localhost, rig1, and private addresses)
   create     /etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password  the certificate file's password (random, never shown) (0600)
   create     /etc/hvo-roof/https/roof-controller.pfx       the controller's certificate, from its CA, for rig1 (for 3 names and 3 addresses, until 2027-11-02)
+  create     /etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__0__Key  the installer's operator key: the deploy script's Status and verified Stop (never shown) (installer-operator (RoofOperator): a new random key, never shown)
+  create     /etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__1__Key  the installer's admin key: adds the first admin (never shown) (installer-admin (RoofAdmin): a new random key, never shown)
+  create     /etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__2__Key  the web UI's own key for Stop (never shown) (web-ui-stop (RoofViewer): a new random key, never shown)
+  create     /etc/hvo-roof/secrets/BlueIris__BaseUrl       the camera the controller shows: the HAT emulator's (http://hat-emulator:5290)
+  create     /etc/hvo-roof/secrets/BlueIris__Password      the camera's password: none (empty)
+  create     /etc/hvo-roof/secrets/BlueIris__UserName      the camera's user: none, the emulator asks for none (empty)
   create     /etc/hvo-roof/install.json                    the install record: the roles, choices and versions (no secrets) (0644)
+Users
+  create     tester                                        the first admin: signs in to the web UI and adds everyone else (added through the controller's API as RoofAdmin, with a password)
+Packages
+  info       bash, curl, setsid or perl, jq or python3     what the deploy script runs (found bash, curl, setsid, jq)
 Containers
-  create     hat-emulator                                  the HAT emulator: the roof, drive and limit switches the rig drives (deployed by digest with the deploy script)
-  create     roof-controller                               the controller, against the HAT emulator (deployed by digest with the deploy script)
+  create     hat-emulator                                  the HAT emulator: the roof, drive and limit switches the rig drives (release 4.0.0's image by digest, on the hvo-emulator network, its control API on 127.0.0.1:5290)
+  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script)
 Ports
   info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)
   info       8088                                          the web UI (free; roof-controller will listen on it)
 
-14 to create, 0 to change, 0 unchanged.
+21 to create, 0 to change, 0 unchanged.
+
+The install asks for the first admin's password (or give it with --admin-password-file FILE).
 Installing a test rig needs root: run the installer with sudo.
 ```
 
@@ -473,7 +516,8 @@ the new one fails a check. A controller that is stopped serves the new certifica
 deployed yet serves it once `hvo-roof-install` deploys it.
 
 `cert --redeploy` also redeploys a controller that serves another certificate than the one in place, such as after a
-renewal that was not redeployed. It exits with code 3 when it could not redeploy, because the roof moves or more than
+renewal that was not redeployed. On a machine that cannot reach GitHub, give the release's folder with `--release DIR`,
+as for an install ([The release it installs](#the-release-it-installs)). It exits with code 3 when it could not redeploy, because the roof moves or more than
 the certificate would change. The certificate is in place either way.
 
 With nothing recorded, such as a controller the deploy script runs, it never redeploys, and `--redeploy` is refused
