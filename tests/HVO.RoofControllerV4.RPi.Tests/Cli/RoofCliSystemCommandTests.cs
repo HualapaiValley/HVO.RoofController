@@ -612,6 +612,7 @@ public sealed class RoofCliSystemCommandTests
     {
         using var host = RoofClientApiTests.CreateHost();
         using var rig = new CliRig(host) { Interactive = true };
+        rig.Input.Enqueue(string.Empty);
         rig.Input.Enqueue(CertificateHex);
         rig.Input.Enqueue(string.Empty);
 
@@ -619,6 +620,7 @@ public sealed class RoofCliSystemCommandTests
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         rig.Prompts.Should().Equal(
+            ("CA certificate file, when a private CA such as the installer's issued the controller's certificate (Enter keeps none; 'none' removes it): ", false),
             ("Certificate SHA-256, for a self-signed certificate (Enter keeps none; 'none' removes it): ", false),
             ("API key (Enter to skip, and sign in later with 'hvo-roof login NAME'): ", true));
         result.Out.Should().Contain("https://localhost/, certificate pinned.");

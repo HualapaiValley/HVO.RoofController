@@ -1299,8 +1299,8 @@ public sealed class RoofTerminalUiTests
         setup.Describe().Should().Contain("Connection saves the controller's address");
 
         Click(tui, "Connection");
-        Fill(tui, "http://localhost/", string.Empty, TestApiKeys.Admin);
-        tui.Ui.Panel!.Fields[2].Secret.Should().BeTrue("the API key is not shown as it is typed");
+        Fill(tui, "http://localhost/", string.Empty, string.Empty, TestApiKeys.Admin);
+        tui.Ui.Panel!.Fields[3].Secret.Should().BeTrue("the API key is not shown as it is typed");
         tui.Ui.Panel.Press("Save and check");
         tui.WaitIdle("the check", () => setup.LastCheck is not null);
 
@@ -1345,12 +1345,52 @@ public sealed class RoofTerminalUiTests
         using var tui = new TuiDriver(rig);
 
         Click(tui, "Connection");
-        Fill(tui, "roof.local", string.Empty, string.Empty);
+        Fill(tui, "roof.local", string.Empty, string.Empty, string.Empty);
         tui.Ui.Panel!.Press("Save and check");
 
         tui.Ui.Panel.Should().NotBeNull("the prompt stays open to fix the address");
         tui.Ui.Panel!.Error.Should().Contain("'roof.local' is not a controller address.");
         File.Exists(rig.CredentialsPath).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Setup_Connection_ACaReplacesTheSavedPin_ButNotOneTypedWithIt()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        var pin = new string('A', 64);
+        RoofCredentialStore.Save(rig.CredentialsPath, new RoofStoredCredentials
+        {
+            Controller = ClientTestSupport.BaseAddress,
+            CertificateSha256 = pin,
+            ApiKey = TestApiKeys.Admin
+        });
+        using var authority = TestCertificates.CreateAuthority("HVO Roof test CA");
+        var file = Path.Combine(rig.Directory, "ca.pem");
+        File.WriteAllText(file, RoofCertificateAuthority.ToPem(authority));
+        using var tui = new TuiDriver(rig);
+        tui.Press(Key.F5);
+        var setup = (RoofUiSetupPage)tui.Ui.CurrentPage;
+
+        Click(tui, "Connection");
+        tui.Ui.Panel!.Fields[2].Text.Should().Be(pin, "the saved pin is shown");
+        tui.Ui.Panel.Fields[1].Text = file;
+        tui.Ui.Panel.Press("Save and check");
+        tui.WaitIdle("the check", () => setup.LastCheck is not null);
+
+        tui.Ui.Panel.Should().BeNull();
+        tui.Ui.Message.Should().Contain("The saved certificate pin was removed: the CA is trusted instead.");
+        rig.Stored!.CaCertificate.Should().Be(RoofCertificateAuthority.ToPem(authority));
+        rig.Stored.CertificateSha256.Should().BeNull();
+        setup.Describe().Should().Contain("Certificate: issued by the CA HVO Roof test CA (only that CA is trusted)");
+
+        Click(tui, "Connection");
+        Fill(tui, ClientTestSupport.BaseAddress.ToString(), file, new string('B', 64), string.Empty);
+        tui.Ui.Panel!.Press("Save and check");
+
+        tui.Ui.Panel.Should().NotBeNull("a pin typed with a CA is refused");
+        tui.Ui.Panel!.Error.Should().StartWith("Give a certificate SHA-256 or a CA certificate, not both");
+        rig.Stored!.CertificateSha256.Should().BeNull();
     }
 
     [TestMethod]

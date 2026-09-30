@@ -112,7 +112,12 @@ public static partial class RoofCli
         {
             var pin = new Option<string?>("--certificate-sha256")
             {
-                Description = "The SHA-256 of the controller's self-signed certificate, 64 hex digits (colons allowed); 'none' removes a saved one."
+                Description = "The SHA-256 of the controller's self-signed certificate, 64 hex digits (colons allowed); 'none' removes a saved one. Replaces a saved CA certificate."
+            };
+            var authority = new Option<string?>("--ca-certificate")
+            {
+                Description = "A file holding the private CA that issued the controller's certificate, such as the installer's (PEM or DER): only that CA is trusted, and the certificate can be reissued under it with no change here. 'none' removes a saved one. Replaces a saved pin.",
+                HelpName = "file"
             };
             var apiKey = new Option<bool>("--api-key")
             {
@@ -124,9 +129,10 @@ public static partial class RoofCli
             };
             var command = new Command(
                 "setup",
-                "Save the controller's address, an API key and the certificate pin in the credentials file, check the connection, and add the first admin person. Asks for what the options leave out when run in a terminal.")
+                "Save the controller's address, an API key and how its certificate is checked (a pin or a CA) in the credentials file, check the connection, and add the first admin person. Asks for what the options leave out when run in a terminal.")
             {
                 pin,
+                authority,
                 apiKey,
                 createAdmin
             };
@@ -137,7 +143,7 @@ public static partial class RoofCli
                 _ = RoofCredentialStore.FromEnvironment(context.Host.GetEnvironmentVariable);
                 var setup = new RoofCliSetup(context);
                 var adminName = parseResult.GetValue(createAdmin) is { } requested ? RequireName(requested) : null;
-                var saved = setup.Prompt(parseResult.GetValue(pin), parseResult.GetValue(apiKey));
+                var saved = setup.Prompt(parseResult.GetValue(pin), parseResult.GetValue(authority), parseResult.GetValue(apiKey));
                 WriteSetupLines(context, saved.Notes);
                 var check = await setup.CheckAsync(saved.Connection, cancellationToken).ConfigureAwait(false);
                 WriteSetupLines(context, check.Lines);
@@ -163,6 +169,7 @@ public static partial class RoofCli
                         controller = saved.Connection.Controller,
                         credentialsFile = context.CredentialsPath,
                         certificatePinned = saved.Connection.CertificateSha256 is not null,
+                        caCertificate = saved.Connection.CaCertificate is { } trusted ? RoofCertificateAuthority.Describe(trusted) : null,
                         credential = saved.Connection.Credential?.ToString(),
                         reachable = check.Reachable,
                         live = check.Live,
@@ -202,8 +209,8 @@ public static partial class RoofCli
 internal sealed record RoofCliSetupResult(RoofCliConnection Connection, IReadOnlyList<string> Notes);
 
 /// <summary>
-/// What <c>hvo-roof setup</c> and the terminal interface's Setup page share: saving the address, key and pin, checking
-/// the connection, and adding the first admin person.
+/// What <c>hvo-roof setup</c> and the terminal interface's Setup page share: saving the address, key, and pin or CA,
+/// checking the connection, and adding the first admin person.
 /// </summary>
 internal sealed class RoofCliSetup(RoofCliContext context)
 {
@@ -230,7 +237,7 @@ internal sealed class RoofCliSetup(RoofCliContext context)
     /// <summary>
     /// The command line's setup: asks for what the options leave out (in a terminal), then writes the credentials file.
     /// </summary>
-    public RoofCliSetupResult Prompt(string? pinOption, bool readApiKey)
+    public RoofCliSetupResult Prompt(string? pinOption, string? authorityOption, bool readApiKey)
     {
         var stored = Load();
         var interactive = context.Host.IsInteractive && !context.Json;
@@ -249,19 +256,41 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         controller ??= stored.Controller ?? throw new RoofCliNotConfiguredException(
             $"No controller address. Give it with --controller, for example '{RoofCli.CommandName} setup --controller https://roof.local:5001/'.");
 
+        // A pin and a CA are never both saved: the one given replaces the other.
         var certificate = stored.CertificateSha256;
-        if (pinOption is not null)
+        var authority = stored.CaCertificate;
+        if (pinOption is not null || authorityOption is not null)
         {
-            certificate = ParsePin(pinOption);
+            var givenPin = pinOption is null ? null : ParsePin(pinOption);
+            var givenAuthority = authorityOption is null ? null : ParseCaCertificate(authorityOption);
+            if (givenPin is not null && givenAuthority is not null)
+            {
+                throw new RoofCliUsageException(BothRefused);
+            }
+
+            certificate = pinOption is not null ? givenPin : (givenAuthority is null ? certificate : null);
+            authority = authorityOption is not null ? givenAuthority : (givenPin is null ? authority : null);
         }
         else if (interactive && controller.Scheme == Uri.UriSchemeHttps)
         {
             var text = context.Host.ReadLine(
-                $"Certificate SHA-256, for a self-signed certificate (Enter keeps {(certificate is null ? "none" : "the saved one")}; 'none' removes it): ",
+                $"CA certificate file, when a private CA such as the installer's issued the controller's certificate (Enter keeps {(authority is null ? "none" : "the saved one")}; 'none' removes it): ",
                 false)?.Trim();
             if (!string.IsNullOrEmpty(text))
             {
-                certificate = ParsePin(text);
+                authority = ParseCaCertificate(text);
+                certificate = authority is null ? certificate : null;
+            }
+
+            if (authority is null)
+            {
+                text = context.Host.ReadLine(
+                    $"Certificate SHA-256, for a self-signed certificate (Enter keeps {(certificate is null ? "none" : "the saved one")}; 'none' removes it): ",
+                    false)?.Trim();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    certificate = ParsePin(text);
+                }
             }
         }
 
@@ -279,15 +308,20 @@ internal sealed class RoofCliSetup(RoofCliContext context)
                 true)?.Trim();
         }
 
-        return Save(controller, certificate, string.IsNullOrEmpty(apiKey) ? null : apiKey);
+        return Save(controller, certificate, authority, string.IsNullOrEmpty(apiKey) ? null : apiKey);
     }
 
     /// <summary>
-    /// Writes the credentials file: the address, the certificate pin (null removes it) and, when
-    /// <paramref name="apiKey"/> is given, a new API key. A saved session is kept.
+    /// Writes the credentials file: the address, the certificate pin or the CA certificate as PEM (null removes each;
+    /// not both) and, when <paramref name="apiKey"/> is given, a new API key. A saved session is kept.
     /// </summary>
-    public RoofCliSetupResult Save(Uri controller, string? certificateSha256, string? apiKey)
+    public RoofCliSetupResult Save(Uri controller, string? certificateSha256, string? caCertificate, string? apiKey)
     {
+        if (certificateSha256 is not null && caCertificate is not null)
+        {
+            throw new RoofCliUsageException(BothRefused);
+        }
+
         if (apiKey is not null)
         {
             try
@@ -300,14 +334,33 @@ internal sealed class RoofCliSetup(RoofCliContext context)
             }
         }
 
+        var authority = context.ReadCaCertificate(caCertificate);
         var stored = Load();
-        var saved = stored with { Controller = controller, CertificateSha256 = certificateSha256, ApiKey = apiKey ?? stored.ApiKey };
+        var saved = stored with
+        {
+            Controller = controller,
+            CertificateSha256 = certificateSha256,
+            CaCertificate = caCertificate,
+            ApiKey = apiKey ?? stored.ApiKey
+        };
         RoofCredentialStore.Save(context.CredentialsPath, saved);
 
+        var trust = certificateSha256 is not null ? ", certificate pinned"
+            : authority is not null ? $", CA {RoofCertificateAuthority.Describe(authority)} trusted"
+            : string.Empty;
         var notes = new List<string>
         {
-            $"Saved in {context.CredentialsPath}: {controller}{(certificateSha256 is null ? string.Empty : ", certificate pinned")}{(saved.ApiKey is null ? string.Empty : ", API key")}."
+            $"Saved in {context.CredentialsPath}: {controller}{trust}{(saved.ApiKey is null ? string.Empty : ", API key")}."
         };
+        if (authority is not null && stored.CertificateSha256 is not null)
+        {
+            notes.Add("The saved certificate pin was removed: the CA is trusted instead.");
+        }
+        else if (certificateSha256 is not null && stored.CaCertificate is not null)
+        {
+            notes.Add("The saved CA certificate was removed: the certificate is pinned instead.");
+        }
+
         if (apiKey is not null && stored.Session is { } session)
         {
             notes.Add($"The saved session{(session.Name is null ? string.Empty : $" for {session.Name}")} is used before the key; sign out to use the key.");
@@ -315,7 +368,7 @@ internal sealed class RoofCliSetup(RoofCliContext context)
 
         var credential = saved.ToCredential();
         return new RoofCliSetupResult(
-            new RoofCliConnection(controller, credential, certificateSha256, credential is null ? "none" : context.CredentialsPath),
+            new RoofCliConnection(controller, credential, certificateSha256, authority, credential is null ? "none" : context.CredentialsPath),
             notes);
     }
 
@@ -407,8 +460,8 @@ internal sealed class RoofCliSetup(RoofCliContext context)
     }
 
     /// <summary>
-    /// Signs in with a password over <paramref name="connection"/>'s address and pin, and saves the session in the
-    /// credentials file beside the address and pin.
+    /// Signs in with a password over <paramref name="connection"/>'s address and pin or CA, and saves the session in
+    /// the credentials file beside them.
     /// </summary>
     public async Task<RoofSessionCredential> SignInAsync(RoofCliConnection connection, string name, string password, CancellationToken cancellationToken)
     {
@@ -419,6 +472,7 @@ internal sealed class RoofCliSetup(RoofCliContext context)
         {
             Controller = connection.Controller,
             CertificateSha256 = connection.CertificateSha256,
+            CaCertificate = connection.CaCertificate is { } authority ? RoofCertificateAuthority.ToPem(authority) : null,
             Session = new RoofStoredSession(session.Token, session.Name, session.Role, session.SessionId, session.ExpiresUtc)
         });
         return session;
@@ -495,13 +549,52 @@ internal sealed class RoofCliSetup(RoofCliContext context)
             : throw new RoofCliUsageException("The certificate SHA-256 must be 64 hex digits (colons allowed), or 'none'.");
     }
 
+    /// <summary>
+    /// The CA certificate in the file at <paramref name="text"/>, as PEM, checked to be a CA's; 'none' is null.
+    /// </summary>
+    internal static string? ParseCaCertificate(string text)
+    {
+        var path = text.Trim();
+        if (string.Equals(path, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var authority = RoofCertificateAuthority.Load(path);
+            return RoofCertificateAuthority.ToPem(authority);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            throw new RoofCliUsageException($"The CA certificate cannot be used: {ex.Message}");
+        }
+    }
+
+    private const string BothRefused
+        = "Give a certificate SHA-256 or a CA certificate, not both: the pin is for a self-signed certificate, the CA for one it issued.";
+
+    // What to save so the controller's certificate is accepted, when that is what went wrong. A certificate that has
+    // expired or does not name the address needs the controller's certificate reissued, which the refusal says.
     private static string PinHint(Exception error)
     {
+        switch (RoofCertificateRefusedException.Find(error)?.Reason)
+        {
+            case RoofCertificateRefusal.NotPinned:
+                return " If the controller's certificate was replaced on purpose, save its SHA-256 with --certificate-sha256, or the CA that issued it with --ca-certificate.";
+            case RoofCertificateRefusal.OtherAuthority:
+                return " If the controller's CA was replaced on purpose, save the new one with --ca-certificate.";
+            case null:
+                break;
+            default:
+                return string.Empty;
+        }
+
         for (var current = error; current is not null; current = current.InnerException)
         {
             if (current is System.Security.Authentication.AuthenticationException)
             {
-                return " The certificate was not accepted: for a self-signed certificate, save its SHA-256 with --certificate-sha256.";
+                return " The certificate was not accepted: save the CA that issued it with --ca-certificate, or, for a self-signed certificate, its SHA-256 with --certificate-sha256.";
             }
         }
 

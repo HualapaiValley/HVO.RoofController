@@ -130,9 +130,9 @@ public static class RoofText
 
     /// <summary>
     /// Operator-facing text for a failed call. Messages of unexpected exceptions are not shown; they may carry internals
-    /// that belong in a log.
+    /// that belong in a log. A certificate refused by the pin or the CA says why.
     /// </summary>
-    public static string DescribeFailure(Exception? error) => error switch
+    public static string DescribeFailure(Exception? error) => RoofCertificateRefusedException.Find(error) is { } refused ? refused.Message : error switch
     {
         RoofApiException refusal => refusal.Message,
         TimeoutException => TimedOut,

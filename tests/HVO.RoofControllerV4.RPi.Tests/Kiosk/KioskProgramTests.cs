@@ -1,7 +1,9 @@
 using System.Text.RegularExpressions;
 using Avalonia.Platform;
 using FluentAssertions;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Kiosk;
+using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Web;
 using HVO.RoofControllerV4.Screens;
 using Microsoft.Extensions.Logging;
@@ -173,6 +175,9 @@ public sealed partial class KioskProgramTests
     [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\" } }", "--Kiosk:ControllerUrl=", "Kiosk:ControllerUrl *", DisplayName = "an empty controller URL")]
     [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\" } }", "--Kiosk:ServerCertificateSha256=not-a-hash", "Kiosk:ServerCertificateSha256 *", DisplayName = "a pin that is not a hash")]
     [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}.missing\" } }", "", "Kiosk:DeviceKeyFile names *, which could not be read*", DisplayName = "no device key file")]
+    [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\", \"ServerCaCertificateFile\": \"{key}.ca\" } }", "", "Kiosk:ServerCaCertificateFile names *device-key.ca, which could not be read (FileNotFoundException). It must be readable by the kiosk's user.", DisplayName = "no CA certificate file")]
+    [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\", \"ServerCaCertificateFile\": \"{key}\" } }", "", "Kiosk:ServerCaCertificateFile cannot be used: *device-key does not hold a certificate in PEM or DER form.", DisplayName = "a CA certificate file that is not a certificate")]
+    [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\", \"ServerCaCertificateFile\": \"{key}\" } }", "--Kiosk:ServerCertificateSha256=" + Pin, "Kiosk:ServerCaCertificateFile and Kiosk:ServerCertificateSha256 are both set. Set one: *", DisplayName = "a CA and a pin")]
     public void TheKiosk_ExitsWithTheSettingsCode_AndSaysWhy(string? settings, string arg, string reason)
     {
         using var directory = new WebTestSupport.TempDirectory();
@@ -233,11 +238,48 @@ public sealed partial class KioskProgramTests
         var options = KioskProgram.ReadOptions(KioskProgram.BuildConfiguration(
             arg.Length > 0 ? [arg, "--Kiosk:DeviceKeyFile=key"] : ["--Kiosk:DeviceKeyFile=key"],
             directory.Path));
-        using var client = KioskProgram.Connect(options, "test-kiosk-key-not-a-real-secret-05", NullLoggerFactory.Instance, error);
+        using var client = KioskProgram.Connect(options, null, "test-kiosk-key-not-a-real-secret-05", NullLoggerFactory.Instance, error);
 
         options.ServerCertificateSha256.Should().BeNull();
         client.Should().NotBeNull();
         error.ToString().Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void TheCaCertificate_IsReadFromTheFileNamed_AndGivenToTheClient()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        using var authority = TestCertificates.CreateAuthority("HVO Roof test CA");
+        var file = directory.File("roof-ca.pem");
+        File.WriteAllText(file, RoofCertificateAuthority.ToPem(authority));
+        File.WriteAllText(directory.File(KioskProgram.SettingsFile), $$"""
+            { "Kiosk": { "ControllerUrl": "https://localhost:8443/", "ServerCaCertificateFile": " {{file}} ", "DeviceKeyFile": "key" } }
+            """);
+        using var error = new StringWriter();
+
+        var options = KioskProgram.ReadOptions(KioskProgram.BuildConfiguration([], directory.Path));
+        using var loaded = KioskCaCertificate.Load(options.ServerCaCertificateFile!);
+        using var client = KioskProgram.Connect(options, loaded, "test-kiosk-key-not-a-real-secret-05", NullLoggerFactory.Instance, error);
+
+        options.ServerCaCertificateFile.Should().Be(file);
+        loaded.RawData.Should().Equal(authority.RawData);
+        client.Should().NotBeNull();
+        error.ToString().Should().BeEmpty();
+        KioskProgram.ReadOptions(KioskProgram.BuildConfiguration(["--Kiosk:ServerCaCertificateFile= "], directory.Path))
+            .ServerCaCertificateFile.Should().BeNull("a blank file name is no CA");
+    }
+
+    [TestMethod]
+    public void ACaCertificateFile_ThatHoldsTheControllersOwnCertificate_StopsTheKiosk()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        using var authority = TestCertificates.CreateAuthority("HVO Roof test CA");
+        using var issued = TestCertificates.Issue(authority);
+        var file = directory.File("roof.pem");
+        File.WriteAllText(file, issued.ExportCertificatePem());
+
+        FluentActions.Invoking(() => KioskCaCertificate.Load(file)).Should().Throw<KioskSettingsException>()
+            .WithMessage($"Kiosk:ServerCaCertificateFile cannot be used: {file} is not a CA certificate: its basic constraints do not say CA.");
     }
 
     [TestMethod]
@@ -246,7 +288,7 @@ public sealed partial class KioskProgramTests
         using var error = new StringWriter();
         var options = new KioskOptions { DeviceKeyFile = "key", ServerCertificateSha256 = "" };
 
-        KioskProgram.Connect(options, "test-kiosk-key-not-a-real-secret-05", NullLoggerFactory.Instance, error).Should().BeNull();
+        KioskProgram.Connect(options, null, "test-kiosk-key-not-a-real-secret-05", NullLoggerFactory.Instance, error).Should().BeNull();
 
         error.ToString().Should().StartWith("The roof kiosk did not start: The certificate pin must be a SHA-256 hash");
     }

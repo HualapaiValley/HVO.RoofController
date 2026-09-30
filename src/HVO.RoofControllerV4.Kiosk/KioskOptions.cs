@@ -23,8 +23,18 @@ public sealed class KioskOptions
     /// </summary>
     public string? DeviceKeyFile { get; set; }
 
-    /// <summary>For an https:// <see cref="ControllerUrl"/> with a self-signed certificate: its SHA-256, in hex.</summary>
+    /// <summary>
+    /// For an https:// <see cref="ControllerUrl"/> with a self-signed certificate: its SHA-256, in hex. Not with
+    /// <see cref="ServerCaCertificateFile"/>.
+    /// </summary>
     public string? ServerCertificateSha256 { get; set; }
+
+    /// <summary>
+    /// For an https:// <see cref="ControllerUrl"/> whose certificate a private CA issued, such as the installer's: a file
+    /// holding the CA's certificate (PEM or DER). Only that CA is trusted, and the controller's certificate can be
+    /// reissued under it with no change here. Not with <see cref="ServerCertificateSha256"/>.
+    /// </summary>
+    public string? ServerCaCertificateFile { get; set; }
 
     /// <summary>How long, in seconds, the kiosk stays unlocked without a touch. Default 120, at most 3600.</summary>
     public int IdleLockSeconds { get; set; } = 120;
@@ -83,6 +93,11 @@ public sealed class KioskOptions
         if (!string.IsNullOrWhiteSpace(ServerCertificateSha256) && !RoofCertificatePin.IsValid(ServerCertificateSha256))
         {
             problems.Add($"{SectionName}:ServerCertificateSha256 must be the certificate's SHA-256: 64 hex digits, colons allowed.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(ServerCertificateSha256) && !string.IsNullOrWhiteSpace(ServerCaCertificateFile))
+        {
+            problems.Add($"{SectionName}:ServerCaCertificateFile and {SectionName}:ServerCertificateSha256 are both set. Set one: the CA that issued the controller's certificate, or the pin of a self-signed one.");
         }
 
         if (string.IsNullOrWhiteSpace(DeviceKeyFile))

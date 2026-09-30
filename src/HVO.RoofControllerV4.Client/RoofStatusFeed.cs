@@ -381,9 +381,8 @@ public sealed class RoofStatusFeed : IAsyncDisposable
                 {
                     http.WebSocketFactory = (context, cancellationToken) => factory(context.Uri, headers, cancellationToken);
                 }
-                else if (_options.ServerCertificateSha256 is { } pin)
+                else if (_options.CertificateValidator is { } validator)
                 {
-                    var validator = RoofCertificatePin.CreateValidator(pin);
                     http.WebSocketConfiguration = socket => socket.RemoteCertificateValidationCallback = validator;
                 }
             })
