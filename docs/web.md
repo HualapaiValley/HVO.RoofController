@@ -157,7 +157,7 @@ A setting that cannot be changed here says why, as the controller gives it.
 
 ![The People page: people, with their roles, and the API keys and sessions tabs](images/web/06-people-desktop.jpg)
 
-An admin adds people and sets their role, password and kiosk PIN, adds and rotates API keys, and ends sessions
+An admin adds people and sets their role, password and [kiosk](kiosk.md) PIN, adds and rotates API keys, and ends sessions
 ([Managing people, keys and sessions](security.md#managing-people-keys-and-sessions)). A new key's secret is shown
 once, as it is created; neither the page nor the controller shows it again.
 

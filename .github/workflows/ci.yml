@@ -23,6 +23,7 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      AVALONIA_TELEMETRY_OPTOUT: 1
       TEST_PROJECT: ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
     defaults:
       run:
@@ -87,8 +88,11 @@ jobs:
 
       # Every unit and API test, including the WebApplicationFactory API tests, runs here. The
       # emulated commissioning scenarios, the browser tests and the soak run in scenarios.yml.
-      # TreatNoTestsAsError fails the step if discovery finds nothing.
+      # TreatNoTestsAsError fails the step if discovery finds nothing. The kiosk's render tests save each screen, as the
+      # touchscreens show it, to HVO_KIOSK_RENDERS_DIR (uploaded below).
       - name: Test
+        env:
+          HVO_KIOSK_RENDERS_DIR: ${{ github.workspace }}/src/TestResults/kiosk-renders
         run: >
           dotnet test "$TEST_PROJECT"
           --no-build -c Debug -v minimal
@@ -132,6 +136,36 @@ jobs:
           file hvo-roof/linux-arm64/hvo-roof | grep -q 'ARM aarch64'
           ./hvo-roof/linux-x64/hvo-roof --version
 
+      # hvo-roof-kiosk as one self-contained file for the Pi (docs/kiosk.md), and for linux-x64 to check that the file
+      # runs: with no device key it refuses its settings (exit 78) before it opens a display.
+      - name: Publish hvo-roof-kiosk
+        run: |
+          for rid in linux-arm64 linux-x64; do
+            dotnet publish HVO.RoofControllerV4.Kiosk -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof-kiosk/$rid"
+            test -x "hvo-roof-kiosk/$rid/hvo-roof-kiosk"
+          done
+          file hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk | grep -q 'ARM aarch64'
+          status=0
+          ./hvo-roof-kiosk/linux-x64/hvo-roof-kiosk 2> kiosk-stderr.txt || status=$?
+          cat kiosk-stderr.txt
+          if [ "$status" -ne 78 ] || ! grep -q 'The roof kiosk did not start' kiosk-stderr.txt; then
+            echo "::error file=src/HVO.RoofControllerV4.Kiosk/Program.cs::hvo-roof-kiosk without settings exited ${status}, not 78 with its settings message"
+            exit 1
+          fi
+          # The artifact: the Pi's program and its deploy files side by side, the directory docs/kiosk.md installs from.
+          # Every file the page installs must be in it.
+          mkdir kiosk-artifact
+          cp hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk HVO.RoofControllerV4.Kiosk/deploy/* kiosk-artifact/
+          installs=$(grep -oP '^\s*sudo install -m [0-7]+ \K[^ ]+(?= )' ../docs/kiosk.md)
+          test -n "$installs"
+          for file in $installs; do
+            if [ ! -f "kiosk-artifact/$file" ]; then
+              echo "::error file=docs/kiosk.md::docs/kiosk.md installs ${file}, which the hvo-roof-kiosk artifact does not have"
+              exit 1
+            fi
+          done
+          ls -l kiosk-artifact
+
       - name: Upload hvo-roof
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -139,6 +173,24 @@ jobs:
           path: |
             src/hvo-roof/*/hvo-roof
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload hvo-roof-kiosk
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hvo-roof-kiosk-${{ github.run_id }}
+          path: src/kiosk-artifact/
+          if-no-files-found: error
+          retention-days: 14
+
+      # The kiosk's screens at 1280x720 (the Pi Touch Display 2) and 800x480 (the original 7-inch touchscreen).
+      - name: Upload kiosk renders
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kiosk-renders-${{ github.run_id }}
+          path: src/TestResults/kiosk-renders/*.png
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Upload test results

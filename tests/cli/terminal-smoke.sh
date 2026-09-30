@@ -2,10 +2,10 @@
 # The published hvo-roof command against a running controller (#45), in a real terminal: a few commands, then
 # 'hvo-roof ui' in a tmux pane, where every page is drawn, F9 stops a roof that another client started, Esc leaves the
 # interface open, and F10 closes it with exit code 0. Then the terminal closing during 'hvo-roof open' (a tmux window
-# killed under its shell, which delivers SIGHUP twice) and SIGTERM during 'hvo-roof close': each sends Stop, the roof
-# stops short of the limit, and 'close' exits 130 (a closed terminal leaves no one to read the exit code of 'open'). The
-# screens are saved as text, and drawn as SVG images (tests/cli/ansi-to-svg.py), for the CI artifacts and the
-# screenshots in docs/cli.md.
+# killed under its shell, which delivers SIGHUP twice) and, from the open limit, SIGTERM during 'hvo-roof close': each
+# sends Stop, the roof stops short of the limit, and 'close' exits 130 (a closed terminal leaves no one to read the exit
+# code of 'open'). The screens are saved as text, and drawn as SVG images (tests/cli/ansi-to-svg.py), for the CI
+# artifacts and the screenshots in docs/cli.md.
 #
 # It needs a controller whose roof may move (the emulated one: tests/emulator/compose-smoke-test.sh runs this script
 # against the compose emulator profile), tmux and an admin API key. It touches no hardware, and it keeps its credentials
@@ -218,6 +218,10 @@ save 08-closed
 # Stop before it ends.
 hangup_during hangup open
 stopped_short hangup-stopped Open
+# The roof is open only as far as the moments above moved it, which a close can cover before its SIGTERM arrives: open
+# it to the limit first, so the close has the whole travel ahead of it when the signal comes.
+run open-full 0 open
+grep -q "Done. Roof: Open" "${out}/open-full.txt" || fail "'hvo-roof open' did not end at the open limit: $(cat "${out}/open-full.txt")"
 signal_during term TERM close
 stopped_short term-stopped Closed
 

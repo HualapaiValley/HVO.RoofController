@@ -13,9 +13,13 @@
       with it.
     -->
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    <!-- Avalonia's build statistics (Avalonia.BuildServices) are not sent: nothing is reported from a build of this repository. -->
+    <UsedAvaloniaProducts />
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="Avalonia.Skia" />
     <PackageReference Include="bunit" />
     <PackageReference Include="FluentAssertions" />
   <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
@@ -37,7 +41,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Cli\HVO.RoofControllerV4.Cli.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Client\HVO.RoofControllerV4.Client.csproj" />
+    <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Kiosk\HVO.RoofControllerV4.Kiosk.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.RPi\HVO.RoofControllerV4.RPi.csproj" />
+    <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Screens\HVO.RoofControllerV4.Screens.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Simulation\HVO.RoofControllerV4.Simulation.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Emulator\HVO.RoofControllerV4.Emulator.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Web\HVO.RoofControllerV4.Web.csproj" />

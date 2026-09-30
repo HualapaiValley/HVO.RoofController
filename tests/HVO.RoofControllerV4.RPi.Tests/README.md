@@ -153,6 +153,9 @@ models exactly that register.
 | `Client/…` | The client library (#44) against the controller in process: every endpoint's answer and refusal, sign-in, sessions and kiosks, Stop beside a stuck command, the status feed through restarts and silence, settings forms, credentials files, certificate pins over real HTTPS (`RoofCertificatePinTests`), the shared wording and the web UI's Stop texts, and that every endpoint has a client call; `RoofClientScenarios` against the emulated roof |
 | `Web/…` | The web UI (#46) in bUnit and in process against the controller's API: each page and what each role is offered, the mode banners, sign-in, sessions and their end, Stop with the person's session and the web UI's own key, the camera relay, its settings, headers and origin checks, and the supervisor's state |
 | `Browser/*BrowserTests` | The web UI in Chromium on phones and tablets, each upright and sideways, and a desktop window, and the screenshots in `docs/web.md` ([Browser tests](#browser-tests)) |
+| `Kiosk/KioskConsoleTests`, `KioskPanelTests`, `KioskProgramTests` | The touchscreen kiosk (#47) against the controller's API in process (`KioskHarness`): the PIN lock and its idle lock, the lease, Stop when the controller answers, refuses or cannot be reached, the stale and unreachable feed, the screen timeout, the admin's settings and restart, answers that arrive after the lock, the program's settings, device key, display and backlight, and the install steps in `docs/kiosk.md` against the files they install |
+| `Kiosk/KioskRenderTests` | The kiosk's screens drawn headless at 1280 x 720 (8.2 px/mm) and 800 x 480 (5.2 px/mm), and the screenshots in `docs/kiosk.md` ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
+| `Kiosk/KioskSoakScenarios`, `KioskSoakResultsTests` | The kiosk and its screen against the emulated roof through controller restarts, with its heap, threads and reconnects, and the soak's results when it fails ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
 
 ## Emulated plant
 
@@ -233,6 +236,32 @@ dotnet build tests/HVO.RoofControllerV4.RPi.Tests
 pwsh tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
 ```
 
+## Kiosk renders and soak
+
+`Kiosk/KioskRenderTests` draws the kiosk's screens (locked, the PIN pad, an operator's, an opening roof, a latched
+fault, a stale status, an unreachable controller, the admin's system page, the settings with their keypad and keyboard,
+a long name and a long value typed, and the blank screen and its wake) with Avalonia's headless platform and Skia, at the Pi Touch Display 2's
+1280 x 720 and the original 7-inch touchscreen's 800 x 480, with the same `KioskShell` the kiosk runs. Each render checks
+the layout as a touchscreen would show it: every button at least 12 mm and on the screen, nothing overlapping, no text
+cut off, broken inside a word or scrolled out of view (but for text abbreviated on purpose, `KioskTheme.Abbreviated`,
+which ends in an ellipsis within its bounds), and Stop on screen, enabled, at least 24 mm, the control a touch at its
+centre reaches, and drawn in Stop's colour. A touch on Stop as the screen blanks, before it is drawn black, still stops
+the roof. The renders are saved as PNG to `HVO_KIOSK_RENDERS_DIR`, or to the test's results
+(`kiosk/`); CI uploads them as `kiosk-renders-<run>`, and `docs/images/kiosk` holds copies. One headless session serves
+the test process (`KioskAvalonia`); a test runs its UI work through `OnUiAsync`, which pumps the UI thread first.
+
+`Kiosk/KioskSoakScenarios` runs the kiosk's console and its screen against an `EmulatedRoofRig` with the production
+settings and the status feed's production reconnect delays. Each cycle unlocks with a PIN, touches Open, touches Stop in
+mid-travel, touches Close and locks; the controller restarts every fourth cycle. It checks that every Stop was
+acknowledged, each restart was one reconnect within 45 s, and the plant's invariants held; when the run leaves at least
+5 minutes after its warm-up (a quarter of the run, at most an hour), also that the managed heap (the median of the last
+three samples within 10 % and 4 MB of the first three) and the process's threads (within 10) are flat. It is
+`[TestCategory("Scenario")]` and `[TestCategory("KioskSoak")]`: 90 s in the scenario job, and `HVO_KIOSK_SOAK_DURATION`
+(30 minutes nightly, in the `kiosk-soak` job). It writes `kiosk-soak-summary.md` and `kiosk-soak-samples.csv` to
+`HVO_SOAK_RESULTS_DIR`, or the test's results (`kiosk-soak/`), before the checks fail it; the last screen (the pump's
+draws, then a render with the layout and Stop checks) is one of the checks, so a fault there is written with the rest
+(`KioskSoakResultsTests`).
+
 ## Adding new tests
 
 1. Build the service with `SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), …)` and set the inputs
@@ -250,11 +279,13 @@ dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filt
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Scenario"
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Browser"
 HVO_SOAK_DURATION=00:30:00 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Soak"
+HVO_KIOSK_SOAK_DURATION=00:30:00 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=KioskSoak"
 ```
 
-The first command is the unit test job in CI. The second runs the commissioning scenarios, the short soak included.
-The third runs the browser tests (Chromium must be installed for the configuration built, here `bin/Release`). The
-fourth runs the soak alone, for as long as `HVO_SOAK_DURATION` says.
+The first command is the unit test job in CI, the kiosk's renders included (set `HVO_KIOSK_RENDERS_DIR` to keep them in
+one directory). The second runs the commissioning scenarios, the short soaks included. The third runs the browser tests
+(Chromium must be installed for the configuration built, here `bin/Release`). The fourth runs the C14 soak alone, for as
+long as `HVO_SOAK_DURATION` says, and the fifth the kiosk soak, for `HVO_KIOSK_SOAK_DURATION`.
 
 The deploy script has its own tests, `tests/deploy/deploy-script-tests.sh` (bash 3.2 or later, `python3`, `jq`,
 `sha256sum` or `shasum`, and `setsid` or `perl` for the script itself). They run the script against fake `docker` and

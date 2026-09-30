@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>The roof controller's touch screens: view models, Avalonia views built in code and the HVO Dark theme, for the kiosk and the Mac app.</Description>
+    <!-- Avalonia's build statistics (Avalonia.BuildServices) are not sent: nothing is reported from a build of this repository. -->
+    <UsedAvaloniaProducts />
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj" />
+    <InternalsVisibleTo Include="HVO.RoofControllerV4.RPi.Tests" />
+    <InternalsVisibleTo Include="hvo-roof-kiosk" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,4 @@
+# Lets the kiosk (group video) turn the display's backlight off when it blanks the screen, and on again at a touch.
+# Install as /etc/udev/rules.d/99-hvo-roof-kiosk-backlight.rules, then apply it as the boot does, with an "add" event
+# (udevadm trigger sends "change" unless told): `sudo udevadm trigger --action=add --subsystem-match=backlight`.
+SUBSYSTEM=="backlight", ACTION=="add", RUN+="/bin/chgrp video /sys%p/bl_power /sys%p/brightness", RUN+="/bin/chmod g+w /sys%p/bl_power /sys%p/brightness"

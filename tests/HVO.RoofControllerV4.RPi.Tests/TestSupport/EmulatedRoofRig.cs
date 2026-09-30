@@ -19,6 +19,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 
@@ -90,26 +91,13 @@ internal sealed record EmulatedRoofRigOptions
 /// </summary>
 /// <remarks>
 /// Test classes that use it are <c>[DoNotParallelize]</c>: each rig starts a whole host, whose blocking start and HAT
-/// polling hold pool threads that the in-process emulator needs to answer within the request timeout. (The deployed
-/// emulator is a separate process.)
+/// polling hold pool threads that the in-process emulator needs to answer within the request timeout, and the test
+/// process has more pool threads from its start (<see cref="TestProcessDefaults"/>). (The deployed emulator is a separate
+/// process.)
 /// </remarks>
 internal sealed class EmulatedRoofRig : IAsyncDisposable
 {
     public static readonly TimeSpan MotionTimeout = TimeSpan.FromSeconds(30);
-
-    /// <summary>The fewest pool worker threads a test process with a rig starts with.</summary>
-    private const int MinWorkerThreads = 32;
-
-    static EmulatedRoofRig()
-    {
-        // The in-process emulator answers on pool threads, while the controller's HAT client blocks pool threads until
-        // it answers. On a 2-core runner the pool starts with 2 workers and adds about 2 a second, so a burst (a
-        // command's writes and read-backs, the 25 ms input poll, status polls, the camera, the exporter) can hold the
-        // emulator's answer past the 1 s request timeout. The deployed emulator is a separate process and never
-        // shares the controller's pool.
-        ThreadPool.GetMinThreads(out var workers, out var completionPorts);
-        ThreadPool.SetMinThreads(Math.Max(workers, MinWorkerThreads), completionPorts);
-    }
 
     private readonly Dictionary<string, string?> _settings;
     private readonly EmulatedCameraHost? _camera;
@@ -353,10 +341,33 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 
 /// <summary>
 /// The production host with the settings given and the test API keys. Nothing is replaced; without
-/// <paramref name="consoleLog"/> the host's console log provider is removed.
+/// <paramref name="consoleLog"/> the host's console log provider is removed. Disposing it also disposes the rate
+/// limiters its pipeline made (<see cref="PipelineRateLimiters"/>), so a stopped host leaves the heap.
 /// </summary>
 internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, string environment, RecordingLoggerProvider logs, bool consoleLog = true) : WebApplicationFactory<Program>
 {
+    private IServer? _server;
+
+    public override async ValueTask DisposeAsync()
+    {
+        // Found before the host is disposed; disposed once it has stopped serving. The server is taken when the host
+        // starts: a restart (StopApplication) ends the program, which disposes the host's services before this runs.
+        var limiters = _server is null ? [] : PipelineRateLimiters.Find(_server);
+        _server = null;
+        await base.DisposeAsync();
+        foreach (var limiter in limiters)
+        {
+            await limiter.DisposeAsync();
+        }
+    }
+
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        var host = base.CreateHost(builder);
+        _server = host.Services.GetRequiredService<IServer>();
+        return host;
+    }
+
     public HttpClient CreateApiClient(string? apiKey = null)
     {
         var client = CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = false });

@@ -100,7 +100,7 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `login`, `logout`, `passwd` | any | Signing in with a password (see [Setup](#setup)). |
 | `config show\|get\|set\|set-secret\|diff\|apply\|discard` | operator (UI group), admin | The controller's settings (see [Settings](#settings)). |
 | `users list\|show\|add\|set\|remove` | admin | The people who sign in. |
-| `pins list\|set\|remove` | admin | The PINs that people use at a kiosk. |
+| `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). |
 | `keys list\|add\|set\|rotate\|remove` | admin | API keys. Keys from the controller's configuration are read-only. |
 | `sessions list\|end` | admin | People's sessions. Tokens are never shown. |
 | `info` | admin | The controller's version, host and resource use. |
@@ -175,7 +175,7 @@ until then). Examples are relay mapping, limit or fault polarity, and turning of
 check. The same rule applies to a pending hand edit that contains such a change (`config apply`), and to a restart that
 would load one (`restart`).
 
-Operators may change only the UI group (for example the kiosk's screen timeout and the default camera). Every other
+Operators may change only the UI group (for example the [kiosk](kiosk.md)'s screen timeout and the default camera). Every other
 group needs an admin. A setting you may not change is refused before anything is sent, with the exit code the
 controller's own refusal would give, in the controller's order. The code is 6 for the role. For a setting in a group
 you may change, it is 7 while a hand edit is pending (even for a local-only setting), and 6 for a local-only setting
@@ -373,9 +373,10 @@ Nothing here needs the Pi, the HAT or the roof.
   - stops, with F9, a roof that another client started, and checks with `status --json` that the roof stopped short of
     the open limit;
   - checks that Esc leaves the interface open and that F10 exits 0;
-  - closes the terminal of `hvo-roof open` (a tmux window killed under its shell, which delivers SIGHUP twice) and sends
-    SIGTERM to `hvo-roof close` while each follows the roof, and checks that each sent Stop, that the controller verified
-    it and that the roof stopped short of the limit, and that `close` exited 130.
+  - closes the terminal of `hvo-roof open` (a tmux window killed under its shell, which delivers SIGHUP twice) and,
+    after opening the roof to the limit, sends SIGTERM to `hvo-roof close`, while each follows the roof, and checks that
+    each sent Stop, that the controller verified it and that the roof stopped short of the limit, and that `close`
+    exited 130.
 
   The `Emulator image` workflow keeps the screens as the `terminal-screens-<run id>` artifact: each as text, with its
   colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The screenshots above are those images.
