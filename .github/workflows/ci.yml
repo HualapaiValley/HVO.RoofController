@@ -358,6 +358,52 @@ jobs:
 
   # HVO Roof.app on a Mac (Apple silicon): its signature, and the program opening and drawing its window (--check) with
   # settings, and refusing without them. Nothing here reaches a controller: the settings name a closed port.
+  # The installer's kiosk steps on a real machine (docs/install.md, "The kiosk end to end"): apt, the hvo-kiosk user, the
+  # files with their modes and owners, and systemd starting the Pi's kiosk program from this run's artifact, on an arm64
+  # runner, as root. The runner is thrown away after, and has no screen: the kiosk logs where it would draw, then stops
+  # there, which stays an assumption of docs/kiosk.md.
+  installer-kiosk:
+    needs: build-and-test
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: src/global.json
+
+      - name: Download hvo-roof-kiosk
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hvo-roof-kiosk-${{ github.run_id }}
+          path: ${{ runner.temp }}/kiosk
+
+      - name: Build the tests
+        run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release -v minimal
+
+      # As root, as the installer runs for the kiosk. The test is skipped without HVO_KIOSK_INSTALL, so the summary must
+      # show it passed, not skipped.
+      - name: Install the kiosk
+        run: |
+          chmod +x "$RUNNER_TEMP/kiosk/hvo-roof-kiosk"
+          sudo env "PATH=$PATH" "DOTNET_ROOT=${DOTNET_ROOT:-}" HOME=/root DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+            HVO_KIOSK_INSTALL=1 "HVO_KIOSK_PROGRAM=$RUNNER_TEMP/kiosk/hvo-roof-kiosk" \
+            dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build \
+            --filter "TestCategory=KioskInstall" --logger "console;verbosity=normal" | tee kiosk-install.txt
+          grep -q '^  Passed TheKiosk_IsInstalled_AndStartedBySystemd_AndASecondRunChangesNothing ' kiosk-install.txt
+
   mac-app:
     needs: build-and-test
     runs-on: macos-latest

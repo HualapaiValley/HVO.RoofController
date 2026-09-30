@@ -46,11 +46,24 @@ public static class ControllerApi
     /// Sends <paramref name="json"/> (a POST) or nothing (a GET) to <paramref name="path"/> with <paramref name="key"/>.
     /// Every secret in the body must already be registered with the log.
     /// </summary>
-    public static async Task<ControllerResponse> SendAsync(InstallContext context, string container, string key, string path, string? json, CancellationToken cancellationToken)
+    public static Task<ControllerResponse> SendAsync(InstallContext context, string container, string key, string path, string? json, CancellationToken cancellationToken)
+        => SendAsync(context, container, key, json is null ? HttpMethod.Get : HttpMethod.Post, path, json, cancellationToken);
+
+    /// <summary>
+    /// Sends <paramref name="json"/>, or nothing, to <paramref name="path"/> as <paramref name="method"/> with
+    /// <paramref name="key"/>. Every secret in the body must already be registered with the log.
+    /// </summary>
+    public static async Task<ControllerResponse> SendAsync(InstallContext context, string container, string key, HttpMethod method, string path, string? json, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(method);
         context.Log.AddSecret(key);
         var config = new StringBuilder();
+        if (method != (json is null ? HttpMethod.Get : HttpMethod.Post))
+        {
+            Option(config, "request", method.Method);
+        }
+
         Option(config, "header", $"X-Api-Key: {key}");
         Option(config, "header", "Accept: application/json");
         if (json is not null)

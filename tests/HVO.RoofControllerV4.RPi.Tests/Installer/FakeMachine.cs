@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Formats.Tar;
+using System.IO.Compression;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -67,6 +69,9 @@ internal sealed record FakeContainer
 /// <summary>A person the fake controller was asked to add through its API: what the installer sent.</summary>
 internal sealed record FakeUserRequest(string Name, string Role, string Password, string? Pin, string Key);
 
+/// <summary>A PIN the fake controller was asked to set for a person through its API: what the installer sent.</summary>
+internal sealed record FakePinRequest(string Name, string Role, string Pin, string Key);
+
 /// <summary>
 /// A whole machine for the installer, in a folder of its own: its files (a Pi's HAT devices, records, folders the
 /// installer makes) under <see cref="Root"/>, and the programs it runs (docker, systemctl, hvo-roof) answered from what
@@ -102,6 +107,7 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         Directory.CreateDirectory(OnDisk(TemporaryDirectory));
         CurrentDirectory = Home;
         Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = ReleaseJson();
+        FileDownloads[ReleaseManifest.DownloadUri("4.0.0", KioskAssetName("4.0.0")).ToString()] = KioskTarball("4.0.0");
         foreach (var program in new[] { "bash", "curl", "setsid", "jq" })
         {
             Programs[program] = $"/usr/bin/{program}";
@@ -140,8 +146,41 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     public Dictionary<string, FakeContainer> Containers { get; } = [];
 
-    /// <summary>The kiosk's service: enabled and active, when its unit file is there.</summary>
-    public (bool Enabled, bool Active) Kiosk { get; set; } = (true, true);
+    /// <summary>The kiosk's service, when its unit file is there: whether it is enabled, and running.</summary>
+    public (bool Enabled, bool Active) Kiosk { get; set; }
+
+    /// <summary>True while systemd waits to start the kiosk again after it stopped: it is activating, not active.</summary>
+    public bool KioskRestarting { get; set; }
+
+    /// <summary>When the kiosk's service last started; null for never.</summary>
+    public DateTimeOffset? KioskStartedAt { get; set; }
+
+    /// <summary>How often systemd was asked to start the kiosk (again).</summary>
+    public int KioskStarts { get; private set; }
+
+    /// <summary>How often systemd was asked to read its units again.</summary>
+    public int DaemonReloads { get; private set; }
+
+    /// <summary>How often udev was asked to apply its rules to the backlight.</summary>
+    public int BacklightTriggers { get; private set; }
+
+    /// <summary>A desktop's display manager has the screen (display-manager.service is active).</summary>
+    public bool DisplayManagerActive { get; set; }
+
+    /// <summary>The Debian packages installed, as dpkg knows them; null for a machine without dpkg.</summary>
+    public HashSet<string>? Packages { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>What apt-get installed, in order, and the environment it ran with.</summary>
+    public List<(IReadOnlyList<string> Packages, IReadOnlyDictionary<string, string>? Environment)> AptInstalls { get; } = [];
+
+    /// <summary>The machine's users, by name: the groups each is in (their own first).</summary>
+    public Dictionary<string, List<string>> Users { get; } = new(StringComparer.Ordinal) { ["root"] = ["root"], ["pi"] = ["pi", "sudo", "video"] };
+
+    /// <summary>Each file's owner and group (user:group), by path, as chown left them; root:root for one not here.</summary>
+    public Dictionary<string, string> Owners { get; } = new(StringComparer.Ordinal);
+
+    // The unit systemd read (at a daemon-reload, or when it first loaded it): a unit file that differs needs a reload.
+    private string? _loadedKioskUnit;
 
     /// <summary>TCP ports something on the machine listens on.</summary>
     public HashSet<int> PortsInUse { get; } = [];
@@ -167,6 +206,9 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What the machine can download, by URL: the release's release.json on GitHub, unless a test takes it away.</summary>
     public Dictionary<string, string> Downloads { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>The files the machine can download, by URL: the release's kiosk, unless a test takes it away.</summary>
+    public Dictionary<string, byte[]> FileDownloads { get; } = new(StringComparer.Ordinal);
+
     /// <summary>What the installer downloaded, in order.</summary>
     public ConcurrentQueue<Uri> Downloaded { get; } = new();
 
@@ -186,6 +228,12 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     /// <summary>Each request to add a person, in order, with what was sent.</summary>
     public List<FakeUserRequest> UserRequests { get; } = [];
+
+    /// <summary>The PINs people have, by name, as the controller was given them.</summary>
+    public Dictionary<string, string> PeoplesPins { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Each request to set a person's PIN, in order, with what was sent.</summary>
+    public List<FakePinRequest> PinRequests { get; } = [];
 
     /// <summary>What the controller answers a request to add a person; null to add them (201, or 409 when they are there).</summary>
     public int? UsersAnswer { get; set; }
@@ -233,8 +281,61 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
                 ? Task.FromResult(text)
                 : Task.FromException<string>(new HttpRequestException("HTTP 404 Not Found.", null, HttpStatusCode.NotFound));
         },
+        DownloadToAsync = async (uri, stream, maxBytes, cancellationToken) =>
+        {
+            Downloaded.Enqueue(uri);
+            if (!FileDownloads.TryGetValue(uri.ToString(), out var content))
+            {
+                throw new HttpRequestException("HTTP 404 Not Found.", null, HttpStatusCode.NotFound);
+            }
+
+            if (content.Length > maxBytes)
+            {
+                throw new InvalidDataException($"The download is larger than {maxBytes} bytes.");
+            }
+
+            await stream.WriteAsync(content, cancellationToken).ConfigureAwait(false);
+        },
         TemporaryDirectory = TemporaryDirectory
     };
+
+    /// <summary>The kiosk's program in the fake release of <paramref name="version"/>: a script that says which it is.</summary>
+    public static byte[] KioskProgram(string version) => Encoding.UTF8.GetBytes($"#!/bin/sh\necho 'HVO roof kiosk {version}'\n");
+
+    /// <summary>The name of the fake release's kiosk tarball, as build/release-assets.py names it.</summary>
+    public static string KioskAssetName(string version) => $"hvo-roof-kiosk-{version}-linux-arm64.tar.gz";
+
+    /// <summary>
+    /// The fake release's kiosk, as the release workflow packs it: one folder with the program and the files it is set up
+    /// with, the same bytes each time. <paramref name="program"/> replaces the program (one that is not the release's).
+    /// </summary>
+    public static byte[] KioskTarball(string version, byte[]? program = null)
+    {
+        var folder = KioskAssetName(version)[..^".tar.gz".Length];
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.Optimal, leaveOpen: true))
+        using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
+        {
+            void Add(string name, byte[] content, UnixFileMode mode)
+            {
+                var entry = new PaxTarEntry(TarEntryType.RegularFile, $"{folder}/{name}")
+                {
+                    Mode = mode,
+                    ModificationTime = Today,
+                    DataStream = new MemoryStream(content)
+                };
+                tar.WriteEntry(entry);
+            }
+
+            tar.WriteEntry(new PaxTarEntry(TarEntryType.Directory, folder) { Mode = Modes.Folder, ModificationTime = Today });
+            Add("hvo-roof-kiosk", program ?? KioskProgram(version), Modes.Program);
+            Add("hvo-roof-kiosk.service", Encoding.UTF8.GetBytes(KioskSteps.Resource("hvo-roof-kiosk.service")), Modes.File);
+            Add("99-hvo-roof-kiosk-backlight.rules", Encoding.UTF8.GetBytes(KioskSteps.Resource("99-hvo-roof-kiosk-backlight.rules")), Modes.File);
+            Add("appsettings.Local.example.json", Encoding.UTF8.GetBytes(KioskSteps.Resource("appsettings.Local.example.json")), Modes.File);
+        }
+
+        return output.ToArray();
+    }
 
     /// <summary>A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests.</summary>
     public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null)
@@ -263,7 +364,18 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
                 controller = Image("roof-controller", controllerDigest ?? ControllerDigest),
                 hatEmulator = Image("roof-hat-emulator", emulatorDigest ?? EmulatorDigest)
             },
-            assets = Array.Empty<object>()
+            assets = new object[]
+            {
+                new
+                {
+                    name = KioskAssetName(version),
+                    kind = KioskSteps.AssetKind,
+                    platform = KioskSteps.AssetPlatform,
+                    size = KioskTarball(version).LongLength,
+                    sha256 = Convert.ToHexStringLower(SHA256.HashData(KioskTarball(version))),
+                    files = new Dictionary<string, string> { ["hvo-roof-kiosk"] = Convert.ToHexStringLower(SHA256.HashData(KioskProgram(version))) }
+                }
+            }
         });
     }
 
@@ -307,6 +419,25 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             Write(HatDevices.ThermalSensor, "48150\n");
         }
 
+        return this;
+    }
+
+    /// <summary>
+    /// The Pi's display outputs, as the kernel lists them: the touchscreen on DSI-1 (connected unless
+    /// <paramref name="connected"/> is false) and an HDMI port with nothing in it.
+    /// </summary>
+    public FakeMachine WithDisplay(bool connected = true)
+    {
+        Write($"{MachineSurveyor.DrmFolder}/card1-DSI-1/status", connected ? "connected\n" : "disconnected\n");
+        Write($"{MachineSurveyor.DrmFolder}/card1-HDMI-A-1/status", "disconnected\n");
+        Folder($"{MachineSurveyor.DrmFolder}/card1");
+        return this;
+    }
+
+    /// <summary>The kiosk's libraries, installed as apt installs them.</summary>
+    public FakeMachine WithKioskPackages()
+    {
+        Packages!.UnionWith(KioskSteps.Packages);
         return this;
     }
 
@@ -537,8 +668,53 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             "docker" when arguments is ["rm", var name] => Docker(() => Containers.Remove(name) ? Answer(name) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
             "docker" when arguments is ["run", "-d", "--name", MachineSurveyor.HatEmulatorContainer, ..] => Docker(() => RunEmulator(arguments)),
             "bash" when arguments is [var script] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, command, cancellationToken),
-            "systemctl" when arguments is ["is-enabled", MachineSurveyor.KioskUnit] => Answer(Kiosk.Enabled ? "enabled" : "disabled", Kiosk.Enabled ? 0 : 1),
-            "systemctl" when arguments is ["is-active", MachineSurveyor.KioskUnit] => Answer(Kiosk.Active ? "active" : "inactive", Kiosk.Active ? 0 : 3),
+            "systemctl" when arguments is ["is-enabled", MachineSurveyor.KioskUnit] => !Exists(MachineSurveyor.KioskUnitFile)
+                ? new CommandResult(1, string.Empty, $"Failed to get unit file state for {MachineSurveyor.KioskUnit}: No such file or directory\n")
+                : Answer(Kiosk.Enabled ? "enabled" : "disabled", Kiosk.Enabled ? 0 : 1),
+            "systemctl" when arguments is ["is-active", MachineSurveyor.KioskUnit] => Answer(
+                !Exists(MachineSurveyor.KioskUnitFile) ? "inactive" : KioskRestarting ? "activating" : Kiosk.Active ? "active" : "inactive",
+                Exists(MachineSurveyor.KioskUnitFile) && Kiosk.Active && !KioskRestarting ? 0 : 3),
+            "systemctl" when arguments is ["is-active", MachineSurveyor.DisplayManagerUnit] => Answer(DisplayManagerActive ? "active" : "inactive", DisplayManagerActive ? 0 : 3),
+            "systemctl" when arguments is ["show", "-p", "NeedDaemonReload", "--value", MachineSurveyor.KioskUnit]
+                => Answer(_loadedKioskUnit is not null && Exists(MachineSurveyor.KioskUnitFile) && Read(MachineSurveyor.KioskUnitFile) != _loadedKioskUnit ? "yes" : "no"),
+            "systemctl" when arguments is ["show", "-p", "ActiveEnterTimestamp", "--timestamp=us+utc", "--value", MachineSurveyor.KioskUnit]
+                => Answer(KioskStartedAt is { } started ? started.UtcDateTime.ToString("ddd yyyy-MM-dd HH:mm:ss.ffffff 'UTC'", System.Globalization.CultureInfo.InvariantCulture) : string.Empty),
+            "systemctl" when arguments is ["daemon-reload"] => Answer(string.Empty, after: () =>
+            {
+                DaemonReloads++;
+                _loadedKioskUnit = Exists(MachineSurveyor.KioskUnitFile) ? Read(MachineSurveyor.KioskUnitFile) : null;
+            }),
+            "systemctl" when arguments is ["enable", MachineSurveyor.KioskUnit] => KioskService(() => Kiosk = Kiosk with { Enabled = true }),
+            "systemctl" when arguments is ["restart", MachineSurveyor.KioskUnit] => KioskService(() =>
+            {
+                Kiosk = Kiosk with { Active = true };
+                KioskStartedAt = DateTimeOffset.UtcNow;
+                KioskStarts++;
+            }),
+            "udevadm" when arguments is ["trigger", "--action=add", "--subsystem-match=backlight"] => Answer(string.Empty, after: () => BacklightTriggers++),
+            "dpkg-query" when Packages is not null && arguments is ["-W", "-f", "${Package} ${db:Status-Status}\n", ..] => PackageQuery(arguments.Skip(3).ToArray()),
+            "apt-get" when Packages is not null && arguments is ["update"] => Answer("Reading package lists... Done"),
+            "apt-get" when Packages is not null && arguments is ["install", "-y", "--no-install-recommends", ..] => Answer($"Setting up {string.Join(", ", arguments.Skip(3))}", after: () =>
+            {
+                AptInstalls.Add((arguments.Skip(3).ToArray(), command.Environment));
+                Packages.UnionWith(arguments.Skip(3));
+            }),
+            "getent" when arguments is ["passwd", var name] => Users.ContainsKey(name)
+                ? Answer($"{name}:x:999:999::/nonexistent:/usr/sbin/nologin")
+                : new CommandResult(2, string.Empty, string.Empty),
+            "id" when arguments is ["-nG", var name] => Users.TryGetValue(name, out var groups)
+                ? Answer(string.Join(' ', groups))
+                : new CommandResult(1, string.Empty, $"id: '{name}': no such user\n"),
+            "useradd" when arguments is ["--system", "--user-group", "--no-create-home", "--shell", "/usr/sbin/nologin", var name] => Users.TryAdd(name, [name])
+                ? Answer(string.Empty)
+                : new CommandResult(9, string.Empty, $"useradd: user '{name}' already exists\n"),
+            "usermod" when arguments is ["-aG", var groups, var name] => Users.TryGetValue(name, out var memberOf)
+                ? Answer(string.Empty, after: () => memberOf.AddRange(groups.Split(',').Where(group => !memberOf.Contains(group))))
+                : new CommandResult(6, string.Empty, $"usermod: user '{name}' does not exist\n"),
+            "stat" when arguments is ["-c", "%U:%G", "--", var path] => Exists(path)
+                ? Answer(Owners.GetValueOrDefault(path, "root:root"))
+                : new CommandResult(1, string.Empty, $"stat: cannot statx '{path}': No such file or directory\n"),
+            "chown" when arguments is [var owner, "--", var path] => Chown(owner, path),
             "sw_vers" when arguments is ["-productVersion"] && Os == InstallerOs.MacOS => Answer("15.6.1"),
             _ when Programs.GetValueOrDefault("hvo-roof") == command.Program && arguments is ["--version"] => Answer("4.0.0+0123456789abcdef"),
             _ => null
@@ -567,6 +743,48 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         catch (IOException)
         {
         }
+    }
+
+    // systemctl enable and restart: they fail for a unit with no file, and load one systemd has not read yet.
+    private CommandResult KioskService(Action act)
+    {
+        if (!Exists(MachineSurveyor.KioskUnitFile))
+        {
+            return new CommandResult(1, string.Empty, $"Failed to enable unit: Unit file {MachineSurveyor.KioskUnit} does not exist.\n");
+        }
+
+        _loadedKioskUnit ??= Read(MachineSurveyor.KioskUnitFile);
+        act();
+        return Answer(string.Empty);
+    }
+
+    // dpkg-query -W: a line for each package dpkg knows, and exit 1 for any it does not.
+    private CommandResult PackageQuery(string[] names)
+    {
+        var known = names.Where(Packages!.Contains).ToArray();
+        var unknown = names.Where(name => !Packages!.Contains(name)).ToArray();
+        return new CommandResult(
+            unknown.Length > 0 ? 1 : 0,
+            string.Concat(known.Select(name => $"{name} installed\n")),
+            string.Concat(unknown.Select(name => $"dpkg-query: no packages found matching {name}\n")));
+    }
+
+    // chown user:group: both must be known (a user's group is named for them), and so must the file.
+    private CommandResult Chown(string owner, string path)
+    {
+        var parts = owner.Split(':');
+        if (parts.Length != 2 || !Users.ContainsKey(parts[0]) || !Users.ContainsKey(parts[1]))
+        {
+            return new CommandResult(1, string.Empty, $"chown: invalid user: '{owner}'\n");
+        }
+
+        if (!Exists(path))
+        {
+            return new CommandResult(1, string.Empty, $"chown: cannot access '{path}': No such file or directory\n");
+        }
+
+        Owners[path] = owner;
+        return Answer(string.Empty);
     }
 
     private CommandResult Docker(Func<CommandResult> answer)
@@ -639,6 +857,32 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             return new CommandResult(0, $"{{\"name\":\"{request.Name}\",\"role\":\"{request.Role}\"}}\n201", string.Empty);
         }
 
+        var method = config.Where(option => option.Name == "request").Select(option => option.Value).SingleOrDefault();
+        var person = ControllerApi.Address + FirstAdminStep.UsersPath + "/";
+        if (method == "PUT" && url.StartsWith(person, StringComparison.Ordinal) && body is not null)
+        {
+            var named = Uri.UnescapeDataString(url[person.Length..]);
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            (root.TryGetProperty("password", out var password) ? password.ValueKind : JsonValueKind.Null).Should().Be(JsonValueKind.Null, "setting a PIN leaves the person's password as it is");
+            (root.TryGetProperty("removePassword", out var remove) && remove.GetBoolean()).Should().BeFalse();
+            var request = new FakePinRequest(named, root.GetProperty("role").GetString()!, root.GetProperty("pin").GetString()!, key);
+            PinRequests.Add(request);
+            if (!ControllerKeys.Contains(key))
+            {
+                return new CommandResult(0, "{\"title\":\"Unauthorized\"}\n401", string.Empty);
+            }
+
+            if (!People.TryGetValue(named, out var role))
+            {
+                return new CommandResult(0, "{\"title\":\"Not Found\",\"detail\":\"No person has that name.\"}\n404", string.Empty);
+            }
+
+            request.Role.Should().Be(role, "the installer keeps the person's role");
+            WithPerson(named, role, request.Pin);
+            return new CommandResult(0, $"{{\"name\":\"{named}\",\"role\":\"{role}\",\"hasPin\":true}}\n200", string.Empty);
+        }
+
         Unexpected.Enqueue(command);
         return new CommandResult(0, "{\"title\":\"Not Found\"}\n404", string.Empty);
     }
@@ -657,13 +901,23 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         return options;
     }
 
-    /// <summary>A person in the controller's identity store, as the controller keeps it (hashes aside).</summary>
-    public FakeMachine WithPerson(string name, string role)
+    /// <summary>A person in the controller's identity store, as the controller keeps it, with a PIN's hash when they have one.</summary>
+    public FakeMachine WithPerson(string name, string role, string? pin = null)
     {
         People[name] = role;
+        if (pin is not null)
+        {
+            PeoplesPins[name] = pin;
+        }
+
         var layout = ControllerLayout.For(Machine);
         Machine.CreateDirectory(layout.Identity, Modes.PrivateFolder);
-        var users = People.Select(person => new { name = person.Key, role = person.Value });
+        var users = People.Select(person => new
+        {
+            name = person.Key,
+            role = person.Value,
+            pinHash = PeoplesPins.TryGetValue(person.Key, out var hashed) ? Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(hashed))) : null
+        });
         Machine.WriteAtomically(layout.IdentityFile, JsonSerializer.Serialize(new { users, apiKeys = Array.Empty<object>() }), Modes.PrivateFile);
         return this;
     }

@@ -177,7 +177,10 @@ internal static class CertificateCommands
         if (record is not null)
         {
             var certificate = plan.Steps.OfType<CertificateStep>().Single();
-            return await RedeployAsync(host, session, record.Roles, settings, certificate, checkedPlan.HasChanges, redeploy, planOnly, cancellationToken).ConfigureAwait(false);
+            var (redeployed, serves) = await RedeployAsync(host, session, record.Roles, settings, certificate, checkedPlan.HasChanges, redeploy, planOnly, cancellationToken).ConfigureAwait(false);
+            return serves && record.Roles.Contains(InstallRole.Kiosk)
+                ? await KioskAsync(host, session, settings, planOnly, checkedPlan.HasChanges, redeployed, cancellationToken).ConfigureAwait(false)
+                : redeployed;
         }
 
         if (!planOnly)
@@ -287,7 +290,10 @@ internal static class CertificateCommands
         if (recorded is var (_, _, record))
         {
             var certificate = plan.Steps.OfType<ImportCertificateStep>().Single();
-            return await RedeployAsync(host, session, record.Roles, own, certificate, checkedPlan.HasChanges, redeploy, planOnly, cancellationToken).ConfigureAwait(false);
+            var (redeployed, serves) = await RedeployAsync(host, session, record.Roles, own, certificate, checkedPlan.HasChanges, redeploy, planOnly, cancellationToken).ConfigureAwait(false);
+            return serves && record.Roles.Contains(InstallRole.Kiosk)
+                ? await KioskAsync(host, session, own, planOnly, checkedPlan.HasChanges, redeployed, cancellationToken).ConfigureAwait(false)
+                : redeployed;
         }
 
         if (!planOnly)
@@ -326,7 +332,7 @@ internal static class CertificateCommands
     /// roof with a verified Stop before it replaces the controller, and puts the old one back when the new one fails a
     /// check. Otherwise it says why not, and how to finish once the roof is idle.
     /// </summary>
-    private static async Task<int> RedeployAsync(
+    private static async Task<(int Exit, bool Serves)> RedeployAsync(
         InstallerHost host,
         InstallerSession session,
         IReadOnlyCollection<InstallRole> roles,
@@ -367,7 +373,7 @@ internal static class CertificateCommands
             }
 
             // With --redeploy, a controller that is not there is one that was not redeployed.
-            return container is null ? notDone : ok;
+            return (container is null ? notDone : ok, container is not null);
         }
 
         var plan = PlanBuilder.BuildRedeploy(machine, session.Survey, roles, settings, certificate);
@@ -391,7 +397,7 @@ internal static class CertificateCommands
         if (!checkedPlan.HasChanges && !checkedPlan.IsBlocked)
         {
             // It serves the certificate in place already.
-            return ok;
+            return (ok, true);
         }
 
         host.Out.WriteLine();
@@ -400,7 +406,7 @@ internal static class CertificateCommands
             host.Out.WriteLine($"The controller is not redeployed to serve the new certificate: {blocked.Check.Detail?.TrimEnd('.')}.");
             host.Out.WriteLine($"The certificate is in place. Once that is dealt with, run {retry} to serve it.");
             session.Log.Write($"Not redeployed: {blocked.Check.Detail}");
-            return planOnly ? ok : notDone;
+            return (planOnly ? ok : notDone, false);
         }
 
         var more = checkedPlan.Steps.Where(step => step.Check.MakesChange && step.Step != controller).Select(step => $"{step.Step.Target} ({step.Check.Detail})").ToList();
@@ -414,14 +420,14 @@ internal static class CertificateCommands
             host.Out.WriteLine($"The controller is not redeployed from here, because more than its certificate would change: {string.Join("; ", more)}.");
             host.Out.WriteLine($"Run {install} to redeploy it, with the new certificate.");
             session.Log.Write($"Not redeployed: more than its certificate would change: {string.Join("; ", more)}.");
-            return planOnly ? ok : notDone;
+            return (planOnly ? ok : notDone, false);
         }
 
         if (!check.MakesChange)
         {
             // Only without root: whether it serves the new certificate needs its keys.
             host.Out.WriteLine($"The controller: {check.Detail}.");
-            return ok;
+            return (ok, false);
         }
 
         const string Safety = "The deploy script stops the roof with a verified Stop before it replaces the controller, and puts the old one back if the new one fails a check; nothing here moves the roof.";
@@ -430,13 +436,13 @@ internal static class CertificateCommands
             host.Out.WriteLine(choice == RedeployChoice.No
                 ? $"The controller is not redeployed (--no-redeploy): it serves the new certificate once you run {retry}, when the roof is idle."
                 : $"Then the controller is {check.Detail}{(choice == RedeployChoice.Ask ? ", once the roof is idle and you agree" : ", once the roof is idle")}. {Safety}");
-            return ok;
+            return (ok, choice != RedeployChoice.No);
         }
 
         if (choice == RedeployChoice.No)
         {
             host.Out.WriteLine($"The controller is not redeployed (--no-redeploy): it serves the new certificate once it is. When the roof is idle, run {retry}.");
-            return ok;
+            return (ok, false);
         }
 
         host.Out.WriteLine($"To serve it, the controller must be deployed again ({check.Detail}). {Safety}");
@@ -449,7 +455,7 @@ internal static class CertificateCommands
                     ? $"No one at a terminal could agree to it, so the controller is not redeployed. When the roof is idle, run {retry}."
                     : $"The controller is not redeployed: it serves the new certificate once it is. When the roof is idle, run {retry}.");
                 session.Log.Write(agreed is null ? "Not redeployed: no one at a terminal could agree to it." : "Not redeployed: the person did not agree.");
-                return ok;
+                return (ok, false);
             }
         }
 
@@ -479,7 +485,38 @@ internal static class CertificateCommands
 
         session.Log.Write($"Redeployed {controller.Target} to serve the new certificate.");
         host.Out.WriteLine("The controller serves the new certificate.");
-        return ok;
+        return (ok, true);
+    }
+
+    /// <summary>
+    /// The kiosk on this Pi, once the controller serves the certificate in place: its settings trust that one (its pin,
+    /// or a new CA), and it starts again to read them. With <paramref name="planOnly"/>, what would happen.
+    /// </summary>
+    private static async Task<int> KioskAsync(
+        InstallerHost host,
+        InstallerSession session,
+        ControllerSettings settings,
+        bool planOnly,
+        bool certificateChanges,
+        int exit,
+        CancellationToken cancellationToken)
+    {
+        if (planOnly && certificateChanges)
+        {
+            // Nothing is in place yet to check it against.
+            host.Out.WriteLine($"Then the kiosk ({MachineSurveyor.KioskUnit}) trusts the certificate the controller serves, and starts again.");
+            return exit;
+        }
+
+        var checkedPlan = await PlanBuilder.BuildKioskCertificate(session.Machine, settings).CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
+        if (!checkedPlan.HasChanges && !checkedPlan.IsBlocked)
+        {
+            return exit;
+        }
+
+        host.Out.WriteLine();
+        var kiosk = await RunPlanAsync(host, session, checkedPlan, planOnly, "the kiosk's trust in the controller's certificate", settings, cancellationToken, describe: false).ConfigureAwait(false);
+        return kiosk != (int)InstallerExitCode.Success ? kiosk : exit;
     }
 
     // Ctrl-C before the controller was redeployed (the installer never kills a deploy script that started): what runs
@@ -500,7 +537,15 @@ internal static class CertificateCommands
             exitCode);
 
     // The plan's lines; then, unless only planning, the changes and what is in place after them.
-    private static async Task<int> RunPlanAsync(InstallerHost host, InstallerSession session, CheckedPlan checkedPlan, bool planOnly, string what, ControllerSettings settings, CancellationToken cancellationToken)
+    private static async Task<int> RunPlanAsync(
+        InstallerHost host,
+        InstallerSession session,
+        CheckedPlan checkedPlan,
+        bool planOnly,
+        string what,
+        ControllerSettings settings,
+        CancellationToken cancellationToken,
+        bool describe = true)
     {
         var lines = PlanText.Lines(checkedPlan).ToList();
         if (!checkedPlan.IsBlocked && !checkedPlan.HasChanges)
@@ -547,6 +592,11 @@ internal static class CertificateCommands
         }
 
         session.Log.Write($"Put {what} in place.");
+        if (!describe)
+        {
+            return (int)InstallerExitCode.Success;
+        }
+
         host.Out.WriteLine();
         var (certificate, authority) = MachineSurveyor.SurveyCertificates(session.Machine, settings);
         var record = Recorded(session.Machine, session.Survey)?.Record;

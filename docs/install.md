@@ -23,15 +23,12 @@ anything, from an answers file that the wizard saves.
 >   ([Certificates](#certificates));
 > - deploys the controller, or a test rig with its HAT emulator, from the release's images by their digests, through
 >   the deploy script ([Deploying](deployment.md#deploying-with-the-script)), and adds the first admin;
+> - sets up the touchscreen kiosk on the controller's Pi ([The kiosk](#the-kiosk));
 > - writes the install record.
 >
-> It adopts a controller that the deploy script already runs. The later installer issues make the rest:
->
-> - #70: the kiosk;
-> - #71: `hvo-roof` and the Mac app.
->
-> Until then, an install that needs one of those parts is refused, with exit code 3, before anything changes. `--plan`
-> shows what such an install will do.
+> It adopts a controller that the deploy script already runs. A later installer issue, #71, makes `hvo-roof` and the
+> Mac app. Until then, an install that needs one of those is refused, with exit code 3, before anything changes.
+> `--plan` shows what such an install will do.
 
 ## Getting it
 
@@ -138,6 +135,9 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
   container.
 - **The kiosk with its controller.** The kiosk needs the controller on the same Pi: choose both, or install the
   controller first.
+- **The kiosk's screen.** The kiosk draws on the display itself, so it needs a connected screen, and no desktop
+  (`display-manager.service`) holding it: use Raspberry Pi OS Lite, or boot to the console. Once the kiosk is
+  installed, a screen that is off or unplugged does not stop an update.
 - **Docker.** The controller and a rig need Docker running, and the right to use it.
 - **Root rules.** See [Running it](#running-it).
 - **Compose.** A container that Docker Compose made is described in the plan but never replaced. Move it first: see
@@ -172,6 +172,8 @@ Before asking anything, and without changing anything, the installer looks at th
   - whether it drives the real HAT or an emulator;
   - whether the deploy script or Docker Compose made it.
 - **The kiosk's service:** `hvo-roof-kiosk.service`.
+- **The display:** the display outputs in `/sys/class/drm` and whether a screen is connected to one, and whether a
+  desktop (`display-manager.service`) runs.
 - **The programs:** `hvo-roof` on the `PATH` (or in `~/.local/bin` or `/usr/local/bin`), and `HVO Roof.app` in
   `/Applications` or `~/Applications`.
 
@@ -195,7 +197,7 @@ what the keys do:
 **2. What to install.** Each role this machine can have. A role it cannot have is shown with the reason, and cannot be
 chosen.
 
-![Step 2: What to install, with the controller chosen and the test rig and Mac app unavailable, each with its reason](images/install/2-roles.svg)
+![Step 2: What to install, with the controller chosen and the test rig, the kiosk and the Mac app unavailable, each with its reason](images/install/2-roles.svg)
 
 On a machine with the HAT's I2C bus, choosing a test rig asks for the host name:
 
@@ -206,10 +208,16 @@ On a machine with the HAT's I2C bus, choosing a test rig asks for the host name:
 - **The controller:** how clients connect (private CA, your own certificate, self-signed, or HTTP), the ports, and
   the other names and domains clients use for it ([Certificates](#certificates)). No domain is listed unless you
   list it: the page names those this machine's resolver searches, and you add one only if clients use names in it.
+- **The kiosk:** whether to hide the console's cursor behind it, and who to give a PIN for signing in at it
+  ([The kiosk](#the-kiosk)). The page names the operators and admins on the controller who have no PIN yet.
 - **`hvo-roof`:** its folder.
 - **The Mac app:** its folder.
 
 ![Step 3: Choices for the controller: the connection, the HTTPS, HTTP and web UI ports, and the names clients use for it](images/install/3-settings.svg)
+
+With the kiosk chosen too:
+
+![Step 3 with the kiosk: the console's cursor hidden, the people to give a PIN, and olga named as an operator without one](images/install/3-settings-kiosk.svg)
 
 Choosing HTTP asks you to type `http`, to confirm that keys, session tokens and PINs may cross the network unencrypted:
 
@@ -265,7 +273,7 @@ after the wizard closes.
 
 When the install is refused, or a step fails, the Done page says why. It also says what was changed, if anything.
 
-![Step 8 after a refusal: the installer cannot install roof-controller yet, and nothing was changed](images/install/8-refused.svg)
+![Step 8 after a refusal: the installer cannot install hvo-roof yet, and nothing was changed](images/install/8-refused.svg)
 
 ## Answers files
 
@@ -302,6 +310,16 @@ A rig's `controller` section has no `camera`. It has a `rig` section instead:
 }
 ```
 
+With the kiosk, a `kiosk` section:
+
+```json
+{
+  "roles": ["controller", "kiosk"],
+  "controller": { "firstAdmin": { "name": "observer", "pin": true } },
+  "kiosk": { "hideCursor": true, "pins": ["olga"] }
+}
+```
+
 | Member | Values | Default |
 |--------|--------|---------|
 | `schema` | `1` | `1` |
@@ -321,6 +339,8 @@ A rig's `controller` section has no `camera`. It has a `rig` section instead:
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
+| `kiosk.hideCursor` | `true` to hide the console's cursor behind the kiosk, from the next reboot (`vt.global_cursor_default=0` in `/boot/firmware/cmdline.txt`). `false` leaves `cmdline.txt` as it is. | `true` |
+| `kiosk.pins` | People on the controller, operators or admins, by the name they sign in with, to give a PIN for signing in at the kiosk. Someone who has one keeps it. Not recorded. | None |
 | `cli.folder` | `~/.local/bin` or `/usr/local/bin` | `~/.local/bin` |
 | `macApp.folder` | `/Applications` or `~/Applications` | `/Applications` |
 | `rigConfirmation` | This machine's host name, for a rig on a machine with `/dev/i2c-1` | None |
@@ -337,10 +357,12 @@ only when a step needs one:
 
 - the first admin's password, typed twice, when the controller has no admin yet;
 - the first admin's PIN, typed twice, with `"pin": true`;
-- the camera's password, when its files are made or its user changes.
+- the camera's password, when its files are made or its user changes;
+- the kiosk's PIN for each person in `kiosk.pins` who has none yet, typed twice.
 
 Without a terminal (`--answers` in a script), give each in a file that only you can read, and the installer reads
-its first line: `--admin-password-file FILE`, `--admin-pin-file FILE` and `--camera-password-file FILE`. When a
+its first line: `--admin-password-file FILE`, `--admin-pin-file FILE`, `--camera-password-file FILE`, and
+`--pin-file NAME=FILE` for each person's PIN (`--pin-file olga=/root/olga-pin`). When a
 step needs one that was not given, the installer stops with exit code 2 and changes nothing.
 
 ### Settings from a backup
@@ -435,6 +457,33 @@ installer's; the installer gives it the rest. A setting of the deploy script's i
 installer deploys. The installer also sets `REQUIRE_IDLE_ROOF`: the script then stops before it replaces the
 controller when it cannot read the roof's status, as well as when the roof moves
 ([Deploying](deployment.md#deploying-with-the-script)).
+
+## The kiosk
+
+On the controller's Pi, the installer sets up the touchscreen kiosk ([kiosk.md](kiosk.md)) as the steps in
+[Install](kiosk.md#by-hand) do by hand:
+
+- **Packages:** the display, touch and font libraries, with apt, when any is missing.
+- **The user:** `hvo-kiosk`, a system user in `video`, `input` and `render`.
+- **The program:** `/opt/hvo-roof-kiosk/hvo-roof-kiosk`, from the release's `hvo-roof-kiosk` tarball, checked against
+  the size and SHA-256 in `release.json`, and the program inside it against its SHA-256 too. The program it replaces
+  is kept as `hvo-roof-kiosk.previous`, to go back to ([kiosk.md](kiosk.md#by-hand)).
+- **The device key:** the controller's own kiosk key (`kiosk`, a `RoofViewer` key marked `Kiosk` and `Local`), made
+  like the installer's other keys, and redeployed to the controller once the roof is idle. The kiosk's copy is
+  `/etc/hvo-roof-kiosk/device-key`, `0400`, which only `hvo-kiosk` reads.
+- **The settings:** `/opt/hvo-roof-kiosk/appsettings.Local.json`, with the controller on `localhost`:
+  `https://localhost:8443/` trusting the installer's CA (`/etc/hvo-roof/ca.crt`), pinning the controller's certificate
+  when it is self-signed or your own, or `http://localhost:8080/` over plain HTTP. Settings changed by hand there are
+  kept.
+- **The service:** `hvo-roof-kiosk.service` and the backlight's udev rule, applied, then the service enabled and
+  started. It is started again when its program, key, settings, unit or rule change.
+- **The cursor:** with `kiosk.hideCursor`, `vt.global_cursor_default=0` in `/boot/firmware/cmdline.txt`. It takes
+  effect at the next reboot, which the Done page reminds you of.
+- **PINs:** for each person in `kiosk.pins`, a PIN typed twice, or read from `--pin-file NAME=FILE`, set through the
+  controller's API. A viewer, or a name that is not on the controller, blocks the plan; someone with a PIN keeps it.
+
+`hvo-roof-install cert` keeps the kiosk's settings with the certificate: renewing a self-signed certificate re-pins
+it, and restarts the kiosk. A certificate from the installer's CA needs no change.
 
 ## Certificates
 
@@ -619,6 +668,8 @@ machine has files, modes, containers and ports, and its programs are stubbed. Th
 - the certificates: the CA's name constraints and the names on the certificate it issues, that the key files are made
   owner-only and never printed, renewal before expiry, a changed name or a new CA, importing a PFX or PEM with its
   chain, and refusing a certificate the controller could not serve;
+- the kiosk's steps (`InstallerKioskTests`): its files, modes and owners, its settings for each way the controller is
+  reached, its PINs, a rollback copy on update, and its settings following a renewed certificate;
 - the exit codes.
 
 The controller's side, `GET /ca.crt` and the `https_certificate` health check, has its own tests
@@ -657,6 +708,17 @@ rig: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the installer's log, or its container
 when it ends. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and its registry's
 15001. `RIG_HTTPS_PORT` and `RIG_WEB_PORT` move the controller off 8443 and 8088, and `RIG_REGISTRY_PORT` moves the
 registry. `RIG_RESULTS_DIR` writes each check's result and timing to `rig-scenario.md`.
+
+### The kiosk end to end
+
+The CI workflow's `installer-kiosk` job runs the installer's kiosk steps for real, as root on GitHub's arm64 runner
+with systemd (`InstallerKioskSystemTests`). They install the kiosk program the build published for linux-arm64, from a
+release folder, with a kiosk key and a CA made for the test, and the test checks the apt packages, the `hvo-kiosk`
+user and its groups, the files with their modes and owners, that `hvo-roof-kiosk.service` runs as `hvo-kiosk` and logs
+where it draws, and that a second run changes nothing; then it removes what it made. The controller's side (its
+container, and the redeploy that gives it the kiosk's key) needs the Pi's HAT, so the fake machine's tests cover it. The
+runner has no screen or touchscreen, so the kiosk's display stays one of its assumptions
+([kiosk.md](kiosk.md#assumptions)). Anywhere without `HVO_KIOSK_INSTALL=1` and `HVO_KIOSK_PROGRAM` the test is skipped.
 
 ### Refreshing the screenshots
 

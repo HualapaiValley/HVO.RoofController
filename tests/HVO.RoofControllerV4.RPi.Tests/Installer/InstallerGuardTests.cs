@@ -201,7 +201,7 @@ public sealed class InstallerGuardTests
     [TestMethod]
     public async Task TheKiosk_NeedsTheControllerOnItsPi()
     {
-        using var pi = new FakeMachine().WithPi();
+        using var pi = new FakeMachine().WithPi().WithDisplay();
         using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
         var kiosk = new InstallAnswers { Roles = [InstallRole.Kiosk] };
 
@@ -211,6 +211,30 @@ public sealed class InstallerGuardTests
 
         pi.Write(InstallPaths.SystemRecord, Record(InstallRole.Controller, HatMode.Real).ToJson());
         RoleGuards.Check(await MachineSurveyor.SurveyAsync(pi.Machine), kiosk).Should().BeEmpty("the controller is recorded as installed");
+    }
+
+    [TestMethod]
+    public async Task TheKiosk_NeedsAScreen_AndNoDesktop()
+    {
+        using var bare = new FakeMachine().WithPi();
+        using var dark = new FakeMachine().WithPi().WithDisplay(connected: false);
+        using var desktop = new FakeMachine().WithPi().WithDisplay();
+        desktop.DisplayManagerActive = true;
+        using var ready = new FakeMachine().WithPi().WithDisplay();
+
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(bare.Machine)).Reason.Should().Contain("screen");
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(dark.Machine)).Reason.Should().Contain("screen");
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(desktop.Machine)).Reason.Should().Contain("display-manager.service");
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(ready.Machine)).Available.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task TheKiosk_OnceInstalled_IsKept_WithItsScreenOff()
+    {
+        using var pi = new FakeMachine().WithPi().WithDisplay(connected: false);
+        pi.Write(InstallPaths.SystemRecord, (Record(InstallRole.Controller, HatMode.Real) with { Roles = [InstallRole.Controller, InstallRole.Kiosk] }).ToJson());
+
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(pi.Machine)).Available.Should().BeTrue("a screen that is off, or unplugged for now, does not take the kiosk away");
     }
 
     [TestMethod]

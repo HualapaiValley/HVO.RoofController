@@ -159,6 +159,20 @@ the same words as every other client.
 The kiosk runs on the controller's Pi, beside the controller's container, as a systemd service. It needs Raspberry Pi
 OS Lite (no desktop): nothing else may hold the display.
 
+The installer sets it up ([install.md](install.md#the-kiosk)). On the controller's Pi, with the touch display
+connected, choose the kiosk with the controller, or on its own once the controller is installed:
+
+```bash
+sudo hvo-roof-install
+```
+
+It does each step below, and checks each on a later run. Its answers file has the kiosk's two choices
+(`kiosk.hideCursor`, `kiosk.pins`), and `--plan` shows the steps before anything changes.
+
+### By hand
+
+The steps the installer takes, for a Pi set up without it:
+
 1. **Packages.** The display and input libraries, and fontconfig:
 
    ```bash
@@ -199,6 +213,14 @@ OS Lite (no desktop): nothing else may hold the display.
    sudo install -m 755 hvo-roof-kiosk /opt/hvo-roof-kiosk/
    ```
 
+   The installer keeps the program it replaces as `/opt/hvo-roof-kiosk/hvo-roof-kiosk.previous`. To go back to it:
+
+   ```bash
+   sudo systemctl stop hvo-roof-kiosk
+   sudo cp -p /opt/hvo-roof-kiosk/hvo-roof-kiosk.previous /opt/hvo-roof-kiosk/hvo-roof-kiosk
+   sudo systemctl start hvo-roof-kiosk
+   ```
+
 4. **The device key.** Give the kiosk a key of its own, with the `RoofViewer` role, marked `Kiosk` (and `Local`, so an
    admin may change the local-only settings here). Add it to the controller's secrets as any configured key
    ([Provisioning API keys](security.md#provisioning-api-keys)), under the next free index:
@@ -233,20 +255,23 @@ OS Lite (no desktop): nothing else may hold the display.
    sudoedit /opt/hvo-roof-kiosk/appsettings.Local.json
    ```
 
-   In HTTPS mode the controller's API is published on port 8443 only, so the
-   kiosk uses `https://localhost:8443/`. The certificate is not issued for `localhost`, so pin it by its SHA-256. Take
-   it from the certificate the controller serves on that port, which works in this directory and whoever issued it:
+   In HTTPS mode the controller's API is published on port 8443 only, so the kiosk uses `https://localhost:8443/`.
+
+   The installer's CA issues the controller's certificate for `localhost` among its names, so trust the CA: put the
+   path of the CA's certificate, `/etc/hvo-roof/ca.crt` (PEM or DER, readable by the kiosk's user), in
+   `ServerCaCertificateFile`, and leave `ServerCertificateSha256` out. Only that CA is trusted, and a certificate
+   reissued under it needs no change here.
+
+   A self-signed certificate, or one of your own that does not name `localhost`, is pinned by its SHA-256 instead.
+   Take it from the certificate the controller serves on that port:
 
    ```bash
    openssl s_client -connect localhost:8443 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
    ```
 
-   and put that in `ServerCertificateSha256`. A certificate reissued later has a new SHA-256, and the pin must follow it.
-
-   When a private CA issued the certificate, such as the installer's, and the certificate names `localhost`, trust the
-   CA instead: put the path of the CA's certificate (PEM or DER, readable by the kiosk's user) in
-   `ServerCaCertificateFile`, and leave `ServerCertificateSha256` out. Only that CA is trusted, and a certificate
-   reissued under it needs no change here. Under `pi-lan-http` the kiosk uses `http://localhost:8080` and neither.
+   and put that in `ServerCertificateSha256`. A certificate reissued later has a new SHA-256, and the pin must follow
+   it: `hvo-roof-install cert` does that when it renews a self-signed certificate, and restarts the kiosk. Under
+   `pi-lan-http` the kiosk uses `http://localhost:8080` and neither.
 
 6. **The service.** Install the unit, and the udev rule for the backlight when `BacklightFile` is set. The rule acts
    on the `add` event the boot sends, so apply it now with one (`udevadm trigger` sends `change` unless told):
@@ -264,7 +289,7 @@ OS Lite (no desktop): nothing else may hold the display.
    it: fix them, then `sudo systemctl restart hvo-roof-kiosk`.
 
 7. **PINs.** An admin gives each operator a PIN (6 to 12 digits) with `hvo-roof pins set <name>`, or on the web UI's
-   People page.
+   People page. The installer gives one to each person named in `kiosk.pins` who has none.
 
 ## Settings
 
@@ -335,6 +360,12 @@ Nothing here needs the Pi, the display or the roof.
 - **The program** (`KioskProgramTests`): its settings, the device key, the display and the backlight, and exit code 78
   for settings it cannot start with; CI runs the published program without settings to check that code. The install
   steps above are checked against the files they install, which are the files of CI's artifact.
+- **The installer's steps** (`InstallerKioskTests`) install the kiosk on a fake Pi: the files, their modes and owners,
+  the device key, the settings for each way the controller is reached, the unit and the udev rule, the cursor, the
+  PINs, a second run that changes nothing, an update that keeps the program it replaces, and a renewed self-signed
+  certificate that the kiosk's pin follows. CI's `installer-kiosk` job runs the installer's kiosk steps for real, as
+  root on an arm64 runner with systemd (`InstallerKioskSystemTests`), and checks that it starts (the display and the
+  touchscreen stay the assumptions above).
 - **The renders** (`KioskRenderTests`) draw each screen headless (Avalonia's headless platform with Skia) at 1280x720
   and 800x480, and check that nothing overlaps, that no text is cut off but for the three texts shortened on purpose (a
   controller name longer than half the header, which the Controller row shows whole; a long name on its pill; the end

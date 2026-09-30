@@ -163,6 +163,15 @@ class TheAssets(ReleaseTestCase):
             self.assertEqual((asset["kind"], asset["platform"]), self.EXPECTED[asset["name"]], asset["name"])
             self.assertEqual(asset["size"], path.stat().st_size, asset["name"])
             self.assertEqual(asset["sha256"], sha256(path), asset["name"])
+            self.assertEqual("files" in asset, asset["kind"] == "kiosk", asset["name"])
+
+    def test_release_json_lists_the_sha256_of_each_file_in_the_kiosk_s_tarball(self):
+        kiosk = next(asset for asset in self.manifest["assets"] if asset["kind"] == "kiosk")
+        folder = self.release.kiosk
+        self.assertEqual(kiosk["files"], {
+            name: hashlib.sha256((folder / name).read_bytes()).hexdigest()
+            for name in ("99-hvo-roof-kiosk-backlight.rules", "appsettings.Local.example.json", "hvo-roof-kiosk",
+                         "hvo-roof-kiosk.service")})
 
     def test_sha256sums_covers_every_asset_and_release_json_as_sha256sum_writes_it(self):
         lines = (self.out / "SHA256SUMS").read_text(encoding="utf-8").splitlines()

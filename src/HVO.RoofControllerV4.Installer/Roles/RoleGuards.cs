@@ -32,7 +32,7 @@ public static class RoleGuards
         {
             InstallRole.Controller => ControllerProblem(survey),
             InstallRole.Rig => RigProblem(survey),
-            InstallRole.Kiosk => survey.RuntimeIdentifier == "linux-arm64" ? null : "The kiosk runs on the controller's Raspberry Pi (64-bit Raspberry Pi OS).",
+            InstallRole.Kiosk => KioskProblem(survey),
             InstallRole.Cli => null,
             InstallRole.MacApp => survey.RuntimeIdentifier == "osx-arm64" ? null : "The Mac app runs on a Mac with Apple silicon.",
             _ => throw new ArgumentOutOfRangeException(nameof(role), role, null)
@@ -129,6 +129,11 @@ public static class RoleGuards
         {
             problems.Add("The kiosk needs the controller on this Pi: choose the controller too, or install it first.");
         }
+        else if (roles.Contains(InstallRole.Kiosk) && !InstallRoles.RunsController(roles) && !survey.Docker.IsUsable)
+        {
+            // The kiosk's key and PINs come from the controller's container.
+            problems.Add($"The kiosk is set up through the controller, which runs in Docker. {survey.Docker.Problem}");
+        }
 
         if (InstallRoles.RunsController(roles) && !survey.Docker.IsUsable)
         {
@@ -165,6 +170,29 @@ public static class RoleGuards
         return missing.Length == 0
             ? null
             : $"The HAT's devices are missing ({string.Join(", ", missing)}). On the observatory's Pi, enable I2C (sudo raspi-config nonint do_i2c 0) and reboot; elsewhere, choose a test rig.";
+    }
+
+    private static string? KioskProblem(MachineSurvey survey)
+    {
+        if (survey.RuntimeIdentifier != "linux-arm64")
+        {
+            return "The kiosk runs on the controller's Raspberry Pi (64-bit Raspberry Pi OS).";
+        }
+
+        if (survey.Display is { DisplayManagerActive: true })
+        {
+            return "A desktop has the screen (display-manager.service is running), and the kiosk draws on it itself: use Raspberry Pi OS Lite, or boot to the console (sudo systemctl set-default multi-user.target), reboot, and run the installer again.";
+        }
+
+        // Once installed, a screen that is off or unplugged for now does not stop an update.
+        if (survey.SystemRecord?.Roles.Contains(InstallRole.Kiosk) == true || survey.Display?.Screens.Count > 0)
+        {
+            return null;
+        }
+
+        return survey.Display is { } display
+            ? $"The kiosk needs a screen, and none is connected ({string.Join(", ", display.Outputs.Select(output => $"{output.Name}: {output.Status}"))}). Connect the touchscreen, check its ribbon cable, reboot, and run the installer again."
+            : $"The kiosk needs a screen, and this Pi has no display outputs ({MachineSurveyor.DrmFolder} lists none): connect the touchscreen, reboot, and run the installer again.";
     }
 
     private static string? RigProblem(MachineSurvey survey)

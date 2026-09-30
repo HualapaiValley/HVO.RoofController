@@ -4,8 +4,8 @@ using HVO.RoofControllerV4.Installer.Machine;
 
 namespace HVO.RoofControllerV4.Installer.Answers;
 
-/// <summary>A secret an install may need, which is never in the answers: a person types it, or gives it in a file.</summary>
-public enum InstallSecret
+/// <summary>What kind of secret an install may need.</summary>
+public enum InstallSecretKind
 {
     /// <summary>The first admin's password.</summary>
     AdminPassword,
@@ -14,7 +14,48 @@ public enum InstallSecret
     AdminPin,
 
     /// <summary>The password of the Blue Iris user the controller shows the camera as.</summary>
-    CameraPassword
+    CameraPassword,
+
+    /// <summary>A person's PIN for the kiosk (<see cref="InstallSecret.Person"/>), given when the kiosk is installed.</summary>
+    Pin
+}
+
+/// <summary>
+/// A secret an install may need, which is never in the answers: a person types it, or gives it in a file. A PIN for the
+/// kiosk names its person; names compare as the controller compares them, without regard to case.
+/// </summary>
+public readonly record struct InstallSecret(InstallSecretKind Kind, string? Person = null) : IComparable<InstallSecret>
+{
+    public static InstallSecret AdminPassword => new(InstallSecretKind.AdminPassword);
+
+    public static InstallSecret AdminPin => new(InstallSecretKind.AdminPin);
+
+    public static InstallSecret CameraPassword => new(InstallSecretKind.CameraPassword);
+
+    /// <summary>The secrets with an option of their own (<c>--admin-password-file</c> and the others).</summary>
+    public static IReadOnlyList<InstallSecret> WithOwnOption { get; } = [AdminPassword, AdminPin, CameraPassword];
+
+    /// <summary><paramref name="person"/>'s PIN, for the kiosk.</summary>
+    public static InstallSecret PinFor(string person)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(person);
+        return new(InstallSecretKind.Pin, person.Trim());
+    }
+
+    /// <summary>True for a PIN: digits, typed on the kiosk's keypad.</summary>
+    public bool IsPin => Kind is InstallSecretKind.AdminPin or InstallSecretKind.Pin;
+
+    public bool Equals(InstallSecret other)
+        => Kind == other.Kind && string.Equals(Person, other.Person, StringComparison.OrdinalIgnoreCase);
+
+    public override int GetHashCode()
+        => HashCode.Combine(Kind, Person is null ? 0 : StringComparer.OrdinalIgnoreCase.GetHashCode(Person));
+
+    /// <summary>The order they are asked in: the admin's, the camera's, then each person's PIN by name.</summary>
+    public int CompareTo(InstallSecret other)
+        => Kind != other.Kind ? Kind.CompareTo(other.Kind) : StringComparer.OrdinalIgnoreCase.Compare(Person, other.Person);
+
+    public override string ToString() => Person is null ? Kind.ToString() : $"{Kind}({Person})";
 }
 
 /// <summary>
@@ -44,29 +85,38 @@ public sealed class InstallSecrets
     }
 
     /// <summary>What the secret is, as the installer names it when it asks: "the first admin's password".</summary>
-    public static string Describe(InstallSecret secret) => secret switch
+    public static string Describe(InstallSecret secret) => secret.Kind switch
     {
-        InstallSecret.AdminPassword => "the first admin's password",
-        InstallSecret.AdminPin => "the first admin's PIN",
-        InstallSecret.CameraPassword => "the camera's password",
+        InstallSecretKind.AdminPassword => "the first admin's password",
+        InstallSecretKind.AdminPin => "the first admin's PIN",
+        InstallSecretKind.CameraPassword => "the camera's password",
+        InstallSecretKind.Pin => $"{secret.Person}'s PIN",
         _ => throw new ArgumentOutOfRangeException(nameof(secret), secret, null)
     };
 
-    /// <summary>The option that gives the secret in a file: <c>--admin-password-file</c>.</summary>
-    public static string OptionName(InstallSecret secret) => secret switch
+    /// <summary>The option that gives <c>--pin-file NAME=FILE</c>: a person's PIN, in a file.</summary>
+    public const string PinFileOption = "--pin-file";
+
+    /// <summary>The option that gives the secret in a file: <c>--admin-password-file</c>, or <see cref="PinFileOption"/> for a person's PIN.</summary>
+    public static string OptionName(InstallSecret secret) => secret.Kind switch
     {
-        InstallSecret.AdminPassword => "--admin-password-file",
-        InstallSecret.AdminPin => "--admin-pin-file",
-        InstallSecret.CameraPassword => "--camera-password-file",
+        InstallSecretKind.AdminPassword => "--admin-password-file",
+        InstallSecretKind.AdminPin => "--admin-pin-file",
+        InstallSecretKind.CameraPassword => "--camera-password-file",
+        InstallSecretKind.Pin => PinFileOption,
         _ => throw new ArgumentOutOfRangeException(nameof(secret), secret, null)
     };
+
+    /// <summary>How the option is given: <c>--admin-password-file FILE</c>, or <c>--pin-file olga=FILE</c>.</summary>
+    public static string OptionUsage(InstallSecret secret)
+        => secret.Kind == InstallSecretKind.Pin ? $"{PinFileOption} {secret.Person}=FILE" : $"{OptionName(secret)} FILE";
 
     /// <summary>What is wrong with <paramref name="value"/> for <paramref name="secret"/>, or null when nothing is.</summary>
-    public static string? Problem(InstallSecret secret, string? value) => secret switch
+    public static string? Problem(InstallSecret secret, string? value) => secret.Kind switch
     {
-        InstallSecret.AdminPassword => RoofIdentityContract.IsValidPassword(value) ? null : RoofIdentityText.PasswordRule,
-        InstallSecret.AdminPin => RoofIdentityContract.IsValidPin(value) ? null : RoofIdentityText.PinRule,
-        InstallSecret.CameraPassword => string.IsNullOrEmpty(value) ? "The camera's password may not be empty."
+        InstallSecretKind.AdminPassword => RoofIdentityContract.IsValidPassword(value) ? null : RoofIdentityText.PasswordRule,
+        InstallSecretKind.AdminPin or InstallSecretKind.Pin => RoofIdentityContract.IsValidPin(value) ? null : RoofIdentityText.PinRule,
+        InstallSecretKind.CameraPassword => string.IsNullOrEmpty(value) ? "The camera's password may not be empty."
             : value.Any(char.IsControl) ? "The camera's password may not hold a control character."
             : null,
         _ => throw new ArgumentOutOfRangeException(nameof(secret), secret, null)
@@ -80,7 +130,7 @@ public sealed class InstallSecrets
     public static string ReadFile(InstallerMachine machine, InstallSecret secret, string path)
     {
         ArgumentNullException.ThrowIfNull(machine);
-        var option = OptionName(secret);
+        var option = secret.Kind == InstallSecretKind.Pin ? $"{PinFileOption} {secret.Person}" : OptionName(secret);
         string? text;
         try
         {

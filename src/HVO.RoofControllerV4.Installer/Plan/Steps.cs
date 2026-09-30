@@ -7,8 +7,11 @@ using HVO.RoofControllerV4.Installer.Survey;
 
 namespace HVO.RoofControllerV4.Installer.Plan;
 
-/// <summary>A folder with its mode: made when missing, its mode set when it differs. Its contents are never touched.</summary>
-public sealed class FolderStep(string path, UnixFileMode mode, string purpose) : PlanStep
+/// <summary>
+/// A folder with its mode, and its owner when one is given: made when missing, its mode and owner set when they differ.
+/// Its contents are never touched.
+/// </summary>
+public sealed class FolderStep(string path, UnixFileMode mode, string purpose, string? owner = null) : PlanStep
 {
     public override StepKind Kind => StepKind.Folder;
 
@@ -18,20 +21,42 @@ public sealed class FolderStep(string path, UnixFileMode mode, string purpose) :
 
     public UnixFileMode Mode => mode;
 
-    public override Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
+    /// <summary>Who owns it (<c>user:group</c>), when that matters; null leaves it to whoever makes it.</summary>
+    public string? Owner => owner;
+
+    public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        var wanted = owner is null ? Modes.Octal(mode) : $"{Modes.Octal(mode)}, {owner}";
         var current = context.Machine.GetMode(path);
-        return Task.FromResult(current switch
+        if (current is null)
         {
-            null => new StepCheck(StepChange.Create, Modes.Octal(mode)),
-            _ when context.Machine.FileExists(path) => new StepCheck(StepChange.Blocked, $"{path} is a file, not a folder"),
-            _ when current.Value != mode => new StepCheck(StepChange.Change, $"{Modes.Octal(current.Value)} → {Modes.Octal(mode)}"),
-            _ => StepCheck.Unchanged(Modes.Octal(mode))
-        });
+            return new StepCheck(StepChange.Create, wanted);
+        }
+
+        if (context.Machine.FileExists(path))
+        {
+            return new StepCheck(StepChange.Blocked, $"{path} is a file, not a folder");
+        }
+
+        var changes = new List<string>();
+        if (current.Value != mode)
+        {
+            changes.Add($"{Modes.Octal(current.Value)} → {Modes.Octal(mode)}");
+        }
+
+        if (owner is not null && await Ownership.GetAsync(context.Machine, path, cancellationToken).ConfigureAwait(false) is var found && found != owner)
+        {
+            changes.Add($"{found ?? "an unknown owner"} → {owner}");
+        }
+
+        return changes.Count > 0 ? new StepCheck(StepChange.Change, string.Join(", ", changes)) : StepCheck.Unchanged(wanted);
     }
 
-    public override Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
+    public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(check);
         if (check.Change == StepChange.Create)
         {
             context.Machine.CreateDirectory(path, mode);
@@ -43,7 +68,35 @@ public sealed class FolderStep(string path, UnixFileMode mode, string purpose) :
             context.Log.Write($"Set {path} to {Modes.Octal(mode)}.");
         }
 
-        return Task.CompletedTask;
+        if (owner is not null)
+        {
+            await Ownership.SetAsync(context, path, owner, cancellationToken).ConfigureAwait(false);
+        }
+    }
+}
+
+/// <summary>Who owns a file or folder (<c>user:group</c>), told with <c>stat</c> and set with <c>chown</c>.</summary>
+public static class Ownership
+{
+    /// <summary>Who owns <paramref name="path"/>; null when it cannot be told.</summary>
+    public static async Task<string?> GetAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        var result = await machine.Commands.RunAsync(new CommandLine("stat", "-c", "%U:%G", "--", path), cancellationToken).ConfigureAwait(false);
+        return result.Succeeded ? result.Output.Trim() : null;
+    }
+
+    /// <summary>Gives <paramref name="path"/> to <paramref name="owner"/>.</summary>
+    public static async Task SetAsync(InstallContext context, string path, string owner, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var result = await context.Machine.Commands.RunAsync(new CommandLine("chown", owner, "--", path), cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            throw new InstallerException($"Could not give {path} to {owner}: {result.Reason}");
+        }
+
+        context.Log.Write($"Gave {path} to {owner}.");
     }
 }
 

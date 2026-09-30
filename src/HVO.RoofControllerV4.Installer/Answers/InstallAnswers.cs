@@ -24,6 +24,8 @@ public sealed record InstallAnswers
 
     public MacAppSettings? MacApp { get; init; }
 
+    public KioskSettings? Kiosk { get; init; }
+
     /// <summary>
     /// For a test rig on a machine with the HAT's I2C bus: this machine's host name, typed to confirm that it is not the
     /// observatory's Pi. The wizard never saves it: each new rig is confirmed by a person, or by an answers file written
@@ -58,6 +60,7 @@ public sealed record InstallAnswers
             Controller = controller,
             Cli = roles.Contains(InstallRole.Cli) ? Cli ?? new CliSettings() : null,
             MacApp = roles.Contains(InstallRole.MacApp) ? MacApp ?? new MacAppSettings() : null,
+            Kiosk = roles.Contains(InstallRole.Kiosk) ? (Kiosk ?? new KioskSettings()).Normalised() : null,
             RigConfirmation = roles.Contains(InstallRole.Rig) ? RigConfirmation : null,
             HttpConfirmation = controller?.Connection == ConnectionMode.Http ? HttpConfirmation : null
         };
@@ -94,6 +97,11 @@ public sealed record InstallAnswers
         if (MacApp is { } macApp && !MacAppSettings.Folders.Contains(macApp.Folder))
         {
             yield return $"The Mac app's folder must be {string.Join(" or ", MacAppSettings.Folders)}, not '{macApp.Folder}'.";
+        }
+
+        foreach (var problem in Kiosk?.Problems() ?? [])
+        {
+            yield return problem;
         }
     }
 

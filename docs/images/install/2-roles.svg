@@ -13,8 +13,11 @@
 <rect x="28.80" y="150" width="563.20" height="18.4" fill="#1c2028"/>
 <rect x="62.40" y="168" width="773.20" height="18.4" fill="#42380f"/>
 <rect x="62.40" y="186" width="773.20" height="18.4" fill="#42380f"/>
-<rect x="28.80" y="240" width="160.00" height="18.4" fill="#1c2028"/>
-<rect x="62.40" y="258" width="773.20" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="204" width="395.20" height="18.4" fill="#1c2028"/>
+<rect x="62.40" y="222" width="773.20" height="18.4" fill="#42380f"/>
+<rect x="62.40" y="240" width="773.20" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="276" width="160.00" height="18.4" fill="#1c2028"/>
+<rect x="62.40" y="294" width="773.20" height="18.4" fill="#42380f"/>
 <rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="196.80" y="537.00" width="4.50" height="9.30" fill="#000000"/>
@@ -44,10 +47,12 @@
 <text x="28.80" y="163.50" fill="#aeb9c8" textLength="562.80" lengthAdjust="spacingAndGlyphs" opacity="0.6">☐ Test rig: the controller against the HAT emulator (nothing moves)</text>
 <text x="62.40" y="181.50" fill="#fef9c3" textLength="722.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">The roof-controller container on this machine drives the real HAT: a test rig is never</text>
 <text x="62.40" y="199.50" fill="#fef9c3" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">installed over it.</text>
-<text x="28.80" y="217.50" fill="#f8fafc" textLength="394.80" lengthAdjust="spacingAndGlyphs">☐ Kiosk: the touchscreen on the controller's Pi</text>
-<text x="28.80" y="235.50" fill="#f8fafc" textLength="294.00" lengthAdjust="spacingAndGlyphs">☐ hvo-roof: the command-line client</text>
-<text x="28.80" y="253.50" fill="#aeb9c8" textLength="159.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">☐ Mac app: HVO Roof</text>
-<text x="62.40" y="271.50" fill="#fef9c3" textLength="378.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">The Mac app runs on a Mac with Apple silicon.</text>
+<text x="28.80" y="217.50" fill="#aeb9c8" textLength="394.80" lengthAdjust="spacingAndGlyphs" opacity="0.6">☐ Kiosk: the touchscreen on the controller's Pi</text>
+<text x="62.40" y="235.50" fill="#fef9c3" textLength="747.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">The kiosk needs a screen, and this Pi has no display outputs (/sys/class/drm lists none):</text>
+<text x="62.40" y="253.50" fill="#fef9c3" textLength="512.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">connect the touchscreen, reboot, and run the installer again.</text>
+<text x="28.80" y="271.50" fill="#f8fafc" textLength="294.00" lengthAdjust="spacingAndGlyphs">☐ hvo-roof: the command-line client</text>
+<text x="28.80" y="289.50" fill="#aeb9c8" textLength="159.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">☐ Mac app: HVO Roof</text>
+<text x="62.40" y="307.50" fill="#fef9c3" textLength="378.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">The Mac app runs on a Mac with Apple silicon.</text>
 <text x="20.40" y="541.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Next ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>
