@@ -163,9 +163,11 @@ choices.
 
 ## The wizard
 
-The wizard has six steps. The key bar says what the keys do:
+The wizard has up to eight steps. A step with nothing to ask for the roles chosen is passed over, and not counted:
+only the controller and a rig have step 4, and step 6 comes only when the plan needs a password. The key bar says
+what the keys do:
 
-- **Enter** does what the highlighted button says.
+- **Enter** does what the highlighted button says, even from a list of options (**Space** chooses an option).
 - **Esc** goes back a step. It never closes the installer.
 - **F10** quits, unless the install is running: then the installer finishes (or stops) first.
 
@@ -196,28 +198,54 @@ Choosing HTTP asks you to type `http`, to confirm that keys, session tokens and 
 
 ![Step 3 with HTTP chosen: a warning, and the field where http is typed to confirm](images/install/3-settings-http.svg)
 
-**4. Review the plan.** Every change the install would make, checked against the machine, as `--plan` prints it
-([The plan](#the-plan)). Install goes ahead only when nothing blocks the plan. **Save answers** writes the answers
-file, which installs the same way elsewhere with `--answers`.
+**4. The controller.** For the controller or a rig:
 
-![Step 4: Review the plan, listing the folders, the record, the adopted container and the ports, with Save answers](images/install/4-review.svg)
+- **The first admin:** the name of the first person, who signs in to the web UI and adds everyone else, and whether
+  they have a PIN for the kiosk. They are added only while the controller has no admin. Leave the name empty to add
+  nobody.
+- **The camera** (the controller only): the Blue Iris server and a user that may only view. Leave the server empty
+  to leave the camera as it is. The page reminds you that earlier versions held a Blue Iris credential in their
+  source, and that the old user's password must change ([security.md](security.md), "Rotate the Blue Iris credential").
+- **Telemetry:** the OTLP/HTTP endpoint the controller exports to. Empty turns the export off.
+- **Settings from a backup:** the full path of an `appsettings.Local.json`, for a controller that has no settings yet.
+
+![Step 4: The controller, with the first admin roy and a PIN, the Blue Iris server and its view-only user with the reminder, a telemetry endpoint and a backup's settings](images/install/4-controller.svg)
+
+A rig has the HAT emulator in place of the camera: how many times as fast as real time it runs, its camera's frame
+rate, and whether other machines may use it (over HTTPS only).
+
+![Step 4 for a test rig: the first admin, and the HAT emulator's time scale, camera frame rate and whether it is open to the network](images/install/4-rig.svg)
+
+**5. Review the plan.** Every change the install would make, checked against the machine, as `--plan` prints it
+([The plan](#the-plan)). Install goes ahead only when nothing blocks the plan. **Save answers** writes the answers
+file, which installs the same way elsewhere with `--answers`. When the plan needs a password, the button says Next.
+
+![Step 5: Review the plan, listing the folders, the record, the adopted container and the ports, with Save answers](images/install/5-review.svg)
 
 A blocked step says why, and Install stays off:
 
-![Step 4 with a blocked plan: a container made by Docker Compose, with the reason and a pointer to the docs](images/install/4-review-blocked.svg)
+![Step 5 with a blocked plan: a container made by Docker Compose, with the reason and a pointer to the docs](images/install/5-review-blocked.svg)
 
-**5. Installing.** Each step as it runs. The installer cannot be left until the install has finished or stopped.
+**6. Passwords.** Only the passwords and PINs the plan needs ([Passwords and PINs](#passwords-and-pins)): the first
+admin's, when the controller has no admin yet, and the camera's, when its files are made or its user changes. Each is
+typed twice and shown only as dots. None is saved, in the answers or anywhere else, or logged, and the fields are
+cleared once the install has them.
 
-![Step 5: Installing, part way through, with each folder created and the record being written](images/install/5-installing.svg)
+![Step 6: Passwords, with the first admin's password and PIN and the camera's password each typed twice and shown as dots, and a message that the two PINs differ](images/install/6-passwords.svg)
 
-**6. Done.** What was installed, where to reach it, how clients trust its certificate, what comes next, and where the
-record and the log are. The same text stays in the terminal after the wizard closes.
+**7. Installing.** Each step as it runs. The installer cannot be left until the install has finished or stopped.
 
-![Step 6: Done, with the controller's API and web UI addresses, its CA with the CA's fingerprint, the record and the log](images/install/6-done.svg)
+![Step 7: Installing, part way through, with each folder created and the record being written](images/install/7-installing.svg)
+
+**8. Done.** What was installed, where to reach it and its log, that the roof has not moved, what to back up, how
+clients trust its certificate, and where the record and the install's log are. The same text stays in the terminal
+after the wizard closes.
+
+![Step 8: Done, with the controller's API and web UI addresses, its log, the backup reminder, its CA with the CA's fingerprint, the record and the log](images/install/8-done.svg)
 
 When the install is refused, or a step fails, the Done page says why. It also says what was changed, if anything.
 
-![Step 6 after a refusal: the installer cannot install roof-controller yet, and nothing was changed](images/install/6-refused.svg)
+![Step 8 after a refusal: the installer cannot install roof-controller yet, and nothing was changed](images/install/8-refused.svg)
 
 ## Answers files
 
@@ -237,7 +265,7 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
     "domains": ["observatory.example"],
     "firstAdmin": { "name": "observer", "pin": true },
     "camera": { "baseUrl": "http://192.168.0.4:81", "userName": "roof-viewer" },
-    "telemetryEndpoint": "http://collector:4317"
+    "telemetryEndpoint": "http://collector:4318"
   }
 }
 ```
@@ -268,7 +296,7 @@ A rig's `controller` section has no `camera`. It has a `rig` section instead:
 | `controller.firstAdmin.pin` | `true` to give the first admin a PIN for the kiosk | `false` |
 | `controller.camera.baseUrl` | The Blue Iris server the controller shows the camera from, such as `http://192.168.0.4:81`. It must have no path, and no user name or password. | None: the camera is left as it is. |
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
-| `controller.telemetryEndpoint` | An OTLP endpoint for the controller's telemetry, such as `http://collector:4317` | None: export is off |
+| `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1`, or the running emulator's |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5`, or the running emulator's |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
@@ -515,7 +543,7 @@ artifact. To refresh the pictures above, download that artifact from a green run
 
 ```bash
 HVO_INSTALLER_RENDERS_DIR=/tmp/installer-renders \
-  dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter "FullyQualifiedName~.Installer.InstallerWizardTests"
+  dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter "FullyQualifiedName~.Installer.InstallerWizard"
 for ans in /tmp/installer-renders/*.ans; do
   python3 ../tests/cli/ansi-to-svg.py "$ans" "../docs/images/install/$(basename "${ans%.ans}").svg" --title hvo-roof-install
 done

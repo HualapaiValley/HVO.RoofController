@@ -391,12 +391,12 @@ public static class Installer
     }
 
     /// <summary>
-    /// Said before the camera's password is asked for: the Blue Iris credential the source once held is in the public git
-    /// history (docs/security.md).
+    /// Said before the camera's password is asked for, and under the wizard's camera: the Blue Iris credential the source
+    /// once held is in the public git history (docs/security.md, "Rotate the Blue Iris credential").
     /// </summary>
     public const string CameraCredentialReminder =
-        "The Blue Iris credential that earlier versions held in their source is still in the public git history: give the controller a "
-        + "view-only Blue Iris user of its own, and change the old user's password if you have not (docs/security.md, \"Rotate the Blue Iris credential\").";
+        "Earlier versions held a Blue Iris credential in their source, and it is still in the public git history: give the controller "
+        + "a view-only user of its own, and change the old user's password (docs/security.md).";
 
     private const int Tries = 3;
 

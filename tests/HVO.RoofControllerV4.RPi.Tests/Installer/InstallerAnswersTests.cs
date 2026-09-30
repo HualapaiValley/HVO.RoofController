@@ -136,7 +136,7 @@ public sealed class InstallerAnswersTests
             {
                 FirstAdmin = new FirstAdminSettings { Name = " observer ", Pin = true },
                 Camera = new CameraSettings { BaseUrl = "http://192.168.0.4:81", UserName = "roof-viewer" },
-                TelemetryEndpoint = "http://collector:4317"
+                TelemetryEndpoint = "http://collector:4318"
             }
         };
 
@@ -146,7 +146,7 @@ public sealed class InstallerAnswersTests
         read.Should().BeEquivalentTo(answers.Normalised());
         read.Controller!.FirstAdmin.Should().Be(new FirstAdminSettings { Name = "observer", Pin = true }, "the name is trimmed");
         read.Controller.Camera.Should().Be(new CameraSettings { BaseUrl = "http://192.168.0.4:81", UserName = "roof-viewer" });
-        read.Controller.TelemetryEndpoint.Should().Be("http://collector:4317");
+        read.Controller.TelemetryEndpoint.Should().Be("http://collector:4318");
         read.Controller.Rig.Should().BeNull("the controller has no rig's choices");
         using var document = JsonDocument.Parse(json);
         var controller = document.RootElement.GetProperty("controller");
@@ -201,7 +201,7 @@ public sealed class InstallerAnswersTests
     [DataRow("""{ "roles": ["controller"], "controller": { "camera": { "baseUrl": "http://192.168.0.4:81/mjpg" } } }""", "The camera's address must be the server alone, with no path.", DisplayName = "A camera's path")]
     [DataRow("""{ "roles": ["controller"], "controller": { "camera": { "baseUrl": "http://192.168.0.4:81/?user=v" } } }""", "The camera's address may not have a query or a fragment.", DisplayName = "A camera's query")]
     [DataRow("""{ "roles": ["controller"], "controller": { "camera": { "baseUrl": "http://192.168.0.4:81", "userName": "a:b" } } }""", "The camera's user name may not hold a colon", DisplayName = "A camera's user name with a colon")]
-    [DataRow("""{ "roles": ["controller"], "controller": { "telemetryEndpoint": "collector:4317" } }""", "The telemetry endpoint must be an absolute http or https address", DisplayName = "Telemetry without a scheme")]
+    [DataRow("""{ "roles": ["controller"], "controller": { "telemetryEndpoint": "collector:4318" } }""", "The telemetry endpoint must be an absolute http or https address", DisplayName = "Telemetry without a scheme")]
     [DataRow("""{ "roles": ["controller"], "controller": { "telemetryEndpoint": "https://token:hunter2@collector:4318" } }""", "The telemetry endpoint may not hold a user name or password", DisplayName = "Telemetry with a password")]
     public void ChoicesThatCannotWork_AreRefused(string json, string expected)
     {
@@ -228,7 +228,7 @@ public sealed class InstallerAnswersTests
             .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer
             {
                 Emulated = true,
-                Settings = new Dictionary<string, string> { [MachineSurveyor.TelemetryEndpointSetting] = "http://collector:4317" }
+                Settings = new Dictionary<string, string> { [MachineSurveyor.TelemetryEndpointSetting] = "http://collector:4318" }
             })
             .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer
             {
@@ -241,7 +241,7 @@ public sealed class InstallerAnswersTests
 
         var session = await InstallerSession.StartAsync(bench.Machine, InstallLog.None, "4.0.0", FakeMachine.Clock);
 
-        session.DefaultController.TelemetryEndpoint.Should().Be("http://collector:4317", "adopting a controller keeps its telemetry");
+        session.DefaultController.TelemetryEndpoint.Should().Be("http://collector:4318", "adopting a controller keeps its telemetry");
         session.DefaultController.Rig.Should().Be(new RigSettings { TimeScale = 10, CameraFramesPerSecond = 2.5, OpenToLan = true }, "a rig published on every address stays open to the network");
 
         bench.Containers[MachineSurveyor.ControllerContainer] = bench.Containers[MachineSurveyor.ControllerContainer] with { PublishAddress = "127.0.0.1" };

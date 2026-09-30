@@ -43,7 +43,7 @@ public sealed partial class InstallerDocsTests
                 Domains = ["observatory.example"],
                 FirstAdmin = new FirstAdminSettings { Name = "observer", Pin = true },
                 Camera = new CameraSettings { BaseUrl = "http://192.168.0.4:81", UserName = "roof-viewer" },
-                TelemetryEndpoint = "http://collector:4317"
+                TelemetryEndpoint = "http://collector:4318"
             },
             "the example shows the defaults, with a name and a domain for the certificate, and each optional choice");
 
@@ -74,8 +74,10 @@ public sealed partial class InstallerDocsTests
     [TestMethod]
     public void EveryPageTheWizardsTestsDraw_HasAScreenshot_ShownOnThePage()
     {
-        var tests = File.ReadAllText(Path.Combine(Root, "tests", "HVO.RoofControllerV4.RPi.Tests", "Installer", "InstallerWizardTests.cs"));
-        var drawn = RenderCall().Matches(tests).Select(match => match.Groups[1].Value).ToArray();
+        var drawn = Directory.GetFiles(Path.Combine(Root, "tests", "HVO.RoofControllerV4.RPi.Tests", "Installer"), "InstallerWizard*Tests.cs")
+            .SelectMany(file => RenderCall().Matches(File.ReadAllText(file)))
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
         var folder = Path.Combine(Root, "docs", "images", "install");
         var screenshots = Directory.GetFiles(folder, "*.svg").Select(Path.GetFileNameWithoutExtension).ToArray();
         var shown = Screenshot().Matches(Page).Select(match => match.Groups[1].Value).ToArray();

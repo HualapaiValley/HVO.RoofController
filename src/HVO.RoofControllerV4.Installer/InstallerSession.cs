@@ -97,7 +97,8 @@ public sealed class InstallerSession
     public IReadOnlyList<InstallSecret> MissingSecrets(CheckedPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return [.. plan.NeededSecrets().Where(secret => !Secrets.Has(secret))];
+        // Asked for in one order, the admin's before the camera's, whatever the order of the steps that need them.
+        return [.. plan.NeededSecrets().Where(secret => !Secrets.Has(secret)).Distinct().Order()];
     }
 
     public IReadOnlyList<RoleOption> Options => RoleGuards.Options(Survey);
@@ -218,9 +219,17 @@ public sealed class InstallerSession
             lines.Add(string.Empty);
             lines.Add($"The controller's API:  {scheme}://{host}:{controller.ApiPort}/");
             lines.Add($"The web UI:            {scheme}://{host}:{controller.WebPort}/");
+            lines.Add($"Its log:               docker logs {MachineSurveyor.ControllerContainer}");
             lines.Add(rig
                 ? "This is a test rig: the controller drives the HAT emulator, and nothing here moves a roof."
                 : "The roof has not moved. Confirm the installation assumptions in commissioning.md on site before the first move.");
+            if (!rig)
+            {
+                var layout = ControllerLayout.For(Machine);
+                lines.Add($"Back up {layout.Configuration} and {layout.Data} now, and after each change: they hold its keys, certificates, "
+                    + "people and settings (commissioning.md, \"Backing up\").");
+            }
+
             var trust = TrustLines(controller, $"{scheme}://{host}:{controller.ApiPort}/ca.crt").ToArray();
             if (trust.Length > 0)
             {
