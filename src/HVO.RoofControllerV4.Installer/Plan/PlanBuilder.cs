@@ -51,6 +51,9 @@ public sealed record ControllerLayout(
     /// <summary>The controller's certificate and key (PKCS#12), as the deploy script mounts it (HTTPS_CERT_FILE).</summary>
     public string Pfx => Path.Join(Https, "roof-controller.pfx");
 
+    /// <summary>The controller's settings file: the settings changed from the shipped defaults, through the API or by hand.</summary>
+    public string SettingsFile => Path.Join(Settings, "appsettings.Local.json");
+
     /// <summary>The controller's identity store: its people and managed API keys, as hashes.</summary>
     public string IdentityFile => Path.Join(Identity, "identity.json");
 
@@ -97,6 +100,12 @@ public static class PlanBuilder
             steps.AddRange(keys.Select(key => new ApiKeyStep(layout, key)));
             var camera = CameraSteps.For(layout, rig, settings.Camera);
             steps.AddRange(camera);
+            var import = settings.ImportSettingsFrom is { } backup ? new SettingsImportStep(layout, backup) : null;
+            if (import is not null)
+            {
+                steps.Add(import);
+            }
+
             steps.Add(new DeployToolsStep());
             var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
             if (emulator is not null)
@@ -104,7 +113,7 @@ public static class PlanBuilder
                 steps.Add(emulator);
             }
 
-            steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator, camera));
+            steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator, camera, import));
             if (settings.FirstAdmin is { } admin)
             {
                 steps.Add(new FirstAdminStep(layout, admin, keys.First(key => key.Use == ApiKeyUse.Admin)));
@@ -209,7 +218,8 @@ public static class PlanBuilder
             InstallerVersion = context.Version,
             InstalledAt = existing?.InstalledAt ?? default,
             UpdatedAt = existing?.UpdatedAt ?? default,
-            Controller = InstallRoles.RunsController(roles) ? answers.Controller : InstallRoles.RunsController(all) ? existing?.Controller : null,
+            // An import is done once: the record keeps the settings, not where they came from.
+            Controller = InstallRoles.RunsController(roles) ? answers.Controller! with { ImportSettingsFrom = null } : InstallRoles.RunsController(all) ? existing?.Controller : null,
             Cli = roles.Contains(InstallRole.Cli) ? answers.Cli : all.Contains(InstallRole.Cli) ? existing?.Cli : null,
             MacApp = roles.Contains(InstallRole.MacApp) ? answers.MacApp : all.Contains(InstallRole.MacApp) ? existing?.MacApp : null
         };

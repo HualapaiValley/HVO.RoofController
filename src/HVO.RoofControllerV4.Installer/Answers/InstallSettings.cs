@@ -71,6 +71,13 @@ public sealed record ControllerSettings
     /// <summary>A test rig's HAT emulator, and who may reach the rig (a rig only).</summary>
     public RigSettings? Rig { get; init; }
 
+    /// <summary>
+    /// An <c>appsettings.Local.json</c> from a backup (its full path), to start the controller with: copied into the
+    /// settings folder as it is when the controller has no settings yet, and never over settings it has. Not recorded:
+    /// an import is done once.
+    /// </summary>
+    public string? ImportSettingsFrom { get; init; }
+
     [JsonIgnore]
     public bool UsesHttps => Connection != ConnectionMode.Http;
 
@@ -114,6 +121,11 @@ public sealed record ControllerSettings
             yield return $"The telemetry endpoint {telemetry}";
         }
 
+        if (ImportSettingsFrom is { } backup && !Path.IsPathFullyQualified(backup))
+        {
+            yield return $"The settings to import ({backup}) must be given by their full path (/home/pi/backup/appsettings.Local.json).";
+        }
+
         if (Rig is { OpenToLan: true } && !UsesHttps)
         {
             yield return "A rig opened to the network needs HTTPS: choose a connection other than http, or keep the rig on this machine.";
@@ -129,7 +141,8 @@ public sealed record ControllerSettings
         Camera = Camera is { } camera
             ? camera with { BaseUrl = camera.BaseUrl.Trim(), UserName = string.IsNullOrWhiteSpace(camera.UserName) ? null : camera.UserName.Trim() }
             : null,
-        TelemetryEndpoint = string.IsNullOrWhiteSpace(TelemetryEndpoint) ? null : TelemetryEndpoint.Trim()
+        TelemetryEndpoint = string.IsNullOrWhiteSpace(TelemetryEndpoint) ? null : TelemetryEndpoint.Trim(),
+        ImportSettingsFrom = string.IsNullOrWhiteSpace(ImportSettingsFrom) ? null : ImportSettingsFrom.Trim()
     };
 
     public bool Equals(ControllerSettings? other)
@@ -143,10 +156,11 @@ public sealed record ControllerSettings
             && Equals(FirstAdmin, other.FirstAdmin)
             && Equals(Camera, other.Camera)
             && string.Equals(TelemetryEndpoint, other.TelemetryEndpoint, StringComparison.Ordinal)
-            && Equals(Rig, other.Rig);
+            && Equals(Rig, other.Rig)
+            && string.Equals(ImportSettingsFrom, other.ImportSettingsFrom, StringComparison.Ordinal);
 
     public override int GetHashCode()
-        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig));
+        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig, ImportSettingsFrom));
 
     public static string Describe(ConnectionMode mode) => mode switch
     {

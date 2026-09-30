@@ -83,13 +83,20 @@ public static class CameraSteps
                 return true;
             }
 
-            if (started is { } since && context.Machine.LastWritten(step.Target) is { } written && written > since + ClockSlack)
+            if (WrittenSince(context, step.Target, started))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>Whether <paramref name="path"/> was written after a container that started at <paramref name="started"/> read it.</summary>
+    public static bool WrittenSince(InstallContext context, string path, DateTimeOffset? started)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return started is { } since && context.Machine.LastWritten(path) is { } written && written > since + ClockSlack;
     }
 }
 

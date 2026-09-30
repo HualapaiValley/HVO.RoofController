@@ -205,7 +205,7 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
 /// </summary>
 /// <remarks>
 /// A controller the deploy script made is adopted as it is when it already runs the release with the answers' ports,
-/// HTTPS, host names, certificate, telemetry, camera, HAT and keys; otherwise it is redeployed, and the check says why. A
+/// HTTPS, host names, certificate, telemetry, camera, settings, HAT and keys; otherwise it is redeployed, and the check says why. A
 /// running one must know a key the deploy script can use for its verified Stop, and the new one must read it too: an
 /// operator or admin key in the secrets folder (<see cref="ControllerProbe.Candidates"/>). One Docker Compose made is
 /// explained and never replaced.
@@ -218,7 +218,8 @@ public sealed class ControllerStep(
     CertificateStep? certificate,
     IReadOnlyList<ApiKeyAllocation> keys,
     HatEmulatorStep? emulator = null,
-    IReadOnlyList<CameraFileStep>? camera = null) : PlanStep
+    IReadOnlyList<CameraFileStep>? camera = null,
+    SettingsImportStep? import = null) : PlanStep
 {
     // The key file the last check found the running controller knows: the deploy script's key for its verified Stop.
     private string? _deployKeyFile;
@@ -338,6 +339,15 @@ public sealed class ControllerStep(
         if (camera is { Count: > 0 } && await CameraSteps.ChangedSinceAsync(context, camera, container.StartedAt, cancellationToken).ConfigureAwait(false))
         {
             return "redeployed to read the camera's new settings";
+        }
+
+        // To be imported, imported by this run, or by one that stopped before it redeployed the controller.
+        if (import is not null
+            && (context.HasApplied(import)
+                || (await import.CheckAsync(context, cancellationToken).ConfigureAwait(false)).MakesChange
+                || (import.Imported(context) && CameraSteps.WrittenSince(context, layout.SettingsFile, container.StartedAt))))
+        {
+            return "redeployed to read the imported settings";
         }
 
         if (certificate is not null)
