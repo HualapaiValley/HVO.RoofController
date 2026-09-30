@@ -253,10 +253,20 @@ class MakeTests(BundleTestCase):
             self.write(f"publish/{library[0]}", library[1])
         return str(self.directory / "publish")
 
-    def make(self, publish):
+    def make(self, publish, build=7, rcodesign=None):
         with contextlib.redirect_stdout(io.StringIO()):
-            bundle.make(publish, str(self.directory / "out"), 7, None)
+            bundle.make(publish, str(self.directory / "out"), build, rcodesign)
         return self.directory / "out" / bundle.APP_NAME
+
+    def rcodesign(self, script):
+        """A stand-in for rcodesign: a shell script, given its arguments."""
+        path = self.write("rcodesign", b"#!/bin/sh\n" + script.encode() + b"\n")
+        os.chmod(path, 0o755)
+        return path
+
+    def out(self):
+        """What is in the out folder: only the bundle once make is done, never its work folder."""
+        return sorted(os.listdir(self.directory / "out"))
 
     def test_a_whole_publish_makes_a_bundle_that_check_passes(self):
         app = self.make(self.publish(("libSkiaSharp.dylib", thin([build_version(MACOS_13)]))))
@@ -264,6 +274,19 @@ class MakeTests(BundleTestCase):
             plist = plistlib.load(file)
         self.assertEqual((plist["CFBundleVersion"], plist["LSMinimumSystemVersion"]), ("7", "13.0"))
         self.assertEqual(self.check(app), (0, ""))
+        self.assertEqual(self.out(), [bundle.APP_NAME])
+
+    def test_rcodesign_signs_the_new_bundle_before_it_takes_the_last_ones_place(self):
+        signed = self.directory / "signed"
+        # What rcodesign was asked to sign, and whether it was already a whole bundle.
+        rcodesign = self.rcodesign(
+            f'echo "$1 $(basename "$2") $(test -f "$2/Contents/Info.plist" && echo whole)" > "{signed}"')
+        self.make(self.publish())
+        self.make(self.publish(), build=8, rcodesign=rcodesign)
+        self.assertEqual(signed.read_text(), f"sign {bundle.APP_NAME} whole\n")
+        self.assertEqual(self.out(), [bundle.APP_NAME])
+        with (self.directory / "out" / bundle.APP_NAME / "Contents/Info.plist").open("rb") as file:
+            self.assertEqual(plistlib.load(file)["CFBundleVersion"], "8")
 
     def test_a_publish_file_make_cannot_use_stops_it_naming_that_file_and_making_no_bundle(self):
         x64 = 0x01000007
@@ -286,10 +309,32 @@ class MakeTests(BundleTestCase):
                 self.assertFalse((self.directory / "out").exists())
 
     def test_a_failed_make_leaves_the_last_bundle_as_it_was(self):
+        left = "the last bundle is left as it was"
+        cases = {
+            "a damaged library": (("libSkiaSharp.dylib", b""), None, "not a 64-bit Mach-O file"),
+            "rcodesign failing": (None, "exit 3", f"rcodesign sign exited 3; {left}"),
+            "rcodesign not there": (None, "/nonexistent/rcodesign",
+                                    f"/nonexistent/rcodesign: No such file or directory; {left}"),
+        }
+        for name, (library, rcodesign, reason) in cases.items():
+            with self.subTest(name):
+                app = self.make(self.publish())
+                if rcodesign and not rcodesign.startswith("/"):
+                    rcodesign = self.rcodesign(rcodesign)
+                with self.assertRaises(SystemExit) as stopped:
+                    self.make(self.publish(library), build=8, rcodesign=rcodesign)
+                self.assertIn(reason, stopped.exception.code)
+                self.assertEqual(self.check(app), (0, ""))
+                with (app / "Contents/Info.plist").open("rb") as file:
+                    self.assertEqual(plistlib.load(file)["CFBundleVersion"], "7")
+                self.assertEqual(self.out(), [bundle.APP_NAME])
+
+    def test_the_bundle_can_be_made_again_from_its_own_program_folder(self):
         app = self.make(self.publish())
-        with self.assertRaises(SystemExit):
-            self.make(self.publish(("libSkiaSharp.dylib", b"")))
+        self.make(str(app / "Contents/MacOS"), build=8)
         self.assertEqual(self.check(app), (0, ""))
+        with (app / "Contents/Info.plist").open("rb") as file:
+            self.assertEqual(plistlib.load(file)["CFBundleVersion"], "8")
 
 
 if __name__ == "__main__":

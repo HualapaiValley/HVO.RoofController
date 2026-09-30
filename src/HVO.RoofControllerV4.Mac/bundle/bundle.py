@@ -21,6 +21,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_NAME = "HVO Roof.app"
@@ -103,8 +104,7 @@ def version_text(encoded):
 
 def make(publish, out, build, rcodesign):
     # The program and the native libraries it loads; nothing else from the publish folder (no symbols, no settings).
-    # Each is read before the old bundle is removed: a file make cannot use is named where it was published, and no
-    # half-made bundle is left behind.
+    # Each is checked first, so a file make cannot use is named where it was published.
     publish_again = "publish again with: dotnet publish HVO.RoofControllerV4.Mac -c Release -r osx-arm64"
     minimum = 0
     for name in [EXECUTABLE] + LIBRARIES:
@@ -119,28 +119,42 @@ def make(publish, out, build, rcodesign):
             sys.exit(f"{source}: has no arm64 code; {publish_again}")
         minimum = max(minimum, arm["minimum"] or 0)
 
+    # The new bundle is built and signed in a folder beside the last one, which it replaces only when whole: a make
+    # that stops at any step leaves the last bundle as it was (even when the publish folder is inside it).
     app = os.path.join(out, APP_NAME)
-    shutil.rmtree(app, ignore_errors=True)
-    macos = os.path.join(app, "Contents", "MacOS")
-    resources = os.path.join(app, "Contents", "Resources")
-    os.makedirs(macos)
-    os.makedirs(resources)
-    for name in [EXECUTABLE] + LIBRARIES:
-        shutil.copyfile(os.path.join(publish, name), os.path.join(macos, name))
-        os.chmod(os.path.join(macos, name), 0o755)
-    shutil.copyfile(os.path.join(HERE, "AppIcon.icns"), os.path.join(resources, "AppIcon.icns"))
-    with open(os.path.join(HERE, "Info.plist"), encoding="utf-8") as file:
-        plist = file.read()
-    plist = (plist.replace("@VERSION@", VERSION).replace("@BUILD@", str(build))
-             .replace("@MINIMUM_SYSTEM@", version_text(minimum) if minimum else "12.0"))
-    with open(os.path.join(app, "Contents", "Info.plist"), "w", encoding="utf-8") as file:
-        file.write(plist)
-    with open(os.path.join(app, "Contents", "PkgInfo"), "w", encoding="ascii") as file:
-        file.write("APPL????")
+    os.makedirs(out, exist_ok=True)
+    work = tempfile.mkdtemp(prefix=".bundle-", dir=out)
+    try:
+        new = os.path.join(work, APP_NAME)
+        macos = os.path.join(new, "Contents", "MacOS")
+        resources = os.path.join(new, "Contents", "Resources")
+        os.makedirs(macos)
+        os.makedirs(resources)
+        for name in [EXECUTABLE] + LIBRARIES:
+            shutil.copyfile(os.path.join(publish, name), os.path.join(macos, name))
+            os.chmod(os.path.join(macos, name), 0o755)
+        shutil.copyfile(os.path.join(HERE, "AppIcon.icns"), os.path.join(resources, "AppIcon.icns"))
+        with open(os.path.join(HERE, "Info.plist"), encoding="utf-8") as file:
+            plist = file.read()
+        plist = (plist.replace("@VERSION@", VERSION).replace("@BUILD@", str(build))
+                 .replace("@MINIMUM_SYSTEM@", version_text(minimum) if minimum else "12.0"))
+        with open(os.path.join(new, "Contents", "Info.plist"), "w", encoding="utf-8") as file:
+            file.write(plist)
+        with open(os.path.join(new, "Contents", "PkgInfo"), "w", encoding="ascii") as file:
+            file.write("APPL????")
 
-    if rcodesign:
-        # Ad hoc: no certificate. rcodesign signs the libraries in place, then the program and the bundle.
-        subprocess.run([rcodesign, "sign", app], check=True)
+        if rcodesign:
+            # Ad hoc: no certificate. rcodesign signs the libraries in place, then the program and the bundle.
+            try:
+                subprocess.run([rcodesign, "sign", new], check=True)
+            except OSError as error:
+                sys.exit(f"{rcodesign}: {error.strerror}; the last bundle is left as it was")
+            except subprocess.CalledProcessError as error:
+                sys.exit(f"{rcodesign} sign exited {error.returncode}; the last bundle is left as it was")
+        shutil.rmtree(app, ignore_errors=True)
+        os.replace(new, app)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     print(app)
 
 
