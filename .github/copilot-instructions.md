@@ -174,6 +174,10 @@ port 5291 (`dotnet run --project src/HVO.RoofControllerV4.Emulator`).
   second job (`deploy-script`) runs `bash -n` and ShellCheck on the deploy script, its tests
   against fake `docker`/`curl`, and `docker compose config` for the Pi compose file's
   profiles (and that `pi` with `pi-lan-http` is rejected) and for `src/docker-compose.yml`.
+  A `mac-cli` job on `macos-latest` checks CI's `hvo-roof` for `osx-arm64` (its ad hoc
+  signature and version), runs `tests/cli/dotnet-run-smoke.sh` with it (setup and the terminal
+  interface in tmux, against the controller and the emulator run with `dotnet run`), and runs
+  the client's certificate tests on macOS.
 - `pi-image.yml` — builds the Pi image for `linux/arm64` (no push) and checks that the
   Dockerfile SDK tag matches `src/global.json`.
 - `emulator-image.yml` — builds the HAT emulator image for `linux/amd64` and `linux/arm64`

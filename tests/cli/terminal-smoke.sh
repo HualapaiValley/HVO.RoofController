@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# The published hvo-roof command against a running controller (#45), in a real terminal: a few commands, then
-# 'hvo-roof ui' in a tmux pane, where every page is drawn, F9 stops a roof that another client started, Esc leaves the
-# interface open, and F10 closes it with exit code 0. Then the terminal closing during 'hvo-roof open' (a tmux window
-# killed under its shell, which delivers SIGHUP twice) and, from the open limit, SIGTERM during 'hvo-roof close': each
-# sends Stop, the roof stops short of the limit, and 'close' exits 130 (a closed terminal leaves no one to read the exit
-# code of 'open'). The screens are saved as text, and drawn as SVG images (tests/cli/ansi-to-svg.py), for the CI
-# artifacts and the screenshots in docs/cli.md.
+# The published hvo-roof command against a running controller (#45), in a real terminal: a few commands, setup (the
+# credentials file it saves, and that file's modes), then 'hvo-roof ui' in a tmux pane, where every page is drawn, F9
+# stops a roof that another client started, Esc leaves the interface open, and F10 closes it with exit code 0. Then the
+# terminal closing during 'hvo-roof open' (a tmux window killed under its shell, which delivers SIGHUP twice) and, from
+# the open limit, SIGTERM during 'hvo-roof close': each sends Stop, the roof stops short of the limit, and 'close' exits
+# 130 (a closed terminal leaves no one to read the exit code of 'open'). The screens are saved as text, and drawn as SVG
+# images (tests/cli/ansi-to-svg.py), for the CI artifacts and the screenshots in docs/cli.md.
 #
 # It needs a controller whose roof may move (the emulated one: tests/emulator/compose-smoke-test.sh runs this script
-# against the compose emulator profile), tmux and an admin API key. It touches no hardware, and it keeps its credentials
+# against the compose emulator profile, and tests/cli/dotnet-run-smoke.sh against dotnet run, as CI does on a Mac), tmux,
+# python3, bash 4 or later and an admin API key. It touches no hardware, and it keeps its credentials
 # in a directory of its own that it removes on exit. tmux runs as a server of its own (not the one you may be working
 # in), so the interface sees only this script's environment: never your credentials or your HVO_ROOF_URL.
 #
@@ -65,6 +66,8 @@ trap cleanup EXIT
 
 command -v tmux >/dev/null || fail "tmux is required"
 command -v python3 >/dev/null || fail "python3 is required"
+# The lower-case expansions below (\${title,,}) are bash 4's; a Mac's own bash is 3.2 (brew install bash).
+[ "${BASH_VERSINFO[0]}" -ge 4 ] || fail "bash 4 or later is required; this is bash ${BASH_VERSION}"
 
 # run <name> <expected exit code> <args...>: runs a command, saves what it wrote, and checks its exit code.
 run() {
@@ -163,9 +166,30 @@ save() {
     python3 "${here}/ansi-to-svg.py" "${out}/$1.ans" "${out}/$1.svg" --title "hvo-roof ui"
 }
 
+# mode <path>: the permission bits, in octal, as stat prints them on Linux (%a) and a Mac (%Lp).
+mode() {
+    python3 -c 'import os, sys; print(format(os.stat(sys.argv[1]).st_mode & 0o7777, "o"))' "$1"
+}
+
 run version 0 --version
 run help 0 --help
 grep -q "ui" "${out}/help.txt" || fail "--help does not list 'ui'"
+
+# Setup with the key on standard input saves the credentials file, 0600 in a 0700 directory (docs/cli.md#credentials),
+# and the file alone then connects. The file is removed afterwards: the rest runs on the environment's credentials.
+credentials="${XDG_CONFIG_HOME}/hvo-roof/credentials.json"
+code=0
+env -u HVO_ROOF_URL -u HVO_ROOF_API_KEY "${cli}" setup --controller "${HVO_ROOF_URL}" --api-key \
+    <<<"${HVO_ROOF_API_KEY}" >"${out}/setup.txt" 2>&1 || code=$?
+[ "${code}" -eq 0 ] || fail "'hvo-roof setup' exited ${code}, not 0: $(cat "${out}/setup.txt")"
+[ -f "${credentials}" ] || fail "'hvo-roof setup' did not save ${credentials}"
+[ "$(mode "${credentials}")" = 600 ] || fail "the credentials file's mode is $(mode "${credentials}"), not 600"
+[ "$(mode "${credentials%/*}")" = 700 ] || fail "the credentials directory's mode is $(mode "${credentials%/*}"), not 700"
+code=0
+env -u HVO_ROOF_URL -u HVO_ROOF_API_KEY "${cli}" whoami >"${out}/whoami-saved.txt" 2>&1 || code=$?
+[ "${code}" -eq 0 ] || fail "'hvo-roof whoami' with the saved credentials exited ${code}: $(cat "${out}/whoami-saved.txt")"
+rm -f "${credentials}"
+echo "[terminal] hvo-roof setup saved the credentials file (0600, in a 0700 directory), and whoami used it"
 run whoami 0 whoami
 run status 0 status
 grep -q "Closed" "${out}/status.txt" || fail "the status does not say Closed: $(cat "${out}/status.txt")"

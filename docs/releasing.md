@@ -202,7 +202,7 @@ names the images until someone publishes the draft.
 
 | Asset | What it is |
 |-------|------------|
-| `hvo-roof-linux-arm64`, `hvo-roof-linux-x64` | `hvo-roof`, for the Pi and for a Linux workstation ([Install](cli.md#install)) |
+| `hvo-roof-linux-arm64`, `hvo-roof-linux-x64`, `hvo-roof-osx-arm64` | `hvo-roof`, for the Pi, a Linux workstation and an Apple silicon Mac (signed ad hoc) ([Install](cli.md#install)) |
 | `hvo-roof-kiosk-<version>-linux-arm64.tar.gz` | The kiosk's program, unit, udev rule and example settings, in a folder of that name ([Install](kiosk.md#install)) |
 | `HVO-Roof-<version>.zip` | The Mac app, signed ad hoc ([Install](mac.md#install)) |
 | `docker-compose.yaml` | The release compose file, each image pinned to its digest ([Deploying with Compose](deployment.md#deploying-with-compose)) |
@@ -385,6 +385,10 @@ gh api -X DELETE "orgs/HualapaiValley/packages/container/roof-controller/version
 
 A dry run's versions were all created within the minutes of its release job, and the tagged one names its dry run.
 Never delete a version of a published release: its tagged image, an image of one of its platforms, or its attestation.
+
+Before the first release, keep the first dry run's versions. They are each package's only ones, GHCR does not delete a
+package's last tagged version (only the whole package), and each package must exist for an owner to make it public
+([The first release](#the-first-release)). Delete them once the first release has pushed its own.
 
 ## A failed release
 

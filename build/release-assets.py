@@ -12,7 +12,7 @@ for the right processor, and the output folder must be new or empty, so a releas
 missing. The images are <registry>/roof-controller and <registry>/roof-hat-emulator, on GHCR unless --registry names
 another (a test's local registry). The assets:
 
-  hvo-roof-<runtime>                          hvo-roof, one file per runtime
+  hvo-roof-<runtime>                          hvo-roof, one file per runtime (linux-arm64, linux-x64, osx-arm64)
   hvo-roof-kiosk-<version>-linux-arm64.tar.gz the kiosk's program, unit, udev rule and example settings, in one folder
   HVO-Roof-<version>.zip                      HVO Roof.app, signed ad hoc
   docker-compose.yaml                         the release compose file, each image pinned to its digest
@@ -47,7 +47,7 @@ release_compose = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release_compose)
 
 # The runtimes hvo-roof is released for, and the processor each file must be built for.
-CLI_RUNTIMES = {"linux-arm64": "aarch64", "linux-x64": "x86-64"}
+CLI_RUNTIMES = {"linux-arm64": "aarch64", "linux-x64": "x86-64", "osx-arm64": "macos-arm64"}
 
 # The kiosk's files and their modes: the program, and docs/kiosk.md's deploy files beside it.
 KIOSK_FILES = {

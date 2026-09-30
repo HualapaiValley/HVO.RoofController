@@ -1,11 +1,11 @@
 # hvo-roof: the command line and the terminal interface
 
-`hvo-roof` is the roof controller's command-line client (#45). It runs on the Pi next to the controller, or on any
-Linux machine that can reach it. Like every UI client, it talks to the controller only over its REST API and status hub,
-using the client library ([src/HVO.RoofControllerV4.Client](../src/HVO.RoofControllerV4.Client/README.md)). It never
-reaches into the controller's process. `hvo-roof ui` opens a full-screen terminal interface (Terminal.Gui). It has the
-roof, the settings, people and keys, the controller's health and restart, and setup, with **Stop roof (F9)** on every
-page.
+`hvo-roof` is the roof controller's command-line client (#45). It runs on the Pi next to the controller, or on any Linux
+machine or Apple silicon Mac that can reach it. Like every UI client, it talks to the controller only over its REST API
+and status hub, using the client library
+([src/HVO.RoofControllerV4.Client](../src/HVO.RoofControllerV4.Client/README.md)). It never reaches into the
+controller's process. `hvo-roof ui` opens a full-screen terminal interface (Terminal.Gui). It has the roof, the
+settings, people and keys, the controller's health and restart, and setup, with **Stop roof (F9)** on every page.
 
 ## Install
 
@@ -15,16 +15,17 @@ page.
 |-------|-------|-------|
 | The Pi | `linux-arm64` | Runs next to the controller, over SSH or at the Pi's console. |
 | Development | `linux-x64` | The same program, for a workstation. |
+| A Mac | `osx-arm64` | Apple silicon only; there is no build for an Intel Mac. See [On a Mac](#on-a-mac). |
 
-Each release has both builds among its assets, as `hvo-roof-linux-arm64` and `hvo-roof-linux-x64`
-([Versions and releases](releasing.md#the-assets)); rename the file to `hvo-roof` when you install it. CI publishes
-both on every run of the `CI` workflow too, as the `hvo-roof-<run id>` artifact. To build one yourself, run from `src/`
-(so `src/global.json` picks the SDK):
+Each release has the three builds among its assets, as `hvo-roof-linux-arm64`, `hvo-roof-linux-x64` and
+`hvo-roof-osx-arm64` ([Versions and releases](releasing.md#the-assets)); rename the file to `hvo-roof` when you install
+it. CI publishes all three on every run of the `CI` workflow too, as the `hvo-roof-<run id>` artifact. To build one
+yourself, run from `src/` (so `src/global.json` picks the SDK):
 
 ```bash
 cd src
 dotnet publish HVO.RoofControllerV4.Cli -c Release -r linux-arm64 -o ../out/hvo-roof-arm64
-# or -r linux-x64 for a workstation
+# or -r linux-x64 for a workstation, -r osx-arm64 for a Mac
 ```
 
 Copy the file into the `PATH`, for example:
@@ -40,6 +41,32 @@ hvo-roof --version
 
 `hvo-roof ui` needs a terminal of at least 80 × 24 that sends function keys: the Linux console, SSH from any common
 terminal, or tmux.
+
+### On a Mac
+
+The `osx-arm64` build runs on a Mac with Apple silicon. It is signed ad hoc, which Apple silicon requires of every
+program, but not with a Developer ID and not notarized. Download it with `curl`, which does not mark the file as
+downloaded from the internet, and put it in the `PATH`:
+
+```bash
+curl -fsSLo hvo-roof https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/hvo-roof-osx-arm64
+shasum -a 256 hvo-roof    # compare with the release's SHA256SUMS
+sudo mkdir -p /usr/local/bin && sudo install -m 0755 hvo-roof /usr/local/bin/hvo-roof && rm hvo-roof
+hvo-roof --version
+```
+
+A copy downloaded with a browser carries the quarantine attribute, and macOS refuses to open it because it cannot check
+the developer. Remove the attribute once you have checked the file: `xattr -d com.apple.quarantine hvo-roof`.
+
+Everything else is as on Linux:
+
+- **The credentials file** is `$XDG_CONFIG_HOME/hvo-roof/credentials.json`, or `~/.config/hvo-roof/credentials.json`,
+  with mode `0600` in a `0700` directory ([Credentials](#credentials)). It is not kept in the Keychain.
+- **The terminal interface** is supported in Terminal and iTerm2, in a window of at least 80 × 24. A Mac keyboard's top
+  row controls the brightness and the volume unless Fn is held: hold Fn with F1 to F10, or turn on *Use F1, F2, etc.
+  keys as standard function keys* in System Settings (Keyboard, then Keyboard Shortcuts, then Function Keys). If a
+  macOS shortcut takes one of those keys, turn the shortcut off there too. The mouse works as well: every page's
+  **Stop roof (F9)** button can be clicked.
 
 ## Setup
 
@@ -389,6 +416,8 @@ Nothing here needs the Pi, the HAT or the roof.
 - **A real terminal.** `tests/cli/terminal-smoke.sh` runs the published `hvo-roof` in tmux, on a tmux server of its
   own, against the compose emulator profile (called by `tests/emulator/compose-smoke-test.sh` when `HVO_ROOF_CLI` is
   set). It:
+  - saves the connection with `hvo-roof setup`, checks that the credentials file is `0600` in a `0700` directory, and
+    that a command works with the file alone;
   - runs a few commands and checks their exit codes;
   - opens every page of the interface;
   - stops, with F9, a roof that another client started, and checks with `status --json` that the roof stopped short of
@@ -407,4 +436,14 @@ Nothing here needs the Pi, the HAT or the roof.
   dotnet publish src/HVO.RoofControllerV4.Cli -c Release -r linux-x64 -o /tmp/hvo-roof
   HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/screens tests/emulator/compose-smoke-test.sh
   cp /tmp/screens/0[1-7]-*.svg docs/images/terminal/
+  ```
+- **Without Docker, and on a Mac.** `tests/cli/dotnet-run-smoke.sh` builds the controller and the HAT emulator, starts
+  both with `dotnet run` on loopback (the controller in the Development environment, with a throwaway admin key), waits
+  until the controller has the emulated roof closed, and runs `terminal-smoke.sh` against them. It needs the .NET SDK,
+  tmux, curl, python3 and bash 4 or later. The `CI` workflow's `mac-cli` job runs it on macOS with CI's `osx-arm64`
+  build, after checking the file's ad hoc signature and its version, and keeps the screens as the
+  `mac-terminal-screens-<run id>` artifact:
+
+  ```bash
+  HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/screens tests/cli/dotnet-run-smoke.sh
   ```

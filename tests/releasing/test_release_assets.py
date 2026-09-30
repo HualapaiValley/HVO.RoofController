@@ -66,7 +66,7 @@ class Release:
         self.kiosk = root / "kiosk"
         self.mac = root / "hvo-roof-mac.zip"
         self.out = root / "out"
-        for runtime, program in (("linux-arm64", AARCH64), ("linux-x64", X86_64)):
+        for runtime, program in (("linux-arm64", AARCH64), ("linux-x64", X86_64), ("osx-arm64", mach_o_arm64(b"cli"))):
             (self.cli / runtime).mkdir(parents=True)
             (self.cli / runtime / "hvo-roof").write_bytes(program)
         self.kiosk.mkdir()
@@ -118,6 +118,7 @@ class TheAssets(ReleaseTestCase):
     EXPECTED = {
         "hvo-roof-linux-arm64": ("cli", "linux-arm64"),
         "hvo-roof-linux-x64": ("cli", "linux-x64"),
+        "hvo-roof-osx-arm64": ("cli", "osx-arm64"),
         "hvo-roof-kiosk-4.0.0-linux-arm64.tar.gz": ("kiosk", "linux-arm64"),
         "HVO-Roof-4.0.0.zip": ("mac-app", "osx-arm64"),
         "docker-compose.yaml": ("compose", None),
@@ -169,7 +170,7 @@ class TheAssets(ReleaseTestCase):
         self.assertEqual(lines, [f"{sha256(self.out / name)}  {name}" for name in names])
 
     def test_the_programs_are_ci_s_files_and_executable(self):
-        for runtime in ("linux-arm64", "linux-x64"):
+        for runtime in ("linux-arm64", "linux-x64", "osx-arm64"):
             asset = self.out / f"hvo-roof-{runtime}"
             self.assertEqual(asset.read_bytes(), (self.release.cli / runtime / "hvo-roof").read_bytes())
             self.assertTrue(asset.stat().st_mode & stat.S_IXUSR, runtime)
@@ -240,15 +241,23 @@ class TheRefusals(ReleaseTestCase):
     def test_a_missing_runtime(self):
         (self.release.cli / "linux-x64" / "hvo-roof").unlink()
         (self.release.cli / "linux-x64").rmdir()
-        self.refused("must hold exactly linux-arm64, linux-x64; it lacks linux-x64")
+        self.refused("must hold exactly linux-arm64, linux-x64, osx-arm64; it lacks linux-x64")
 
     def test_a_runtime_this_script_does_not_release(self):
-        (self.release.cli / "osx-arm64").mkdir()
-        self.refused("it also holds osx-arm64, which this script does not release (add it to build/release-assets.py)")
+        (self.release.cli / "osx-x64").mkdir()
+        self.refused("it also holds osx-x64, which this script does not release (add it to build/release-assets.py)")
 
     def test_a_program_for_the_wrong_processor(self):
         (self.release.cli / "linux-arm64" / "hvo-roof").write_bytes(X86_64)
         self.refused("linux-arm64/hvo-roof is built for x86-64, not aarch64")
+
+    def test_a_mac_program_built_for_linux(self):
+        (self.release.cli / "osx-arm64" / "hvo-roof").write_bytes(AARCH64)
+        self.refused("osx-arm64/hvo-roof is built for aarch64, not macos-arm64")
+
+    def test_a_linux_program_built_for_the_mac(self):
+        (self.release.cli / "linux-arm64" / "hvo-roof").write_bytes(mach_o_arm64())
+        self.refused("linux-arm64/hvo-roof is built for macos-arm64, not aarch64")
 
     def test_a_program_that_is_not_one(self):
         (self.release.cli / "linux-x64" / "hvo-roof").write_bytes(b"#!/bin/sh\n")
