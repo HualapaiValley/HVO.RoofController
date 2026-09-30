@@ -168,9 +168,9 @@ uses the same words as every other client.
 
 ### When it does not start
 
-Settings the app cannot start with (no `ControllerUrl`, a device key file that is missing or holds more than a key, a
-CA certificate file that is missing or holds no CA's certificate, a value out of range) open a window that says why, and where the settings file is, instead of the roof. Change the
-settings, then open the app again.
+Settings the app cannot start with (no `ControllerUrl`, a device key file that is missing or holds more than a key, a CA
+certificate file that is missing or holds no CA's certificate, a value out of range) open a window that says why, and
+where the settings file is, instead of the roof. Change the settings, then open the app again.
 
 ![The app's refusal on its first launch: the setting that is missing, and where its settings file will be](images/mac/refusal-760x460.png)
 

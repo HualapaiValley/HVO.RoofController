@@ -111,6 +111,13 @@ internal sealed class RoofUiSetupPage : RoofUiPage
                 var authority = string.IsNullOrWhiteSpace(values[1])
                     ? certificate is null ? stored.CaCertificate : null
                     : RoofCliSetup.ParseCaCertificate(values[1]);
+
+                // A new CA replaces the saved pin, as 'setup --ca-certificate' does, while its field still shows that pin.
+                if (authority is not null && certificate is not null && string.Equals(certificate, stored.CertificateSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    certificate = null;
+                }
+
                 var apiKey = values[3].Trim();
                 RoofCliSetupResult saved;
                 try
