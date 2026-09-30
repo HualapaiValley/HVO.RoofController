@@ -34,9 +34,8 @@ public sealed record ProbeResult(ProbeOutcome Outcome, bool IsMoving = false, st
 public sealed record DeployKeyCandidate(string File, string Description);
 
 /// <summary>
-/// Asks the running controller for its Status from inside its container, over its loopback, as the deploy script does:
-/// the key goes on curl's standard input, never on a command line, and the command is secret, so the log shows neither
-/// the key nor the answer.
+/// Asks the running controller for its Status from inside its container, over its loopback, as the deploy script does
+/// (<see cref="ControllerApi"/>): the key never goes on a command line, and the log shows neither it nor the answer.
 /// </summary>
 public static class ControllerProbe
 {
@@ -49,40 +48,20 @@ public static class ControllerProbe
     public static async Task<ProbeResult> StatusAsync(InstallContext context, string container, string key, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
-        context.Log.AddSecret(key);
-        var result = await context.Machine.Commands.RunAsync(
-            new CommandLine(
-                "docker", "exec", "-i", container,
-                "curl", "-sS", "--max-time", "15", "-H", "@-", "-H", "Accept: application/json", "-w", "\n%{http_code}",
-                $"http://localhost:8080/{StatusPath}")
-            {
-                Input = $"X-Api-Key: {key}\n",
-                Secret = true,
-                Timeout = TimeSpan.FromSeconds(30)
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        var lines = result.Output.TrimEnd('\n').Split('\n');
-        var code = lines[^1].Trim();
-        if (!result.Succeeded || code is "000" or "")
+        var response = await ControllerApi.SendAsync(context, container, key, StatusPath, null, cancellationToken).ConfigureAwait(false);
+        switch (response.Status)
         {
-            var reason = context.Log.Redact(result.Reason);
-            return new ProbeResult(ProbeOutcome.NoAnswer, Reason: string.IsNullOrWhiteSpace(reason) ? $"docker exec ended with exit {result.ExitCode}" : reason);
-        }
-
-        if (code == "401")
-        {
-            return new ProbeResult(ProbeOutcome.Rejected);
-        }
-
-        if (code != "200")
-        {
-            return new ProbeResult(ProbeOutcome.NoAnswer, Reason: $"its Status answered HTTP {code}");
+            case null:
+                return new ProbeResult(ProbeOutcome.NoAnswer, Reason: response.Reason);
+            case 401:
+                return new ProbeResult(ProbeOutcome.Rejected);
+            case not 200:
+                return new ProbeResult(ProbeOutcome.NoAnswer, Reason: $"its Status answered HTTP {response.Status}");
         }
 
         try
         {
-            using var status = JsonDocument.Parse(string.Join('\n', lines[..^1]));
+            using var status = JsonDocument.Parse(response.Body);
             var root = status.RootElement;
             var moving = root.TryGetProperty("isMoving", out var isMoving) && isMoving.ValueKind == JsonValueKind.True;
             var motion = root.TryGetProperty("commandedMotion", out var commanded) && commanded.ValueKind == JsonValueKind.String ? commanded.GetString() : null;

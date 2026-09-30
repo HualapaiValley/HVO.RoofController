@@ -66,6 +66,9 @@ public sealed class InstallContext
     /// <summary>Where a long step (a deploy) says how it is getting on, a line at a time; null when nobody is watching.</summary>
     public Action<string>? Progress { get; init; }
 
+    /// <summary>The passwords and PINs given for this run: never saved, logged or shown.</summary>
+    public InstallSecrets Secrets { get; init; } = new();
+
     private readonly HashSet<PlanStep> applied = [];
 
     /// <summary>The release this installer installs: its release.json, read once a run.</summary>
@@ -100,6 +103,12 @@ public abstract class PlanStep
 
     /// <summary>False for a step this installer can plan but not carry out yet: an install that needs it is refused first.</summary>
     public virtual bool CanApply => true;
+
+    /// <summary>
+    /// The secrets the change <paramref name="check"/> found needs (the first admin's password): the installer asks for
+    /// them, or reads them from files, before it changes anything.
+    /// </summary>
+    public virtual IReadOnlyList<InstallSecret> SecretsNeeded(StepCheck check) => [];
 
     /// <summary>Makes the change <paramref name="check"/> found. Called only when it makes one.</summary>
     public abstract Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken);

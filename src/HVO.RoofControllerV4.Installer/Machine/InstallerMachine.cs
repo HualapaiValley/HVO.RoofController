@@ -149,6 +149,13 @@ public sealed class InstallerMachine
         return File.Exists(onDisk) || Directory.Exists(onDisk) ? File.GetUnixFileMode(onDisk) : null;
     }
 
+    /// <summary>When the file was last written, or null when there is no such file (or it cannot be seen).</summary>
+    public DateTimeOffset? LastWritten(string path)
+    {
+        var onDisk = OnDisk(path);
+        return File.Exists(onDisk) ? new DateTimeOffset(File.GetLastWriteTimeUtc(onDisk), TimeSpan.Zero) : null;
+    }
+
     /// <summary>The files in the folder (not in the folders within it), as paths on this machine; none when it is not there.</summary>
     public IReadOnlyList<string> ListFiles(string path)
     {

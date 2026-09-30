@@ -95,6 +95,8 @@ public static class PlanBuilder
             var certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
             var keys = AllocateKeys(machine, survey, layout, roles);
             steps.AddRange(keys.Select(key => new ApiKeyStep(layout, key)));
+            var camera = CameraSteps.For(layout, rig, settings.Camera);
+            steps.AddRange(camera);
             steps.Add(new DeployToolsStep());
             var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
             if (emulator is not null)
@@ -102,7 +104,12 @@ public static class PlanBuilder
                 steps.Add(emulator);
             }
 
-            steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator));
+            steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator, camera));
+            if (settings.FirstAdmin is { } admin)
+            {
+                steps.Add(new FirstAdminStep(layout, admin, keys.First(key => key.Use == ApiKeyUse.Admin)));
+            }
+
             steps.Add(new PortStep(settings.ApiPort, settings.UsesHttps ? "the controller's API (HTTPS)" : "the controller's API (HTTP)", MachineSurveyor.ControllerContainer));
             steps.Add(new PortStep(settings.WebPort, "the web UI", MachineSurveyor.ControllerContainer));
         }

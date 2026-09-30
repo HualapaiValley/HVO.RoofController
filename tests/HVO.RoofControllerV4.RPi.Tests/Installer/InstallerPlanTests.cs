@@ -29,6 +29,10 @@ public sealed class InstallerPlanTests
         "/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__2__Key"
     ];
 
+    /// <summary>A rig's camera files in <paramref name="secrets"/>: the emulator's camera, with no user.</summary>
+    internal static string[] RigCamera(string secrets)
+        => [.. new[] { CameraSteps.BaseUrlSetting, CameraSteps.PasswordSetting, CameraSteps.UserNameSetting }.Select(setting => $"{secrets}/{setting}")];
+
     private static readonly string[] ControllerFolders =
     [
         "/etc/hvo-roof", "/etc/hvo-roof/secrets", "/etc/hvo-roof/https", "/etc/hvo-roof/ca", "/etc/hvo-roof/config",
@@ -233,7 +237,7 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.Container).Should().Equal(MachineSurveyor.HatEmulatorContainer, MachineSurveyor.ControllerContainer);
         plan.Steps.Single(step => step.Step.Target == MachineSurveyor.ControllerContainer).Step.Purpose.Should().Be("the controller, against the HAT emulator");
         Steps(plan, StepKind.File).Should().Equal(
-            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, InstallPaths.SystemRecord]);
+            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, .. RigCamera("/etc/hvo-roof/secrets"), InstallPaths.SystemRecord]);
     }
 
     [TestMethod]
@@ -264,6 +268,7 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.File).Should().Equal(
             $"{root}/ca.crt", $"{root}/secrets/Kestrel__Certificates__Default__Password", $"{root}/https/roof-controller.pfx",
             $"{root}/secrets/RoofControllerSecurity__ApiKeys__0__Key", $"{root}/secrets/RoofControllerSecurity__ApiKeys__1__Key", $"{root}/secrets/RoofControllerSecurity__ApiKeys__2__Key",
+            $"{root}/secrets/BlueIris__BaseUrl", $"{root}/secrets/BlueIris__Password", $"{root}/secrets/BlueIris__UserName",
             "/Users/roy/.config/hvo-roof/install.json");
         Change(plan, "/Users/roy/.config/hvo-roof/install.json").Detail.Should().Be("0600", "the person's record is theirs alone");
     }

@@ -74,6 +74,32 @@ public sealed class InstallerSession
     /// <summary>The answers so far: the roles and choices.</summary>
     public InstallAnswers Answers { get; set; }
 
+    /// <summary>The passwords and PINs given so far (<see cref="GiveSecret"/>): never saved, logged or shown.</summary>
+    public InstallSecrets Secrets { get; } = new();
+
+    /// <summary>
+    /// Keeps a password or PIN for this run, and keeps it out of the log. Throws <see cref="InstallerUsageException"/>
+    /// when it is not one the step takes.
+    /// </summary>
+    public void GiveSecret(InstallSecret secret, string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (InstallSecrets.Problem(secret, value) is { } problem)
+        {
+            throw new InstallerUsageException(problem);
+        }
+
+        Log.AddSecret(value);
+        Secrets.Set(secret, value);
+    }
+
+    /// <summary>The secrets <paramref name="plan"/> needs that were not given yet.</summary>
+    public IReadOnlyList<InstallSecret> MissingSecrets(CheckedPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return [.. plan.NeededSecrets().Where(secret => !Secrets.Has(secret))];
+    }
+
     public IReadOnlyList<RoleOption> Options => RoleGuards.Options(Survey);
 
     /// <summary>
@@ -110,7 +136,8 @@ public sealed class InstallerSession
         Answers = Answers.Normalised(),
         Version = Version,
         Time = Time,
-        Release = Release
+        Release = Release,
+        Secrets = Secrets
     };
 
     /// <summary>What the answers make and change here: it only looks.</summary>
@@ -139,6 +166,7 @@ public sealed class InstallerSession
                 Version = context.Version,
                 Time = context.Time,
                 Release = context.Release,
+                Secrets = context.Secrets,
                 Progress = progress
             },
             progress,

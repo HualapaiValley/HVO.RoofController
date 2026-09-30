@@ -59,7 +59,13 @@ internal sealed record FakeContainer
 
     /// <summary>Its environment's other settings (never a secret): RoofWeb__StopKeyFile, OTEL_EXPORTER_OTLP_ENDPOINT…</summary>
     public IReadOnlyDictionary<string, string> Settings { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>When it last started; null for one that says it never has.</summary>
+    public DateTimeOffset? StartedAt { get; init; }
 }
+
+/// <summary>A person the fake controller was asked to add through its API: what the installer sent.</summary>
+internal sealed record FakeUserRequest(string Name, string Role, string Password, string? Pin, string Key);
 
 /// <summary>
 /// A whole machine for the installer, in a folder of its own: its files (a Pi's HAT devices, records, folders the
@@ -174,6 +180,15 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     /// <summary>What the controller's Status says to a key it knows; null when it does not answer.</summary>
     public string? StatusJson { get; set; } = "{\"isMoving\":false,\"commandedMotion\":\"None\",\"hatMode\":\"Physical\"}";
+
+    /// <summary>The controller's people, by name (as its identity store keeps them, whatever the case): their roles.</summary>
+    public Dictionary<string, string> People { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Each request to add a person, in order, with what was sent.</summary>
+    public List<FakeUserRequest> UserRequests { get; } = [];
+
+    /// <summary>What the controller answers a request to add a person; null to add them (201, or 409 when they are there).</summary>
+    public int? UsersAnswer { get; set; }
 
     /// <summary>Docker's networks.</summary>
     public HashSet<string> Networks { get; } = new(StringComparer.Ordinal) { "bridge" };
@@ -486,7 +501,7 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             "docker" when arguments is ["container", "inspect", "--format", _, var name] => Docker(() => Containers.TryGetValue(name, out var container)
                 ? Answer(container.State == "running" ? EmulatorHealth : container.State)
                 : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
-            "docker" when arguments is ["exec", "-i", var name, "curl", ..] => Docker(() => Status(name, command)),
+            "docker" when arguments is ["exec", "-i", var name, "curl", ..] => Docker(() => Controller(name, command)),
             "docker" when arguments is ["context", "show"] => Docker(() => Answer("default")),
             "docker" when arguments is ["pull", "--platform", _, _] => Docker(() => Answer("Status: Downloaded newer image")),
             "docker" when arguments is ["network", "inspect", var network] => Docker(() => Networks.Contains(network)
@@ -545,22 +560,89 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     }
 
     // The controller's Status from inside its container, as curl prints it with -w '\n%{http_code}'.
-    private CommandResult Status(string name, CommandLine command)
+    // The controller's API from inside its container, as curl reads its config from standard input (-K -).
+    private CommandResult Controller(string name, CommandLine command)
     {
         if (!Containers.TryGetValue(name, out var container) || container.State != "running")
         {
             return new CommandResult(1, string.Empty, $"Error response from daemon: container {name} is not running\n");
         }
 
-        if (StatusJson is null)
+        command.Arguments.Should().ContainInOrder(["-K", "-"], "curl reads its key and body from standard input, never from its command line");
+        var config = CurlConfig(command.Input ?? string.Empty);
+        var key = config.Where(option => option.Name == "header" && option.Value.StartsWith("X-Api-Key: ", StringComparison.Ordinal))
+            .Select(option => option.Value["X-Api-Key: ".Length..]).SingleOrDefault() ?? string.Empty;
+        var body = config.Where(option => option.Name == "data-raw").Select(option => option.Value).SingleOrDefault();
+        var url = command.Arguments.Last();
+        if (url == ControllerApi.Address + ControllerProbe.StatusPath)
         {
-            return new CommandResult(7, "\n000", "curl: (7) Failed to connect to localhost port 8080\n");
+            if (StatusJson is null)
+            {
+                return new CommandResult(7, "\n000", "curl: (7) Failed to connect to localhost port 8080\n");
+            }
+
+            return ControllerKeys.Contains(key)
+                ? new CommandResult(0, StatusJson + "\n200", string.Empty)
+                : new CommandResult(0, "{\"title\":\"Unauthorized\"}\n401", string.Empty);
         }
 
-        var key = (command.Input ?? string.Empty).Replace("X-Api-Key: ", string.Empty, StringComparison.Ordinal).TrimEnd('\n');
-        return ControllerKeys.Contains(key)
-            ? new CommandResult(0, StatusJson + "\n200", string.Empty)
-            : new CommandResult(0, "{\"title\":\"Unauthorized\"}\n401", string.Empty);
+        if (url == ControllerApi.Address + FirstAdminStep.UsersPath && body is not null)
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            var request = new FakeUserRequest(
+                root.GetProperty("name").GetString()!,
+                root.GetProperty("role").GetString()!,
+                root.GetProperty("password").GetString()!,
+                root.TryGetProperty("pin", out var pin) && pin.ValueKind == JsonValueKind.String ? pin.GetString() : null,
+                key);
+            UserRequests.Add(request);
+            if (!ControllerKeys.Contains(key))
+            {
+                return new CommandResult(0, "{\"title\":\"Unauthorized\"}\n401", string.Empty);
+            }
+
+            if (UsersAnswer is { } answer)
+            {
+                return new CommandResult(0, $"{{\"title\":\"Refused\",\"detail\":\"The request was refused ({answer}).\"}}\n{answer}", string.Empty);
+            }
+
+            if (People.ContainsKey(request.Name))
+            {
+                return new CommandResult(0, "{\"title\":\"Conflict\",\"detail\":\"A person has that name.\"}\n409", string.Empty);
+            }
+
+            WithPerson(request.Name, request.Role);
+            return new CommandResult(0, $"{{\"name\":\"{request.Name}\",\"role\":\"{request.Role}\"}}\n201", string.Empty);
+        }
+
+        Unexpected.Enqueue(command);
+        return new CommandResult(0, "{\"title\":\"Not Found\"}\n404", string.Empty);
+    }
+
+    // curl's config lines, name = "value", with the value's backslashes and quotes escaped.
+    private static List<(string Name, string Value)> CurlConfig(string text)
+    {
+        var options = new List<(string Name, string Value)>();
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(line, "^(\\S+) = \"(.*)\"$");
+            match.Success.Should().BeTrue($"each line of curl's config is name = \"value\" (line {options.Count + 1})");
+            options.Add((match.Groups[1].Value, System.Text.RegularExpressions.Regex.Replace(match.Groups[2].Value, "\\\\(.)", "$1")));
+        }
+
+        return options;
+    }
+
+    /// <summary>A person in the controller's identity store, as the controller keeps it (hashes aside).</summary>
+    public FakeMachine WithPerson(string name, string role)
+    {
+        People[name] = role;
+        var layout = ControllerLayout.For(Machine);
+        Machine.CreateDirectory(layout.Identity, Modes.PrivateFolder);
+        var users = People.Select(person => new { name = person.Key, role = person.Value });
+        Machine.WriteAtomically(layout.IdentityFile, JsonSerializer.Serialize(new { users, apiKeys = Array.Empty<object>() }), Modes.PrivateFile);
+        return this;
     }
 
     private CommandResult RunEmulator(IReadOnlyList<string> arguments)
@@ -634,7 +716,8 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             PublishAddress = environment["PUBLISH_ADDRESS"] is { Length: > 0 } address ? address : null,
             Network = network,
             AllowedHosts = environment["ALLOWED_HOSTS"] is { Length: > 0 } hosts ? hosts : null,
-            Settings = settings
+            Settings = settings,
+            StartedAt = DateTimeOffset.UtcNow
         };
 
         // The new controller reads the keys in the secrets folder when it starts.
@@ -701,7 +784,15 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
                 Name = "/" + name,
                 Config = new { Image = image, Labels = labels, Env = environment },
                 HostConfig = new { PortBindings = ports, NetworkMode = container.Network ?? "bridge" },
-                State = new { Status = container.State }
+                State = new
+                {
+                    Status = container.State,
+
+                    // As Docker writes it: nine digits of the second, and the year 1 for a container that never started.
+                    StartedAt = container.StartedAt is { } started
+                        ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff", System.Globalization.CultureInfo.InvariantCulture) + "42Z"
+                        : "0001-01-01T00:00:00Z"
+                }
             }
         });
     }

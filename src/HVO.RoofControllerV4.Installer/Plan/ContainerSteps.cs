@@ -205,7 +205,7 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
 /// </summary>
 /// <remarks>
 /// A controller the deploy script made is adopted as it is when it already runs the release with the answers' ports,
-/// HTTPS, host names, certificate, telemetry, HAT and keys; otherwise it is redeployed, and the check says why. A
+/// HTTPS, host names, certificate, telemetry, camera, HAT and keys; otherwise it is redeployed, and the check says why. A
 /// running one must know a key the deploy script can use for its verified Stop, and the new one must read it too: an
 /// operator or admin key in the secrets folder (<see cref="ControllerProbe.Candidates"/>). One Docker Compose made is
 /// explained and never replaced.
@@ -217,7 +217,8 @@ public sealed class ControllerStep(
     bool rig,
     CertificateStep? certificate,
     IReadOnlyList<ApiKeyAllocation> keys,
-    HatEmulatorStep? emulator = null) : PlanStep
+    HatEmulatorStep? emulator = null,
+    IReadOnlyList<CameraFileStep>? camera = null) : PlanStep
 {
     // The key file the last check found the running controller knows: the deploy script's key for its verified Stop.
     private string? _deployKeyFile;
@@ -332,6 +333,11 @@ public sealed class ControllerStep(
         if (replacesEmulator)
         {
             return "redeployed: the HAT emulator is replaced";
+        }
+
+        if (camera is { Count: > 0 } && await CameraSteps.ChangedSinceAsync(context, camera, container.StartedAt, cancellationToken).ConfigureAwait(false))
+        {
+            return "redeployed to read the camera's new settings";
         }
 
         if (certificate is not null)

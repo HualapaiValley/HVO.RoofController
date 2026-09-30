@@ -195,6 +195,9 @@ public sealed record ContainerSurvey
     /// <summary>The HAT emulator's camera frame rate (Emulator__CameraFramesPerSecond), when set.</summary>
     public string? EmulatorCameraFramesPerSecond { get; init; }
 
+    /// <summary>When it last started (State.StartedAt); null when it never has. It read its secrets then.</summary>
+    public DateTimeOffset? StartedAt { get; init; }
+
     public bool IsRunning => State == "running";
 
     /// <summary>The digest of the image it runs (sha256:…), when it was deployed by one; null for a tag alone.</summary>

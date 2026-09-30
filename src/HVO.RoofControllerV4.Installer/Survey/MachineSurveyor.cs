@@ -306,7 +306,8 @@ public static partial class MachineSurveyor
                 WebStopKeyFile = environment.GetValueOrDefault(WebStopKeyFileSetting) is { Length: > 0 } stopKey ? stopKey : null,
                 TelemetryEndpoint = environment.GetValueOrDefault(TelemetryEndpointSetting),
                 EmulatorTimeScale = environment.GetValueOrDefault(EmulatorTimeScaleSetting),
-                EmulatorCameraFramesPerSecond = environment.GetValueOrDefault(EmulatorCameraFramesSetting)
+                EmulatorCameraFramesPerSecond = environment.GetValueOrDefault(EmulatorCameraFramesSetting),
+                StartedAt = container.TryGetProperty("State", out var started) ? StartedAt(started) : null
             };
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)
@@ -315,6 +316,25 @@ public static partial class MachineSurveyor
             throw new InstallerException($"docker container inspect {name} gave an answer the installer cannot read.");
         }
     }
+
+    // Docker's State.StartedAt: RFC 3339 with up to nine digits of the second, and the year 1 for a container never started.
+    private static DateTimeOffset? StartedAt(JsonElement state)
+    {
+        if (state.ValueKind != JsonValueKind.Object || !state.TryGetProperty("StartedAt", out var element) || element.ValueKind != JsonValueKind.String || element.GetString() is not { } text)
+        {
+            return null;
+        }
+
+        var match = StartedAtPattern().Match(text);
+        return match.Success
+            && DateTimeOffset.TryParse(match.Groups["time"].Value + match.Groups["fraction"].Value + match.Groups["zone"].Value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time)
+            && time.Year > 1
+                ? time
+                : null;
+    }
+
+    [GeneratedRegex(@"^(?<time>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?<fraction>\.\d{1,7})?\d*(?<zone>Z|[+-]\d{2}:\d{2})$", RegexOptions.CultureInvariant)]
+    private static partial Regex StartedAtPattern();
 
     private static async Task<ServiceSurvey?> SurveyKioskAsync(InstallerMachine machine, CancellationToken cancellationToken)
     {

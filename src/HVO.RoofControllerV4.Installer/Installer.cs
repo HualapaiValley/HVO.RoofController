@@ -59,6 +59,13 @@ public static class Installer
         {
             Description = "Print the installer's version (the release it installs) and change nothing."
         };
+        var secretFiles = Enum.GetValues<InstallSecret>().ToDictionary(
+            secret => secret,
+            secret => new Option<string?>(InstallSecrets.OptionName(secret))
+            {
+                Description = $"Read {InstallSecrets.Describe(secret)} from the first line of this file, which only you may read, in place of typing it.",
+                HelpName = "FILE"
+            });
         var root = new RootCommand(
             "Installs the roof controller, a test rig, the kiosk, hvo-roof or the Mac app on this machine, and records what it installed. "
             + "With no options it opens the wizard. It never moves the roof.");
@@ -73,6 +80,11 @@ public static class Installer
         root.Options.Add(plan);
         root.Options.Add(release);
         root.Options.Add(version);
+        foreach (var option in secretFiles.Values)
+        {
+            root.Options.Add(option);
+        }
+
         root.Subcommands.Add(CertificateCommands.Create(host));
         root.SetAction((parseResult, token) =>
         {
@@ -82,7 +94,13 @@ public static class Installer
                 return Task.FromResult((int)InstallerExitCode.Success);
             }
 
-            var options = new RunOptions(parseResult.GetValue(answers), parseResult.GetValue(plan), parseResult.GetValue(release));
+            var options = new RunOptions(parseResult.GetValue(answers), parseResult.GetValue(plan), parseResult.GetValue(release))
+            {
+                SecretFiles = secretFiles
+                    .Select(option => (option.Key, File: parseResult.GetValue(option.Value)))
+                    .Where(option => option.File is not null)
+                    .ToDictionary(option => option.Key, option => option.File!)
+            };
             return RunAsync(host, options, token);
         });
 
@@ -115,6 +133,9 @@ public static class Installer
     /// <param name="ReleaseFolder"><c>--release</c>: the folder with the release's release.json, in place of GitHub.</param>
     internal sealed record RunOptions(string? AnswersFile, bool PlanOnly, string? ReleaseFolder)
     {
+        /// <summary><c>--admin-password-file</c> and the others: the files that hold the passwords and PINs.</summary>
+        public IReadOnlyDictionary<InstallSecret, string> SecretFiles { get; init; } = new Dictionary<InstallSecret, string>();
+
         public ReleaseSource Release(InstallerHost host)
             => ReleaseFolder is { } folder ? ReleaseSource.Folder(Path.GetFullPath(folder, host.Machine.CurrentDirectory)) : ReleaseSource.GitHub();
     }
@@ -190,12 +211,23 @@ public static class Installer
             return (int)InstallerExitCode.Refused;
         }
 
+        GiveSecretFiles(host, session, options);
         var checkedPlan = await session.CheckAsync(cancellationToken).ConfigureAwait(false);
         host.Out.WriteLine($"The plan for {InstallRoles.Describe(session.Answers.Roles)} on {session.Survey.HostName}, {session.Version}:");
         host.Out.WriteLine();
         foreach (var line in PlanText.Lines(checkedPlan))
         {
             host.Out.WriteLine(line);
+        }
+
+        var missing = session.MissingSecrets(checkedPlan);
+        if (missing.Count > 0)
+        {
+            host.Out.WriteLine();
+            foreach (var secret in missing)
+            {
+                host.Out.WriteLine($"The install asks for {InstallSecrets.Describe(secret)} (or give it with {InstallSecrets.OptionName(secret)} FILE).");
+            }
         }
 
         var system = session.Answers.Roles.Where(role => InstallRoles.ScopeOf(role, session.Machine.Os) == InstallScope.System).ToArray();
@@ -229,6 +261,7 @@ public static class Installer
             return (int)InstallerExitCode.Refused;
         }
 
+        GiveSecretFiles(host, session, options);
         var checkedPlan = await session.CheckAsync(cancellationToken).ConfigureAwait(false);
         foreach (var line in PlanText.Lines(checkedPlan))
         {
@@ -239,6 +272,16 @@ public static class Installer
         {
             log.Write($"Refused: {PlanText.Summary(checkedPlan)}");
             return (int)InstallerExitCode.Refused;
+        }
+
+        try
+        {
+            AskForSecrets(host, session, checkedPlan);
+        }
+        catch (InstallerException error)
+        {
+            log.Write($"Refused: {error.Message}");
+            throw;
         }
 
         host.Out.WriteLine();
@@ -271,6 +314,7 @@ public static class Installer
         host.Error.WriteLine("Looking at this machine…");
         var log = InstallLog.Open(host.Machine, InstallPaths.Log(host.Machine), host.Time);
         var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, options.Release(host), cancellationToken).ConfigureAwait(false);
+        GiveSecretFiles(host, session, options);
         var app = host.CreateApplication();
         InstallerWizard? wizard = null;
         try
@@ -317,6 +361,77 @@ public static class Installer
         }
 
         return InstallAnswers.Parse(json ?? throw new InstallerUsageException($"There is no answers file {path}."));
+    }
+
+    // The passwords and PINs given in files (--admin-password-file and the others), each checked before anything is planned.
+    private static void GiveSecretFiles(InstallerHost host, InstallerSession session, RunOptions options)
+    {
+        foreach (var (secret, file) in options.SecretFiles.OrderBy(pair => pair.Key))
+        {
+            session.GiveSecret(secret, InstallSecrets.ReadFile(host.Machine, secret, Path.GetFullPath(file, host.Machine.CurrentDirectory)));
+        }
+    }
+
+    /// <summary>
+    /// The passwords and PINs <paramref name="plan"/> needs that no file gave: each typed twice at the terminal, and never
+    /// shown. Without a terminal, the install is refused before anything changes.
+    /// </summary>
+    internal static void AskForSecrets(InstallerHost host, InstallerSession session, CheckedPlan plan)
+    {
+        var missing = session.MissingSecrets(plan);
+        foreach (var secret in missing)
+        {
+            if (secret == InstallSecret.CameraPassword)
+            {
+                host.Error.WriteLine(CameraCredentialReminder);
+            }
+
+            session.GiveSecret(secret, AskFor(host, secret, missing));
+        }
+    }
+
+    /// <summary>
+    /// Said before the camera's password is asked for: the Blue Iris credential the source once held is in the public git
+    /// history (docs/security.md).
+    /// </summary>
+    public const string CameraCredentialReminder =
+        "The Blue Iris credential that earlier versions held in their source is still in the public git history: give the controller a "
+        + "view-only Blue Iris user of its own, and change the old user's password if you have not (docs/security.md, \"Rotate the Blue Iris credential\").";
+
+    private const int Tries = 3;
+
+    private static string AskFor(InstallerHost host, InstallSecret secret, IReadOnlyList<InstallSecret> missing)
+    {
+        var what = InstallSecrets.Describe(secret);
+        for (var attempt = 1; ; attempt++)
+        {
+            var typed = host.ReadSecret(what) ?? throw NoTerminal(missing);
+            var problem = InstallSecrets.Problem(secret, typed);
+            if (problem is null)
+            {
+                var again = host.ReadSecret($"{what} again") ?? throw NoTerminal(missing);
+                if (string.Equals(typed, again, StringComparison.Ordinal))
+                {
+                    return typed;
+                }
+
+                problem = secret == InstallSecret.AdminPin ? "The two PINs differ." : "The two passwords differ.";
+            }
+
+            host.Error.WriteLine(problem);
+            if (attempt == Tries)
+            {
+                throw new InstallerUsageException($"{char.ToUpperInvariant(what[0])}{what[1..]} was not given in {Tries} tries, so nothing was changed.");
+            }
+        }
+    }
+
+    private static InstallerUsageException NoTerminal(IReadOnlyList<InstallSecret> missing)
+    {
+        var them = missing.Count == 1 ? "it" : "them";
+        return new InstallerUsageException(
+            $"The install needs {string.Join(" and ", missing.Select(InstallSecrets.Describe))}, and there is no terminal to type {them} at: "
+            + $"give {them} with {string.Join(" and ", missing.Select(secret => $"{InstallSecrets.OptionName(secret)} FILE"))}. Nothing was changed.");
     }
 
     // What needs doing about the certificate: the wizard shows it on its first page, and every other run says it too.
