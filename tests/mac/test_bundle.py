@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for bundle.py's reading of the Mac app's bundle (#48): Mach-O files, Info.plist and AppIcon.icns, whole and
-damaged. A damaged file is a problem in check's report (exit 1), never a hang or a traceback.
+damaged. A damaged file is a problem in check's report (exit 1), or a line naming it when make stops; never a hang or a
+traceback. From the repository root:
 
     python3 -m unittest discover -s tests/mac -p 'test_*.py'
 """
@@ -40,13 +41,16 @@ def signature():
     return bundle.LC_CODE_SIGNATURE, struct.pack("<II", 0, 0)
 
 
-def universal(*slices):
-    """A universal (fat) file holding the given (cpu, image) slices."""
-    header = struct.pack(">II", 0xCAFEBABE, len(slices))
-    offset = 8 + 20 * len(slices)
+def universal(*slices, wide=False):
+    """A universal (fat) file holding the given (cpu, image) slices; wide, in the 64-bit form (0xCAFEBABF), whose
+    entries are 32 bytes instead of 20."""
+    header = struct.pack(">II", 0xCAFEBABF if wide else 0xCAFEBABE, len(slices))
+    offset = 8 + (32 if wide else 20) * len(slices)
     table, images = b"", b""
     for cpu, image in slices:
-        table += struct.pack(">iiIII", cpu, 0, offset + len(images), len(image), 0)
+        at = offset + len(images)
+        table += (struct.pack(">iiQQII", cpu, 0, at, len(image), 0, 0) if wide
+                  else struct.pack(">iiIII", cpu, 0, at, len(image), 0))
         images += image
     return header + table + images
 
@@ -91,6 +95,13 @@ class BundleTestCase(unittest.TestCase):
         path.write_bytes(data)
         return str(path)
 
+    def check(self, app):
+        """bundle.py check of an unsigned bundle: its exit code and what it wrote to stderr."""
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = bundle.check(str(app), unsigned=True)
+        return code, errors.getvalue()
+
 
 class MachOTests(BundleTestCase):
     def test_a_signed_image_says_so_and_names_the_oldest_macos(self):
@@ -103,11 +114,13 @@ class MachOTests(BundleTestCase):
 
     def test_a_universal_file_gives_each_slice(self):
         x64 = 0x01000007
-        image = bundle.MachO(self.write("program", universal(
-            (x64, thin([build_version(MACOS_13)], cpu=x64)),
-            (bundle.CPU_ARM64, thin([build_version(MACOS_12), signature()])))))
-        self.assertEqual(image.slices[bundle.CPU_ARM64], {"signed": True, "minimum": MACOS_12})
-        self.assertEqual(image.slices[x64], {"signed": False, "minimum": MACOS_13})
+        for wide in (False, True):
+            with self.subTest("64-bit" if wide else "32-bit"):
+                image = bundle.MachO(self.write("program", universal(
+                    (x64, thin([build_version(MACOS_13)], cpu=x64)),
+                    (bundle.CPU_ARM64, thin([build_version(MACOS_12), signature()])), wide=wide)))
+                self.assertEqual(image.slices[bundle.CPU_ARM64], {"signed": True, "minimum": MACOS_12})
+                self.assertEqual(image.slices[x64], {"signed": False, "minimum": MACOS_13})
 
     def test_damaged_files_are_refused_with_a_reason(self):
         whole = thin([build_version(MACOS_12), signature()])
@@ -118,6 +131,9 @@ class MachOTests(BundleTestCase):
         short_build_version = thin([(bundle.LC_BUILD_VERSION, b"\x01\x00\x00\x00")])
         slice_past_the_end = bytearray(universal((bundle.CPU_ARM64, whole)))
         struct.pack_into(">I", slice_past_the_end, 8 + 12, len(whole) + 1)
+        wide = universal((bundle.CPU_ARM64, whole), wide=True)
+        wide_slice_past_the_end = bytearray(wide)
+        struct.pack_into(">Q", wide_slice_past_the_end, 8 + 16, len(whole) + 1)
         cases = {
             "empty": (b"", "not a 64-bit Mach-O file"),
             "not Mach-O": (b"#!/bin/sh\necho hello\n", "not a 64-bit Mach-O file"),
@@ -128,6 +144,9 @@ class MachOTests(BundleTestCase):
             "a build version cut short": (short_build_version, "a build version is cut short"),
             "universal header cut short": (b"\xca\xfe\xba\xbe\x00\x00\x00\x02", "the universal header is cut short"),
             "a slice past the end": (bytes(slice_past_the_end), "a slice is cut short"),
+            # 23 of a 64-bit entry's 32 bytes: enough for a 32-bit entry, not for the offset and size it needs.
+            "64-bit universal header cut short": (wide[:8 + 23], "the universal header is cut short"),
+            "a 64-bit slice past the end": (bytes(wide_slice_past_the_end), "a slice is cut short"),
         }
         for name, (data, reason) in cases.items():
             with self.subTest(name):
@@ -190,12 +209,6 @@ class CheckTests(BundleTestCase):
             "CFBundleVersion": "7", "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "12.0"}))
         return app
 
-    def check(self, app):
-        output, errors = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            code = bundle.check(str(app), unsigned=True)
-        return code, errors.getvalue()
-
     def test_a_whole_bundle_passes(self):
         self.assertEqual(self.check(self.make_bundle()), (0, ""))
 
@@ -224,6 +237,45 @@ class CheckTests(BundleTestCase):
         code, errors = self.check(app)
         self.assertEqual(code, 1)
         self.assertIn("MacOS/libSkiaSharp.dylib needs macOS 13.0, newer than LSMinimumSystemVersion", errors)
+
+
+class MakeTests(BundleTestCase):
+    """bundle.py make from a publish folder, without signing."""
+
+    def publish(self, library=None):
+        """A publish folder whose program and libraries need macOS 12, with the given (name, data) library instead."""
+        for name in [bundle.EXECUTABLE] + bundle.LIBRARIES:
+            self.write(f"publish/{name}", thin([build_version(MACOS_12)]))
+        if library:
+            self.write(f"publish/{library[0]}", library[1])
+        return str(self.directory / "publish")
+
+    def make(self, publish):
+        with contextlib.redirect_stdout(io.StringIO()):
+            bundle.make(publish, str(self.directory / "out"), 7, None)
+        return self.directory / "out" / bundle.APP_NAME
+
+    def test_a_whole_publish_makes_a_bundle_that_check_passes(self):
+        app = self.make(self.publish(("libSkiaSharp.dylib", thin([build_version(MACOS_13)]))))
+        with (app / "Contents/Info.plist").open("rb") as file:
+            plist = plistlib.load(file)
+        self.assertEqual((plist["CFBundleVersion"], plist["LSMinimumSystemVersion"]), ("7", "13.0"))
+        self.assertEqual(self.check(app), (0, ""))
+
+    def test_a_damaged_program_or_library_stops_make_with_its_name(self):
+        cases = {
+            "a library cut short": ("libSkiaSharp.dylib", thin([build_version(MACOS_12)])[:36],
+                                    "libSkiaSharp.dylib: a load command is cut short"),
+            "a program that is not Mach-O": (bundle.EXECUTABLE, b"#!/bin/sh\n",
+                                             f"{bundle.EXECUTABLE}: not a 64-bit Mach-O file"),
+        }
+        for name, (file, data, reason) in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(SystemExit) as stopped:
+                    self.make(self.publish((file, data)))
+                self.assertIsInstance(stopped.exception.code, str)
+                self.assertIn(reason, stopped.exception.code)
+                self.assertIn("publish again", stopped.exception.code)
 
 
 if __name__ == "__main__":

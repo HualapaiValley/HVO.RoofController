@@ -301,3 +301,9 @@ restore's report when Docker cannot be read, `--rollback` and its undo, HAT emul
 the verified `hatMode`, and the HAT a rollback restores), and that the key never appears in an argument list. An
 unknown test name counts as a failure. Run `tests/deploy/deploy-script-tests.sh [test_name ...]` from the
 repository root.
+
+The Mac app's bundle script has its own tests too, `tests/mac/test_bundle.py` (`python3` alone). They check that
+`bundle.py` reads whole Mach-O files (thin, and universal in both forms), `Info.plist` and `AppIcon.icns`, that
+`check` reports damaged ones with exit code 1 and `make` stops on them with a line naming the file, and that a bundle
+`make` builds passes `check` ([docs/mac.md](../../docs/mac.md)). Run
+`python3 -m unittest discover -s tests/mac -p 'test_*.py'` from the repository root.

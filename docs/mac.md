@@ -259,9 +259,11 @@ Nothing here needs a Mac, the controller's Pi or the roof.
 - **The app** (`MacAppTests`): `--check` exits 0 once the window is drawn and 1 when it is not or there is none, the
   refusal window, and the icon: it is drawn in code (`MacIcon`), at each size macOS uses, and `bundle/AppIcon.icns`
   must hold that drawing.
-- **The bundle script** (`tests/mac/test_bundle.py`): `bundle.py` reads whole Mach-O files (thin and universal),
-  `Info.plist` and `AppIcon.icns`, and reports damaged ones (cut short, or with a size of 0) as problems, with exit
-  code 1, not a hang or a traceback. Run it with `python3 -m unittest discover -s tests/mac -p 'test_*.py'`.
+- **The bundle script** (`tests/mac/test_bundle.py`): `bundle.py` reads whole Mach-O files (thin, and universal in
+  both the 32-bit and 64-bit forms), `Info.plist` and `AppIcon.icns`. `check` reports damaged ones (cut short, or with
+  a size of 0) as problems with exit code 1, and `make` stops on a damaged program or library with a line naming it:
+  neither hangs nor ends in a traceback. Run it from the repository root with
+  `python3 -m unittest discover -s tests/mac -p 'test_*.py'`.
 - **The bundle**: CI makes it from the osx-arm64 publish, signs it with rcodesign, checks it with `bundle.py check`
   and rcodesign's `print-signature-info`, and keeps it as the `hvo-roof-mac-<run id>.zip` artifact for 14 days.
 

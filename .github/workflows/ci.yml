@@ -280,9 +280,10 @@ jobs:
           printf 'ci-mac-check-not-a-real-key\n' > "$settings/device-key"
           chmod 600 "$settings/device-key"
           # The exit code as well as the line: the app must also quit cleanly (sign out, close) after drawing.
+          # stdout has the console log and the check's line; stderr has anything the app refuses.
           status=0
-          HVO_ROOF_MAC_SETTINGS="$settings" "HVO Roof.app/Contents/MacOS/hvo-roof-mac" --check > check.txt 2> check-log.txt || status=$?
-          cat check-log.txt check.txt
+          HVO_ROOF_MAC_SETTINGS="$settings" "HVO Roof.app/Contents/MacOS/hvo-roof-mac" --check > check.txt 2> check-stderr.txt || status=$?
+          cat check-stderr.txt check.txt
           if [ "$status" -ne 0 ] || ! grep -q '^HVO Roof check: the window opened and was drawn' check.txt; then
             echo "::error file=src/HVO.RoofControllerV4.Mac/MacCheck.cs::hvo-roof-mac --check exited ${status}; it must draw the window and exit 0"
             exit 1

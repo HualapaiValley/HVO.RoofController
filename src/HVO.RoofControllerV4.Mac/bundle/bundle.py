@@ -119,7 +119,10 @@ def make(publish, out, build, rcodesign):
 
     minimum = 0
     for name in [EXECUTABLE] + LIBRARIES:
-        arm = MachO(os.path.join(macos, name)).slices.get(CPU_ARM64)
+        try:
+            arm = MachO(os.path.join(macos, name)).slices.get(CPU_ARM64)
+        except ValueError as error:
+            sys.exit(f"{error}; publish again with: dotnet publish HVO.RoofControllerV4.Mac -c Release -r osx-arm64")
         if arm is None:
             sys.exit(f"{name}: has no arm64 code; publish with -r osx-arm64")
         minimum = max(minimum, arm["minimum"] or 0)
