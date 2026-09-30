@@ -95,9 +95,10 @@ uses the same words as every other client.
 
 ## Install
 
-1. **The app.** CI builds, signs and checks the app on every run: download the `hvo-roof-mac-<run id>.zip` artifact
-   from the run's page on GitHub (Actions), open it, and move `HVO Roof.app` to Applications. Or build it yourself
-   ([Build it yourself](#build-it-yourself)).
+1. **The app.** Each release has the app among its assets, as `HVO-Roof-<version>.zip`
+   ([Versions and releases](releasing.md#the-assets)): download it, open it, and move `HVO Roof.app` to Applications.
+   CI also builds, signs and checks the app on every run, as the `hvo-roof-mac-<run id>.zip` artifact on the run's
+   page on GitHub (Actions). Or build it yourself ([Build it yourself](#build-it-yourself)).
 
 2. **The first launch.** The app is signed ad hoc, with no Apple certificate, which is enough for your own Macs but not
    for Gatekeeper to know who made it. So the first time, macOS refuses to open it from a download. Either:

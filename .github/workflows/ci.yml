@@ -7,12 +7,23 @@ on:
     branches: [ main, feature/** ]
   schedule:
     - cron: '0 2 * * *'
+  # The release workflow runs this workflow as a gate (docs/releasing.md), and releases the programs it builds, tested
+  # here with the release's version.
+  workflow_call:
+    inputs:
+      version:
+        description: 'The release version to build, such as 4.0.0 or 4.0.0-rc.1; empty for 4.0.0-ci.<run>'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A literal first part: in a called workflow github.workflow is the caller's name, and a group equal to the caller's
+  # would deadlock the two.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,9 +36,6 @@ jobs:
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
       AVALONIA_TELEMETRY_OPTOUT: 1
       TEST_PROJECT: ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
-      # Every program built here is 4.0.0-ci.<run> (docs/releasing.md): MSBuild reads the variable as a property, so
-      # every restore, build and publish below gets it. The SDK adds the commit (+<sha>) from the checkout.
-      VersionSuffix: ci.${{ github.run_number }}
     defaults:
       run:
         # The dotnet host resolves global.json from the working directory upward, not from
@@ -38,6 +46,17 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      # Every program built here is 4.0.0-ci.<run>, or the release's version when the release workflow runs this one
+      # (docs/releasing.md). MSBuild reads the Version variable as a property, so every restore, build and publish below
+      # gets it; the SDK adds the commit (+<sha>) from the checkout.
+      - name: Product version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          version=${RELEASE_VERSION:-$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")}
+          echo "Product version: ${version}"
+          echo "Version=${version}" >> "$GITHUB_ENV"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -137,8 +156,8 @@ jobs:
             test -x "hvo-roof/$rid/hvo-roof"
           done
           file hvo-roof/linux-arm64/hvo-roof | grep -q 'ARM aarch64'
-          # The product version and this commit, as build/version.sh names a CI build.
-          expected="$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")+${GITHUB_SHA}"
+          # The product version and this commit.
+          expected="${Version}+${GITHUB_SHA}"
           actual=$(./hvo-roof/linux-x64/hvo-roof --version)
           echo "hvo-roof --version: ${actual}"
           if [ "${actual}" != "${expected}" ]; then
@@ -203,7 +222,7 @@ jobs:
           echo "${APPLE_CODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
           rcodesign="$RUNNER_TEMP/$archive/rcodesign"
-          version=$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")
+          version="${Version}"
           python3 HVO.RoofControllerV4.Mac/bundle/bundle.py make hvo-roof-mac/osx-arm64 mac-artifact \
             --version "$version" --build "$GITHUB_RUN_NUMBER" --rcodesign "$rcodesign"
           python3 HVO.RoofControllerV4.Mac/bundle/bundle.py check "mac-artifact/HVO Roof.app" --version "$version"
@@ -331,7 +350,7 @@ jobs:
           bash -n tests/emulator/compose-smoke-test.sh
           bash -n tests/emulator/deploy-scenarios.sh
           bash -n tests/cli/terminal-smoke.sh
-          for script in build/*.sh tests/versioning/*.sh; do
+          for script in build/*.sh tests/versioning/*.sh tests/releasing/*.sh; do
             bash -n "${script}"
           done
           for script in src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-*; do
@@ -339,12 +358,13 @@ jobs:
           done
           python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py tests/mac/test_bundle.py \
             src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py \
-            build/release-compose.py tests/releasing/test_release_compose.py
+            build/release-compose.py tests/releasing/test_release_compose.py build/release-assets.py \
+            tests/releasing/test_release_assets.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/cli/terminal-smoke.sh \
             src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-* \
-            build/*.sh tests/versioning/*.sh
+            build/*.sh tests/versioning/*.sh tests/releasing/*.sh
 
       # build/version.sh (the product version and the release tag's check) and build/check-image-labels.sh.
       - name: Version script tests
@@ -359,9 +379,20 @@ jobs:
         run: python3 -m unittest discover -s tests/mac -p 'test_*.py' -v
 
       # build/release-compose.py: the release compose file, and the sources it refuses. The Compose profiles step
-      # checks the file it makes with Compose.
-      - name: Release compose script tests
+      # checks the file it makes with Compose. build/release-assets.py: a release's assets, release.json and SHA256SUMS,
+      # and the programs it refuses to release.
+      - name: Release script tests
         run: python3 -m unittest discover -s tests/releasing -p 'test_*.py' -v
+
+      # build/push-image.sh pushing two-platform OCI archives to a registry in Docker, and tagging them latest.
+      - name: Image push script tests
+        run: |
+          skopeo --version
+          tests/releasing/push-image-tests.sh
+
+      # build/release-latest.sh deciding whether publishing a release moves latest, against a stand-in for gh.
+      - name: Release latest script tests
+        run: tests/releasing/release-latest-tests.sh
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh

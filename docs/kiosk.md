@@ -176,8 +176,15 @@ OS Lite (no desktop): nothing else may hold the display.
    ```
 
 3. **The program.** Steps 3, 5 and 6 install the program and its files from one directory that holds them side by
-   side, and run in it. CI builds that directory for the Pi: unpack its `hvo-roof-kiosk-<run id>` artifact and `cd`
-   into it. Or publish it from a checkout, at the repository's root:
+   side, and run in it. Each release has it among its assets ([Versions and releases](releasing.md#the-assets)):
+
+   ```bash
+   tar -xzf hvo-roof-kiosk-4.0.0-linux-arm64.tar.gz
+   cd hvo-roof-kiosk-4.0.0-linux-arm64
+   ```
+
+   CI builds the same directory for the Pi: unpack its `hvo-roof-kiosk-<run id>` artifact and `cd` into it. Or publish
+   it from a checkout, at the repository's root:
 
    ```bash
    dotnet publish src/HVO.RoofControllerV4.Kiosk -c Release -r linux-arm64 -o hvo-roof-kiosk

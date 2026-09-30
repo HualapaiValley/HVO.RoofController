@@ -16,8 +16,10 @@ page.
 | The Pi | `linux-arm64` | Runs next to the controller, over SSH or at the Pi's console. |
 | Development | `linux-x64` | The same program, for a workstation. |
 
-CI publishes both builds on every run of the `CI` workflow, as the `hvo-roof-<run id>` artifact. To build one
-yourself, run from `src/` (so `src/global.json` picks the SDK):
+Each release has both builds among its assets, as `hvo-roof-linux-arm64` and `hvo-roof-linux-x64`
+([Versions and releases](releasing.md#the-assets)); rename the file to `hvo-roof` when you install it. CI publishes
+both on every run of the `CI` workflow too, as the `hvo-roof-<run id>` artifact. To build one yourself, run from `src/`
+(so `src/global.json` picks the SDK):
 
 ```bash
 cd src

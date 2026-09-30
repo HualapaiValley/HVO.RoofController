@@ -104,8 +104,10 @@ public sealed class C6DriveRunningInputScenarios
         var stoppedAt = rig.ContactChanges(1).Last(c => !c.Closed).At;
         (rig.EventTimes(PlantEventKind.Input, "IN4 LOW").Single() - stoppedAt).Should().BeLessThan(TimeSpan.FromMilliseconds(50), "P111 = 0 (coast) shuts the output off at once");
 
+        // Were IN4 still high, Close would be refused (409), not delayed, so the bound only spans the Stop reply and the Close
+        // request: two round trips that a busy CI runner has stretched to 250 ms.
         (await client.AcceptedAsync("Close")).CommandedMotion.Should().Be(RoofMotionDirection.Closing);
-        (rig.ContactChanges(2).Single(c => c.Closed).At - stoppedAt).Should().BeLessThan(TimeSpan.FromMilliseconds(250),
+        (rig.ContactChanges(2).Single(c => c.Closed).At - stoppedAt).Should().BeLessThan(TimeSpan.FromSeconds(1),
             "nothing holds IN4 after a coast stop, so the interlock lets the reversal through without waiting");
         (await rig.WaitForControllerAsync(s => s.Status == RoofControllerStatus.Closed && !s.IsMoving, "the roof to close"))
             .LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
