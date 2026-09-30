@@ -1460,6 +1460,28 @@ test_rollback_returns_from_a_pulled_image_to_the_one_before_and_ignores_image_re
   [[ -z "$(docker_calls pull)$(docker_calls run)$(docker_calls buildx)" ]] || fail_test "--rollback pulled, built or ran an image"
 }
 
+# A reference a deploy would refuse, left in the environment, must not stop a rollback or a remote check.
+test_rollback_and_verify_remote_ignore_a_malformed_image_ref() {
+  local bad_ref="IMAGE_REF=ghcr.io/hualapaivalley/roof-controller:4.0.0"
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" "${bad_ref}" -- --rollback
+  assert_status 0
+  assert_output_contains "Rolled back."
+  assert_output_not_contains "IMAGE_REF must name"
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous current false no
+
+  teardown
+  setup
+  seed_container roof-controller compose true 8443:8443
+  seed_label roof-controller com.docker.compose.project roof
+  deploy "${HTTPS_ENV[@]}" "${bad_ref}" -- --verify-remote
+  assert_status 0
+  assert_output_contains "[done] Verified at https://pi.test:8443 from this machine"
+  assert_no_docker_calls "--verify-remote"
+}
+
 test_compose_managed_controller_is_refused_before_anything_changes() {
   local name args
   for name in roof-controller roof-controller-previous; do

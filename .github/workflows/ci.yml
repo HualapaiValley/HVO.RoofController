@@ -496,6 +496,23 @@ jobs:
             echo "::error file=build/release-compose.py::the release compose file's pi and pi-lan-http profiles can be enabled together"
             exit 1
           fi
+          # A release pins both images to their digests: Compose must read that file too, with each image pinned.
+          pinned="${RUNNER_TEMP}/release-compose/pinned.yaml"
+          controller_digest="sha256:$(printf controller | sha256sum | cut -c1-64)"
+          emulator_digest="sha256:$(printf emulator | sha256sum | cut -c1-64)"
+          ../../build/release-compose.py --version "${version}" --controller-digest "${controller_digest}" \
+            --emulator-digest "${emulator_digest}" -o "${pinned}"
+          for profile in pi pi-lan-http emulator; do
+            docker compose -f "${pinned}" --profile "${profile}" config --format json | jq -e --arg version "${version}" \
+                --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" '
+              [.services[]
+                | .image == "ghcr.io/hualapaivalley/roof-controller:\($version)@\($controller)"
+                  or .image == "ghcr.io/hualapaivalley/roof-hat-emulator:\($version)@\($emulator)"]
+              | length == 2 and all' >/dev/null || {
+              echo "::error file=build/release-compose.py::a service of the digest-pinned release compose file's ${profile} profile names another image than the release's, pinned"
+              exit 1
+            }
+          done
           # The local development compose file (the controller against the emulator container). Its controller runs the
           # same supervisor, so its stop grace period must cover the same waits.
           docker compose -f ../docker-compose.yml config --format json | jq -e --argjson grace "${grace}" '

@@ -33,7 +33,7 @@ set -euo pipefail
 #   Docker pulls that image instead; it is deployed only if Docker reports that digest and BUILD_PLATFORM for it, and
 #   nothing is built, so the script runs without a checkout. Everything from the pre-flight on is the same. On the Pi
 #   itself, set DOCKER_CONTEXT=default: the remote check then runs from the Pi, so check from another machine afterwards
-#   too (--verify-remote). --rollback and --verify-remote ignore IMAGE_REF.
+#   too (--verify-remote). --rollback and --verify-remote ignore IMAGE_REF, and do not check it.
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
@@ -260,8 +260,10 @@ esac
 
 # Pull mode: a released image, named by its digest, so the Pi runs exactly the image the release lists. Checked here, so
 # that a malformed reference changes nothing, and never starts with '-', so docker cannot take it for an option.
+# --rollback and --verify-remote deploy no image: they ignore it, so a reference left in the environment cannot stop a
+# rollback.
 IMAGE_DIGEST=""
-if [[ -n "${IMAGE_REF}" ]]; then
+if [[ -n "${IMAGE_REF}" && "${ROLLBACK}" != "true" && "${VERIFY_REMOTE}" != "true" ]]; then
   image_ref_pattern='^[a-z0-9][A-Za-z0-9._/:-]*@(sha256:[0-9a-f]{64})$'
   [[ "${IMAGE_REF}" =~ ${image_ref_pattern} ]] \
     || fail "IMAGE_REF must name a released image by its digest, <registry>/<name>[:<tag>]@sha256:<64 hex digits> (e.g. ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:...), got '${IMAGE_REF}'. Nothing was changed."
@@ -276,8 +278,9 @@ fi
 # break the restore, the restart policy or the pre-flight container, --stop-timeout or --stop-signal could cut the
 # controller's shutdown stop short, and --platform could run another platform's image than the one checked. Short
 # options may be combined (-itd, -p8443:8443). HatEmulator settings (in any case, as .NET reads them), given directly or
-# in an --env-file, would switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report. In emulator mode the HAT's bus stays unmapped: no I2C device, no --privileged
-# (which maps every device) and no mount of the host's /dev.
+# in an --env-file, would switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report. In
+# emulator mode the HAT's bus stays unmapped: no I2C device, no --privileged (which maps every device) and no mount of
+# the host's /dev.
 EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it."
 
 refuse_emulator_setting() {

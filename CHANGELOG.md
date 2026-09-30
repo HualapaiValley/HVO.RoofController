@@ -98,11 +98,12 @@ the roof against this server; use the web UI (port 8088) for operator access.
 - Released images (#63). With `IMAGE_REF=<registry>/<name>[:<tag>]@sha256:<digest>`, `deploy-roofcontroller-rpi.sh`
   pulls a released image into the Pi's Docker instead of building one, deploys it only if Docker reports that digest
   and the Pi's platform for it, and prints its version; it needs no checkout, and runs on the Pi itself with
-  `DOCKER_CONTEXT=default`. A reference without a digest is refused. `build/release-compose.py` makes a release's
-  compose file: the Pi compose file with the released GHCR images and nothing built, for the Pi profiles and the
-  `emulator` profile, which CI checks against the source profile by profile. The controller's image is now built for
-  `linux/amd64` as well as `linux/arm64`. The container scenarios deploy a pulled image from a local registry (C12
-  step 11). See [docs/deployment.md](docs/deployment.md#deploying-a-released-image).
+  `DOCKER_CONTEXT=default`. A reference without a digest is refused; `--rollback` and `--verify-remote` ignore it.
+  `build/release-compose.py` makes a release's compose file: the Pi compose file with the released GHCR images and
+  nothing built, for the Pi profiles and the `emulator` profile, which CI checks against the source profile by profile,
+  with and without the digests. The controller's image is now built for `linux/amd64` as well as `linux/arm64`. The
+  container scenarios deploy a two-platform image index from a local registry by its digest (C12 step 11). See
+  [docs/deployment.md](docs/deployment.md#deploying-a-released-image).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`

@@ -391,9 +391,12 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   pre-flight, with the running controller untouched.
 - From the pre-flight on, the deploy is the same as for a built image, and the pre-flight and the new controller run
   the checked platform's image. `--dry-run` shows the pull in its plan and pulls nothing.
-- `--rollback` and `--verify-remote` ignore `IMAGE_REF`: a rollback restores `<name>-previous` however it was deployed.
-- The released images are public, so the Pi needs no registry login. For a registry that needs one, run `docker login`
-  in the Pi's Docker first.
+- `--rollback` and `--verify-remote` ignore `IMAGE_REF`, and do not check it: a rollback restores `<name>-previous`
+  however it was deployed, even with a reference a deploy would refuse still in the environment.
+- The released images are public once a maintainer has made the GHCR packages public, a step of the first release
+  ([Versions and releases](releasing.md)); then the Pi needs no registry login. Until then, or for a registry that
+  needs one, an anonymous pull fails with `unauthorized` or `denied`: run `docker login ghcr.io` in the Pi's Docker
+  first, with a token that can read packages.
 
 **On the Pi itself.** The script can also run on the Pi, with `DOCKER_CONTEXT=default` for the Pi's own Docker:
 

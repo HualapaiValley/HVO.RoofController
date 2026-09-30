@@ -21,9 +21,11 @@
 #              added on the Compose controller, and the session they opened there, still work after each move: both
 #              mount the same identity directory. So does a setting changed through the API on the Compose controller:
 #              both mount the same settings directory.
-#   pull       The deploy script's pull mode (C12 step 11): a released image, pushed to a registry of this run's own on
-#              loopback, deployed by its digest with no build; a reference without a digest, a digest the registry does
-#              not hold and the other platform each change nothing; --rollback between the pulled and the built version.
+#   pull       The deploy script's pull mode (C12 step 11): a released image, an index of two platforms as a release
+#              publishes it, pushed to a registry of this run's own on loopback and deployed by the index's digest with
+#              no build; a reference without a digest, a digest the registry does not hold and an image with nothing for
+#              the other platform each change nothing; --rollback between the pulled and the built version, with an
+#              IMAGE_REF it ignores.
 #
 # Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It runs only against the local Docker daemon
 # (the default context, with DOCKER_HOST unset or a unix socket), not on a Raspberry Pi, and touches no hardware: the
@@ -1529,6 +1531,19 @@ registry_ready() {
   curl -fsS --max-time 2 "http://127.0.0.1:${registry_port}/v2/" >/dev/null
 }
 
+# push_image <platform> <context> <tag>: builds the image for that platform and pushes it to the run's registry under
+# that tag, with its digest in PUSHED_DIGEST. Only the registry keeps it: the deploy pulls by digest, as from a release.
+PUSHED_DIGEST=""
+push_image() {
+  local output
+  docker buildx build --quiet --provenance=false --platform "$1" -t "${release_repository}:$3" --load "$2" >/dev/null \
+    || fail "could not build the released image for $1"
+  output=$(docker push "${release_repository}:$3") || fail "could not push the released image for $1: ${output}"
+  PUSHED_DIGEST=$(sed -n 's/^.*: digest: \(sha256:[0-9a-f]\{64\}\) .*/\1/p' <<<"${output}")
+  [[ -n "${PUSHED_DIGEST}" ]] || fail "the push of the image for $1 reported no digest: ${output}"
+  docker rmi "${release_repository}:$3" >/dev/null
+}
+
 # expect_not_pulled <id>: expect_untouched, and the controller was not stopped or replaced for a pull that failed.
 expect_not_pulled() {
   expect_deploy_log "The running controller was not touched."
@@ -1542,22 +1557,30 @@ scenario_pull() {
 
   # CommissioningCheck("C12", "11")
   current_check="C12 step 11: a released image pulled by its digest"
-  # A release's image as the release workflow publishes it, in a registry of this run's own on loopback: this run's
-  # controller image under another version label, so the deploy has something new to pull.
+  # A release's image as the release workflow publishes it, in a registry of this run's own on loopback: an index of
+  # two platforms, deployed by the index's digest as release.json lists it. This run's platform is its controller image
+  # under another version label, so the deploy has something new to pull; the other is an empty image, which builds
+  # without emulation.
+  local other_platform=linux/arm64
+  [[ "${platform}" == linux/amd64 ]] || other_platform=linux/amd64
   docker run -d --name "${registry_name}" -p "127.0.0.1:${registry_port}:5000" "${registry_image}" >/dev/null \
     || fail "could not start the registry"
   wait_for "the registry" 60 registry_ready
-  mkdir -p "${work}/release-image"
+  mkdir -p "${work}/release-image" "${work}/other-image"
   printf 'FROM %s\nLABEL org.opencontainers.image.version=4.0.0-scenario\n' "${image}" > "${work}/release-image/Dockerfile"
-  docker buildx build --quiet --platform "${platform}" -t "${release_repository}:4.0.0-scenario" --load \
-    "${work}/release-image" >/dev/null || fail "could not build the released image"
-  local push digest ref
-  push=$(docker push "${release_repository}:4.0.0-scenario") || fail "could not push the released image: ${push}"
-  digest=$(sed -n 's/^4\.0\.0-scenario: digest: \(sha256:[0-9a-f]\{64\}\) .*/\1/p' <<<"${push}")
-  [[ -n "${digest}" ]] || fail "the push reported no digest: ${push}"
-  # Only the tag goes: the deploy pulls the image by its digest, as from a release.
-  docker rmi "${release_repository}:4.0.0-scenario" >/dev/null
-  ref="${release_repository}:4.0.0-scenario@${digest}"
+  printf 'FROM scratch\nLABEL org.opencontainers.image.version=4.0.0-scenario\n' > "${work}/other-image/Dockerfile"
+  local tag=4.0.0-scenario single other digest ref
+  push_image "${platform}" "${work}/release-image" "${tag}-${platform#linux/}"
+  single=${PUSHED_DIGEST}
+  push_image "${other_platform}" "${work}/other-image" "${tag}-${other_platform#linux/}"
+  other=${PUSHED_DIGEST}
+  docker buildx imagetools create --progress quiet -t "${release_repository}:${tag}" \
+    "${release_repository}@${single}" "${release_repository}@${other}" >/dev/null \
+    || fail "could not push the released image's index"
+  digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${release_repository}:${tag}" | jq -r .digest)
+  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ && "${digest}" != "${single}" ]] \
+    || fail "the registry reported no index digest for ${release_repository}:${tag}: '${digest}'"
+  ref="${release_repository}:${tag}@${digest}"
 
   local old_id new_id
   old_id=$(container_id "${controller}")
@@ -1580,30 +1603,32 @@ scenario_pull() {
   local pull_seconds=${DEPLOY_SECONDS}
 
   # Refusals: each changes nothing, and the running controller is never asked to stop the roof.
-  local other_platform=linux/arm64 unknown_digest
-  [[ "${platform}" == linux/amd64 ]] || other_platform=linux/amd64
+  local unknown_digest single_ref="${release_repository}:${tag}-${platform#linux/}@${single}"
   unknown_digest="sha256:$(printf '%s' "not-${digest}" | sha256sum | cut -c1-64)"
   start_relay_monitor
-  deploy "IMAGE_REF=${release_repository}:4.0.0-scenario"
+  deploy "IMAGE_REF=${release_repository}:${tag}"
   (( DEPLOY_STATUS != 0 )) || fail "a reference without a digest was deployed"
   expect_deploy_log "IMAGE_REF must name a released image by its digest"
   expect_deploy_log "Nothing was changed."
   expect_untouched "${new_id}"
-  deploy "IMAGE_REF=${release_repository}:4.0.0-scenario@${unknown_digest}"
+  deploy "IMAGE_REF=${release_repository}:${tag}@${unknown_digest}"
   (( DEPLOY_STATUS != 0 )) || fail "a digest the registry does not hold was deployed"
-  expect_deploy_log "Could not pull ${release_repository}:4.0.0-scenario@${unknown_digest}"
+  expect_deploy_log "Could not pull ${release_repository}:${tag}@${unknown_digest}"
   expect_not_pulled "${new_id}"
-  # A registry refuses the platform (no matching manifest), or the image the Pi holds is checked and is not for it.
-  deploy "IMAGE_REF=${ref}" "BUILD_PLATFORM=${other_platform}"
+  # An image with nothing for the other platform (this platform's own, by its digest): a registry refuses the platform
+  # (no matching manifest), or the image the Pi then holds is checked and is not for it.
+  deploy "IMAGE_REF=${single_ref}" "BUILD_PLATFORM=${other_platform}"
   (( DEPLOY_STATUS != 0 )) || fail "the image was deployed for ${other_platform}"
-  deploy_log_has "Could not pull ${ref} for ${other_platform}" || deploy_log_has "The image ${ref} is not for ${other_platform}" \
+  deploy_log_has "Could not pull ${single_ref} for ${other_platform}" \
+    || deploy_log_has "The image ${single_ref} is not for ${other_platform}" \
     || fail "the deploy for ${other_platform} did not fail at the pull or the platform check"
   expect_not_pulled "${new_id}"
   relays_stayed_off
 
   # --rollback swaps the pulled version with the one before (a built image) and back: each container keeps its image.
+  # It ignores IMAGE_REF, even one a deploy would refuse.
   start_relay_monitor
-  deploy "IMAGE_REF=${ref}" -- --rollback
+  deploy "IMAGE_REF=${release_repository}:${tag}" -- --rollback
   (( DEPLOY_STATUS == 0 )) || fail "the rollback from the pulled image failed (exit ${DEPLOY_STATUS})"
   [[ "$(container_id "${controller}")" == "${old_id}" && "$(container_id "${previous}")" == "${new_id}" ]] \
     || fail "the rollback did not swap the pulled version with the one before"
@@ -1614,7 +1639,7 @@ scenario_pull() {
   [[ "$(container_image "${controller}")" == "$(image_id "${ref}")" ]] || fail "${controller} does not run the pulled image again"
   relays_stayed_off
   assert_relays_off
-  pass "deployed ${digest:0:19}... from a registry in ${pull_seconds} s with no build; a reference without a digest, a digest the registry does not hold and ${other_platform} each changed nothing; --rollback swapped to the built version and back; relays 0 throughout"
+  pass "deployed the two-platform index ${digest:0:19}... from a registry in ${pull_seconds} s with no build; a reference without a digest, a digest the registry does not hold and an image with nothing for ${other_platform} each changed nothing; --rollback swapped to the built version and back; relays 0 throughout"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
