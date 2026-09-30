@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>What the terminal programs share: HVO Dark for Terminal.Gui, used by hvo-roof's interface and the installer.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Terminal.Gui" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj" />
+  </ItemGroup>
+
+</Project>

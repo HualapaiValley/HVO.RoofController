@@ -5,14 +5,17 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>hvo-roof</AssemblyName>
-    <RootNamespace>HVO.RoofControllerV4.Cli</RootNamespace>
-    <Description>Command-line client and terminal interface for the HVO roof controller, over its REST API and status hub.</Description>
+    <AssemblyName>hvo-roof-install</AssemblyName>
+    <RootNamespace>HVO.RoofControllerV4.Installer</RootNamespace>
+    <Description>The roof controller's installer: sets up the controller, a test rig, the kiosk, hvo-roof and the Mac app, and records what it installed.</Description>
     <InvariantGlobalization>true</InvariantGlobalization>
     <RuntimeIdentifiers>linux-arm64;linux-x64;osx-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
-  <!-- dotnet publish -r linux-arm64 (the Pi), -r linux-x64 (development) or -r osx-arm64 (a Mac) gives one self-contained file. -->
+  <!--
+    dotnet publish -r linux-arm64 (the Pi), -r linux-x64 (a PC test rig) or -r osx-arm64 (a Mac) gives one
+    self-contained file, which install.sh downloads and runs.
+  -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
@@ -26,10 +29,14 @@
     <ProjectReference Include="../HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj" />
     <ProjectReference Include="../HVO.RoofControllerV4.TerminalUi/HVO.RoofControllerV4.TerminalUi.csproj" />
     <InternalsVisibleTo Include="HVO.RoofControllerV4.RPi.Tests" />
+    <Using Include="HVO.RoofControllerV4.TerminalUi" />
   </ItemGroup>
 
+  <!-- It installs on Linux and macOS only: file modes, systemd and Docker are its whole job. -->
   <ItemGroup>
-    <Using Include="HVO.RoofControllerV4.TerminalUi" />
+    <AssemblyAttribute Include="System.Runtime.Versioning.UnsupportedOSPlatformAttribute">
+      <_Parameter1>windows</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

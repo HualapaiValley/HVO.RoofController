@@ -132,6 +132,23 @@ the roof against this server; use the web UI (port 8088) for operator access.
   CA and the name constraints) on macOS; the smoke test's screens are kept as `mac-terminal-screens-<run id>`. The
   smoke test now also checks that `setup` keeps the credentials file at mode 600 in a folder at 700. See
   [docs/cli.md](docs/cli.md#on-a-mac).
+- The installer, `hvo-roof-install` (#67). One self-contained file for Linux arm64 and x64 and Apple silicon Macs, which
+  CI publishes as `hvo-roof-install-<run id>` and checks with `--version` and `--plan`. With no options it opens a
+  wizard in HVO Dark: what it found on the machine (the Pi and the HAT's devices, Docker, the install records,
+  `/etc/hvo-roof`, the containers and who made them, the kiosk's service, `hvo-roof` and the Mac app), the roles this
+  machine may have (each one it cannot have says why), their choices, the plan to review, the install and Done.
+  `--answers FILE` installs from the answers file the review page saves, which never holds a secret, and `--plan`
+  prints every folder, file, container, service and port an install would make or change and changes nothing. It
+  never drives the real HAT anywhere but a 64-bit Pi with its devices, never installs a test rig where the real HAT is,
+  asks for the host name before a rig on a machine with the HAT's I2C bus, installs the machine's roles only as root
+  and the person's never as root, and replaces no container that Docker Compose made. Each step changes only what
+  differs, so a second run changes nothing. It records what it installed in `/etc/hvo-roof/install.json` (the
+  controller, a rig on Linux, the kiosk) or `~/.config/hvo-roof/install.json` (`hvo-roof`, the Mac app, a rig on a
+  Mac), and logs each command and change with no secret. It makes the controller's folders and adopts a controller the
+  deploy script runs; the certificate authority, deploying the controller and a rig, the kiosk, `hvo-roof` and the Mac
+  app follow (#68 to #71), and an install that needs them is refused, with exit code 3, before anything changes. CI
+  keeps the wizard's pages as `installer-renders-<run id>`. HVO Dark for the terminal moves to
+  `HVO.RoofControllerV4.TerminalUi`, which `hvo-roof ui` and the installer share. See [docs/install.md](docs/install.md).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`

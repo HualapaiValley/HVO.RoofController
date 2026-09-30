@@ -115,10 +115,12 @@ jobs:
       # Every unit and API test, including the WebApplicationFactory API tests, runs here. The
       # emulated commissioning scenarios, the browser tests and the soak run in scenarios.yml.
       # TreatNoTestsAsError fails the step if discovery finds nothing. The render tests save each screen, as the kiosk's
-      # touchscreens and the Mac app's window show it, to HVO_KIOSK_RENDERS_DIR (uploaded below).
+      # touchscreens and the Mac app's window show it, to HVO_KIOSK_RENDERS_DIR, and each of the installer's wizard pages
+      # to HVO_INSTALLER_RENDERS_DIR (both uploaded below).
       - name: Test
         env:
           HVO_KIOSK_RENDERS_DIR: ${{ github.workspace }}/src/TestResults/kiosk-renders
+          HVO_INSTALLER_RENDERS_DIR: ${{ github.workspace }}/src/TestResults/installer-renders
         run: >
           dotnet test "$TEST_PROJECT"
           --no-build -c Debug -v minimal
@@ -223,6 +225,33 @@ jobs:
           done
           ls -l kiosk-artifact
 
+      # hvo-roof-install as one self-contained file for each machine it installs on: linux-arm64 (the Pi), linux-x64 (a
+      # PC test rig) and osx-arm64 (a Mac). The linux-x64 file is run: its version, and --plan with no answers on a
+      # machine with nothing recorded refuses (exit 2) and changes nothing.
+      - name: Publish hvo-roof-install
+        run: |
+          for rid in linux-arm64 linux-x64 osx-arm64; do
+            dotnet publish HVO.RoofControllerV4.Installer -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof-install/$rid"
+            test -x "hvo-roof-install/$rid/hvo-roof-install"
+          done
+          file hvo-roof-install/linux-arm64/hvo-roof-install | grep -q 'ARM aarch64'
+          file hvo-roof-install/linux-x64/hvo-roof-install | grep -q 'x86-64'
+          file hvo-roof-install/osx-arm64/hvo-roof-install | grep -q 'Mach-O 64-bit arm64'
+          expected="${Version}+${GITHUB_SHA}"
+          actual=$(./hvo-roof-install/linux-x64/hvo-roof-install --version)
+          echo "hvo-roof-install --version: ${actual}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error file=Directory.Build.props::hvo-roof-install --version printed ${actual}, not ${expected}"
+            exit 1
+          fi
+          status=0
+          ./hvo-roof-install/linux-x64/hvo-roof-install --plan 2> install-stderr.txt || status=$?
+          cat install-stderr.txt
+          if [ "$status" -ne 2 ] || ! grep -q 'Nothing is recorded as installed here' install-stderr.txt; then
+            echo "::error file=src/HVO.RoofControllerV4.Installer/Installer.cs::hvo-roof-install --plan with nothing recorded exited ${status}, not 2 with its message"
+            exit 1
+          fi
+
       # HVO Roof.app (docs/mac.md): published for osx-arm64 and made into the bundle, signed ad hoc by rcodesign, and
       # published for linux-x64 to check that the program refuses missing settings (exit 78) before it opens a window.
       # The mac-app job runs the bundle on a Mac.
@@ -260,6 +289,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload hvo-roof-install
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hvo-roof-install-${{ github.run_id }}
+          path: |
+            src/hvo-roof-install/*/hvo-roof-install
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload hvo-roof-kiosk
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -285,6 +323,27 @@ jobs:
         with:
           name: kiosk-renders-${{ github.run_id }}
           path: src/TestResults/kiosk-renders/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      # The installer's wizard pages at 100x30, as ANSI (.ans) and drawn as SVG by tests/cli/ansi-to-svg.py: the
+      # screenshots in docs/install.md.
+      - name: Draw the installer renders
+        if: always()
+        run: |
+          shopt -s nullglob
+          for ans in TestResults/installer-renders/*.ans; do
+            python3 ../tests/cli/ansi-to-svg.py "$ans" "${ans%.ans}.svg" --title hvo-roof-install
+          done
+
+      - name: Upload installer renders
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installer-renders-${{ github.run_id }}
+          path: |
+            src/TestResults/installer-renders/*.ans
+            src/TestResults/installer-renders/*.svg
           if-no-files-found: warn
           retention-days: 14
 
