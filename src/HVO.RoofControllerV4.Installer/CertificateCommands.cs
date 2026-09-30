@@ -341,6 +341,8 @@ internal static class CertificateCommands
         var sudo = ControllerLayout.For(machine) == ControllerLayout.System ? "sudo " : string.Empty;
         string[] again = session.Release.FolderPath is { } folder ? ["cert", "--redeploy", "--release", folder] : ["cert", "--redeploy"];
         var retry = sudo + new CommandLine(Installer.CommandName, again);
+        string[] fromRelease = session.Release.FolderPath is { } from ? ["--release", from] : [];
+        var install = sudo + new CommandLine(Installer.CommandName, fromRelease);
         var ok = (int)InstallerExitCode.Success;
         var notDone = choice == RedeployChoice.Yes ? (int)InstallerExitCode.Refused : ok;
         ContainerSurvey? container;
@@ -410,7 +412,7 @@ internal static class CertificateCommands
         if (more.Count > 0)
         {
             host.Out.WriteLine($"The controller is not redeployed from here, because more than its certificate would change: {string.Join("; ", more)}.");
-            host.Out.WriteLine($"Run {sudo}{Installer.CommandName} to redeploy it, with the new certificate.");
+            host.Out.WriteLine($"Run {install} to redeploy it, with the new certificate.");
             session.Log.Write($"Not redeployed: more than its certificate would change: {string.Join("; ", more)}.");
             return planOnly ? ok : notDone;
         }
@@ -459,11 +461,12 @@ internal static class CertificateCommands
         try
         {
             // Each step is checked again just before it runs: a roof that started moving stops the redeploy there.
-            await checkedPlan.ApplyAsync(session.Context, host.Out.WriteLine, cancellationToken).ConfigureAwait(false);
+            await checkedPlan.ApplyAsync(session.ContextFor(host.Out.WriteLine), host.Out.WriteLine, cancellationToken).ConfigureAwait(false);
         }
         catch (InstallerException error)
         {
-            throw NotRedeployed(error, session, retry);
+            // More than the certificate changed while the person decided: only the installer shows it all first.
+            throw NotRedeployed(error, session, controller.MoreThanCertificateChanged ? install : retry);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -475,8 +478,8 @@ internal static class CertificateCommands
         return ok;
     }
 
-    // Ctrl-C before the controller was redeployed (a deploy script that started runs to its end first): what runs now,
-    // and how to finish.
+    // Ctrl-C before the controller was redeployed (the installer never kills a deploy script that started): what runs
+    // now, and how to finish.
     private static async Task<InstallerException> StoppedAsync(InstallerSession session, string retry)
     {
         session.Log.Write("Stopped before the controller was redeployed.");
@@ -532,7 +535,7 @@ internal static class CertificateCommands
         session.Log.Write($"Putting {what} in place: {PlanText.Summary(checkedPlan)}");
         try
         {
-            await checkedPlan.ApplyAsync(session.Context, host.Out.WriteLine, cancellationToken).ConfigureAwait(false);
+            await checkedPlan.ApplyAsync(session.ContextFor(host.Out.WriteLine), host.Out.WriteLine, cancellationToken).ConfigureAwait(false);
         }
         catch (InstallerException error) when (error is not InstallerRefusedException)
         {

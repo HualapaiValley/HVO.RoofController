@@ -70,8 +70,19 @@ public static class DeployScript
         if (!result.Succeeded)
         {
             var said = LastWords(result);
+            var words = said is null ? string.Empty : $": {context.Log.Redact(said)}";
+
+            // 129, 130 and 143: a hangup, a Ctrl-C or a TERM ended it, through its EXIT trap.
+            if (result.ExitCode is 129 or 130 or 143)
+            {
+                throw new InstallerException(
+                    $"The deploy script was stopped (exit {result.ExitCode}){words}. When it is stopped while it replaces the controller, it "
+                    + "puts the old one back. The install log has the script's output.",
+                    InstallerExitCode.Cancelled);
+            }
+
             throw new InstallerException(
-                $"The deploy script stopped (exit {result.ExitCode}){(said is null ? string.Empty : $": {context.Log.Redact(said)}")}. "
+                $"The deploy script stopped (exit {result.ExitCode}){words}. "
                 + "When it fails after stopping a running controller, it puts that one back. The install log has the script's output.");
         }
     }

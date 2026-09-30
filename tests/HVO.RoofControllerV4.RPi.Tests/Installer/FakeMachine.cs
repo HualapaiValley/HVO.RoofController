@@ -199,6 +199,9 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What the deploy script says when it fails; null for a deploy that succeeds.</summary>
     public string? DeployFailure { get; set; }
 
+    /// <summary>The deploy script's exit code when it fails with <see cref="DeployFailure"/>: 130 when a Ctrl-C stopped it.</summary>
+    public int DeployFailureExitCode { get; set; } = 1;
+
     /// <summary>What happens while the deploy script runs (a Ctrl-C, say), before it finishes.</summary>
     public Action? DuringDeploy { get; set; }
 
@@ -693,7 +696,7 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         File.Exists(OnDisk(script)).Should().BeTrue("the installer writes the deploy script before it runs it");
         if (DeployFailure is { } failure)
         {
-            return new CommandResult(1, "[deploy] Pre-flight\n", failure + "\n");
+            return new CommandResult(DeployFailureExitCode, "[deploy] Pre-flight\n", failure + "\n");
         }
 
         var keyFile = environment["OPERATOR_KEY_FILE"];

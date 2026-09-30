@@ -97,7 +97,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid. |
 | 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, a missing prerequisite (`sudo`, Docker), something the installer will not replace, a part it cannot install yet, or a certificate the controller could not serve. |
-| 130 | You quit before installing, or the installer was interrupted (Ctrl+C stops between steps, and lets a deploy script that has started finish). |
+| 130 | You quit before installing, or the installer was interrupted (Ctrl+C stops between steps; it stops a running deploy script too, which puts the old controller back if it was replacing it). |
 
 ## Roles
 
@@ -422,9 +422,11 @@ mode set, and its contents are never touched. The record is rewritten only when 
 run of the same answers changes nothing: "Nothing to change: this machine is already as the answers describe."
 
 After a failed step, running the installer again carries on from where it stopped. So does it after Ctrl+C, which
-stops the installer between steps. A deploy script that has started runs to its end first, since it puts the old
-controller back if it cannot finish, and the installer then says what runs as the controller. An API key entry that a
-stopped install left with its name but no key is finished by the next run.
+stops the installer between steps. The installer never kills a deploy script that has started: a Ctrl+C at the terminal
+(outside the wizard, which reads its own keys) reaches the script too, which stops and puts the old controller back if
+it was replacing it, while an interrupt only the installer gets (`kill -INT`) lets the script run to its end. Either way the installer then says what runs as the
+controller, and exits 130. An API key entry that a stopped install left with its name but no key is finished by the
+next run.
 
 The deploy script runs with a clean environment. Only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TERM`, `TMPDIR`
 and Docker's own `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` reach it from the

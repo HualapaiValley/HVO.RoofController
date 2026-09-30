@@ -177,7 +177,8 @@ public sealed class InstallerCertificateRedeployTests
         pi.Questions.Should().Equal(Question);
         run.Error.Should().Contain("The controller was not redeployed:")
             .And.Contain("more than its certificate would change now: redeployed to read the camera's new settings")
-            .And.Contain("The certificate is in place; the log is /var/log/hvo-roof-install.log.");
+            .And.Contain("The certificate is in place; the log is /var/log/hvo-roof-install.log. To serve it, run sudo hvo-roof-install once the roof is idle.")
+            .And.NotContain("--redeploy", "cert --redeploy would refuse again: only the installer shows all that changed");
         pi.Deploys.Should().ContainSingle("what the person agreed to was the certificate alone");
     }
 
@@ -214,6 +215,26 @@ public sealed class InstallerCertificateRedeployTests
             .And.NotContain("Run the installer again");
         pi.Deploys.Should().ContainSingle();
         pi.Read(InstallPaths.SystemLog).Should().Contain("Stopped before the controller was redeployed.");
+    }
+
+    [TestMethod]
+    public async Task CtrlC_WhileTheDeployScriptRuns_SaysItStopsOnceTheScriptEnds_AndWhatRuns()
+    {
+        using var pi = await InstalledAsync();
+        using var interrupt = new CancellationTokenSource();
+        pi.Replies = _ => true;
+        pi.DuringDeploy = interrupt.Cancel;
+        pi.DeployFailure = "[deploy] Interrupted: the old controller was put back.";
+        pi.DeployFailureExitCode = 130;
+
+        var run = await pi.RunAsync(interrupt.Token, "cert", "--renew");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Cancelled, run.ToString());
+        pi.DeploysCancellable.Should().AllBeEquivalentTo(false, "killing the script part-way through the switch would leave the old controller stopped");
+        run.Output.Should().Contain(ControllerStep.StoppingMessage, run.ToString());
+        run.Error.Should().Contain("The controller was not redeployed: The deploy script was stopped (exit 130): [deploy] Interrupted: the old controller was put back.")
+            .And.Contain("roof-controller runs now, version 4.0.0.")
+            .And.Contain("To serve it, run sudo hvo-roof-install cert --redeploy once the roof is idle.");
     }
 
     [TestMethod]

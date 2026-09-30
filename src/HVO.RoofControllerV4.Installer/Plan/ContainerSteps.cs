@@ -279,10 +279,20 @@ public sealed class ControllerStep(
             return refused;
         }
 
-        return CertificateOnly && check.MakesChange && !OnlyCertificateDiffers
-            ? new StepCheck(StepChange.Blocked, $"more than its certificate would change now: {check.Detail}")
-            : check;
+        if (CertificateOnly && check.MakesChange && !OnlyCertificateDiffers)
+        {
+            MoreThanCertificateChanged = true;
+            return new StepCheck(StepChange.Blocked, $"more than its certificate would change now: {check.Detail}");
+        }
+
+        return check;
     }
+
+    /// <summary>
+    /// Whether a check with <see cref="CertificateOnly"/> found that more than the certificate would change: only the
+    /// installer, which shows all of it, redeploys the controller then.
+    /// </summary>
+    public bool MoreThanCertificateChanged { get; private set; }
 
     // An API key entry the controller refuses fails the deploy script's pre-flight check, so a deploy is not tried with
     // one there; one of the installer's own that it will finish (ApiKeyFiles.Allocate) is not in the way.
@@ -596,9 +606,10 @@ public sealed class ControllerStep(
             ["ROOF_OPERATOR_API_KEY"] = string.Empty
         };
 
-        // Once started, the script runs to its end. A Ctrl-C at the terminal reaches it too, and it puts the old controller
-        // back itself (its EXIT trap); killing it part-way through the switch would leave the old one stopped.
-        using (cancellationToken.Register(() => context.Progress?.Invoke("Stopping once the deploy script finishes: it puts the old controller back if it cannot finish.")))
+        // The installer never kills the script: killed part-way through the switch, it would leave the old controller stopped.
+        // A Ctrl-C at the terminal reaches the script too, which stops and puts the old controller back itself (its EXIT
+        // trap); an interrupt only the installer gets lets the script run to its end. Either way the plan stops after it.
+        using (cancellationToken.Register(() => context.Progress?.Invoke(StoppingMessage)))
         {
             try
             {
@@ -606,7 +617,10 @@ public sealed class ControllerStep(
             }
             catch (InstallerException error)
             {
-                throw new InstallerException($"{error.Message} {await NowAsync(context).ConfigureAwait(false)}", error.ExitCode);
+                var stopped = cancellationToken.IsCancellationRequested || error.ExitCode == InstallerExitCode.Cancelled;
+                throw new InstallerException(
+                    $"{error.Message} {await NowAsync(context).ConfigureAwait(false)}",
+                    stopped ? InstallerExitCode.Cancelled : error.ExitCode);
             }
         }
 
@@ -618,6 +632,9 @@ public sealed class ControllerStep(
 
         context.Log.Write($"Deployed {Target}: release {release.Version}, verified by the deploy script.");
     }
+
+    /// <summary>What an interrupt while the deploy script runs says: the script is not killed, so it finishes or puts the old controller back.</summary>
+    public const string StoppingMessage = "Stopping once the deploy script ends. It is not killed: if it was replacing the controller, it finishes or puts the old one back.";
 
     /// <summary>What runs as the controller now, as a sentence: after the deploy script stopped, or the install did.</summary>
     internal static async Task<string> NowAsync(InstallContext context)

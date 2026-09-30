@@ -305,7 +305,7 @@ public sealed class InstallerDeployTests
     }
 
     [TestMethod]
-    public async Task ACtrlC_WhileTheScriptRuns_LetsItFinish()
+    public async Task AnInterruptOnlyTheInstallerGets_WhileTheScriptRuns_LetsItFinish()
     {
         using var pi = InstallerPlanTests.AdoptablePi();
         using var interrupt = new CancellationTokenSource();
@@ -314,9 +314,40 @@ public sealed class InstallerDeployTests
         var run = await pi.RunAsync(interrupt.Token, "--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
 
         pi.DeploysCancellable.Should().Equal([false], "killing the script part-way through the switch would leave the old controller stopped");
-        run.Output.Should().Contain("Stopping once the deploy script finishes: it puts the old controller back if it cannot finish.", run.ToString());
+        run.Output.Should().Contain(ControllerStep.StoppingMessage, run.ToString());
         pi.Containers[MachineSurveyor.ControllerContainer].Settings.Should().ContainKey(MachineSurveyor.WebStopKeyFileSetting, "the script finished the switch");
         run.ExitCode.Should().Be((int)InstallerExitCode.Cancelled, run.ToString());
+    }
+
+    [TestMethod]
+    public async Task ACtrlC_ThatStopsTheScriptToo_SaysWhatRuns_AndExits130()
+    {
+        using var pi = InstallerPlanTests.AdoptablePi();
+        using var interrupt = new CancellationTokenSource();
+        pi.DuringDeploy = interrupt.Cancel;
+        pi.DeployFailure = "[deploy] Interrupted: roof-controller was put back.";
+        pi.DeployFailureExitCode = 130;
+
+        var run = await pi.RunAsync(interrupt.Token, "--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Cancelled, run.ToString());
+        run.Output.Should().Contain(ControllerStep.StoppingMessage, run.ToString());
+        run.Error.Should().Contain("The deploy script was stopped (exit 130): [deploy] Interrupted: roof-controller was put back.", run.ToString())
+            .And.Contain("roof-controller runs now, version 4.0.0.")
+            .And.Contain("Run the installer again to carry on");
+    }
+
+    [TestMethod]
+    public async Task AScriptStoppedBySignal_WithoutTheInstallersCtrlC_StillExits130()
+    {
+        using var pi = InstallerPlanTests.AdoptablePi();
+        pi.DeployFailure = "[deploy] Terminated.";
+        pi.DeployFailureExitCode = 143;
+
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Cancelled, run.ToString());
+        run.Error.Should().Contain("The deploy script was stopped (exit 143)", run.ToString());
     }
 
     [TestMethod]

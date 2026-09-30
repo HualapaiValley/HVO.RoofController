@@ -129,7 +129,10 @@ public sealed class InstallerSession
     /// <summary>Why the installer refuses the answers here; empty when it may go ahead.</summary>
     public IReadOnlyList<string> Problems(bool planOnly = false) => RoleGuards.Check(Survey, Answers, planOnly);
 
-    public InstallContext Context => new()
+    public InstallContext Context => ContextFor(null);
+
+    /// <summary>A context whose long steps (a deploy) say how they are getting on through <paramref name="progress"/>.</summary>
+    public InstallContext ContextFor(Action<string>? progress) => new()
     {
         Machine = Machine,
         Log = Log,
@@ -138,7 +141,8 @@ public sealed class InstallerSession
         Version = Version,
         Time = Time,
         Release = Release,
-        Secrets = Secrets
+        Secrets = Secrets,
+        Progress = progress
     };
 
     /// <summary>What the answers make and change here: it only looks.</summary>
@@ -156,22 +160,7 @@ public sealed class InstallerSession
         }
 
         Log.Write($"Installing {InstallRoles.Describe(Answers.Roles)}: {PlanText.Summary(plan)}");
-        var context = Context;
-        await plan.ApplyAsync(
-            new InstallContext
-            {
-                Machine = context.Machine,
-                Log = context.Log,
-                Survey = context.Survey,
-                Answers = context.Answers,
-                Version = context.Version,
-                Time = context.Time,
-                Release = context.Release,
-                Secrets = context.Secrets,
-                Progress = progress
-            },
-            progress,
-            cancellationToken).ConfigureAwait(false);
+        await plan.ApplyAsync(ContextFor(progress), progress, cancellationToken).ConfigureAwait(false);
         Log.Write($"Installed {InstallRoles.Describe(Answers.Roles)}.");
     }
 
