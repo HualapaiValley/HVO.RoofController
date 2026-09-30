@@ -170,7 +170,8 @@ public sealed class KioskSettingsPage : UserControl
     private Control Editor(RoofSettingsFormField field)
     {
         var panel = new StackPanel { Name = "editor", Spacing = _metrics.Gap };
-        var label = $"Change {field.Label} (default {field.DefaultValue})";
+        // The default is on the setting's page, a press before the editor; here the caption is kept to one short line.
+        var label = $"Change {field.Label}";
         if (_panel.EditError is { } error)
         {
             // Above the editor, so it is seen without scrolling past the keyboard.
@@ -214,15 +215,14 @@ public sealed class KioskSettingsPage : UserControl
                     VerticalAlignment = VerticalAlignment.Center,
                     Children =
                     {
-                        // The label is the setting's, shown whole on its page before the editor opened.
+                        // One line, never cut: the render checks refuse it cut short.
                         new TextBlock
                         {
                             Name = "editor-label",
                             Text = label,
                             FontSize = _metrics.Small,
                             Foreground = KioskTheme.Muted,
-                            TextTrimming = TextTrimming.CharacterEllipsis,
-                            Classes = { KioskTheme.Abbreviated }
+                            TextTrimming = TextTrimming.CharacterEllipsis
                         },
                         // A value too long for the box shows its end, where the typing is.
                         new TextBlock

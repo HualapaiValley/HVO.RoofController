@@ -5,6 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using FluentAssertions;
+using HVO.Core.Results;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
@@ -121,7 +122,7 @@ public sealed class KioskRenderTests
 
         await OnUiAsync(() =>
         {
-            screen.Text("title").Should().Be("Roof");
+            screen.Text("title").Should().Be(KioskHarness.ControllerName);
             screen.Visible("lease").Should().BeTrue();
             var pill = screen.Find("unlocked-by")!;
             pill.Bounds.Width.Should().BeLessThanOrEqualTo(screen.Metrics.Touch * 3, "a long name is cut short, not the header squeezed");
@@ -134,6 +135,67 @@ public sealed class KioskRenderTests
                 .Where(block => block.IsEffectivelyVisible && block.Text?.EndsWith(unlocked, StringComparison.Ordinal) == true)
                 .Should().ContainSingle("the whole name is in the notice");
         });
+    }
+
+    [TestMethod]
+    [DataRow(1280, 720, 8.2, "HualapaiValleyObservatory", false)]
+    [DataRow(800, 480, 5.2, "HualapaiValleyObservatory", false)]
+    [DataRow(1280, 720, 8.2, "HualapaiValleyObservatoryRollOffRoofController", true)]
+    [DataRow(800, 480, 5.2, "HualapaiValleyObservatoryRollOffRoofController", true)]
+    [DataRow(1280, 720, 8.2, "Hualapai Valley Observatory roll-off roof controller", true)]
+    [DataRow(800, 480, 5.2, "Hualapai Valley Observatory roll-off roof controller", true)]
+    public async Task TheControllerName_IsWholeWhileTheBadgesFitBesideIt_AndKeepsHalfTheHeaderWhenNot(
+        int width, int height, double pixelsPerMillimetre, string start, bool padded)
+    {
+        // Padded to as long as a controller name may be (64 characters); the person's name too, with the lease pill.
+        var controller = padded ? start.PadRight(64, 'x') : start;
+        var name = "observatory.night.operator@hualapai-valley.example.org".PadRight(RoofIdentityContract.MaximumNameLength, 'x');
+        await using var harness = await KioskHarness.CreateAsync();
+        harness.Report(harness.Current with { ControllerName = controller });
+        harness.Roof.Mock.Setup(service => service.Open()).Returns(() =>
+        {
+            harness.Report(KioskHarness.Opening() with { ControllerName = controller });
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening);
+        });
+        await harness.StartLiveAsync();
+        await RoofClientApiTests.AddUserAsync(harness.Host, name, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
+
+        // Locked, the badges are short: a name that fits beside them is whole.
+        await screen.RenderAsync($"controller-name-locked-{controller.Length}-{(controller.Contains(' ') ? "words" : "word")}", TestContext);
+        await OnUiAsync(() => TitleShouldFit(screen, controller, whole: !padded));
+
+        await harness.UnlockAsync(name);
+        await harness.Console.OpenAsync();
+        await harness.WaitForAsync(view => view.HoldsLease && view.Status?.Status == RoofControllerStatus.Opening, "the opening roof");
+        await screen.RenderAsync($"controller-name-unlocked-{controller.Length}-{(controller.Contains(' ') ? "words" : "word")}", TestContext);
+        await OnUiAsync(() =>
+        {
+            // Unlocked, the person's pill and the lease take more room: a short name may or may not fit beside them.
+            TitleShouldFit(screen, controller, whole: padded ? false : null);
+            screen.Visible("lease").Should().BeTrue();
+        });
+    }
+
+    private static void TitleShouldFit(KioskScreen screen, string controller, bool? whole)
+    {
+        var title = (TextBlock)screen.Find("title")!;
+        var header = (Control)title.GetVisualParent()!;
+        title.Text.Should().Be(controller);
+        title.TextLayout.TextLines.Should().ContainSingle("the name is on one line, never broken inside a word");
+        if (whole == true)
+        {
+            title.TextLayout.TextLines[0].HasCollapsed.Should().BeFalse("the name fits beside the badges");
+        }
+        else if (whole == false || title.TextLayout.TextLines[0].HasCollapsed)
+        {
+            title.TextLayout.TextLines[0].HasCollapsed.Should().BeTrue("a name too long for its share ends in an ellipsis");
+            title.Bounds.Width.Should().BeGreaterThanOrEqualTo(header.Bounds.Width / 2 - 1, "the name keeps at least half the header");
+        }
+
+        screen.Window.GetVisualDescendants().OfType<TextBlock>()
+            .Where(block => block.IsEffectivelyVisible && block.Text?.Contains(controller, StringComparison.Ordinal) == true && block != title)
+            .Should().NotBeEmpty("the status card's Controller row shows the name whole");
     }
 
     [TestMethod]
@@ -298,6 +360,39 @@ public sealed class KioskRenderTests
             screen.Text("editor-value").Should().Be("Pier");
             screen.OffScreen(name => name.StartsWith("editor-", StringComparison.Ordinal)).Should().BeEmpty("the value, Save, Cancel and every key are on the screen without scrolling");
         });
+    }
+
+    [TestMethod]
+    public async Task EverySettingsEditor_FitsTheSmallestScreen_WithItsCaptionWhole()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Admin);
+        await using var screen = await KioskScreen.ShowAsync(harness, 800, 480, 5.2);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Settings));
+        await UntilAsync(() => screen.Shell.Settings is { Form: not null, Busy: null }, "the settings");
+        var keys = await OnUiAsync(() => screen.Shell.Settings.Form!.Groups
+            .SelectMany(group => group.Fields)
+            .Where(field => field.CanWrite && !field.Setting.Secret)
+            .Select(field => field.Key)
+            .ToList());
+        keys.Should().HaveCountGreaterThan(20, "the admin may change most settings here");
+
+        foreach (var key in keys)
+        {
+            await OnUiAsync(() =>
+            {
+                screen.Shell.Settings.SelectField(key);
+                screen.Shell.Settings.BeginEdit();
+            });
+            await screen.CheckAsync($"editor-{key}");
+            await OnUiAsync(() =>
+            {
+                screen.Shell.Settings.Editing.Should().NotBeNull(key);
+                screen.OffScreen(name => name.StartsWith("editor-", StringComparison.Ordinal)).Should().BeEmpty($"{key}'s editor is on the screen without scrolling");
+                screen.Shell.Settings.CancelEdit();
+            });
+        }
     }
 
     [TestMethod]

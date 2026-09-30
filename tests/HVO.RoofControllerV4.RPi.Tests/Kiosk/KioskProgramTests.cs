@@ -440,17 +440,23 @@ public sealed partial class KioskProgramTests
     [TestMethod]
     public void TheInstallSteps_InstallEveryFileOfTheDirectoryTheyRunIn_AndNoOther()
     {
-        // The directory is the program beside the deploy files: CI's artifact, or what the page publishes and copies.
-        var directory = Directory.GetFiles(Path.GetDirectoryName(DeployFile("hvo-roof-kiosk.service"))!)
-            .Select(Path.GetFileName)
-            .Append("hvo-roof-kiosk");
         var page = File.ReadAllText(InstallPage());
         var installed = InstallPattern().Matches(page).Select(match => match.Groups["source"].Value);
 
-        installed.Should().BeEquivalentTo(directory, "the steps install each file by its bare name, from that directory");
+        installed.Should().BeEquivalentTo(InstallDirectory(), "the steps install each file by its bare name, from that directory");
         page.Should().Contain("dotnet publish src/HVO.RoofControllerV4.Kiosk -c Release -r linux-arm64 -o hvo-roof-kiosk\n")
             .And.Contain("cp src/HVO.RoofControllerV4.Kiosk/deploy/* hvo-roof-kiosk/\n")
             .And.Contain("cd hvo-roof-kiosk\n");
+    }
+
+    [TestMethod]
+    public void TheInstallSteps_ReadNoFileTheDirectoryTheyRunInLacks()
+    {
+        var page = File.ReadAllText(InstallPage());
+        var read = ReadPattern().Matches(page).Select(match => match.Groups["file"].Value).ToList();
+
+        read.Should().NotBeEmpty("the page's commands read files (an example: the settings)");
+        read.Where(file => !file.StartsWith('/')).Should().BeSubsetOf(InstallDirectory(), "a file a step reads by a relative name is in the directory the steps run in");
     }
 
     [GeneratedRegex("ACTION==\"(?<action>[a-z]+)\"")]
@@ -458,6 +464,16 @@ public sealed partial class KioskProgramTests
 
     [GeneratedRegex("^ *sudo install -m [0-7]+ (?<source>[^ ]+) [^ ]+$", RegexOptions.Multiline)]
     private static partial Regex InstallPattern();
+
+    /// <summary>A file a command reads: an install's source, or <c>-in</c>'s file.</summary>
+    [GeneratedRegex("(?:^ *sudo install -m [0-7]+ | -in )(?<file>[^ \n]+)", RegexOptions.Multiline)]
+    private static partial Regex ReadPattern();
+
+    /// <summary>The directory the install steps run in: the program beside the deploy files (CI's artifact, or what the page publishes and copies).</summary>
+    private static IEnumerable<string> InstallDirectory()
+        => Directory.GetFiles(Path.GetDirectoryName(DeployFile("hvo-roof-kiosk.service"))!)
+            .Select(file => Path.GetFileName(file))
+            .Append("hvo-roof-kiosk");
 
     private static string DeployFile(string name) => Path.Combine(RepositoryRoot(), "src", "HVO.RoofControllerV4.Kiosk", "deploy", name);
 

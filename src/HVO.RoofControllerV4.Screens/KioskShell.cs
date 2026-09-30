@@ -58,17 +58,18 @@ public sealed class KioskShell : UserControl
         Foreground = KioskTheme.Text;
         FontSize = metrics.Font;
 
-        // The title and the badges share the header: the title (the controller's name) keeps its width, wrapping between
-        // words past a limit, and the badges wrap onto more lines in what is left. The unlocking person's name is cut
-        // short on its pill (see UpdateBadges), so a long one cannot squeeze the title.
+        // The title and the badges share the header (KioskHeaderPanel): the title (the controller's name) is whole while
+        // the badges fit beside it, and keeps at least half the header when they do not; a longer name ends in an
+        // ellipsis, and the status card's Controller row shows it whole. The badges wrap onto more lines in what is
+        // left. The unlocking person's name is cut short on its pill (see UpdateBadges), so a long one cannot squeeze
+        // the title.
         _title = KioskTheme.Label("Roof", metrics.Large, weight: FontWeight.SemiBold);
         _title.Name = "title";
-        _title.MaxWidth = metrics.Touch * 4;
+        _title.TextWrapping = TextWrapping.NoWrap;
+        _title.TextTrimming = TextTrimming.CharacterEllipsis;
+        _title.Classes.Add(KioskTheme.Abbreviated);
         _badges = new WrapPanel { Name = "badges", ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap / 2, HorizontalAlignment = HorizontalAlignment.Right };
-        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = metrics.Gap * 2, Margin = new Thickness(0, 0, 0, metrics.Gap) };
-        header.Children.Add(_title);
-        Grid.SetColumn(_badges, 1);
-        header.Children.Add(_badges);
+        var header = new KioskHeaderPanel { Spacing = metrics.Gap * 2, Margin = new Thickness(0, 0, 0, metrics.Gap), Children = { _title, _badges } };
         _banners = new StackPanel { Name = "banners", Spacing = metrics.Gap, Margin = new Thickness(0, 0, 0, metrics.Gap) };
         _scroller = new ScrollViewer
         {

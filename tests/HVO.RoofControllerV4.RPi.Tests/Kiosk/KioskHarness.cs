@@ -174,13 +174,16 @@ internal sealed class KioskHarness : IAsyncDisposable
         return harness;
     }
 
+    /// <summary>The name the controller sends when none is set, as the kiosk shows it on a controller as installed.</summary>
+    public static readonly string ControllerName = new RoofControllerHostOptionsV4().ControllerName;
+
     /// <summary>A roof status as the controller reports it, taken at <see cref="Start"/>.</summary>
     public static RoofStatusResponse Snapshot(
         RoofControllerStatus status = RoofControllerStatus.Closed,
         RoofMotionDirection motion = RoofMotionDirection.None,
         bool faultLatched = false,
         RoofRelayRegisterState relayState = RoofRelayRegisterState.Verified)
-        => RoofServiceMock.Snapshot(status, motion, faultLatched, relayState) with { SnapshotUtc = Start, LastTransitionUtc = Start };
+        => RoofServiceMock.Snapshot(status, motion, faultLatched, relayState) with { SnapshotUtc = Start, LastTransitionUtc = Start, ControllerName = ControllerName };
 
     /// <summary>
     /// A roof that is opening, with <paramref name="leaseSeconds"/> of operator lease left: 6 s is renewed every 2 s,

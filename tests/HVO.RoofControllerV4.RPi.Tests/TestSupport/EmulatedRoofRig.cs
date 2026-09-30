@@ -359,13 +359,14 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 /// </summary>
 internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, string environment, RecordingLoggerProvider logs, bool consoleLog = true) : WebApplicationFactory<Program>
 {
-    private IHost? _host;
+    private IServer? _server;
 
     public override async ValueTask DisposeAsync()
     {
-        // Found while the host is still whole; disposed once it has stopped serving.
-        var limiters = _host is null ? [] : PipelineRateLimiters.Find(_host.Services.GetRequiredService<IServer>());
-        _host = null;
+        // Found before the host is disposed; disposed once it has stopped serving. The server is taken when the host
+        // starts: a restart (StopApplication) ends the program, which disposes the host's services before this runs.
+        var limiters = _server is null ? [] : PipelineRateLimiters.Find(_server);
+        _server = null;
         await base.DisposeAsync();
         foreach (var limiter in limiters)
         {
@@ -373,7 +374,12 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
         }
     }
 
-    protected override IHost CreateHost(IHostBuilder builder) => _host = base.CreateHost(builder);
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        var host = base.CreateHost(builder);
+        _server = host.Services.GetRequiredService<IServer>();
+        return host;
+    }
 
     public HttpClient CreateApiClient(string? apiKey = null)
     {

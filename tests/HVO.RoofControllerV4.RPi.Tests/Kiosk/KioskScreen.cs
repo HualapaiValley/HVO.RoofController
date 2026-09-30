@@ -88,6 +88,14 @@ internal sealed class KioskScreen : IAsyncDisposable
         return pixels.Lit;
     });
 
+    /// <summary>Lays the screen out and runs <see cref="RenderAsync"/>'s layout checks, without drawing or saving it.</summary>
+    public Task CheckAsync(string name) => OnUiAsync(() =>
+    {
+        Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        CheckLayout(name);
+    });
+
     /// <summary>Lays the screen out and draws it, as the kiosk does when something on it changes, without saving it.</summary>
     public Task DrawAsync() => OnUiAsync(() =>
     {
@@ -166,6 +174,10 @@ internal sealed class KioskScreen : IAsyncDisposable
         return shown;
     }
 
+    /// <summary>The texts shortened on purpose: the controller's name, the person's name on its pill, and the value being typed.</summary>
+    private static bool ShortenedOnPurpose(TextBlock block)
+        => block.Name is "title" or "editor-value" || block.GetVisualAncestors().OfType<Control>().Any(ancestor => ancestor.Name == "unlocked-by");
+
     private void CheckLayout(string name)
     {
         var screen = new Rect(Window.ClientSize);
@@ -202,8 +214,16 @@ internal sealed class KioskScreen : IAsyncDisposable
             }
 
             // An ellipsis cuts a text short without shortening its lines, and a text that may not wrap can be wider than
-            // its box. Only a text marked abbreviated may end in an ellipsis: its whole text is shown elsewhere.
-            if (!block.Classes.Contains(KioskTheme.Abbreviated))
+            // its box. Only a text marked abbreviated may end in an ellipsis: its whole text is shown elsewhere. Those are
+            // the three kiosk.md lists; the mark on any other is a fault.
+            if (block.Classes.Contains(KioskTheme.Abbreviated))
+            {
+                if (!ShortenedOnPurpose(block))
+                {
+                    problems.Add($"\"{text}\" is marked abbreviated, but is not one of the texts kiosk.md says are shortened on purpose");
+                }
+            }
+            else
             {
                 if (block.TextLayout.TextLines.Any(line => line.HasCollapsed))
                 {

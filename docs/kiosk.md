@@ -226,10 +226,11 @@ OS Lite (no desktop): nothing else may hold the display.
    ```
 
    In HTTPS mode the controller's API is published on port 8443 only, so the
-   kiosk uses `https://localhost:8443/`. The certificate is not issued for `localhost`, so pin it by its SHA-256:
+   kiosk uses `https://localhost:8443/`. The certificate is not issued for `localhost`, so pin it by its SHA-256. Take
+   it from the certificate the controller serves on that port, which works in this directory and whoever issued it:
 
    ```bash
-   openssl x509 -in roof.crt -noout -fingerprint -sha256 | cut -d= -f2
+   openssl s_client -connect localhost:8443 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
    ```
 
    and put that in `ServerCertificateSha256`. Under `pi-lan-http` the kiosk uses `http://localhost:8080` and no pin.
@@ -319,8 +320,9 @@ Nothing here needs the Pi, the display or the roof.
   for settings it cannot start with; CI runs the published program without settings to check that code. The install
   steps above are checked against the files they install, which are the files of CI's artifact.
 - **The renders** (`KioskRenderTests`) draw each screen headless (Avalonia's headless platform with Skia) at 1280x720
-  and 800x480, and check that nothing overlaps, that no text is cut off but for text shortened on purpose (a long name
-  on its pill, the end of a long value being typed), that every button is at least 12 mm, and that Stop is shown in
+  and 800x480, and check that nothing overlaps, that no text is cut off but for the three texts shortened on purpose (a
+  controller name longer than half the header, which the Controller row shows whole; a long name on its pill; the end
+  of a long value being typed), that every button is at least 12 mm, and that Stop is shown in
   full on every screen and stops the roof even when touched as the screen blanks. The pictures on this page are those renders; CI keeps them as the `kiosk-renders`
   artifact. To refresh them, from `src/`:
 
