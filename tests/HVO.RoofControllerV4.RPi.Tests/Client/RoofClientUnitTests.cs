@@ -212,6 +212,54 @@ public sealed class RoofClientUnitTests
     }
 
     [TestMethod]
+    public void TheEnvironment_ReadsTheCaCertificateFromTheFileItNames()
+    {
+        using var authority = TestCertificates.CreateAuthority("HVO Roof test CA");
+        using var issued = TestCertificates.Issue(authority);
+        var pem = Path.Combine(_directory, "ca.pem");
+        var der = Path.Combine(_directory, "ca.der");
+        var leaf = Path.Combine(_directory, "leaf.pem");
+        File.WriteAllText(pem, RoofCertificateAuthority.ToPem(authority));
+        File.WriteAllBytes(der, authority.RawData);
+        File.WriteAllText(leaf, issued.ExportCertificatePem());
+        var environment = new Dictionary<string, string?>();
+        string? Get(string name) => environment.GetValueOrDefault(name);
+
+        environment[RoofCredentialStore.CaCertificateVariable] = $" {pem} ";
+        var fromPem = RoofCredentialStore.FromEnvironment(Get)!;
+        fromPem.CaCertificate.Should().Be(RoofCertificateAuthority.ToPem(authority), "the CA alone overrides the file's pin or CA");
+        fromPem.ToCredential().Should().BeNull("a CA alone is not a credential");
+        environment[RoofCredentialStore.CaCertificateVariable] = der;
+        RoofCredentialStore.FromEnvironment(Get)!.CaCertificate.Should().Be(RoofCertificateAuthority.ToPem(authority), "DER is read too, and kept as PEM");
+
+        environment[RoofCredentialStore.CaCertificateVariable] = leaf;
+        FluentActions.Invoking(() => RoofCredentialStore.FromEnvironment(Get)).Should().Throw<RoofCredentialFileException>()
+            .WithMessage($"HVO_ROOF_CA_CERT cannot be used: {leaf} is not a CA certificate: its basic constraints do not say CA.");
+        environment[RoofCredentialStore.CaCertificateVariable] = Path.Combine(_directory, "missing.pem");
+        FluentActions.Invoking(() => RoofCredentialStore.FromEnvironment(Get)).Should().Throw<RoofCredentialFileException>()
+            .WithMessage("HVO_ROOF_CA_CERT cannot be used: Could not find file *missing.pem*");
+
+        environment[RoofCredentialStore.CaCertificateVariable] = pem;
+        environment[RoofCredentialStore.CertificateVariable] = new string('a', 64);
+        FluentActions.Invoking(() => RoofCredentialStore.FromEnvironment(Get)).Should().Throw<RoofCredentialFileException>()
+            .WithMessage("HVO_ROOF_CERT_SHA256 and HVO_ROOF_CA_CERT are both set. Set one: the pin of a self-signed certificate, or the CA that issued the certificate.");
+    }
+
+    [TestMethod]
+    public void TheCredentialsFile_KeepsTheCaCertificate()
+    {
+        using var authority = TestCertificates.CreateAuthority("HVO Roof test CA");
+        var path = Path.Combine(_directory, "credentials.json");
+        var credentials = new RoofStoredCredentials { Controller = new Uri("https://192.168.1.20:8443/"), CaCertificate = RoofCertificateAuthority.ToPem(authority) };
+
+        RoofCredentialStore.Save(path, credentials);
+
+        RoofCredentialStore.Load(path).Should().Be(credentials);
+        credentials.ToString().Should().Be(
+            "RoofStoredCredentials { Controller = https://192.168.1.20:8443/, ApiKey = (none), OnBehalfOf = , Session = , CertificateSha256 = , CaCertificate = (set) }");
+    }
+
+    [TestMethod]
     public void TheStoredCredential_PrefersTheSession()
     {
         var session = new RoofStoredSession(Token, "alice", RoofControllerApiContract.OperatorRole, "session-1", null);
@@ -297,7 +345,7 @@ public sealed class RoofClientUnitTests
             "kiosk (locked)",
             "RoofSessionResponse { SessionId = session-1, Name = olive, Role = RoofOperator, Kind = Pin, ExpiresUtc = 2026-03-01T12:00:00.0000000+00:00, IdleTimeoutSeconds = 300 }",
             "RoofStoredSession { Name = alice, Role = , SessionId = , ExpiresUtc = 2026-03-01T12:00:00.0000000+00:00 }",
-            "RoofStoredCredentials { Controller = , ApiKey = (set), OnBehalfOf = , Session = RoofStoredSession { Name = alice, Role = , SessionId = , ExpiresUtc =  }, CertificateSha256 =  }",
+            "RoofStoredCredentials { Controller = , ApiKey = (set), OnBehalfOf = , Session = RoofStoredSession { Name = alice, Role = , SessionId = , ExpiresUtc =  }, CertificateSha256 = , CaCertificate = (none) }",
             "RoofApiKeySecretResponse { Key = RoofApiKeyResponse { Name = kiosk-1, Role = RoofViewer, Kiosk = True, Source = Managed, CreatedUtc = , UpdatedUtc =  } }",
             "RoofSignInRequest { Name = alice, Password = (set) }",
             "RoofPinSignInRequest { Name = olive, Pin = (set) }",
@@ -399,8 +447,11 @@ public sealed class RoofClientUnitTests
 
         validator(this, pinned, null, SslPolicyErrors.RemoteCertificateChainErrors).Should().BeTrue("the pin matches");
         validator(this, pinned, null, SslPolicyErrors.RemoteCertificateNameMismatch).Should().BeTrue("the pin matches");
-        validator(this, other, null, SslPolicyErrors.RemoteCertificateChainErrors).Should().BeFalse("another certificate is not trusted");
-        validator(this, null, null, SslPolicyErrors.RemoteCertificateNotAvailable).Should().BeFalse();
+        FluentActions.Invoking(() => validator(this, other, null, SslPolicyErrors.RemoteCertificateChainErrors))
+            .Should().Throw<RoofCertificateRefusedException>("another certificate is not trusted")
+            .Which.Reason.Should().Be(RoofCertificateRefusal.NotPinned);
+        FluentActions.Invoking(() => validator(this, null, null, SslPolicyErrors.RemoteCertificateNotAvailable))
+            .Should().Throw<RoofCertificateRefusedException>().Which.Reason.Should().Be(RoofCertificateRefusal.NoCertificate);
         validator(this, other, null, SslPolicyErrors.None).Should().BeTrue("a trusted certificate is still accepted");
     }
 

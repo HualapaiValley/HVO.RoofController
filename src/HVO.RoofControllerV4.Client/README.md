@@ -14,15 +14,28 @@ using var client = new RoofControllerClient(new RoofConnectionOptions
 {
     BaseAddress = new Uri("https://roof.local:5001/"),
     Credential = new RoofApiKeyCredential(apiKey),
-    // Only for a controller with a self-signed certificate: its SHA-256, 64 hex digits.
-    ServerCertificateSha256 = pinnedHash
+    // Only for a certificate a private CA issued, such as the installer's: that CA's certificate.
+    ServerCaCertificate = RoofCertificateAuthority.Load("/etc/hvo-roof/ca.pem")
 });
 
 var status = await client.Roof.GetStatusAsync();
 ```
 
-The pin covers requests, Stop and the status hub's WebSocket. Any other certificate must be trusted as usual.
-`RoofCertificatePinTests` checks all three over real HTTPS, with the right pin, another certificate's pin, and none.
+How the controller's certificate is checked, for requests, Stop and the status hub's WebSocket alike:
+
+- **`ServerCaCertificate`**: only that CA is trusted, not the system's CAs. The certificate must chain to it (through
+  intermediates the controller sends), be in date, be for a server, and name the host in `BaseAddress` (a DNS name or
+  an IP address); the CA's name constraints apply. A certificate reissued under the same CA needs no change. A
+  certificate that is not a CA's (no CA basic constraint) is refused when the options are checked.
+- **`ServerCertificateSha256`**: the SHA-256 of a self-signed certificate, 64 hex digits. A certificate the system
+  trusts is accepted too.
+- **Neither**: the system's trust store.
+
+Setting both is refused. A certificate that is not accepted fails the call with a `RoofCertificateRefusedException` in
+its exception chain (`RoofCertificateRefusedException.Find`), whose `Reason` and message say why: another CA issued it,
+it has expired or is not yet valid, it names another host, it is outside the CA's name constraints, or it is not the
+pinned one. `RoofCertificateAuthority.Load` reads a CA's certificate from a PEM or DER file. `RoofCertificatePinTests`
+and `RoofCertificateAuthorityTests` check both over real HTTPS, against CAs and certificates made as the tests run.
 
 `RoofControllerClient` groups the endpoints:
 
@@ -99,10 +112,12 @@ When a kiosk's PIN session ends, the kiosk locks, and the device key still reads
 
 ### Command-line credentials
 
-`RoofCredentialStore` keeps a command-line client's controller address, API key or session, and certificate pin:
+`RoofCredentialStore` keeps a command-line client's controller address, API key or session, and certificate pin or
+CA certificate (as PEM):
 
-- In the environment: `HVO_ROOF_URL`, `HVO_ROOF_API_KEY` (with `HVO_ROOF_ON_BEHALF_OF`), `HVO_ROOF_SESSION` and
-  `HVO_ROOF_CERT_SHA256`.
+- In the environment: `HVO_ROOF_URL`, `HVO_ROOF_API_KEY` (with `HVO_ROOF_ON_BEHALF_OF`), `HVO_ROOF_SESSION`, and
+  `HVO_ROOF_CERT_SHA256` or `HVO_ROOF_CA_CERT` (the path of the CA's certificate file, read and checked when the
+  environment is read). Both at once are refused.
 - In a file: `$XDG_CONFIG_HOME/hvo-roof/credentials.json`, or `~/.config/hvo-roof/credentials.json`. The file is
   written atomically with mode `0600` in a `0700` directory. A file that other users can read or change, or one in a
   directory they can change, is refused, with the `chmod` command that fixes it.

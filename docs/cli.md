@@ -50,8 +50,17 @@ hvo-roof setup --controller https://roof.local:5001/ --api-key
 - **`--controller`** is the controller's address. The address is saved in the credentials file.
 - **`--api-key`** reads a key from the terminal without echo, or as one line of standard input. It is never read from
   the command line.
+- **`--ca-certificate <file>`** trusts the private CA that issued the controller's certificate, such as the one the
+  installer makes (PEM or DER). The CA is saved in the credentials file, so the file it came from can go. Only that CA
+  is trusted, not the system's CAs; the certificate must still name the host in the address, and the CA's name
+  constraints apply. The controller's certificate can then be reissued under the same CA, for a new address or when it
+  expires, with no change here. `none` removes a saved CA.
 - **`--certificate-sha256`** pins the controller's self-signed certificate by its SHA-256 (64 hex digits, colons
-  allowed). When the certificate is not accepted, setup says so and points to this option. `none` removes a saved pin.
+  allowed). A reissued certificate has a new SHA-256, so the pin must be saved again. `none` removes a saved pin.
+- **The CA or the pin, not both.** Saving one removes the other, and setup says so; giving both is an error (exit 2).
+  In a terminal, setup asks for a CA file first and for a pin only when there is no CA. When the certificate is not
+  accepted, setup says why and which option would help: a certificate from another CA points to `--ca-certificate`, one
+  that is not the pinned one to either, and one for another host name to neither (the certificate needs reissuing).
 - **`--create-admin <name>`** adds the first admin person, with a password that setup asks for. It needs an admin API
   key, which is how a new installation gets its first person.
 
@@ -77,12 +86,19 @@ The terminal interface's **Setup (F5)** page does the same: Connection, Check, S
 - **The environment.** These variables override the file, as a container or a script would set them:
   - `HVO_ROOF_URL`: the controller's address.
   - `HVO_ROOF_API_KEY` or `HVO_ROOF_SESSION`: the credential.
-  - `HVO_ROOF_CERT_SHA256`: the certificate pin. It overrides the file's pin on its own, too.
+  - `HVO_ROOF_CA_CERT`: the path of a file holding the CA certificate (PEM or DER), read each time `hvo-roof` starts.
+  - `HVO_ROOF_CERT_SHA256`: the certificate pin.
   - `HVO_ROOF_ON_BEHALF_OF`: the person a shared key acts for.
 - **Order.** The address comes from `--controller`, then the environment, then the file. The credential comes from the
-  environment, then the file (a saved session first, then a saved key). An `HVO_ROOF_URL` that is not an `http` or
-  `https` address, or a pin that is not 64 hex digits, is an error (exit 3). That applies even when `--controller` is
-  given, and to `setup`, so that a broken environment is not hidden.
+  environment, then the file (a saved session first, then a saved key). The CA and the pin go together: either variable
+  replaces both of the file's, so a CA in the environment is not joined by the file's pin. Each of these is an error
+  (exit 3), and says why:
+  - an `HVO_ROOF_URL` that is not an `http` or `https` address, or a pin that is not 64 hex digits;
+  - `HVO_ROOF_CA_CERT` naming a file that cannot be read, or that holds no CA's certificate (a certificate without the
+    CA basic constraint, such as the controller's own, is refused);
+  - both `HVO_ROOF_CA_CERT` and `HVO_ROOF_CERT_SHA256`, or a credentials file holding both a CA and a pin.
+
+  That applies even when `--controller` is given, and to `setup`, so that a broken environment is not hidden.
 - **Secrets never go on the command line.** This covers passwords, PINs, API keys and secret settings. They are read
   from the terminal without echo, or as one line of standard input. A new key's value is shown once, when it is added
   or rotated.
@@ -346,7 +362,7 @@ and description below. A setting that cannot be changed here says why (for examp
 
 ![The System page: health, readiness and version](images/terminal/04-system.svg)
 
-![The Setup page: the controller address, the certificate pin, the credential and where it comes from](images/terminal/05-setup.svg)
+![The Setup page: the controller address, how its certificate is checked, the credential and where it comes from](images/terminal/05-setup.svg)
 
 ## Tests
 

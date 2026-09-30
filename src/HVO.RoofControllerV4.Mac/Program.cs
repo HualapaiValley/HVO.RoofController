@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -48,12 +49,16 @@ public static class Program
         MacOptions options;
         string keyFile;
         string deviceKey;
+        X509Certificate2? authority;
         try
         {
             configuration = BuildConfiguration(args, folder);
             options = ReadOptions(configuration);
             keyFile = options.DeviceKeyPath(folder);
             deviceKey = KioskDeviceKey.Load(keyFile, $"{MacOptions.SectionName}:DeviceKeyFile", "you");
+            authority = options.CaCertificatePath(folder) is { } authorityFile
+                ? KioskCaCertificate.Load(authorityFile, $"{MacOptions.SectionName}:ServerCaCertificateFile", "you")
+                : null;
         }
         catch (KioskSettingsException ex)
         {
@@ -74,7 +79,7 @@ public static class Program
             logger.LogWarning("The device key file {Path} can be read by others than you: make it 0600 (chmod 600)", keyFile);
         }
 
-        using var client = Connect(options, deviceKey, loggerFactory, error);
+        using var client = Connect(options, authority, deviceKey, loggerFactory, error);
         if (client is null)
         {
             return SettingsExitCode;
@@ -160,8 +165,9 @@ public static class Program
             throw new KioskSettingsException($"The {MacOptions.SectionName} settings could not be read: {ex.Message}");
         }
 
-        // An empty pin (as in "ServerCertificateSha256": "") is no pin.
+        // An empty pin (as in "ServerCertificateSha256": "") is no pin, and an empty CA file no CA.
         options.ServerCertificateSha256 = string.IsNullOrWhiteSpace(options.ServerCertificateSha256) ? null : options.ServerCertificateSha256.Trim();
+        options.ServerCaCertificateFile = string.IsNullOrWhiteSpace(options.ServerCaCertificateFile) ? null : options.ServerCaCertificateFile.Trim();
         var problems = options.Validate();
         if (problems.Count > 0)
         {
@@ -174,8 +180,14 @@ public static class Program
     /// <summary>
     /// The client for the controller the settings name, or null, with the reason written to <paramref name="error"/>,
     /// when the client refuses them. <see cref="MacOptions.Validate"/> checks the same things first.
+    /// <paramref name="authority"/> is the CA that <see cref="MacOptions.ServerCaCertificateFile"/> names.
     /// </summary>
-    internal static RoofControllerClient? Connect(MacOptions options, string deviceKey, ILoggerFactory loggerFactory, TextWriter error)
+    internal static RoofControllerClient? Connect(
+        MacOptions options,
+        X509Certificate2? authority,
+        string deviceKey,
+        ILoggerFactory loggerFactory,
+        TextWriter error)
     {
         try
         {
@@ -184,6 +196,7 @@ public static class Program
                 BaseAddress = options.ControllerUrl!,
                 Credential = new RoofKioskCredential(deviceKey),
                 ServerCertificateSha256 = options.ServerCertificateSha256,
+                ServerCaCertificate = authority,
                 LoggerFactory = loggerFactory
             });
         }

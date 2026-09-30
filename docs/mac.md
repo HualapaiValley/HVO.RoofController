@@ -154,8 +154,13 @@ uses the same words as every other client.
    openssl s_client -connect localhost:8443 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
    ```
 
-   and put that in `ServerCertificateSha256`. A certificate the Mac trusts needs no pin. Under `pi-lan-http` the app
-   uses `http://roof-pi.local:8080/` and no pin, and the device key and passwords cross the LAN in clear text
+   and put that in `ServerCertificateSha256`. A certificate the Mac trusts needs no pin.
+
+   When a private CA issued the certificate, such as the installer's, trust the CA instead: copy the CA's certificate
+   (PEM or DER) into the settings folder, name it in `ServerCaCertificateFile` in place of `ServerCertificateSha256`,
+   and use an address the certificate names (its host name or IP address). Only that CA is trusted, and a certificate
+   reissued under it needs no change here, where a pin would. Under `pi-lan-http` the app uses
+   `http://roof-pi.local:8080/` and neither, and the device key and passwords cross the LAN in clear text
    ([Deployment](deployment.md)).
 
 5. **Open the app.** It shows the roof, signed out.
@@ -163,7 +168,7 @@ uses the same words as every other client.
 ### When it does not start
 
 Settings the app cannot start with (no `ControllerUrl`, a device key file that is missing or holds more than a key, a
-value out of range) open a window that says why, and where the settings file is, instead of the roof. Change the
+CA certificate file that is missing or holds no CA's certificate, a value out of range) open a window that says why, and where the settings file is, instead of the roof. Change the
 settings, then open the app again.
 
 ![The app's refusal on its first launch: the setting that is missing, and where its settings file will be](images/mac/refusal-760x460.png)
@@ -191,7 +196,8 @@ controller, from Terminal: an app opened from the Finder does not get Terminal's
 |---------|---------|---------|
 | `ControllerUrl` | none (required) | The controller's API, `http` or `https`, such as `https://roof-pi.local:8443/`. |
 | `DeviceKeyFile` | `device-key` | The file with the Mac's device key, on one line. A relative path is in the settings folder; `~/` is your home folder. Only you should be able to read it. |
-| `ServerCertificateSha256` | none | For an `https://` `ControllerUrl` with a certificate the Mac does not trust: its SHA-256, as 64 hex digits (colons allowed). |
+| `ServerCertificateSha256` | none | For an `https://` `ControllerUrl` with a certificate the Mac does not trust: its SHA-256, as 64 hex digits (colons allowed). Not with `ServerCaCertificateFile`. |
+| `ServerCaCertificateFile` | none | For an `https://` `ControllerUrl` with a certificate a private CA issued: the file with the CA's certificate, PEM or DER. A relative path is in the settings folder; `~/` is your home folder. Only that CA is trusted; the certificate must name the host in `ControllerUrl`. Not with `ServerCertificateSha256`. |
 | `IdleLockSeconds` | `900` | How long the app stays signed in without use, from 10 to 3600. |
 | `PixelsPerMillimetre` | `4` | Sets the size of everything, from 2 to 40. At 4, a button is at least 48 points in both directions and the text is 16 points. |
 

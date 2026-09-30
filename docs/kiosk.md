@@ -234,7 +234,12 @@ OS Lite (no desktop): nothing else may hold the display.
    openssl s_client -connect localhost:8443 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2
    ```
 
-   and put that in `ServerCertificateSha256`. Under `pi-lan-http` the kiosk uses `http://localhost:8080` and no pin.
+   and put that in `ServerCertificateSha256`. A certificate reissued later has a new SHA-256, and the pin must follow it.
+
+   When a private CA issued the certificate, such as the installer's, and the certificate names `localhost`, trust the
+   CA instead: put the path of the CA's certificate (PEM or DER, readable by the kiosk's user) in
+   `ServerCaCertificateFile`, and leave `ServerCertificateSha256` out. Only that CA is trusted, and a certificate
+   reissued under it needs no change here. Under `pi-lan-http` the kiosk uses `http://localhost:8080` and neither.
 
 6. **The service.** Install the unit, and the udev rule for the backlight when `BacklightFile` is set. The rule acts
    on the `add` event the boot sends, so apply it now with one (`udevadm trigger` sends `change` unless told):
@@ -263,7 +268,8 @@ The kiosk's settings are the `Kiosk` section of `appsettings.Local.json` next to
 |---------|---------|---------|
 | `ControllerUrl` | `http://localhost:8080` | The controller's API. |
 | `DeviceKeyFile` | none (required) | The file with the kiosk's device key, on one line. Only the kiosk's user may read it. |
-| `ServerCertificateSha256` | none | For an `https://` `ControllerUrl` with a certificate the Pi does not trust: its SHA-256, as 64 hex digits (colons allowed). |
+| `ServerCertificateSha256` | none | For an `https://` `ControllerUrl` with a certificate the Pi does not trust: its SHA-256, as 64 hex digits (colons allowed). Not with `ServerCaCertificateFile`. |
+| `ServerCaCertificateFile` | none | For an `https://` `ControllerUrl` with a certificate a private CA issued: the file with the CA's certificate, PEM or DER, which the kiosk's user must be able to read. Only that CA is trusted; the certificate must name the host in `ControllerUrl`. Not with `ServerCertificateSha256`. |
 | `IdleLockSeconds` | `120` | How long the kiosk stays unlocked without a touch, from 10 to 3600. |
 | `PixelsPerMillimetre` | `8.2` | The display's pixels per millimetre, from 2 to 40, which sets the size of everything. 8.2: the Raspberry Pi Touch Display 2; about 5.2: the first 7-inch touch display. |
 | `Card` | the first connected | The display's DRM device, such as `/dev/dri/card1`. |

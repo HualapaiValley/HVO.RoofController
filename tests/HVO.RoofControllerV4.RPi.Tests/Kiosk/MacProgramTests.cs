@@ -1,6 +1,8 @@
 using System.Xml.Linq;
 using FluentAssertions;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Mac;
+using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Web;
 using HVO.RoofControllerV4.Screens;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -167,6 +169,41 @@ public sealed class MacProgramTests
         new MacOptions { DeviceKeyFile = elsewhere }.DeviceKeyPath(directory.Path).Should().Be(elsewhere);
     }
 
+    [TestMethod]
+    public void TheCaCertificate_IsInTheSettingsFolder_UnlessItIsNamedElsewhere()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        new MacOptions().CaCertificatePath(directory.Path).Should().BeNull();
+        new MacOptions { ServerCaCertificateFile = " " }.CaCertificatePath(directory.Path).Should().BeNull();
+        new MacOptions { ServerCaCertificateFile = "roof-ca.pem" }.CaCertificatePath(directory.Path).Should().Be(directory.File("roof-ca.pem"));
+        new MacOptions { ServerCaCertificateFile = "~/certs/roof-ca.pem" }.CaCertificatePath(directory.Path).Should().Be(Path.Combine(home, "certs", "roof-ca.pem"));
+        var elsewhere = Path.Combine(Path.GetTempPath(), "roof-ca.pem");
+        new MacOptions { ServerCaCertificateFile = elsewhere }.CaCertificatePath(directory.Path).Should().Be(elsewhere);
+    }
+
+    [TestMethod]
+    public void TheCaCertificate_IsReadFromTheSettings_AndGivenToTheClient()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        using var authority = TestCertificates.CreateAuthority("HVO Roof test CA");
+        File.WriteAllBytes(directory.File("roof-ca.der"), authority.RawData);
+        using var error = new StringWriter();
+
+        var options = MacProgram.ReadOptions(MacProgram.BuildConfiguration(
+            ["--Mac:ControllerUrl=https://roof-pi.local:8443/", "--Mac:ServerCaCertificateFile= roof-ca.der "], directory.Path));
+        using var loaded = KioskCaCertificate.Load(options.CaCertificatePath(directory.Path)!, "Mac:ServerCaCertificateFile", "you");
+        using var client = MacProgram.Connect(options, loaded, Key, NullLoggerFactory.Instance, error);
+
+        options.ServerCaCertificateFile.Should().Be("roof-ca.der");
+        loaded.RawData.Should().Equal(authority.RawData);
+        client.Should().NotBeNull();
+        error.ToString().Should().BeEmpty();
+        MacProgram.ReadOptions(MacProgram.BuildConfiguration(["--Mac:ControllerUrl=https://roof-pi.local:8443/", "--Mac:ServerCaCertificateFile="], directory.Path))
+            .ServerCaCertificateFile.Should().BeNull("an empty file name is no CA");
+    }
+
     // ---- Refusing to start ----------------------------------------------------------------------------------------------
 
     [TestMethod]
@@ -176,6 +213,9 @@ public sealed class MacProgramTests
     [DataRow("{ \"Mac\": { \"ControllerUrl\": \"http://roof-pi:8080/\" } }", "--Mac:ServerCertificateSha256=not-a-hash", "Mac:ServerCertificateSha256 *", DisplayName = "a pin that is not a hash")]
     [DataRow("{ \"Mac\": { \"ControllerUrl\": \"http://roof-pi:8080/\", \"DeviceKeyFile\": \"missing\" } }", "", "Mac:DeviceKeyFile names *missing, which could not be read (FileNotFoundException). It must be readable by you.", DisplayName = "no device key file")]
     [DataRow("{ \"Mac\": { \"ControllerUrl\": \"http://roof-pi:8080/\", \"DeviceKeyFile\": \"two-lines\" } }", "", "Mac:DeviceKeyFile names *two-lines, which must hold one API key on one line.*", DisplayName = "a device key file that is not one key")]
+    [DataRow("{ \"Mac\": { \"ControllerUrl\": \"https://roof-pi:8443/\", \"ServerCaCertificateFile\": \"roof-ca.pem\" } }", "", "Mac:ServerCaCertificateFile names *roof-ca.pem, which could not be read (FileNotFoundException). It must be readable by you.", DisplayName = "no CA certificate file")]
+    [DataRow("{ \"Mac\": { \"ControllerUrl\": \"https://roof-pi:8443/\", \"ServerCaCertificateFile\": \"two-lines\" } }", "", "Mac:ServerCaCertificateFile cannot be used: *two-lines does not hold a certificate in PEM or DER form.", DisplayName = "a CA certificate file that is not a certificate")]
+    [DataRow("{ \"Mac\": { \"ControllerUrl\": \"https://roof-pi:8443/\", \"ServerCaCertificateFile\": \"two-lines\" } }", "--Mac:ServerCertificateSha256=" + Pin, "Mac:ServerCaCertificateFile and Mac:ServerCertificateSha256 are both set. Set one: *", DisplayName = "a CA and a pin")]
     public void TheApp_ExitsWithTheSettingsCode_SaysWhy_AndShowsIt(string? settings, string arg, string reason)
     {
         using var directory = new WebTestSupport.TempDirectory();
@@ -241,7 +281,7 @@ public sealed class MacProgramTests
         using var error = new StringWriter();
 
         var options = MacProgram.ReadOptions(MacProgram.BuildConfiguration([arg, "--Mac:ControllerUrl=https://roof-pi.local:8443/"], directory.Path));
-        using var client = MacProgram.Connect(options, Key, NullLoggerFactory.Instance, error);
+        using var client = MacProgram.Connect(options, null, Key, NullLoggerFactory.Instance, error);
 
         options.ServerCertificateSha256.Should().BeNull();
         client.Should().NotBeNull();
@@ -254,9 +294,22 @@ public sealed class MacProgramTests
         using var error = new StringWriter();
         var options = new MacOptions { ControllerUrl = new Uri("https://roof-pi.local:8443/"), ServerCertificateSha256 = "" };
 
-        MacProgram.Connect(options, Key, NullLoggerFactory.Instance, error).Should().BeNull();
+        MacProgram.Connect(options, null, Key, NullLoggerFactory.Instance, error).Should().BeNull();
 
         error.ToString().Should().StartWith("HVO Roof did not start: The certificate pin must be a SHA-256 hash");
+    }
+
+    [TestMethod]
+    public void ACaThatIsNotOne_IsSaid_NotThrown()
+    {
+        using var authority = TestCertificates.CreateAuthority("HVO Roof test CA");
+        using var issued = TestCertificates.Issue(authority);
+        using var error = new StringWriter();
+        var options = new MacOptions { ControllerUrl = new Uri("https://roof-pi.local:8443/") };
+
+        MacProgram.Connect(options, issued, Key, NullLoggerFactory.Instance, error).Should().BeNull();
+
+        error.ToString().Should().StartWith("HVO Roof did not start: The CA certificate is not a CA's: its basic constraints do not say CA.");
     }
 
     // ---- The bundle -----------------------------------------------------------------------------------------------------

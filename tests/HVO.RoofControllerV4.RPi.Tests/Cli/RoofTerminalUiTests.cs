@@ -1299,8 +1299,8 @@ public sealed class RoofTerminalUiTests
         setup.Describe().Should().Contain("Connection saves the controller's address");
 
         Click(tui, "Connection");
-        Fill(tui, "http://localhost/", string.Empty, TestApiKeys.Admin);
-        tui.Ui.Panel!.Fields[2].Secret.Should().BeTrue("the API key is not shown as it is typed");
+        Fill(tui, "http://localhost/", string.Empty, string.Empty, TestApiKeys.Admin);
+        tui.Ui.Panel!.Fields[3].Secret.Should().BeTrue("the API key is not shown as it is typed");
         tui.Ui.Panel.Press("Save and check");
         tui.WaitIdle("the check", () => setup.LastCheck is not null);
 
@@ -1345,7 +1345,7 @@ public sealed class RoofTerminalUiTests
         using var tui = new TuiDriver(rig);
 
         Click(tui, "Connection");
-        Fill(tui, "roof.local", string.Empty, string.Empty);
+        Fill(tui, "roof.local", string.Empty, string.Empty, string.Empty);
         tui.Ui.Panel!.Press("Save and check");
 
         tui.Ui.Panel.Should().NotBeNull("the prompt stays open to fix the address");

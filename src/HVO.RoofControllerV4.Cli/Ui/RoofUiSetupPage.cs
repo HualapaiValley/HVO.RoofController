@@ -7,8 +7,8 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 
 /// <summary>
 /// The connection, as <c>hvo-roof setup</c>, <c>login</c> and <c>logout</c> keep it: the controller's address, the
-/// certificate pin and an API key in the credentials file, a check of the connection, signing in and out, and adding
-/// the first admin person with an admin API key.
+/// certificate pin or CA, and an API key in the credentials file, a check of the connection, signing in and out, and
+/// adding the first admin person with an admin API key.
 /// </summary>
 internal sealed class RoofUiSetupPage : RoofUiPage
 {
@@ -52,7 +52,7 @@ internal sealed class RoofUiSetupPage : RoofUiPage
                 : Environment(context)?.Controller is not null ? RoofCredentialStore.ControllerVariable
                 : "the credentials file";
             lines.Add($"Controller:  {connection.Controller} (from {from})");
-            lines.Add($"Certificate: {(connection.CertificateSha256 is null ? "not pinned (the system's trust store checks it)" : "pinned by SHA-256")}");
+            lines.Add($"Certificate: {DescribeTrust(connection)}");
             lines.Add(connection.Credential is null
                 ? "Credential:  none. Sign in, or save an admin's API key under Connection."
                 : $"Credential:  {connection.Credential} (from {(connection.Source == "environment" ? "the environment" : connection.Source)})");
@@ -94,22 +94,28 @@ internal sealed class RoofUiSetupPage : RoofUiPage
 
         Ui.Ask(new RoofUiPrompt(
             "Connection",
-            "The controller's address, for example https://roof.local:5001/. The certificate SHA-256 is for a self-signed "
-                + "certificate (64 hex digits; blank or 'none' removes it). A blank API key keeps the saved credential.",
+            "The controller's address, for example https://roof.local:5001/. The CA certificate file is for a certificate "
+                + $"a private CA such as the installer's issued (PEM or DER; blank keeps {(stored.CaCertificate is null ? "none" : "the saved one")}, "
+                + "'none' removes it). The certificate SHA-256 is for a self-signed certificate (64 hex digits; blank or 'none' "
+                + "removes it). Give one or the other. A blank API key keeps the saved credential.",
             [
                 new RoofUiField("Controller address", Initial: stored.Controller?.ToString() ?? string.Empty),
+                new RoofUiField("CA certificate file"),
                 new RoofUiField("Certificate SHA-256", Initial: stored.CertificateSha256 ?? string.Empty),
                 new RoofUiField("API key", Secret: true)
             ],
             [new RoofUiAction("Save and check", values =>
             {
                 var controller = RoofCliSetup.ParseController(values[0].Trim());
-                var certificate = string.IsNullOrWhiteSpace(values[1]) ? null : RoofCliSetup.ParsePin(values[1]);
-                var apiKey = values[2].Trim();
+                var certificate = string.IsNullOrWhiteSpace(values[2]) ? null : RoofCliSetup.ParsePin(values[2]);
+                var authority = string.IsNullOrWhiteSpace(values[1])
+                    ? certificate is null ? stored.CaCertificate : null
+                    : RoofCliSetup.ParseCaCertificate(values[1]);
+                var apiKey = values[3].Trim();
                 RoofCliSetupResult saved;
                 try
                 {
-                    saved = _setup.Save(controller, certificate, apiKey.Length == 0 ? null : apiKey);
+                    saved = _setup.Save(controller, certificate, authority, apiKey.Length == 0 ? null : apiKey);
                 }
                 catch (Exception error) when (error is RoofCredentialFileException or IOException or UnauthorizedAccessException)
                 {
@@ -251,6 +257,11 @@ internal sealed class RoofUiSetupPage : RoofUiPage
     }
 
     private static string Join(string? first, string then) => string.IsNullOrEmpty(first) ? then : $"{first} {then}";
+
+    private static string DescribeTrust(RoofCliConnection connection)
+        => connection.CaCertificate is { } authority ? $"issued by the CA {RoofCertificateAuthority.Describe(authority)} (only that CA is trusted)"
+            : connection.CertificateSha256 is not null ? "pinned by SHA-256"
+            : "not pinned (the system's trust store checks it)";
 
     private static RoofStoredCredentials? Environment(RoofCliContext context)
     {

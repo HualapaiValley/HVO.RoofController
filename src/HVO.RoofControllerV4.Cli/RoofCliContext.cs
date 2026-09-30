@@ -1,14 +1,21 @@
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using HVO.RoofControllerV4.Client;
 
 namespace HVO.RoofControllerV4.Cli;
 
 /// <summary>
-/// The controller address and credential a command uses, and where they came from. The environment wins over the
+/// The controller address and credential a command uses, and where they came from, with how the controller's
+/// certificate is checked: a pin, a private CA, or neither (the system's trust store). The environment wins over the
 /// credentials file, and <c>--controller</c> wins over both for the address.
 /// </summary>
-internal sealed record RoofCliConnection(Uri Controller, RoofCredential? Credential, string? CertificateSha256, string Source);
+internal sealed record RoofCliConnection(
+    Uri Controller,
+    RoofCredential? Credential,
+    string? CertificateSha256,
+    X509Certificate2? CaCertificate,
+    string Source);
 
 /// <summary>There is no controller address, so no command can reach the controller.</summary>
 internal sealed class RoofCliNotConfiguredException(string message) : Exception(message);
@@ -62,16 +69,42 @@ internal sealed class RoofCliContext
         var fromEnvironment = environment?.ToCredential();
         var credential = fromEnvironment ?? file?.ToCredential();
         var source = fromEnvironment is not null ? "environment" : credential is not null ? CredentialsPath : "none";
-        var certificate = environment?.CertificateSha256 ?? file?.CertificateSha256;
 
-        // Checked here, so a pin that cannot be used is a configuration problem (exit 3), not a controller failure.
+        // The pin and the CA go together: when the environment sets either, the file's are not used, so a pin in one
+        // and a CA in the other are never both in force.
+        var trust = environment is { CertificateSha256: not null } or { CaCertificate: not null } ? environment : file;
+        var certificate = trust?.CertificateSha256;
+
+        // Checked here, so a pin or a CA that cannot be used is a configuration problem (exit 3), not a controller
+        // failure. The environment's were checked as they were read.
         if (certificate is not null && !RoofCertificatePin.IsValid(certificate))
         {
             throw new RoofCredentialFileException(
                 $"The certificate pin in {CredentialsPath} is not a SHA-256 pin: 64 hex digits. Save it again with '{RoofCli.CommandName} setup'.");
         }
 
-        return new RoofCliConnection(controller, credential, certificate, source);
+        if (certificate is not null && trust?.CaCertificate is not null)
+        {
+            throw new RoofCredentialFileException(
+                $"{CredentialsPath} has both a certificate pin and a CA certificate. Save one with '{RoofCli.CommandName} setup'.");
+        }
+
+        return new RoofCliConnection(controller, credential, certificate, ReadCaCertificate(trust?.CaCertificate), source);
+    }
+
+    /// <summary>The CA certificate saved as PEM, or null; throws when it cannot be used.</summary>
+    internal X509Certificate2? ReadCaCertificate(string? pem)
+    {
+        try
+        {
+            return pem is null ? null : RoofCertificateAuthority.FromPem(pem);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RoofCredentialFileException(
+                $"The CA certificate in {CredentialsPath} is not a CA's certificate in PEM form. Save it again with '{RoofCli.CommandName} setup --ca-certificate FILE'.",
+                ex);
+        }
     }
 
     public RoofControllerClient CreateClient(RoofCliConnection connection) => new(new RoofConnectionOptions
@@ -79,6 +112,7 @@ internal sealed class RoofCliContext
         BaseAddress = connection.Controller,
         Credential = connection.Credential,
         ServerCertificateSha256 = connection.CertificateSha256,
+        ServerCaCertificate = connection.CaCertificate,
         CreateHandler = Host.CreateHandler,
         WebSocketFactory = Host.WebSocketFactory,
         StatusFeed = StatusFeed,

@@ -104,6 +104,14 @@ the roof against this server; use the web UI (port 8088) for operator access.
   with and without the digests. The controller's image is now built for `linux/amd64` as well as `linux/arm64`. The
   container scenarios deploy a two-platform image index from a local registry by its digest (C12 step 11). See
   [docs/deployment.md](docs/deployment.md#deploying-a-released-image).
+- Trusting a private CA (#65). The client library's `ServerCaCertificate` trusts only the CA that issued the
+  controller's certificate, such as the installer's: the certificate must chain to it and name the host, the CA's name
+  constraints apply, and a certificate reissued under the same CA needs no change at the clients. It covers requests,
+  Stop and the status hub, and replaces the pin where a CA is in use: setting both is refused. `hvo-roof setup
+  --ca-certificate <file>` saves the CA in the credentials file (or `HVO_ROOF_CA_CERT` names the file), and the kiosk
+  and the Mac app take `ServerCaCertificateFile`. A certificate that is not accepted says why: another CA, expired,
+  another host name, outside the name constraints, or not the pinned one, and `hvo-roof` names the option that would
+  help. See [docs/cli.md](docs/cli.md#setup).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`

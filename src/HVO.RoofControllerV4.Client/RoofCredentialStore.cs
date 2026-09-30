@@ -29,11 +29,17 @@ public sealed record RoofStoredCredentials
     /// <summary>The pinned SHA-256 of a controller's self-signed certificate (see <see cref="RoofConnectionOptions.ServerCertificateSha256"/>).</summary>
     public string? CertificateSha256 { get; init; }
 
-    // The API key is left out, so the record can be logged.
+    /// <summary>
+    /// The private CA that issued the controller's certificate, as PEM (see
+    /// <see cref="RoofConnectionOptions.ServerCaCertificate"/>). Not with <see cref="CertificateSha256"/>.
+    /// </summary>
+    public string? CaCertificate { get; init; }
+
+    // The API key is left out, so the record can be logged; the CA is public, but long.
     private bool PrintMembers(StringBuilder builder)
     {
         builder.Append($"Controller = {Controller}, ApiKey = {(ApiKey is null ? "(none)" : "(set)")}, OnBehalfOf = {OnBehalfOf}, ")
-            .Append($"Session = {Session}, CertificateSha256 = {CertificateSha256}");
+            .Append($"Session = {Session}, CertificateSha256 = {CertificateSha256}, CaCertificate = {(CaCertificate is null ? "(none)" : "(set)")}");
         return true;
     }
 
@@ -80,6 +86,9 @@ public static class RoofCredentialStore
     public const string SessionVariable = "HVO_ROOF_SESSION";
     public const string CertificateVariable = "HVO_ROOF_CERT_SHA256";
 
+    /// <summary>The path of a file holding the CA certificate, PEM or DER; not a certificate itself.</summary>
+    public const string CaCertificateVariable = "HVO_ROOF_CA_CERT";
+
     private const UnixFileMode OwnerFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private const UnixFileMode OwnerDirectoryMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
@@ -103,8 +112,13 @@ public static class RoofCredentialStore
         return Path.Combine(configHome, "hvo-roof", "credentials.json");
     }
 
-    /// <summary>Credentials from the environment, or null when none of the variables is set.</summary>
-    /// <exception cref="RoofCredentialFileException">The controller address or the certificate pin is not valid.</exception>
+    /// <summary>
+    /// Credentials from the environment, or null when none of the variables is set. The CA certificate is read from the
+    /// file that <c>HVO_ROOF_CA_CERT</c> names.
+    /// </summary>
+    /// <exception cref="RoofCredentialFileException">
+    /// The controller address, the certificate pin or the CA certificate is not valid, or both the pin and the CA are set.
+    /// </exception>
     public static RoofStoredCredentials? FromEnvironment(Func<string, string?>? getEnvironmentVariable = null)
     {
         getEnvironmentVariable ??= Environment.GetEnvironmentVariable;
@@ -112,10 +126,12 @@ public static class RoofCredentialStore
         var apiKey = getEnvironmentVariable(ApiKeyVariable);
         var session = getEnvironmentVariable(SessionVariable);
         var certificate = getEnvironmentVariable(CertificateVariable);
+        var authorityFile = getEnvironmentVariable(CaCertificateVariable);
         if (string.IsNullOrWhiteSpace(controller)
             && string.IsNullOrWhiteSpace(apiKey)
             && string.IsNullOrWhiteSpace(session)
-            && string.IsNullOrWhiteSpace(certificate))
+            && string.IsNullOrWhiteSpace(certificate)
+            && string.IsNullOrWhiteSpace(authorityFile))
         {
             return null;
         }
@@ -132,14 +148,35 @@ public static class RoofCredentialStore
             throw new RoofCredentialFileException($"{CertificateVariable} is not a SHA-256 pin: 64 hex digits.");
         }
 
+        if (!string.IsNullOrWhiteSpace(certificate) && !string.IsNullOrWhiteSpace(authorityFile))
+        {
+            throw new RoofCredentialFileException(
+                $"{CertificateVariable} and {CaCertificateVariable} are both set. Set one: the pin of a self-signed certificate, or the CA that issued the certificate.");
+        }
+
         return new RoofStoredCredentials
         {
             Controller = address,
             ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim(),
             OnBehalfOf = getEnvironmentVariable(OnBehalfOfVariable),
             Session = string.IsNullOrWhiteSpace(session) ? null : new RoofStoredSession(session.Trim(), null, null, null, null),
-            CertificateSha256 = string.IsNullOrWhiteSpace(certificate) ? null : certificate.Trim()
+            CertificateSha256 = string.IsNullOrWhiteSpace(certificate) ? null : certificate.Trim(),
+            CaCertificate = string.IsNullOrWhiteSpace(authorityFile) ? null : ReadCaCertificate(authorityFile.Trim())
         };
+    }
+
+    // As PEM, checked to be a CA's, so a file that cannot be used is refused before anything is sent.
+    private static string ReadCaCertificate(string path)
+    {
+        try
+        {
+            using var authority = RoofCertificateAuthority.Load(path);
+            return RoofCertificateAuthority.ToPem(authority);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            throw new RoofCredentialFileException($"{CaCertificateVariable} cannot be used: {ex.Message}", ex);
+        }
     }
 
     /// <summary>Reads the file, or returns null when it does not exist.</summary>

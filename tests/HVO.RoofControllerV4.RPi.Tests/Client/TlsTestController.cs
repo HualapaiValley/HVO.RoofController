@@ -17,7 +17,7 @@ using Microsoft.Extensions.Logging;
 namespace HVO.RoofControllerV4.RPi.Tests.Client;
 
 /// <summary>
-/// Only what the TLS tests need from a controller, over real HTTPS on a loopback port: who am I, Stop, and a status hub
+/// Only what the TLS tests need from a controller, over real HTTPS on a loopback port: liveness, who am I, Stop, and a status hub
 /// that offers WebSockets only, so a connected feed proves the certificate check reached the WebSocket as well as the
 /// negotiate request. <see cref="Present"/> changes the certificate for the connections that follow.
 /// </summary>
@@ -72,6 +72,7 @@ internal sealed class TlsTestController : IAsyncDisposable
         builder.Services.AddSignalR().AddJsonProtocol(json => json.PayloadSerializerOptions = RoofClientJson.Create());
 
         var app = builder.Build();
+        app.MapGet(RoofApiRoutes.HealthLive, () => Results.Text("Healthy"));
         app.MapGet("api/v4.0/Auth/Me", () => Results.Json(
             new RoofCallerResponse(CallerName, RoofControllerApiContract.ViewerRole, RoofCredentialKind.ApiKey, null, null, null, false),
             RoofClientJson.Options));
