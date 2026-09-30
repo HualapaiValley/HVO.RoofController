@@ -234,7 +234,22 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
     "httpPort": 8080,
     "webPort": 8088,
     "hostNames": ["roof"],
-    "domains": ["observatory.example"]
+    "domains": ["observatory.example"],
+    "firstAdmin": { "name": "observer", "pin": true },
+    "camera": { "baseUrl": "http://192.168.0.4:81", "userName": "roof-viewer" },
+    "telemetryEndpoint": "http://collector:4317"
+  }
+}
+```
+
+A rig's `controller` section has no `camera`. It has a `rig` section instead:
+
+```json
+{
+  "roles": ["rig"],
+  "controller": {
+    "firstAdmin": { "name": "tester" },
+    "rig": { "timeScale": 10, "cameraFramesPerSecond": 5, "openToLan": false }
   }
 }
 ```
@@ -249,13 +264,35 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
 | `controller.webPort` | The web UI (`WEB_HOST_PORT`) | `8088` |
 | `controller.hostNames` | Other short names clients use for the controller, such as `roof` ([Certificates](#certificates)) | None |
 | `controller.domains` | The domains clients reach it under, such as `observatory.example` | None. The wizard names the search domains in `/etc/resolv.conf`, but lists none unasked. |
+| `controller.firstAdmin.name` | The first person, an admin, added when the controller has no admin yet. Their password, and their PIN with `"pin": true`, are typed, or given in files ([Passwords and PINs](#passwords-and-pins)). | None. The wizard asks. |
+| `controller.firstAdmin.pin` | `true` to give the first admin a PIN for the kiosk | `false` |
+| `controller.camera.baseUrl` | The Blue Iris server the controller shows the camera from, such as `http://192.168.0.4:81`. It must have no path, and no user name or password. | None: the camera is left as it is. |
+| `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
+| `controller.telemetryEndpoint` | An OTLP endpoint for the controller's telemetry, such as `http://collector:4317` | None: export is off |
+| `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1`, or the running emulator's |
+| `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5`, or the running emulator's |
+| `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
 | `cli.folder` | `~/.local/bin` or `/usr/local/bin` | `~/.local/bin` |
 | `macApp.folder` | `/Applications` or `~/Applications` | `/Applications` |
 | `rigConfirmation` | This machine's host name, for a rig on a machine with `/dev/i2c-1` | None |
 | `httpConfirmation` | `http`, to serve plain HTTP where the controller does not already | None |
 
-The `controller` section applies to a rig too. A section for a role that is not chosen is dropped. The wizard never
+The `controller` section applies to a rig too. A section for a role that is not chosen is dropped. An answers file
+has no place for a password, a PIN or a key: a member such as `password` is an error. The wizard never
 saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on its own. The wizard saves answers to `hvo-roof-answers.json` in the folder where the installer was started, unless you give another path.
+
+### Passwords and PINs
+
+A person types each password and PIN; none is saved in an answers file, the record or the log. The installer asks
+only when a step needs one:
+
+- the first admin's password, typed twice, when the controller has no admin yet;
+- the first admin's PIN, typed twice, with `"pin": true`;
+- the camera's password, when its files are made or its user changes.
+
+Without a terminal (`--answers` in a script), give each in a file that only you can read, and the installer reads
+its first line: `--admin-password-file FILE`, `--admin-pin-file FILE` and `--camera-password-file FILE`. When a
+step needs one that was not given, the installer refuses and changes nothing.
 
 ## The plan
 

@@ -41,12 +41,17 @@ public sealed record InstallAnswers
     /// <summary>
     /// These answers with a section, with its defaults, for each role that has questions, and none for a role not
     /// chosen, so a saved file holds only what applies. A controller with no choices yet gets
-    /// <paramref name="defaultController"/>'s, or the defaults.
+    /// <paramref name="defaultController"/>'s, or the defaults. A rig has its emulator's choices and no camera (it shows
+    /// the emulator's); the controller has no rig's choices.
     /// </summary>
     public InstallAnswers Normalised(ControllerSettings? defaultController = null)
     {
         var roles = InstallRoles.Ordered(Roles);
+        var rig = roles.Contains(InstallRole.Rig);
         var controller = InstallRoles.RunsController(roles) ? (Controller ?? defaultController ?? new ControllerSettings()).Normalised() : null;
+        controller = controller is null ? null
+            : rig ? controller with { Camera = null, Rig = controller.Rig ?? new RigSettings() }
+            : controller with { Rig = null };
         return this with
         {
             Roles = roles,
@@ -69,6 +74,16 @@ public sealed record InstallAnswers
         foreach (var problem in Controller?.Problems() ?? [])
         {
             yield return problem;
+        }
+
+        if (Roles.Contains(InstallRole.Rig) && Controller?.Camera is not null)
+        {
+            yield return "A rig shows the HAT emulator's camera: leave out controller.camera.";
+        }
+
+        if (Roles.Contains(InstallRole.Controller) && Controller?.Rig is not null)
+        {
+            yield return "controller.rig is for a test rig: leave it out for the controller.";
         }
 
         if (Cli is { } cli && !CliSettings.Folders.Contains(cli.Folder))

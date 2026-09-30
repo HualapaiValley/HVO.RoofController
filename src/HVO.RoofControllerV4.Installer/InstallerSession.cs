@@ -1,3 +1,4 @@
+using System.Globalization;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Deployment;
@@ -79,12 +80,22 @@ public sealed class InstallerSession
     /// The controller's choices when nothing is recorded: the person's own certificate when one is in place that this
     /// machine's CA did not issue (so it is never replaced unasked, even when an installer's CA elsewhere issued it),
     /// otherwise a private CA (in place of a self-signed one, or one that cannot be opened). No domain is listed unasked:
-    /// each one lets the CA sign for any name in it, so the wizard only suggests those this machine seems to be in.
+    /// each one lets the CA sign for any name in it, so the wizard only suggests those this machine seems to be in. A
+    /// controller already running keeps its telemetry, and a rig's emulator its pace.
     /// </summary>
     public ControllerSettings DefaultController => new()
     {
-        Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa
+        Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa,
+        TelemetryEndpoint = Survey.Controller?.TelemetryEndpoint is { Length: > 0 } endpoint ? endpoint : null,
+        Rig = new RigSettings
+        {
+            TimeScale = Number(Survey.HatEmulator?.EmulatorTimeScale) ?? RigSettings.DefaultTimeScale,
+            CameraFramesPerSecond = Number(Survey.HatEmulator?.EmulatorCameraFramesPerSecond) ?? RigSettings.DefaultCameraFramesPerSecond
+        }
     };
+
+    private static double? Number(string? text)
+        => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number) ? number : null;
 
     /// <summary>Why the installer refuses the answers here; empty when it may go ahead.</summary>
     public IReadOnlyList<string> Problems(bool planOnly = false) => RoleGuards.Check(Survey, Answers, planOnly);

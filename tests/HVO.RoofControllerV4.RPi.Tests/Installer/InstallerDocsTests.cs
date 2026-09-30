@@ -29,17 +29,27 @@ public sealed partial class InstallerDocsTests
     }
 
     [TestMethod]
-    public void TheAnswersFileExample_IsOneTheInstallerReads()
+    public void TheAnswersFileExamples_AreOnesTheInstallerReads()
     {
-        var example = JsonBlock().Match(Page);
-        example.Success.Should().BeTrue("docs/install.md shows an answers file");
+        var examples = JsonBlock().Matches(Page);
+        examples.Should().HaveCountGreaterThanOrEqualTo(2, "docs/install.md shows an answers file for the controller, and one for a rig");
 
-        var answers = InstallAnswers.Parse(example.Groups[1].Value);
-
+        var answers = InstallAnswers.Parse(examples[0].Groups[1].Value);
         answers.Roles.Should().Equal(InstallRole.Controller);
         answers.Controller.Should().BeEquivalentTo(
-            new ControllerSettings { HostNames = ["roof"], Domains = ["observatory.example"] },
-            "the example shows the defaults, with a name and a domain for the certificate");
+            new ControllerSettings
+            {
+                HostNames = ["roof"],
+                Domains = ["observatory.example"],
+                FirstAdmin = new FirstAdminSettings { Name = "observer", Pin = true },
+                Camera = new CameraSettings { BaseUrl = "http://192.168.0.4:81", UserName = "roof-viewer" },
+                TelemetryEndpoint = "http://collector:4317"
+            },
+            "the example shows the defaults, with a name and a domain for the certificate, and each optional choice");
+
+        var rig = InstallAnswers.Parse(examples[1].Groups[1].Value);
+        rig.Roles.Should().Equal(InstallRole.Rig);
+        rig.Controller!.Rig.Should().Be(new RigSettings { TimeScale = 10, CameraFramesPerSecond = RigSettings.DefaultCameraFramesPerSecond });
     }
 
     [TestMethod]
@@ -55,6 +65,8 @@ public sealed partial class InstallerDocsTests
         page.Should().Contain($"| `controller.httpsPort` | The controller's API over HTTPS (the deploy script's `HTTPS_HOST_PORT`) | `{ControllerSettings.DefaultHttpsPort}` |");
         page.Should().Contain($"| `controller.httpPort` | The controller's API over HTTP, with `http` (`HOST_PORT`) | `{ControllerSettings.DefaultHttpPort}` |");
         page.Should().Contain($"| `controller.webPort` | The web UI (`WEB_HOST_PORT`) | `{ControllerSettings.DefaultWebPort}` |");
+        page.Should().Contain(FormattableString.Invariant($"| A rig only: how many times as fast as real time the emulated roof runs, from `{RigSettings.MinimumTimeScale}` to `{RigSettings.MaximumTimeScale}` | `{RigSettings.DefaultTimeScale}`, or the running emulator's |"));
+        page.Should().Contain(FormattableString.Invariant($"| A rig only: the emulated camera's frame rate, from `{RigSettings.MinimumCameraFramesPerSecond}` to `{RigSettings.MaximumCameraFramesPerSecond}` | `{RigSettings.DefaultCameraFramesPerSecond}`, or the running emulator's |"));
         page.Should().Contain($"| `cli.folder` | `{CliSettings.HomeFolder}` or `{CliSettings.SharedFolder}` | `{new CliSettings().Folder}` |");
         page.Should().Contain($"| `macApp.folder` | `{MacAppSettings.SharedFolder}` or `{MacAppSettings.HomeFolder}` | `{new MacAppSettings().Folder}` |");
     }
