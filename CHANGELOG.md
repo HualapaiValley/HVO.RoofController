@@ -110,10 +110,13 @@ the roof against this server; use the web UI (port 8088) for operator access.
   `hvo-roof` for Linux arm64 and x64, the kiosk's tarball, the Mac app's zip, the release compose file and the deploy
   script, with `release.json` (the version, the commit, each image's digest and each asset's SHA-256), `SHA256SUMS` and
   a build provenance attestation. A final release needs `docs/upgrade-notes/X.Y.Z.md` and its CHANGELOG section; its
-  notes start with the upgrade notes. Publishing a final release that is the latest moves each image's `latest` tag
-  (`release-latest.yml`); a release candidate leaves it. A manual run is a dry run, `X.Y.Z-dryrun.<run>`, ending in a
-  draft to delete. `build/release-assets.py` gathers the assets and `build/push-image.sh` pushes an image from its OCI
-  archive with the digest it was checked with; CI tests both. See [docs/releasing.md](docs/releasing.md).
+  notes start with the upgrade notes. The release job runs in the `release` environment, whose reviewers and allowed
+  refs an admin sets before the first release. Publishing the newest final release moves each image's `latest` tag
+  (`release-latest.yml`); a release candidate, or a fix to an older version, leaves it. A manual run is a dry run,
+  `X.Y.Z-dryrun.<run>`, ending in a draft to delete. `build/release-assets.py` gathers the assets,
+  `build/push-image.sh` pushes an image from its OCI archive with the digest it was checked with, and
+  `build/release-latest.sh` decides whether `latest` moves; CI tests all three. See
+  [docs/releasing.md](docs/releasing.md).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`

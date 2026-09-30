@@ -390,6 +390,10 @@ jobs:
           skopeo --version
           tests/releasing/push-image-tests.sh
 
+      # build/release-latest.sh deciding whether publishing a release moves latest, against a stand-in for gh.
+      - name: Release latest script tests
+        run: tests/releasing/release-latest-tests.sh
+
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
 

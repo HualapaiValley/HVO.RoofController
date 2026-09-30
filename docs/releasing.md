@@ -178,17 +178,22 @@ version, and check its labels and its platforms with `check-image-labels.sh`.
    `ghcr.io/hualapaivalley/roof-hat-emulator:4.0.0`. Each image gets a build provenance attestation, which GHCR keeps
    beside it.
 4. **The assets.** `release-assets.py` gathers what CI built and tested in this run into the release's assets
-   ([The assets](#the-assets)), with the images' digests. The run checks `hvo-roof-linux-x64 --version` against the
-   version and commit, and `SHA256SUMS` against the files. One build provenance attestation covers every file in
-   `SHA256SUMS`.
+   ([The assets](#the-assets)), with the images' digests. Before logging in to GHCR, the run checks that CI's
+   `hvo-roof` for linux-x64 prints the version and commit, running it with no token and an empty environment; here it
+   checks that `hvo-roof-linux-x64` is that file, and `SHA256SUMS` against the files. One build provenance attestation
+   covers every file in `SHA256SUMS`.
 5. **The draft.** A draft release of the assets, titled `HVO Roof Controller 4.0.0` and marked a prerelease for a
    release candidate. Its notes are the upgrade notes, the images, how to check the files, and then what GitHub writes
    from the pull requests merged since the last release.
 
 Only the last job can write: the draft (`contents: write`), the images (`packages: write`) and the attestations
-(`id-token: write` for the signing certificate, and `attestations: write`). Every other job, CI's and the scenarios'
-included, can only read. Every action is pinned to a commit. A second run for the same tag waits for the first rather
-than cancelling it.
+(`id-token: write` for the signing certificate, and `attestations: write`). Only the two steps that call `gh` have the
+token in their environment. Every other job, CI's and the scenarios' included, can only read. Every action is pinned
+to a commit. A second run for the same tag waits for the first rather than cancelling it.
+
+The last job runs in the `release` environment. The check that a tag is on main runs from the tagged commit's own
+workflow, so a commit could leave it out; the environment's protection rules are the repository's, and no commit can
+change them ([The first release](#the-first-release)).
 
 The workflow publishes nothing. Only people who can write to the repository see a draft, and no published release
 names the images until someone publishes the draft.
@@ -211,9 +216,14 @@ Anyone can check a downloaded file, and where it was built, with the [GitHub CLI
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify hvo-roof-linux-arm64 --repo HualapaiValley/HVO.RoofController
-gh attestation verify oci://ghcr.io/hualapaivalley/roof-controller:4.0.0 --repo HualapaiValley/HVO.RoofController
+gh attestation verify hvo-roof-linux-arm64 --repo HualapaiValley/HVO.RoofController \
+  --signer-workflow HualapaiValley/HVO.RoofController/.github/workflows/release.yml --source-ref refs/tags/v4.0.0
+gh attestation verify oci://ghcr.io/hualapaivalley/roof-controller:4.0.0 --repo HualapaiValley/HVO.RoofController \
+  --signer-workflow HualapaiValley/HVO.RoofController/.github/workflows/release.yml --source-ref refs/tags/v4.0.0
 ```
+
+`--repo` alone accepts an attestation from any of the repository's workflows, on any branch, such as a dry run's of a
+file with the same name. `--signer-workflow` and `--source-ref` accept only the release workflow's, for that tag.
 
 ## release.json
 
@@ -265,7 +275,8 @@ Check the draft, on its page and with its files:
   gh release download v4.0.0 --repo HualapaiValley/HVO.RoofController --dir release-check
   cd release-check
   sha256sum --check SHA256SUMS
-  gh attestation verify hvo-roof-linux-x64 --repo HualapaiValley/HVO.RoofController
+  gh attestation verify hvo-roof-linux-x64 --repo HualapaiValley/HVO.RoofController \
+    --signer-workflow HualapaiValley/HVO.RoofController/.github/workflows/release.yml --source-ref refs/tags/v4.0.0
   chmod +x hvo-roof-linux-x64 && ./hvo-roof-linux-x64 --version    # 4.0.0+<the tagged commit>
   jq '{version, tag, prerelease, commit, images: [.images[].reference]}' release.json
   ```
@@ -276,7 +287,8 @@ Check the draft, on its page and with its files:
 
   ```bash
   docker buildx imagetools inspect ghcr.io/hualapaivalley/roof-controller:4.0.0
-  gh attestation verify oci://ghcr.io/hualapaivalley/roof-controller:4.0.0 --repo HualapaiValley/HVO.RoofController
+  gh attestation verify oci://ghcr.io/hualapaivalley/roof-controller:4.0.0 --repo HualapaiValley/HVO.RoofController \
+    --signer-workflow HualapaiValley/HVO.RoofController/.github/workflows/release.yml --source-ref refs/tags/v4.0.0
   ```
 
 - **The notes.** The upgrade notes are there and read well, and the pull requests GitHub lists are the release's.
@@ -293,10 +305,21 @@ Publish the draft on its page (Edit, then Publish release), or:
 gh release edit v4.0.0 --repo HualapaiValley/HVO.RoofController --draft=false
 ```
 
-Publishing a final release that is the repository's latest runs the
-[`Release latest`](../.github/workflows/release-latest.yml) workflow. It gives each image named in `release.json` the
-`latest` tag, once it has checked that the image's version tag still names the digest in `release.json`. A release
-candidate, or a release that is not the repository's latest (a fix to an older version), leaves `latest` where it is.
+GitHub marks a newly published release the repository's latest unless told otherwise. Publish a fix to an older
+version, such as 4.0.1 after 4.1.0, with `--latest=false`, so that GitHub's "Latest" stays on the newest:
+
+```bash
+gh release edit v4.0.1 --repo HualapaiValley/HVO.RoofController --draft=false --latest=false
+```
+
+Publishing a release runs the [`Release latest`](../.github/workflows/release-latest.yml) workflow.
+[`build/release-latest.sh`](../build/release-latest.sh) decides whether `latest` moves: only for the newest final
+release, the highest `vX.Y.Z` of the published releases that are not prereleases, whatever GitHub marks latest. A
+release candidate, or a fix to an older version, leaves `latest` where it is, and the run's summary says why. For the
+newest, the workflow gives each image named in its `release.json` the `latest` tag, once it has checked that the
+image's version tag still names the digest in `release.json`. It refuses a release whose tag is a candidate's but
+which is not marked a prerelease, and a `release.json` that is not the release's.
+
 A release published with a workflow's token starts no workflow, so a workflow that publishes calls `Release latest`
 itself. To run it by hand for a published release:
 
@@ -315,12 +338,21 @@ organization makes both packages public: on the organization's Packages page, fo
 `roof-hat-emulator`, Package settings, Change visibility, Public. Anyone can then pull the images without logging in,
 as the Pi and the release compose file do. A public package cannot be made private again.
 
+The release workflow's last job runs in the `release` environment, which GitHub makes, unprotected, on the first run.
+Before the first release, an admin of the repository protects it and the tags, in the repository's settings:
+
+- **Environments, `release`.** Required reviewers: the release managers, one of whom approves each run's release
+  job; tick "Prevent self-review" if there are two or more. Deployment branches and tags: selected ones, the tag rule
+  `v*` and the branch `main` (for [dry runs](#a-dry-run)).
+- **Rules, Rulesets, New tag ruleset.** Target the tags `v*`, and restrict creations, updates and deletions to the
+  release managers (the bypass list), so that nobody else can tag a release or move one's tag.
+
 Optionally, turn on immutable releases in the repository's settings (General, Releases), so that a published
 release's tag and assets cannot be changed, as this page already treats them.
 
 ## A dry run
 
-To try the whole workflow without releasing anything, run it by hand, on main or a branch:
+To try the whole workflow without releasing anything, run it by hand, on main:
 
 ```bash
 gh workflow run release.yml --repo HualapaiValley/HVO.RoofController --ref main
@@ -329,7 +361,9 @@ gh workflow run release.yml --repo HualapaiValley/HVO.RoofController --ref main
 A dry run releases the commit it runs on as version `4.0.0-dryrun.<run number>` (`version.sh --dry-run`), with the tag
 `v4.0.0-dryrun.<run number>`. Every check runs but the tag's: CI, the scenarios, the images, the assets and the
 attestations. Its draft is a prerelease whose notes say it is a dry run, and it makes no git tag. Its images are on
-GHCR with the dry run's version as their tag, and it never moves `latest`.
+GHCR with the dry run's version as their tag, and it never moves `latest`. Its release job waits for a reviewer as a
+release's does. The `release` environment lets only main and `v*` tags run that job, so to dry-run another branch, add
+it to the environment's deployment branches first, and remove it afterwards.
 
 Delete what it made afterwards, the draft and the images:
 
@@ -339,10 +373,11 @@ gh release delete v4.0.0-dryrun.<run number> --repo HualapaiValley/HVO.RoofContr
 
 On GHCR, each package holds the dry run's image as several versions: the one tagged with the dry run's version, an
 untagged one for each platform, and the attestation. Delete them on the package's page (the version's menu, Delete),
-or with a token that has the `delete:packages` scope. `gh api` lists a package's versions with their IDs and tags,
-newest first, and deletes one by its ID:
+or with `gh api`, which lists a package's versions with their IDs and tags, newest first, and deletes one by its ID.
+Its token needs the `read:packages` and `delete:packages` scopes, which `gh auth login` does not give:
 
 ```bash
+gh auth refresh -h github.com -s read:packages,delete:packages
 gh api "orgs/HualapaiValley/packages/container/roof-controller/versions" \
   --jq '.[] | {id, name, tags: .metadata.container.tags, created_at}'
 gh api -X DELETE "orgs/HualapaiValley/packages/container/roof-controller/versions/<id>"
@@ -385,6 +420,9 @@ Once a release is published, its tag never moves.
   names and modes, the kiosk tarball's contents, `release.json`, `SHA256SUMS`, and every artifact it must refuse.
 - `tests/releasing/push-image-tests.sh` pushes two-platform OCI archives with `push-image.sh` to a registry of its own
   in Docker, checks every digest the registry then holds, and tags them `latest`, refusing a version tag pushed again.
-  CI runs both.
+- `tests/releasing/release-latest-tests.sh` runs `release-latest.sh` against a stand-in for `gh` that serves made-up
+  releases, two to a page: the first final release, a candidate, a fix to an older version, versions `sort -V`
+  orders, drafts and other tags, and each release and `release.json` it refuses. CI runs these with the
+  `push-image.sh` tests.
 - The release workflow runs CI and the scenarios for every release, and a [dry run](#a-dry-run) runs the whole
   workflow without releasing.

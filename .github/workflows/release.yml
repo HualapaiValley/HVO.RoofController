@@ -87,7 +87,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # The only job that writes: the draft release (contents), the images (packages) and the attestations (id-token for
-    # the signing certificate, attestations to store them).
+    # the signing certificate, attestations to store them). The release environment's protection rules, which no
+    # commit can change, decide who may run it and from which refs (docs/releasing.md#the-first-release).
+    environment: release
     permissions:
       contents: write
       packages: write
@@ -97,16 +99,18 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       TAG: ${{ needs.version.outputs.tag }}
       REGISTRY: ghcr.io/hualapaivalley
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      # A release for this tag, even a draft left by a run that failed, would be replaced by this one's images before
-      # gh release create refused it: stop first. Delete a failed run's draft to run again (docs/releasing.md).
+      # A release for this tag, even a draft left by a run that failed, means this run would push its images over the
+      # release's: stop first. GitHub would take a second draft for the tag, and gh release create refuses only a
+      # published release. Delete a failed run's draft to run again (docs/releasing.md).
       - name: No release for this tag yet
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           existing=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" --jq ".[] | select(.tag_name == \"${TAG}\") | .html_url")
           if [ -n "${existing}" ]; then
@@ -139,6 +143,18 @@ jobs:
           name: hvo-roof-mac-${{ github.run_id }}.zip
           path: ${{ runner.temp }}/ci/mac
           skip-decompress: true
+
+      # CI's hvo-roof names the release's version and commit. Run before anything logs in, with no token and an empty
+      # home: the released copy is checked to be this one when the assets are gathered.
+      - name: Check hvo-roof's version
+        run: |
+          cli="${RUNNER_TEMP}/ci/cli/linux-x64/hvo-roof"
+          chmod +x "${cli}"
+          actual=$(env -i HOME="$(mktemp -d)" PATH=/usr/bin:/bin "${cli}" --version)
+          if [ "${actual}" != "${VERSION}+${GITHUB_SHA}" ]; then
+            echo "::error::hvo-roof --version printed '${actual}', not '${VERSION}+${GITHUB_SHA}'."
+            exit 1
+          fi
 
       - name: Set up QEMU (arm64 emulation for the runtime stage)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -237,11 +253,7 @@ jobs:
             --controller-digest "${CONTROLLER_DIGEST}" --emulator-digest "${EMULATOR_DIGEST}" \
             --cli "${RUNNER_TEMP}/ci/cli" --kiosk "${RUNNER_TEMP}/ci/kiosk" --mac-zip "${mac[0]}" \
             -o "${RUNNER_TEMP}/dist"
-          actual=$("${RUNNER_TEMP}/dist/hvo-roof-linux-x64" --version)
-          if [ "${actual}" != "${VERSION}+${GITHUB_SHA}" ]; then
-            echo "::error::hvo-roof-linux-x64 --version printed '${actual}', not '${VERSION}+${GITHUB_SHA}'."
-            exit 1
-          fi
+          cmp "${RUNNER_TEMP}/ci/cli/linux-x64/hvo-roof" "${RUNNER_TEMP}/dist/hvo-roof-linux-x64"
           (cd "${RUNNER_TEMP}/dist" && sha256sum --check --strict SHA256SUMS)
           jq . "${RUNNER_TEMP}/dist/release.json"
 
@@ -252,6 +264,8 @@ jobs:
           subject-checksums: ${{ runner.temp }}/dist/SHA256SUMS
 
       - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           notes="${RUNNER_TEMP}/notes.md"
           {
@@ -280,8 +294,10 @@ jobs:
 
           \`\`\`bash
           sha256sum --check --ignore-missing SHA256SUMS
-          gh attestation verify hvo-roof-linux-arm64 --repo ${GITHUB_REPOSITORY}
-          gh attestation verify oci://${REGISTRY}/roof-controller:${VERSION} --repo ${GITHUB_REPOSITORY}
+          gh attestation verify hvo-roof-linux-arm64 --repo ${GITHUB_REPOSITORY} \\
+            --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml --source-ref ${GITHUB_REF}
+          gh attestation verify oci://${REGISTRY}/roof-controller:${VERSION} --repo ${GITHUB_REPOSITORY} \\
+            --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml --source-ref ${GITHUB_REF}
           \`\`\`
 
           EOF

@@ -2,10 +2,11 @@ name: Release latest
 
 # Moves the images' latest tag to a final release's images when the release is published (docs/releasing.md): each
 # image named in the release's release.json, once its version tag is checked to still be the digest the release names.
-# A prerelease, or a release that is not the repository's latest (a fix to an older version), leaves latest alone.
+# Only the newest final release moves it (build/release-latest.sh): a prerelease, or a fix to an older version, leaves
+# latest alone.
 #
-# Publishing with the workflow token starts no workflow, so what publishes that way (the end-to-end tests) runs this one
-# itself; a manual run does the same for a tag.
+# Publishing with the workflow token starts no workflow, so a workflow that publishes that way must run this one itself
+# (workflow_call; the end-to-end tests will, #74). A manual run does the same for a tag.
 on:
   release:
     types: [ published ]
@@ -39,7 +40,6 @@ jobs:
       packages: write
     env:
       TAG: ${{ inputs.tag || github.event.release.tag_name }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,30 +48,9 @@ jobs:
 
       - name: The release
         id: release
-        run: |
-          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::'${TAG}' is not a release tag."
-            exit 1
-          fi
-          release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}") || {
-            echo "::error::No published release for ${TAG}."
-            exit 1
-          }
-          latest=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
-          if [ "$(jq -r .prerelease <<<"${release}")" = true ]; then
-            echo "${TAG} is a prerelease: latest stays where it is." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "move=false" >> "$GITHUB_OUTPUT"
-          elif [ "${latest}" != "${TAG}" ]; then
-            echo "${TAG} is not the latest release (${latest} is): latest stays where it is." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "move=false" >> "$GITHUB_OUTPUT"
-          else
-            gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern release.json --dir "${RUNNER_TEMP}"
-            jq -e --arg tag "${TAG}" '.tag == $tag and .prerelease == false' "${RUNNER_TEMP}/release.json" > /dev/null || {
-              echo "::error::${TAG}'s release.json is for $(jq -r .tag "${RUNNER_TEMP}/release.json")."
-              exit 1
-            }
-            echo "move=true" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: build/release-latest.sh "${GITHUB_REPOSITORY}" "${TAG}" "${RUNNER_TEMP}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         if: steps.release.outputs.move == 'true'
