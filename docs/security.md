@@ -153,14 +153,17 @@ The app reads one file per setting from `/run/secrets` (`AddKeyPerFile`). The fi
 in place of `:`. The deploy script and `docker-compose.yaml` bind-mount `/etc/hvo-roof/secrets` there read-only.
 
 ```bash
-sudo install -d -m 700 /etc/hvo-roof/secrets
-cd /etc/hvo-roof/secrets
-printf '%s' 'observatory-operator' | sudo tee RoofControllerSecurity__ApiKeys__0__Name >/dev/null
-printf '%s' 'RoofOperator' | sudo tee RoofControllerSecurity__ApiKeys__0__Role >/dev/null
-printf '%s' "$KEY"         | sudo tee RoofControllerSecurity__ApiKeys__0__Key  >/dev/null
+D=/etc/hvo-roof/secrets
+sudo install -d -m 700 "$D"
+printf '%s' 'observatory-operator' | sudo tee "$D/RoofControllerSecurity__ApiKeys__0__Name" >/dev/null
+printf '%s' 'RoofOperator'         | sudo tee "$D/RoofControllerSecurity__ApiKeys__0__Role" >/dev/null
+printf '%s' "$KEY"                 | sudo tee "$D/RoofControllerSecurity__ApiKeys__0__Key"  >/dev/null
 # ...repeat with index 1, 2, ... for a viewer key, an admin key, etc.
-sudo chmod 600 /etc/hvo-roof/secrets/*
+sudo find "$D" -type f -exec chmod 600 {} +
 ```
+
+The directory is root's alone, so every command names it in full through `sudo`: a `cd` into it, or a `*` in it,
+would run as you and fail.
 
 The controller runs as root in the container, so keep the directory `root:root`, mode `0700`, and the files `0600`, as
 above. Never give them to UID 1654: that is the image's `app` user, which runs the web UI, and the web UI must not read

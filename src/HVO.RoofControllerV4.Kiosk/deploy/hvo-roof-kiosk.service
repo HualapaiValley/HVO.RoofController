@@ -1,0 +1,41 @@
+# The roof controller's touchscreen kiosk (docs/kiosk.md). Install as /etc/systemd/system/hvo-roof-kiosk.service.
+# It draws on the display through DRM and reads the touchscreen through libinput: no X11 or Wayland, and nothing else
+# may hold the display. It shows "Connecting to the controller…" until the controller answers, and offers Stop meanwhile.
+[Unit]
+Description=HVO roof controller touchscreen kiosk
+Documentation=https://github.com/HualapaiValley/HVO.RoofController/blob/main/docs/kiosk.md
+Wants=network-online.target
+After=network-online.target docker.service systemd-udev-settle.service
+
+[Service]
+Type=simple
+User=hvo-kiosk
+Group=hvo-kiosk
+# video: /dev/dri (and the backlight, with the udev rule); input: /dev/input; render: the GPU's render node.
+SupplementaryGroups=video input render
+WorkingDirectory=/opt/hvo-roof-kiosk
+ExecStart=/opt/hvo-roof-kiosk/hvo-roof-kiosk
+# Always back after an exit or a crash, except for settings it cannot start with (exit 78): fix them, then
+# `sudo systemctl restart hvo-roof-kiosk`.
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=78
+# SIGTERM: the kiosk locks (ends the PIN session at the controller) before it exits.
+TimeoutStopSec=30
+# The single-file program unpacks its native libraries here; fontconfig keeps its cache here too.
+CacheDirectory=hvo-roof-kiosk
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/cache/hvo-roof-kiosk
+Environment=XDG_CACHE_HOME=/var/cache/hvo-roof-kiosk
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

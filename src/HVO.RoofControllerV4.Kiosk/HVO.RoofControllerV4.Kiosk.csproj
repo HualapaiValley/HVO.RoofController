@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>hvo-roof-kiosk</AssemblyName>
+    <RootNamespace>HVO.RoofControllerV4.Kiosk</RootNamespace>
+    <Description>The roof controller's touchscreen kiosk: the roof, Stop and a PIN-locked operator and admin view, full screen on the Pi's display.</Description>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RuntimeIdentifiers>linux-arm64;linux-x64</RuntimeIdentifiers>
+    <!-- Avalonia's build statistics (Avalonia.BuildServices) are not sent: nothing is reported from a build of this repository. -->
+    <UsedAvaloniaProducts />
+  </PropertyGroup>
+
+  <!-- dotnet publish -r linux-arm64 (the Pi) or -r linux-x64 (development) gives one self-contained file. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.LinuxFramebuffer" />
+    <PackageReference Include="Avalonia.Skia" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <ProjectReference Include="../HVO.RoofControllerV4.Screens/HVO.RoofControllerV4.Screens.csproj" />
+    <InternalsVisibleTo Include="HVO.RoofControllerV4.RPi.Tests" />
+  </ItemGroup>
+
+</Project>

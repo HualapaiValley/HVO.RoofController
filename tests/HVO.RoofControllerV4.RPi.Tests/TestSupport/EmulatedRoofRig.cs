@@ -19,6 +19,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 
@@ -353,10 +354,27 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 
 /// <summary>
 /// The production host with the settings given and the test API keys. Nothing is replaced; without
-/// <paramref name="consoleLog"/> the host's console log provider is removed.
+/// <paramref name="consoleLog"/> the host's console log provider is removed. Disposing it also disposes the rate
+/// limiters its pipeline made (<see cref="PipelineRateLimiters"/>), so a stopped host leaves the heap.
 /// </summary>
 internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, string environment, RecordingLoggerProvider logs, bool consoleLog = true) : WebApplicationFactory<Program>
 {
+    private IHost? _host;
+
+    public override async ValueTask DisposeAsync()
+    {
+        // Found while the host is still whole; disposed once it has stopped serving.
+        var limiters = _host is null ? [] : PipelineRateLimiters.Find(_host.Services.GetRequiredService<IServer>());
+        _host = null;
+        await base.DisposeAsync();
+        foreach (var limiter in limiters)
+        {
+            await limiter.DisposeAsync();
+        }
+    }
+
+    protected override IHost CreateHost(IHostBuilder builder) => _host = base.CreateHost(builder);
+
     public HttpClient CreateApiClient(string? apiKey = null)
     {
         var client = CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = false });

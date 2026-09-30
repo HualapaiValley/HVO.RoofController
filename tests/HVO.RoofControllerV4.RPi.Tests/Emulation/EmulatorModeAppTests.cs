@@ -17,6 +17,7 @@ using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
 using HVO.RoofControllerV4.Simulation.Emulator;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +40,41 @@ public sealed class EmulatorModeAppTests
 {
     private const string RoofApi = "/api/v4.0/RoofControl";
     private static readonly TimeSpan MotionTimeout = TimeSpan.FromSeconds(30);
+
+    [TestMethod]
+    public async Task ARestart_LeavesTheStoppedHostToTheCollector()
+    {
+        // The soaks restart the controller for hours and watch the heap: a stopped host that stayed would read as a leak.
+        await using var rig = await EmulatedRoofRig.StartAsync();
+        PipelineRateLimiters.Find(rig.App.Services.GetRequiredService<IServer>()).Should()
+            .ContainSingle("the rate limiter's timer holds a stopped host, so the rig must find it to dispose it");
+
+        var stopped = new List<WeakReference>();
+        for (var i = 0; i < 3; i++)
+        {
+            stopped.Add(new WeakReference(rig.App));
+            await rig.RestartControllerAsync(crash: false);
+        }
+
+        // The first host a process starts can stay: threads the runtime starts once and keeps (on that host's behalf)
+        // hold its execution context. Every later host must go, the last within moments (its last work finishing).
+        var later = stopped.Skip(1).ToList();
+        var clock = Stopwatch.StartNew();
+        while (true)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            if (later.All(host => !host.IsAlive) || clock.Elapsed > TimeSpan.FromSeconds(10))
+            {
+                break;
+            }
+
+            await Task.Delay(200);
+        }
+
+        later.Should().OnlyContain(host => !host.IsAlive, "nothing outside a stopped host may keep it");
+    }
 
     [TestMethod]
     public async Task TheRoof_OpensAndCloses_ThroughTheApi_AgainstTheEmulator()
