@@ -44,21 +44,46 @@ public sealed class KioskAvalonia
     }
 
     /// <summary>Runs <paramref name="action"/> on Avalonia's thread, after what is waiting there (the shell's updates).</summary>
-    public static Task OnUiAsync(Action action) => Session.Dispatch(
+    public static Task OnUiAsync(Action action) => OffUiAsync(Session.Dispatch(
         () =>
         {
             Dispatcher.UIThread.RunJobs();
             action();
+            return true;
         },
-        CancellationToken.None);
+        CancellationToken.None));
 
-    public static Task<T> OnUiAsync<T>(Func<T> read) => Session.Dispatch(
+    public static Task<T> OnUiAsync<T>(Func<T> read) => OffUiAsync(Session.Dispatch(
         () =>
         {
             Dispatcher.UIThread.RunJobs();
             return read();
         },
-        CancellationToken.None);
+        CancellationToken.None));
+
+    /// <summary>
+    /// Runs Avalonia's thread for <paramref name="time"/>, as a running app does: its timers fire. Between the tests'
+    /// dispatches the thread only waits for the next one.
+    /// </summary>
+    public static Task RunForAsync(TimeSpan time) => OffUiAsync(Session.Dispatch(
+        async () =>
+        {
+            await Task.Delay(time);
+            return true;
+        },
+        CancellationToken.None));
+
+    /// <summary>
+    /// The result of a dispatch, with the test going on on the thread pool. A dispatch completes on Avalonia's thread,
+    /// where an await would go on: the test would hold that thread, and after the last test MSTest would stop the
+    /// session (<see cref="StopAvalonia"/>) on it, waiting for it to finish.
+    /// </summary>
+    private static async Task<T> OffUiAsync<T>(Task<T> dispatch)
+    {
+        var result = await dispatch.ConfigureAwait(false);
+        await Task.Yield();
+        return result;
+    }
 
     /// <summary>Waits until <paramref name="condition"/>, read on Avalonia's thread, holds, for up to <paramref name="timeout"/> (15 s).</summary>
     public static async Task UntilAsync(Func<bool> condition, string what, TimeSpan? timeout = null)

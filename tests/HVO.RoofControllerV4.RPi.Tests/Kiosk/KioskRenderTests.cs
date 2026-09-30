@@ -51,7 +51,7 @@ public sealed class KioskRenderTests
             screen.Shell.RoofPage.Close.IsEffectivelyVisible.Should().BeFalse();
             screen.Visible("nav-settings").Should().BeFalse();
             screen.Text("nav-lock").Should().Be("Unlock");
-            screen.Text("hint").Should().StartWith(KioskRoofPage.LockedHint);
+            screen.Text("hint").Should().StartWith(KioskWording.Kiosk.SignedOutHint);
         });
     }
 
@@ -130,7 +130,7 @@ public sealed class KioskRenderTests
             pieces.Select(piece => piece.Text).Should().Equal(name, $" ({KioskText.DescribeRole(RoofControllerApiContract.OperatorRole)})");
             pieces[0].TextLayout.TextLines.Should().Contain(line => line.HasCollapsed, "the name ends in an ellipsis");
             pieces[1].TextLayout.TextLines.Should().NotContain(line => line.HasCollapsed, "the role is shown whole");
-            var unlocked = KioskText.Unlocked(name, RoofControllerApiContract.OperatorRole);
+            var unlocked = KioskWording.Kiosk.SignedIn(name, RoofControllerApiContract.OperatorRole);
             screen.Window.GetVisualDescendants().OfType<TextBlock>()
                 .Where(block => block.IsEffectivelyVisible && block.Text?.EndsWith(unlocked, StringComparison.Ordinal) == true)
                 .Should().ContainSingle("the whole name is in the notice");

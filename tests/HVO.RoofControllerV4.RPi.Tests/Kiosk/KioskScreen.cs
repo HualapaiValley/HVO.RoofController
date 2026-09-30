@@ -106,10 +106,33 @@ internal sealed class KioskScreen : IAsyncDisposable
     /// <summary>A touch on the middle of <paramref name="target"/>, as the touchscreen sends it.</summary>
     public Task TouchAsync(Control target) => OnUiAsync(() =>
     {
-        var centre = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), Window)
-            ?? throw new InvalidOperationException($"{target.Name} is not in the window.");
+        var centre = Centre(target);
         var finger = Window.TouchBegin(centre, RawInputModifiers.None);
         Window.TouchEnd(finger, centre, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+    });
+
+    /// <summary>A click on the middle of <paramref name="target"/>, as the Mac app's mouse or trackpad sends it.</summary>
+    public Task ClickAsync(Control target) => OnUiAsync(() =>
+    {
+        var centre = Centre(target);
+        Window.MouseDown(centre, MouseButton.Left, RawInputModifiers.None);
+        Window.MouseUp(centre, MouseButton.Left, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+    });
+
+    /// <summary>Types <paramref name="text"/> on the keyboard, into what has the keyboard.</summary>
+    public Task TypeAsync(string text) => OnUiAsync(() =>
+    {
+        Window.KeyTextInput(text);
+        Dispatcher.UIThread.RunJobs();
+    });
+
+    /// <summary>Presses and lets go of <paramref name="key"/>, on what has the keyboard.</summary>
+    public Task PressAsync(PhysicalKey key, RawInputModifiers modifiers = RawInputModifiers.None) => OnUiAsync(() =>
+    {
+        Window.KeyPressQwerty(key, modifiers);
+        Window.KeyReleaseQwerty(key, modifiers);
         Dispatcher.UIThread.RunJobs();
     });
 
@@ -158,6 +181,10 @@ internal sealed class KioskScreen : IAsyncDisposable
         .ToList();
 
     public ValueTask DisposeAsync() => new(OnUiAsync(Window.Close));
+
+    private Point Centre(Control target)
+        => target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), Window)
+            ?? throw new InvalidOperationException($"{target.Name} is not in the window.");
 
     /// <summary>The part of the window that shows <paramref name="visual"/>: what every clipping ancestor holds.</summary>
     private Rect Shown(Visual visual)

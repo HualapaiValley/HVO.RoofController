@@ -6,7 +6,8 @@
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 
 Roof Controller V4 for the HVO observatory: a Raspberry Pi controller with an
-authenticated HTTP API, and its clients: a web UI, a touchscreen kiosk, a command line and a terminal interface.
+authenticated HTTP API, and its clients: a web UI, a touchscreen kiosk, a Mac app, a command line and a terminal
+interface.
 
 ## Features
 
@@ -39,6 +40,10 @@ authenticated HTTP API, and its clients: a web UI, a touchscreen kiosk, a comman
   roof, drawn through DRM with no desktop: anyone can watch the roof and press Stop, and a person
   unlocks it with their name and PIN to open or close the roof or change settings
   ([docs/kiosk.md](docs/kiosk.md))
+- **Mac app** — `HVO Roof.app`, the kiosk's screens in a window on a Mac with Apple silicon:
+  the roof and Stop with the Mac's own device key, and a person signs in with their name and
+  password to open or close the roof or change settings. Built and signed on Linux without Xcode,
+  and run on a Mac in CI ([docs/mac.md](docs/mac.md))
 - **Docker Deployment** — containerized deployment to Raspberry Pi (linux-arm64) through a
   fail-closed deployment script ([docs/deployment.md](docs/deployment.md))
 
@@ -110,8 +115,9 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 | `HVO.RoofControllerV4.Client` | Client library for the REST API and the status hub, shared by every UI client ([its README](src/HVO.RoofControllerV4.Client/README.md)) |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the command line and terminal interface, over the client library ([docs/cli.md](docs/cli.md)) |
 | `HVO.RoofControllerV4.Web` | The web UI: Blazor Server, over the client library ([docs/web.md](docs/web.md)) |
-| `HVO.RoofControllerV4.Screens` | The kiosk's screens and view models: Avalonia controls in HVO Dark, over the client library |
+| `HVO.RoofControllerV4.Screens` | The screens and view models of the kiosk and the Mac app: Avalonia controls in HVO Dark, over the client library |
 | `HVO.RoofControllerV4.Kiosk` | `hvo-roof-kiosk`: the touchscreen kiosk, drawing the screens through DRM ([docs/kiosk.md](docs/kiosk.md)) |
+| `HVO.RoofControllerV4.Mac` | `HVO Roof.app`: the Mac app, the screens in a window, and its bundle scripts ([docs/mac.md](docs/mac.md)) |
 | `HVO.RoofControllerV4.Simulation` | Emulated roof plant: SMVector drive, ME-8108 limit switches, SM-I-010 HAT and the wiring |
 | `HVO.RoofControllerV4.Emulator` | HAT emulator: serves the emulated plant's HAT registers over TCP, with a fault-injection API ([docs/emulator.md](docs/emulator.md)) |
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
@@ -190,6 +196,7 @@ with the roof mechanism isolated.
 | [Security](docs/security.md) | API keys, roles, people and sessions, remote settings and restart, HTTPS and the web UI's sign-in |
 | [Web UI](docs/web.md) | The browser interface: signing in, the pages, Stop, its settings and screenshots |
 | [Kiosk](docs/kiosk.md) | The touchscreen at the roof: the screens, unlocking with a PIN, Stop, installing it on the Pi, its settings and screenshots |
+| [Mac app](docs/mac.md) | The kiosk's screens in a window on a Mac: signing in with a password, Stop, installing it and its device key, its settings, building and signing it on Linux, and screenshots |
 | [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
 | [Command line](docs/cli.md) | `hvo-roof`: install, setup and credentials, the commands, exit codes and the terminal interface |
 | [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |

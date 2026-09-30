@@ -1,5 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using HVO.RoofControllerV4.Client;
@@ -9,8 +11,8 @@ namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
 /// The kiosk's settings page: the groups, a group's settings, one setting's details, and a touch editor for it (a keypad
-/// for numbers and durations, a keyboard for text, a button per value for the rest). Rebuilt when the panel changes,
-/// which only a touch here or its answer does.
+/// for numbers and durations, a keyboard for text, a button per value for the rest; in the Mac app, a text box for
+/// numbers, durations and text). Rebuilt when the panel changes, which only a touch here or its answer does.
 /// </summary>
 public sealed class KioskSettingsPage : UserControl
 {
@@ -124,7 +126,7 @@ public sealed class KioskSettingsPage : UserControl
         panel.Children.Add(KioskTheme.Label(group.Description, _metrics.Font, KioskTheme.Muted));
         if (group.Secrets.Count > 0)
         {
-            panel.Children.Add(KioskTheme.Label(KioskSettingsPanel.SecretsElsewhere, _metrics.Font, KioskTheme.MutedWeak));
+            panel.Children.Add(KioskTheme.Label(_panel.SecretsElsewhere, _metrics.Font, KioskTheme.MutedWeak));
         }
 
         panel.Children.Add(Back(() => _panel.SelectGroup(null)));
@@ -159,7 +161,7 @@ public sealed class KioskSettingsPage : UserControl
         }
         else if (field.Setting.Secret)
         {
-            panel.Children.Add(KioskTheme.Label(KioskSettingsPanel.SecretsElsewhere, _metrics.Font, KioskTheme.MutedWeak));
+            panel.Children.Add(KioskTheme.Label(_panel.SecretsElsewhere, _metrics.Font, KioskTheme.MutedWeak));
         }
 
         actions.Add(Back(() => _panel.SelectField(null)));
@@ -172,10 +174,12 @@ public sealed class KioskSettingsPage : UserControl
         var panel = new StackPanel { Name = "editor", Spacing = _metrics.Gap };
         // The default is on the setting's page, a press before the editor; here the caption is kept to one short line.
         var label = $"Change {field.Label}";
+        Border? errorBanner = null;
         if (_panel.EditError is { } error)
         {
             // Above the editor, so it is seen without scrolling past the keyboard.
-            panel.Children.Add(KioskTheme.Banner(error, KioskNoticeLevel.Danger, _metrics, "editor-error"));
+            errorBanner = KioskTheme.Banner(error, KioskNoticeLevel.Danger, _metrics, "editor-error");
+            panel.Children.Add(errorBanner);
         }
 
         if (_panel.EditorKind == KioskEditorKind.Choices)
@@ -197,6 +201,11 @@ public sealed class KioskSettingsPage : UserControl
 
             choices.Children.Add(KioskTheme.TouchButton("Cancel", "editor-cancel", _metrics, _panel.CancelEdit));
             panel.Children.Add(choices);
+        }
+        else if (_console.Wording.KeyboardTyping)
+        {
+            panel.Children.Insert(0, KioskTheme.Label(label, _metrics.Font, KioskTheme.Muted));
+            panel.Children.Add(TextEditor(field, errorBanner));
         }
         else
         {
@@ -251,6 +260,59 @@ public sealed class KioskSettingsPage : UserControl
         }
 
         return panel;
+    }
+
+    /// <summary>
+    /// The Mac app's editor: the value in a text box, which has the keyboard. Return saves and Escape cancels. The box keeps
+    /// what is typed; the panel is told without a rebuild, which would take the box's place in the typing.
+    /// </summary>
+    private Grid TextEditor(RoofSettingsFormField field, Border? errorBanner)
+    {
+        var box = new TextBox
+        {
+            Name = "editor-text",
+            Text = _panel.EditText,
+            PlaceholderText = field.Setting.Nullable ? KioskSettingsPanel.NoValue : null,
+            FontSize = _metrics.Large,
+            MinHeight = _metrics.Touch,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            AcceptsReturn = false,
+            TextWrapping = TextWrapping.NoWrap
+        };
+        box.CaretIndex = box.Text?.Length ?? 0;
+        // TextChanging, not TextChanged: it is raised as the text changes, so Return sends what the box shows, and the
+        // text set above (before this handler) is not taken for typing that hides the refusal.
+        box.TextChanging += (_, _) =>
+        {
+            _panel.SetText(box.Text);
+            // The refusal was of the value before this change.
+            errorBanner?.IsVisible = false;
+        };
+        box.AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                _ = _panel.ReviewAsync();
+            }
+            else if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                _panel.CancelEdit();
+            }
+        }, RoutingStrategies.Tunnel);
+        box.Loaded += (_, _) => box.Focus();
+
+        var save = KioskTheme.TouchButton("Save", "editor-save", _metrics, () => _ = _panel.ReviewAsync());
+        KioskTheme.Colour(save, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
+        var cancel = KioskTheme.TouchButton("Cancel", "editor-cancel", _metrics, _panel.CancelEdit);
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = _metrics.Gap };
+        row.Children.Add(box);
+        Grid.SetColumn(save, 1);
+        row.Children.Add(save);
+        Grid.SetColumn(cancel, 2);
+        row.Children.Add(cancel);
+        return row;
     }
 
     /// <summary>Four rows, so the keypad fits under the value on the smallest screen; a duration's units are a fifth column.</summary>

@@ -10,7 +10,9 @@ namespace HVO.RoofControllerV4.Screens;
 /// The roof, for a kiosk at the roof: its status feed (the device key's), Stop, and, once a person unlocks it with their
 /// PIN, Open, Close and Clear fault, with the rules and words every client shares (<see cref="RoofCommandRules"/>,
 /// <see cref="RoofStatusText"/>, <see cref="RoofStopText"/>). It locks itself after <see cref="KioskConsoleOptions.IdleLock"/>
-/// without a touch, and blanks the screen after the controller's kiosk screen timeout.
+/// without a touch, and blanks the screen after the controller's kiosk screen timeout. The Mac app is the same console,
+/// signed in to with a name and password (<see cref="SignInAsync"/>) and never blanked
+/// (<see cref="KioskConsoleOptions.Wording"/>, <see cref="KioskConsoleOptions.Blanking"/>).
 /// </summary>
 /// <remarks>
 /// <para>Stop is always offered, locked or not, and is sent at once on a connection of its own: it never waits for a
@@ -67,7 +69,7 @@ public sealed class KioskConsole : IAsyncDisposable
     private TimeSpan _screenTimeout;
     private DateTimeOffset _screenTimeoutDue;
     private bool _readingScreenTimeout;
-    private KioskView _view = KioskView.NotStarted;
+    private KioskView _view;
 
     /// <param name="client">The kiosk's client, whose credential is a <see cref="RoofKioskCredential"/>.</param>
     public KioskConsole(RoofControllerClient client, KioskConsoleOptions? options = null, ILogger<KioskConsole>? logger = null)
@@ -86,6 +88,12 @@ public sealed class KioskConsole : IAsyncDisposable
         _screenTimeout = _options.DefaultScreenTimeout;
         _screenTimeoutDue = now;
         _session = _kiosk.PinSession;
+        _view = KioskView.NotStarted with
+        {
+            OpenBlock = _options.Wording.Starting,
+            CloseBlock = _options.Wording.Starting,
+            ClearFaultBlock = _options.Wording.Starting
+        };
         _leaseTimer = _time.CreateTimer(_ => OnLeaseDue(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _tickTimer = _time.CreateTimer(_ => OnTick(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _kiosk.PinSessionChanged += OnPinSessionChanged;
@@ -96,6 +104,9 @@ public sealed class KioskConsole : IAsyncDisposable
 
     /// <summary>The client the kiosk talks to the controller with: the settings and system screens use it too.</summary>
     public RoofControllerClient Client => _client;
+
+    /// <summary>How a person signs in here, and the words for it.</summary>
+    public KioskWording Wording => _options.Wording;
 
     /// <summary>Raised after <see cref="View"/> changed, on any thread.</summary>
     public event Action? Changed;
@@ -131,7 +142,11 @@ public sealed class KioskConsole : IAsyncDisposable
         }
 
         feed.Start();
-        RefreshScreenTimeout();
+        if (_options.Blanking)
+        {
+            RefreshScreenTimeout();
+        }
+
         Publish();
     }
 
@@ -180,60 +195,77 @@ public sealed class KioskConsole : IAsyncDisposable
     /// Unlocks the kiosk with a person's PIN. Returns null when it is unlocked, or why it is not (the controller's
     /// answer: a wrong PIN, a lockout, a controller that cannot be reached).
     /// </summary>
-    public async Task<string?> UnlockAsync(string name, string pin)
+    public Task<string?> UnlockAsync(string name, string pin)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentException.ThrowIfNullOrEmpty(pin);
+        return SignInCoreAsync(name, "Kiosk PIN sign-in", "Kiosk unlocked", closing => _client.Auth.SignInWithPinAsync(name, pin, closing));
+    }
+
+    /// <summary>
+    /// Signs a person in with their name and password (the Mac app). Returns null when they are signed in, or why they
+    /// are not (the controller's answer: a wrong name or password, a lockout, a controller that cannot be reached).
+    /// </summary>
+    public Task<string?> SignInAsync(string name, string password)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(password);
+        return SignInCoreAsync(name, "Sign-in", "Signed in", closing => _client.Auth.SignInOnDeviceAsync(name, password, closing));
+    }
+
+    // What: "Kiosk PIN sign-in", and done: "Kiosk unlocked", for the log.
+    private async Task<string?> SignInCoreAsync(string name, string what, string done, Func<CancellationToken, Task<RoofSessionResponse>> signIn)
+    {
         Task signingOut;
         CancellationToken closing;
         lock (_gate)
         {
             if (_disposed)
             {
-                return "The kiosk is closing.";
+                return _options.Wording.Closing;
             }
 
             if (_session is not null)
             {
-                return "The kiosk is already unlocked.";
+                return _options.Wording.AlreadySignedIn;
             }
 
             signingOut = _signingOut;
             closing = _closing.Token;
         }
 
-        // The previous person's session ends first: signing out ends whichever PIN session the kiosk uses then.
+        // The previous person's session ends first: signing out ends whichever session the kiosk uses then.
         await signingOut.ConfigureAwait(false);
         var sentAt = _time.GetUtcNow();
         try
         {
-            var session = await _client.Auth.SignInWithPinAsync(name, pin, closing).ConfigureAwait(false);
+            var session = await signIn(closing).ConfigureAwait(false);
             lock (_gate)
             {
                 if (ReferenceEquals(_session, session))
                 {
                     _keptAliveAt = sentAt;
-                    AddNoticeLocked(KioskText.Unlocked(session.Name, session.Role), KioskNoticeLevel.Info);
+                    AddNoticeLocked(_options.Wording.SignedIn(session.Name, session.Role), KioskNoticeLevel.Info);
                 }
             }
 
-            _logger.LogInformation("Kiosk unlocked by {Name} ({Role})", session.Name, session.Role);
+            _logger.LogInformation("{Done} by {Name} ({Role})", done, session.Name, session.Role);
             Publish();
             return null;
         }
         catch (OperationCanceledException) when (closing.IsCancellationRequested)
         {
-            return "The kiosk is closing.";
+            return _options.Wording.Closing;
         }
         catch (Exception error)
         {
             if (error is RoofApiException refusal)
             {
-                _logger.LogInformation("Kiosk PIN sign-in for {Name} was refused: {Code}", name, refusal.CodeText ?? refusal.StatusCode.ToString());
+                _logger.LogInformation("{What} for {Name} was refused: {Code}", what, name, refusal.CodeText ?? refusal.StatusCode.ToString());
             }
             else
             {
-                _logger.LogWarning(error, "Kiosk PIN sign-in for {Name} failed", name);
+                _logger.LogWarning(error, "{What} for {Name} failed", what, name);
             }
 
             return RoofText.DescribeFailure(error);
@@ -244,7 +276,7 @@ public sealed class KioskConsole : IAsyncDisposable
     /// Locks the kiosk at once and ends the PIN session at the controller. The returned task ends when the controller
     /// answered, or after <see cref="KioskConsoleOptions.SignOutTimeout"/>; it never throws.
     /// </summary>
-    public Task LockAsync() => LockCore(KioskText.LockedNotice, KioskNoticeLevel.Info);
+    public Task LockAsync() => LockCore(_options.Wording.SignedOutNotice, KioskNoticeLevel.Info);
 
     public Task OpenAsync() => MoveAsync(RoofMotionDirection.Opening);
 
@@ -311,6 +343,11 @@ public sealed class KioskConsole : IAsyncDisposable
     /// <summary>Reads the kiosk screen timeout from the controller's settings now, unless a read is on its way.</summary>
     public void RefreshScreenTimeout()
     {
+        if (!_options.Blanking)
+        {
+            return;
+        }
+
         CancellationToken closing;
         lock (_gate)
         {
@@ -447,8 +484,8 @@ public sealed class KioskConsole : IAsyncDisposable
                     AddNoticeLocked(
                         !status.IsMoving ? $"{verb} accepted. Roof: {RoofStatusText.DescribeRoof(status)}."
                             : lockedMeanwhile && status.LeaseSecondsRemaining is not null
-                                ? $"{verb} accepted after the kiosk was locked, so it does not renew the operator lease. If the roof is still moving, it stops when the lease runs out."
-                            : _holdsLease ? $"{verb} accepted. The kiosk renews the operator lease while the roof moves; if it is locked or cannot reach the controller, the roof stops when the lease runs out. {RoofStopText.ButtonLabel} stops it now."
+                                ? $"{verb} {_options.Wording.AcceptedAfterSignOut}"
+                            : _holdsLease ? $"{verb} accepted. {_options.Wording.RenewsLease} {RoofStopText.ButtonLabel} stops it now."
                             : $"{verb} accepted. {RoofStopText.ButtonLabel} stops it.",
                         lockedMeanwhile && status.IsMoving ? KioskNoticeLevel.Warning : KioskNoticeLevel.Info);
                 }
@@ -568,7 +605,7 @@ public sealed class KioskConsole : IAsyncDisposable
     }
 
     // Why nothing is offered: the console has not started, or the kiosk is locked.
-    private string? NotOfferedLocked() => !_started ? KioskText.Starting : _session is null ? KioskText.Locked : null;
+    private string? NotOfferedLocked() => !_started ? _options.Wording.Starting : _session is null ? _options.Wording.SignedOutBlock : null;
 
     private RoofCommandState CommandStateLocked()
         => new(_status, IsStaleLocked(), _session is { } session && IsOperator(session.Role), _busy is not null);
@@ -742,7 +779,7 @@ public sealed class KioskConsole : IAsyncDisposable
             if (_holdsLease)
             {
                 _logger.LogWarning("Kiosk locked while it held the operator lease for {Name}; renewal stopped so the lease can expire", session.Name);
-                AddNoticeLocked(KioskText.LeaseDroppedOnLock, KioskNoticeLevel.Warning);
+                AddNoticeLocked(_options.Wording.LeaseDroppedOnSignOut, KioskNoticeLevel.Warning);
             }
 
             DropLeaseLocked();
@@ -803,7 +840,7 @@ public sealed class KioskConsole : IAsyncDisposable
                 // A request was refused for the PIN session: it ended at the controller (it was idle too long, or the
                 // person's PIN or role changed). The kiosk locks; it did not end the session itself.
                 _logger.LogWarning("The controller ended the PIN session of {Name}; the kiosk is locked", _session.Name);
-                AddNoticeLocked(_holdsLease ? KioskText.SessionEndedWithLease : KioskText.SessionEnded, KioskNoticeLevel.Warning);
+                AddNoticeLocked(_holdsLease ? _options.Wording.SessionEndedWithLease : _options.Wording.SessionEnded, KioskNoticeLevel.Warning);
                 DropLeaseLocked();
                 _session = null;
                 _lastActivity = now;
@@ -886,21 +923,21 @@ public sealed class KioskConsole : IAsyncDisposable
             {
                 if (now - _lastActivity >= _options.IdleLock)
                 {
-                    lockNotice = KioskText.IdleLocked(_options.IdleLock);
+                    lockNotice = _options.Wording.IdleSignedOutAfter(_options.IdleLock);
                 }
                 else if (GetSessionIdleTimeout(session) is { } idle && now - _keptAliveAt >= idle)
                 {
-                    lockNotice = KioskText.SessionIdleLocked(idle);
+                    lockNotice = _options.Wording.SessionIdleSignedOut(idle);
                 }
             }
 
-            if (!_blank && _screenTimeout > TimeSpan.Zero && now - _lastTouch >= _screenTimeout && !KeepAwakeLocked())
+            if (_options.Blanking && !_blank && _screenTimeout > TimeSpan.Zero && now - _lastTouch >= _screenTimeout && !KeepAwakeLocked())
             {
                 _blank = true;
                 changed = true;
             }
 
-            readTimeout = !_readingScreenTimeout && now >= _screenTimeoutDue;
+            readTimeout = _options.Blanking && !_readingScreenTimeout && now >= _screenTimeoutDue;
         }
 
         if (lockNotice is not null)
@@ -1052,7 +1089,7 @@ public sealed class KioskConsole : IAsyncDisposable
         string? banner = null;
         if (feed is not null)
         {
-            banner = refused ? KioskText.DescribeKeyRefused(staleSince)
+            banner = refused ? _options.Wording.DescribeKeyRefused(staleSince)
                 : unreachable ? KioskText.DescribeUnreachable(staleSince)
                 : _status is null ? KioskText.NoStatusYet
                 : feed.StaleSince is { } since ? $"STALE: no status since {RoofStatusText.Time(since)}. Showing the last known state; Stop still works."
@@ -1095,7 +1132,7 @@ public sealed class KioskConsole : IAsyncDisposable
             StopOutcome = _stopOutcome,
             StopInFlight = _stopsInFlight > 0,
             IsBlank = _blank,
-            ScreenTimeout = _screenTimeout,
+            ScreenTimeout = _options.Blanking ? _screenTimeout : TimeSpan.Zero,
             IdleLock = _options.IdleLock,
             Notices = _notices.ToArray()
         };

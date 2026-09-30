@@ -10,6 +10,15 @@ public sealed record KioskMetrics
     public const double MinimumTouchMillimetres = 12;
 
     /// <summary>
+    /// The Mac app's pixels in a millimetre. Its window is used with a mouse or trackpad at a desk, and 4 (about 100 an
+    /// inch) gives it 48-pixel buttons and 16-pixel text, which read well at arm's length.
+    /// </summary>
+    public const double DeskPixelsPerMillimetre = 4;
+
+    /// <summary>The Mac app's sizes (<see cref="DeskPixelsPerMillimetre"/>).</summary>
+    public static KioskMetrics Desk { get; } = new(DeskPixelsPerMillimetre);
+
+    /// <summary>
     /// The sizes for a screen with <paramref name="pixelsPerMillimetre"/> device-independent pixels in a millimetre (the
     /// Raspberry Pi Touch Display 2 about 8.2; the first 7-inch display about 5.2).
     /// </summary>
@@ -27,8 +36,11 @@ public sealed record KioskMetrics
         Large = Math.Round(Font * 1.5);
         Huge = Math.Round(Font * 2.4);
         Gap = Math.Max(4, Math.Round(Touch / 16));
-        StopWidth = Math.Round(Touch * 2.6);
-        NavWidth = Math.Round(Touch * 1.35);
+        // Wide enough for "Stop" whole in the Huge text: on the kiosks the touch target sets it, and on a desk the text.
+        StopWidth = Math.Round(Math.Max(Touch * 2.6, Huge * 4));
+        // Wide enough for "Settings" whole in the body text (about four ems, a button's padding and its edges): on the
+        // kiosks the touch target sets it, and on a desk the text.
+        NavWidth = Math.Round(Math.Max(Touch * 1.35, (Font * 4) + (Gap * 4) + 4));
     }
 
     public double PixelsPerMillimetre { get; }

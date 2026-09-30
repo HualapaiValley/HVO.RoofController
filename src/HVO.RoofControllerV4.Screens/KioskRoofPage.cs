@@ -14,10 +14,9 @@ namespace HVO.RoofControllerV4.Screens;
 /// </summary>
 public sealed class KioskRoofPage : UserControl
 {
-    public const string LockedHint = "Locked: unlock the kiosk with a PIN to open or close the roof.";
-
     public const string RoleHint = "Open, Close and Clear fault need the Operator role.";
 
+    private readonly KioskWording _wording;
     private readonly KioskMetrics _metrics;
     private readonly TextBlock _positionLabel;
     private readonly TextBlock _position;
@@ -37,6 +36,7 @@ public sealed class KioskRoofPage : UserControl
     {
         ArgumentNullException.ThrowIfNull(console);
         ArgumentNullException.ThrowIfNull(metrics);
+        _wording = console.Wording;
         _metrics = metrics;
 
         _positionLabel = KioskTheme.Label("Position", metrics.Small, KioskTheme.Muted);
@@ -143,7 +143,7 @@ public sealed class KioskRoofPage : UserControl
         Close.IsEnabled = view.CloseBlock is null;
         ClearFault.IsEnabled = view.ClearFaultBlock is null;
 
-        _hint.Text = !view.IsUnlocked ? $"{LockedHint} {RoofStopText.AlwaysAvailable}"
+        _hint.Text = !view.IsUnlocked ? $"{_wording.SignedOutHint} {RoofStopText.AlwaysAvailable}"
             : !view.IsOperator ? $"{RoleHint} {RoofStopText.AlwaysAvailable}"
             : string.Empty;
         _hint.IsVisible = _hint.Text.Length > 0;

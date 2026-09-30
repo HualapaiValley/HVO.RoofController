@@ -50,6 +50,27 @@ public sealed class RoofAuthApi
         return session;
     }
 
+    /// <summary>
+    /// Signs a person in with their name and password on a device that has its own key (a <see cref="RoofKioskCredential"/>:
+    /// the Mac app). The request carries no credential, as <see cref="SignInAsync"/>'s does not; on success the device
+    /// sends the new session with its key, as it sends a PIN session, and drops it when the controller refuses it.
+    /// </summary>
+    public async Task<RoofSessionResponse> SignInOnDeviceAsync(string name, string password, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(password);
+        var device = _owner.Credential as RoofKioskCredential
+            ?? throw new InvalidOperationException("Signing in on a device needs a device credential (RoofKioskCredential).");
+        var session = await _http.SendAsync<RoofSessionResponse>(
+            HttpMethod.Post,
+            RoofApiRoutes.Session,
+            new RoofSignInRequest { Name = name, Password = password },
+            cancellationToken,
+            use: null).ConfigureAwait(false);
+        device.UsePinSession(session);
+        return session;
+    }
+
     /// <summary>The people who may unlock this kiosk with a PIN. Device key only.</summary>
     public Task<RoofPinUserResponse[]> GetPinUsersAsync(CancellationToken cancellationToken = default)
     {
