@@ -1,5 +1,6 @@
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
+using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
@@ -17,21 +18,29 @@ public sealed class InstallerSession
     /// <summary>The file the wizard offers to save the answers to, in the folder the installer was started in.</summary>
     public const string AnswersFileName = "hvo-roof-answers.json";
 
-    private InstallerSession(InstallerMachine machine, InstallLog log, string version, MachineSurvey survey, TimeProvider time)
+    private InstallerSession(InstallerMachine machine, InstallLog log, string version, MachineSurvey survey, TimeProvider time, ReleaseSource release)
     {
         Machine = machine;
         Log = log;
         Version = version;
         Survey = survey;
         Time = time;
+        Release = release;
         Answers = RecordedAnswers(survey, includeSystem: survey.IsRoot) ?? new InstallAnswers();
     }
 
     /// <summary>
     /// Looks at the machine (every command logged) and starts a session there, with the answers of what was installed
-    /// before (<see cref="RecordedAnswers"/>) as the starting point.
+    /// before (<see cref="RecordedAnswers"/>) as the starting point. The release comes from <paramref name="release"/>,
+    /// GitHub unless it says otherwise.
     /// </summary>
-    public static async Task<InstallerSession> StartAsync(InstallerMachine machine, InstallLog log, string version, TimeProvider time, CancellationToken cancellationToken = default)
+    public static async Task<InstallerSession> StartAsync(
+        InstallerMachine machine,
+        InstallLog log,
+        string version,
+        TimeProvider time,
+        ReleaseSource? release = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(log);
@@ -44,7 +53,7 @@ public sealed class InstallerSession
             log.Write(line);
         }
 
-        return new InstallerSession(logged, log, RoofVersion(version), survey, time);
+        return new InstallerSession(logged, log, RoofVersion(version), survey, time, release ?? ReleaseSource.GitHub());
     }
 
     public InstallerMachine Machine { get; }
@@ -57,6 +66,9 @@ public sealed class InstallerSession
     public MachineSurvey Survey { get; }
 
     public TimeProvider Time { get; }
+
+    /// <summary>Where the release's release.json comes from.</summary>
+    public ReleaseSource Release { get; }
 
     /// <summary>The answers so far: the roles and choices.</summary>
     public InstallAnswers Answers { get; set; }
@@ -84,7 +96,8 @@ public sealed class InstallerSession
         Survey = Survey,
         Answers = Answers.Normalised(),
         Version = Version,
-        Time = Time
+        Time = Time,
+        Release = Release
     };
 
     /// <summary>What the answers make and change here: it only looks.</summary>
@@ -102,7 +115,21 @@ public sealed class InstallerSession
         }
 
         Log.Write($"Installing {InstallRoles.Describe(Answers.Roles)}: {PlanText.Summary(plan)}");
-        await plan.ApplyAsync(Context, progress, cancellationToken).ConfigureAwait(false);
+        var context = Context;
+        await plan.ApplyAsync(
+            new InstallContext
+            {
+                Machine = context.Machine,
+                Log = context.Log,
+                Survey = context.Survey,
+                Answers = context.Answers,
+                Version = context.Version,
+                Time = context.Time,
+                Release = context.Release,
+                Progress = progress
+            },
+            progress,
+            cancellationToken).ConfigureAwait(false);
         Log.Write($"Installed {InstallRoles.Describe(Answers.Roles)}.");
     }
 

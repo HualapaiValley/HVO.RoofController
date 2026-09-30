@@ -62,7 +62,10 @@ public sealed class InstallerMachine
         CurrentDirectory = CurrentDirectory,
         IsPortInUse = IsPortInUse,
         NetworkAddresses = NetworkAddresses,
-        ServedCertificateAsync = ServedCertificateAsync
+        ServedCertificateAsync = ServedCertificateAsync,
+        DownloadTextAsync = DownloadTextAsync,
+        ApiHandler = ApiHandler,
+        TemporaryDirectory = TemporaryDirectory
     };
 
     /// <summary>
@@ -79,6 +82,21 @@ public sealed class InstallerMachine
     /// with TLS within a few seconds. Nothing is sent but the handshake.
     /// </summary>
     public Func<int, CancellationToken, Task<X509Certificate2?>> ServedCertificateAsync { get; init; } = PresentedOnLoopbackAsync;
+
+    /// <summary>
+    /// Downloads a small text file over HTTPS (release.json): its text, or an <see cref="HttpRequestException"/> saying
+    /// why not. Redirects are followed; anything over a megabyte is refused.
+    /// </summary>
+    public Func<Uri, CancellationToken, Task<string>> DownloadTextAsync { get; init; } = DownloadAsync;
+
+    /// <summary>
+    /// The innermost handler for the controller's API, or null for the client's own. A test puts a fake controller
+    /// here; the installer never changes how the certificate is checked.
+    /// </summary>
+    public Func<HttpMessageHandler>? ApiHandler { get; init; }
+
+    /// <summary>The folder for the installer's temporary files, as a path on this machine.</summary>
+    public string TemporaryDirectory { get; init; } = Path.GetTempPath();
 
     /// <summary>The platform as release assets name it: linux-arm64, linux-x64 or osx-arm64 (or another the installer refuses).</summary>
     public string RuntimeIdentifier => $"{(Os == InstallerOs.MacOS ? "osx" : "linux")}-{Architecture.ToString().ToLowerInvariant()}";
@@ -129,6 +147,25 @@ public sealed class InstallerMachine
     {
         var onDisk = OnDisk(path);
         return File.Exists(onDisk) || Directory.Exists(onDisk) ? File.GetUnixFileMode(onDisk) : null;
+    }
+
+    /// <summary>The files in the folder (not in the folders within it), as paths on this machine; none when it is not there.</summary>
+    public IReadOnlyList<string> ListFiles(string path)
+    {
+        var onDisk = OnDisk(path);
+        return Directory.Exists(onDisk)
+            ? [.. Directory.EnumerateFiles(onDisk).Select(file => Path.Join(path, Path.GetFileName(file))).Order(StringComparer.Ordinal)]
+            : [];
+    }
+
+    /// <summary>Deletes the folder and everything in it; nothing when it is not there.</summary>
+    public void DeleteDirectory(string path)
+    {
+        var onDisk = OnDisk(path);
+        if (Directory.Exists(onDisk))
+        {
+            Directory.Delete(onDisk, recursive: true);
+        }
     }
 
     public void SetMode(string path, UnixFileMode mode) => File.SetUnixFileMode(OnDisk(path), mode);
@@ -215,6 +252,20 @@ public sealed class InstallerMachine
             HostName = System.Net.Dns.GetHostName(),
             CurrentDirectory = global::System.Environment.CurrentDirectory
         };
+    }
+
+    private static async Task<string> DownloadAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        const int limit = 1024 * 1024;
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30), MaxResponseContentBufferSize = limit };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("hvo-roof-install");
+        using var response = await client.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}.", null, response.StatusCode);
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static bool AnswersOnLoopback(int port)

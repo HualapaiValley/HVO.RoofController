@@ -9,6 +9,7 @@ using System.Text.Json;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
+using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Survey;
@@ -42,6 +43,18 @@ internal sealed record FakeContainer
 
     /// <summary>The host names it answers to (AllowedHosts); null when the deploy script left it unset (any).</summary>
     public string? AllowedHosts { get; init; }
+
+    /// <summary>The digest of the image it runs; null for the one the fake release names.</summary>
+    public string? Digest { get; init; }
+
+    /// <summary>The one address its ports are published on; null for every address.</summary>
+    public string? PublishAddress { get; init; }
+
+    /// <summary>The Docker network it is on; null for Docker's default bridge.</summary>
+    public string? Network { get; init; }
+
+    /// <summary>Its environment's other settings (never a secret): RoofWeb__StopKeyFile, OTEL_EXPORTER_OTLP_ENDPOINT…</summary>
+    public IReadOnlyDictionary<string, string> Settings { get; init; } = new Dictionary<string, string>();
 }
 
 /// <summary>
@@ -53,6 +66,12 @@ internal sealed record FakeContainer
 [UnsupportedOSPlatform("windows")]
 internal sealed class FakeMachine : ICommandRunner, IDisposable
 {
+    /// <summary>The digest of the controller's image in the fake release.</summary>
+    public static readonly string ControllerDigest = "sha256:" + new string('c', 64);
+
+    /// <summary>The digest of the HAT emulator's image in the fake release.</summary>
+    public static readonly string EmulatorDigest = "sha256:" + new string('e', 64);
+
     /// <summary>When the tests' installs happen: certificates' dates, and the screenshots that show them, never change.</summary>
     public static readonly DateTimeOffset Today = new(2026, 10, 1, 9, 0, 0, TimeSpan.Zero);
 
@@ -70,7 +89,9 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         UserName = root ? "root" : userName;
         Home = root ? "/root" : os == InstallerOs.MacOS ? $"/Users/{userName}" : $"/home/{userName}";
         Directory.CreateDirectory(OnDisk(Home));
+        Directory.CreateDirectory(OnDisk(TemporaryDirectory));
         CurrentDirectory = Home;
+        Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = ReleaseJson();
         if (os == InstallerOs.Linux)
         {
             Write("/etc/os-release", "NAME=\"Debian GNU/Linux\"\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n");
@@ -128,6 +149,15 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
 
     public ConcurrentQueue<CommandLine> Ran { get; } = new();
 
+    /// <summary>What the machine can download, by URL: the release's release.json on GitHub, unless a test takes it away.</summary>
+    public Dictionary<string, string> Downloads { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>What the installer downloaded, in order.</summary>
+    public ConcurrentQueue<Uri> Downloaded { get; } = new();
+
+    /// <summary>The machine's folder for temporary files.</summary>
+    public string TemporaryDirectory { get; } = "/tmp";
+
     public ConcurrentQueue<CommandLine> Unexpected { get; } = new();
 
     public InstallerMachine Machine => new()
@@ -144,8 +174,47 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
         CurrentDirectory = CurrentDirectory,
         IsPortInUse = PortsInUse.Contains,
         NetworkAddresses = () => Addresses.ToArray(),
-        ServedCertificateAsync = (port, _) => Task.FromResult(ServedCertificates.TryGetValue(port, out var served) ? X509CertificateLoader.LoadCertificate(served.RawData) : null)
+        ServedCertificateAsync = (port, _) => Task.FromResult(ServedCertificates.TryGetValue(port, out var served) ? X509CertificateLoader.LoadCertificate(served.RawData) : null),
+        DownloadTextAsync = (uri, _) =>
+        {
+            Downloaded.Enqueue(uri);
+            return Downloads.TryGetValue(uri.ToString(), out var text)
+                ? Task.FromResult(text)
+                : Task.FromException<string>(new HttpRequestException("HTTP 404 Not Found.", null, HttpStatusCode.NotFound));
+        },
+        TemporaryDirectory = TemporaryDirectory
     };
+
+    /// <summary>A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests.</summary>
+    public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null)
+    {
+        object Image(string name, string digest) => new
+        {
+            repository = $"ghcr.io/hualapaivalley/{name}",
+            tag = version,
+            digest,
+            reference = $"ghcr.io/hualapaivalley/{name}:{version}@{digest}",
+            platforms = new[] { "linux/amd64", "linux/arm64" }
+        };
+
+        return JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            product = "HVO Roof Controller",
+            version,
+            tag = $"v{version}",
+            prerelease = version.Contains('-', StringComparison.Ordinal),
+            commit = "0123456789abcdef0123456789abcdef01234567",
+            created = "2026-10-01T12:00:00Z",
+            repository = "https://github.com/HualapaiValley/HVO.RoofController",
+            images = new
+            {
+                controller = Image("roof-controller", controllerDigest ?? ControllerDigest),
+                hatEmulator = Image("roof-hat-emulator", emulatorDigest ?? EmulatorDigest)
+            },
+            assets = Array.Empty<object>()
+        });
+    }
 
     public string OnDisk(string path) => Path.Join(Root, path);
 
@@ -402,8 +471,8 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             // As the deploy script publishes them.
             var apiPort = container.ApiPort ?? (container.Https ? ControllerSettings.DefaultHttpsPort : ControllerSettings.DefaultHttpPort);
             environment.Add(container.Https ? "ASPNETCORE_URLS=http://localhost:8080;https://+:8443" : "ASPNETCORE_URLS=http://+:8080");
-            ports[container.Https ? "8443/tcp" : "8080/tcp"] = [new { HostIp = string.Empty, HostPort = apiPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
-            ports["8088/tcp"] = [new { HostIp = string.Empty, HostPort = container.WebPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
+            ports[container.Https ? "8443/tcp" : "8080/tcp"] = [new { HostIp = container.PublishAddress ?? string.Empty, HostPort = apiPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
+            ports["8088/tcp"] = [new { HostIp = container.PublishAddress ?? string.Empty, HostPort = container.WebPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
             environment.Add($"HatEmulator__Enabled={(container.Emulated ? "true" : "false")}");
             if (container.Emulated)
             {
@@ -417,19 +486,23 @@ internal sealed class FakeMachine : ICommandRunner, IDisposable
             environment.Add($"AllowedHosts={allowed}");
         }
 
+        environment.AddRange(container.Settings.Select(setting => $"{setting.Key}={setting.Value}"));
+
         if (container.Secret is { } secret)
         {
             environment.Add($"RoofControllerSecurity__ApiKeys__0__Key={secret}");
         }
 
-        var image = $"ghcr.io/hualapaivalley/{(name == MachineSurveyor.ControllerContainer ? "roof-controller" : "roof-hat-emulator")}@sha256:{new string('a', 64)}";
+        var controllerImage = name == MachineSurveyor.ControllerContainer;
+        var digest = container.Digest ?? (controllerImage ? ControllerDigest : EmulatorDigest);
+        var image = $"ghcr.io/hualapaivalley/{(controllerImage ? "roof-controller" : "roof-hat-emulator")}:{container.Version ?? "4.0.0"}@{digest}";
         return JsonSerializer.Serialize(new[]
         {
             new
             {
                 Name = "/" + name,
                 Config = new { Image = image, Labels = labels, Env = environment },
-                HostConfig = new { PortBindings = ports },
+                HostConfig = new { PortBindings = ports, NetworkMode = container.Network ?? "bridge" },
                 State = new { Status = container.State }
             }
         });

@@ -1,4 +1,5 @@
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Survey;
 
@@ -58,6 +59,16 @@ public sealed class InstallContext
     public required string Version { get; init; }
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    /// <summary>Where the release's release.json comes from: read once a run, the first time a step needs it.</summary>
+    public ReleaseSource Release { get; init; } = ReleaseSource.GitHub();
+
+    /// <summary>Where a long step (a deploy) says how it is getting on, a line at a time; null when nobody is watching.</summary>
+    public Action<string>? Progress { get; init; }
+
+    /// <summary>The release this installer installs: its release.json, read once a run.</summary>
+    public Task<ReleaseManifest> ReleaseAsync(CancellationToken cancellationToken)
+        => Release.GetAsync(Machine, Log, Version, cancellationToken);
 }
 
 /// <summary>

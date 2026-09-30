@@ -1,5 +1,6 @@
 using System.CommandLine;
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -49,6 +50,11 @@ public static class Installer
         {
             Description = "Print every folder, file, container, service and port the install would make or change, and change nothing. Uses --answers, or what is installed."
         };
+        var release = new Option<string?>("--release")
+        {
+            Description = $"Read the release (its {ReleaseManifest.FileName}) from this folder, not from GitHub: for a machine that cannot reach GitHub.",
+            HelpName = "DIR"
+        };
         var version = new Option<bool>("--version")
         {
             Description = "Print the installer's version (the release it installs) and change nothing."
@@ -65,6 +71,7 @@ public static class Installer
 
         root.Options.Add(answers);
         root.Options.Add(plan);
+        root.Options.Add(release);
         root.Options.Add(version);
         root.Subcommands.Add(CertificateCommands.Create(host));
         root.SetAction((parseResult, token) =>
@@ -75,7 +82,8 @@ public static class Installer
                 return Task.FromResult((int)InstallerExitCode.Success);
             }
 
-            return RunAsync(host, parseResult.GetValue(answers), parseResult.GetValue(plan), token);
+            var options = new RunOptions(parseResult.GetValue(answers), parseResult.GetValue(plan), parseResult.GetValue(release));
+            return RunAsync(host, options, token);
         });
 
         var parsed = root.Parse(args);
@@ -101,19 +109,34 @@ public static class Installer
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static Task<int> RunAsync(InstallerHost host, string? answersFile, bool planOnly, CancellationToken cancellationToken)
+    /// <summary>What the command line asks for.</summary>
+    /// <param name="AnswersFile"><c>--answers</c>: install from this file.</param>
+    /// <param name="PlanOnly"><c>--plan</c>: say what an install would do.</param>
+    /// <param name="ReleaseFolder"><c>--release</c>: the folder with the release's release.json, in place of GitHub.</param>
+    internal sealed record RunOptions(string? AnswersFile, bool PlanOnly, string? ReleaseFolder)
+    {
+        public ReleaseSource Release(InstallerHost host)
+            => ReleaseFolder is { } folder ? ReleaseSource.Folder(Path.GetFullPath(folder, host.Machine.CurrentDirectory)) : ReleaseSource.GitHub();
+    }
+
+    private static Task<int> RunAsync(InstallerHost host, RunOptions options, CancellationToken cancellationToken)
         => GuardAsync(
             host,
             () =>
             {
-                if (planOnly)
+                if (options.ReleaseFolder is { } folder && !host.Machine.DirectoryExists(Path.GetFullPath(folder, host.Machine.CurrentDirectory)))
                 {
-                    return PlanAsync(host, answersFile, cancellationToken);
+                    throw new InstallerUsageException($"There is no folder {folder} for --release.");
                 }
 
-                if (answersFile is not null)
+                if (options.PlanOnly)
                 {
-                    return InstallAsync(host, answersFile, cancellationToken);
+                    return PlanAsync(host, options, cancellationToken);
+                }
+
+                if (options.AnswersFile is { } answersFile)
+                {
+                    return InstallAsync(host, answersFile, options, cancellationToken);
                 }
 
                 if (!host.IsInteractive)
@@ -121,7 +144,7 @@ public static class Installer
                     throw new InstallerUsageException($"The wizard needs a terminal. Without one, install from an answers file: {CommandName} --answers FILE.");
                 }
 
-                return WizardAsync(host, cancellationToken);
+                return WizardAsync(host, options, cancellationToken);
             },
             cancellationToken);
 
@@ -151,11 +174,11 @@ public static class Installer
     }
 
     /// <summary><c>--plan</c>: what the answers (or what is installed) would make and change here. Nothing is logged or changed.</summary>
-    private static async Task<int> PlanAsync(InstallerHost host, string? answersFile, CancellationToken cancellationToken)
+    private static async Task<int> PlanAsync(InstallerHost host, RunOptions options, CancellationToken cancellationToken)
     {
-        var session = await InstallerSession.StartAsync(host.Machine, InstallLog.None, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
+        var session = await InstallerSession.StartAsync(host.Machine, InstallLog.None, host.Version, host.Time, options.Release(host), cancellationToken).ConfigureAwait(false);
         WriteWarnings(host, session);
-        session.Answers = answersFile is not null
+        session.Answers = options.AnswersFile is { } answersFile
             ? ReadAnswers(host, answersFile)
             : InstallerSession.RecordedAnswers(session.Survey, includeSystem: true)
                 ?? throw new InstallerUsageException($"Nothing is recorded as installed here: give the answers to plan, {CommandName} --plan --answers FILE.");
@@ -185,11 +208,11 @@ public static class Installer
     }
 
     /// <summary><c>--answers FILE</c>: installs from the answers, asking nothing.</summary>
-    private static async Task<int> InstallAsync(InstallerHost host, string answersFile, CancellationToken cancellationToken)
+    private static async Task<int> InstallAsync(InstallerHost host, string answersFile, RunOptions options, CancellationToken cancellationToken)
     {
         var answers = ReadAnswers(host, answersFile);
         var log = InstallLog.Open(host.Machine, InstallPaths.Log(host.Machine), host.Time);
-        var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
+        var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, options.Release(host), cancellationToken).ConfigureAwait(false);
         WriteWarnings(host, session);
         session.Answers = answers;
         log.Write($"Installing from {Path.GetFullPath(answersFile, host.Machine.CurrentDirectory)}: {InstallRoles.Describe(answers.Roles)}.");
@@ -243,11 +266,11 @@ public static class Installer
         return (int)InstallerExitCode.Success;
     }
 
-    private static async Task<int> WizardAsync(InstallerHost host, CancellationToken cancellationToken)
+    private static async Task<int> WizardAsync(InstallerHost host, RunOptions options, CancellationToken cancellationToken)
     {
         host.Error.WriteLine("Looking at this machine…");
         var log = InstallLog.Open(host.Machine, InstallPaths.Log(host.Machine), host.Time);
-        var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
+        var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, options.Release(host), cancellationToken).ConfigureAwait(false);
         var app = host.CreateApplication();
         InstallerWizard? wizard = null;
         try

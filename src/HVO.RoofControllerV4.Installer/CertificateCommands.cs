@@ -79,7 +79,7 @@ internal static class CertificateCommands
         var machine = host.Machine;
         RefuseRootOnMac(machine, "cert");
         var log = planOnly || NeedsRoot(machine) ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time);
-        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
+        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken: cancellationToken).ConfigureAwait(false);
         Installer.WriteWarnings(host, session);
         var record = RecordedOrRefuse(machine, session.Survey)?.Record;
         if (record is null && session.Survey.Certificate is { NeedsRoot: true })
@@ -157,7 +157,7 @@ internal static class CertificateCommands
         var machine = host.Machine;
         RefuseRootOnMac(machine, "cert import FILE");
         var log = planOnly || NeedsRoot(machine) ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time);
-        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
+        var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken: cancellationToken).ConfigureAwait(false);
         RefuseWithoutRoot(machine, planOnly, "cert import FILE");
         var recorded = RecordedOrRefuse(machine, session.Survey);
 
