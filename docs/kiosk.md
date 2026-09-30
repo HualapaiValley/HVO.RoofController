@@ -174,12 +174,21 @@ OS Lite (no desktop): nothing else may hold the display.
    sudo usermod -aG video,input,render hvo-kiosk
    ```
 
-3. **The program.** CI builds it for the Pi (the `hvo-roof-kiosk` artifact, with the files below), or publish it:
+3. **The program.** Steps 3, 5 and 6 install the program and its files from one directory that holds them side by
+   side, and run in it. CI builds that directory for the Pi: unpack its `hvo-roof-kiosk-<run id>` artifact and `cd`
+   into it. Or publish it from a checkout, at the repository's root:
 
    ```bash
    dotnet publish src/HVO.RoofControllerV4.Kiosk -c Release -r linux-arm64 -o hvo-roof-kiosk
+   cp src/HVO.RoofControllerV4.Kiosk/deploy/* hvo-roof-kiosk/
+   cd hvo-roof-kiosk
+   ```
+
+   Then install the program:
+
+   ```bash
    sudo install -d /opt/hvo-roof-kiosk
-   sudo install -m 755 hvo-roof-kiosk/hvo-roof-kiosk /opt/hvo-roof-kiosk/
+   sudo install -m 755 hvo-roof-kiosk /opt/hvo-roof-kiosk/
    ```
 
 4. **The device key.** Give the kiosk a key of its own, with the `RoofViewer` role, marked `Kiosk` (and `Local`, so an
@@ -209,8 +218,14 @@ OS Lite (no desktop): nothing else may hold the display.
 
    The kiosk warns at start when others than its owner can read the file.
 
-5. **Settings.** Copy `deploy/appsettings.Local.example.json` to `/opt/hvo-roof-kiosk/appsettings.Local.json` and
-   set what differs ([Settings](#settings)). In HTTPS mode the controller's API is published on port 8443 only, so the
+5. **Settings.** Install the example settings as `appsettings.Local.json`, and set what differs ([Settings](#settings)):
+
+   ```bash
+   sudo install -m 644 appsettings.Local.example.json /opt/hvo-roof-kiosk/appsettings.Local.json
+   sudoedit /opt/hvo-roof-kiosk/appsettings.Local.json
+   ```
+
+   In HTTPS mode the controller's API is published on port 8443 only, so the
    kiosk uses `https://localhost:8443/`. The certificate is not issued for `localhost`, so pin it by its SHA-256:
 
    ```bash
@@ -219,12 +234,13 @@ OS Lite (no desktop): nothing else may hold the display.
 
    and put that in `ServerCertificateSha256`. Under `pi-lan-http` the kiosk uses `http://localhost:8080` and no pin.
 
-6. **The service.** Install the unit, and the udev rule for the backlight when `BacklightFile` is set:
+6. **The service.** Install the unit, and the udev rule for the backlight when `BacklightFile` is set. The rule acts
+   on the `add` event the boot sends, so apply it now with one (`udevadm trigger` sends `change` unless told):
 
    ```bash
-   sudo install -m 644 deploy/hvo-roof-kiosk.service /etc/systemd/system/
-   sudo install -m 644 deploy/99-hvo-roof-kiosk-backlight.rules /etc/udev/rules.d/
-   sudo udevadm trigger -s backlight
+   sudo install -m 644 hvo-roof-kiosk.service /etc/systemd/system/
+   sudo install -m 644 99-hvo-roof-kiosk-backlight.rules /etc/udev/rules.d/
+   sudo udevadm trigger --action=add --subsystem-match=backlight
    sudo systemctl daemon-reload
    sudo systemctl enable --now hvo-roof-kiosk
    ```
@@ -278,9 +294,12 @@ Raspberry Pi and Avalonia documentation, and are checked when the kiosk is first
   display is 800x480 on 154 mm (5.2 px/mm). The kiosk's pages are checked at both sizes.
 - **The way up.** The Touch Display 2's panel is 720x1280 portrait, so landscape takes `Rotation` 90 or 270, whichever
   is the right way up in its mount (the example settings have 90); the first 7-inch display is landscape at 0. The
-  kernel's `video=…,rotate=` setting turns only the text console, not the kiosk. Avalonia turns the touch input with
-  the picture; if touches land in the wrong place, turn the touchscreen with libinput's calibration matrix (a udev rule
-  setting `LIBINPUT_CALIBRATION_MATRIX`).
+  kernel's `video=…,rotate=` setting turns only the text console, not the kiosk. At start the kiosk (Avalonia
+  12.1.3's libinput input) sets every touch device's libinput calibration matrix from `Rotation`, so touches turn with
+  the picture, and a udev `LIBINPUT_CALIBRATION_MATRIX` is overridden. A touch controller mounted differently from its
+  panel (touches mirrored, or turned against the picture) is corrected below libinput, with the touchscreen's
+  device-tree properties (`touchscreen-inverted-x`, `touchscreen-inverted-y`, `touchscreen-swapped-x-y`), which the
+  touch displays' overlays take as `invx`, `invy` and `swapxy`.
 - **The backlight.** The Touch Display's backlight is `/sys/class/backlight/<name>/bl_power`, where 0 is on and 4 is
   off; the name depends on the display and the Pi, so `BacklightFile` names it.
 - **The fonts.** The kiosk carries its font (Inter), so it needs no fonts installed; Skia's native library still
@@ -293,11 +312,16 @@ Night mode (a red screen that keeps dark adaptation) was considered, and is left
 Nothing here needs the Pi, the display or the roof.
 
 - **The console and the pages** (`tests/HVO.RoofControllerV4.RPi.Tests/Kiosk`): unlocking and locking, the idle lock,
-  the lease, Stop's answers, the stale, unreachable and refused status, the screen timeout, the settings editors and
-  their refusals, System and Restart, and the program's settings and exit code, against a fake controller.
+  the lease (renewed only while this kiosk moves the roof), Stop's answers, the stale, unreachable and refused status,
+  the screen timeout, the settings editors and their refusals, System and Restart, and that an answer that arrives
+  after the kiosk locks is not shown to the next person. Against the controller's API in process, with a mocked roof.
+- **The program** (`KioskProgramTests`): its settings, the device key, the display and the backlight, and exit code 78
+  for settings it cannot start with; CI runs the published program without settings to check that code. The install
+  steps above are checked against the files they install, which are the files of CI's artifact.
 - **The renders** (`KioskRenderTests`) draw each screen headless (Avalonia's headless platform with Skia) at 1280x720
-  and 800x480, and check that nothing is cut off or overlaps, that every button is at least 12 mm, and that Stop is
-  shown in full on every screen. The pictures on this page are those renders; CI keeps them as the `kiosk-renders`
+  and 800x480, and check that nothing overlaps, that no text is cut off but for text shortened on purpose (a long name
+  on its pill, the end of a long value being typed), that every button is at least 12 mm, and that Stop is shown in
+  full on every screen and stops the roof even when touched as the screen blanks. The pictures on this page are those renders; CI keeps them as the `kiosk-renders`
   artifact. To refresh them, from `src/`:
 
   ```bash

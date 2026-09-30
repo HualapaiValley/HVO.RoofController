@@ -25,21 +25,26 @@ public static class Program
     public const string SettingsFile = "appsettings.Local.json";
 
     [STAThread]
-    public static int Main(string[] args)
+    public static int Main(string[] args) => Run(args, AppContext.BaseDirectory, Console.Error);
+
+    /// <summary>
+    /// The kiosk, from its settings in <paramref name="baseDirectory"/> to its exit code. Settings it cannot start with
+    /// are written to <paramref name="error"/> and give <see cref="SettingsExitCode"/> before anything is shown.
+    /// </summary>
+    internal static int Run(string[] args, string baseDirectory, TextWriter error)
     {
         IConfiguration configuration;
         KioskOptions options;
         string deviceKey;
         try
         {
-            configuration = BuildConfiguration(args, AppContext.BaseDirectory);
+            configuration = BuildConfiguration(args, baseDirectory);
             options = ReadOptions(configuration);
             deviceKey = KioskDeviceKey.Load(options.DeviceKeyFile!);
         }
         catch (KioskSettingsException ex)
         {
-            Console.Error.WriteLine($"The roof kiosk did not start: {ex.Message}");
-            return SettingsExitCode;
+            return Refuse(error, ex.Message);
         }
 
         using var loggerFactory = LoggerFactory.Create(logging => logging
@@ -56,13 +61,12 @@ public static class Program
             logger.LogWarning("The device key file {Path} can be read by others than its owner: make it 0400 or 0600", options.DeviceKeyFile);
         }
 
-        using var client = new RoofControllerClient(new RoofConnectionOptions
+        using var client = Connect(options, deviceKey, loggerFactory, error);
+        if (client is null)
         {
-            BaseAddress = options.ControllerUrl,
-            Credential = new RoofKioskCredential(deviceKey),
-            ServerCertificateSha256 = options.ServerCertificateSha256,
-            LoggerFactory = loggerFactory
-        });
+            return SettingsExitCode;
+        }
+
         var console = new KioskConsole(
             client,
             new KioskConsoleOptions { IdleLock = TimeSpan.FromSeconds(options.IdleLockSeconds) },
@@ -135,7 +139,7 @@ public static class Program
                 .AddCommandLine(commandLine)
                 .Build();
         }
-        catch (Exception ex) when (ex is FormatException or InvalidDataException or IOException)
+        catch (Exception ex) when (ex is FormatException or InvalidDataException or IOException or UnauthorizedAccessException)
         {
             throw new KioskSettingsException($"The settings could not be read: {ex.Message}");
         }
@@ -154,6 +158,8 @@ public static class Program
             throw new KioskSettingsException($"The {KioskOptions.SectionName} settings could not be read: {ex.Message}");
         }
 
+        // An empty pin (as in "ServerCertificateSha256": "") is no pin.
+        options.ServerCertificateSha256 = string.IsNullOrWhiteSpace(options.ServerCertificateSha256) ? null : options.ServerCertificateSha256.Trim();
         var problems = options.Validate();
         if (problems.Count > 0)
         {
@@ -161,6 +167,36 @@ public static class Program
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// The client for the controller the settings name, or null, with the reason written to <paramref name="error"/>,
+    /// when the client refuses them. <see cref="KioskOptions.Validate"/> checks the same things first, so this only
+    /// keeps the kiosk from crashing (and being restarted) if the two ever differ.
+    /// </summary>
+    internal static RoofControllerClient? Connect(KioskOptions options, string deviceKey, ILoggerFactory loggerFactory, TextWriter error)
+    {
+        try
+        {
+            return new RoofControllerClient(new RoofConnectionOptions
+            {
+                BaseAddress = options.ControllerUrl,
+                Credential = new RoofKioskCredential(deviceKey),
+                ServerCertificateSha256 = options.ServerCertificateSha256,
+                LoggerFactory = loggerFactory
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            Refuse(error, ex.Message);
+            return null;
+        }
+    }
+
+    private static int Refuse(TextWriter error, string reason)
+    {
+        error.WriteLine($"The roof kiosk did not start: {reason}");
+        return SettingsExitCode;
     }
 
     private static void Shutdown(PosixSignalContext context)

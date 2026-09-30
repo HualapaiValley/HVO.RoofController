@@ -201,6 +201,20 @@ internal sealed class KioskScreen : IAsyncDisposable
                 problems.Add($"\"{text}\" shows only \"{text[..shown]}\" in {block.Bounds.Width:0}x{block.Bounds.Height:0}");
             }
 
+            // An ellipsis cuts a text short without shortening its lines, and a text that may not wrap can be wider than
+            // its box. Only a text marked abbreviated may end in an ellipsis: its whole text is shown elsewhere.
+            if (!block.Classes.Contains(KioskTheme.Abbreviated))
+            {
+                if (block.TextLayout.TextLines.Any(line => line.HasCollapsed))
+                {
+                    problems.Add($"\"{text}\" is cut short with an ellipsis in {block.Bounds.Width:0}x{block.Bounds.Height:0}");
+                }
+                else if (block.TextWrapping == TextWrapping.NoWrap && block.TextLayout.WidthIncludingTrailingWhitespace > block.Bounds.Width + 1)
+                {
+                    problems.Add($"\"{text}\" ({block.TextLayout.WidthIncludingTrailingWhitespace:0} px) is wider than its box ({block.Bounds.Width:0} px)");
+                }
+            }
+
             foreach (var line in block.TextLayout.TextLines.Skip(1))
             {
                 var at = line.FirstTextSourceIndex;
@@ -237,7 +251,45 @@ internal sealed class KioskScreen : IAsyncDisposable
             }
         }
 
-        problems.Should().BeEmpty($"every button on {name} at {Size} is a whole touch target on the screen, and no text is cut off");
+        problems.AddRange(Overlaps(buttons));
+        problems.Should().BeEmpty(
+            $"every button on {name} at {Size} is a whole touch target on the screen, no text is cut off (but for one abbreviated on purpose), and nothing is drawn over anything else");
+    }
+
+    /// <summary>
+    /// The buttons and texts drawn over one another: what the screen shows of each (a button and the text on it are one
+    /// thing) meets what it shows of another.
+    /// </summary>
+    private List<string> Overlaps(IEnumerable<Button> buttons)
+    {
+        var things = buttons.Cast<Control>()
+            .Concat(Window.GetVisualDescendants().OfType<TextBlock>()
+                .Where(block => block.IsEffectivelyVisible && !string.IsNullOrEmpty(block.Text) && !block.GetVisualAncestors().OfType<Button>().Any()))
+            .Select(thing => (Thing: thing, Drawn: Shown(thing).Intersect(new Rect(thing.TranslatePoint(default, Window) ?? default, thing.Bounds.Size)).Deflate(0.5)))
+            .Where(thing => thing.Drawn.Width > 0 && thing.Drawn.Height > 0)
+            .ToList();
+        var overlaps = new List<string>();
+        for (var i = 0; i < things.Count; i++)
+        {
+            for (var j = i + 1; j < things.Count; j++)
+            {
+                if (things[i].Drawn.Intersects(things[j].Drawn)
+                    && !things[i].Thing.IsVisualAncestorOf(things[j].Thing)
+                    && !things[j].Thing.IsVisualAncestorOf(things[i].Thing))
+                {
+                    overlaps.Add($"{Describe(things[i].Thing)} at {things[i].Drawn} is drawn over {Describe(things[j].Thing)} at {things[j].Drawn}");
+                }
+            }
+        }
+
+        return overlaps;
+
+        static string Describe(Control thing) => thing switch
+        {
+            TextBlock block => $"\"{block.Text}\"",
+            Button button => button.Name ?? KioskTheme.GetText(button),
+            _ => thing.GetType().Name
+        };
     }
 
     private void CheckStop(string name, KioskPixels pixels)

@@ -58,13 +58,17 @@ public sealed class KioskShell : UserControl
         Foreground = KioskTheme.Text;
         FontSize = metrics.Font;
 
+        // The title and the badges share the header: the title (the controller's name) keeps its width, wrapping between
+        // words past a limit, and the badges wrap onto more lines in what is left. The unlocking person's name is cut
+        // short on its pill (see UpdateBadges), so a long one cannot squeeze the title.
         _title = KioskTheme.Label("Roof", metrics.Large, weight: FontWeight.SemiBold);
         _title.Name = "title";
+        _title.MaxWidth = metrics.Touch * 4;
         _badges = new WrapPanel { Name = "badges", ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap / 2, HorizontalAlignment = HorizontalAlignment.Right };
-        var header = new DockPanel { Margin = new Thickness(0, 0, 0, metrics.Gap) };
-        DockPanel.SetDock(_badges, Dock.Right);
-        header.Children.Add(_badges);
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = metrics.Gap * 2, Margin = new Thickness(0, 0, 0, metrics.Gap) };
         header.Children.Add(_title);
+        Grid.SetColumn(_badges, 1);
+        header.Children.Add(_badges);
         _banners = new StackPanel { Name = "banners", Spacing = metrics.Gap, Margin = new Thickness(0, 0, 0, metrics.Gap) };
         _scroller = new ScrollViewer
         {
@@ -253,17 +257,20 @@ public sealed class KioskShell : UserControl
         }
     }
 
-    private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (_console.Touch())
-        {
-            e.Handled = true;
-        }
-    }
+    private void OnPointerPressed(object? sender, PointerPressedEventArgs e) => Touched(e);
 
-    private void OnKeyDown(object? sender, KeyEventArgs e)
+    private void OnKeyDown(object? sender, KeyEventArgs e) => Touched(e);
+
+    /// <summary>
+    /// Records the touch, and swallows it only when the screen showed black. What is on the glass decides, not whether
+    /// the console had already blanked: in the moment between the console blanking and the view showing it, the person
+    /// sees the buttons and a press on Stop must stop the roof.
+    /// </summary>
+    private void Touched(RoutedEventArgs e)
     {
-        if (_console.Touch())
+        var shownBlank = _blank.IsVisible;
+        _console.Touch();
+        if (shownBlank)
         {
             e.Handled = true;
         }
@@ -323,8 +330,10 @@ public sealed class KioskShell : UserControl
             _badges.Children.Add(KioskTheme.Pill($"Renewing lease{left}", KioskTheme.Colours(KioskNoticeLevel.Info), _metrics, "lease"));
         }
 
+        // A name may be 64 characters: past three touch widths it ends in an ellipsis, and the role still shows. The whole
+        // name is in the notice "Unlocked by …".
         _badges.Children.Add(view.UnlockedBy is { } by
-            ? KioskTheme.Pill($"{by} ({KioskText.DescribeRole(view.Role)})", KioskTheme.Colours(KioskNoticeLevel.Info), _metrics, "unlocked-by")
+            ? KioskTheme.Pill(by, KioskTheme.Colours(KioskNoticeLevel.Info), _metrics, "unlocked-by", _metrics.Touch * 3, $" ({KioskText.DescribeRole(view.Role)})")
             : KioskTheme.Pill("Locked", (KioskTheme.Muted, KioskTheme.Badge, KioskTheme.Frame), _metrics, "locked"));
     }
 

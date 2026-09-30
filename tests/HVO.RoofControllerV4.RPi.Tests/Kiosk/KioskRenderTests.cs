@@ -1,8 +1,15 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.VisualTree;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.Client;
+using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Screens;
 using static HVO.RoofControllerV4.RPi.Tests.Kiosk.KioskAvalonia;
 
@@ -12,9 +19,10 @@ namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
 /// The kiosk's screens as Avalonia draws them (its headless platform, rendering with Skia and the kiosk's font), at the
 /// Pi Touch Display 2's 1280x720 (8.2 pixels a millimetre) and the original 7-inch touchscreen's 800x480 (5.2). Each
 /// screen is saved as a PNG, in <c>HVO_KIOSK_RENDERS_DIR</c> or the test results' kiosk folder, and checked: every
-/// button is at least the 12 mm touch target and inside the screen, no text is cut off, and Stop is on screen, enabled,
-/// in its colour and the first thing a touch on it reaches. The console behind each screen is the one the kiosk runs, against the
-/// controller's real API (<see cref="KioskHarness"/>).
+/// button is at least the 12 mm touch target and inside the screen, nothing overlaps, no text is cut off (but for text
+/// abbreviated on purpose, <see cref="KioskTheme.Abbreviated"/>, whose whole text is shown elsewhere), and Stop is on
+/// screen, enabled, in its colour and the first thing a touch on it reaches, even as the screen blanks. The console behind
+/// each screen is the one the kiosk runs, against the controller's real API (<see cref="KioskHarness"/>).
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -90,6 +98,41 @@ public sealed class KioskRenderTests
             screen.Visible("lease").Should().BeTrue();
             screen.Text("position").Should().Be(RoofText.DescribePosition(RoofControllerStatus.Opening));
             screen.Shell.RoofPage.Open.IsEffectivelyEnabled.Should().BeFalse("the roof is already opening");
+        });
+    }
+
+    [TestMethod]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
+    public async Task ALongName_IsCutShortOnItsPill_AndTheTitleTheRoleAndTheLeaseStayWhole(int width, int height, double pixelsPerMillimetre)
+    {
+        // As long as a name may be (64 characters), with no space to wrap at.
+        var name = "observatory.night.operator@hualapai-valley.example.org".PadRight(RoofIdentityContract.MaximumNameLength, 'x');
+        await using var harness = await KioskHarness.CreateAsync();
+        harness.OpensTheRoof();
+        await harness.StartLiveAsync();
+        await RoofClientApiTests.AddUserAsync(harness.Host, name, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
+        await harness.UnlockAsync(name);
+        await harness.Console.OpenAsync();
+        await harness.WaitForAsync(view => view.HoldsLease && view.Status?.Status == RoofControllerStatus.Opening, "the opening roof");
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
+
+        await screen.RenderAsync("long-name", TestContext);
+
+        await OnUiAsync(() =>
+        {
+            screen.Text("title").Should().Be("Roof");
+            screen.Visible("lease").Should().BeTrue();
+            var pill = screen.Find("unlocked-by")!;
+            pill.Bounds.Width.Should().BeLessThanOrEqualTo(screen.Metrics.Touch * 3, "a long name is cut short, not the header squeezed");
+            var pieces = pill.GetVisualDescendants().OfType<TextBlock>().OrderBy(piece => piece.TranslatePoint(default, pill)?.X).ToList();
+            pieces.Select(piece => piece.Text).Should().Equal(name, $" ({KioskText.DescribeRole(RoofControllerApiContract.OperatorRole)})");
+            pieces[0].TextLayout.TextLines.Should().Contain(line => line.HasCollapsed, "the name ends in an ellipsis");
+            pieces[1].TextLayout.TextLines.Should().NotContain(line => line.HasCollapsed, "the role is shown whole");
+            var unlocked = KioskText.Unlocked(name, RoofControllerApiContract.OperatorRole);
+            screen.Window.GetVisualDescendants().OfType<TextBlock>()
+                .Where(block => block.IsEffectivelyVisible && block.Text?.EndsWith(unlocked, StringComparison.Ordinal) == true)
+                .Should().ContainSingle("the whole name is in the notice");
         });
     }
 
@@ -260,6 +303,40 @@ public sealed class KioskRenderTests
     [TestMethod]
     [DataRow(1280, 720, 8.2)]
     [DataRow(800, 480, 5.2)]
+    public async Task ALongCameraName_ShowsItsEnd_WhereTheTypingIs(int width, int height, double pixelsPerMillimetre)
+    {
+        // As long as a camera name may be (64 characters).
+        var camera = "Pier camera number one on the north side of the observatory roof"[..RoofControllerUiOptions.MaximumCameraNameLength];
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Admin);
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
+
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Settings));
+        await UntilAsync(() => screen.Shell.Settings is { Form: not null, Busy: null }, "the settings");
+        await OnUiAsync(() =>
+        {
+            screen.Shell.Settings.SelectField(DefaultCamera);
+            screen.Shell.Settings.BeginEdit();
+            screen.Shell.Settings.ClearText();
+            screen.Shell.Settings.Type(camera);
+        });
+
+        await screen.RenderAsync("settings-long-camera", TestContext);
+
+        await OnUiAsync(() =>
+        {
+            screen.Text("editor-value").Should().Be(camera);
+            var value = (TextBlock)screen.Find("editor-value")!;
+            value.TextTrimming.Should().Be(TextTrimming.LeadingCharacterEllipsis, "the end of the value, where the typing is, is shown");
+            value.TextLayout.TextLines.Should().Contain(line => line.HasCollapsed, "the value is too long for its box");
+            screen.OffScreen(name => name.StartsWith("editor-", StringComparison.Ordinal)).Should().BeEmpty("the value, Save, Cancel and every key are on the screen without scrolling");
+        });
+    }
+
+    [TestMethod]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
     public async Task ABlankScreen_IsBlack_AndTheTouchThatWakesIt_DoesNotPressStop(int width, int height, double pixelsPerMillimetre)
     {
         await using var harness = await KioskHarness.CreateAsync(settings: new Dictionary<string, string?> { [KioskTimeout] = "00:01:00" });
@@ -282,5 +359,35 @@ public sealed class KioskRenderTests
         await screen.TouchAsync(screen.Shell.Stop);
         await harness.WaitForAsync(view => view.StopOutcome == RoofStopOutcome.Acknowledged, "the Stop the next touch sends");
         harness.Calls(nameof(IRoofControllerServiceV4.Stop)).Should().Be(1);
+    }
+
+    [TestMethod]
+    public async Task ATouchOnStop_AsTheScreenBlanks_ButBeforeItIsDrawnBlack_StopsTheRoof()
+    {
+        await using var harness = await KioskHarness.CreateAsync(settings: new Dictionary<string, string?> { [KioskTimeout] = "00:01:00" });
+        await harness.StartLiveAsync();
+        await harness.WaitForAsync(view => view.ScreenTimeout == TimeSpan.FromMinutes(1), "the controller's screen timeout");
+        await using var screen = await KioskScreen.ShowAsync(harness, 800, 480, 5.2);
+        await screen.DrawAsync();
+
+        // The console blanks the screen on its own clock, off the UI thread, as the touch arrives: the touch reaches the
+        // shell before the view has drawn the screen black.
+        (bool Blank, bool Drawn)? asTheTouchArrived = null;
+        void BlankAsTheTouchArrives(object? sender, PointerPressedEventArgs e)
+        {
+            // A thread of its own: a task waited for here could be run on the UI thread, which draws what it changes at once.
+            var clock = new Thread(() => harness.Clock.Advance(TimeSpan.FromMinutes(1)));
+            clock.Start();
+            clock.Join();
+            asTheTouchArrived = (harness.Console.View.IsBlank, screen.Find("blank")!.IsVisible);
+        }
+
+        await OnUiAsync(() => screen.Window.AddHandler(InputElement.PointerPressedEvent, BlankAsTheTouchArrives, RoutingStrategies.Tunnel, handledEventsToo: true));
+        await screen.TouchAsync(screen.Shell.Stop);
+
+        asTheTouchArrived.Should().Be((true, false), "the console had blanked the screen, and the view had not drawn it, when the touch reached the shell");
+        await harness.WaitForAsync(view => view.StopOutcome == RoofStopOutcome.Acknowledged, "the Stop the touch sends");
+        harness.Calls(nameof(IRoofControllerServiceV4.Stop)).Should().Be(1, "a touch on Stop the screen still showed stops the roof");
+        harness.Console.View.IsBlank.Should().BeFalse("the touch woke the screen too");
     }
 }

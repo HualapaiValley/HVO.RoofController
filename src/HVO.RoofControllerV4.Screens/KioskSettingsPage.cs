@@ -214,21 +214,25 @@ public sealed class KioskSettingsPage : UserControl
                     VerticalAlignment = VerticalAlignment.Center,
                     Children =
                     {
+                        // The label is the setting's, shown whole on its page before the editor opened.
                         new TextBlock
                         {
                             Name = "editor-label",
                             Text = label,
                             FontSize = _metrics.Small,
                             Foreground = KioskTheme.Muted,
-                            TextTrimming = TextTrimming.CharacterEllipsis
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                            Classes = { KioskTheme.Abbreviated }
                         },
+                        // A value too long for the box shows its end, where the typing is.
                         new TextBlock
                         {
                             Name = "editor-value",
                             Text = _panel.EditText.Length == 0 ? (field.Setting.Nullable ? KioskSettingsPanel.NoValue : string.Empty) : _panel.EditText,
                             FontSize = _metrics.Large,
                             Foreground = _panel.EditText.Length == 0 ? KioskTheme.MutedWeak : KioskTheme.Text,
-                            TextTrimming = TextTrimming.CharacterEllipsis
+                            TextTrimming = TextTrimming.LeadingCharacterEllipsis,
+                            Classes = { KioskTheme.Abbreviated }
                         }
                     }
                 }

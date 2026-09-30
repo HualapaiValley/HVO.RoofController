@@ -448,6 +448,63 @@ public sealed class KioskPanelTests
         settings.Busy.Should().BeNull();
     }
 
+    [TestMethod]
+    public async Task TheSettingsReadForAnAdmin_AnsweredAfterTheLock_AreNotShownToTheNextPerson()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Admin);
+        var settings = new KioskSettingsPanel(harness.Console);
+        await using var held = HoldNext(harness, HttpMethod.Get, RoofApiRoutes.Settings);
+        var adminsRead = settings.LoadAsync();
+        await held.WaitAsync();
+        settings.Busy.Should().NotBeNull("the admin's read of the settings is on its way");
+
+        await harness.Console.LockAsync();
+        settings.Reset();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        settings.Reset();
+        await settings.LoadAsync();
+        var operators = settings.Form;
+        operators.Should().NotBeNull();
+
+        held.Release();
+        await adminsRead.WaitAsync(TimeSpan.FromSeconds(10));
+
+        settings.Form.Should().BeSameAs(operators, "the admin's settings, answered after the lock, are not shown to the operator");
+        settings.Busy.Should().BeNull("the operator's page is not busy with the admin's read");
+        settings.Message.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task ASaveAnsweredAfterTheLock_IsNotShownToTheNextPerson_ButTheKioskUsesIt()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.WaitForAsync(view => view.ScreenTimeout == TimeSpan.FromMinutes(5), "the default screen timeout");
+        var settings = new KioskSettingsPanel(harness.Console);
+        await settings.LoadAsync();
+        settings.SelectField(KioskTimeout);
+        settings.BeginEdit();
+        settings.ClearText();
+        settings.Type("120");
+        var save = RoofApiRoutes.SettingsGroup(RoofSettingsContract.UiGroup);
+        await using var held = HoldNext(harness, HttpMethod.Post, save);
+        var saving = settings.ReviewAsync();
+        await held.WaitAsync();
+
+        await harness.Console.LockAsync();
+        settings.Reset();
+        held.Release();
+        await saving.WaitAsync(TimeSpan.FromSeconds(10));
+
+        settings.Form.Should().BeNull("the page read for the operator is not read again after the lock");
+        settings.Message.Should().BeNull("what the save came to is not shown to the next person");
+        settings.Busy.Should().BeNull();
+        await harness.WaitForAsync(view => view.ScreenTimeout == TimeSpan.FromMinutes(2), "the new screen timeout, which the controller saved");
+    }
+
     // ---- The system page ------------------------------------------------------------------------------------------------
 
     [TestMethod]
@@ -470,6 +527,33 @@ public sealed class KioskPanelTests
         system.Question.Should().BeNull();
         system.Message.Should().Be(new KioskNotice(KioskSystemPanel.RestartNeedsAdmin, KioskNoticeLevel.Warning, KioskHarness.Start));
         harness.Host.Services.GetRequiredService<RoofRestartSignal>().Requested.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task TheHostReadForAnAdmin_AnsweredAfterTheLock_IsNotShownToTheNextPerson()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Admin);
+        var system = new KioskSystemPanel(harness.Console);
+        await using var held = HoldNext(harness, HttpMethod.Get, RoofApiRoutes.SystemMetrics);
+        var adminsRead = system.LoadAsync();
+        await held.WaitAsync();
+
+        await harness.Console.LockAsync();
+        system.Reset();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        system.Reset();
+        await system.LoadAsync();
+        var operators = system.Message;
+        system.Information.Should().BeEmpty();
+
+        held.Release();
+        await adminsRead.WaitAsync(TimeSpan.FromSeconds(10));
+
+        system.Information.Should().BeEmpty("the admin's host information, answered after the lock, is not shown to the operator");
+        system.Message.Should().BeSameAs(operators);
+        system.Busy.Should().BeNull("the operator's page is not busy with the admin's read");
     }
 
     [TestMethod]
@@ -550,5 +634,44 @@ public sealed class KioskPanelTests
     {
         Directory.CreateDirectory(Path.GetDirectoryName(harness.SettingsPath)!);
         File.WriteAllText(harness.SettingsPath, json);
+    }
+
+    /// <summary>
+    /// Holds the answer to the next <paramref name="method"/> request to <paramref name="path"/> on its way, even if the
+    /// kiosk gives up on it, until <see cref="HeldAnswer.Release"/> (or the end of the test).
+    /// </summary>
+    private static HeldAnswer HoldNext(KioskHarness harness, HttpMethod method, string path)
+    {
+        var held = new HeldAnswer();
+        var next = 1;
+        harness.DelayAnswer = (request, _) =>
+        {
+            if (request.Method != method || request.RequestUri!.AbsolutePath.TrimStart('/') != path || Interlocked.Exchange(ref next, 0) == 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            held.Reached.TrySetResult();
+            return held.Answer.Task;
+        };
+        return held;
+    }
+
+    private sealed class HeldAnswer : IAsyncDisposable
+    {
+        public TaskCompletionSource Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Answer { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WaitAsync() => Reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        public void Release() => Answer.TrySetResult();
+
+        // A test that fails while the answer is held lets it go, so the harness can close.
+        public ValueTask DisposeAsync()
+        {
+            Release();
+            return ValueTask.CompletedTask;
+        }
     }
 }

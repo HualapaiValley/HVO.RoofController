@@ -1,19 +1,23 @@
+using System.Text.RegularExpressions;
 using Avalonia.Platform;
 using FluentAssertions;
 using HVO.RoofControllerV4.Kiosk;
 using HVO.RoofControllerV4.RPi.Tests.Web;
 using HVO.RoofControllerV4.Screens;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using KioskProgram = HVO.RoofControllerV4.Kiosk.Program;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
 
 /// <summary>
 /// The kiosk program's settings, device key, display and backlight: what it starts with, and what it refuses to start
-/// with (it exits with <see cref="KioskProgram.SettingsExitCode"/>, which systemd does not restart).
+/// with (it exits with <see cref="KioskProgram.SettingsExitCode"/>, which systemd does not restart). The program itself
+/// runs only with settings it refuses: with good ones it would take the display. Then the install steps in
+/// docs/kiosk.md, against the files they install.
 /// </summary>
 [TestClass]
-public sealed class KioskProgramTests
+public sealed partial class KioskProgramTests
 {
     private const string Pin = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
 
@@ -151,7 +155,7 @@ public sealed class KioskProgramTests
     [TestMethod]
     public void TheExampleSettings_AreValid()
     {
-        var example = Path.Combine(RepositoryRoot(), "src", "HVO.RoofControllerV4.Kiosk", "deploy", "appsettings.Local.example.json");
+        var example = DeployFile("appsettings.Local.example.json");
         using var directory = new WebTestSupport.TempDirectory();
         File.Copy(example, directory.File(KioskProgram.SettingsFile));
 
@@ -160,6 +164,91 @@ public sealed class KioskProgramTests
         options.DeviceKeyFile.Should().NotBeNullOrWhiteSpace();
         options.Window.Should().BeFalse();
         options.Rotation.Should().Be(90, "the example is for the Touch Display 2, whose panel is portrait");
+    }
+
+    [TestMethod]
+    [DataRow(null, "", "Kiosk:DeviceKeyFile must name the file*", DisplayName = "no settings")]
+    [DataRow("{ \"Kiosk\": { \"IdleLockSeconds\": ", "", "The settings could not be read: *", DisplayName = "not JSON")]
+    [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\", \"IdleLockSeconds\": \"soon\" } }", "", "The Kiosk settings could not be read: *", DisplayName = "a value of the wrong type")]
+    [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\" } }", "--Kiosk:ControllerUrl=", "Kiosk:ControllerUrl *", DisplayName = "an empty controller URL")]
+    [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}\" } }", "--Kiosk:ServerCertificateSha256=not-a-hash", "Kiosk:ServerCertificateSha256 *", DisplayName = "a pin that is not a hash")]
+    [DataRow("{ \"Kiosk\": { \"DeviceKeyFile\": \"{key}.missing\" } }", "", "Kiosk:DeviceKeyFile names *, which could not be read*", DisplayName = "no device key file")]
+    public void TheKiosk_ExitsWithTheSettingsCode_AndSaysWhy(string? settings, string arg, string reason)
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var key = directory.File("device-key");
+        File.WriteAllText(key, "test-kiosk-key-not-a-real-secret-05");
+        if (settings is not null)
+        {
+            File.WriteAllText(directory.File(KioskProgram.SettingsFile), settings.Replace("{key}", key, StringComparison.Ordinal));
+        }
+
+        using var error = new StringWriter();
+
+        KioskProgram.Run(arg.Length > 0 ? [arg] : [], directory.Path, error).Should().Be(KioskProgram.SettingsExitCode);
+
+        error.ToString().Should().Match($"The roof kiosk did not start: {reason}");
+        error.ToString().Should().NotContain("secret-05");
+    }
+
+    [TestMethod]
+    public void ASettingsFileTheKioskMayNotRead_ExitsWithTheSettingsCode()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("Unix permissions only.");
+            return;
+        }
+
+        using var directory = new WebTestSupport.TempDirectory();
+        var path = directory.File(KioskProgram.SettingsFile);
+        File.WriteAllText(path, "{ }");
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            File.OpenRead(path).Dispose();
+            Assert.Inconclusive("The file can still be read (as root).");
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        using var error = new StringWriter();
+
+        KioskProgram.Run([], directory.Path, error).Should().Be(KioskProgram.SettingsExitCode);
+
+        error.ToString().Should().StartWith("The roof kiosk did not start: The settings could not be read: ");
+    }
+
+    [TestMethod]
+    [DataRow("{ }", "--Kiosk:ServerCertificateSha256=", DisplayName = "empty on the command line")]
+    [DataRow("{ \"Kiosk\": { \"ServerCertificateSha256\": \"\" } }", "", DisplayName = "empty in the file")]
+    [DataRow("{ \"Kiosk\": { \"ServerCertificateSha256\": \"   \" } }", "", DisplayName = "blank in the file")]
+    public void AnEmptyCertificatePin_IsNoPin(string settings, string arg)
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        File.WriteAllText(directory.File(KioskProgram.SettingsFile), settings);
+        using var error = new StringWriter();
+
+        var options = KioskProgram.ReadOptions(KioskProgram.BuildConfiguration(
+            arg.Length > 0 ? [arg, "--Kiosk:DeviceKeyFile=key"] : ["--Kiosk:DeviceKeyFile=key"],
+            directory.Path));
+        using var client = KioskProgram.Connect(options, "test-kiosk-key-not-a-real-secret-05", NullLoggerFactory.Instance, error);
+
+        options.ServerCertificateSha256.Should().BeNull();
+        client.Should().NotBeNull();
+        error.ToString().Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void SettingsTheClientRefuses_AreSaid_NotThrown()
+    {
+        using var error = new StringWriter();
+        var options = new KioskOptions { DeviceKeyFile = "key", ServerCertificateSha256 = "" };
+
+        KioskProgram.Connect(options, "test-kiosk-key-not-a-real-secret-05", NullLoggerFactory.Instance, error).Should().BeNull();
+
+        error.ToString().Should().StartWith("The roof kiosk did not start: The certificate pin must be a SHA-256 hash");
     }
 
     // ---- The device key -------------------------------------------------------------------------------------------------
@@ -327,6 +416,52 @@ public sealed class KioskProgramTests
         IEnumerable<(string Category, LogLevel Level, string Message, Exception? Exception)> Warnings()
             => harness.Logs.Entries.Where(entry => entry.Level == LogLevel.Warning && entry.Category.EndsWith(nameof(KioskBacklight), StringComparison.Ordinal));
     }
+
+    // ---- The install ----------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void TheBacklightRule_IsAppliedWithTheEventItActsOn()
+    {
+        var rule = File.ReadAllLines(DeployFile("99-hvo-roof-kiosk-backlight.rules"));
+        var actions = rule.Where(line => !line.TrimStart().StartsWith('#'))
+            .SelectMany(line => RuleActionPattern().Matches(line).Select(match => match.Groups["action"].Value))
+            .Distinct()
+            .ToList();
+        var triggers = rule.Concat(File.ReadAllLines(InstallPage()))
+            .Where(line => line.Contains("sudo udevadm trigger", StringComparison.Ordinal))
+            .ToList();
+
+        actions.Should().ContainSingle("the rule acts on one event");
+        triggers.Should().HaveCount(2, "the rule's comment and the install steps both say how to apply it");
+        triggers.Should().AllSatisfy(line => line.Should().Contain(
+            $"--action={actions[0]}", "udevadm trigger sends change events unless told, which the rule does nothing on"));
+    }
+
+    [TestMethod]
+    public void TheInstallSteps_InstallEveryFileOfTheDirectoryTheyRunIn_AndNoOther()
+    {
+        // The directory is the program beside the deploy files: CI's artifact, or what the page publishes and copies.
+        var directory = Directory.GetFiles(Path.GetDirectoryName(DeployFile("hvo-roof-kiosk.service"))!)
+            .Select(Path.GetFileName)
+            .Append("hvo-roof-kiosk");
+        var page = File.ReadAllText(InstallPage());
+        var installed = InstallPattern().Matches(page).Select(match => match.Groups["source"].Value);
+
+        installed.Should().BeEquivalentTo(directory, "the steps install each file by its bare name, from that directory");
+        page.Should().Contain("dotnet publish src/HVO.RoofControllerV4.Kiosk -c Release -r linux-arm64 -o hvo-roof-kiosk\n")
+            .And.Contain("cp src/HVO.RoofControllerV4.Kiosk/deploy/* hvo-roof-kiosk/\n")
+            .And.Contain("cd hvo-roof-kiosk\n");
+    }
+
+    [GeneratedRegex("ACTION==\"(?<action>[a-z]+)\"")]
+    private static partial Regex RuleActionPattern();
+
+    [GeneratedRegex("^ *sudo install -m [0-7]+ (?<source>[^ ]+) [^ ]+$", RegexOptions.Multiline)]
+    private static partial Regex InstallPattern();
+
+    private static string DeployFile(string name) => Path.Combine(RepositoryRoot(), "src", "HVO.RoofControllerV4.Kiosk", "deploy", name);
+
+    private static string InstallPage() => Path.Combine(RepositoryRoot(), "docs", "kiosk.md");
 
     private static void Connector(WebTestSupport.TempDirectory sys, string name, string status)
     {

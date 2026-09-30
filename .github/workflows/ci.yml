@@ -152,6 +152,19 @@ jobs:
             echo "::error file=src/HVO.RoofControllerV4.Kiosk/Program.cs::hvo-roof-kiosk without settings exited ${status}, not 78 with its settings message"
             exit 1
           fi
+          # The artifact: the Pi's program and its deploy files side by side, the directory docs/kiosk.md installs from.
+          # Every file the page installs must be in it.
+          mkdir kiosk-artifact
+          cp hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk HVO.RoofControllerV4.Kiosk/deploy/* kiosk-artifact/
+          installs=$(grep -oP '^\s*sudo install -m [0-7]+ \K[^ ]+(?= )' ../docs/kiosk.md)
+          test -n "$installs"
+          for file in $installs; do
+            if [ ! -f "kiosk-artifact/$file" ]; then
+              echo "::error file=docs/kiosk.md::docs/kiosk.md installs ${file}, which the hvo-roof-kiosk artifact does not have"
+              exit 1
+            fi
+          done
+          ls -l kiosk-artifact
 
       - name: Upload hvo-roof
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -166,9 +179,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hvo-roof-kiosk-${{ github.run_id }}
-          path: |
-            src/hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk
-            src/HVO.RoofControllerV4.Kiosk/deploy/*
+          path: src/kiosk-artifact/
           if-no-files-found: error
           retention-days: 14
 

@@ -75,7 +75,7 @@ public sealed class KioskOptions
     public IReadOnlyList<string> Validate()
     {
         var problems = new List<string>();
-        if (!ControllerUrl.IsAbsoluteUri || ControllerUrl.Scheme is not ("http" or "https"))
+        if (ControllerUrl is null || !ControllerUrl.IsAbsoluteUri || ControllerUrl.Scheme is not ("http" or "https"))
         {
             problems.Add($"{SectionName}:ControllerUrl must be an absolute http or https URL, such as http://localhost:8080.");
         }

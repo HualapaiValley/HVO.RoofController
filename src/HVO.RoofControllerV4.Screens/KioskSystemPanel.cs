@@ -15,6 +15,7 @@ public sealed class KioskSystemPanel
     public const string RestartNeedsAdmin = "Restarting the controller needs the Admin role.";
 
     private readonly KioskConsole _console;
+    private CancellationTokenSource _reset = new();
 
     public KioskSystemPanel(KioskConsole console)
     {
@@ -43,9 +44,14 @@ public sealed class KioskSystemPanel
     /// <summary>Raised after anything here changed.</summary>
     public event Action? Changed;
 
-    /// <summary>Forgets everything read: the kiosk was locked.</summary>
+    /// <summary>Forgets everything read: the kiosk was locked, or unlocked by someone.</summary>
     public void Reset()
     {
+        // What is still on its way was asked for by the person before: its reads are cancelled, and no answer is shown
+        // to the next person or ends their Busy. The old source is not disposed: those requests still hold its token, and
+        // a source without a timer holds nothing to free.
+        _reset.Cancel();
+        _reset = new CancellationTokenSource();
         Health = null;
         Checks = [];
         Information = [];
@@ -56,28 +62,31 @@ public sealed class KioskSystemPanel
     }
 
     /// <summary>Reads the health report and, for an admin, the version, host and resource use.</summary>
-    public Task LoadAsync() => RunAsync("Reading the controller's health…", async () =>
+    public Task LoadAsync() => RunAsync("Reading the controller's health…", async reset =>
     {
-        var report = await _console.Client.Health.GetReportAsync();
+        var report = await _console.Client.Health.GetReportAsync(reset);
         IReadOnlyList<(string Label, string Value)> information = [];
         if (_console.View.IsAdmin)
         {
-            var info = await _console.Client.System.GetInformationAsync();
-            var metrics = await _console.Client.System.GetMetricsAsync();
+            var info = await _console.Client.System.GetInformationAsync(reset);
+            var metrics = await _console.Client.System.GetMetricsAsync(reset);
             information = [.. RoofSystemText.DescribeInformation(info, metrics)];
         }
 
-        Health = report.Status;
-        Checks = [.. report.Checks.Select(check => (check.Name, check.Status, check.Description ?? string.Empty))];
-        Information = information;
-        Message = new KioskNotice($"Health: {report.Status}.", report.Status == "Healthy" ? KioskNoticeLevel.Info : KioskNoticeLevel.Warning, Now);
+        return () =>
+        {
+            Health = report.Status;
+            Checks = [.. report.Checks.Select(check => (check.Name, check.Status, check.Description ?? string.Empty))];
+            Information = information;
+            Message = new KioskNotice($"Health: {report.Status}.", report.Status == "Healthy" ? KioskNoticeLevel.Info : KioskNoticeLevel.Warning, Now);
+        };
     });
 
     /// <summary>Asks whether the controller is ready (anonymous).</summary>
-    public Task CheckReadinessAsync() => RunAsync("Asking whether the controller is ready…", async () =>
+    public Task CheckReadinessAsync() => RunAsync("Asking whether the controller is ready…", async reset =>
     {
-        var result = await _console.Client.Health.GetReadinessAsync();
-        Message = result.IsHealthy
+        var result = await _console.Client.Health.GetReadinessAsync(reset);
+        return () => Message = result.IsHealthy
             ? new KioskNotice($"Ready: {result.Status}.", KioskNoticeLevel.Info, Now)
             : new KioskNotice($"Not ready: {result.Status}.", KioskNoticeLevel.Danger, Now);
     });
@@ -95,10 +104,10 @@ public sealed class KioskSystemPanel
             return Task.CompletedTask;
         }
 
-        return RunAsync("Checking for a pending hand edit…", async () =>
+        return RunAsync("Checking for a pending hand edit…", async reset =>
         {
-            var catalogue = await _console.Client.Settings.GetCatalogueAsync();
-            var form = RoofSettingsForm.Create(catalogue, await _console.Client.Settings.GetAsync());
+            var catalogue = await _console.Client.Settings.GetCatalogueAsync(reset);
+            var form = RoofSettingsForm.Create(catalogue, await _console.Client.Settings.GetAsync(reset));
             List<string> lines = [RoofSystemText.RestartQuestion];
             if (form.PendingHandEdit is { } pending)
             {
@@ -107,7 +116,7 @@ public sealed class KioskSystemPanel
             }
 
             var confirm = form.PendingHandEdit?.RequiresConfirmation == true;
-            Question = new KioskQuestion(
+            return () => Question = new KioskQuestion(
                 "Restart the controller",
                 lines,
                 [new KioskAnswer(confirm ? "Confirm and restart" : "Restart", () => RestartAsync(confirm))]);
@@ -126,35 +135,46 @@ public sealed class KioskSystemPanel
     private Task RestartAsync(bool confirm)
     {
         Question = null;
-        return RunAsync("Restarting: stopping the roof and verifying the stop…", async () =>
+        // A restart sent is not cancelled by a lock: only its answer is dropped.
+        return RunAsync("Restarting: stopping the roof and verifying the stop…", async _ =>
         {
             var restart = await _console.Client.System.RestartAsync(confirm);
-            Message = new KioskNotice($"{restart.Message} {RoofSystemText.RestartComingBack}", KioskNoticeLevel.Info, Now);
+            return () => Message = new KioskNotice($"{restart.Message} {RoofSystemText.RestartComingBack}", KioskNoticeLevel.Info, Now);
         });
     }
 
-    private async Task RunAsync(string busy, Func<Task> send)
+    /// <summary>
+    /// Sends what <paramref name="send"/> sends, saying <paramref name="busy"/> meanwhile, then shows what it came to (the
+    /// action it returns, or the failure). Nothing is shown if <see cref="Reset"/> came first.
+    /// </summary>
+    private async Task RunAsync(string busy, Func<CancellationToken, Task<Action>> send)
     {
         if (Busy is not null)
         {
             return;
         }
 
+        var reset = _reset.Token;
         Busy = busy;
         Raise();
+        Action show;
         try
         {
-            await send();
+            show = await send(reset);
         }
         catch (Exception error)
         {
-            Message = new KioskNotice(RoofText.DescribeFailure(error), KioskNoticeLevel.Danger, Now);
+            show = () => Message = new KioskNotice(RoofText.DescribeFailure(error), KioskNoticeLevel.Danger, Now);
         }
-        finally
+
+        if (reset.IsCancellationRequested)
         {
-            Busy = null;
-            Raise();
+            return;
         }
+
+        show();
+        Busy = null;
+        Raise();
     }
 
     private void Raise() => Changed?.Invoke();

@@ -217,7 +217,9 @@ public sealed class KioskConsoleTests
     }
 
     [TestMethod]
-    public async Task TouchesKeepThePinSessionOpen_AndWithoutRequestsTheKioskLocksBeforeTheControllerEndsIt()
+    [DataRow(0, DisplayName = "answered at once")]
+    [DataRow(200, DisplayName = "answered after 200 ms")]
+    public async Task TouchesKeepThePinSessionOpen_AndWithoutRequestsTheKioskLocksBeforeTheControllerEndsIt(int answerMilliseconds)
     {
         await using var harness = await KioskHarness.CreateAsync(
             settings: new Dictionary<string, string?> { ["RoofControllerSecurity:Identity:PinSessionIdleTimeout"] = "00:01:00" },
@@ -225,14 +227,20 @@ public sealed class KioskConsoleTests
         await harness.StartLiveAsync();
         await harness.UnlockAsync(KioskHarness.Operator);
         harness.Credential.PinSession!.IdleTimeoutSeconds.Should().Be(60);
+        harness.DelayAnswer = (request, cancellationToken) => request.RequestUri!.AbsolutePath.EndsWith(RoofApiRoutes.Me, StringComparison.Ordinal)
+            ? Task.Delay(answerMilliseconds, cancellationToken)
+            : Task.CompletedTask;
 
-        // A touch every 10 s for two minutes: each quarter of the session's idle timeout, one touch keeps it open.
+        // A touch every 10 s for two minutes: each quarter of the session's idle timeout, one touch keeps it open. Each
+        // keep-alive is answered before the clock moves on, however long the answer takes.
         for (var i = 0; i < 12; i++)
         {
             await harness.AdvanceAsync(TimeSpan.FromSeconds(10));
             harness.Console.Touch();
-            await Task.Delay(20);
+            await ClientTestSupport.WaitUntilAsync(() => !harness.Console.KeepingAlive, "the keep-alive answered");
         }
+
+        harness.Sent(HttpMethod.Get, RoofApiRoutes.Me).Should().BeGreaterThanOrEqualTo(6, "every other touch is 15 s or more after the last keep-alive");
 
         harness.Console.View.IsUnlocked.Should().BeTrue("the touches kept the session open");
 
@@ -632,8 +640,8 @@ public sealed class KioskConsoleTests
         harness.Push(KioskHarness.Snapshot());
         harness.Console.Touch().Should().BeFalse();
         (await harness.Console.UnlockAsync(KioskHarness.Admin, TestSecrets.Pin)).Should().Be("The kiosk is closing.");
-        await Task.Delay(100);
-        changes.Should().Be(0);
+        await harness.AdvanceAsync(TimeSpan.FromMinutes(1));
+        changes.Should().Be(0, "the ticks, the lease timer and the keep-alive are stopped");
         harness.Logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("closed while it held the operator lease"));
     }
 
@@ -671,10 +679,18 @@ public sealed class KioskConsoleTests
         await harness.WaitForAsync(view => view.Status!.StatusVersion > before, $"the answer to renewal {renewals}");
     }
 
+    // Nothing is awaited between a lease timer firing and its renewal reaching the harness, so a renewal the clock makes
+    // due is counted as sent inside Advance, however slow its answer: the count after it is final, with no time to wait.
     private static async Task NoRenewalAsync(KioskHarness harness, int renewals)
     {
+        await ClientTestSupport.WaitUntilAsync(
+            () => harness.Answered(HttpMethod.Post, RoofApiRoutes.Lease) == harness.Sent(HttpMethod.Post, RoofApiRoutes.Lease),
+            "the renewals sent to be answered");
+        var sent = harness.Sent(HttpMethod.Post, RoofApiRoutes.Lease);
+        Renewals(harness).Should().Be(renewals);
+
         harness.Clock.Advance(TimeSpan.FromSeconds(10));
-        await Task.Delay(200);
-        Renewals(harness).Should().Be(renewals, "the kiosk no longer renews the lease");
+
+        harness.Sent(HttpMethod.Post, RoofApiRoutes.Lease).Should().Be(sent, "the kiosk no longer renews the lease");
     }
 }

@@ -104,10 +104,45 @@ public static class KioskTheme
         };
     }
 
-    /// <summary>A badge: short text on a coloured pill.</summary>
-    public static Border Pill(string text, (IBrush Foreground, IBrush Background, IBrush Edge) colours, KioskMetrics metrics, string? name = null)
+    /// <summary>
+    /// The class of a text cut short with an ellipsis on purpose, because its whole text is shown elsewhere (or, for a
+    /// value being typed, because its end is what matters). Any other text cut short is a fault.
+    /// </summary>
+    public const string Abbreviated = "abbreviated";
+
+    /// <summary>
+    /// A badge: short text on a coloured pill. On a pill no wider than <paramref name="maxWidth"/>, a text too long for
+    /// it ends in an ellipsis before <paramref name="kept"/>, which is always shown whole; the caller shows the whole
+    /// text elsewhere.
+    /// </summary>
+    public static Border Pill(
+        string text,
+        (IBrush Foreground, IBrush Background, IBrush Edge) colours,
+        KioskMetrics metrics,
+        string? name = null,
+        double maxWidth = double.PositiveInfinity,
+        string? kept = null)
     {
         ArgumentNullException.ThrowIfNull(metrics);
+        TextBlock Piece(string piece) => new() { Text = piece, FontSize = metrics.Small, Foreground = colours.Foreground, FontWeight = FontWeight.SemiBold };
+        var label = Piece(text);
+        Control child = label;
+        if (double.IsFinite(maxWidth))
+        {
+            label.TextTrimming = TextTrimming.CharacterEllipsis;
+            label.Classes.Add(Abbreviated);
+        }
+
+        if (kept is not null)
+        {
+            var end = Piece(kept);
+            var line = new DockPanel();
+            DockPanel.SetDock(end, Dock.Right);
+            line.Children.Add(end);
+            line.Children.Add(label);
+            child = line;
+        }
+
         return new Border
         {
             Name = name,
@@ -117,7 +152,8 @@ public static class KioskTheme
             CornerRadius = new CornerRadius(metrics.Font),
             Padding = new Thickness(metrics.Gap * 1.5, metrics.Gap / 2),
             VerticalAlignment = VerticalAlignment.Center,
-            Child = new TextBlock { Text = text, FontSize = metrics.Small, Foreground = colours.Foreground, FontWeight = FontWeight.SemiBold }
+            MaxWidth = maxWidth,
+            Child = child
         };
     }
 

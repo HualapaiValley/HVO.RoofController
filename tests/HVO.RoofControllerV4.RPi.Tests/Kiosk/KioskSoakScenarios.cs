@@ -30,7 +30,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
 /// <c>00:30:00</c>) in the nightly kiosk soak. The heap and threads are assessed only when the run leaves at least
 /// <see cref="MinimumTrendWindow"/> after the warm-up; a shorter run records them. The results
 /// (<c>kiosk-soak-summary.md</c>, <c>kiosk-soak-samples.csv</c>) go to <c>HVO_SOAK_RESULTS_DIR</c>, or the test results,
-/// and are written before the checks fail the test. The resources are the test process's, which runs the emulator, the
+/// and are written before the checks fail the test; the last screen (its draws, its layout and Stop) is one of the checks
+/// (<see cref="FinishAsync"/>). The resources are the test process's, which runs the emulator, the
 /// controller and the kiosk: a leak in any of them fails the soak. A restart leaves no stopped controller behind: the rig
 /// disposes the rate limiters ASP.NET Core leaves running, which would hold each one (<see cref="PipelineRateLimiters"/>).
 /// </remarks>
@@ -52,6 +53,9 @@ public sealed class KioskSoakScenarios
     private const long MemorySlackBytes = 4L * 1024 * 1024;
     private const int ThreadMargin = 10;
     private const int EndSamples = 3;
+
+    internal const string SummaryFile = "kiosk-soak-summary.md";
+    internal const string SamplesFile = "kiosk-soak-samples.csv";
 
     private static readonly TimeSpan DefaultDuration = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan MinimumTrendWindow = TimeSpan.FromMinutes(5);
@@ -136,15 +140,46 @@ public sealed class KioskSoakScenarios
         }
 
         await stopping.CancelAsync();
-        await pumping;
         run.Elapsed = clock.Elapsed;
-        await screen.RenderAsync("soak-end", TestContext);
-
-        var checks = Evaluate(run, rig, failure);
-        var results = WriteResults(run, checks, logs);
-        TestContext.WriteLine(File.ReadAllText(Path.Combine(results, "kiosk-soak-summary.md")));
+        var results = ResultsDirectory();
+        var checks = await FinishAsync(run, rig.Session.Plant.Violations.Count, failure, FinalScreenAsync, logs, results);
+        TestContext.WriteLine(File.ReadAllText(Path.Combine(results, SummaryFile)));
 
         checks.Where(check => !check.Passed).Should().BeEmpty("every kiosk soak criterion must hold (results in {0})", results);
+
+        async Task FinalScreenAsync()
+        {
+            await pumping;
+            await screen.RenderAsync("soak-end", TestContext);
+        }
+    }
+
+    /// <summary>
+    /// The end of a run: waits for the last screen (the pump's draws, then a render that checks its layout and Stop), then
+    /// evaluates the run and writes its results. A fault in the last screen is a failed check written with the others, so
+    /// a run that fails keeps its samples and says why.
+    /// </summary>
+    internal static async Task<IReadOnlyList<KioskSoakCheck>> FinishAsync(
+        KioskSoakRun run,
+        int violations,
+        Exception? failure,
+        Func<Task> finalScreen,
+        RecordingLoggerProvider logs,
+        string directory)
+    {
+        Exception? screenFailure = null;
+        try
+        {
+            await finalScreen();
+        }
+        catch (Exception exception)
+        {
+            screenFailure = exception;
+        }
+
+        var checks = Evaluate(run, violations, failure, screenFailure);
+        WriteResults(directory, run, checks, logs);
+        return checks;
     }
 
     /// <summary>Unlock, Open, Stop in mid-travel, Close to the closed limit, lock: the Stop and the moves are touches on the screen.</summary>
@@ -210,11 +245,12 @@ public sealed class KioskSoakScenarios
         return new KioskSoakSample(elapsed, run.Cycles, GC.GetTotalMemory(forceFullCollection: true), process.Threads.Count, run.Connections, run.Restarts);
     }
 
-    private static List<KioskSoakCheck> Evaluate(KioskSoakRun run, EmulatedRoofRig rig, Exception? failure)
+    private static List<KioskSoakCheck> Evaluate(KioskSoakRun run, int violations, Exception? failure, Exception? screenFailure)
     {
         var checks = new List<KioskSoakCheck>
         {
-            new("Every cycle completed", failure is null, failure is null ? $"{run.Cycles} cycles" : $"after {run.Cycles} cycles: {failure.GetType().Name}: {failure.Message}"),
+            new("Every cycle completed", failure is null, failure is null ? $"{run.Cycles} cycles" : $"after {run.Cycles} cycles: {Describe(failure)}"),
+            new("The last screen", screenFailure is null, screenFailure is null ? "drawn, laid out, with Stop in full" : Describe(screenFailure)),
             new("Every Stop acknowledged", run.Stops > 0 && run.Acknowledged == run.Stops, $"{run.Acknowledged} of {run.Stops}"),
             new("A restart was ridden through", run.Restarts > 0, $"{run.Restarts} restarts"),
             new(
@@ -225,7 +261,7 @@ public sealed class KioskSoakScenarios
                 "Each reconnect within the bound",
                 run.Reconnects.Count == run.Restarts && run.Reconnects.All(took => took <= ReconnectBound),
                 run.Reconnects.Count == 0 ? "none" : $"slowest {run.Reconnects.Max().TotalSeconds:0.0} s (bound {ReconnectBound.TotalSeconds:0} s)"),
-            new("The plant's invariants held", rig.Session.Plant.Violations.Count == 0, $"{rig.Session.Plant.Violations.Count} violations")
+            new("The plant's invariants held", violations == 0, $"{violations} violations")
         };
 
         var trend = run.Samples.Where(sample => sample.Elapsed >= run.WarmUp).ToList();
@@ -253,11 +289,18 @@ public sealed class KioskSoakScenarios
         return checks;
     }
 
-    private string WriteResults(KioskSoakRun run, List<KioskSoakCheck> checks, RecordingLoggerProvider logs)
-    {
-        var directory = Environment.GetEnvironmentVariable(ResultsVariable) is { Length: > 0 } configured
+    private string ResultsDirectory()
+        => Environment.GetEnvironmentVariable(ResultsVariable) is { Length: > 0 } configured
             ? configured
             : Path.Combine(TestContext.TestRunResultsDirectory ?? Path.GetTempPath(), "kiosk-soak");
+
+    /// <summary>An exception on one line of the summary's table.</summary>
+    private static string Describe(Exception exception)
+        => $"{exception.GetType().Name}: {string.Join(' ', exception.Message.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))}"
+            .Replace("|", "\\|", StringComparison.Ordinal);
+
+    private static void WriteResults(string directory, KioskSoakRun run, List<KioskSoakCheck> checks, RecordingLoggerProvider logs)
+    {
         Directory.CreateDirectory(directory);
 
         var summary = new StringBuilder();
@@ -297,7 +340,7 @@ public sealed class KioskSoakScenarios
             }
         }
 
-        File.WriteAllText(Path.Combine(directory, "kiosk-soak-summary.md"), summary.ToString());
+        File.WriteAllText(Path.Combine(directory, SummaryFile), summary.ToString());
 
         var samples = new StringBuilder("elapsed_s,cycles,heap_bytes,threads,connections,restarts\n");
         foreach (var sample in run.Samples)
@@ -305,8 +348,7 @@ public sealed class KioskSoakScenarios
             samples.AppendLine(CultureInfo.InvariantCulture, $"{sample.Elapsed.TotalSeconds:0.0},{sample.Cycles},{sample.HeapBytes},{sample.Threads},{sample.Connections},{sample.Restarts}");
         }
 
-        File.WriteAllText(Path.Combine(directory, "kiosk-soak-samples.csv"), samples.ToString());
-        return directory;
+        File.WriteAllText(Path.Combine(directory, SamplesFile), samples.ToString());
     }
 
     /// <summary>The kiosk's device key, as the installation configures it: a viewer key that may unlock with a PIN.</summary>
@@ -346,11 +388,11 @@ public sealed class KioskSoakScenarios
 
     private static string Megabytes(long bytes) => string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.0} MB");
 
-    private sealed record KioskSoakSample(TimeSpan Elapsed, int Cycles, long HeapBytes, int Threads, int Connections, int Restarts);
+    internal sealed record KioskSoakSample(TimeSpan Elapsed, int Cycles, long HeapBytes, int Threads, int Connections, int Restarts);
 
-    private sealed record KioskSoakCheck(string Name, bool Passed, string Detail);
+    internal sealed record KioskSoakCheck(string Name, bool Passed, string Detail);
 
-    private sealed class KioskSoakRun(TimeSpan duration, TimeSpan warmUp)
+    internal sealed class KioskSoakRun(TimeSpan duration, TimeSpan warmUp)
     {
         private const int MaxNotes = 100;
         private RoofStatusFeedState _feedState;

@@ -100,6 +100,18 @@ public sealed class KioskConsole : IAsyncDisposable
     /// <summary>Raised after <see cref="View"/> changed, on any thread.</summary>
     public event Action? Changed;
 
+    /// <summary>True while a touch's keep-alive request is on its way (for tests: wait for it rather than for a time).</summary>
+    internal bool KeepingAlive
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _keepingAlive;
+            }
+        }
+    }
+
     /// <summary>Starts the status feed, the idle lock and the screen timeout. A second call does nothing.</summary>
     public void Start()
     {
@@ -124,8 +136,9 @@ public sealed class KioskConsole : IAsyncDisposable
     }
 
     /// <summary>
-    /// Records a touch anywhere on the screen: it keeps the kiosk unlocked and the screen on. Returns true when the touch
-    /// only woke a blank screen; the view then does not pass it to the control under it.
+    /// Records a touch anywhere on the screen: it keeps the kiosk unlocked and the screen on. Returns true when the screen
+    /// was blank. Whether the touch also reaches the control under it is the view's to decide, from what it showed: the
+    /// view may not have drawn the blank screen yet.
     /// </summary>
     public bool Touch()
     {

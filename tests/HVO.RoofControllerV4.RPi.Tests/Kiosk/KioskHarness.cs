@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using FluentAssertions;
 using HVO.Core.Results;
@@ -33,6 +34,8 @@ internal sealed class KioskHarness : IAsyncDisposable
 
     public const string Admin = "ada";
 
+    private readonly ConcurrentDictionary<string, int> _sent = new();
+    private readonly ConcurrentDictionary<string, int> _answered = new();
     private RoofStatusResponse _current = Snapshot();
     private long _version = 11;
     private volatile bool _reachable = true;
@@ -140,6 +143,21 @@ internal sealed class KioskHarness : IAsyncDisposable
     public Func<HttpRequestMessage, bool>? CutAnswer { get; set; }
 
     /// <summary>
+    /// Awaited after the controller handled each request and before its answer reaches the kiosk: a slow network, or
+    /// (with a task the test completes) an answer held on its way.
+    /// </summary>
+    public Func<HttpRequestMessage, CancellationToken, Task>? DelayAnswer { get; set; }
+
+    /// <summary>
+    /// How many <paramref name="method"/> requests to <paramref name="path"/> the kiosk has sent, counted as each is sent
+    /// (before any answer, and whether or not the controller is <see cref="Reachable"/>).
+    /// </summary>
+    public int Sent(HttpMethod method, string path) => _sent.GetValueOrDefault(Key(method, path));
+
+    /// <summary>How many of those <see cref="Sent"/> requests the kiosk has had an answer to, or a failure.</summary>
+    public int Answered(HttpMethod method, string path) => _answered.GetValueOrDefault(Key(method, path));
+
+    /// <summary>
     /// A kiosk, not started, with an operator (<see cref="Operator"/>) and an admin (<see cref="Admin"/>) who each have
     /// <see cref="TestSecrets.Pin"/>.
     /// </summary>
@@ -243,23 +261,47 @@ internal sealed class KioskHarness : IAsyncDisposable
         return await ClientTestSupport.WebSocketFactory(() => Host.Server)(uri, headers, cancellationToken);
     }
 
+    private static string Key(HttpMethod method, string path) => $"{method.Method} {path.TrimStart('/')}";
+
     private sealed class GateHandler(KioskHarness harness, HttpMessageHandler inner) : DelegatingHandler(inner)
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            if (!harness.Reachable)
+            var key = Key(request.Method, request.RequestUri!.AbsolutePath);
+            harness._sent.AddOrUpdate(key, 1, static (_, count) => count + 1);
+            try
             {
-                throw new HttpRequestException("Connection refused (test).");
-            }
+                if (!harness.Reachable)
+                {
+                    throw new HttpRequestException("Connection refused (test).");
+                }
 
-            var response = await base.SendAsync(request, cancellationToken);
-            if (harness.CutAnswer?.Invoke(request) == true)
+                var response = await base.SendAsync(request, cancellationToken);
+                if (harness.CutAnswer?.Invoke(request) == true)
+                {
+                    response.Dispose();
+                    throw new HttpRequestException(HttpRequestError.ResponseEnded, "The connection ended before the answer arrived.");
+                }
+
+                if (harness.DelayAnswer is { } delay)
+                {
+                    try
+                    {
+                        await delay(request, cancellationToken);
+                    }
+                    catch
+                    {
+                        response.Dispose();
+                        throw;
+                    }
+                }
+
+                return response;
+            }
+            finally
             {
-                response.Dispose();
-                throw new HttpRequestException(HttpRequestError.ResponseEnded, "The connection ended before the answer arrived.");
+                harness._answered.AddOrUpdate(key, 1, static (_, count) => count + 1);
             }
-
-            return response;
         }
     }
 }

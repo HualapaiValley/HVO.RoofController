@@ -35,6 +35,7 @@ public sealed class KioskSettingsPanel
     public const string NotReadYet = "The settings are not read yet.";
 
     private readonly KioskConsole _console;
+    private CancellationTokenSource _reset = new();
 
     public KioskSettingsPanel(KioskConsole console)
     {
@@ -135,9 +136,15 @@ public sealed class KioskSettingsPanel
         return lines;
     }
 
-    /// <summary>Forgets everything read and typed: the kiosk was locked.</summary>
+    /// <summary>Forgets everything read and typed: the kiosk was locked, or unlocked by someone.</summary>
     public void Reset()
     {
+        // What is still on its way was asked for by the person before: its reads are cancelled, and no answer is shown
+        // to the next person or ends their Busy. A change already sent is not cancelled; only its answer is dropped. The
+        // old source is not disposed: those requests still hold its token, and a source without a timer holds nothing to
+        // free.
+        _reset.Cancel();
+        _reset = new CancellationTokenSource();
         Form = null;
         Busy = null;
         Message = null;
@@ -156,14 +163,25 @@ public sealed class KioskSettingsPanel
             return;
         }
 
+        var reset = _reset.Token;
+        using var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, reset);
         Busy = "Reading the settings…";
         Raise();
         try
         {
-            var catalogue = await _console.Client.Settings.GetCatalogueAsync(cancellationToken);
-            var settings = await _console.Client.Settings.GetAsync(cancellationToken);
+            var catalogue = await _console.Client.Settings.GetCatalogueAsync(reading.Token);
+            var settings = await _console.Client.Settings.GetAsync(reading.Token);
+            if (reset.IsCancellationRequested)
+            {
+                return;
+            }
+
             Show(RoofSettingsForm.Create(catalogue, settings));
             Message = null;
+        }
+        catch (Exception) when (reset.IsCancellationRequested)
+        {
+            // Reset: the page is someone else's now.
         }
         catch (Exception error) when (!cancellationToken.IsCancellationRequested)
         {
@@ -171,8 +189,7 @@ public sealed class KioskSettingsPanel
         }
         finally
         {
-            Busy = null;
-            Raise();
+            Done(reset);
         }
     }
 
@@ -412,12 +429,20 @@ public sealed class KioskSettingsPanel
     {
         var request = edit.ToRequest(confirm);
         var needsRestart = edit.NeedsRestart;
+        var reset = _reset.Token;
         Question = null;
         Busy = "Saving…";
         Raise();
         try
         {
             var saved = await _console.Client.Settings.UpdateAsync(edit.Group.Name, request);
+            // The screen timeout may be what changed, whoever is at the kiosk now.
+            _console.RefreshScreenTimeout();
+            if (reset.IsCancellationRequested)
+            {
+                return;
+            }
+
             CloseEditor();
             var notes = new List<string> { $"Saved (settings version {saved.Version})." };
             // The controller's warnings say why the settings are in memory; this note is for when it gives no reason.
@@ -434,43 +459,53 @@ public sealed class KioskSettingsPanel
             notes.AddRange(saved.Warnings.Select(warning => $"Warning: {warning}"));
             var level = saved.Warnings.Count > 0 || !saved.FileBacked ? KioskNoticeLevel.Warning : KioskNoticeLevel.Info;
             Message = new KioskNotice(string.Join(' ', notes), level, Now);
-            _console.RefreshScreenTimeout();
-            await ReadAgainAsync(null, saved);
+            await ReadAgainAsync(null, saved, reset);
         }
         catch (Exception error)
         {
-            await RefusedAsync($"{edit.Group.Title} could not be saved.", error, alsoReadAgainFor: RoofControllerErrorCode.SettingsHandEditPending);
+            if (!reset.IsCancellationRequested)
+            {
+                await RefusedAsync($"{edit.Group.Title} could not be saved.", error, alsoReadAgainFor: RoofControllerErrorCode.SettingsHandEditPending, reset);
+            }
         }
         finally
         {
-            Busy = null;
-            Raise();
+            Done(reset);
         }
     }
 
     private async Task HandEditAsync(string busy, string done, string failed, Func<CancellationToken, Task<RoofSettingsResponse>> send)
     {
+        var reset = _reset.Token;
         Question = null;
         Busy = busy;
         Raise();
         try
         {
             var saved = await send(CancellationToken.None);
+            // Applying a hand edit may change the screen timeout, whoever is at the kiosk now.
+            _console.RefreshScreenTimeout();
+            if (reset.IsCancellationRequested)
+            {
+                return;
+            }
+
             Message = new KioskNotice(
                 string.Join(' ', saved.Warnings.Select(warning => $"Warning: {warning}").Prepend($"{done} (settings version {saved.Version}).")),
                 saved.Warnings.Count > 0 ? KioskNoticeLevel.Warning : KioskNoticeLevel.Info,
                 Now);
-            _console.RefreshScreenTimeout();
-            await ReadAgainAsync(saved, null);
+            await ReadAgainAsync(saved, null, reset);
         }
         catch (Exception error)
         {
-            await RefusedAsync(failed, error, alsoReadAgainFor: null);
+            if (!reset.IsCancellationRequested)
+            {
+                await RefusedAsync(failed, error, alsoReadAgainFor: null, reset);
+            }
         }
         finally
         {
-            Busy = null;
-            Raise();
+            Done(reset);
         }
     }
 
@@ -478,15 +513,24 @@ public sealed class KioskSettingsPanel
     /// Shows the settings after a change: <paramref name="settings"/> when the change answered with all of them, else
     /// read again. A failure to read keeps the change's message and says the page is from before it.
     /// </summary>
-    private async Task ReadAgainAsync(RoofSettingsResponse? settings, RoofSettingsResponse? saved)
+    private async Task ReadAgainAsync(RoofSettingsResponse? settings, RoofSettingsResponse? saved, CancellationToken reset)
     {
         try
         {
-            var catalogue = await _console.Client.Settings.GetCatalogueAsync();
-            Show(RoofSettingsForm.Create(catalogue, settings ?? await _console.Client.Settings.GetAsync()));
+            var catalogue = await _console.Client.Settings.GetCatalogueAsync(reset);
+            var form = RoofSettingsForm.Create(catalogue, settings ?? await _console.Client.Settings.GetAsync(reset));
+            if (!reset.IsCancellationRequested)
+            {
+                Show(form);
+            }
         }
         catch (Exception error)
         {
+            if (reset.IsCancellationRequested)
+            {
+                return;
+            }
+
             var done = Message?.Text ?? $"Saved (settings version {saved?.Version}).";
             Message = new KioskNotice(
                 $"{done} The settings could not be read again. {RoofText.DescribeFailure(error)} They are shown as they were before the change.",
@@ -496,7 +540,7 @@ public sealed class KioskSettingsPanel
     }
 
     /// <summary>Says why a change failed; after a version conflict (or a hand edit found pending) reads the settings again.</summary>
-    private async Task RefusedAsync(string failed, Exception error, RoofControllerErrorCode? alsoReadAgainFor)
+    private async Task RefusedAsync(string failed, Exception error, RoofControllerErrorCode? alsoReadAgainFor, CancellationToken reset)
     {
         var message = $"{failed} {RoofText.DescribeFailure(error)}";
         Message = new KioskNotice(message, KioskNoticeLevel.Danger, Now);
@@ -505,12 +549,21 @@ public sealed class KioskSettingsPanel
             CloseEditor();
             try
             {
-                var catalogue = await _console.Client.Settings.GetCatalogueAsync();
-                Show(RoofSettingsForm.Create(catalogue, await _console.Client.Settings.GetAsync()));
-                Message = new KioskNotice($"{message} {ReadAgainAfterRefusal}", KioskNoticeLevel.Danger, Now);
+                var catalogue = await _console.Client.Settings.GetCatalogueAsync(reset);
+                var form = RoofSettingsForm.Create(catalogue, await _console.Client.Settings.GetAsync(reset));
+                if (!reset.IsCancellationRequested)
+                {
+                    Show(form);
+                    Message = new KioskNotice($"{message} {ReadAgainAfterRefusal}", KioskNoticeLevel.Danger, Now);
+                }
             }
             catch (Exception readError)
             {
+                if (reset.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 Message = new KioskNotice(
                     $"{message} The settings could not be read again. {RoofText.DescribeFailure(readError)}",
                     KioskNoticeLevel.Danger,
@@ -527,6 +580,16 @@ public sealed class KioskSettingsPanel
         if (Editing is not null)
         {
             Editing = form.FindField(Editing.Key) is { CanWrite: true } editing ? editing : null;
+        }
+    }
+
+    /// <summary>Ends what was on its way, unless <see cref="Reset"/> came first (the page is someone else's then).</summary>
+    private void Done(CancellationToken reset)
+    {
+        if (!reset.IsCancellationRequested)
+        {
+            Busy = null;
+            Raise();
         }
     }
 
