@@ -26,6 +26,12 @@ public static partial class MachineSurveyor
     /// <summary>Where the kiosk's unit file is.</summary>
     public const string KioskUnitFile = "/etc/systemd/system/" + KioskUnit;
 
+    /// <summary>Where the kernel lists the display outputs.</summary>
+    public const string DrmFolder = "/sys/class/drm";
+
+    /// <summary>A desktop's login screen (lightdm on Raspberry Pi OS with a desktop).</summary>
+    public const string DisplayManagerUnit = "display-manager.service";
+
     /// <summary>The Mac app's bundle name.</summary>
     public const string MacAppBundle = "HVO Roof.app";
 
@@ -81,6 +87,7 @@ public static partial class MachineSurveyor
             Controller = controller,
             HatEmulator = emulator,
             Kiosk = await SurveyKioskAsync(machine, cancellationToken).ConfigureAwait(false),
+            Display = await SurveyDisplayAsync(machine, cancellationToken).ConfigureAwait(false),
             Cli = await SurveyCliAsync(machine, cancellationToken).ConfigureAwait(false),
             MacApp = SurveyMacApp(machine),
             Certificate = certificate,
@@ -347,6 +354,46 @@ public static partial class MachineSurveyor
         var active = await machine.Commands.RunAsync(new CommandLine("systemctl", "is-active", KioskUnit), cancellationToken).ConfigureAwait(false);
         return new ServiceSurvey(KioskUnit, enabled.Output.Trim() == "enabled", active.Output.Trim() == "active");
     }
+
+    // Each output is a folder named for its card and connector (card1-HDMI-A-1), with a status file; the cards alone
+    // (card1) and render nodes have none. A writeback output (the Pi's card1-Writeback-1) is not a screen.
+    private static async Task<DisplaySurvey?> SurveyDisplayAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    {
+        if (machine.RuntimeIdentifier != "linux-arm64")
+        {
+            return null;
+        }
+
+        var outputs = new List<(string Name, string Status)>();
+        foreach (var name in machine.ListNames(DrmFolder))
+        {
+            if (OutputPattern().Match(name) is { Success: true } match && !match.Groups["output"].Value.StartsWith("Writeback", StringComparison.Ordinal))
+            {
+                string? status;
+                try
+                {
+                    status = machine.ReadText(Path.Join(DrmFolder, name, "status"));
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    status = null;
+                }
+
+                outputs.Add((match.Groups["output"].Value, status?.Trim() is { Length: > 0 } text ? text : "unknown"));
+            }
+        }
+
+        if (outputs.Count == 0)
+        {
+            return null;
+        }
+
+        var manager = await machine.Commands.RunAsync(new CommandLine("systemctl", "is-active", DisplayManagerUnit), cancellationToken).ConfigureAwait(false);
+        return new DisplaySurvey(outputs, manager.Output.Trim() == "active");
+    }
+
+    [GeneratedRegex("^card[0-9]+-(?<output>[A-Za-z0-9-]+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex OutputPattern();
 
     private static async Task<ProgramSurvey?> SurveyCliAsync(InstallerMachine machine, CancellationToken cancellationToken)
     {

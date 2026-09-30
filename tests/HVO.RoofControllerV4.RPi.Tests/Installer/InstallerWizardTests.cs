@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
@@ -325,6 +326,50 @@ public sealed class InstallerWizardTests
     }
 
     [TestMethod]
+    public async Task TheSettingsPage_AsksHowTheKioskRuns_AndWhoGetsAPin()
+    {
+        using var pi = AdoptablePi().WithDisplay();
+        pi.WithPerson("olga", RoofControllerApiContract.OperatorRole)
+            .WithPerson("ben", RoofControllerApiContract.AdminRole, pin: "864213")
+            .WithPerson("vera", RoofControllerApiContract.ViewerRole);
+        using var wizard = await WizardDriver.StartAsync(pi);
+        wizard.NextTo(1);
+        var roles = (RolesPage)wizard.Page;
+        roles.Choices[InstallRole.Controller].Value = CheckState.Checked;
+        roles.Choices[InstallRole.Kiosk].Value = CheckState.Checked;
+        wizard.NextTo(2);
+        var settings = (SettingsPage)wizard.Page;
+
+        settings.HideCursor!.Value.Should().Be(CheckState.Checked, "the console's cursor shows through the kiosk otherwise");
+        settings.Pins!.Text.Should().BeEmpty();
+        wizard.Screen.Should().Contain("The kiosk on the touchscreen")
+            .And.Contain("Hide the console's cursor behind it (from the next reboot)")
+            .And.Contain("Give a PIN to:")
+            .And.Contain("someone who has one keeps it. Without one").And.Contain("now: olga.");
+        ShouldHaveColours(wizard.ColoursOf("The kiosk on the touchscreen"), RoofUiPalette.Text, RoofUiPalette.Surface);
+        settings.Describe().Should().Contain("Kiosk: the console's cursor hidden; PINs for none");
+        wizard.Render(TestContext, "3-settings-kiosk");
+
+        settings.Pins.Text = "olga ben's";
+        wizard.Press(Key.Enter);
+        wizard.Page.Should().BeSameAs(settings);
+        wizard.Wizard.Message.Should().Be("'ben's' is not a name the controller takes: give the kiosk's PINs to people by the name they sign in with.");
+
+        settings.HideCursor.Value = CheckState.UnChecked;
+        settings.Pins.Text = "olga, Ben olga";
+        wizard.NextTo(4);
+        wizard.Session.Answers.Kiosk.Should().Be(new KioskSettings { HideCursor = false, Pins = ["olga", "Ben"] });
+        wizard.Session.Answers.Kiosk!.Pins.Should().Equal("olga", "Ben");
+
+        wizard.Press(Key.Esc);
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().BeSameAs(settings);
+        settings.HideCursor.Value.Should().Be(CheckState.UnChecked);
+        settings.Pins.Text.Should().Be("olga Ben");
+        settings.Describe().Should().Contain("Kiosk: the console's cursor shown; PINs for olga, Ben");
+    }
+
+    [TestMethod]
     public async Task TheReviewPage_ChecksThePlan_BeforeInstallCanBePressed()
     {
         using var pi = AdoptablePi();
@@ -485,27 +530,26 @@ public sealed class InstallerWizardTests
     [TestMethod]
     public async Task AnInstallTheInstallerCannotDoYet_IsRefused_AndChangesNothing()
     {
-        using var pi = new FakeMachine().WithPi();
-        var log = InstallLog.Open(pi.Machine, InstallPaths.SystemLog, TimeProvider.System);
-        using var wizard = await WizardDriver.StartAsync(pi, log);
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
+        var path = InstallPaths.Log(laptop.Machine);
+        laptop.Folder(Path.GetDirectoryName(path)!);
+        var log = InstallLog.Open(laptop.Machine, path, TimeProvider.System);
+        using var wizard = await WizardDriver.StartAsync(laptop, log);
         wizard.NextTo(1);
-        wizard.Press(Key.Space);
-        wizard.Press(Key.CursorDown);
-        wizard.Press(Key.CursorDown);
-        wizard.Press(Key.Space);
-        ((RolesPage)wizard.Page).Chosen.Should().Equal(InstallRole.Controller, InstallRole.Kiosk);
+        ((RolesPage)wizard.Page).Choices[InstallRole.Cli].Value = CheckState.Checked;
+        ((RolesPage)wizard.Page).Chosen.Should().Equal(InstallRole.Cli);
         wizard.NextTo(4);
-        var before = pi.Snapshot(InstallPaths.SystemLog);
+        var before = laptop.Snapshot(path);
 
         wizard.Press(Key.Enter);
         wizard.WaitIdle("the install", () => wizard.Page is DonePage);
 
         wizard.Wizard.Result.Should().Be(InstallerExitCode.Refused);
-        wizard.Wizard.Failure.Should().StartWith("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed.");
-        wizard.Page.Describe().Should().Equal(wizard.Wizard.Failure, "Nothing was changed.", "The log: /var/log/hvo-roof-install.log");
+        wizard.Wizard.Failure.Should().StartWith("This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed.");
+        wizard.Page.Describe().Should().Equal(wizard.Wizard.Failure, "Nothing was changed.", $"The log: {path}");
         ShouldHaveColours(wizard.ColoursOf("This installer cannot install"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
-        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
-        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet");
+        laptop.Snapshot(path).Should().Equal(before);
+        laptop.Read(path).Should().Contain("Refused: This installer cannot install /home/roy/.local/bin/hvo-roof yet");
         wizard.Render(TestContext, "8-refused");
     }
 

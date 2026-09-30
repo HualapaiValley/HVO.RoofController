@@ -17,7 +17,9 @@ another (a test's local registry). The assets:
   HVO-Roof-<version>.zip                      HVO Roof.app, signed ad hoc
   docker-compose.yaml                         the release compose file, each image pinned to its digest
   deploy-roofcontroller-rpi.sh                the deploy script
-  release.json                                the version, the commit, each image's digest and each asset's SHA-256
+  release.json                                the version, the commit, each image's digest, each asset's SHA-256, and
+                                              the SHA-256 of each file in the kiosk's tarball (the installer checks an
+                                              installed kiosk against them without downloading it)
   SHA256SUMS                                  every asset's SHA-256, release.json's included, as sha256sum writes it
 """
 
@@ -122,7 +124,7 @@ def cli_assets(cli, out):
 
 def kiosk_asset(kiosk, out, version, mtime):
     """The kiosk's files in one folder, in a tarball that is the same for the same files: sorted, owned by root, with
-    fixed modes and the release's time."""
+    fixed modes and the release's time. Returns its name and each file's SHA-256."""
     exact_entries(kiosk, KIOSK_FILES, "The kiosk folder")
     program = kiosk / "hvo-roof-kiosk"
     if processor(program) != "aarch64":
@@ -140,14 +142,16 @@ def kiosk_asset(kiosk, out, version, mtime):
         directory = tarfile.TarInfo(folder)
         directory.type, directory.mode = tarfile.DIRTYPE, 0o755
         add(directory)
+        files = {}
         for file_name in sorted(KIOSK_FILES):
             data = (kiosk / file_name).read_bytes()
             info = tarfile.TarInfo(f"{folder}/{file_name}")
             info.size, info.mode = len(data), KIOSK_FILES[file_name]
             add(info, io.BytesIO(data))
+            files[file_name] = hashlib.sha256(data).hexdigest()
     with open(out / name, "wb") as file, gzip.GzipFile(filename="", mode="wb", fileobj=file, mtime=mtime) as archive:
         archive.write(buffer.getvalue())
-    return name
+    return name, files
 
 
 def mac_asset(mac_zip, out, version):
@@ -180,8 +184,9 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def manifest(out, assets, version, commit, created, registry, digests):
-    """release.json: what the installer and install.sh read to know the release, its images and its files."""
+def manifest(out, assets, version, commit, created, registry, digests, contents):
+    """release.json: what the installer and install.sh read to know the release, its images and its files; an archive
+    in contents lists its files' SHA-256 too."""
     images = {}
     for key, image in (("controller", "roof-controller"), ("hatEmulator", "roof-hat-emulator")):
         repository = f"{registry}/{image}"
@@ -204,7 +209,7 @@ def manifest(out, assets, version, commit, created, registry, digests):
         "images": images,
         "assets": [
             {"name": name, "kind": kind, "platform": platform, "size": (out / name).stat().st_size,
-             "sha256": sha256(out / name)}
+             "sha256": sha256(out / name), **({"files": contents[name]} if name in contents else {})}
             for name, (kind, platform) in sorted(assets.items())
         ],
     }
@@ -227,7 +232,9 @@ def build(arguments):
     assets = {}
     for name in cli_assets(arguments.cli, out):
         assets[name] = ("cli", name.removeprefix("hvo-roof-"))
-    assets[kiosk_asset(arguments.kiosk, out, version, mtime)] = ("kiosk", "linux-arm64")
+    kiosk, kiosk_files = kiosk_asset(arguments.kiosk, out, version, mtime)
+    assets[kiosk] = ("kiosk", "linux-arm64")
+    contents = {kiosk: kiosk_files}
     assets[mac_asset(arguments.mac_zip, out, version)] = ("mac-app", "osx-arm64")
 
     try:
@@ -244,7 +251,7 @@ def build(arguments):
     assets[DEPLOY_SCRIPT.name] = ("deploy-script", None)
 
     digests = {"controller": arguments.controller_digest, "hatEmulator": arguments.emulator_digest}
-    release = manifest(out, assets, version, arguments.commit, arguments.created, arguments.registry, digests)
+    release = manifest(out, assets, version, arguments.commit, arguments.created, arguments.registry, digests, contents)
     (out / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
 
     sums = "".join(f"{sha256(out / name)}  {name}\n" for name in sorted([*assets, "release.json"]))

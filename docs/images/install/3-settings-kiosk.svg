@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="864" height="594" viewBox="0 0 864.00 594.00" role="img" aria-label="hvo-roof-install">
+<g font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" xml:space="preserve" style="white-space: pre">
+<rect x="0" y="0" width="864.00" height="594.00" rx="8" fill="#05070d"/>
+<rect x="0" y="0" width="864.00" height="30" rx="8" fill="#323233"/>
+<rect x="0" y="22" width="864.00" height="8" fill="#323233"/>
+<circle cx="16" cy="15.0" r="6" fill="#ff5f57"/>
+<circle cx="36" cy="15.0" r="6" fill="#febc2e"/>
+<circle cx="56" cy="15.0" r="6" fill="#28c840"/>
+<text x="432.00" y="20.0" fill="#cccccc" text-anchor="middle" font-size="13">hvo-roof-install</text>
+<rect x="20.40" y="60" width="823.60" height="18.4" fill="#0e1628"/>
+<rect x="37.20" y="78" width="59.20" height="18.4" fill="#2563eb"/>
+<rect x="28.80" y="96" width="244.00" height="18.4" fill="#0e1628"/>
+<rect x="247.20" y="204" width="67.60" height="18.4" fill="#0e1628"/>
+<rect x="247.20" y="222" width="67.60" height="18.4" fill="#0e1628"/>
+<rect x="247.20" y="240" width="67.60" height="18.4" fill="#0e1628"/>
+<rect x="28.80" y="276" width="202.00" height="18.4" fill="#0e1628"/>
+<rect x="247.20" y="294" width="336.40" height="18.4" fill="#0e1628"/>
+<rect x="247.20" y="312" width="336.40" height="18.4" fill="#0e1628"/>
+<rect x="28.80" y="384" width="235.60" height="18.4" fill="#0e1628"/>
+<rect x="247.20" y="420" width="336.40" height="18.4" fill="#0e1628"/>
+<rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
+<rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
+<rect x="196.80" y="537.00" width="4.50" height="9.30" fill="#000000"/>
+<line x1="16.20" y1="50.40" x2="16.20" y2="573.60" stroke="#abb0b7" stroke-width="1.2"/>
+<line x1="15.60" y1="51.00" x2="25.20" y2="51.00" stroke="#abb0b7" stroke-width="1.2"/>
+<line x1="234.00" y1="51.00" x2="848.40" y2="51.00" stroke="#abb0b7" stroke-width="1.2"/>
+<line x1="24.60" y1="41.40" x2="24.60" y2="60.60" stroke="#abb0b7" stroke-width="1.2"/>
+<line x1="234.60" y1="41.40" x2="234.60" y2="60.60" stroke="#abb0b7" stroke-width="1.2"/>
+<line x1="847.80" y1="50.40" x2="847.80" y2="573.60" stroke="#abb0b7" stroke-width="1.2"/>
+<line x1="33.00" y1="77.40" x2="33.00" y2="96.60" stroke="#2d333d" stroke-width="1.2"/>
+<line x1="28.20" y1="87.00" x2="33.60" y2="87.00" stroke="#2d333d" stroke-width="1.2"/>
+<line x1="99.60" y1="87.00" x2="835.80" y2="87.00" stroke="#2d333d" stroke-width="1.2"/>
+<line x1="100.20" y1="77.40" x2="100.20" y2="96.60" stroke="#2d333d" stroke-width="1.2"/>
+<line x1="24.60" y1="95.40" x2="24.60" y2="510.60" stroke="#2d333d" stroke-width="1.2"/>
+<line x1="839.40" y1="95.40" x2="839.40" y2="510.60" stroke="#2d333d" stroke-width="1.2"/>
+<line x1="28.20" y1="519.00" x2="835.80" y2="519.00" stroke="#2d333d" stroke-width="1.2"/>
+<line x1="15.60" y1="573.00" x2="848.40" y2="573.00" stroke="#abb0b7" stroke-width="1.2"/>
+<path d="M28.80,87.00 Q24.60,87.00 24.60,96.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
+<path d="M835.20,87.00 Q839.40,87.00 839.40,96.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
+<path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
+<path d="M839.40,510.00 Q839.40,519.00 835.20,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
+<text x="28.80" y="55.50" fill="#abb0b7" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
+<text x="20.40" y="73.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 3 of 7: Choices</text>
+<text x="37.20" y="91.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Choices</text>
+<text x="28.80" y="109.50" fill="#f8fafc" textLength="243.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">How the controller is reached</text>
+<text x="45.60" y="127.50" fill="#f8fafc" textLength="714.00" lengthAdjust="spacingAndGlyphs">◉ HTTPS, with a certificate from this installer's certificate authority (recommended)</text>
+<text x="45.60" y="145.50" fill="#f8fafc" textLength="285.60" lengthAdjust="spacingAndGlyphs">○ HTTPS, with your own certificate</text>
+<text x="45.60" y="163.50" fill="#f8fafc" textLength="512.40" lengthAdjust="spacingAndGlyphs">○ HTTPS, with a self-signed certificate that each client pins</text>
+<text x="45.60" y="181.50" fill="#f8fafc" textLength="470.40" lengthAdjust="spacingAndGlyphs">○ HTTP, with no encryption (only on a network you trust)</text>
+<text x="45.60" y="217.50" fill="#f8fafc" textLength="176.40" lengthAdjust="spacingAndGlyphs">HTTPS port (the API):</text>
+<text x="247.20" y="217.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">8443</text>
+<text x="45.60" y="235.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">HTTP port (the API):</text>
+<text x="247.20" y="235.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">8080</text>
+<text x="45.60" y="253.50" fill="#f8fafc" textLength="100.80" lengthAdjust="spacingAndGlyphs">Web UI port:</text>
+<text x="247.20" y="253.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">8088</text>
+<text x="28.80" y="289.50" fill="#f8fafc" textLength="201.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">Names clients use for it</text>
+<text x="45.60" y="307.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs">Other host names:</text>
+<text x="45.60" y="325.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Domains:</text>
+<text x="45.60" y="343.50" fill="#f8fafc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Separate them with spaces. The controller answers to roofpi and each of these, alone, under</text>
+<text x="45.60" y="361.50" fill="#f8fafc" textLength="554.40" lengthAdjust="spacingAndGlyphs">.local and under each domain, and its certificate is for them all.</text>
+<text x="28.80" y="397.50" fill="#f8fafc" textLength="235.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">The kiosk on the touchscreen</text>
+<text x="45.60" y="415.50" fill="#f8fafc" textLength="504.00" lengthAdjust="spacingAndGlyphs">☑ Hide the console's cursor behind it (from the next reboot)</text>
+<text x="45.60" y="433.50" fill="#f8fafc" textLength="117.60" lengthAdjust="spacingAndGlyphs">Give a PIN to:</text>
+<text x="45.60" y="451.50" fill="#f8fafc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Operators and admins already on the controller, by the name they sign in with, separated by</text>
+<text x="45.60" y="469.50" fill="#f8fafc" textLength="764.40" lengthAdjust="spacingAndGlyphs">spaces. Each is asked for a PIN after the review; someone who has one keeps it. Without one</text>
+<text x="45.60" y="487.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">now: olga.</text>
+<text x="20.40" y="541.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">⟦ Back ⟧</text>
+<text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Next ◄⟧</text>
+<text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>
+<text x="70.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Next</text>
+<text x="121.20" y="559.50" fill="#3b82f6" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Esc</text>
+<text x="154.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Back</text>
+<text x="205.20" y="559.50" fill="#3b82f6" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">F10</text>
+<text x="238.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Quit</text>
+</g>
+</svg>

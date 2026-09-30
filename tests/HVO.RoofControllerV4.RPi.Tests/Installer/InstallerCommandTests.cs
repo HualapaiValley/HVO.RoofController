@@ -175,18 +175,19 @@ public sealed class InstallerCommandTests
     [TestMethod]
     public async Task Answers_ThatNeedWhatThisInstallerCannotInstallYet_AreRefused_BeforeAnythingChanges()
     {
-        using var pi = new FakeMachine().WithPi();
-        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller, InstallRole.Kiosk] });
-        var before = pi.Snapshot();
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
+        var answers = laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli] });
+        var log = InstallPaths.Log(laptop.Machine);
+        laptop.Folder(Path.GetDirectoryName(log)!);
+        var before = laptop.Snapshot();
 
-        var run = await pi.RunAsync("--answers", answers);
+        var run = await laptop.RunAsync("--answers", answers);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-        run.Error.Should().Be("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed. The plan (--plan) shows what an install will do." + Environment.NewLine);
+        run.Error.Should().Be("This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed. The plan (--plan) shows what an install will do." + Environment.NewLine);
         run.Output.Should().NotContain("Creating");
-        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before, "only the log is written");
-        pi.Read(InstallPaths.SystemLog).Should().Contain("Refused: This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet");
-        pi.Deploys.Should().BeEmpty();
+        laptop.Snapshot(log).Should().Equal(before, "only the log is written");
+        laptop.Read(log).Should().Contain("Refused: This installer cannot install /home/roy/.local/bin/hvo-roof yet");
     }
 
     [TestMethod]

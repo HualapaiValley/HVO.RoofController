@@ -3,6 +3,7 @@ using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
@@ -64,6 +65,7 @@ public sealed class InstallerMachine
         NetworkAddresses = NetworkAddresses,
         ServedCertificateAsync = ServedCertificateAsync,
         DownloadTextAsync = DownloadTextAsync,
+        DownloadToAsync = DownloadToAsync,
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory
     };
@@ -88,6 +90,13 @@ public sealed class InstallerMachine
     /// why not. Redirects are followed; anything over a megabyte is refused.
     /// </summary>
     public Func<Uri, CancellationToken, Task<string>> DownloadTextAsync { get; init; } = DownloadAsync;
+
+    /// <summary>
+    /// Downloads a file over HTTPS (a release's kiosk) into the stream, or throws an <see cref="HttpRequestException"/>
+    /// saying why not, or an <see cref="InvalidDataException"/> when it is larger than the most given. Redirects are
+    /// followed.
+    /// </summary>
+    public Func<Uri, Stream, long, CancellationToken, Task> DownloadToAsync { get; init; } = DownloadStreamAsync;
 
     /// <summary>
     /// The innermost handler for the controller's API, or null for the client's own. A test puts a fake controller
@@ -165,6 +174,42 @@ public sealed class InstallerMachine
             : [];
     }
 
+    /// <summary>The names of the entries in the folder (files, folders and links), sorted; none when it is not there.</summary>
+    public IReadOnlyList<string> ListNames(string path)
+    {
+        var onDisk = OnDisk(path);
+        return Directory.Exists(onDisk)
+            ? [.. Directory.EnumerateFileSystemEntries(onDisk).Select(Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal)]
+            : [];
+    }
+
+    /// <summary>
+    /// Downloads <paramref name="uri"/> to <paramref name="path"/>, a new file only its owner may read, of no more than
+    /// <paramref name="maxBytes"/>: a download that fails leaves no file.
+    /// </summary>
+    public async Task DownloadFileAsync(Uri uri, string path, long maxBytes, CancellationToken cancellationToken)
+    {
+        var onDisk = OnDisk(path);
+        var stream = new FileStream(onDisk, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            UnixCreateMode = Modes.PrivateFile
+        });
+        try
+        {
+            await using (stream.ConfigureAwait(false))
+            {
+                await DownloadToAsync(uri, stream, maxBytes, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            File.Delete(onDisk);
+            throw;
+        }
+    }
+
     /// <summary>Deletes the folder and everything in it; nothing when it is not there.</summary>
     public void DeleteDirectory(string path)
     {
@@ -229,6 +274,118 @@ public sealed class InstallerMachine
     public void WriteAtomically(string path, string content, UnixFileMode mode)
         => WriteAtomically(path, Encoding.UTF8.GetBytes(content), mode);
 
+    /// <summary>
+    /// Replaces a file's text in one step, through a new file renamed over it, and sets no mode: for a file system that
+    /// keeps none (the Pi's FAT boot partition, where setting one fails).
+    /// </summary>
+    public void ReplaceText(string path, string content)
+    {
+        var onDisk = OnDisk(path);
+        var temporary = $"{onDisk}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write))
+            {
+                stream.Write(Encoding.UTF8.GetBytes(content));
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, onDisk, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes <paramref name="path"/> in one step, as <see cref="WriteAtomically(string, byte[], UnixFileMode)"/> does,
+    /// with what <paramref name="write"/> puts in the stream it is given: when it throws, the old file stays as it was.
+    /// </summary>
+    public async Task WriteAtomicallyAsync(string path, Func<Stream, CancellationToken, Task> write, UnixFileMode mode, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+        var onDisk = OnDisk(path);
+        var temporary = $"{onDisk}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            var stream = new FileStream(temporary, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                UnixCreateMode = mode
+            });
+            await using (stream.ConfigureAwait(false))
+            {
+                await write(stream, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.SetUnixFileMode(temporary, mode);
+            File.Move(temporary, onDisk, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    /// <summary>Copies <paramref name="source"/> to <paramref name="destination"/> in one step, with <paramref name="mode"/>.</summary>
+    public Task CopyFileAsync(string source, string destination, UnixFileMode mode, CancellationToken cancellationToken)
+        => WriteAtomicallyAsync(
+            destination,
+            async (stream, token) =>
+            {
+                var from = OpenRead(source) ?? throw new FileNotFoundException($"{source} is not there.", source);
+                await using (from.ConfigureAwait(false))
+                {
+                    await from.CopyToAsync(stream, token).ConfigureAwait(false);
+                }
+            },
+            mode,
+            cancellationToken);
+
+    /// <summary>The file, open to read, or null when there is no such file.</summary>
+    public Stream? OpenRead(string path)
+    {
+        try
+        {
+            return new FileStream(OnDisk(path), FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The file's SHA-256, in lower-case hex, or null when there is no such file.</summary>
+    public async Task<string?> Sha256Async(string path, CancellationToken cancellationToken)
+    {
+        var stream = OpenRead(path);
+        if (stream is null)
+        {
+            return null;
+        }
+
+        await using (stream.ConfigureAwait(false))
+        {
+            return Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+        }
+    }
+
+    /// <summary>Renames <paramref name="source"/> over <paramref name="destination"/>, in one step.</summary>
+    public void MoveFile(string source, string destination) => File.Move(OnDisk(source), OnDisk(destination), overwrite: true);
+
+    /// <summary>Deletes the file; nothing when it is not there.</summary>
+    public void DeleteFile(string path) => File.Delete(OnDisk(path));
+
     /// <summary>Adds a line to the end of the file, making the file with <paramref name="mode"/> when it is not there.</summary>
     public void AppendLine(string path, string line, UnixFileMode mode)
     {
@@ -273,6 +430,37 @@ public sealed class InstallerMachine
         }
 
         return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task DownloadStreamAsync(Uri uri, Stream destination, long limit, CancellationToken cancellationToken)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("hvo-roof-install");
+        using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}.", null, response.StatusCode);
+        }
+
+        if (response.Content.Headers.ContentLength is > 0 and var length && length > limit)
+        {
+            throw new InvalidDataException($"It is {length} bytes, more than the {limit} expected.");
+        }
+
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            total += read;
+            if (total > limit)
+            {
+                throw new InvalidDataException($"It is more than the {limit} bytes expected.");
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static bool AnswersOnLoopback(int port)
@@ -417,6 +605,9 @@ public static class Modes
 
     /// <summary>0600: a file only its owner may read.</summary>
     public const UnixFileMode PrivateFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    /// <summary>0400: a file only its owner may read, and nobody writes.</summary>
+    public const UnixFileMode OwnerReadOnly = UnixFileMode.UserRead;
 
     /// <summary>0755: a program.</summary>
     public const UnixFileMode Program = Folder;

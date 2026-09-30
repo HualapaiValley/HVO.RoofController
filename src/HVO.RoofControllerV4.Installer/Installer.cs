@@ -1,4 +1,5 @@
 using System.CommandLine;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Plan;
@@ -55,13 +56,20 @@ public static class Installer
         {
             Description = "Print the installer's version (the release it installs) and change nothing."
         };
-        var secretFiles = Enum.GetValues<InstallSecret>().ToDictionary(
+        var secretFiles = InstallSecret.WithOwnOption.ToDictionary(
             secret => secret,
             secret => new Option<string?>(InstallSecrets.OptionName(secret))
             {
                 Description = $"Read {InstallSecrets.Describe(secret)} from the first line of this file, which only you may read, in place of typing it.",
                 HelpName = "FILE"
             });
+        var pinFiles = new Option<string[]>(InstallSecrets.PinFileOption)
+        {
+            Description = "Read a person's PIN for the kiosk from the first line of this file, which only you may read, in place of typing it. "
+                + "Give it once for each person.",
+            HelpName = "NAME=FILE",
+            Arity = ArgumentArity.ZeroOrMore
+        };
         var root = new RootCommand(
             "Installs the roof controller, a test rig, the kiosk, hvo-roof or the Mac app on this machine, and records what it installed. "
             + "With no options it opens the wizard. It never moves the roof.");
@@ -81,6 +89,8 @@ public static class Installer
             root.Options.Add(option);
         }
 
+        root.Options.Add(pinFiles);
+
         root.Subcommands.Add(CertificateCommands.Create(host));
         root.SetAction((parseResult, token) =>
         {
@@ -95,7 +105,8 @@ public static class Installer
                 SecretFiles = secretFiles
                     .Select(option => (option.Key, File: parseResult.GetValue(option.Value)))
                     .Where(option => option.File is not null)
-                    .ToDictionary(option => option.Key, option => option.File!)
+                    .ToDictionary(option => option.Key, option => option.File!),
+                PinFiles = parseResult.GetValue(pinFiles) ?? []
             };
             return RunAsync(host, options, token);
         });
@@ -131,6 +142,32 @@ public static class Installer
     {
         /// <summary><c>--admin-password-file</c> and the others: the files that hold the passwords and PINs.</summary>
         public IReadOnlyDictionary<InstallSecret, string> SecretFiles { get; init; } = new Dictionary<InstallSecret, string>();
+
+        /// <summary><c>--pin-file NAME=FILE</c>, as given: the files that hold people's PINs for the kiosk.</summary>
+        public IReadOnlyList<string> PinFiles { get; init; } = [];
+
+        /// <summary>Every file that holds a secret, <see cref="PinFiles"/> included. Throws <see cref="InstallerUsageException"/> for a <c>--pin-file</c> that is not NAME=FILE.</summary>
+        public IReadOnlyDictionary<InstallSecret, string> AllSecretFiles()
+        {
+            var files = new Dictionary<InstallSecret, string>(SecretFiles);
+            foreach (var given in PinFiles)
+            {
+                var equals = given.IndexOf('=', StringComparison.Ordinal);
+                var name = equals > 0 ? given[..equals].Trim() : "";
+                var file = equals > 0 ? given[(equals + 1)..] : "";
+                if (!RoofIdentityContract.IsValidName(name) || file.Length == 0)
+                {
+                    throw new InstallerUsageException($"{InstallSecrets.PinFileOption} {given}: give a person's name and a file, as {InstallSecrets.PinFileOption} olga=olga.pin.");
+                }
+
+                if (!files.TryAdd(InstallSecret.PinFor(name), file))
+                {
+                    throw new InstallerUsageException($"{InstallSecrets.PinFileOption} gives {name}'s PIN twice.");
+                }
+            }
+
+            return files;
+        }
 
         public ReleaseSource Release(InstallerHost host) => Installer.Release(host, ReleaseFolder);
     }
@@ -377,7 +414,7 @@ public static class Installer
     // The passwords and PINs given in files (--admin-password-file and the others), each checked before anything is planned.
     private static void GiveSecretFiles(InstallerHost host, InstallerSession session, RunOptions options)
     {
-        foreach (var (secret, file) in options.SecretFiles.OrderBy(pair => pair.Key))
+        foreach (var (secret, file) in options.AllSecretFiles().OrderBy(pair => pair.Key))
         {
             session.GiveSecret(secret, InstallSecrets.ReadFile(host.Machine, secret, Path.GetFullPath(file, host.Machine.CurrentDirectory)));
         }
@@ -392,7 +429,7 @@ public static class Installer
         var missing = session.MissingSecrets(plan);
         foreach (var secret in missing)
         {
-            if (secret == InstallSecret.CameraPassword)
+            if (secret.Kind == InstallSecretKind.CameraPassword)
             {
                 host.Error.WriteLine(CameraCredentialReminder);
             }
@@ -426,7 +463,7 @@ public static class Installer
                     return typed;
                 }
 
-                problem = secret == InstallSecret.AdminPin ? "The two PINs differ." : "The two passwords differ.";
+                problem = secret.IsPin ? "The two PINs differ." : "The two passwords differ.";
             }
 
             host.Error.WriteLine(problem);
@@ -442,7 +479,7 @@ public static class Installer
         var them = missing.Count == 1 ? "it" : "them";
         return new InstallerUsageException(
             $"The install needs {string.Join(" and ", missing.Select(InstallSecrets.Describe))}, and there is no terminal to type {them} at: "
-            + $"give {them} with {string.Join(" and ", missing.Select(secret => $"{InstallSecrets.OptionName(secret)} FILE"))}. Nothing was changed.");
+            + $"give {them} with {string.Join(" and ", missing.Select(InstallSecrets.OptionUsage))}. Nothing was changed.");
     }
 
     // What needs doing about the certificate: the wizard shows it on its first page, and every other run says it too.

@@ -50,6 +50,9 @@ public sealed record InstallRecord
 
     public MacAppSettings? MacApp { get; init; }
 
+    /// <summary>The kiosk's choices, without the people given PINs (they are given once).</summary>
+    public KioskSettings? Kiosk { get; init; }
+
     /// <summary>True when the record says this machine drives the real HAT.</summary>
     [JsonIgnore]
     public bool DrivesRealHat => Hat == HatMode.Real || Roles.Contains(InstallRole.Controller);
@@ -60,7 +63,8 @@ public sealed record InstallRecord
         Roles = Roles,
         Controller = Controller,
         Cli = Cli,
-        MacApp = MacApp
+        MacApp = MacApp,
+        Kiosk = Kiosk
     }.Normalised();
 
     public string ToJson() => JsonSerializer.Serialize(this, InstallerJson.Options) + "\n";

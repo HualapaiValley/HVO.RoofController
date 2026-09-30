@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -33,7 +34,7 @@ public sealed partial class InstallerDocsTests
     public void TheAnswersFileExamples_AreOnesTheInstallerReads()
     {
         var examples = JsonBlock().Matches(Page);
-        examples.Should().HaveCountGreaterThanOrEqualTo(2, "docs/install.md shows an answers file for the controller, and one for a rig");
+        examples.Should().HaveCountGreaterThanOrEqualTo(3, "docs/install.md shows an answers file for the controller, one for a rig, and one with the kiosk");
 
         var answers = InstallAnswers.Parse(examples[0].Groups[1].Value);
         answers.Roles.Should().Equal(InstallRole.Controller);
@@ -51,6 +52,11 @@ public sealed partial class InstallerDocsTests
         var rig = InstallAnswers.Parse(examples[1].Groups[1].Value);
         rig.Roles.Should().Equal(InstallRole.Rig);
         rig.Controller!.Rig.Should().Be(new RigSettings { TimeScale = 10, CameraFramesPerSecond = RigSettings.DefaultCameraFramesPerSecond });
+
+        var kiosk = InstallAnswers.Parse(examples[2].Groups[1].Value);
+        kiosk.Roles.Should().Equal(InstallRole.Controller, InstallRole.Kiosk);
+        kiosk.Kiosk.Should().BeEquivalentTo(new KioskSettings { HideCursor = true, Pins = ["olga"] });
+        kiosk.Problems().Should().BeEmpty();
     }
 
     [TestMethod]

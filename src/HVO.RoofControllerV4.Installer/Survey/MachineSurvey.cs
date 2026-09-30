@@ -73,6 +73,9 @@ public sealed record MachineSurvey
     /// <summary>The kiosk's service, when its unit is installed.</summary>
     public ServiceSurvey? Kiosk { get; init; }
 
+    /// <summary>The screens a kiosk could draw on: on a 64-bit Linux machine with a display controller; null elsewhere.</summary>
+    public DisplaySurvey? Display { get; init; }
+
     /// <summary>hvo-roof on the PATH, when it is there.</summary>
     public ProgramSurvey? Cli { get; init; }
 
@@ -117,6 +120,18 @@ public static class HatDevices
     public const string GpioMemory = "/dev/gpiomem";
     public const string ThermalSensor = "/sys/class/thermal/thermal_zone0/temp";
     public const string PiModel = "/proc/device-tree/model";
+}
+
+/// <summary>
+/// A machine's display outputs, as its kernel lists them (<c>/sys/class/drm/card1-DSI-1</c>), and whether a desktop has
+/// the screen: the kiosk draws on it itself, and cannot while a display manager does.
+/// </summary>
+/// <param name="Outputs">Each output (DSI-1, HDMI-A-1) and what its status says: connected, disconnected or unknown.</param>
+/// <param name="DisplayManagerActive">True when display-manager.service (a desktop's login screen) is running.</param>
+public sealed record DisplaySurvey(IReadOnlyList<(string Name, string Status)> Outputs, bool DisplayManagerActive)
+{
+    /// <summary>The outputs with a screen on them, or that cannot tell (a panel may say unknown).</summary>
+    public IReadOnlyList<string> Screens => [.. Outputs.Where(output => output.Status is "connected" or "unknown").Select(output => output.Name)];
 }
 
 /// <summary>Docker, as the installer found it.</summary>

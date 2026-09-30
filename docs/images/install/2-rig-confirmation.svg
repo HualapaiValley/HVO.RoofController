@@ -9,11 +9,14 @@
 <text x="432.00" y="20.0" fill="#cccccc" text-anchor="middle" font-size="13">hvo-roof-install</text>
 <rect x="20.40" y="60" width="823.60" height="18.4" fill="#0e1628"/>
 <rect x="37.20" y="78" width="126.40" height="18.4" fill="#2563eb"/>
-<rect x="28.80" y="204" width="160.00" height="18.4" fill="#1c2028"/>
-<rect x="62.40" y="222" width="773.20" height="18.4" fill="#42380f"/>
-<rect x="28.80" y="258" width="806.80" height="18.4" fill="#42380f"/>
-<rect x="28.80" y="276" width="806.80" height="18.4" fill="#42380f"/>
-<rect x="28.80" y="294" width="336.40" height="18.4" fill="#0e1628"/>
+<rect x="28.80" y="168" width="395.20" height="18.4" fill="#1c2028"/>
+<rect x="62.40" y="186" width="773.20" height="18.4" fill="#42380f"/>
+<rect x="62.40" y="204" width="773.20" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="240" width="160.00" height="18.4" fill="#1c2028"/>
+<rect x="62.40" y="258" width="773.20" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="294" width="806.80" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="312" width="806.80" height="18.4" fill="#42380f"/>
+<rect x="28.80" y="330" width="336.40" height="18.4" fill="#0e1628"/>
 <rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="196.80" y="537.00" width="4.50" height="9.30" fill="#000000"/>
@@ -41,13 +44,15 @@
 <text x="28.80" y="109.50" fill="#f8fafc" textLength="604.80" lengthAdjust="spacingAndGlyphs">Choose what this machine is for. Roles this machine cannot have say why.</text>
 <text x="28.80" y="145.50" fill="#f8fafc" textLength="613.20" lengthAdjust="spacingAndGlyphs">☐ Controller: drives the roof through the real HAT (the observatory's Pi)</text>
 <text x="28.80" y="163.50" fill="#f8fafc" textLength="562.80" lengthAdjust="spacingAndGlyphs">☑ Test rig: the controller against the HAT emulator (nothing moves)</text>
-<text x="28.80" y="181.50" fill="#f8fafc" textLength="394.80" lengthAdjust="spacingAndGlyphs">☐ Kiosk: the touchscreen on the controller's Pi</text>
-<text x="28.80" y="199.50" fill="#f8fafc" textLength="294.00" lengthAdjust="spacingAndGlyphs">☐ hvo-roof: the command-line client</text>
-<text x="28.80" y="217.50" fill="#aeb9c8" textLength="159.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">☐ Mac app: HVO Roof</text>
-<text x="62.40" y="235.50" fill="#fef9c3" textLength="378.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">The Mac app runs on a Mac with Apple silicon.</text>
-<text x="28.80" y="271.50" fill="#fef9c3" textLength="756.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">This machine has the HAT's I2C bus (/dev/i2c-1). A test rig must never be installed on the</text>
-<text x="28.80" y="289.50" fill="#fef9c3" textLength="655.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">observatory's Pi. Type this machine's host name (roofpi) to confirm it is not.</text>
-<text x="28.80" y="307.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">roofpi</text>
+<text x="28.80" y="181.50" fill="#aeb9c8" textLength="394.80" lengthAdjust="spacingAndGlyphs" opacity="0.6">☐ Kiosk: the touchscreen on the controller's Pi</text>
+<text x="62.40" y="199.50" fill="#fef9c3" textLength="747.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">The kiosk needs a screen, and this Pi has no display outputs (/sys/class/drm lists none):</text>
+<text x="62.40" y="217.50" fill="#fef9c3" textLength="512.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">connect the touchscreen, reboot, and run the installer again.</text>
+<text x="28.80" y="235.50" fill="#f8fafc" textLength="294.00" lengthAdjust="spacingAndGlyphs">☐ hvo-roof: the command-line client</text>
+<text x="28.80" y="253.50" fill="#aeb9c8" textLength="159.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">☐ Mac app: HVO Roof</text>
+<text x="62.40" y="271.50" fill="#fef9c3" textLength="378.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">The Mac app runs on a Mac with Apple silicon.</text>
+<text x="28.80" y="307.50" fill="#fef9c3" textLength="756.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">This machine has the HAT's I2C bus (/dev/i2c-1). A test rig must never be installed on the</text>
+<text x="28.80" y="325.50" fill="#fef9c3" textLength="655.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">observatory's Pi. Type this machine's host name (roofpi) to confirm it is not.</text>
+<text x="28.80" y="343.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">roofpi</text>
 <text x="20.40" y="541.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Next ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>

@@ -230,7 +230,11 @@ public sealed class InstallerSession
         if (answers.Roles.Contains(InstallRole.Kiosk))
         {
             lines.Add(string.Empty);
-            lines.Add($"The kiosk starts on the touchscreen when the Pi starts ({MachineSurveyor.KioskUnit}).");
+            lines.Add($"The kiosk runs on the touchscreen, and starts when the Pi does ({MachineSurveyor.KioskUnit}). Its log: journalctl -u {MachineSurveyor.KioskUnit}");
+            if (answers.Kiosk?.HideCursor == true && !KioskCursorStep.Hidden(Machine))
+            {
+                lines.Add("Reboot to hide the console's cursor behind the kiosk: sudo reboot");
+            }
         }
 
         if (answers.Cli is { } cli)

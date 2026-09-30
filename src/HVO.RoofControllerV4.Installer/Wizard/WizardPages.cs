@@ -1,5 +1,6 @@
 using System.Globalization;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Plan;
@@ -256,6 +257,8 @@ internal sealed class SettingsPage : WizardPage
     private Label? _namesHint;
     private Label? _httpPrompt;
     private TextField? _httpConfirmation;
+    private CheckBox? _hideCursor;
+    private TextField? _pins;
     private OptionSelector? _cliFolder;
     private OptionSelector? _macAppFolder;
     private readonly List<string> _description = [];
@@ -282,6 +285,12 @@ internal sealed class SettingsPage : WizardPage
     /// <summary>Where the person types http to confirm plain HTTP; shown only when that needs confirming.</summary>
     public TextField? HttpConfirmation => _httpConfirmation;
 
+    /// <summary>Whether the console's cursor is hidden behind the kiosk.</summary>
+    public CheckBox? HideCursor => _hideCursor;
+
+    /// <summary>The people on the controller to give a PIN for the kiosk, separated by spaces.</summary>
+    public TextField? Pins => _pins;
+
     public OptionSelector? CliFolder => _cliFolder;
 
     public OptionSelector? MacAppFolder => _macAppFolder;
@@ -290,7 +299,8 @@ internal sealed class SettingsPage : WizardPage
     {
         Clear();
         _connection = _cliFolder = _macAppFolder = null;
-        _httpsPort = _httpPort = _webPort = _hostNames = _domains = _httpConfirmation = null;
+        _httpsPort = _httpPort = _webPort = _hostNames = _domains = _httpConfirmation = _pins = null;
+        _hideCursor = null;
         _namesHint = _httpPrompt = null;
         _description.Clear();
         var answers = Session.Answers.Normalised();
@@ -314,6 +324,15 @@ internal sealed class SettingsPage : WizardPage
             Add(_namesHint);
             previous = _namesHint;
             _description.Add($"Names: {Listed(controller.HostNames)}; domains: {Listed(controller.Domains)}");
+        }
+
+        if (answers.Kiosk is { } kiosk)
+        {
+            previous = Heading(previous, "The kiosk on the touchscreen");
+            _hideCursor = Check(ref previous, "Hide the console's cursor behind it (from the next reboot)", kiosk.HideCursor);
+            _pins = Field(ref previous, "Give a PIN to", string.Join(' ', kiosk.Pins), 40);
+            previous = Hint(previous, PinsHint());
+            _description.Add($"Kiosk: the console's cursor {(kiosk.HideCursor ? "hidden" : "shown")}; PINs for {Listed(kiosk.Pins)}");
         }
 
         if (answers.Cli is { } cli)
@@ -369,6 +388,11 @@ internal sealed class SettingsPage : WizardPage
                 },
                 HttpConfirmation = _httpConfirmation is { Visible: true } confirmation ? confirmation.Text : null
             };
+        }
+
+        if (answers.Kiosk is not null && _hideCursor is not null && _pins is not null)
+        {
+            answers = answers with { Kiosk = new KioskSettings { HideCursor = _hideCursor.Value == CheckState.Checked, Pins = Names(_pins.Text) } };
         }
 
         if (answers.Cli is not null && _cliFolder is not null)
@@ -435,6 +459,27 @@ internal sealed class SettingsPage : WizardPage
     }
 
     private static string Listed(IReadOnlyList<string> names) => names.Count == 0 ? "none" : string.Join(", ", names);
+
+    // Who may be given a PIN: the controller's operators and admins, by the name they sign in with; those without one
+    // named, when the installer can read who they are.
+    private string PinsHint()
+    {
+        const string Hint = "Operators and admins already on the controller, by the name they sign in with, separated by spaces. "
+            + "Each is asked for a PIN after the review; someone who has one keeps it.";
+        IReadOnlyList<IdentityEntry> people;
+        try
+        {
+            people = ControllerIdentity.Read(Session.Machine, ControllerLayout.For(Session.Machine).IdentityFile).Users;
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or InstallerException)
+        {
+            return Hint;
+        }
+
+        var without = people.Where(person => !person.HasPin && !person.Role.Equals(RoofControllerApiContract.ViewerRole, StringComparison.OrdinalIgnoreCase))
+            .Select(person => person.Name).ToList();
+        return without.Count == 0 ? Hint : $"{Hint} Without one now: {string.Join(", ", without)}.";
+    }
 
     // Names as a person types them: separated by spaces, commas or semicolons.
     private static IReadOnlyList<string> Names(string text)
@@ -771,6 +816,7 @@ internal sealed class PasswordsPage : WizardPage
         View previous = Wrapping(new Label { Text = intro, X = 0, Y = 0 });
         Add(previous);
         _description.Add(intro);
+        var pinRuleShown = false;
         foreach (var secret in missing)
         {
             var what = InstallSecrets.Describe(secret);
@@ -778,12 +824,12 @@ internal sealed class PasswordsPage : WizardPage
             var again = Field(ref previous, "Again", first: false);
             _fields.Add((secret, typed, again));
             _description.Add($"{Capitalised(what)}: typed twice");
-            var rule = secret switch
-            {
-                InstallSecret.AdminPassword => RoofIdentityText.PasswordRule,
-                InstallSecret.AdminPin => RoofIdentityText.PinRule,
-                _ => null
-            };
+
+            // The PIN rule once, under the first PIN: the kiosk's people may each have one.
+            var rule = secret.Kind == InstallSecretKind.AdminPassword ? RoofIdentityText.PasswordRule
+                : secret.IsPin && !pinRuleShown ? RoofIdentityText.PinRule
+                : null;
+            pinRuleShown |= secret.IsPin;
             if (rule is not null)
             {
                 previous = Hint(previous, rule);

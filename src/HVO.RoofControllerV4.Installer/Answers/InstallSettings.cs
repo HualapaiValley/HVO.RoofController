@@ -333,3 +333,41 @@ public sealed record MacAppSettings
 
     public static IReadOnlyList<string> Folders { get; } = [SharedFolder, HomeFolder];
 }
+
+/// <summary>The kiosk's choices: the touchscreen on the controller's own Pi.</summary>
+public sealed record KioskSettings
+{
+    /// <summary>
+    /// True (the default) to hide the console's blinking cursor, which shows through the kiosk's screen otherwise: a
+    /// setting in the Pi's <c>cmdline.txt</c>, which takes effect at the next reboot.
+    /// </summary>
+    public bool HideCursor { get; init; } = true;
+
+    /// <summary>
+    /// People already on the controller, by the name they sign in with, to give a PIN for signing in at the kiosk: each
+    /// PIN is typed, or given in a file (<c>--pin-file NAME=FILE</c>). Someone who has a PIN keeps it. Not recorded: PINs
+    /// are set once, and changed in the web UI.
+    /// </summary>
+    public IReadOnlyList<string> Pins { get; init; } = [];
+
+    public IEnumerable<string> Problems()
+    {
+        foreach (var name in Pins.Where(name => !RoofIdentityContract.IsValidName(name)))
+        {
+            yield return $"'{name}' is not a name the controller takes: give the kiosk's PINs to people by the name they sign in with.";
+        }
+    }
+
+    /// <summary>These choices with the names trimmed, each once, in order.</summary>
+    public KioskSettings Normalised() => this with
+    {
+        Pins = Pins.Select(name => name.Trim()).Where(name => name.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+    };
+
+    public bool Equals(KioskSettings? other)
+        => other is not null
+            && HideCursor == other.HideCursor
+            && Pins.SequenceEqual(other.Pins, StringComparer.OrdinalIgnoreCase);
+
+    public override int GetHashCode() => HashCode.Combine(HideCursor, Pins.Count);
+}

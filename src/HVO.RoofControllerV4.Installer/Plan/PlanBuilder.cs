@@ -76,12 +76,32 @@ public static class PlanBuilder
         answers = answers.Normalised();
         var roles = answers.Roles;
         var steps = new List<PlanStep>();
+        var layout = ControllerLayout.For(machine);
+        IReadOnlyList<ApiKeyAllocation> keys = [];
 
+        // The kiosk installed on its own brings the recorded controller along: the controller gives it a key, and is
+        // deployed again to read one that is new. The first admin and an import were done once, and are not again.
+        IReadOnlyCollection<InstallRole> controllerRoles = [];
+        ControllerSettings? controller = null;
         if (InstallRoles.RunsController(roles))
         {
-            var rig = roles.Contains(InstallRole.Rig);
-            var layout = ControllerLayout.For(machine);
-            var settings = answers.Controller!;
+            (controllerRoles, controller) = (roles, answers.Controller);
+        }
+        else if (roles.Contains(InstallRole.Kiosk) && survey.SystemRecord is { Controller: { } recorded } record)
+        {
+            controllerRoles = [.. record.Roles.Where(role => role is InstallRole.Controller or InstallRole.Rig)];
+            controller = recorded.Normalised() with { FirstAdmin = null, ImportSettingsFrom = null };
+        }
+
+        if (roles.Contains(InstallRole.Kiosk) && controller is null)
+        {
+            throw new InstallerException($"The kiosk needs the controller on this Pi, and {InstallPaths.SystemRecord} has no controller's settings: install the controller with the kiosk.");
+        }
+
+        if (controller is not null)
+        {
+            var rig = controllerRoles.Contains(InstallRole.Rig);
+            var settings = controller;
             var names = CertificateNames.For(machine, settings);
             AddFolder(steps, layout.Configuration, Modes.Folder, "the controller's configuration");
             AddFolder(steps, layout.Secrets, Modes.PrivateFolder, "secrets the controller reads, one file per setting");
@@ -96,7 +116,7 @@ public static class PlanBuilder
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
             var certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
-            var keys = AllocateKeys(machine, survey, layout, roles);
+            keys = AllocateKeys(machine, survey, layout, roles);
             steps.AddRange(keys.Select(key => new ApiKeyStep(layout, key)));
             var camera = CameraSteps.For(layout, rig, settings.Camera);
             steps.AddRange(camera);
@@ -125,9 +145,13 @@ public static class PlanBuilder
 
         if (roles.Contains(InstallRole.Kiosk))
         {
-            steps.Add(new LaterStep(StepKind.Folder, "/opt/hvo-roof-kiosk", "the kiosk's program", context => context.Machine.DirectoryExists("/opt/hvo-roof-kiosk")));
-            steps.Add(new LaterStep(StepKind.Folder, "/etc/hvo-roof-kiosk", "the kiosk's settings and device key", context => context.Machine.DirectoryExists("/etc/hvo-roof-kiosk")));
-            steps.Add(new LaterStep(StepKind.Service, MachineSurveyor.KioskUnit, "starts the kiosk on the touchscreen", context => context.Survey.Kiosk is not null));
+            steps.AddRange(KioskSteps.For(
+                layout,
+                controller!,
+                answers.Kiosk!,
+                keys.First(key => key.Use == ApiKeyUse.Kiosk),
+                keys.First(key => key.Use == ApiKeyUse.Admin),
+                controller!.FirstAdmin));
         }
 
         if (roles.Contains(InstallRole.Cli))
@@ -221,6 +245,17 @@ public static class PlanBuilder
         return new InstallPlan(steps);
     }
 
+    /// <summary>
+    /// The kiosk's trust in the controller's certificate, as <c>hvo-roof-install cert</c> changes it once the controller
+    /// serves a new one: its settings (the certificate's pin, or the CA), and its service, started again to read them.
+    /// </summary>
+    public static InstallPlan BuildKioskCertificate(InstallerMachine machine, ControllerSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(settings);
+        return new InstallPlan([.. KioskSteps.ForCertificate(ControllerLayout.For(machine), settings.Normalised())]);
+    }
+
     private static List<PlanStep> CertificateFolders(ControllerLayout layout)
     {
         var steps = new List<PlanStep>();
@@ -252,7 +287,9 @@ public static class PlanBuilder
             // An import is done once: the record keeps the settings, not where they came from.
             Controller = InstallRoles.RunsController(roles) ? answers.Controller! with { ImportSettingsFrom = null } : InstallRoles.RunsController(all) ? existing?.Controller : null,
             Cli = roles.Contains(InstallRole.Cli) ? answers.Cli : all.Contains(InstallRole.Cli) ? existing?.Cli : null,
-            MacApp = roles.Contains(InstallRole.MacApp) ? answers.MacApp : all.Contains(InstallRole.MacApp) ? existing?.MacApp : null
+            MacApp = roles.Contains(InstallRole.MacApp) ? answers.MacApp : all.Contains(InstallRole.MacApp) ? existing?.MacApp : null,
+            // PINs are set once, and changed in the web UI: the record keeps none.
+            Kiosk = roles.Contains(InstallRole.Kiosk) ? answers.Kiosk! with { Pins = [] } : all.Contains(InstallRole.Kiosk) ? existing?.Kiosk : null
         };
     }
 

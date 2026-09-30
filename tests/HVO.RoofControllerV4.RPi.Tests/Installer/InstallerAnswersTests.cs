@@ -257,17 +257,27 @@ public sealed class InstallerAnswersTests
     [TestMethod]
     public void TheRecord_ReadsBack_AndSaysWhatIsInstalled()
     {
-        var record = InstallerGuardTests.Record(InstallRole.Controller, HatMode.Real) with { Roles = [InstallRole.Controller, InstallRole.Kiosk] };
+        var record = InstallerGuardTests.Record(InstallRole.Controller, HatMode.Real) with
+        {
+            Roles = [InstallRole.Controller, InstallRole.Kiosk],
+            Kiosk = new KioskSettings { HideCursor = false }
+        };
 
         var read = InstallRecord.Parse(record.ToJson());
 
         read.Should().BeEquivalentTo(record);
         read.SameAs(record).Should().BeTrue();
         read.DrivesRealHat.Should().BeTrue();
-        read.ToAnswers().Should().BeEquivalentTo(new InstallAnswers { Roles = [InstallRole.Controller, InstallRole.Kiosk], Controller = new ControllerSettings() });
+        read.ToAnswers().Should().BeEquivalentTo(new InstallAnswers
+        {
+            Roles = [InstallRole.Controller, InstallRole.Kiosk],
+            Controller = new ControllerSettings(),
+            Kiosk = new KioskSettings { HideCursor = false }
+        });
         using var document = JsonDocument.Parse(record.ToJson());
         document.RootElement.EnumerateObject().Select(member => member.Name).Should().Equal(
-            "schema", "scope", "roles", "hat", "version", "installerVersion", "installedAt", "updatedAt", "controller");
+            "schema", "scope", "roles", "hat", "version", "installerVersion", "installedAt", "updatedAt", "controller", "kiosk");
+        document.RootElement.GetProperty("kiosk").GetProperty("hideCursor").GetBoolean().Should().BeFalse();
         document.RootElement.GetProperty("scope").GetString().Should().Be("system");
         document.RootElement.GetProperty("hat").GetString().Should().Be("real");
     }

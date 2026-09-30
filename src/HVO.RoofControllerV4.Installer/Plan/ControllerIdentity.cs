@@ -3,12 +3,15 @@ using HVO.RoofControllerV4.Installer.Machine;
 
 namespace HVO.RoofControllerV4.Installer.Plan;
 
-/// <summary>A person, or an API key added through the API, as the identity store names it: its name and role.</summary>
-public sealed record IdentityEntry(string Name, string Role);
+/// <summary>
+/// A person, or an API key added through the API, as the identity store names it: its name and role, and for a person
+/// whether they have a PIN for the kiosk.
+/// </summary>
+public sealed record IdentityEntry(string Name, string Role, bool HasPin = false);
 
 /// <summary>
 /// What the controller's identity store (identity.json) says that is not secret: its people's names and roles, and the
-/// names and roles of the API keys added through the API. Its hashes are never read.
+/// names and roles of the API keys added through the API. Its hashes are never read: only whether a person has a PIN.
 /// </summary>
 public sealed record ControllerIdentity(IReadOnlyList<IdentityEntry> Users, IReadOnlyList<IdentityEntry> ApiKeys)
 {
@@ -44,7 +47,7 @@ public sealed record ControllerIdentity(IReadOnlyList<IdentityEntry> Users, IRea
         => root.TryGetProperty(member, out var list) && list.ValueKind == JsonValueKind.Array
             ? [.. list.EnumerateArray()
                 .Where(entry => entry.ValueKind == JsonValueKind.Object)
-                .Select(entry => new IdentityEntry(Text(entry, "name"), Text(entry, "role")))
+                .Select(entry => new IdentityEntry(Text(entry, "name"), Text(entry, "role"), Text(entry, "pinHash").Length > 0))
                 .Where(entry => entry.Name.Length > 0)]
             : [];
 

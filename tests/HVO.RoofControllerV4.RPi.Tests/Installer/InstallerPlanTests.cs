@@ -276,13 +276,18 @@ public sealed class InstallerPlanTests
     [TestMethod]
     public async Task TheKiosk_IsPlannedWithTheController()
     {
-        using var pi = new FakeMachine().WithPi();
+        using var pi = new FakeMachine().WithPi().WithDisplay();
 
         var plan = await CheckAsync(pi, InstallRole.Controller, InstallRole.Kiosk);
 
         plan.Steps.Select(step => step.Step.Target).Should().ContainInOrder(
-            "/opt/hvo-roof-kiosk", "/etc/hvo-roof-kiosk", MachineSurveyor.KioskUnit, InstallPaths.SystemRecord);
+            string.Join(", ", KioskSteps.Packages), KioskSteps.User, KioskSteps.ProgramFolder, KioskSteps.Program, KioskSteps.ConfigurationFolder,
+            KioskSteps.DeviceKeyFile, KioskSteps.SettingsFile, MachineSurveyor.KioskUnitFile, KioskSteps.BacklightRuleFile, MachineSurveyor.KioskUnit,
+            KioskSteps.CommandLineFiles[0], InstallPaths.SystemRecord);
         Steps(plan, StepKind.Service).Should().Equal(MachineSurveyor.KioskUnit);
+        Change(plan, KioskSteps.DeviceKeyFile).Detail.Should().Contain("0400");
+        Change(plan, KioskSteps.ConfigurationFolder).Detail.Should().Contain(KioskSteps.FolderOwner);
+        plan.Steps.Should().NotContain(step => step.Step is KioskPinStep, "nobody was chosen for a PIN");
     }
 
     [TestMethod]
@@ -381,15 +386,15 @@ public sealed class InstallerPlanTests
     [TestMethod]
     public async Task AStepThisInstallerCannotCarryOutYet_RefusesTheInstallBeforeAnythingChanges()
     {
-        using var pi = new FakeMachine().WithPi();
-        var session = await StartAsync(pi, InstallRole.Controller, InstallRole.Kiosk);
-        var before = pi.Snapshot();
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
+        var session = await StartAsync(laptop, InstallRole.Cli);
+        var before = laptop.Snapshot();
 
         var install = async () => await session.ApplyAsync(await session.CheckAsync());
 
         (await install.Should().ThrowAsync<InstallerRefusedException>()).Which.Message.Should()
-            .Be("This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service yet, so nothing was installed. The plan (--plan) shows what an install will do.");
-        pi.Snapshot().Should().Equal(before);
+            .Be("This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed. The plan (--plan) shows what an install will do.");
+        laptop.Snapshot().Should().Equal(before);
     }
 
     [TestMethod]

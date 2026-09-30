@@ -37,6 +37,13 @@
     <EmbeddedResource Include="../HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh" Link="Deployment/deploy-roofcontroller-rpi.sh" LogicalName="deploy-roofcontroller-rpi.sh" />
   </ItemGroup>
 
+  <!-- The kiosk's unit, backlight rule and example settings, as the release's kiosk folder has them. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/hvo-roof-kiosk.service" Link="Plan/Kiosk/hvo-roof-kiosk.service" LogicalName="kiosk/hvo-roof-kiosk.service" />
+    <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/99-hvo-roof-kiosk-backlight.rules" Link="Plan/Kiosk/99-hvo-roof-kiosk-backlight.rules" LogicalName="kiosk/99-hvo-roof-kiosk-backlight.rules" />
+    <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/appsettings.Local.example.json" Link="Plan/Kiosk/appsettings.Local.example.json" LogicalName="kiosk/appsettings.Local.example.json" />
+  </ItemGroup>
+
   <!-- It installs on Linux and macOS only: file modes, systemd and Docker are its whole job. -->
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.Versioning.UnsupportedOSPlatformAttribute">

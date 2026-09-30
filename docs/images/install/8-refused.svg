@@ -34,12 +34,12 @@
 <path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <path d="M839.40,510.00 Q839.40,519.00 835.20,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
 <text x="28.80" y="55.50" fill="#abb0b7" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
-<text x="20.40" y="73.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 7 of 7: Done</text>
+<text x="20.40" y="73.50" fill="#f8fafc" textLength="142.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 6 of 6: Done</text>
 <text x="37.20" y="91.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">Done</text>
-<text x="28.80" y="109.50" fill="#fecaca" textLength="789.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">This installer cannot install /opt/hvo-roof-kiosk, /etc/hvo-roof-kiosk, hvo-roof-kiosk.service</text>
-<text x="28.80" y="127.50" fill="#fecaca" textLength="663.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">yet, so nothing was installed. The plan (--plan) shows what an install will do.</text>
+<text x="28.80" y="109.50" fill="#fecaca" textLength="789.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed. The</text>
+<text x="28.80" y="127.50" fill="#fecaca" textLength="369.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">plan (--plan) shows what an install will do.</text>
 <text x="28.80" y="163.50" fill="#f8fafc" textLength="168.00" lengthAdjust="spacingAndGlyphs">Nothing was changed.</text>
-<text x="28.80" y="181.50" fill="#f8fafc" textLength="319.20" lengthAdjust="spacingAndGlyphs">The log: /var/log/hvo-roof-install.log</text>
+<text x="28.80" y="181.50" fill="#f8fafc" textLength="436.80" lengthAdjust="spacingAndGlyphs">The log: /home/roy/.local/state/hvo-roof/install.log</text>
 <text x="20.40" y="541.50" fill="#aeb9c8" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
 <text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Quit ◄⟧</text>
 <text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>
