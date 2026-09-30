@@ -243,10 +243,13 @@ class MakeTests(BundleTestCase):
     """bundle.py make from a publish folder, without signing."""
 
     def publish(self, library=None):
-        """A publish folder whose program and libraries need macOS 12, with the given (name, data) library instead."""
+        """A publish folder whose program and libraries need macOS 12, with the given (name, data) file instead, or
+        without it when its data is None."""
         for name in [bundle.EXECUTABLE] + bundle.LIBRARIES:
             self.write(f"publish/{name}", thin([build_version(MACOS_12)]))
-        if library:
+        if library and library[1] is None:
+            os.remove(self.directory / "publish" / library[0])
+        elif library:
             self.write(f"publish/{library[0]}", library[1])
         return str(self.directory / "publish")
 
@@ -262,20 +265,31 @@ class MakeTests(BundleTestCase):
         self.assertEqual((plist["CFBundleVersion"], plist["LSMinimumSystemVersion"]), ("7", "13.0"))
         self.assertEqual(self.check(app), (0, ""))
 
-    def test_a_damaged_program_or_library_stops_make_with_its_name(self):
+    def test_a_publish_file_make_cannot_use_stops_it_naming_that_file_and_making_no_bundle(self):
+        x64 = 0x01000007
         cases = {
             "a library cut short": ("libSkiaSharp.dylib", thin([build_version(MACOS_12)])[:36],
-                                    "libSkiaSharp.dylib: a load command is cut short"),
-            "a program that is not Mach-O": (bundle.EXECUTABLE, b"#!/bin/sh\n",
-                                             f"{bundle.EXECUTABLE}: not a 64-bit Mach-O file"),
+                                    "a load command is cut short"),
+            "a program that is not Mach-O": (bundle.EXECUTABLE, b"#!/bin/sh\n", "not a 64-bit Mach-O file"),
+            "a library with no arm64 code": ("libHarfBuzzSharp.dylib", thin([build_version(MACOS_12)], cpu=x64),
+                                             "has no arm64 code"),
+            "a library missing": ("libAvaloniaNative.dylib", None, "missing"),
         }
         for name, (file, data, reason) in cases.items():
             with self.subTest(name):
+                publish = self.publish((file, data))
                 with self.assertRaises(SystemExit) as stopped:
-                    self.make(self.publish((file, data)))
+                    self.make(publish)
                 self.assertIsInstance(stopped.exception.code, str)
-                self.assertIn(reason, stopped.exception.code)
+                self.assertIn(f"{os.path.join(publish, file)}: {reason}", stopped.exception.code)
                 self.assertIn("publish again", stopped.exception.code)
+                self.assertFalse((self.directory / "out").exists())
+
+    def test_a_failed_make_leaves_the_last_bundle_as_it_was(self):
+        app = self.make(self.publish())
+        with self.assertRaises(SystemExit):
+            self.make(self.publish(("libSkiaSharp.dylib", b"")))
+        self.assertEqual(self.check(app), (0, ""))
 
 
 if __name__ == "__main__":

@@ -102,30 +102,33 @@ def version_text(encoded):
 
 
 def make(publish, out, build, rcodesign):
+    # The program and the native libraries it loads; nothing else from the publish folder (no symbols, no settings).
+    # Each is read before the old bundle is removed: a file make cannot use is named where it was published, and no
+    # half-made bundle is left behind.
+    publish_again = "publish again with: dotnet publish HVO.RoofControllerV4.Mac -c Release -r osx-arm64"
+    minimum = 0
+    for name in [EXECUTABLE] + LIBRARIES:
+        source = os.path.join(publish, name)
+        if not os.path.isfile(source):
+            sys.exit(f"{source}: missing; {publish_again}")
+        try:
+            arm = MachO(source).slices.get(CPU_ARM64)
+        except ValueError as error:
+            sys.exit(f"{error}; {publish_again}")
+        if arm is None:
+            sys.exit(f"{source}: has no arm64 code; {publish_again}")
+        minimum = max(minimum, arm["minimum"] or 0)
+
     app = os.path.join(out, APP_NAME)
     shutil.rmtree(app, ignore_errors=True)
     macos = os.path.join(app, "Contents", "MacOS")
     resources = os.path.join(app, "Contents", "Resources")
     os.makedirs(macos)
     os.makedirs(resources)
-    # The program and the native libraries it loads; nothing else from the publish folder (no symbols, no settings).
     for name in [EXECUTABLE] + LIBRARIES:
-        source = os.path.join(publish, name)
-        if not os.path.isfile(source):
-            sys.exit(f"{source}: missing; publish with: dotnet publish HVO.RoofControllerV4.Mac -c Release -r osx-arm64")
-        shutil.copyfile(source, os.path.join(macos, name))
+        shutil.copyfile(os.path.join(publish, name), os.path.join(macos, name))
         os.chmod(os.path.join(macos, name), 0o755)
     shutil.copyfile(os.path.join(HERE, "AppIcon.icns"), os.path.join(resources, "AppIcon.icns"))
-
-    minimum = 0
-    for name in [EXECUTABLE] + LIBRARIES:
-        try:
-            arm = MachO(os.path.join(macos, name)).slices.get(CPU_ARM64)
-        except ValueError as error:
-            sys.exit(f"{error}; publish again with: dotnet publish HVO.RoofControllerV4.Mac -c Release -r osx-arm64")
-        if arm is None:
-            sys.exit(f"{name}: has no arm64 code; publish with -r osx-arm64")
-        minimum = max(minimum, arm["minimum"] or 0)
     with open(os.path.join(HERE, "Info.plist"), encoding="utf-8") as file:
         plist = file.read()
     plist = (plist.replace("@VERSION@", VERSION).replace("@BUILD@", str(build))

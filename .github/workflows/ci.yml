@@ -280,7 +280,8 @@ jobs:
           printf 'ci-mac-check-not-a-real-key\n' > "$settings/device-key"
           chmod 600 "$settings/device-key"
           # The exit code as well as the line: the app must also quit cleanly (sign out, close) after drawing.
-          # stdout has the console log and the check's line; stderr has anything the app refuses.
+          # stdout has the console log and the check's line; stderr has its refusals and anything the runtime or macOS
+          # writes there.
           status=0
           HVO_ROOF_MAC_SETTINGS="$settings" "HVO Roof.app/Contents/MacOS/hvo-roof-mac" --check > check.txt 2> check-stderr.txt || status=$?
           cat check-stderr.txt check.txt
@@ -331,7 +332,8 @@ jobs:
       - name: Screenshot converter tests
         run: python3 -m unittest discover -s tests/cli -p 'test_*.py' -v
 
-      # bundle.py reading whole and damaged Mach-O files, Info.plist and AppIcon.icns (docs/mac.md).
+      # bundle.py reading whole and damaged Mach-O files, Info.plist and AppIcon.icns, and make on whole and damaged
+      # publish folders (docs/mac.md).
       - name: Mac bundle script tests
         run: python3 -m unittest discover -s tests/mac -p 'test_*.py' -v
 
