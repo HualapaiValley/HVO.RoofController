@@ -221,10 +221,12 @@ python3 HVO.RoofControllerV4.Mac/bundle/bundle.py check "mac/HVO Roof.app"
 `make` puts the program, its three native libraries (Avalonia's macOS windowing, Skia and HarfBuzz) and the icon in the
 bundle, fills in `Info.plist` (the version, `--build`'s number, and the oldest macOS the program's files are built for),
 and signs it ad hoc. It checks the program and libraries in the publish folder first: one that is missing, damaged or
-has no arm64 code stops it with a line naming that file. It builds and signs the new bundle beside the last one and puts
-it in place only when it is whole, so a `make` that stops at any step, rcodesign failing included, leaves the last
-bundle as it was. `check` reads back what `make` promises: `Info.plist`, arm64 code with a signature in every program
-file, the icon at each size, and nothing else.
+has no arm64 code stops it with a line naming that file. It builds and signs the new bundle beside the last one, then
+swaps them with two renames (the last bundle moves aside, the new one takes its place), so a `make` that stops at any
+step, rcodesign failing included, leaves the last bundle as it was. If some of the last bundle cannot be deleted
+afterwards (a folder in it that cannot be written), `make` names the folder it is in, to delete by hand. `check` reads
+back what `make` promises: `Info.plist`, arm64 code with a signature in every program file, the icon at each size, and
+nothing else.
 
 **Sharing the app** with Macs that are not yours would need it signed with a Developer ID certificate and notarised by
 Apple, which needs an Apple Developer account. rcodesign can do both from Linux (its `sign` with the certificate and
@@ -262,11 +264,11 @@ Nothing here needs a Mac, the controller's Pi or the roof.
 - **The app** (`MacAppTests`): `--check` exits 0 once the window is drawn and 1 when it is not or there is none, the
   refusal window, and the icon: it is drawn in code (`MacIcon`), at each size macOS uses, and `bundle/AppIcon.icns`
   must hold that drawing.
-- **The bundle script** (`tests/mac/test_bundle.py`): `bundle.py` reads whole Mach-O files (thin, and universal in
-  both the 32-bit and 64-bit forms), `Info.plist` and `AppIcon.icns`. `check` reports damaged ones (cut short, or with
-  a size of 0) as problems with exit code 1. `make` stops on a damaged program or library, or on rcodesign failing, with
-  a line naming it, and leaves the last bundle as it was: neither hangs nor ends in a traceback. Run it from the
-  repository root with
+- **The bundle script** (`tests/mac/test_bundle.py`): `bundle.py` reads whole Mach-O files (thin, and universal in both
+  the 32-bit and 64-bit forms), `Info.plist` and `AppIcon.icns`. `check` reports damaged ones (cut short, or with a size
+  of 0) as problems with exit code 1. `make` stops on a damaged program or library, on rcodesign failing, or on a rename
+  in the swap failing, with a line naming it, and leaves the last bundle as it was: neither hangs nor ends in a
+  traceback. A folder in the last bundle that cannot be written does not stop it. Run it from the repository root with
   `python3 -m unittest discover -s tests/mac -p 'test_*.py'`.
 - **The bundle**: CI makes it from the osx-arm64 publish, signs it with rcodesign, checks it with `bundle.py check`
   and rcodesign's `print-signature-info`, and keeps it as the `hvo-roof-mac-<run id>.zip` artifact for 14 days.

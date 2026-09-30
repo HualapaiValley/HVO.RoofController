@@ -305,7 +305,8 @@ repository root.
 The Mac app's bundle script has its own tests too, `tests/mac/test_bundle.py` (`python3` alone). They check that
 `bundle.py` reads whole Mach-O files (thin, and universal in both forms), `Info.plist` and `AppIcon.icns`, and that
 `check` reports damaged ones with exit code 1. `make` checks only the program and libraries: one that is missing,
-damaged or has no arm64 code stops it with a line naming the publish file. A `make` that stops, there or when
-rcodesign fails, leaves the last bundle as it was. `make` can remake the bundle from its own program folder, and an
-unsigned bundle that `make` builds passes `check --unsigned` ([docs/mac.md](../../docs/mac.md)). Run
-`python3 -m unittest discover -s tests/mac -p 'test_*.py'` from the repository root.
+damaged or has no arm64 code stops it with a line naming the publish file. Whether `make` stops there, on rcodesign
+failing, or on the new bundle not taking the last one's place, it leaves the last bundle as it was. `make` can remake
+the bundle from its own program folder, and an unsigned bundle that `make` builds passes `check --unsigned`
+([docs/mac.md](../../docs/mac.md)). Run `python3 -m unittest discover -s tests/mac -p 'test_*.py'` from the repository
+root.

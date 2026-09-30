@@ -7,6 +7,7 @@ traceback. From the repository root:
 """
 
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -16,6 +17,7 @@ import signal
 import struct
 import tempfile
 import unittest
+from unittest import mock
 
 BUNDLE_DIR = pathlib.Path(__file__).resolve().parents[2] / "src" / "HVO.RoofControllerV4.Mac" / "bundle"
 _spec = importlib.util.spec_from_file_location("bundle", BUNDLE_DIR / "bundle.py")
@@ -278,12 +280,13 @@ class MakeTests(BundleTestCase):
 
     def test_rcodesign_signs_the_new_bundle_before_it_takes_the_last_ones_place(self):
         signed = self.directory / "signed"
-        # What rcodesign was asked to sign, and whether it was already a whole bundle.
+        # What rcodesign was asked to sign, the start of the folder it was in, and whether it was already whole.
         rcodesign = self.rcodesign(
-            f'echo "$1 $(basename "$2") $(test -f "$2/Contents/Info.plist" && echo whole)" > "{signed}"')
+            f'echo "$1 $(basename "$(dirname "$2")" | cut -c1-8) $(basename "$2")'
+            f' $(test -f "$2/Contents/Info.plist" && echo whole)" > "{signed}"')
         self.make(self.publish())
         self.make(self.publish(), build=8, rcodesign=rcodesign)
-        self.assertEqual(signed.read_text(), f"sign {bundle.APP_NAME} whole\n")
+        self.assertEqual(signed.read_text(), f"sign .bundle- {bundle.APP_NAME} whole\n")
         self.assertEqual(self.out(), [bundle.APP_NAME])
         with (self.directory / "out" / bundle.APP_NAME / "Contents/Info.plist").open("rb") as file:
             self.assertEqual(plistlib.load(file)["CFBundleVersion"], "8")
@@ -328,6 +331,53 @@ class MakeTests(BundleTestCase):
                 with (app / "Contents/Info.plist").open("rb") as file:
                     self.assertEqual(plistlib.load(file)["CFBundleVersion"], "7")
                 self.assertEqual(self.out(), [bundle.APP_NAME])
+
+    def test_a_swap_that_stops_puts_the_last_bundle_back(self):
+        real = os.replace
+        left = "the last bundle is left as it was"
+        denied = OSError(errno.EACCES, "Permission denied")
+        cases = {
+            # Which rename stops (the last bundle moving aside, or the new one taking its place), and how.
+            "the last bundle cannot move": ("last", denied),
+            "the new bundle cannot take its place": ("new", denied),
+            "interrupted between the renames": ("new", KeyboardInterrupt()),
+        }
+        for name, (step, failure) in cases.items():
+            with self.subTest(name):
+                app = self.make(self.publish())
+
+                def replace(source, target):
+                    moving = ("last" if source == str(app)
+                              else "new" if os.path.basename(source) == bundle.APP_NAME else None)
+                    if moving == step:
+                        raise failure
+                    real(source, target)
+
+                stops = SystemExit if isinstance(failure, OSError) else KeyboardInterrupt
+                with mock.patch.object(bundle.os, "replace", replace), self.assertRaises(stops) as stopped:
+                    self.make(self.publish(), build=8)
+                if stops is SystemExit:
+                    self.assertEqual(stopped.exception.code, f"{app}: Permission denied; {left}")
+                self.assertEqual(self.check(app), (0, ""))
+                with (app / "Contents/Info.plist").open("rb") as file:
+                    self.assertEqual(plistlib.load(file)["CFBundleVersion"], "7")
+                self.assertEqual(self.out(), [bundle.APP_NAME])
+
+    @unittest.skipIf(os.geteuid() == 0, "root can delete from a folder that cannot be written")
+    def test_a_folder_in_the_last_bundle_that_cannot_be_written_does_not_stop_make(self):
+        app = self.make(self.publish())
+        os.chmod(app / "Contents/MacOS", 0o555)
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            self.make(self.publish(), build=8)
+        self.assertEqual(self.check(app), (0, ""))
+        with (app / "Contents/Info.plist").open("rb") as file:
+            self.assertEqual(plistlib.load(file)["CFBundleVersion"], "8")
+        # What is left of the last bundle is named, to be deleted by hand.
+        leftover = [name for name in self.out() if name != bundle.APP_NAME]
+        self.assertEqual(len(leftover), 1)
+        self.assertIn(f"{self.directory / 'out' / leftover[0]}: could not all be deleted", errors.getvalue())
+        os.chmod(self.directory / "out" / leftover[0] / "last/Contents/MacOS", 0o755)
 
     def test_the_bundle_can_be_made_again_from_its_own_program_folder(self):
         app = self.make(self.publish())

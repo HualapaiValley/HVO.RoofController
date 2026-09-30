@@ -124,8 +124,8 @@ def make(publish, out, build, rcodesign):
     app = os.path.join(out, APP_NAME)
     os.makedirs(out, exist_ok=True)
     work = tempfile.mkdtemp(prefix=".bundle-", dir=out)
+    new, last = os.path.join(work, APP_NAME), os.path.join(work, "last")
     try:
-        new = os.path.join(work, APP_NAME)
         macos = os.path.join(new, "Contents", "MacOS")
         resources = os.path.join(new, "Contents", "Resources")
         os.makedirs(macos)
@@ -151,10 +151,24 @@ def make(publish, out, build, rcodesign):
                 sys.exit(f"{rcodesign}: {error.strerror}; the last bundle is left as it was")
             except subprocess.CalledProcessError as error:
                 sys.exit(f"{rcodesign} sign exited {error.returncode}; the last bundle is left as it was")
-        shutil.rmtree(app, ignore_errors=True)
-        os.replace(new, app)
+
+        # Two renames, so the last bundle is never partly deleted: it moves into the work folder, then the new one takes
+        # its place. It is deleted with the work folder only once the new one is there (a kill between the two renames
+        # would leave it in the work folder).
+        try:
+            if os.path.lexists(app):
+                os.replace(app, last)
+            os.replace(new, app)
+        except OSError as error:
+            sys.exit(f"{app}: {error.strerror}; the last bundle is left as it was")
     finally:
+        # Whatever stopped make, the last bundle goes back if the new one is not in its place.
+        if os.path.lexists(last) and not os.path.lexists(app):
+            os.replace(last, app)
         shutil.rmtree(work, ignore_errors=True)
+        if os.path.lexists(work):
+            print(f"{work}: could not all be deleted (a folder in the last bundle that cannot be written?); "
+                  "delete it yourself", file=sys.stderr)
     print(app)
 
 
