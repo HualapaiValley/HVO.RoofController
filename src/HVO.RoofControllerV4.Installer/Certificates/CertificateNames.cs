@@ -89,8 +89,8 @@ public sealed record CertificateNames(
     }
 
     /// <summary>
-    /// The domains this machine seems to be in: its resolver's search domains and its host name's own. The wizard offers
-    /// them, but the CA only ever issues for the domains the person lists.
+    /// The domains this machine seems to be in: its resolver's search domains and its host name's own. The wizard names
+    /// them as a hint, but the CA only ever issues for the domains the person lists.
     /// </summary>
     public static IReadOnlyList<string> SuggestedDomains(InstallerMachine machine)
     {
@@ -132,6 +132,12 @@ public sealed record CertificateNames(
         var label = hostName.Split('.')[0].Trim().ToLowerInvariant();
         return DnsName.IsLabel(label) ? label : null;
     }
+
+    /// <summary>
+    /// The name clients on the network reach <paramref name="hostName"/> by: its short name under <c>.local</c> (a host
+    /// named <c>roofpi.site.example</c> is <c>roofpi.local</c>), or <c>localhost</c> when it has no short name.
+    /// </summary>
+    public static string LocalName(string hostName) => ShortName(hostName) is { } name ? $"{name}.local" : "localhost";
 
     private static bool IsVirtual(string name) => VirtualInterfaces.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal));
 

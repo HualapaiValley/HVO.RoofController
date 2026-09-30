@@ -349,12 +349,16 @@ internal sealed class SettingsPage : WizardPage
         UpdateHttpConfirmation();
     }
 
-    // The names are those the controller answers to (AllowedHosts), and those on the certificate the installer makes.
+    // The names are those the controller answers to (AllowedHosts), and those on the certificate the installer makes. The
+    // domains this machine seems to be in are named, not filled in: each domain listed lets the private CA sign for any
+    // name in it.
     private string NamesHint(ConnectionMode connection)
     {
         var host = CertificateNames.ShortName(Session.Survey.HostName) ?? "localhost";
         var hint = $"Separate them with spaces. The controller answers to {host} and each of these, alone, under .local and under each domain";
-        return connection is ConnectionMode.PrivateCa or ConnectionMode.SelfSigned ? $"{hint}, and its certificate is for them all." : $"{hint}.";
+        hint = connection is ConnectionMode.PrivateCa or ConnectionMode.SelfSigned ? $"{hint}, and its certificate is for them all." : $"{hint}.";
+        var suggested = CertificateNames.SuggestedDomains(Session.Machine);
+        return suggested.Count == 0 ? hint : $"{hint} This machine is in {string.Join(", ", suggested)}: add a domain only if clients use names in it.";
     }
 
     private void UpdateHttpConfirmation()

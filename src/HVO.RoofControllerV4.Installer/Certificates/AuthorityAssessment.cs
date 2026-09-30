@@ -92,7 +92,7 @@ public sealed class AuthorityAssessment : IDisposable
         var notPermitted = permitted?.NotPermitted(names) ?? [];
         var reason = replacing is not null && string.Equals(ControllerCertificates.Fingerprint(authority), replacing, StringComparison.OrdinalIgnoreCase)
                 ? "a person asked for a new one (--new-ca)"
-            : authority.NotAfter - now.UtcDateTime < ControllerCertificates.RenewAuthorityWithin
+            : new DateTimeOffset(authority.NotAfter) - now < ControllerCertificates.RenewAuthorityWithin
                 ? $"it expires on {Date(authority.NotAfter)}"
             : permitted is null
                 ? "it does not limit the names it may issue for"

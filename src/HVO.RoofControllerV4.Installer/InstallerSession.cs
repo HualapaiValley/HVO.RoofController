@@ -66,12 +66,12 @@ public sealed class InstallerSession
     /// <summary>
     /// The controller's choices when nothing is recorded: the person's own certificate when one is in place that another
     /// CA issued (so it is never replaced unasked), otherwise a private CA (in place of a self-signed one, or one that
-    /// cannot be opened); and the domains this machine seems to be in, which the person may clear.
+    /// cannot be opened). No domain is listed unasked: each one lets the CA sign for any name in it, so the wizard only
+    /// suggests those this machine seems to be in.
     /// </summary>
     public ControllerSettings DefaultController => new()
     {
-        Connection = Survey.Certificate is { Problem: null, Issuer: not null, FromAuthority: false } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa,
-        Domains = CertificateNames.SuggestedDomains(Machine)
+        Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa
     };
 
     /// <summary>Why the installer refuses the answers here; empty when it may go ahead.</summary>
@@ -146,7 +146,7 @@ public sealed class InstallerSession
         {
             var rig = answers.Roles.Contains(InstallRole.Rig);
             var scheme = controller.UsesHttps ? "https" : "http";
-            var host = rig ? "localhost" : $"{Survey.HostName}.local";
+            var host = rig ? "localhost" : CertificateNames.LocalName(Survey.HostName);
             lines.Add(string.Empty);
             lines.Add($"The controller's API:  {scheme}://{host}:{controller.ApiPort}/");
             lines.Add($"The web UI:            {scheme}://{host}:{controller.WebPort}/");
@@ -323,7 +323,7 @@ public sealed class InstallerSession
         if (certificate is not null)
         {
             // Your own certificate is renewed by whoever issued it; the installer renews the ones it makes.
-            var own = certificate.Issuer is not null && !certificate.FromAuthority;
+            var own = certificate.IsTheirs;
             var renew = own ? "Put a new one in place with: sudo hvo-roof-install cert import FILE" : "Renew it with: sudo hvo-roof-install cert";
             if (certificate.Problem is { } problem)
             {

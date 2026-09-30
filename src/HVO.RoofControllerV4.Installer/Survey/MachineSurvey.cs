@@ -205,6 +205,17 @@ public sealed record CertificateSurvey
     /// <summary>True when this machine's CA (<see cref="MachineSurvey.Authority"/>) issued it.</summary>
     public bool FromAuthority { get; init; }
 
+    /// <summary>
+    /// True when a CA the installer made issued it, going by the issuer's name, even when that CA is no longer this
+    /// machine's (its files were removed, or a new one made).
+    /// </summary>
+    public bool FromInstallerCa { get; init; }
+
+    /// <summary>
+    /// True when it is the person's own: another CA issued it, so they renew it, and the installer never replaces it unasked.
+    /// </summary>
+    public bool IsTheirs => Issuer is not null && !FromAuthority && !FromInstallerCa;
+
     /// <summary>The DNS names and addresses it is for.</summary>
     public IReadOnlyList<string> Names { get; init; } = [];
 

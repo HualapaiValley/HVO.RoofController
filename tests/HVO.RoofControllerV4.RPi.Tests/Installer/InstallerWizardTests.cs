@@ -233,7 +233,8 @@ public sealed class InstallerWizardTests
             .And.Contain("Other host names:")
             .And.Contain("Domains:")
             .And.Contain("Separate them with spaces. The controller answers to roofpi and each of these, alone, under")
-            .And.Contain(".local and under each domain, and its certificate is for them all.");
+            .And.Contain(".local and under each domain, and its certificate is for them all.")
+            .And.NotContain("This machine is in");
         ShouldHaveColours(wizard.ColoursOf("Names clients use for it"), RoofUiPalette.Text, RoofUiPalette.Surface);
 
         settings.HostNames.Text = "roof roof.observatory.example";
@@ -256,6 +257,23 @@ public sealed class InstallerWizardTests
         settings.HostNames.Text.Should().Be("roof dome");
         settings.Domains.Text.Should().Be("observatory.example");
         settings.Describe().Should().Contain("Names: roof, dome; domains: observatory.example");
+    }
+
+    [TestMethod]
+    public async Task TheSettingsPage_SuggestsTheMachinesDomains_WithoutListingThem()
+    {
+        using var pi = AdoptablePi().Write(CertificateNames.ResolverConfiguration, "search observatory.example\n");
+        using var wizard = await WizardDriver.StartAsync(pi);
+        wizard.NextTo(1);
+        wizard.Press(Key.Space);
+        wizard.NextTo(2);
+        var settings = (SettingsPage)wizard.Page;
+
+        settings.Domains!.Text.Should().BeEmpty("each domain listed lets the CA sign for any name in it, so none is listed unasked");
+        wizard.Screen.Should().Contain("This machine is in").And.Contain("observatory.example: add a domain only if clients use names in it.");
+
+        wizard.NextTo(3);
+        wizard.Session.Answers.Controller!.Domains.Should().BeEmpty();
     }
 
     [TestMethod]

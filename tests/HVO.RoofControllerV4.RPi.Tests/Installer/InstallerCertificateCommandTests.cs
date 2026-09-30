@@ -66,6 +66,39 @@ public sealed class InstallerCertificateCommandTests
     }
 
     [TestMethod]
+    public async Task Cert_WithNothingRecorded_MakesTheCertificate_WithTheDefaults()
+    {
+        using var pi = new FakeMachine().WithPi();
+
+        var run = await pi.RunAsync("cert");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain("Creating file /etc/hvo-roof/ca.crt: done.")
+            .And.Contain("Creating file /etc/hvo-roof/https/roof-controller.pfx: done.")
+            .And.Contain("  For:       roofpi, roofpi.local, localhost, 192.168.1.50, 127.0.0.1, ::1")
+            .And.EndWith("Nothing here is recorded as running the controller yet: when you install it (hvo-roof-install), choose private-ca to keep this certificate.\n");
+        pi.Exists(InstallPaths.SystemRecord).Should().BeFalse("the install records what it installs; cert only makes the certificate");
+
+        var again = await pi.RunAsync("cert");
+
+        again.ExitCode.Should().Be(0, again.ToString());
+        again.Output.Should().Contain("Nothing to change: the controller's certificate is in place as it should be.")
+            .And.NotContain("Creating")
+            .And.EndWith("choose private-ca to keep this certificate.\n", "it is still not recorded");
+        pi.Unexpected.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task CertShow_OnAHostNamedWithItsDomain_GivesItsLocalName()
+    {
+        using var pi = Recorded(new FakeMachine(hostName: "roofpi.site.example").WithPi().WithCertificates());
+
+        var shown = await pi.RunAsync("cert", "show");
+
+        shown.Output.Should().Contain("  Clients get it from https://roofpi.local:8443/ca.crt, or from /etc/hvo-roof/ca.crt", shown.ToString());
+    }
+
+    [TestMethod]
     public async Task CertPlan_ChangesNothing_AndSaysWhenChangesNeedRoot()
     {
         using var pi = Recorded(new FakeMachine(root: false).WithPi());
@@ -116,19 +149,15 @@ public sealed class InstallerCertificateCommandTests
     [TestMethod]
     public async Task Cert_WhatItCannotDo_IsRefusedOrAUsageError()
     {
-        using var none = new FakeMachine().WithPi();
         using var http = Recorded(new FakeMachine().WithPi(), new ControllerSettings { Connection = ConnectionMode.Http });
         using var selfSigned = Recorded(new FakeMachine().WithPi(), new ControllerSettings { Connection = ConnectionMode.SelfSigned });
         using var own = Recorded(new FakeMachine().WithPi(), new ControllerSettings { Connection = ConnectionMode.OwnCertificate });
 
-        var nothing = await none.RunAsync("cert");
         var plain = await http.RunAsync("cert");
         var newCa = await selfSigned.RunAsync("cert", "--new-ca");
         var renew = await own.RunAsync("cert", "--renew");
         var missing = await own.RunAsync("cert");
 
-        nothing.ExitCode.Should().Be((int)InstallerExitCode.Refused, nothing.ToString());
-        nothing.Error.Should().Contain("Nothing here is recorded as running the controller or a test rig: install it first (hvo-roof-install).");
         plain.ExitCode.Should().Be((int)InstallerExitCode.Refused, plain.ToString());
         plain.Error.Should().Contain("The controller serves plain HTTP, so it has no certificate.");
         newCa.ExitCode.Should().Be((int)InstallerExitCode.Usage, newCa.ToString());
@@ -288,6 +317,63 @@ public sealed class InstallerCertificateCommandTests
             File.Delete(pi.OnDisk("/root/password.txt"));
             pi.AllText().Should().NotContain(TheirPassword, "the password is never kept, logged or printed");
             (run.Output + run.Error).Should().NotContain(TheirPassword);
+        }
+    }
+
+    [TestMethod]
+    public async Task CertImport_TheSameCertificate_ChangesNothing_UnlessItsChainIsNew()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var (their, theirs) = TheirCertificate();
+        using (their)
+        using (theirs)
+        using (var key = theirs.GetECDsaPrivateKey()!)
+        {
+            pi.Write("/root/leaf.crt", theirs.ExportCertificatePem() + "\n");
+            pi.Write("/root/full.crt", theirs.ExportCertificatePem() + "\n" + their.ExportCertificatePem() + "\n");
+            pi.Write("/root/their.key", key.ExportEncryptedPkcs8PrivateKeyPem(TheirPassword, new PbeParameters(PbeEncryptionAlgorithm.Aes256Cbc, HashAlgorithmName.SHA256, 10_000)) + "\n");
+            pi.Write("/root/password.txt", TheirPassword + "\n");
+            string[] Import(string file) => ["cert", "import", file, "--key", "their.key", "--password-file", "password.txt"];
+
+            var alone = await pi.RunAsync(Import("leaf.crt"));
+            var again = await pi.RunAsync(Import("leaf.crt"));
+            var withChain = await pi.RunAsync(Import("full.crt"));
+            var thenAgain = await pi.RunAsync(Import("full.crt"));
+
+            alone.Output.Should().Contain("Creating file /etc/hvo-roof/https/roof-controller.pfx: done.", alone.ToString());
+            again.Output.Should().Contain("Nothing to change: your certificate is in place as it should be.", again.ToString());
+            withChain.ExitCode.Should().Be(0, withChain.ToString());
+            withChain.Output.Should().Contain("Changing file /etc/hvo-roof/https/roof-controller.pfx: done.", "the same certificate now has its chain, which clients need");
+            thenAgain.Output.Should().Contain("Nothing to change: your certificate is in place as it should be.", thenAgain.ToString());
+            ControllerCertificates.PfxChain(File.ReadAllBytes(pi.OnDisk(Layout.Pfx)), pi.Read(Layout.PfxPassword)).Should().ContainSingle()
+                .Which.Should().Equal(their.RawData);
+        }
+    }
+
+    [TestMethod]
+    public async Task CertImport_AKeyThatTakesTooLongToOpen_IsRefused_BeforeItAsksForAPassword()
+    {
+        using var pi = new FakeMachine().WithPi();
+        pi.Types = _ => TheirPassword;
+        var (their, theirs) = TheirCertificate();
+        using (their)
+        using (theirs)
+        using (var key = theirs.GetECDsaPrivateKey()!)
+        {
+            pi.Write("/root/their.crt", theirs.ExportCertificatePem() + "\n");
+            pi.Write("/root/pbes2.key", key.ExportEncryptedPkcs8PrivateKeyPem(TheirPassword, new PbeParameters(PbeEncryptionAlgorithm.Aes256Cbc, HashAlgorithmName.SHA256, 700_000)) + "\n");
+            pi.Write("/root/pkcs12.key", key.ExportEncryptedPkcs8PrivateKeyPem(TheirPassword, new PbeParameters(PbeEncryptionAlgorithm.TripleDes3KeyPkcs12, HashAlgorithmName.SHA1, 700_000)) + "\n");
+
+            foreach (var file in new[] { "pbes2.key", "pkcs12.key" })
+            {
+                var run = await pi.RunAsync("cert", "import", "their.crt", "--key", file);
+
+                run.ExitCode.Should().Be((int)InstallerExitCode.Usage, run.ToString());
+                run.Error.Should().Contain($"The key in /root/{file} needs 700000 iterations to derive its password's key, more than the 600000 the installer allows: export it again with fewer.");
+            }
+
+            pi.Asked.Should().BeEmpty("it is refused before a password is asked for");
+            pi.Exists(Layout.Pfx).Should().BeFalse();
         }
     }
 

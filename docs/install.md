@@ -185,8 +185,8 @@ On a machine with the HAT's I2C bus, choosing a test rig asks for the host name:
 **3. Choices.** The questions of the roles chosen, filled in from the record, or with the defaults:
 
 - **The controller:** how clients connect (private CA, your own certificate, self-signed, or HTTP), the ports, and
-  the other names and domains clients use for it ([Certificates](#certificates)). The domains start as those this
-  machine's resolver searches.
+  the other names and domains clients use for it ([Certificates](#certificates)). No domain is listed unless you
+  list it: the page names those this machine's resolver searches, and you add one only if clients use names in it.
 - **`hvo-roof`:** its folder.
 - **The Mac app:** its folder.
 
@@ -248,7 +248,7 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
 | `controller.httpPort` | The controller's API over HTTP, with `http` (`HOST_PORT`) | `8080` |
 | `controller.webPort` | The web UI (`WEB_HOST_PORT`) | `8088` |
 | `controller.hostNames` | Other short names clients use for the controller, such as `roof` ([Certificates](#certificates)) | None |
-| `controller.domains` | The domains clients reach it under, such as `observatory.example` | None. The wizard suggests the search domains in `/etc/resolv.conf`. |
+| `controller.domains` | The domains clients reach it under, such as `observatory.example` | None. The wizard names the search domains in `/etc/resolv.conf`, but lists none unasked. |
 | `cli.folder` | `~/.local/bin` or `/usr/local/bin` | `~/.local/bin` |
 | `macApp.folder` | `/Applications` or `~/Applications` | `/Applications` |
 | `rigConfirmation` | This machine's host name, for a rig on a machine with `/dev/i2c-1` | None |
@@ -328,7 +328,9 @@ platforms set for a server certificate.
   - `local`, `localhost`, and the short names and domains of the controller;
   - the private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and loopback.
 
-  A stolen Pi, or the CA's key, therefore cannot pass for another site to the clients.
+  So a stolen Pi, or the CA's key, cannot pass for a public site to the clients. It can still sign for any `.local`
+  name, any name in a listed domain, and any private address, so keep the key safe, list only the domains clients use,
+  and if a Pi or its key is lost, remove its CA from each client's trust.
 - **The certificate** lasts 397 days, the most browsers accept. It is for:
   - the machine's short host name and each name in `controller.hostNames`, each alone, under `.local` and under each
     domain in `controller.domains`;
@@ -374,6 +376,11 @@ Every run of the installer, `--plan` included, warns when one of these applies:
   another CA issued it, or its password does not open it. `--renew` issues it again even when none of these apply.
 - **The modes** of the files, when they differ.
 
+With nothing recorded yet, such as a controller the deploy script runs, it uses the defaults: the installer's CA,
+unless your own certificate from another CA is in place. It then says which connection to choose when you install the
+controller, so the certificate is kept. It refuses to issue while this machine's clock is before the CA's start: set
+the time (NTP) first.
+
 It prints the plan, each step, and the certificate as `cert show` does. It never restarts the controller or moves the
 roof. The controller serves a new certificate once it is deployed again: when the roof is idle, run the deploy script
 again ([Deploying](deployment.md#deploying-with-the-script)). From #69 the installer does that step.
@@ -391,9 +398,10 @@ own. The file is one of these:
 
 When the file or the key has a password, the installer asks for it, or reads it from `--password-file FILE`. The
 password opens the file only: the installer writes the controller's own file with a new random password. It refuses a
-certificate that has expired, is not yet valid, is a CA's, or is not for a server. It warns when the certificate is not
-for a name or address clients use, and when it lasts longer than Apple's platforms accept. `--plan` checks the file
-and shows what would change.
+certificate that has expired, is not yet valid, is a CA's, or is not for a server, and a key whose password needs more
+than 600,000 iterations to derive its key (export it again with fewer). It warns when the certificate is not for a name
+or address clients use, and when it lasts longer than Apple's platforms accept. Importing the same certificate again
+changes nothing, unless its chain has changed. `--plan` checks the file and shows what would change.
 
 The installer never renews your certificate. Before it expires, import the new one.
 

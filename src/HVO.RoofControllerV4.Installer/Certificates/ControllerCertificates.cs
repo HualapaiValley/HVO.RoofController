@@ -33,6 +33,9 @@ public static class ControllerCertificates
     /// </summary>
     public static X509KeyStorageFlags KeyStorage => OperatingSystem.IsMacOS() ? X509KeyStorageFlags.DefaultKeySet : X509KeyStorageFlags.EphemeralKeySet;
 
+    /// <summary>How the name of every CA the installer makes starts: "HVO Roof CA (host, date)".</summary>
+    public const string AuthorityNamePrefix = "HVO Roof CA (";
+
     // A clock a little behind this one still accepts a certificate made now.
     private static readonly TimeSpan ClockSkew = TimeSpan.FromHours(1);
 
@@ -44,7 +47,7 @@ public static class ControllerCertificates
         ArgumentNullException.ThrowIfNull(names);
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var request = new CertificateRequest(
-            CommonName($"HVO Roof CA ({names.Host}, {AuthorityAssessment.Date(now.UtcDateTime)})"),
+            CommonName($"{AuthorityNamePrefix}{names.Host}, {AuthorityAssessment.Date(now.UtcDateTime)})"),
             key,
             HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, 0, true));
@@ -56,17 +59,27 @@ public static class ControllerCertificates
 
     /// <summary>
     /// A certificate for <paramref name="names"/>, with its key, issued by <paramref name="authority"/> (which holds its
-    /// key). It lasts <see cref="IssuedLifetime"/>, or until the CA expires if sooner.
+    /// key). It lasts <see cref="IssuedLifetime"/>, or until the CA expires if sooner, and never starts before the CA.
     /// </summary>
+    /// <exception cref="InstallerException">This machine's clock is before the CA's start.</exception>
     public static X509Certificate2 Issue(X509Certificate2 authority, CertificateNames names, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(authority);
         ArgumentNullException.ThrowIfNull(names);
+        var authorityStarts = new DateTimeOffset(authority.NotBefore);
+        var authorityEnds = new DateTimeOffset(authority.NotAfter);
+        if (now < authorityStarts || now >= authorityEnds)
+        {
+            throw new InstallerException(
+                $"This machine's clock ({AuthorityAssessment.Date(now.UtcDateTime)}) is outside its CA's dates ({AuthorityAssessment.Date(authority.NotBefore)} to {AuthorityAssessment.Date(authority.NotAfter)}): set the time (NTP) and run it again.");
+        }
+
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var request = ServerRequest(key, names);
         request.CertificateExtensions.Add(X509AuthorityKeyIdentifierExtension.CreateFromCertificate(authority, true, false));
-        var notAfter = now + IssuedLifetime < authority.NotAfter ? now + IssuedLifetime : new DateTimeOffset(authority.NotAfter);
-        using var issued = request.Create(authority, now - ClockSkew, notAfter, SerialNumber());
+        var notBefore = now - ClockSkew > authorityStarts ? now - ClockSkew : authorityStarts;
+        var notAfter = now + IssuedLifetime < authorityEnds ? now + IssuedLifetime : authorityEnds;
+        using var issued = request.Create(authority, notBefore, notAfter, SerialNumber());
         return issued.CopyWithPrivateKey(key);
     }
 
@@ -135,6 +148,36 @@ public static class ControllerCertificates
         catch (CryptographicException)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The certificates of a PKCS#12 file that have no key there (the chain after the certificate), as DER, or null when
+    /// the password does not open it.
+    /// </summary>
+    public static IReadOnlyList<byte[]>? PfxChain(byte[] pfx, string password)
+    {
+        ArgumentNullException.ThrowIfNull(pfx);
+        X509Certificate2Collection loaded;
+        try
+        {
+            loaded = X509CertificateLoader.LoadPkcs12Collection(pfx, password, KeyStorage);
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
+
+        try
+        {
+            return loaded.Where(certificate => !certificate.HasPrivateKey).Select(certificate => certificate.RawData).ToArray();
+        }
+        finally
+        {
+            foreach (var certificate in loaded)
+            {
+                certificate.Dispose();
+            }
         }
     }
 

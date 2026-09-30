@@ -70,16 +70,18 @@ internal static class CertificateCommands
         return cert;
     }
 
-    /// <summary><c>cert</c>: the recorded controller's certificate, checked and made or renewed.</summary>
+    /// <summary>
+    /// <c>cert</c>: the controller's certificate, checked and made or renewed: as recorded, or with the defaults when nothing
+    /// is recorded yet (a controller the deploy script runs, or one not yet installed).
+    /// </summary>
     private static async Task<int> RenewAsync(InstallerHost host, bool planOnly, bool renew, bool newCa, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         var log = planOnly || NeedsRoot(machine) ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time);
         var session = await InstallerSession.StartAsync(machine, log, host.Version, host.Time, cancellationToken).ConfigureAwait(false);
         Installer.WriteWarnings(host, session);
-        var (_, _, record) = Recorded(machine, session.Survey)
-            ?? throw new InstallerRefusedException($"Nothing here is recorded as running the controller or a test rig: install it first ({Installer.CommandName}).");
-        var settings = record.Controller!;
+        var record = Recorded(machine, session.Survey)?.Record;
+        var settings = record?.Controller ?? session.DefaultController;
         if (settings.Connection == ConnectionMode.Http)
         {
             throw new InstallerRefusedException(
@@ -98,10 +100,17 @@ internal static class CertificateCommands
         }
 
         RefuseWithoutRoot(machine, planOnly, "cert");
-        session.Answers = record.ToAnswers();
+        session.Answers = record?.ToAnswers() ?? new InstallAnswers();
         var replacing = newCa ? session.Survey.Authority?.Fingerprint : null;
         var checkedPlan = await PlanBuilder.BuildCertificate(machine, settings, replacing, renew).CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
-        return await RunPlanAsync(host, session, checkedPlan, planOnly, "the controller's certificate", settings, cancellationToken).ConfigureAwait(false);
+        var exit = await RunPlanAsync(host, session, checkedPlan, planOnly, "the controller's certificate", settings, cancellationToken).ConfigureAwait(false);
+        if (exit == (int)InstallerExitCode.Success && !planOnly && record is null)
+        {
+            host.Out.WriteLine(
+                $"Nothing here is recorded as running the controller yet: when you install it ({Installer.CommandName}), choose {(settings.Connection == ConnectionMode.OwnCertificate ? "own-certificate" : "private-ca")} to keep this certificate.");
+        }
+
+        return exit;
     }
 
     /// <summary><c>cert show</c>: the certificate and CA in place, and what needs doing about them. It only reads.</summary>
@@ -262,7 +271,7 @@ internal static class CertificateCommands
         {
             lines.Add($"Certificate: {certificate.Path}");
             lines.Add($"  Subject:   {certificate.Subject}");
-            lines.Add($"  Issued by: {(certificate.Issuer is null ? "itself (self-signed)" : certificate.FromAuthority ? $"{certificate.Issuer}, this machine's CA" : certificate.Issuer)}");
+            lines.Add($"  Issued by: {(certificate.Issuer is null ? "itself (self-signed)" : certificate.FromAuthority ? $"{certificate.Issuer}, this machine's CA" : certificate.FromInstallerCa ? $"{certificate.Issuer}, an installer's CA that is not this machine's" : certificate.Issuer)}");
             lines.Add($"  Valid:     until {InstallerSession.Date(certificate.NotAfter)}, {Left(certificate.NotAfter, now)}");
             lines.Add($"  For:       {string.Join(", ", certificate.Names)}");
             if (certificate.Uncovered.Count > 0)
@@ -291,7 +300,7 @@ internal static class CertificateCommands
         lines.Add($"  SHA-256:   {authority.Fingerprint}");
         if (record?.Controller is { Connection: ConnectionMode.PrivateCa } controller)
         {
-            var host = record.Roles.Contains(InstallRole.Rig) ? "localhost" : $"{machine.HostName}.local";
+            var host = record.Roles.Contains(InstallRole.Rig) ? "localhost" : CertificateNames.LocalName(machine.HostName);
             lines.Add($"  Clients get it from https://{host}:{controller.ApiPort}/ca.crt, or from {authority.Path}");
         }
 

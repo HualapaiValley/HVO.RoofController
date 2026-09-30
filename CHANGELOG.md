@@ -160,7 +160,8 @@ the roof against this server; use the web UI (port 8088) for operator access.
   SHA-256 fingerprints, and `cert import FILE` puts your own certificate in place (PKCS#12, or PEM with its chain and
   key), refusing one that has expired, is not yet valid, is a CA's or is not for a server. Each has `--plan`, and none
   restarts the controller: the output says to redeploy when the roof is idle. The wizard's settings page asks for the
-  names and domains, and Done shows where clients get the CA and its fingerprint. The controller serves its CA at the
+  names and domains, listing no domain unasked and naming those the machine's resolver searches as a hint. Done shows
+  where clients get the CA and its fingerprint. The controller serves its CA at the
   anonymous `GET /ca.crt` (the handshake leaves a self-signed root out), and `/health` reports `https_certificate`:
   Degraded within 30 days of expiry, Unhealthy when it has expired or cannot be read. See
   [docs/install.md](docs/install.md#certificates).

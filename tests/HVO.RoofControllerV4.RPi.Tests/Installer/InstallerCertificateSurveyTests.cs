@@ -83,9 +83,33 @@ public sealed class InstallerCertificateSurveyTests
         var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
 
         survey.Certificate!.FromAuthority.Should().BeFalse();
+        survey.Certificate.FromInstallerCa.Should().BeFalse();
+        survey.Certificate.IsTheirs.Should().BeTrue();
         survey.Certificate.Issuer.Should().Be("Their CA");
         InstallerSession.CertificateWarnings(survey, FakeMachine.Today).Should().Equal(
             "The certificate expires on 2026-10-21, in 20 days. Put a new one in place with: sudo hvo-roof-install cert import FILE");
+    }
+
+    [TestMethod]
+    public async Task ACertificateAnInstallersCaIssued_IsTheInstallers_EvenWhenThatCaIsGone()
+    {
+        using var pi = new FakeMachine().WithPi().WithCertificates();
+        File.Delete(pi.OnDisk(Layout.CaCertificate));
+        File.Delete(pi.OnDisk(Layout.CaKey));
+
+        var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
+        var session = await InstallerPlanTests.StartAsync(pi, InstallRole.Controller);
+
+        survey.Certificate!.FromAuthority.Should().BeFalse("this machine has no CA now");
+        survey.Certificate.FromInstallerCa.Should().BeTrue();
+        survey.Certificate.IsTheirs.Should().BeFalse();
+        session.DefaultController.Connection.Should().Be(ConnectionMode.PrivateCa, "the installer made it, so it makes a new CA and issues it again");
+        InstallerSession.CertificateWarnings(survey, FakeMachine.Today.AddDays(370)).Should().Equal(
+            "The certificate expires on 2027-11-02, in 27 days. Renew it with: sudo hvo-roof-install cert");
+
+        var shown = await pi.RunAsync("cert", "show");
+
+        shown.Output.Should().Contain("  Issued by: HVO Roof CA (roofpi, 2026-10-01), an installer's CA that is not this machine's");
     }
 
     [TestMethod]
@@ -205,7 +229,7 @@ public sealed class InstallerCertificateSurveyTests
     }
 
     [TestMethod]
-    public async Task WithNothingRecorded_TheControllerKeepsYourOwnCertificate_OrGetsAPrivateCa()
+    public async Task WithNothingRecorded_TheControllerKeepsYourOwnCertificate_OrGetsAPrivateCa_WithNoDomainUnasked()
     {
         using var fresh = new FakeMachine(hostName: "roofpi").Write(CertificateNames.ResolverConfiguration, "search observatory.example\n");
         fresh.WithPi();
@@ -221,7 +245,7 @@ public sealed class InstallerCertificateSurveyTests
         var defaults = (await InstallerPlanTests.StartAsync(fresh, InstallRole.Controller)).DefaultController;
 
         defaults.Connection.Should().Be(ConnectionMode.PrivateCa);
-        defaults.Domains.Should().Equal("observatory.example");
+        defaults.Domains.Should().BeEmpty("each domain lets the CA sign for any name in it, so the person lists them; the wizard only suggests them");
         (await InstallerPlanTests.StartAsync(own, InstallRole.Controller)).DefaultController.Connection.Should().Be(ConnectionMode.OwnCertificate, "a certificate another CA issued is never replaced unasked");
         (await InstallerPlanTests.StartAsync(selfSigned, InstallRole.Controller)).DefaultController.Connection.Should().Be(ConnectionMode.PrivateCa);
         (await InstallerPlanTests.StartAsync(unreadable, InstallRole.Controller)).DefaultController.Connection.Should().Be(ConnectionMode.PrivateCa, "one the controller cannot serve is not kept");

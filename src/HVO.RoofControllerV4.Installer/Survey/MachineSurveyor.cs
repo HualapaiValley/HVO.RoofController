@@ -168,6 +168,7 @@ public static partial class MachineSurveyor
             Fingerprint = ControllerCertificates.Fingerprint(certificate),
             Issuer = ControllerCertificates.IsSelfSigned(certificate) ? null : certificate.GetNameInfo(X509NameType.SimpleName, true),
             FromAuthority = authority is not null && ControllerCertificates.IsIssuedBy(certificate, authority),
+            FromInstallerCa = certificate.GetNameInfo(X509NameType.SimpleName, true).StartsWith(ControllerCertificates.AuthorityNamePrefix, StringComparison.Ordinal),
             Names = [.. dnsNames, .. addresses.Select(address => address.ToString())],
             Uncovered = ControllerCertificates.CompareNames(certificate, CertificateNames.For(machine, settings)).Missing
         };

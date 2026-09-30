@@ -116,6 +116,19 @@ public sealed class InstallerCertificateTests
     }
 
     [TestMethod]
+    public void ACertificate_NeverStartsBeforeItsCa_AndAClockBeforeTheCa_IsRefused()
+    {
+        using var authority = ControllerCertificates.CreateAuthority(InstallerCertificates.Names, Today);
+
+        using var early = ControllerCertificates.Issue(authority, InstallerCertificates.Names, Today.AddMinutes(-30));
+        var behind = () => ControllerCertificates.Issue(authority, InstallerCertificates.Names, Today.AddDays(-2));
+
+        early.NotBefore.Should().Be(authority.NotBefore, "a CA cannot sign for a time before its own start, even within the clock's allowance");
+        behind.Should().Throw<InstallerException>().WithMessage(
+            "This machine's clock (2026-09-29) is outside its CA's dates (2026-10-01 to 2036-09-28): set the time (NTP) and run it again.");
+    }
+
+    [TestMethod]
     public void ThePfx_HoldsTheCertificatesKey_AndTheCasCertificate_NeverItsKey()
     {
         var (authority, issued) = InstallerCertificates.Issue(Today);
@@ -202,6 +215,8 @@ public sealed class InstallerCertificateTests
 
         CertificateNames.SuggestedDomains(pi.Machine).Should().Equal("site.example", "observatory.example");
         CertificateNames.ShortName("RoofPi.site.example").Should().Be("roofpi");
+        CertificateNames.LocalName("RoofPi.site.example").Should().Be("roofpi.local", "the name clients reach it by on the network");
+        CertificateNames.LocalName("_odd_").Should().Be("localhost");
     }
 
     [TestMethod]

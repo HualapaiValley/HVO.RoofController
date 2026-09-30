@@ -140,6 +140,24 @@ public sealed class InstallerCertificatePlanTests
     }
 
     [TestMethod]
+    public async Task TheRenewalWindows_AreMeasuredInUtc_InAnyTimeZone()
+    {
+        // X509Certificate2 gives its dates in local time. An hour either side of each window tells them apart only when
+        // both sides are compared in UTC; on a machine whose zone is not UTC, a local date read as UTC moves the window.
+        using var pi = new FakeMachine().WithPi().WithCertificates();
+        var certificateExpires = FakeMachine.Today + ControllerCertificates.IssuedLifetime;
+        var authorityExpires = FakeMachine.Today + ControllerCertificates.AuthorityLifetime;
+        var hour = TimeSpan.FromHours(1);
+        async Task<StepChange> At(DateTimeOffset now, string target)
+            => Change(await CheckAsync(pi, new ControllerSettings(), time: new FixedClock(now)), target).Change;
+
+        (await At(certificateExpires - ControllerCertificates.RenewWithin - hour, Layout.Pfx)).Should().Be(StepChange.Unchanged);
+        (await At(certificateExpires - ControllerCertificates.RenewWithin + hour, Layout.Pfx)).Should().Be(StepChange.Change);
+        (await At(authorityExpires - ControllerCertificates.RenewAuthorityWithin - hour, Layout.CaCertificate)).Should().Be(StepChange.Unchanged);
+        (await At(authorityExpires - ControllerCertificates.RenewAuthorityWithin + hour, Layout.CaCertificate)).Should().Be(StepChange.Change);
+    }
+
+    [TestMethod]
     public async Task ACertificateExpiringWithin30Days_IsIssuedAgain_UnderTheSameCa()
     {
         using var pi = new FakeMachine().WithPi().WithCertificates();

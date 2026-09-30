@@ -265,7 +265,7 @@ public sealed class CertificateStep(ControllerLayout layout, CertificateNames na
                 ? "it is not self-signed: a self-signed one in its place"
             : missing.Count > 0 || extra.Count > 0
                 ? $"the names changed ({Changes(missing, extra)}): issued again"
-            : current.NotAfter - now.UtcDateTime < ControllerCertificates.RenewWithin
+            : new DateTimeOffset(current.NotAfter) - now < ControllerCertificates.RenewWithin
                 ? $"it expires on {AuthorityAssessment.Date(current.NotAfter)}: issued again"
             : renew
                 ? $"issued again, as asked (--renew): it was valid until {AuthorityAssessment.Date(current.NotAfter)}"
@@ -367,6 +367,7 @@ public sealed class ImportCertificateStep(ControllerLayout layout, ImportedCerti
         return $"{certificate.Subject}, until {AuthorityAssessment.Date(certificate.Certificate.NotAfter)}, issued by {certificate.Issuer}";
     }
 
+    // The same certificate with the same chain after it: a file of the certificate alone is written again with its chain.
     private bool InPlace(byte[] pfx, string? password)
     {
         if (string.IsNullOrEmpty(password))
@@ -375,6 +376,10 @@ public sealed class ImportCertificateStep(ControllerLayout layout, ImportedCerti
         }
 
         using var current = ControllerCertificates.LoadPfx(pfx, password);
-        return current is not null && current.RawData.AsSpan().SequenceEqual(imported.Certificate.RawData);
+        return current is not null
+            && current.RawData.AsSpan().SequenceEqual(imported.Certificate.RawData)
+            && ControllerCertificates.PfxChain(pfx, password) is { } chain
+            && chain.Count == imported.Chain.Count
+            && imported.Chain.All(link => chain.Any(held => held.AsSpan().SequenceEqual(link.RawData)));
     }
 }

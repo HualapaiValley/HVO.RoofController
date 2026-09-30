@@ -1,3 +1,5 @@
+using System.Formats.Asn1;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -17,6 +19,14 @@ public sealed class ImportedCertificate : IDisposable
     private static readonly TimeSpan AppleLongest = TimeSpan.FromDays(825);
 
     private static readonly string[] KeyLabels = ["PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"];
+
+    // The most iterations an encrypted key's password may need (PBKDF2's, or PKCS#12's own derivation's), as .NET's PKCS#12
+    // loader allows: .NET opens an encrypted PEM key with no limit, so a key asking for more would keep the installer
+    // busy for as long as its maker chose.
+    private const int MostIterations = 600_000;
+
+    private const string Pbes2 = "1.2.840.113549.1.5.13";
+    private const string Pbkdf2 = "1.2.840.113549.1.5.12";
 
     private ImportedCertificate(X509Certificate2 certificate, IReadOnlyList<X509Certificate2> chain)
     {
@@ -116,7 +126,7 @@ public sealed class ImportedCertificate : IDisposable
             warnings.Add($"It is not for {string.Join(", ", missing)}: a client that uses {(missing.Count == 1 ? "it" : "one")} refuses it.");
         }
 
-        if (Certificate.NotAfter - Certificate.NotBefore > AppleLongest)
+        if (Certificate.NotAfter.ToUniversalTime() - Certificate.NotBefore.ToUniversalTime() > AppleLongest)
         {
             warnings.Add("It is valid for more than 825 days, so macOS and iOS refuse it.");
         }
@@ -249,6 +259,12 @@ public sealed class ImportedCertificate : IDisposable
 
         var (keyLabel, pem) = blocks[0];
         var encrypted = keyLabel == "ENCRYPTED PRIVATE KEY";
+        if (encrypted && Iterations(pem) is { } iterations && iterations > MostIterations)
+        {
+            throw new InstallerUsageException(
+                $"The key in {keyName} needs {iterations} iterations to derive its password's key, more than the {MostIterations} the installer allows: export it again with fewer.");
+        }
+
         var given = encrypted ? password($"{keyName}'s password") ?? throw NoPassword(keyName) : null;
         foreach (var create in new Func<AsymmetricAlgorithm>[] { RSA.Create, ECDsa.Create })
         {
@@ -282,6 +298,39 @@ public sealed class ImportedCertificate : IDisposable
         throw new InstallerUsageException(encrypted
             ? $"The password does not open the key in {keyName}, or it is not an RSA or ECDSA key."
             : $"The key in {keyName} is not an RSA or ECDSA key the installer can read.");
+    }
+
+    // How many iterations of PBKDF2 (or of PKCS#12's own key derivation) an encrypted PKCS#8 key asks for, read before a
+    // password is tried; null when it cannot be read here, and .NET's import says what is wrong with it.
+    private static BigInteger? Iterations(string pem)
+    {
+        try
+        {
+            var fields = PemEncoding.Find(pem);
+            var info = new AsnReader(Convert.FromBase64String(pem[fields.Base64Data]), AsnEncodingRules.BER).ReadSequence();
+            var algorithm = info.ReadSequence();
+            var scheme = algorithm.ReadObjectIdentifier();
+            var parameters = algorithm.ReadSequence();
+            if (scheme == Pbes2)
+            {
+                // PBES2: the key derivation's parameters are those of PBKDF2 (salt, iterations, ...).
+                var derivation = parameters.ReadSequence();
+                if (derivation.ReadObjectIdentifier() != Pbkdf2)
+                {
+                    return null;
+                }
+
+                parameters = derivation.ReadSequence();
+            }
+
+            // PBKDF2's parameters, PBES1's and PKCS#12's all start with the salt, then the iterations.
+            parameters.ReadEncodedValue();
+            return parameters.ReadInteger();
+        }
+        catch (Exception error) when (error is AsnContentException or CryptographicException or FormatException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private static InstallerUsageException NoPassword(string name)
