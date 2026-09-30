@@ -21,6 +21,9 @@
 #              added on the Compose controller, and the session they opened there, still work after each move: both
 #              mount the same identity directory. So does a setting changed through the API on the Compose controller:
 #              both mount the same settings directory.
+#   pull       The deploy script's pull mode (C12 step 11): a released image, pushed to a registry of this run's own on
+#              loopback, deployed by its digest with no build; a reference without a digest, a digest the registry does
+#              not hold and the other platform each change nothing; --rollback between the pulled and the built version.
 #
 # Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It runs only against the local Docker daemon
 # (the default context, with DOCKER_HOST unset or a unix socket), not on a Raspberry Pi, and touches no hardware: the
@@ -29,7 +32,7 @@
 # start while a roof-controller container, or this run's emulator container or network, exists. Only a run that got
 # past that check removes them on exit; the images stay (the build cache).
 #
-#   tests/emulator/deploy-scenarios.sh [lifecycle] [supervisor] [c12] [migration]    (all four by default, in that order)
+#   tests/emulator/deploy-scenarios.sh [lifecycle] [supervisor] [c12] [migration] [pull]   (all five by default, in that order)
 #
 # Settings (environment): SCN_HTTPS_PORT (the controller's published HTTPS port, default 18443), SCN_WEB_PORT (the web
 # UI's published HTTPS port, default 18088), SCN_EMULATOR_PORT (the emulator's control API on loopback, default 15390),
@@ -65,6 +68,11 @@ emulator_name=hvo-deploy-scenarios-hat
 emulator_image=hvo/roof-hat-emulator:dev
 image=hvo/roof-controller:deploy-scenarios
 compose_project=hvo-deploy-scenarios
+# The pull scenario's registry, on loopback (Docker pulls from 127.0.0.1 over plain HTTP without configuration).
+registry_name=hvo-deploy-scenarios-registry
+registry_port=${SCN_REGISTRY_PORT:-15000}
+registry_image=registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+release_repository="127.0.0.1:${registry_port}/hvo/roof-controller"
 controller="roof-controller"
 previous="${controller}-previous"
 case "$(uname -m)" in
@@ -156,7 +164,10 @@ cleanup() {
   fi
   stop_relay_monitor
   remove_controllers
-  docker rm -f "${emulator_name}" >/dev/null 2>&1
+  docker rm -f "${emulator_name}" "${registry_name}" >/dev/null 2>&1
+  # The pulled image (by its digest); the images the run built stay, as the build cache.
+  docker images --digests --format '{{.Repository}}@{{.Digest}}' "${release_repository}" 2>/dev/null \
+    | grep '@sha256:' | xargs -r docker rmi >/dev/null 2>&1
   docker network rm "${network}" >/dev/null 2>&1
   write_results
   rm -rf "${work}"
@@ -586,8 +597,9 @@ setup() {
   if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap)?$")" ]]; then
     fail "a ${controller} container exists on this Docker host; these scenarios deploy their own under that name. Remove it first."
   fi
-  if [[ -n "$(docker ps -aq --filter "name=^/${emulator_name}$")" ]] || docker network inspect "${network}" >/dev/null 2>&1; then
-    fail "${emulator_name} or the ${network} network exists: another run is using them, or one was killed. Remove them first."
+  if [[ -n "$(docker ps -aq --filter "name=^/(${emulator_name}|${registry_name})$")" ]] \
+      || docker network inspect "${network}" >/dev/null 2>&1; then
+    fail "${emulator_name}, ${registry_name} or the ${network} network exists: another run is using them, or one was killed. Remove them first."
   fi
   # From here on, every roof-controller container, the emulator and the network are this run's, and cleanup removes them.
   owns_resources=1
@@ -1511,13 +1523,108 @@ scenario_migration() {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
+# pull
+
+registry_ready() {
+  curl -fsS --max-time 2 "http://127.0.0.1:${registry_port}/v2/" >/dev/null
+}
+
+# expect_not_pulled <id>: expect_untouched, and the controller was not stopped or replaced for a pull that failed.
+expect_not_pulled() {
+  expect_deploy_log "The running controller was not touched."
+  expect_untouched "$1"
+  ! deploy_log_has "Pre-flight: validating" || fail "the script ran the pre-flight after a pull that failed its checks"
+}
+
+scenario_pull() {
+  ensure_deployed
+  close_roof
+
+  # CommissioningCheck("C12", "11")
+  current_check="C12 step 11: a released image pulled by its digest"
+  # A release's image as the release workflow publishes it, in a registry of this run's own on loopback: this run's
+  # controller image under another version label, so the deploy has something new to pull.
+  docker run -d --name "${registry_name}" -p "127.0.0.1:${registry_port}:5000" "${registry_image}" >/dev/null \
+    || fail "could not start the registry"
+  wait_for "the registry" 60 registry_ready
+  mkdir -p "${work}/release-image"
+  printf 'FROM %s\nLABEL org.opencontainers.image.version=4.0.0-scenario\n' "${image}" > "${work}/release-image/Dockerfile"
+  docker buildx build --quiet --platform "${platform}" -t "${release_repository}:4.0.0-scenario" --load \
+    "${work}/release-image" >/dev/null || fail "could not build the released image"
+  local push digest ref
+  push=$(docker push "${release_repository}:4.0.0-scenario") || fail "could not push the released image: ${push}"
+  digest=$(sed -n 's/^4\.0\.0-scenario: digest: \(sha256:[0-9a-f]\{64\}\) .*/\1/p' <<<"${push}")
+  [[ -n "${digest}" ]] || fail "the push reported no digest: ${push}"
+  # Only the tag goes: the deploy pulls the image by its digest, as from a release.
+  docker rmi "${release_repository}:4.0.0-scenario" >/dev/null
+  ref="${release_repository}:4.0.0-scenario@${digest}"
+
+  local old_id new_id
+  old_id=$(container_id "${controller}")
+  start_relay_monitor
+  deploy "IMAGE_REF=${ref}"
+  (( DEPLOY_STATUS == 0 )) || fail "the deploy of the pulled image failed (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[pull] Pulling ${ref} for ${platform} into Docker context 'default'..."
+  expect_deploy_log "[pull] ${digest} for ${platform}: version 4.0.0-scenario"
+  expect_deploy_log "[deploy] Roof stop verified (relay register all off)."
+  expect_deploy_log "[done] Deployment complete and verified at ${roof}"
+  ! deploy_log_has "[build]" || fail "the deploy of a pulled image built one"
+  new_id=$(container_id "${controller}")
+  [[ "${new_id}" != "${old_id}" ]] || fail "the controller was not replaced"
+  [[ "$(container_image "${controller}")" == "$(image_id "${ref}")" ]] || fail "${controller} does not run the pulled image"
+  [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "the old controller is not kept as ${previous}"
+  container_stopped "${previous}" || fail "${previous} is running (or docker could not say)"
+  web_ui_live || fail "the web UI is not live at ${web}"
+  relays_stayed_off
+  assert_relays_off
+  local pull_seconds=${DEPLOY_SECONDS}
+
+  # Refusals: each changes nothing, and the running controller is never asked to stop the roof.
+  local other_platform=linux/arm64 unknown_digest
+  [[ "${platform}" == linux/amd64 ]] || other_platform=linux/amd64
+  unknown_digest="sha256:$(printf '%s' "not-${digest}" | sha256sum | cut -c1-64)"
+  start_relay_monitor
+  deploy "IMAGE_REF=${release_repository}:4.0.0-scenario"
+  (( DEPLOY_STATUS != 0 )) || fail "a reference without a digest was deployed"
+  expect_deploy_log "IMAGE_REF must name a released image by its digest"
+  expect_deploy_log "Nothing was changed."
+  expect_untouched "${new_id}"
+  deploy "IMAGE_REF=${release_repository}:4.0.0-scenario@${unknown_digest}"
+  (( DEPLOY_STATUS != 0 )) || fail "a digest the registry does not hold was deployed"
+  expect_deploy_log "Could not pull ${release_repository}:4.0.0-scenario@${unknown_digest}"
+  expect_not_pulled "${new_id}"
+  # A registry refuses the platform (no matching manifest), or the image the Pi holds is checked and is not for it.
+  deploy "IMAGE_REF=${ref}" "BUILD_PLATFORM=${other_platform}"
+  (( DEPLOY_STATUS != 0 )) || fail "the image was deployed for ${other_platform}"
+  deploy_log_has "Could not pull ${ref} for ${other_platform}" || deploy_log_has "The image ${ref} is not for ${other_platform}" \
+    || fail "the deploy for ${other_platform} did not fail at the pull or the platform check"
+  expect_not_pulled "${new_id}"
+  relays_stayed_off
+
+  # --rollback swaps the pulled version with the one before (a built image) and back: each container keeps its image.
+  start_relay_monitor
+  deploy "IMAGE_REF=${ref}" -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback from the pulled image failed (exit ${DEPLOY_STATUS})"
+  [[ "$(container_id "${controller}")" == "${old_id}" && "$(container_id "${previous}")" == "${new_id}" ]] \
+    || fail "the rollback did not swap the pulled version with the one before"
+  ! deploy_log_has "[pull]" || fail "--rollback pulled the image"
+  deploy -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback to the pulled image failed (exit ${DEPLOY_STATUS})"
+  [[ "$(container_id "${controller}")" == "${new_id}" ]] || fail "the second rollback did not return to the pulled version"
+  [[ "$(container_image "${controller}")" == "$(image_id "${ref}")" ]] || fail "${controller} does not run the pulled image again"
+  relays_stayed_off
+  assert_relays_off
+  pass "deployed ${digest:0:19}... from a registry in ${pull_seconds} s with no build; a reference without a digest, a digest the registry does not hold and ${other_platform} each changed nothing; --rollback swapped to the built version and back; relays 0 throughout"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
 
 scenarios=("$@")
-(( ${#scenarios[@]} > 0 )) || scenarios=(lifecycle supervisor c12 migration)
+(( ${#scenarios[@]} > 0 )) || scenarios=(lifecycle supervisor c12 migration pull)
 for scenario in "${scenarios[@]}"; do
   case "${scenario}" in
-    lifecycle|supervisor|c12|migration) ;;
-    *) echo "Unknown scenario: ${scenario} (lifecycle, supervisor, c12 or migration)" >&2; exit 2 ;;
+    lifecycle|supervisor|c12|migration|pull) ;;
+    *) echo "Unknown scenario: ${scenario} (lifecycle, supervisor, c12, migration or pull)" >&2; exit 2 ;;
   esac
 done
 

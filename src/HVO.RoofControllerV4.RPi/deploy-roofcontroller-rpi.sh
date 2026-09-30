@@ -28,6 +28,12 @@ set -euo pipefail
 #
 # Usage: PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh [--dry-run] [--force-unverified-stop] [--rollback]
 #        PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh --verify-remote
+# The image: by default the script builds IMAGE_TAG from this checkout for BUILD_PLATFORM and loads it into the Pi's
+#   Docker. With IMAGE_REF=<registry>/<name>[:<tag>]@sha256:<digest> (a release's image, from its release.json) the Pi's
+#   Docker pulls that image instead; it is deployed only if Docker reports that digest and BUILD_PLATFORM for it, and
+#   nothing is built, so the script runs without a checkout. Everything from the pre-flight on is the same. On the Pi
+#   itself, set DOCKER_CONTEXT=default: the remote check then runs from the Pi, so check from another machine afterwards
+#   too (--verify-remote). --rollback and --verify-remote ignore IMAGE_REF.
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
@@ -76,7 +82,10 @@ fi
 
 DOCKER_CONTEXT=${DOCKER_CONTEXT:-rpi-remote}
 IMAGE_TAG=${IMAGE_TAG:-hvov9/roof-controller:v4}
-# Platform the image is built for: the Pi's. linux/amd64 is for a test rig on a PC, in HAT emulator mode only.
+# A released image to pull on the Pi in place of building IMAGE_TAG here: <registry>/<name>[:<tag>]@sha256:<digest>.
+IMAGE_REF=${IMAGE_REF:-}
+# Platform the image is built (or pulled) for: the Pi's. linux/amd64 is for a test rig on a PC, in HAT emulator mode
+# only.
 BUILD_PLATFORM=${BUILD_PLATFORM:-linux/arm64}
 CONTAINER_NAME=${CONTAINER_NAME:-roof-controller}
 PREVIOUS_CONTAINER_NAME="${CONTAINER_NAME}-previous"
@@ -88,7 +97,8 @@ HTTPS_HOST_PORT=${HTTPS_HOST_PORT:-8443}
 WEB_HOST_PORT=${WEB_HOST_PORT:-8088}
 # Extra `docker run` options for the controller, split on whitespace (no quoting). Also applied to the pre-flight
 # container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports, graceful
-# stop) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT and STOP_TIMEOUT_SECONDS.
+# stop, platform) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and
+# BUILD_PLATFORM.
 EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
 HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
 IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-false}
@@ -166,6 +176,9 @@ VERIFIED_HAT_MODE=""
 # Why wait_ready found the controller exited, when the container's supervisor said so.
 EXIT_DETAIL=""
 WORK_DIR=""
+# `docker run --platform` for a pulled image (check_pulled_image), and `image inspect --platform` where the CLI has it.
+image_platform_args=()
+inspect_platform_args=()
 
 # From the first change of the switch on (and during the restore), docker runs in its own session, outside the
 # terminal's process group, so a Ctrl-C or a hangup at the terminal cannot reach it; bash runs its trap once the call
@@ -245,12 +258,25 @@ case "${BUILD_PLATFORM}" in
   *) fail "BUILD_PLATFORM must be linux/arm64 (the Pi) or linux/amd64 (a test rig on the HAT emulator), got '${BUILD_PLATFORM}'. Nothing was changed." ;;
 esac
 
+# Pull mode: a released image, named by its digest, so the Pi runs exactly the image the release lists. Checked here, so
+# that a malformed reference changes nothing, and never starts with '-', so docker cannot take it for an option.
+IMAGE_DIGEST=""
+if [[ -n "${IMAGE_REF}" ]]; then
+  image_ref_pattern='^[a-z0-9][A-Za-z0-9._/:-]*@(sha256:[0-9a-f]{64})$'
+  [[ "${IMAGE_REF}" =~ ${image_ref_pattern} ]] \
+    || fail "IMAGE_REF must name a released image by its digest, <registry>/<name>[:<tag>]@sha256:<64 hex digits> (e.g. ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:...), got '${IMAGE_REF}'. Nothing was changed."
+  IMAGE_DIGEST=${BASH_REMATCH[1]}
+  DEPLOY_IMAGE=${IMAGE_REF}
+else
+  DEPLOY_IMAGE=${IMAGE_TAG}
+fi
+
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
-# break the restore, the restart policy or the pre-flight container, and --stop-timeout or --stop-signal could cut the
-# controller's shutdown stop short. Short options may be combined (-itd, -p8443:8443). HatEmulator settings (in any case,
-# as .NET reads them), given directly or in an --env-file, would switch the HAT without HAT_EMULATOR_ENDPOINT and
-# ALLOW_EMULATED_HAT, and the report. In emulator mode the HAT's bus stays unmapped: no I2C device, no --privileged
+# break the restore, the restart policy or the pre-flight container, --stop-timeout or --stop-signal could cut the
+# controller's shutdown stop short, and --platform could run another platform's image than the one checked. Short
+# options may be combined (-itd, -p8443:8443). HatEmulator settings (in any case, as .NET reads them), given directly or
+# in an --env-file, would switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report. In emulator mode the HAT's bus stays unmapped: no I2C device, no --privileged
 # (which maps every device) and no mount of the host's /dev.
 EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it."
 
@@ -332,7 +358,7 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
   case "${arg}" in
     --name|--name=*|--detach|--detach=*|--rm|--rm=*|--restart|--restart=*|--cidfile|--cidfile=*|--publish|--publish=*|--publish-all|--publish-all=*)
       reserved=true ;;
-    --stop-timeout|--stop-timeout=*|--stop-signal|--stop-signal=*)
+    --stop-timeout|--stop-timeout=*|--stop-signal|--stop-signal=*|--platform|--platform=*)
       reserved=true ;;
     *)
       reserved=false
@@ -340,7 +366,7 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
       ;;
   esac
   if [[ "${reserved}" == "true" ]]; then
-    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout and --stop-signal itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT and STOP_TIMEOUT_SECONDS)."
+    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout, --stop-signal and --platform itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and BUILD_PLATFORM)."
   fi
   refuse_emulator_setting "${arg}"
 done
@@ -833,6 +859,41 @@ show_containers() {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Pull mode
+
+# inspect_pulled <format>: fields of the pulled image, for the platform it was pulled for. Docker's containerd image
+# store can hold several platforms of an image: asked for one it does not hold, it reports empty fields (or fails, in
+# the classic store). A Docker CLI without `image inspect --platform` reports the only platform the classic store holds.
+inspect_pulled() {
+  dockerc image inspect ${inspect_platform_args[@]+"${inspect_platform_args[@]}"} --format "$1" "${IMAGE_REF}"
+}
+
+# check_pulled_image: the pulled image must be the one IMAGE_REF's digest names, for BUILD_PLATFORM. Docker checks the
+# digest as it pulls; this also covers an image that was already on the Pi, and a registry mirror in between.
+check_pulled_image() {
+  local digests platform labels version revision
+  inspect_platform_args=()
+  if dockerc image inspect --help 2>/dev/null | grep -q -- '--platform'; then
+    inspect_platform_args=(--platform "${BUILD_PLATFORM}")
+  fi
+  # The platform first: the classic store fails every inspect for a platform it does not hold (Docker's error is shown).
+  platform=$(inspect_pulled '{{.Os}}/{{.Architecture}}') || platform=""
+  [[ "${platform}" != "/" ]] || platform=""
+  [[ "${platform}" == "${BUILD_PLATFORM}" ]] \
+    || fail "The image ${IMAGE_REF} is not for ${BUILD_PLATFORM} (Docker reports '${platform:-no image for that platform}'). The running controller was not touched."
+  digests=$(inspect_pulled '{{range .RepoDigests}}{{println .}}{{end}}') \
+    || fail "Could not inspect the pulled image ${IMAGE_REF}. The running controller was not touched."
+  grep -q "@${IMAGE_DIGEST}\$" <<<"${digests}" \
+    || fail "The pulled image does not carry the digest ${IMAGE_DIGEST} (Docker reports: $(tr '\n' ' ' <<<"${digests}")). The running controller was not touched."
+  labels=$(inspect_pulled '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} {{index .Labels "org.opencontainers.image.revision"}}{{end}}' 2>/dev/null) \
+    || labels=""
+  read -r version revision <<<"${labels}" || true
+  echo "[pull] ${IMAGE_DIGEST} for ${platform}: version ${version:-unknown}${revision:+, commit ${revision:0:12}}"
+  # The pre-flight and the controller run this platform's image, whatever else the Pi holds under the digest.
+  image_platform_args=(--platform "${BUILD_PLATFORM}")
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Restore. Everything here runs without errexit, and every step checks its own result.
 
 # The ID of the container this deploy created: from `docker run -d`, or from the cidfile docker writes on creation
@@ -1094,7 +1155,12 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   if [[ "${ROLLBACK}" == "true" ]]; then
     echo "[dry-run] Would request a verified Stop, swap ${CONTAINER_NAME} with ${PREVIOUS_CONTAINER_NAME} and verify it at ${REMOTE_BASE_URL}."
   else
-    echo "[dry-run] Would build ${IMAGE_TAG} for ${BUILD_PLATFORM}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
+    if [[ -n "${IMAGE_REF}" ]]; then
+      image_step="pull ${IMAGE_REF} for ${BUILD_PLATFORM} into Docker context '${DOCKER_CONTEXT}' and check its digest and platform"
+    else
+      image_step="build ${IMAGE_TAG} for ${BUILD_PLATFORM}"
+    fi
+    echo "[dry-run] Would ${image_step}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
     echo "[dry-run] HAT: ${HAT_SUMMARY}"
   fi
   echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; identity dir: ${IDENTITY_DIR:-<none, kept in memory>}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
@@ -1181,30 +1247,40 @@ fi
 
 [[ "${ROLLBACK}" != "true" ]] || fail "internal error: the --rollback path did not finish; nothing was built or deployed."
 
-if ! docker buildx version >/dev/null 2>&1; then
-  fail "docker buildx is required but not available. Install Docker Buildx and try again."
-fi
-
-# The product version and commit the image carries (docs/releasing.md): a deploy from a checkout is a -dev build.
-ROOF_VERSION=$("${REPO_ROOT}/build/version.sh" --dev) || fail "could not read the product version from Directory.Build.props."
-ROOF_REVISION=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)
-
-echo "[build] Building ${IMAGE_TAG} (${ROOF_VERSION}${ROOF_REVISION:+, commit ${ROOF_REVISION:0:12}}) for ${BUILD_PLATFORM}..."
-docker buildx build \
-  --platform "${BUILD_PLATFORM}" \
-  -f "${DOCKERFILE_PATH}" \
-  -t "${IMAGE_TAG}" \
-  --build-arg "ROOF_VERSION=${ROOF_VERSION}" \
-  --build-arg "ROOF_REVISION=${ROOF_REVISION}" \
-  --build-arg "ROOF_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --load \
-  "${REPO_ROOT}"
-
 WORK_DIR=$(mktemp -d)
-docker save "${IMAGE_TAG}" -o "${WORK_DIR}/image.tar"
 
-echo "[deploy] Loading image into Docker context '${DOCKER_CONTEXT}'"
-dockerc load < "${WORK_DIR}/image.tar"
+if [[ -n "${IMAGE_REF}" ]]; then
+  # Pull mode: the Pi's Docker pulls the released image, and it is used only if it is the image the digest names, for
+  # the platform this run deploys. Nothing is built here, so the script also runs outside a checkout.
+  echo "[pull] Pulling ${IMAGE_REF} for ${BUILD_PLATFORM} into Docker context '${DOCKER_CONTEXT}'..."
+  dockerc pull --platform "${BUILD_PLATFORM}" "${IMAGE_REF}" \
+    || fail "Could not pull ${IMAGE_REF} for ${BUILD_PLATFORM} into Docker context '${DOCKER_CONTEXT}' (see above). The running controller was not touched."
+  check_pulled_image
+else
+  if ! docker buildx version >/dev/null 2>&1; then
+    fail "docker buildx is required but not available. Install Docker Buildx and try again."
+  fi
+
+  # The product version and commit the image carries (docs/releasing.md): a deploy from a checkout is a -dev build.
+  ROOF_VERSION=$("${REPO_ROOT}/build/version.sh" --dev) || fail "could not read the product version from Directory.Build.props."
+  ROOF_REVISION=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)
+
+  echo "[build] Building ${IMAGE_TAG} (${ROOF_VERSION}${ROOF_REVISION:+, commit ${ROOF_REVISION:0:12}}) for ${BUILD_PLATFORM}..."
+  docker buildx build \
+    --platform "${BUILD_PLATFORM}" \
+    -f "${DOCKERFILE_PATH}" \
+    -t "${IMAGE_TAG}" \
+    --build-arg "ROOF_VERSION=${ROOF_VERSION}" \
+    --build-arg "ROOF_REVISION=${ROOF_REVISION}" \
+    --build-arg "ROOF_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --load \
+    "${REPO_ROOT}"
+
+  docker save "${IMAGE_TAG}" -o "${WORK_DIR}/image.tar"
+
+  echo "[deploy] Loading image into Docker context '${DOCKER_CONTEXT}'"
+  dockerc load < "${WORK_DIR}/image.tar"
+fi
 
 # Environment, devices and mounts of the controller container. The pre-flight check runs with exactly these.
 # shellcheck disable=SC2054 # commas are part of --mount values
@@ -1296,8 +1372,8 @@ container_args+=(${extra_args[@]+"${extra_args[@]}"})
 # not open the HAT). The key's SHA-256 lets it confirm this script's key is configured without passing the key.
 echo "[deploy] Pre-flight: validating the new container's configuration on the Pi"
 deploy_key_sha256=$(printf '%s' "${OPERATOR_KEY}" | sha256_hex)
-if ! dockerc run --rm "${container_args[@]}" --env "DeploymentCheck__DeployKeySha256=${deploy_key_sha256}" \
-    "${IMAGE_TAG}" --validate-deployment; then
+if ! dockerc run --rm ${image_platform_args[@]+"${image_platform_args[@]}"} "${container_args[@]}" \
+    --env "DeploymentCheck__DeployKeySha256=${deploy_key_sha256}" "${DEPLOY_IMAGE}" --validate-deployment; then
   fail "Pre-flight failed (see above). The running controller was not touched."
 fi
 
@@ -1346,7 +1422,7 @@ echo "[deploy] Starting the new container on ${PI_HOST}"
 NEW_CIDFILE="${WORK_DIR}/new-controller.cid"
 NEW_CONTAINER_ID=$(dockerc run -d --cidfile "${NEW_CIDFILE}" --name "${CONTAINER_NAME}" --restart unless-stopped \
     --stop-timeout "${STOP_TIMEOUT_SECONDS}" --log-driver local --log-opt max-size=10m --log-opt max-file=5 \
-    "${publish_args[@]}" "${container_args[@]}" "${IMAGE_TAG}") \
+    ${image_platform_args[@]+"${image_platform_args[@]}"} "${publish_args[@]}" "${container_args[@]}" "${DEPLOY_IMAGE}") \
   || abort_switch "docker run failed for the new controller"
 
 verify_controller "${CONTAINER_NAME}" || abort_switch "${FAILURE}"

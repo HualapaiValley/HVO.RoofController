@@ -9,6 +9,10 @@ TESTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SCRIPT="${TESTS_DIR}/../../src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh"
 KEY="deploy-test-operator-key-3f9c2a7e5b1d4c8a"
 IMAGE="test/roof-controller:v4"
+# A released image (pull mode): the reference with its digest, as a release lists it.
+DIGEST="sha256:20533a0149c42d4e814d2bb9c4ead07fc857b51dbf2a4f677240e32829195fc0"
+OTHER_DIGEST="sha256:f41408bf6c34db52ab1cbcc6c22f7b1eaae411f854541400fb0aa6833d20507e"
+IMAGE_REF="registry.test:5000/hvo/roof-controller:4.0.0@${DIGEST}"
 
 PASSED=0
 FAILED=0
@@ -1166,13 +1170,13 @@ test_rollback_path_cannot_fall_through_into_build() {
   assert_container roof-controller-previous old false
 }
 
-test_extra_docker_args_cannot_override_name_restart_ports_or_stop() {
+test_extra_docker_args_cannot_override_name_restart_ports_stop_or_platform() {
   seed_container roof-controller old true 8443:8443
   local value
   for value in "--name other" "--name=other" "-d" "--detach" "--detach=true" "--rm" "--restart always" \
       "--restart=always" "--cidfile /tmp/cid" "-p 80:8080" "-p8080:8080" "--publish 80:8080" "--publish=80:8080" \
       "-P" "--publish-all" "-itd" "-tp 80:8080" "--stop-timeout 1" "--stop-timeout=1" "--stop-signal SIGKILL" \
-      "--stop-signal=KILL"; do
+      "--stop-signal=KILL" "--platform linux/amd64" "--platform=linux/amd64"; do
     : > "${FAKE_STATE_DIR}/calls.log"
     deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
     assert_status 1
@@ -1283,6 +1287,177 @@ test_build_platform_amd64_is_for_the_emulator_only() {
   assert_container roof-controller new true unless-stopped
   docker_calls buildx | jq -e -s 'map(select(.[1] == "build")) | length == 1 and (.[0] | .[index("--platform") + 1] == "linux/amd64")' \
     >/dev/null || fail_test "expected one build for linux/amd64: $(docker_calls buildx)"
+}
+
+# --- Pull mode --------------------------------------------------------------------------------------------------------
+
+# assert_nothing_changed <label>: no container stopped, renamed, removed or started, and no image built or loaded.
+assert_nothing_changed() {
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls buildx)$(docker_calls load)" ]] \
+    || fail_test "$1: something changed: $(jq -c 'if .[0] == "--context" then .[2:] else . end' "${FAKE_STATE_DIR}/calls.log" | grep -E '^\["(stop|rename|rm|run|buildx|load)"' | head -n 1)"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_pull_mode_pulls_checks_and_deploys_the_released_image_without_building() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}"
+
+  assert_status 0
+  assert_output_contains "[pull] Pulling ${IMAGE_REF} for linux/arm64 into Docker context 'test-context'..."
+  assert_output_contains "[pull] ${DIGEST} for linux/arm64: version 4.0.0, commit 0123456789ab"
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443"
+  assert_output_not_contains "[build]"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false no
+  [[ -z "$(docker_calls buildx)$(docker_calls save)$(docker_calls load)" ]] || fail_test "pull mode built, saved or loaded an image"
+
+  # The Pi's Docker pulls the reference for the Pi's platform, then the image is checked for that platform.
+  docker_calls pull | jq -e -s --arg ref "${IMAGE_REF}" 'length == 1 and .[0] == ["pull", "--platform", "linux/arm64", $ref]' \
+    >/dev/null || fail_test "expected one pull of ${IMAGE_REF} for linux/arm64: $(docker_calls pull)"
+  grep -F '"--context", "test-context", "pull"' "${FAKE_STATE_DIR}/calls.log" >/dev/null \
+    || fail_test "the pull did not use the Pi's Docker context"
+  docker_calls image | jq -e -s --arg ref "${IMAGE_REF}" \
+    'map(select(index("--help") | not)) | length == 3 and all(.[]; .[index("--platform") + 1] == "linux/arm64" and .[-1] == $ref)' \
+    >/dev/null || fail_test "expected three image inspects of ${IMAGE_REF} for linux/arm64: $(docker_calls image)"
+  (( $(call_index '"pull"') < $(call_index '"--validate-deployment"') )) || fail_test "the pre-flight ran before the pull"
+
+  # The pre-flight and the controller run the pulled image, for the checked platform.
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e --arg ref "${IMAGE_REF}" 'index($ref) and .[index("--platform") + 1] == "linux/arm64"' <<<"${args}" >/dev/null \
+      || fail_test "expected ${IMAGE_REF} run for linux/arm64: ${args}"
+  done
+  jq -e --arg ref "${IMAGE_REF}" '.[-2] == $ref and .[-1] == "--validate-deployment"' <<<"$(preflight_args)" >/dev/null \
+    || fail_test "the pre-flight does not run ${IMAGE_REF} --validate-deployment: $(preflight_args)"
+  jq -e --arg ref "${IMAGE_REF}" '.[-1] == $ref' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "the controller does not run ${IMAGE_REF}: $(controller_run_args)"
+  assert_key_never_in_argv
+}
+
+test_pull_mode_runs_outside_a_checkout() {
+  seed_container roof-controller old true 8443:8443
+  # The script as a release ships it: on its own, with no repository around it.
+  mkdir -p "${WORK}/release"
+  cp "${SCRIPT}" "${WORK}/release/deploy-roofcontroller-rpi.sh"
+  local SCRIPT="${WORK}/release/deploy-roofcontroller-rpi.sh"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}"
+
+  assert_status 0
+  assert_output_contains "Deployment complete and verified"
+  assert_container roof-controller new true unless-stopped
+}
+
+test_image_ref_without_a_digest_is_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local value
+  for value in "registry.test:5000/hvo/roof-controller:4.0.0" "registry.test:5000/hvo/roof-controller:latest" \
+      "registry.test:5000/hvo/roof-controller@sha256:20533a01" "registry.test:5000/hvo/roof-controller@$(tr '[:lower:]' '[:upper:]' <<<"${DIGEST}")" \
+      "registry.test:5000/hvo/roof-controller@md5:0123456789abcdef0123456789abcdef" "--privileged@${DIGEST}" \
+      "registry.test/roof-controller:4.0.0@${DIGEST} --privileged" "registry.test/roof controller@${DIGEST}" \
+      "Registry.test/roof-controller@${DIGEST}"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${value}"
+    assert_status 1
+    assert_output_contains "IMAGE_REF must name a released image by its digest"
+    assert_output_contains "got '${value}'. Nothing was changed."
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_failed_pull_changes_nothing() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULL_FAIL=true
+
+  assert_status 1
+  assert_output_contains "no such host"
+  assert_output_contains "Could not pull ${IMAGE_REF} for linux/arm64 into Docker context 'test-context' (see above). The running controller was not touched."
+  assert_nothing_changed "failed pull"
+  [[ -z "$(docker_calls exec)" ]] || fail_test "the running controller was asked to stop"
+}
+
+test_pulled_image_with_another_digest_changes_nothing() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_DIGEST=${OTHER_DIGEST}"
+
+  assert_status 1
+  assert_output_contains "The pulled image does not carry the digest ${DIGEST} (Docker reports: registry.test:5000/hvo/roof-controller@${OTHER_DIGEST}"
+  assert_output_contains "The running controller was not touched."
+  assert_nothing_changed "wrong digest"
+}
+
+test_pulled_image_for_another_platform_changes_nothing() {
+  seed_container roof-controller old true 8443:8443
+  local store
+  # The classic image store fails the inspect, the containerd store reports empty fields, and a CLI without
+  # `image inspect --platform` reports the platform the image has.
+  for store in "FAKE_IMAGE_STORE=classic" "FAKE_IMAGE_STORE=containerd" "FAKE_INSPECT_PLATFORM=false"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULLED_PLATFORM=linux/amd64 "${store}"
+    assert_status 1
+    assert_output_contains "The image ${IMAGE_REF} is not for linux/arm64"
+    assert_output_contains "The running controller was not touched."
+    if [[ "${store}" == "FAKE_INSPECT_PLATFORM=false" ]]; then
+      assert_output_contains "(Docker reports 'linux/amd64')"
+    else
+      assert_output_contains "(Docker reports 'no image for that platform')"
+    fi
+    assert_nothing_changed "${store}"
+  done
+}
+
+test_pull_mode_with_a_cli_without_inspect_platform_checks_the_image_it_holds() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_INSPECT_PLATFORM=false
+
+  assert_status 0
+  assert_output_contains "[pull] ${DIGEST} for linux/arm64: version 4.0.0"
+  assert_container roof-controller new true unless-stopped
+  docker_calls image | jq -e -s 'map(select(index("--help") | not)) | length == 3 and all(.[]; index("--platform") | not)' \
+    >/dev/null || fail_test "expected image inspects without --platform: $(docker_calls image)"
+}
+
+test_pull_mode_amd64_is_for_the_emulator_only() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" BUILD_PLATFORM=linux/amd64
+  assert_status 1
+  assert_output_contains "BUILD_PLATFORM=linux/amd64 is for a test rig on the HAT emulator"
+  assert_no_docker_calls "amd64 without the emulator"
+
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" BUILD_PLATFORM=linux/amd64 HAT_EMULATOR_ENDPOINT=hat-emulator:5291 \
+    ALLOW_EMULATED_HAT=true
+  assert_status 0
+  assert_output_contains "[pull] ${DIGEST} for linux/amd64: version 4.0.0"
+  assert_container roof-controller new true unless-stopped
+  docker_calls pull | jq -e -s '.[0] | .[index("--platform") + 1] == "linux/amd64"' >/dev/null \
+    || fail_test "expected a pull for linux/amd64: $(docker_calls pull)"
+  jq -e '.[index("--platform") + 1] == "linux/amd64" and index("HatEmulator__Enabled=true")' <<<"$(controller_run_args)" \
+    >/dev/null || fail_test "expected the emulated controller run for linux/amd64: $(controller_run_args)"
+}
+
+test_pull_mode_dry_run_pulls_nothing() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" -- --dry-run
+
+  assert_status 0
+  assert_output_contains "[dry-run] Would pull ${IMAGE_REF} for linux/arm64 into Docker context 'test-context' and check its digest and platform, run the pre-flight check"
+  [[ -z "$(docker_calls pull)$(docker_calls image)" ]] || fail_test "the dry run pulled or inspected an image"
+  assert_nothing_changed "dry run"
+}
+
+test_rollback_returns_from_a_pulled_image_to_the_one_before_and_ignores_image_ref() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}"
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" -- --rollback
+  assert_status 0
+  assert_output_contains "Rolled back."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous new false no
+  [[ -z "$(docker_calls pull)$(docker_calls run)$(docker_calls buildx)" ]] || fail_test "--rollback pulled, built or ran an image"
 }
 
 test_compose_managed_controller_is_refused_before_anything_changes() {

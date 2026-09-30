@@ -214,6 +214,13 @@ Two compose files run the controller with the emulator:
 | `src/docker-compose.yml` | Development | Local development, on `http://localhost:5200`. The admin key comes from `HVO_DEV_ROOF_API_KEY`. |
 | `src/HVO.RoofControllerV4.RPi/docker-compose.yaml`, profile `emulator` | Production, with `HatEmulator__AllowOutsideDevelopment=true` | The production roof settings against the emulator, on plain HTTP at `127.0.0.1:5195` (`HVO_EMULATED_ROOF_PORT`). The admin key comes from `HVO_EMULATED_ROOF_API_KEY`. Its camera proxy reads the emulator's camera (`BlueIris__BaseUrl=http://hat-emulator:5290`, no credentials; the frame rate is `HVO_EMULATOR_CAMERA_FPS`, 5 by default). It exports telemetry only when `HVO_EMULATED_ROOF_OTLP_ENDPOINT` is set, and rotates its logs as the Pi profiles do. It maps no devices, so it can run next to a Pi profile. |
 
+A release's own compose file ([deployment.md](deployment.md#deploying-with-compose)) has the same `emulator` profile
+with the released images, pulled for the machine it runs on, so it needs no checkout:
+
+```bash
+HVO_EMULATED_ROOF_API_KEY=$(openssl rand -hex 24) docker compose --profile emulator up -d
+```
+
 `tests/emulator/compose-smoke-test.sh` builds both images through the `emulator` profile. It opens and closes the
 emulated roof through the controller's API, checks that the plant recorded no violations, and checks the banner, the
 status and the Degraded health. CI runs it in the "Emulator image" workflow, which also builds the emulator image for
@@ -233,20 +240,22 @@ key, both generated for the run.
 | `lifecycle` | `docker stop` while the roof travels and a camera stream is open through the proxy: the supervisor stops the controller first, which stops the roof (`HostShutdown`, relays off) and exits 0 before the supervisor stops the web UI; the stream ends within 5 s, and the container exits 0 within 5 s, not 137, then starts again ready and still, with the web UI live (C11 steps 1-3). `docker kill` while it travels: the HAT holds the relays, the restart policy does not restart the killed container, and the controller turns the relays off when it is started again. `docker stop` while the emulator fails relay writes (C11 step 4): once until the shutdown logs the stop unverified, when a retry verifies the relays off; and once for good, when the container still exits within the grace period with the relays held, and the restarted controller turns them off. `POST System/Restart` (C11 step 5): the controller answers 202 and exits 75, and the supervisor starts it again in the same container (Docker's restart count unchanged), ready with the relays off, while the web UI keeps running. |
 | `supervisor` | [The container's two processes](deployment.md#the-containers-two-processes): the web UI runs as the image's `app` user with only its `RoofWeb__*` settings, and cannot read `/run/secrets`. The controller killed inside the container while the roof travels: the relays are held, and the supervisor starts it again after its backoff, when it turns them off; the web UI keeps running and Docker does not restart the container (C11 step 6). A crash loop: after the crash limit the controller is left stopped, the health check fails, and the web UI is live and says why (C11 step 7). A forced restart through the web UI's control file starts the crash-looping controller, ignores a second request within 10 s of its start, and kills and starts a running controller (C11 step 8). The web UI killed while the roof moves: the supervisor starts only the web UI again, and the controller and the move carry on (C11 step 9). |
 | `c12` | [Commissioning](commissioning.md) C12 with `deploy-roofcontroller-rpi.sh`: a deploy with the roof idle; a deploy while it moves, which stops it (verified all-off) before the old controller is stopped; `--rollback` twice; pre-flight failures (a key that is not configured, a renamed certificate, a wrong certificate password, no RoofOperator key) that leave the running controller untouched; `ALLOWED_HOSTS=localhost`, which fails the remote check and rolls back; relay-register reads failing, so the Stop cannot be verified and the deploy aborts before it stops the controller; a HAT endpoint that does not resolve, so the new controller never becomes ready and is rolled back; and a new web UI that cannot start, which is rolled back with the previous controller and its web UI running again; the web UI live at its published port over HTTPS after a deploy; and the relay register sampled every 0.1 s through steps 3-9, never energized. |
+| `pull` | [A released image](deployment.md#deploying-a-released-image), as the deploy script deploys it with `IMAGE_REF` (C12 step 11): the run's controller image under another version label, pushed to a registry of the run's own on `127.0.0.1` (`SCN_REGISTRY_PORT`, default 15000) and deployed by its digest. The script pulls it, reports its digest, platform and version, and builds nothing; the controller runs that image, the old one is kept as `roof-controller-previous`, and the relays stay off. A reference without a digest, a digest the registry does not hold and the other platform's image are each refused with the running controller untouched. `--rollback` swaps back and forth. |
 | `migration` | [Moving between Compose and the deploy script](deployment.md#moving-between-compose-and-the-deploy-script): the `pi` profile on the emulator (a Compose override maps no devices and points the controller at the emulator), the script refusing its container, the move to the script, `docker compose up` failing on the name while the script's controller runs, and the move back to the Compose version. The deploy script's `--verify-remote` checks each Compose controller from this machine under a Docker context that does not exist, so any Docker call would fail. A key the controller does not know gets 401. A person added on the Compose controller, their session, and a setting changed through the API (saved to `appsettings.Local.json`, mode 644) carry over to the script's controller and back. Both controllers report the two log levels as changeable through the API, from the shipped defaults, since the image sets no log level in its environment. |
 
 ```bash
-tests/emulator/deploy-scenarios.sh                      # all four
+tests/emulator/deploy-scenarios.sh                      # all five
 tests/emulator/deploy-scenarios.sh c12                  # one
 SCN_RESULTS_DIR=out tests/emulator/deploy-scenarios.sh  # also writes out/deploy-scenarios.md, with the timings
 ```
 
-It needs docker with buildx and compose 2.24 or later, curl, jq and openssl. The controller is named `roof-controller`,
-as the script and the Compose `pi` profile name it, so the run refuses to start while a `roof-controller` container, or
-the run's emulator container (`hvo-deploy-scenarios-hat`) or network (`hvo-deploy-scenarios`), exists on that Docker
-host. A refused run removes nothing. A run that starts removes everything it started when it ends, stops a deploy it
-left running, and prints the containers, the controller's last log lines and the emulator's history when a check
-fails. CI runs it in the "Scenarios" workflow.
+It needs docker with buildx and compose 2.24 or later, curl, jq and openssl; `pull` also pulls the `registry:2` image
+from Docker Hub, by its digest. The controller is named `roof-controller`, as the script and the Compose `pi` profile
+name it, so the run refuses to start while a `roof-controller` container, or the run's emulator container
+(`hvo-deploy-scenarios-hat`), registry container (`hvo-deploy-scenarios-registry`) or network (`hvo-deploy-scenarios`),
+exists on that Docker host. A refused run removes nothing. A run that starts removes everything it started when it
+ends, stops a deploy it left running, and prints the containers, the controller's last log lines and the emulator's
+history when a check fails. CI runs it in the "Scenarios" workflow.
 
 ## Tests
 
@@ -270,8 +279,8 @@ No test relies on physical hardware.
 | `RoofControllerHealthCheckTests` | Emulator mode's health: Degraded naming the endpoint, and every more serious result naming the emulator |
 | `DeploymentValidatorTests` | The deployment check: emulator mode refused outside Development without `AllowOutsideDevelopment`, refused with `/dev/i2c-1` mapped, invalid `HatEmulator` settings |
 | `tests/emulator/compose-smoke-test.sh` | The two images together through the compose `emulator` profile, including the camera proxy against the emulated camera |
-| CI "Compose profiles" step | The Pi profiles pin emulator mode off; the `emulator` profile maps no devices and has its own network |
-| `tests/emulator/deploy-scenarios.sh` | The container's stop and kill while the roof travels, C12 with the deploy script, and moving between Compose and the script ([Container scenarios](#container-scenarios)) |
+| CI "Compose profiles" step | The Pi profiles pin emulator mode off; the `emulator` profile maps no devices and has its own network; the release compose file is the same, profile by profile, with the release's images and nothing built |
+| `tests/emulator/deploy-scenarios.sh` | The container's stop and kill while the roof travels, C12 with the deploy script, a pulled image, and moving between Compose and the script ([Container scenarios](#container-scenarios)) |
 | `tests/deploy/deploy-script-tests.sh` | Emulator mode: the refusal without `ALLOW_EMULATED_HAT`, the unmapped HAT and the recorded flag; `HatEmulator` settings refused in `EXTRA_DOCKER_ARGS` and in an `--env-file`; I2C devices, `--privileged` (any value Docker reads as true) and `/dev` mounts refused in emulator mode; the verified `hatMode`, with a rollback on a mismatch; and the rollback's HAT checks, before the swap and once the restored version runs |
 
 `EmulatorModeAppTests` is `[DoNotParallelize]`. Each test starts a whole controller host whose startup and HAT polling
