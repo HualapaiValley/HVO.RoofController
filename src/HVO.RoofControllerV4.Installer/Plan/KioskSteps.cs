@@ -58,6 +58,9 @@ public static class KioskSteps
     /// <summary>
     /// The kiosk's steps, after the controller's: <paramref name="kioskKey"/> is the controller's key the kiosk gets a
     /// copy of, and <paramref name="adminKey"/> the installer's admin key, which gives the people chosen their PINs.
+    /// <paramref name="certificate"/> and <paramref name="authority"/> are the plan's steps that may issue the
+    /// controller a new certificate or make a new CA in the same run: the kiosk pins the one, and is started again to
+    /// read the other.
     /// </summary>
     public static IReadOnlyList<PlanStep> For(
         ControllerLayout layout,
@@ -65,14 +68,16 @@ public static class KioskSteps
         KioskSettings kiosk,
         ApiKeyAllocation kioskKey,
         ApiKeyAllocation adminKey,
-        FirstAdminSettings? firstAdmin)
+        FirstAdminSettings? firstAdmin,
+        CertificateStep? certificate = null,
+        CertificateAuthorityStep? authority = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(controller);
         ArgumentNullException.ThrowIfNull(kiosk);
         var program = new KioskProgramStep();
         var key = new KioskDeviceKeyStep(layout, kioskKey);
-        var settings = new KioskSettingsStep(layout, controller);
+        var settings = new KioskSettingsStep(layout, controller, certificate);
         var unit = new KioskFileStep(MachineSurveyor.KioskUnitFile, "hvo-roof-kiosk.service", "the kiosk's systemd unit");
         var rule = new KioskFileStep(BacklightRuleFile, "99-hvo-roof-kiosk-backlight.rules", "lets the kiosk turn the screen's backlight off and on");
         var steps = new List<PlanStep>
@@ -86,7 +91,7 @@ public static class KioskSteps
             settings,
             unit,
             rule,
-            new KioskServiceStep(layout, controller, [program, key, settings, unit, rule], unit, rule)
+            new KioskServiceStep(layout, controller, [program, key, settings, unit, rule], unit, rule, authority)
         };
 
         if (kiosk.HideCursor)
@@ -183,11 +188,13 @@ public sealed class KioskPackagesStep : PlanStep
 }
 
 /// <summary>
-/// The kiosk's user, <c>hvo-kiosk</c>: a system user with no home or login, in <see cref="KioskSteps.Groups"/>. One
-/// already there is kept, and added to any of those groups it is not in.
+/// The kiosk's user, <c>hvo-kiosk</c>: a system user with no home or login, in its own group (which owns the
+/// configuration folder it reads its key from) and in <see cref="KioskSteps.Groups"/>. One already there is kept, and
+/// added to any of those groups it is not in; its group is made when only the user is there.
 /// </summary>
 public sealed class KioskUserStep : PlanStep
 {
+    private bool _groupExists;
     private IReadOnlyList<string> _missingGroups = [];
 
     public override StepKind Kind => StepKind.User;
@@ -200,19 +207,24 @@ public sealed class KioskUserStep : PlanStep
     {
         ArgumentNullException.ThrowIfNull(context);
         var groups = string.Join(", ", KioskSteps.Groups);
+        var group = await context.Machine.Commands.RunAsync(new CommandLine("getent", "group", KioskSteps.User), cancellationToken).ConfigureAwait(false);
+        _groupExists = group.Succeeded;
         var user = await context.Machine.Commands.RunAsync(new CommandLine("getent", "passwd", KioskSteps.User), cancellationToken).ConfigureAwait(false);
         if (!user.Succeeded)
         {
             _missingGroups = KioskSteps.Groups;
-            return new StepCheck(StepChange.Create, $"a system user with no home or login, in {groups}");
+            return new StepCheck(
+                StepChange.Create,
+                $"a system user with no home or login, in {groups}{(_groupExists ? $", and the {KioskSteps.User} group already here" : string.Empty)}");
         }
 
         var member = await context.Machine.Commands.RunAsync(new CommandLine("id", "-nG", KioskSteps.User), cancellationToken).ConfigureAwait(false);
         var memberOf = member.Output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
-        _missingGroups = [.. KioskSteps.Groups.Where(group => !memberOf.Contains(group))];
-        return _missingGroups.Count == 0
-            ? StepCheck.Unchanged($"in {groups}")
-            : new StepCheck(StepChange.Change, $"added to {string.Join(", ", _missingGroups)}");
+        _missingGroups = [.. KioskSteps.Groups.Prepend(KioskSteps.User).Where(name => !memberOf.Contains(name))];
+        var missing = string.Join(", ", _missingGroups);
+        return _missingGroups.Count == 0 ? StepCheck.Unchanged($"in {KioskSteps.User}, {groups}")
+            : _groupExists ? new StepCheck(StepChange.Change, $"added to {missing}")
+            : new StepCheck(StepChange.Change, $"the {KioskSteps.User} group made, and the user added to {missing}");
     }
 
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
@@ -220,12 +232,20 @@ public sealed class KioskUserStep : PlanStep
         ArgumentNullException.ThrowIfNull(context);
         if (check.Change == StepChange.Create)
         {
+            // A group of that name left behind is the user's group; useradd --user-group refuses to make it again.
+            string[] group = _groupExists ? ["--gid", KioskSteps.User] : ["--user-group"];
+            string[] arguments = ["--system", .. group, "--no-create-home", "--shell", "/usr/sbin/nologin", KioskSteps.User];
             await KioskSteps.Run(
                 context,
                 $"add the {KioskSteps.User} user",
-                new CommandLine("useradd", "--system", "--user-group", "--no-create-home", "--shell", "/usr/sbin/nologin", KioskSteps.User),
+                new CommandLine("useradd", arguments),
                 cancellationToken).ConfigureAwait(false);
             context.Log.Write($"Added the {KioskSteps.User} user.");
+        }
+        else if (!_groupExists)
+        {
+            await KioskSteps.Run(context, $"add the {KioskSteps.User} group", new CommandLine("groupadd", "--system", KioskSteps.User), cancellationToken).ConfigureAwait(false);
+            context.Log.Write($"Added the {KioskSteps.User} group.");
         }
 
         await KioskSteps.Run(
@@ -487,7 +507,7 @@ public sealed class KioskDeviceKeyStep(ControllerLayout layout, ApiKeyAllocation
 /// how to trust it (its CA, or its certificate's pin; neither under plain HTTP) and the device key's file. Settings a
 /// person changed by hand are kept.
 /// </summary>
-public sealed class KioskSettingsStep(ControllerLayout layout, ControllerSettings controller) : PlanStep
+public sealed class KioskSettingsStep(ControllerLayout layout, ControllerSettings controller, CertificateStep? issuing = null) : PlanStep
 {
     private const string Section = "Kiosk";
 
@@ -567,9 +587,9 @@ public sealed class KioskSettingsStep(ControllerLayout layout, ControllerSetting
                 return (current, null, new StepCheck(StepChange.Info, "only root can read the controller's certificate: run with sudo to check the kiosk's pin"));
             }
 
-            if (certificate?.Fingerprint is not { } fingerprint)
+            // The installer makes it, puts it in place or issues a new one in this run: the kiosk pins that one.
+            if (certificate?.Fingerprint is not { } fingerprint || (issuing is not null && !context.HasApplied(issuing) && issuing.WillWrite(context)))
             {
-                // The installer makes it, or puts it in place, in this run.
                 return (current, null, new StepCheck(current is null ? StepChange.Create : StepChange.Change, $"{Address()}, pinning the controller's certificate once it is in place"));
             }
 
@@ -659,7 +679,8 @@ public sealed class KioskServiceStep(
     ControllerSettings controller,
     IReadOnlyList<PlanStep> inputs,
     KioskFileStep? unit,
-    KioskFileStep? rule) : PlanStep
+    KioskFileStep? rule,
+    CertificateAuthorityStep? authority = null) : PlanStep
 {
     private bool _enabled;
     private bool _needsReload;
@@ -741,6 +762,12 @@ public sealed class KioskServiceStep(
         if (_needsReload)
         {
             return "its new unit";
+        }
+
+        // A CA the installer makes in this run: the kiosk reads its CA when it starts.
+        if (authority is not null && (context.HasApplied(authority) ? authority.Wrote : authority.WillWrite(context)))
+        {
+            return $"its new {Path.GetFileName(authority.Target)}";
         }
 
         foreach (var input in inputs)

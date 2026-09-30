@@ -136,8 +136,8 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
 - **The kiosk with its controller.** The kiosk needs the controller on the same Pi: choose both, or install the
   controller first.
 - **The kiosk's screen.** The kiosk draws on the display itself, so it needs a connected screen, and no desktop
-  (`display-manager.service`) holding it: use Raspberry Pi OS Lite, or boot to the console. Once the kiosk is
-  installed, a screen that is off or unplugged does not stop an update.
+  (`display-manager.service`) holding it, now or at the next boot: use Raspberry Pi OS Lite, or boot to the console.
+  Once the kiosk is installed, a screen that is off or unplugged does not stop an update.
 - **Docker.** The controller and a rig need Docker running, and the right to use it.
 - **Root rules.** See [Running it](#running-it).
 - **Compose.** A container that Docker Compose made is described in the plan but never replaced. Move it first: see
@@ -173,7 +173,7 @@ Before asking anything, and without changing anything, the installer looks at th
   - whether the deploy script or Docker Compose made it.
 - **The kiosk's service:** `hvo-roof-kiosk.service`.
 - **The display:** the display outputs in `/sys/class/drm` and whether a screen is connected to one, and whether a
-  desktop (`display-manager.service`) runs.
+  desktop (`display-manager.service`) runs, or starts at boot (it is enabled, and the Pi boots to `graphical.target`).
 - **The programs:** `hvo-roof` on the `PATH` (or in `~/.local/bin` or `/usr/local/bin`), and `HVO Roof.app` in
   `/Applications` or `~/Applications`.
 

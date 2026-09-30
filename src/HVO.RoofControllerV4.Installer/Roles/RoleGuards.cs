@@ -179,9 +179,12 @@ public static class RoleGuards
             return "The kiosk runs on the controller's Raspberry Pi (64-bit Raspberry Pi OS).";
         }
 
-        if (survey.Display is { DisplayManagerActive: true })
+        if (survey.Display is { DisplayManagerActive: true } or { DisplayManagerAtBoot: true })
         {
-            return "A desktop has the screen (display-manager.service is running), and the kiosk draws on it itself: use Raspberry Pi OS Lite, or boot to the console (sudo systemctl set-default multi-user.target), reboot, and run the installer again.";
+            var desktop = survey.Display.DisplayManagerActive
+                ? "A desktop has the screen (display-manager.service is running)"
+                : $"A desktop takes the screen at boot (display-manager.service is enabled, and the Pi boots to {MachineSurveyor.GraphicalTarget})";
+            return $"{desktop}, and the kiosk draws on it itself: use Raspberry Pi OS Lite, or boot to the console (sudo systemctl set-default multi-user.target), reboot, and run the installer again.";
         }
 
         // Once installed, a screen that is off or unplugged for now does not stop an update.
@@ -190,7 +193,7 @@ public static class RoleGuards
             return null;
         }
 
-        return survey.Display is { } display
+        return survey.Display is { Outputs.Count: > 0 } display
             ? $"The kiosk needs a screen, and none is connected ({string.Join(", ", display.Outputs.Select(output => $"{output.Name}: {output.Status}"))}). Connect the touchscreen, check its ribbon cable, reboot, and run the installer again."
             : $"The kiosk needs a screen, and this Pi has no display outputs ({MachineSurveyor.DrmFolder} lists none): connect the touchscreen, reboot, and run the installer again.";
     }

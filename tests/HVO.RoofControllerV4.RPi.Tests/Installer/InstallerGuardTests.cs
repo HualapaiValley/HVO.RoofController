@@ -229,6 +229,30 @@ public sealed class InstallerGuardTests
     }
 
     [TestMethod]
+    public async Task TheKiosk_IsRefused_WhenADesktopStartsAtBoot_AndNotWhenThePiBootsToTheConsole()
+    {
+        using var stopped = new FakeMachine().WithPi().WithDisplay();
+        stopped.DisplayManagerEnabled = true;
+        using var console = new FakeMachine().WithPi().WithDisplay();
+        console.DisplayManagerEnabled = true;
+        console.DefaultTarget = "multi-user.target";
+
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(stopped.Machine)).Reason.Should()
+            .Contain("takes the screen at boot").And.Contain("sudo systemctl set-default multi-user.target");
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(console.Machine)).Available.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task AnInstalledKiosk_IsRefused_WhileADesktopRuns_WithNoDisplayOutputsListed()
+    {
+        using var pi = new FakeMachine().WithPi();
+        pi.Write(InstallPaths.SystemRecord, (Record(InstallRole.Controller, HatMode.Real) with { Roles = [InstallRole.Controller, InstallRole.Kiosk] }).ToJson());
+        pi.DisplayManagerActive = true;
+
+        RoleGuards.Option(InstallRole.Kiosk, await MachineSurveyor.SurveyAsync(pi.Machine)).Reason.Should().Contain("display-manager.service is running");
+    }
+
+    [TestMethod]
     public async Task TheKiosk_OnceInstalled_IsKept_WithItsScreenOff()
     {
         using var pi = new FakeMachine().WithPi().WithDisplay(connected: false);

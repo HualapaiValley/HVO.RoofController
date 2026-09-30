@@ -178,6 +178,79 @@ public sealed class InstallerKioskTests
     }
 
     [TestMethod]
+    public async Task ACertificateTheInstallIssuesAgain_IsPinned_AndTheKioskStartedAgain()
+    {
+        using var pi = KioskPi();
+        var answers = WithTheController with { Controller = new ControllerSettings { Connection = ConnectionMode.SelfSigned } };
+        (await pi.RunAsync("--answers", pi.WriteAnswers(answers))).ExitCode.Should().Be(0);
+        var first = ServedFingerprint(pi);
+        var named = pi.WriteAnswers(answers with { Controller = answers.Controller! with { HostNames = ["roof"] } }, "named.json");
+
+        var plan = await pi.RunAsync("--answers", named, "--plan");
+        var run = await pi.RunAsync("--answers", named);
+
+        plan.Output.Should().Contain("pinning the controller's certificate once it is in place")
+            .And.Contain($"started again to read its new {Path.GetFileName(KioskSteps.SettingsFile)}");
+        run.ExitCode.Should().Be(0, run.ToString());
+        var reissued = ServedFingerprint(pi);
+        reissued.Should().NotBe(first, "the certificate is issued again for the new name");
+        Options(pi).ServerCertificateSha256.Should().Be(reissued, "the kiosk pins the certificate the controller serves");
+        pi.KioskStarts.Should().Be(2, "the kiosk is started again to read its new pin");
+    }
+
+    [TestMethod]
+    public async Task ACaTheInstallMakesAgain_StartsTheKioskAgain_ToReadIt()
+    {
+        using var pi = KioskPi();
+        var answers = pi.WriteAnswers(WithTheController);
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        var settings = pi.Read(KioskSteps.SettingsFile);
+        var layout = ControllerLayout.For(pi.Machine);
+        var authority = pi.Read(layout.CaCertificate);
+        File.Delete(pi.OnDisk(layout.CaCertificate));
+        File.Delete(pi.OnDisk(layout.CaKey));
+
+        var plan = await pi.RunAsync("--answers", answers, "--plan");
+        var run = await pi.RunAsync("--answers", answers);
+
+        plan.Output.Should().Contain("started again to read its new ca.crt");
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Read(layout.CaCertificate).Should().NotBe(authority);
+        pi.Read(KioskSteps.SettingsFile).Should().Be(settings, "the kiosk's settings name the same CA file");
+        pi.KioskStarts.Should().Be(2, "the kiosk reads its CA when it starts");
+    }
+
+    [TestMethod]
+    public async Task AKioskUserMadeByHand_WithoutItsGroup_IsGivenIt()
+    {
+        using var pi = KioskPi();
+        pi.Users[KioskSteps.User] = ["nogroup", .. KioskSteps.Groups];
+        var answers = pi.WriteAnswers(WithTheController);
+
+        var plan = await pi.RunAsync("--answers", answers, "--plan");
+        var run = await pi.RunAsync("--answers", answers);
+
+        plan.Output.Should().Contain($"the {KioskSteps.User} group made, and the user added to {KioskSteps.User}");
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Groups.Should().Contain(KioskSteps.User);
+        pi.Users[KioskSteps.User].Should().Contain(KioskSteps.User, "its configuration folder is open to that group alone");
+        pi.Owners[KioskSteps.ConfigurationFolder].Should().Be(KioskSteps.FolderOwner);
+        pi.Owners[KioskSteps.DeviceKeyFile].Should().Be(KioskSteps.KeyOwner);
+    }
+
+    [TestMethod]
+    public async Task AKioskGroupLeftBehind_BecomesItsUsersGroup()
+    {
+        using var pi = KioskPi();
+        pi.Groups.Add(KioskSteps.User);
+
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController));
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Users[KioskSteps.User].Should().BeEquivalentTo([KioskSteps.User, .. KioskSteps.Groups]);
+    }
+
+    [TestMethod]
     public async Task ARenew_UnderThePrivateCa_LeavesTheKioskAsItIs()
     {
         using var pi = KioskPi();

@@ -8,6 +8,7 @@ using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
+using HVO.RoofControllerV4.Installer.Roles;
 
 namespace HVO.RoofControllerV4.Installer.Survey;
 
@@ -31,6 +32,9 @@ public static partial class MachineSurveyor
 
     /// <summary>A desktop's login screen (lightdm on Raspberry Pi OS with a desktop).</summary>
     public const string DisplayManagerUnit = "display-manager.service";
+
+    /// <summary>The boot target that starts a desktop's display manager.</summary>
+    public const string GraphicalTarget = "graphical.target";
 
     /// <summary>The Mac app's bundle name.</summary>
     public const string MacAppBundle = "HVO Roof.app";
@@ -87,7 +91,7 @@ public static partial class MachineSurveyor
             Controller = controller,
             HatEmulator = emulator,
             Kiosk = await SurveyKioskAsync(machine, cancellationToken).ConfigureAwait(false),
-            Display = await SurveyDisplayAsync(machine, cancellationToken).ConfigureAwait(false),
+            Display = await SurveyDisplayAsync(machine, systemRecord?.Roles.Contains(InstallRole.Kiosk) == true, cancellationToken).ConfigureAwait(false),
             Cli = await SurveyCliAsync(machine, cancellationToken).ConfigureAwait(false),
             MacApp = SurveyMacApp(machine),
             Certificate = certificate,
@@ -356,8 +360,9 @@ public static partial class MachineSurveyor
     }
 
     // Each output is a folder named for its card and connector (card1-HDMI-A-1), with a status file; the cards alone
-    // (card1) and render nodes have none. A writeback output (the Pi's card1-Writeback-1) is not a screen.
-    private static async Task<DisplaySurvey?> SurveyDisplayAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    // (card1) and render nodes have none. A writeback output (the Pi's card1-Writeback-1) is not a screen. A desktop
+    // that would hold the screen is surveyed when there is an output, or a kiosk installed here (its screen may be off).
+    private static async Task<DisplaySurvey?> SurveyDisplayAsync(InstallerMachine machine, bool kioskInstalled, CancellationToken cancellationToken)
     {
         if (machine.RuntimeIdentifier != "linux-arm64")
         {
@@ -383,13 +388,16 @@ public static partial class MachineSurveyor
             }
         }
 
-        if (outputs.Count == 0)
+        if (outputs.Count == 0 && !kioskInstalled)
         {
             return null;
         }
 
-        var manager = await machine.Commands.RunAsync(new CommandLine("systemctl", "is-active", DisplayManagerUnit), cancellationToken).ConfigureAwait(false);
-        return new DisplaySurvey(outputs, manager.Output.Trim() == "active");
+        // A desktop that is stopped for now still takes the screen at boot, when it is enabled and the Pi boots to it.
+        var active = await machine.Commands.RunAsync(new CommandLine("systemctl", "is-active", DisplayManagerUnit), cancellationToken).ConfigureAwait(false);
+        var enabled = await machine.Commands.RunAsync(new CommandLine("systemctl", "is-enabled", DisplayManagerUnit), cancellationToken).ConfigureAwait(false);
+        var boots = await machine.Commands.RunAsync(new CommandLine("systemctl", "get-default"), cancellationToken).ConfigureAwait(false);
+        return new DisplaySurvey(outputs, active.Output.Trim() == "active", enabled.Succeeded && boots.Output.Trim() == GraphicalTarget);
     }
 
     [GeneratedRegex("^card[0-9]+-(?<output>[A-Za-z0-9-]+)$", RegexOptions.CultureInvariant)]

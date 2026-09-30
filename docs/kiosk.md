@@ -273,8 +273,9 @@ The steps the installer takes, for a Pi set up without it:
    it: `hvo-roof-install cert` does that when it renews a self-signed certificate, and restarts the kiosk. Under
    `pi-lan-http` the kiosk uses `http://localhost:8080` and neither.
 
-6. **The service.** Install the unit, and the udev rule for the backlight when `BacklightFile` is set. The rule acts
-   on the `add` event the boot sends, so apply it now with one (`udevadm trigger` sends `change` unless told):
+6. **The service.** Install the unit, and the udev rule for the backlight when `BacklightFile` is set (the installer
+   always installs the rule, which does nothing without it). The rule acts on the `add` event the boot sends, so
+   apply it now with one (`udevadm trigger` sends `change` unless told):
 
    ```bash
    sudo install -m 644 hvo-roof-kiosk.service /etc/systemd/system/
