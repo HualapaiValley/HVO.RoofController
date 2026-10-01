@@ -1410,14 +1410,18 @@ test_a_release_from_a_folder_is_the_installer_s_too() {
 }
 
 test_a_folder_given_from_where_it_is_ignores_cdpath() {
+  # install.sh starts under env -i, with no PWD to keep a logical path, so the folder is the physical one: on macOS,
+  # TMPDIR's /var is a link to /private/var.
+  local here
+  here=$(cd -P -- "${WORK}" && pwd)
   mkdir -p "${WORK}/elsewhere/release"
   pushd "${WORK}" >/dev/null || return
   install_sh CDPATH=".:${WORK}/elsewhere" -- --from release --roles rig
   popd >/dev/null || return
 
   assert_status 0
-  assert_output_contains "Taking hvo-roof-install ${VERSION} for linux-arm64 from ${WORK}/release"
-  assert_installer "args=[--release][${WORK}/release]"
+  assert_output_contains "Taking hvo-roof-install ${VERSION} for linux-arm64 from ${here}/release"
+  assert_installer "args=[--release][${here}/release]"
 }
 
 test_a_rollback_from_a_folder_is_not_given_it_as_the_release_before() {
