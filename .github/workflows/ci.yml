@@ -594,7 +594,7 @@ jobs:
           retention-days: 7
 
   # The Pi deploy path: the deploy script (against fake docker/curl, see tests/deploy), the container's supervisor
-  # (tests/container) and the compose profiles.
+  # (tests/container) and the compose profiles; with the build and release scripts' tests, and the docs' links.
   deploy-script:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -626,7 +626,8 @@ jobs:
           python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py tests/mac/test_bundle.py \
             src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py \
             build/release-compose.py tests/releasing/test_release_compose.py build/release-assets.py \
-            tests/releasing/test_release_assets.py tests/install/on-terminal
+            tests/releasing/test_release_assets.py tests/install/on-terminal build/check-doc-links.py \
+            tests/docs/test_check_doc_links.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/installer/rig-scenario.sh tests/cli/terminal-smoke.sh \
@@ -652,6 +653,13 @@ jobs:
       # and the programs it refuses to release.
       - name: Release script tests
         run: python3 -m unittest discover -s tests/releasing -p 'test_*.py' -v
+
+      # build/check-doc-links.py: every relative link and anchor in the Markdown files resolves, to a file git tracks
+      # (its tests, then every Markdown file git tracks).
+      - name: Docs links
+        run: |
+          python3 -m unittest discover -s tests/docs -p 'test_*.py' -v
+          build/check-doc-links.py
 
       # build/push-image.sh pushing two-platform OCI archives to a registry in Docker, and tagging them latest.
       - name: Image push script tests

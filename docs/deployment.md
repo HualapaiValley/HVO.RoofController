@@ -11,6 +11,10 @@ This page covers:
 
 For API keys, roles and the Blue Iris credentials, see [security.md](security.md).
 
+> **The installer does this.** `hvo-roof-install` prepares the Pi, deploys the controller with the deploy script, and
+> later upgrades, rolls back and backs it up ([install.md](install.md)). This page is the reference for what it does,
+> and the steps for a Pi set up without it.
+
 ## One-time preparation on the Pi
 
 ### 1. Secrets directory

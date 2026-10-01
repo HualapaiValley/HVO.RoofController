@@ -9,6 +9,24 @@ Roof Controller V4 for the HVO observatory: a Raspberry Pi controller with an
 authenticated HTTP API, and its clients: a web UI, a touchscreen kiosk, a Mac app, a command line and a terminal
 interface.
 
+## Install
+
+On the observatory's Raspberry Pi, with Raspberry Pi OS Lite (64-bit), install the controller and its touchscreen
+kiosk from the latest release:
+
+```bash
+curl -fsSL https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/install.sh | bash -s -- --roles controller,kiosk
+```
+
+`install.sh` checks the machine, downloads the release's installer (`hvo-roof-install`), checks the download against
+the release, and starts the installer's wizard. On another machine, the same command installs `hvo-roof` with
+`--roles cli`, the Mac app (Apple silicon) with `--roles mac-app`, and a test rig against the HAT emulator with
+`--roles rig`. The installer later upgrades and rolls back what it installed, and backs up and restores the
+controller's and the kiosk's settings and data.
+
+[docs/install.md](docs/install.md) has the rest: preparing the Pi, the roles, the wizard, answers files, certificates,
+upgrades and backups, and troubleshooting.
+
 ## Features
 
 - **Roof Automation** — open/close/stop control of the observatory roll-off roof through a
@@ -127,6 +145,8 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 
 ## Quick Start
 
+For development:
+
 ```bash
 # Run dotnet from src/ so src/global.json selects the SDK
 cd src
@@ -151,7 +171,8 @@ needs the HAT, the drive or the roof; see [docs/emulator.md](docs/emulator.md).
 
 ## Docker Deployment
 
-Deploy to the Pi with the deployment script,
+The installer deploys the controller with the deployment script ([Install](#install)). To deploy by hand, use the
+script,
 `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh`. It builds the `linux/arm64`
 image and first runs the image's deployment check (`--validate-deployment`) on the Pi with
 the final container's configuration: roof options, a usable operator key, the HTTPS
@@ -199,7 +220,7 @@ with the roof mechanism isolated.
 | [Web UI](docs/web.md) | The browser interface: signing in, the pages, Stop, its settings and screenshots |
 | [Kiosk](docs/kiosk.md) | The touchscreen at the roof: the screens, unlocking with a PIN, Stop, installing it on the Pi, its settings and screenshots |
 | [Mac app](docs/mac.md) | The kiosk's screens in a window on a Mac: signing in with a password, Stop, installing it and its device key, its settings, building and signing it on Linux, and screenshots |
-| [Installing](docs/install.md) | `hvo-roof-install`: the roles and where each runs, the guards, the wizard, answers files, `--plan`, the install record and the log, exit codes and screenshots |
+| [Installing](docs/install.md) | `install.sh` and `hvo-roof-install`: preparing the Pi, the roles and where each runs, the guards, the wizard, answers files, `--plan`, certificates, upgrades, rollbacks, backups, the install record and the log, exit codes, troubleshooting and screenshots |
 | [Deployment](docs/deployment.md) | Pi deployment script and compose, deployment check, verified stop, rollback |
 | [Command line](docs/cli.md) | `hvo-roof`: install, setup and credentials, the commands, exit codes and the terminal interface |
 | [HAT emulator](docs/emulator.md) | Running the controller without hardware: the emulator, its settings and fault-injection API, containers |

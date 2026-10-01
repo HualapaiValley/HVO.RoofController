@@ -13,7 +13,7 @@ It records what it installed, so a later run can check, repair and upgrade what 
 It runs as a wizard in the terminal, in the same HVO Dark look as the other interfaces. It can also run without asking
 anything, from an answers file that the wizard saves.
 
-> **What it does today.** This release of the installer:
+> **What it does.** The installer:
 >
 > - looks at the machine;
 > - offers only the roles the machine can have, and refuses the rest;
@@ -32,6 +32,71 @@ anything, from an answers file that the wizard saves.
 >   [Backing up and restoring](#backing-up-and-restoring), [Uninstalling](#uninstalling)).
 >
 > It adopts a controller that the deploy script already runs.
+
+## Before you start
+
+### The Pi
+
+The controller and the kiosk run on the observatory's Raspberry Pi, with the HAT. Set the Pi up first:
+
+1. **Raspberry Pi OS Lite (64-bit).** Write it to the Pi's card or drive with
+   [Raspberry Pi Imager](https://www.raspberrypi.com/software/): under the operating systems, choose Raspberry Pi OS
+   (other), then Raspberry Pi OS Lite (64-bit). `install.sh` refuses a 32-bit system, and the kiosk needs the display
+   with no desktop holding it ([The guards](#the-guards)).
+2. **Imager's settings.** Before it writes, edit its OS customisation settings:
+   - **the host name,** such as `roof-pi`. Clients reach the controller by it (`roof-pi.local`), and the installer makes
+     the controller's certificate and CA for it. Choose it now: a new host name later needs a new CA, which every client
+     must trust again ([Renewing](#renewing));
+   - **your user name and password,** for the user who runs the installer with `sudo`;
+   - **SSH,** with public-key authentication only and your public key, so that you install from another machine;
+   - **the time zone** and the keyboard layout;
+   - **Wi-Fi** only when the Pi has no network cable.
+3. **A fixed address.** Give the Pi a DHCP reservation on the router, so that its address stays the same. The
+   certificate is made for the Pi's addresses too: after a change of address, `sudo hvo-roof-install cert` issues it
+   again, under the same CA.
+4. **Up to date.** Start the Pi, sign in over SSH, and bring it up to date:
+
+   ```bash
+   sudo apt update && sudo apt full-upgrade -y && sudo reboot
+   ```
+
+5. **The clock.** Raspberry Pi OS sets its clock from the network. `install.sh` refuses a clock more than 5 minutes out,
+   since TLS, the release's attestation and the certificates the installer makes depend on it. `timedatectl` shows
+   whether it is synchronised.
+6. **The HAT and the screen.** With the Pi off, fit the HAT and, for the kiosk, connect the touch display, so that the
+   installer finds them. You need not turn I2C on or install Docker first: `install.sh` offers to do both
+   ([What install.sh checks](#what-installsh-checks)).
+
+### The roof
+
+The installer never moves the roof, and nothing in an install commands it to move. Even so, for the first install of the
+controller on the observatory's Pi:
+
+- **Close the roof,** and have someone see it, on site or by camera, while the controller starts for the first time.
+- **Isolate the drive by its STOP loop, not its power.** When the site has a stop that opens the drive's STOP loop
+  without the Pi ([C1](commissioning.md#c1-independent-hardware-stop-path)), hold it open until the install is done.
+  Leave the drive powered: the controller reads a drive with no power as a drive fault (IN3 low,
+  [hardware overview](projects/roof-controller-v4-rpi/hardware-overview.md#93-vfd-healthyfault-input---in3)) and
+  latches it, and the deploy then fails its readiness check.
+- **Commission it** before you first open the roof from the new controller: go through the
+  [commissioning checks](commissioning.md) and the installation assumptions they depend on.
+
+Once a controller runs, an install or an upgrade replaces it only while the roof is idle: the deploy script stops the
+roof with a verified Stop first, and puts the old controller back if the new one fails a check
+([Running it again](#running-it-again)).
+
+### The other machines
+
+| Role | Needs |
+|------|-------|
+| `hvo-roof` | Linux (64-bit ARM or x86-64) or a Mac with Apple silicon. |
+| The Mac app | A Mac with Apple silicon, and an admin's name and password, to make its device key. |
+| A test rig | Linux (64-bit ARM or x86-64) with Docker, or a Mac with Apple silicon and Docker Desktop. |
+
+`hvo-roof` and the Mac app need the controller's address and, with the installer's CA (the default), its CA's SHA-256
+fingerprint (with a self-signed certificate, the certificate's), which the controller's installer shows on its Done
+page, and `sudo hvo-roof-install cert show` prints on the controller ([Trusting the CA](#trusting-the-ca)). Install
+the controller first.
 
 ## Getting it
 
@@ -64,6 +129,17 @@ the download, and starts it. On the observatory's Pi, for the controller and its
 
 ```bash
 curl -fsSL https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/install.sh | bash -s -- --roles controller,kiosk
+```
+
+On the other machines, change `--roles`:
+
+```bash
+# A test rig: Linux with Docker, or a Mac with Docker Desktop
+curl -fsSL https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/install.sh | bash -s -- --roles rig
+# hvo-roof and the Mac app, on your Mac, as you (not with sudo)
+curl -fsSL https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/install.sh | bash -s -- --roles cli,mac-app
+# hvo-roof on Linux, as you
+curl -fsSL https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/install.sh | bash -s -- --roles cli
 ```
 
 Without `--roles` it asks what the machine is for, and the installer asks the rest. Pipe it to `bash`, not `sh`: it
@@ -1103,6 +1179,66 @@ writes no log.
 | root | `/var/log/hvo-roof-install.log` | `0640`, owned by root |
 | you, on Linux | `$XDG_STATE_HOME/hvo-roof/install.log`, or `~/.local/state/hvo-roof/install.log` | `0600` |
 | you, on a Mac | `~/Library/Logs/hvo-roof-install.log` | `0600` |
+
+## Troubleshooting
+
+Start with what was said: each check that fails, each refusal and each failed step says why, and what to do. Then:
+
+- **The log.** It keeps what the installer found, every command it ran and how it ended
+  ([The record and the log](#the-record-and-the-log)): `sudo less /var/log/hvo-roof-install.log` for the machine's
+  roles, `~/.local/state/hvo-roof/install.log` (Linux) or `~/Library/Logs/hvo-roof-install.log` (Mac) for yours.
+- **The plan.** `--plan` shows each step, and what blocks one, without changing anything ([The plan](#the-plan)).
+- **Running it again.** After a failed step or Ctrl+C, the installer carries on from where it stopped
+  ([Running it again](#running-it-again)).
+- **The exit code** says what kind of trouble it was ([Exit codes](#exit-codes)).
+
+### install.sh
+
+| It says | What to do |
+|---------|------------|
+| `This machine runs 32-bit ARM …`, or `… a 64-bit kernel and a 32-bit system …` | Write Raspberry Pi OS Lite (64-bit) to the Pi ([Before you start](#the-pi)). |
+| `FAIL  This machine's clock is … out …` | Turn synchronisation on (`sudo timedatectl set-ntp true`), wait until `timedatectl` says `System clock synchronized: yes`, then run it again. On a Mac: System Settings → General → Date & Time, and turn on "Set time and date automatically". |
+| `FAIL  github.com did not answer …`, or `FAIL  ghcr.io did not answer …` | Check the machine's network and DNS: it needs both. If it says TLS failed, check the clock (`timedatectl`) and any proxy that intercepts HTTPS. On a machine that cannot reach GitHub, give the release's files with `--from DIR`; Docker still pulls the images from ghcr.io. |
+| `FAIL  I2C is off …` | Run it again with `--enable-i2c`, or turn I2C on with `sudo raspi-config nonint do_i2c 0`. |
+| `FAIL  raspi-config turned I2C on from the next start …` | Restart the Pi (`sudo reboot`), then run it again. |
+| `FAIL  Docker is not installed …` | Run it again with `--install-docker` (Raspberry Pi OS, Debian or Ubuntu), or install Docker Engine 20.10 or later yourself. On a Mac, install Docker Desktop and start it. |
+| `FAIL  Docker is installed, and its engine did not answer …` | Start it: `sudo systemctl enable --now docker`, or open Docker Desktop. |
+| `FAIL  The controller drives the real HAT, on the observatory's Raspberry Pi, and this is not a Pi …` | The controller runs only on the observatory's Pi. To try it on another machine, choose a test rig (`--roles rig`). |
+| `… is yours, and never installed as root …` | Run it as yourself, without `sudo`: `hvo-roof` and the Mac app are installed for you. |
+| `Programs cannot run from … (it is mounted noexec) …` | Give it a folder that programs can run from: `mkdir -p ~/.cache/hvo-tmp`, then put `TMPDIR=~/.cache/hvo-tmp` before `bash` in the command. |
+| `… SHA-256 is …, and SHA256SUMS says …` | The download was not the release's: run it again. A proxy that changes downloads does this too. If it happens again, open an issue. |
+| `note  its attestation was not checked: gh …` | Only a note: the SHA-256 and the version were checked. To have the attestation checked too, install [gh](https://cli.github.com) and sign in (`gh auth login`). |
+
+### The installer
+
+- **It refused (exit code 3).** Nothing was changed. The message names the reason, often one of
+  [the guards](#the-guards); `--plan` shows the step it blocks.
+- **A step failed (exit code 1).** Nothing after that step changed. The log names the step, and ends with the last 40
+  lines of the output of the command that failed. Put right what it says, then run the installer again.
+- **The deploy script stopped before it replaced the controller.** The old controller still runs, and the end of the
+  script's output in the log says why. If the roof was moving, or its status could not be read, run the installer
+  again once the roof is idle. If the new image failed its pre-flight or its image checks, put right what it names. If
+  the Stop could not be verified, the controller has latched `RelayVerificationFailed`: check the relays and the HAT,
+  clear the fault (`hvo-roof clear-fault`, or in the web UI), then run the installer again.
+- **The deploy script put the old controller back.** The new one failed a check, which the end of the script's output
+  in the log names. The old controller runs as before.
+- **The wizard's keys do nothing, or it draws badly.** It needs a terminal of at least 80 × 24 that sends function
+  keys ([Getting it](#getting-it)). Or install from an answers file, with no wizard ([Answers files](#answers-files)).
+
+### The clients
+
+- **A browser warns that the connection is not private.** It does not trust the controller's CA yet: check the CA's
+  fingerprint, then trust it ([Trusting the controller in a browser](#trusting-the-controller-in-a-browser)).
+- **A browser, `hvo-roof` or the Mac app stopped trusting the controller.** The controller has a new CA, or a new
+  self-signed certificate: `cert` made one, such as after a change of host name, or renewed a self-signed one
+  ([Renewing](#renewing)). Trust the new CA or certificate in each browser, and run the installer again for `hvo-roof`
+  and the Mac app (both in one run, when both are installed) with its new fingerprint
+  ([hvo-roof and the Mac app](#hvo-roof-and-the-mac-app)).
+- **The kiosk shows nothing.** `journalctl -u hvo-roof-kiosk` says why ([Install](kiosk.md#install)). A desktop that
+  holds the display stops it: use Raspberry Pi OS Lite, or have the Pi boot to the console
+  (`sudo systemctl set-default multi-user.target`, then restart it).
+- **The Mac app opens a window that says why it did not start.** See
+  [When it does not start](mac.md#when-it-does-not-start).
 
 ## Tests
 
