@@ -132,9 +132,9 @@ public sealed class InstallerMacSystemTests
 
     /// <summary>
     /// The keychain step reads what macOS's own tools print: the controller's CA in a keychain of the test's own, found by
-    /// its SHA-256 with its SHA-1 beside it, and, with HVO_MAC_TRUST_SETTINGS=1 (CI, which lets sudo change the admin trust
-    /// settings without the dialog that would otherwise wait for someone), trusted for SSL there the way
-    /// <c>add-trusted-cert</c> trusts it in the person's, then read back from their export.
+    /// its SHA-256 with its SHA-1 beside it; then trusted for SSL the way <c>add-trusted-cert</c> trusts it in the person's
+    /// settings, but written to a file of the test's own (<c>-o</c>), the same form <c>trust-settings-export</c> gives, so
+    /// the Mac's trust settings are untouched and no authorization dialog waits for someone.
     /// </summary>
     [TestMethod]
     public void TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem()
@@ -151,7 +151,6 @@ public sealed class InstallerMacSystemTests
         using var authority = RoofCertificateAuthority.FromPem(FakeMachine.ControllerCaPem);
         var sha256 = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA256));
         var sha1 = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA1));
-        var trusted = false;
         try
         {
             Run("security", "create-keychain", "-p", Guid.NewGuid().ToString("N"), keychain).Exit.Should().Be(0);
@@ -162,28 +161,15 @@ public sealed class InstallerMacSystemTests
             found.Exit.Should().Be(0, found.Output);
             KeychainTrustStep.KeychainHashes(found.Output).Should().Equal([(sha256, sha1)], found.Output);
 
-            if (Environment.GetEnvironmentVariable("HVO_MAC_TRUST_SETTINGS") != "1")
-            {
-                return;
-            }
-
-            var trust = Run("sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl", "-k", keychain, ca);
-            trust.Exit.Should().Be(0, trust.Output);
-            trusted = true;
             var exported = Path.Join(work.FullName, "trust-settings.plist");
-            var export = Run("security", "trust-settings-export", "-d", exported);
-            export.Exit.Should().Be(0, export.Output);
+            var trust = Run("security", "add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", keychain, "-o", exported, ca);
+            trust.Exit.Should().Be(0, trust.Output);
             var xml = Run("plutil", "-convert", "xml1", "-o", "-", exported);
             xml.Exit.Should().Be(0, xml.Output);
             KeychainTrustStep.TrustedForWebsites(xml.Output).Should().Contain(sha1, xml.Output);
         }
         finally
         {
-            if (trusted)
-            {
-                Run("sudo", "-n", "security", "remove-trusted-cert", "-d", ca);
-            }
-
             Run("security", "delete-keychain", keychain);
             work.Delete(recursive: true);
         }

@@ -917,12 +917,11 @@ app's window with them, and a second run changes nothing. No key or password is 
 without `HVO_MAC_INSTALL=1` and `HVO_MAC_APP_ZIP` the test is skipped.
 
 A second test reads a keychain as macOS writes it: it adds a CA to a keychain of its own, and checks that the
-installer finds it by its SHA-256 in `security find-certificate -Z`'s listing. With `HVO_MAC_TRUST_SETTINGS=1` it
-also trusts the CA for websites in the admin trust settings and checks that the installer reads that from their
-export, then removes the trust and the keychain. macOS asks in a dialog before `sudo` may change those settings, and a
-runner has no one to answer it, so the job first allows the change with `sudo security authorizationdb write
-com.apple.trust-settings.admin allow`; every command the test runs fails it after two minutes rather than waiting. It
-runs with `HVO_MAC_INSTALL=1`.
+installer finds it by its SHA-256 in `security find-certificate -Z`'s listing. It then trusts the CA for websites with
+`security add-trusted-cert -o FILE`, which writes the trust settings to a file of its own, in the form
+`security trust-settings-export` gives, instead of changing the Mac's: no authorization dialog waits for someone, and
+nothing is left to undo. It checks that the installer reads that trust, then removes the keychain. Every command the
+test runs fails it after two minutes rather than waiting. It runs with `HVO_MAC_INSTALL=1`.
 
 ### Refreshing the screenshots
 
