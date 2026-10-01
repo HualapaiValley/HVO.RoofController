@@ -6,7 +6,9 @@ name: Release
 # GHCR with the version as their tag, and attests them; gathers the programs CI built and tested (hvo-roof, the
 # installer, the kiosk and the Mac app), with the compose file, the deploy script and the upgrade notes, into the
 # release's assets, with release.json and SHA256SUMS (build/release-assets.py);
-# attests the assets; and makes a draft release of them. Nothing is published here: a person checks the draft and
+# attests the assets; and makes a draft release of them. The e2e job then installs a rig from the draft's assets, on
+# x64 and arm64, by their install.sh, with the release's images, and runs the rig scenario against it
+# (tests/installer/rig-scenario.sh). Nothing is published here: a person checks the draft and the e2e job, and
 # publishes it, and publishing a final release moves the images' latest tag (release-latest.yml).
 #
 # A manual run is a dry run of all of it, for the commit it runs on: version X.Y.Z-dryrun.<run>, images with that tag,
@@ -279,6 +281,15 @@ jobs:
         with:
           subject-checksums: ${{ runner.temp }}/dist/SHA256SUMS
 
+      # The assets as they are drafted, for the e2e job.
+      - name: Upload the assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.run_id }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -329,3 +340,66 @@ jobs:
           fi
           url=$(gh release create "${TAG}" "${RUNNER_TEMP}"/dist/* "${args[@]}")
           echo "Draft release ${TAG}: ${url}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The release end to end, on x64 and arm64: the draft's install.sh, from its assets, checks hvo-roof-install against
+  # SHA256SUMS and its attestation and installs a rig against the HAT emulator from the release's images, and the rig
+  # scenario runs against it (tests/installer/rig-scenario.sh, from a release: no upgrade or rollback, which need the
+  # release before). It writes nothing; publish the draft only when it passed (docs/releasing.md).
+  e2e:
+    needs: [ version, release ]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ ubuntu-latest, ubuntu-24.04-arm ]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    # The images (packages) until they are public, and the assets' attestations.
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download the assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ github.run_id }}
+          path: ${{ runner.temp }}/release
+
+      # The installer pulls the images as root.
+      - name: Sign in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "${GH_TOKEN}" | sudo -n docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      # gh checks hvo-roof-install's attestation with the token.
+      - name: Install by install.sh, again, hvo-roof, motion, change, renew, names, back up, restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RIG_RELEASE_DIR: ${{ runner.temp }}/release
+          RIG_RESULTS_DIR: ${{ runner.temp }}/rig-scenario-results
+        run: tests/installer/rig-scenario.sh
+
+      - name: Sign out of GHCR
+        if: always()
+        run: sudo -n docker logout ghcr.io
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "${RUNNER_TEMP}/rig-scenario-results/rig-scenario.md" ]; then
+            cat "${RUNNER_TEMP}/rig-scenario-results/rig-scenario.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-e2e-results-${{ matrix.runner }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/rig-scenario-results/**
+          if-no-files-found: warn
+          retention-days: 7

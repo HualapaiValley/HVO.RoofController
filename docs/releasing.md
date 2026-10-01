@@ -162,8 +162,9 @@ version, and check its labels and its platforms with `check-image-labels.sh`.
    `VersionPrefix`, is not on main, or, for a final release, has no upgrade notes or CHANGELOG section. Nothing was
    released then: delete the tag (`git push origin :refs/tags/v4.0.0`, then `git tag -d v4.0.0`), fix what the run
    named, and tag again.
-5. **The draft.** The run ends in a draft release, linked from the run's summary. Check it
-   ([Before publishing](#before-publishing)), then publish it ([Publishing](#publishing)).
+5. **The draft.** The run makes a draft release, linked from the run's summary, then installs a rig from it end to
+   end. When that has passed too, check the draft ([Before publishing](#before-publishing)), then publish it
+   ([Publishing](#publishing)).
 
 ## What the release workflow does
 
@@ -187,14 +188,21 @@ version, and check its labels and its platforms with `check-image-labels.sh`.
    covers every file in `SHA256SUMS`.
 5. **The draft.** A draft release of the assets, titled `HVO Roof Controller 4.0.0` and marked a prerelease for a
    release candidate. Its notes are the upgrade notes, the images, how to check the files, and then what GitHub writes
-   from the pull requests merged since the last release.
+   from the pull requests merged since the last release. The same assets go to the run as an artifact.
+6. **The end to end.** The `e2e` job, on x64 and on arm64, installs a test rig from that artifact as a person would
+   from the release: the release's `install.sh` checks `hvo-roof-install` against `SHA256SUMS` and its attestation
+   and starts it, and the installer runs the release's images from GHCR against the HAT emulator. The rig scenario
+   then installs `hvo-roof` by `install.sh`, opens, stops part way and closes the emulated roof through it, renews the
+   certificate, changes the rig's address and name, and backs the rig up and restores it
+   ([The rig end to end](install.md#the-rig-end-to-end)). It writes nothing, and signs in to GHCR only to read the
+   images while they are private.
 
-Only the last job can write: the draft (`contents: write`), the images (`packages: write`) and the attestations
+Only the release job can write: the draft (`contents: write`), the images (`packages: write`) and the attestations
 (`id-token: write` for the signing certificate, and `attestations: write`). Only the two steps that call `gh` have the
 token in their environment. Every other job, CI's and the scenarios' included, can only read. Every action is pinned
 to a commit. A second run for the same tag waits for the first rather than cancelling it.
 
-The last job runs in the `release` environment. The check that a tag is on main runs from the tagged commit's own
+The release job runs in the `release` environment. The check that a tag is on main runs from the tagged commit's own
 workflow, so a commit could leave it out; the environment's protection rules are the repository's, and no commit can
 change them ([The first release](#the-first-release)).
 
@@ -282,7 +290,8 @@ What a program needs to know about a release, such as the installer and `install
 
 Check the draft, on its page and with its files:
 
-- **The run.** Every job passed, and the summary names the draft.
+- **The run.** Every job passed, the `e2e` job on both runners included, and the summary names the draft. Never
+  publish a draft whose `e2e` job failed or did not run.
 - **The assets.** Every file of [The assets](#the-assets) is there, with the version in its name where it has one.
   Download them into an empty folder and check them:
 
@@ -375,7 +384,8 @@ gh workflow run release.yml --repo HualapaiValley/HVO.RoofController --ref main
 
 A dry run releases the commit it runs on as version `4.0.0-dryrun.<run number>` (`version.sh --dry-run`), with the tag
 `v4.0.0-dryrun.<run number>`. Every check runs but the tag's: CI, the scenarios, the images, the assets and the
-attestations. Its draft is a prerelease whose notes say it is a dry run, and it makes no git tag. Its images are on
+attestations, and the end to end from the draft's assets, where `install.sh` checks the attestation without a tag (a dry
+run has none). Its draft is a prerelease whose notes say it is a dry run, and it makes no git tag. Its images are on
 GHCR with the dry run's version as their tag, and it never moves `latest`. Its release job waits for a reviewer as a
 release's does. The `release` environment lets only main and `v*` tags run that job, so to dry-run another branch, add
 it to the environment's deployment branches first, and remove it afterwards.
@@ -422,6 +432,11 @@ then:
   gh release delete v4.0.0 --repo HualapaiValley/HVO.RoofController --yes
   ```
 
+- **The `e2e` job**: the draft is there, and must not be published. Its results (`release-e2e-results-<runner>-<run>`)
+  say which check failed. When the runner failed rather than the release, re-run the failed jobs: they take the
+  assets from the run's artifact, and the draft stays. When the code needs a fix, delete the draft and the tag, merge
+  the fix, and tag the new commit.
+
 Once a release is published, its tag never moves.
 
 ## Tests
@@ -445,5 +460,6 @@ Once a release is published, its tag never moves.
   releases, two to a page: the first final release, a candidate, a fix to an older version, versions `sort -V`
   orders, drafts and other tags, and each release and `release.json` it refuses. CI runs these with the
   `push-image.sh` tests.
-- The release workflow runs CI and the scenarios for every release, and a [dry run](#a-dry-run) runs the whole
-  workflow without releasing.
+- The release workflow runs CI and the scenarios for every release, then installs a rig from its draft on x64 and
+  arm64 (`tests/installer/rig-scenario.sh` with `RIG_RELEASE_DIR`, [The rig end to end](install.md#the-rig-end-to-end)),
+  and a [dry run](#a-dry-run) runs the whole workflow without releasing.

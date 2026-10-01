@@ -1175,52 +1175,84 @@ CI runs them on Linux with bash 5, and on a Mac with its own bash 3.2 (the `inst
 
 ### The rig end to end
 
-`tests/installer/rig-scenario.sh`, the Scenarios workflow's `installer-rig` job, installs a test rig for real. It uses
-the published installer, real Docker and the HAT emulator. The release is built as the release workflow builds one:
-the controller's and the emulator's images, each an index of this machine's platform, built from its Dockerfile, and
-an empty image for the other platform. They go in a registry of the run's own on loopback, with the `release.json`
-that names them by digest. The script checks:
+`tests/installer/rig-scenario.sh` installs a test rig for real, with `install.sh`, the published installer, real Docker
+and the HAT emulator. It runs in two places:
 
-1. **Install.** `--plan` changes nothing. The install as root with `--answers`, `--release` and
-   `--admin-password-file` then runs the release's images by digest, published on loopback only. The folders and files
-   have their modes. The controller answers over HTTPS with the installer's CA and reports the emulated HAT, the web UI
+- **The Scenarios workflow's `installer-rig` job**, nightly and on every pull request, on x64 and on arm64. The release
+  is built from the checkout as the release workflow builds one: `install.sh` with the release's version written in,
+  `hvo-roof-install` and `hvo-roof` for this machine, the controller's and the emulator's images (each an index of this
+  machine's platform, built from its Dockerfile, and an empty image for the other platform) in a registry of the run's
+  own on loopback, `release.json` naming them by digest, and `SHA256SUMS`. `install.sh` does not see `gh` there, so it
+  notes that the attestation was not checked, as it would on a machine without `gh`.
+- **The release workflow's `e2e` job**, on x64 and on arm64, after the release is drafted. `RIG_RELEASE_DIR` gives it
+  the draft's assets, and the images are the release's, from GHCR. `install.sh` checks `hvo-roof-install`'s
+  attestation with `gh`, signed in with the run's token. Steps 10 and 11 need the release before, built from the
+  checkout, so this job leaves them out; the `installer-rig` job runs them.
+
+The script checks:
+
+1. **Install.** `--plan` changes nothing. Then the release's `install.sh` installs the rig, run as the one-line install
+   runs it (bash reading the script on its standard input), with no terminal, as cron or CI would run it, with
+   `--from` (the release's files in a folder), `--answers` and `--admin-password-file`. It names the version and the
+   role from the answers file, takes `hvo-roof-install` for this machine from the folder, checks its SHA-256 against
+   `SHA256SUMS` (and its attestation, in the `e2e` job), and starts it as root. The install runs the release's images
+   by digest, published on loopback only. The folders and files have their modes, and the installed installer is the
+   release's. The controller answers over HTTPS with the installer's CA and reports the emulated HAT, the web UI
    answers, and the first admin signs in with the password from the file. No key or password is in the output, the
    log, the record or the containers' configuration.
 2. **Again.** The same answers change nothing and replace nothing.
-3. **hvo-roof.** The installer, run as you and not as root (in a home of the run's own, so yours is untouched),
-   installs the release's `hvo-roof` with the rig as its controller, trusting the rig's CA by its fingerprint. A wrong
-   fingerprint is refused (exit 3) with nothing installed. Then `hvo-roof` is in `~/.local/bin` (`0755`) and is the
-   release's, and its connection holds the rig's CA (`0600`). `hvo-roof login` signs in with the password on standard
-   input, and `hvo-roof status` reports the emulated HAT. The same answers again change nothing and keep the session. No
-   password, key or session is in the output, the log or the record.
-4. **Change.** A new time scale replaces the emulator and redeploys the controller against it.
-5. **Certificate.** `cert --renew --redeploy` serves a new certificate that the CA from before the renewal verifies,
+3. **hvo-roof.** `hvo-roof` for the person running the scenario, in a home of the run's own, so yours is untouched. A
+   wrong CA fingerprint is refused (exit 3) with nothing installed. Then `install.sh` installs it as you and not as
+   root, with the rig as its controller, trusting the rig's CA by its fingerprint. `hvo-roof` is in `~/.local/bin`
+   (`0755`) and is the release's, and its connection holds the rig's CA (`0600`). `hvo-roof login` signs in with the
+   password on standard input, and `hvo-roof status` reports the emulated HAT. The same answers again change nothing
+   and keep the session. No password, key or session is in the output, the log or the record.
+4. **Motion.** The emulated roof, through `hvo-roof`. `hvo-roof open` follows the roof to the open limit, with the
+   drive stopped there. At real time, `hvo-roof close --no-wait` starts a close, and once the roof has left the open
+   limit `hvo-roof stop` is acknowledged: the drive stops between the limits with the relays open, and the status says
+   stopped part way. `hvo-roof close` then follows the roof to the closed limit. The emulator records each direction
+   relay closing, and no violation.
+5. **Change.** A new time scale replaces the emulator and redeploys the controller against it.
+6. **Certificate.** `cert --renew --redeploy` serves a new certificate that the CA from before the renewal verifies,
    and leaves that CA unchanged. `hvo-roof`, which trusts the CA rather than the certificate, still signs in.
-6. **Backup.** The installer the install put in `/usr/local/sbin` backs up to a folder of the run's own, never
+7. **Names.** A dummy network interface (`hvorig0`) gives the machine a new address. `cert --plan` says the
+   certificate is issued again to add it, and `cert --redeploy` does so from the same CA: the controller answers at
+   the address, and `hvo-roof`, its connection unchanged, still signs in. With the interface gone, `cert --redeploy`
+   drops the address. A new host name in the answers (`controller.hostNames`) is different: the CA's name constraints
+   cover only the names it was made for, so `--plan` says it may not issue for the name and that a new CA, which every
+   client must trust in its place, is needed. The install makes the new CA, and the controller answers to the name
+   with a certificate from it. `hvo-roof` is given the new CA's fingerprint, trusts it in place of the old one, and
+   signs in.
+8. **Backup.** The installer the install put in `/usr/local/sbin` backs up to a folder of the run's own, never
    `RIG_RESULTS_DIR`: the archive is root's and `0600`, its manifest comes first, and it holds the record, the CA, the
    certificate and the keys. No secret is in the output or the log.
-7. **Restore.** `uninstall --purge --no-backup` stops the controller with a verified Stop and removes the containers,
+9. **Restore.** `uninstall --purge --no-backup` stops the controller with a verified Stop and removes the containers,
    their images, the data, the record and the installer. `restore` then puts the backup back and installs from its
    record: the same keys, CA and certificate, the first admin signing in with the same password, and the time scale
-   of step 4. `upgrade` to the same release then changes nothing.
-8. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs that
-   release. Its `upgrade` shows the new release's upgrade notes and hands over to the new installer, which it puts in
-   `/usr/local/sbin`. The controller and the emulator are then the new release's, the old controller is kept as
-   `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing.
-9. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
-   `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so and
-   changes nothing, and `upgrade` goes forward again.
+   of step 5. `upgrade` to the same release then changes nothing.
+10. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs
+    that release. Its `upgrade` shows the new release's upgrade notes and hands over to the new installer, which it
+    puts in `/usr/local/sbin`. The controller and the emulator are then the new release's, the old controller is kept
+    as `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing.
+11. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
+    `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so
+    and changes nothing, and `upgrade` goes forward again.
 
-Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
-and no violation.
+Except in step 4, the roof does not move: the relay register stays 0, and the emulator records no direction relay
+closing and no violation.
 
-It needs Docker with buildx, the .NET SDK, git, `curl`, `jq`, `openssl`, `ss`, and `sudo` without a password that
-reaches the same Docker daemon. The release before is built from `RIG_PREVIOUS_REF` (by default `origin/main`) in a git
-worktree of its own, so a checkout needs that commit: the workflow fetches the whole history. It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a
-rig: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the installer's log, `/usr/local/sbin/hvo-roof-install`, or its containers
-or network. It removes all of them when it ends, with the backup and the worktree. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and its registry's
-15001. `RIG_HTTPS_PORT` and `RIG_WEB_PORT` move the controller off 8443 and 8088, and `RIG_REGISTRY_PORT` moves the
-registry. `RIG_RESULTS_DIR` writes each check's result and timing to `rig-scenario.md`.
+It needs Docker, `curl`, `jq`, `openssl`, `ss`, `ip`, `setsid`, `python3`, and `sudo` without a password that reaches
+the same Docker daemon. From the checkout it also needs Docker's buildx, the .NET SDK and git. The release before is
+built from `RIG_PREVIOUS_REF` (by default `origin/main`) in a git worktree of its own, so a checkout needs that commit:
+the workflow fetches the whole history. From a release (`RIG_RELEASE_DIR`), sudo's Docker must be able to pull the
+release's images, and `gh` must be signed in (`GH_TOKEN`).
+
+It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`,
+`/var/lib/hvo-roof`, the installer's log, `/usr/local/sbin/hvo-roof-install`, its containers or network, or a network
+interface named `hvorig0`. It removes all of them when it ends, with the backup, the worktree and the releases'
+images. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and (from the checkout)
+its registry's 15001. `RIG_HTTPS_PORT` and `RIG_WEB_PORT` move the controller off 8443 and 8088, and
+`RIG_REGISTRY_PORT` moves the registry. `RIG_RESULTS_DIR` writes each check's result and timing to `rig-scenario.md`.
 
 ### The kiosk end to end
 
