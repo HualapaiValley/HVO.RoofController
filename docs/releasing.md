@@ -198,9 +198,11 @@ version, and check its labels and its platforms with `check-image-labels.sh`.
    images while they are private.
 
 Only the release job can write: the draft (`contents: write`), the images (`packages: write`) and the attestations
-(`id-token: write` for the signing certificate, and `attestations: write`). Only the two steps that call `gh` have the
-token in their environment. Every other job, CI's and the scenarios' included, can only read. Every action is pinned
-to a commit. A second run for the same tag waits for the first rather than cancelling it.
+(`id-token: write` for the signing certificate, and `attestations: write`). Only the steps that need it have the token
+in their environment: those that call `gh`, and the e2e job's sign-in to GHCR, which pipes its read-only token to
+`docker login --password-stdin` and signs out when the job ends. Every other job, CI's and the scenarios' included,
+can only read. Every action is pinned to a commit. A second run for the same tag waits for the first rather than
+cancelling it.
 
 The release job runs in the `release` environment. The check that a tag is on main runs from the tagged commit's own
 workflow, so a commit could leave it out; the environment's protection rules are the repository's, and no commit can

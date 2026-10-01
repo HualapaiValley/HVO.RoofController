@@ -163,10 +163,12 @@ seconds_since() {
 write_results() {
   [[ -n "${RIG_RESULTS_DIR:-}" ]] || return 0
   mkdir -p "${RIG_RESULTS_DIR}"
+  local where="a release in a registry on loopback"
+  [[ -z "${release_source}" ]] || where="the release's assets, its images from GHCR"
   {
     echo "# The installer's rig role end to end"
     echo
-    echo "hvo-roof-install for ${rid}, a release in a registry on loopback, the HAT emulator on real Docker. Timings are wall-clock seconds."
+    echo "hvo-roof-install for ${rid}, ${where}, the HAT emulator on real Docker. Timings are wall-clock seconds."
     echo
     echo "| Check | Result | Detail |"
     echo "|---|---|---|"
@@ -1059,7 +1061,7 @@ scenario_motion() {
 }
 
 scenario_names() {
-  local controller_id credentials="${person_home}/.config/hvo-roof/credentials.json"
+  local controller_id credentials="${person_home}/.config/hvo-roof/credentials.json" status
   sudo -n cat "${ca}" > "${work}/ca-names.crt" || fail "could not read ${ca}"
   jq -c '{controller, caCertificate}' "${credentials}" > "${work}/cli-connection.json"
 
@@ -1068,8 +1070,12 @@ scenario_names() {
   made_interface=1
   sudo -n ip address add "${new_address}/32" dev "${interface}" || fail "could not give ${interface} the address ${new_address}"
   sudo -n ip link set "${interface}" up || fail "could not bring ${interface} up"
-  ! answers_at "${new_address}" "${work}/ca-names.crt" --connect-to "${new_address}:${https_port}:127.0.0.1:${https_port}" \
-    || fail "the controller answers at ${new_address} before its certificate names it"
+  # Ready, so that only the certificate (curl's 60, the peer's certificate not verified) keeps the new address out.
+  ready || fail "the controller is not ready before the address change"
+  status=0
+  curl -sS --max-time 10 --cacert "${work}/ca-names.crt" --connect-to "${new_address}:${https_port}:127.0.0.1:${https_port}" \
+    -o /dev/null "https://${new_address}:${https_port}/health/ready" 2>/dev/null || status=$?
+  (( status == 60 )) || fail "expected a certificate that does not name ${new_address} (curl's exit 60), got curl's exit ${status}"
   install cert-address-plan cert --plan --release "${release_dir}"
   expect_installed "cert --plan (a new address)"
   expect_output cert-address-plan "adds ${new_address}"
