@@ -834,6 +834,23 @@ jobs:
             exit 1
           }
 
+  # build/secret-scan.py (AGENTS.md): its tests, then this repository's files and every commit since the Blue Iris
+  # credential's (#22), which needs the whole history. It names where a secret is, never the secret.
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Secret scan script tests
+        run: python3 -m unittest discover -s tests/security -p 'test_*.py' -v
+
+      - name: Secret scan
+        run: build/secret-scan.py
+
   # install.sh's tests with a Mac's own bash (3.2) and its BSD date, shasum and pseudo-terminals: the commands install.sh
   # finds on a Mac that it does not run in its tests are stand-ins, as on Linux (tests/install).
   install-sh-mac:
