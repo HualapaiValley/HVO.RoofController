@@ -298,6 +298,7 @@ test_https_deploy_validates_first_publishes_only_https_and_keeps_previous() {
   assert_output_contains "Deployment complete and verified at https://pi.test:8443"
   assert_container roof-controller new true unless-stopped
   assert_container roof-controller-previous old false no
+  assert_output_contains "The previous version is kept as roof-controller-previous; run with --rollback to return to it."
 
   local preflight run expected_sha
   preflight=$(preflight_args)
@@ -848,6 +849,28 @@ test_older_previous_is_replaced_after_successful_deploy() {
   if ! (( i_stop > 0 && i_stop < i_rm && i_rm < i_rename )); then
     fail_test "unexpected order: stop=${i_stop} rm=${i_rm} rename=${i_rename}"
   fi
+}
+
+test_first_deploy_says_there_is_no_previous_version() {
+  deploy "${HTTPS_ENV[@]}"
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous missing false
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443"
+  assert_output_contains "There was no controller before this one, so there is no previous version to roll back to."
+  assert_output_not_contains "is kept as"
+}
+
+test_first_deploy_beside_an_older_previous_leaves_it_for_a_rollback() {
+  seed_container roof-controller-previous older false
+  deploy "${HTTPS_ENV[@]}"
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous older false
+  assert_output_contains "There was no roof-controller to replace. The older roof-controller-previous is left as it was; run with --rollback to return to it."
+  assert_output_not_contains "is kept as"
 }
 
 test_stopped_old_controller_is_restored_stopped() {

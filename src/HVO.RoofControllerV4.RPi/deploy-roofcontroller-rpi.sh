@@ -1547,4 +1547,12 @@ RESTORE_MODE=""
 
 echo "[deploy] Container status" || true
 show_containers
-echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. HAT: ${HAT_SUMMARY}. The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it." || true
+# A first deploy keeps nothing: only a replaced controller becomes <name>-previous, and an older one is left alone.
+if [[ "${STATE}" != "missing" ]]; then
+  KEPT="The previous version is kept as ${PREVIOUS_CONTAINER_NAME}; run with --rollback to return to it."
+elif [[ "${PREVIOUS_STATE}" == "stopped" ]]; then
+  KEPT="There was no ${CONTAINER_NAME} to replace. The older ${PREVIOUS_CONTAINER_NAME} is left as it was; run with --rollback to return to it."
+else
+  KEPT="There was no controller before this one, so there is no previous version to roll back to."
+fi
+echo "[done] Deployment complete and verified at ${REMOTE_BASE_URL}. HAT: ${HAT_SUMMARY}. ${KEPT}" || true
