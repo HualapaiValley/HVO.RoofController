@@ -430,10 +430,9 @@ internal static class LifecycleCommands
     }
 
     /// <summary>
-    /// The record in <paramref name="scope"/>, refused when there is none, it cannot be read, or nothing is installed (an
-    /// uninstalled one is taken when <paramref name="uninstalled"/>), and, for the machine's, without root unless planning.
+    /// Each release's upgrade notes from the one installed to the target, oldest first: a release candidate's are its
+    /// release's.
     /// </summary>
-    // Each release's notes from the one installed to the target, oldest first: a release candidate's are its release's.
     private static void ShowUpgradeNotes(InstallerHost host, ReleaseManifest manifest, string installed, string target)
     {
         var core = target.Split('-', '+')[0];
@@ -451,6 +450,10 @@ internal static class LifecycleCommands
         }
     }
 
+    /// <summary>
+    /// The record in <paramref name="scope"/>, refused when there is none, it cannot be read, or nothing is installed (an
+    /// uninstalled one is taken when <paramref name="uninstalled"/>), and, for the machine's, without root unless planning.
+    /// </summary>
     private static InstallRecord Installed(InstallerHost host, MachineSurvey survey, InstallScope scope, string command, bool planOnly, bool uninstalled = false)
     {
         var record = scope == InstallScope.System ? survey.SystemRecord : survey.UserRecord;

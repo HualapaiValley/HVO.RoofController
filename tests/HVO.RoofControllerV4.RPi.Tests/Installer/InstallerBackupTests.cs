@@ -478,7 +478,6 @@ public sealed class InstallerBackupTests
         next.Machine.Unexpected.Should().BeEmpty();
     }
 
-    // The controller and the kiosk, installed, with a secret set through the API (as the controller keeps one).
     // restore checks the archive it opened through /proc/<pid>/fd, which only Linux has: elsewhere these tests cannot run.
     private static Task<InstallerRun> RestoreAsync(FakeMachine pi, params string[] arguments)
     {
@@ -490,6 +489,7 @@ public sealed class InstallerBackupTests
         return pi.RunAsync(["restore", .. arguments]);
     }
 
+    // The controller and the kiosk, installed, with a secret set through the API (as the controller keeps one).
     private static async Task<FakeMachine> InstalledPiAsync()
     {
         var pi = await InstallerLifecycleTests.InstalledPiAsync();
