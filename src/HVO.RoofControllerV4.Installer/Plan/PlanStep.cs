@@ -33,6 +33,9 @@ public enum StepChange
     /// <summary>It is there as the step would leave it: nothing to do.</summary>
     Unchanged,
 
+    /// <summary>It is there and goes (uninstall): the step removes it.</summary>
+    Remove,
+
     /// <summary>Nothing to make or change, but worth saying (a port the controller will listen on).</summary>
     Info,
 
@@ -45,7 +48,7 @@ public sealed record StepCheck(StepChange Change, string? Detail = null)
 {
     public static StepCheck Unchanged(string? detail = null) => new(StepChange.Unchanged, detail);
 
-    public bool MakesChange => Change is StepChange.Create or StepChange.Change;
+    public bool MakesChange => Change is StepChange.Create or StepChange.Change or StepChange.Remove;
 }
 
 /// <summary>What a step runs with: the machine (its commands logged), the log, what the survey found and the answers.</summary>

@@ -51,6 +51,12 @@ public sealed class InstallerHost
     /// </summary>
     public Func<string, bool?> Confirm { get; init; } = _ => null;
 
+    /// <summary>
+    /// Asks the person at the terminal for a line, its argument the question (the machine's name, which
+    /// <c>uninstall --purge</c> asks to be typed): what they typed, or null when no one can be asked.
+    /// </summary>
+    public Func<string, string?> Ask { get; init; } = _ => null;
+
     /// <summary>This process, on the machine it runs on.</summary>
     public static InstallerHost System() => new()
     {
@@ -59,8 +65,20 @@ public sealed class InstallerHost
         Machine = InstallerMachine.Current(),
         IsInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected,
         ReadSecret = ReadSecretFromTerminal,
-        Confirm = ConfirmAtTerminal
+        Confirm = ConfirmAtTerminal,
+        Ask = AskAtTerminal
     };
+
+    private static string? AskAtTerminal(string question)
+    {
+        if (Console.IsInputRedirected)
+        {
+            return null;
+        }
+
+        Console.Error.Write($"{question} ");
+        return Console.ReadLine()?.Trim() ?? string.Empty;
+    }
 
     // y or yes goes ahead; anything else, Enter alone, or the end of the input does not.
     private static bool? ConfirmAtTerminal(string question)

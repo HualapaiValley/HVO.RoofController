@@ -144,7 +144,11 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
     {
         var (existing, _) = InstallRecord.Load(context.Machine, path);
         var now = context.Time.GetUtcNow();
-        var record = build(context, existing) with { InstalledAt = existing?.InstalledAt ?? now, UpdatedAt = now };
+        var record = build(context, existing);
+
+        // A reinstall after uninstall is installed afresh.
+        var reinstalled = existing?.UninstalledAt is not null && record.UninstalledAt is null;
+        record = record with { InstalledAt = existing is null || reinstalled ? now : existing.InstalledAt, UpdatedAt = now };
         var folder = Path.GetDirectoryName(path)!;
         if (!context.Machine.DirectoryExists(folder))
         {
@@ -162,11 +166,13 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
     {
         if (!before.Roles.SequenceEqual(after.Roles))
         {
-            return $"roles: {string.Join(", ", before.Roles.Select(InstallRoles.Name))} → {string.Join(", ", after.Roles.Select(InstallRoles.Name))}";
+            return $"roles: {Names(before.Roles)} → {Names(after.Roles)}";
         }
 
         return before.Version != after.Version ? $"version {before.Version} → {after.Version}" : "the choices changed";
     }
+
+    private static string Names(IReadOnlyList<InstallRole> roles) => roles.Count == 0 ? "none" : string.Join(", ", roles.Select(InstallRoles.Name));
 }
 
 /// <summary>A TCP port a container publishes. It is free, or the installer's own container has it; anything else listening there blocks the install.</summary>

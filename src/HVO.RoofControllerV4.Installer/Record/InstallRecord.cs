@@ -40,6 +40,18 @@ public sealed record InstallRecord
     /// <summary>The installer that last wrote this record.</summary>
     public required string InstallerVersion { get; init; }
 
+    /// <summary>
+    /// The release installed before <see cref="Version"/>: what <c>rollback</c> goes back to. Null on a first install, and
+    /// after a rollback (the release rolled back from is then <see cref="RolledBackFrom"/>).
+    /// </summary>
+    public string? PreviousVersion { get; init; }
+
+    /// <summary>The release <c>rollback</c> went back from; the next install or upgrade clears it.</summary>
+    public string? RolledBackFrom { get; init; }
+
+    /// <summary>When <c>uninstall</c> removed the roles (the record keeps the choices, for a reinstall); null while installed.</summary>
+    public DateTimeOffset? UninstalledAt { get; init; }
+
     public DateTimeOffset InstalledAt { get; init; }
 
     public DateTimeOffset UpdatedAt { get; init; }

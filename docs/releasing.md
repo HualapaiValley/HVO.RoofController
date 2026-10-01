@@ -86,15 +86,16 @@ build/release-compose.py --version 4.0.0 --controller-digest sha256:<hex> --emul
 ```
 
 [`build/release-assets.py`](../build/release-assets.py) gathers a release's assets ([The assets](#the-assets)) into
-one new folder, from what CI built: `hvo-roof` for each Linux processor, the kiosk's folder and the Mac app's zip. It
-checks that each is exactly what it expects, built for the right processor, and makes the kiosk's tarball, the compose
-file (with `release-compose.py`), `release.json` and `SHA256SUMS`. `--registry` names another registry than GHCR, for
-a test:
+one new folder, from what CI built: `hvo-roof` and `hvo-roof-install` for each platform, the kiosk's folder and the Mac
+app's zip. It checks that each is exactly what it expects, built for the right processor, and makes the kiosk's
+tarball, the compose file (with `release-compose.py`), `release.json` and `SHA256SUMS`. `--upgrade-notes FILE` puts the
+upgrade notes in `release.json`. `--registry` names another registry than GHCR, for a test:
 
 ```bash
 build/release-assets.py --version 4.0.0 --commit "$(git rev-parse HEAD)" --created 2026-10-01T12:00:00Z \
   --controller-digest sha256:<hex> --emulator-digest sha256:<hex> \
-  --cli ci/cli --kiosk ci/kiosk --mac-zip ci/mac/hvo-roof-mac-<run id>.zip -o dist
+  --cli ci/cli --installer ci/installer --kiosk ci/kiosk --mac-zip ci/mac/hvo-roof-mac-<run id>.zip \
+  --upgrade-notes docs/upgrade-notes/4.0.0.md -o dist
 ```
 
 [`build/push-image.sh`](../build/push-image.sh) pushes an image from an OCI archive to a registry with
@@ -178,9 +179,10 @@ version, and check its labels and its platforms with `check-image-labels.sh`.
    `ghcr.io/hualapaivalley/roof-hat-emulator:4.0.0`. Each image gets a build provenance attestation, which GHCR keeps
    beside it.
 4. **The assets.** `release-assets.py` gathers what CI built and tested in this run into the release's assets
-   ([The assets](#the-assets)), with the images' digests. Before logging in to GHCR, the run checks that CI's
-   `hvo-roof` for linux-x64 prints the version and commit, running it with no token and an empty environment; here it
-   checks that `hvo-roof-linux-x64` is that file, and `SHA256SUMS` against the files. One build provenance attestation
+   ([The assets](#the-assets)), with the images' digests and the upgrade notes. Before logging in to GHCR, the run
+   checks that CI's `hvo-roof` and `hvo-roof-install` for linux-x64 print the version and commit, running each with no
+   token and an empty environment; here it checks that `hvo-roof-linux-x64` and `hvo-roof-install-linux-x64` are those
+   files, and `SHA256SUMS` against the files. One build provenance attestation
    covers every file in `SHA256SUMS`.
 5. **The draft.** A draft release of the assets, titled `HVO Roof Controller 4.0.0` and marked a prerelease for a
    release candidate. Its notes are the upgrade notes, the images, how to check the files, and then what GitHub writes
@@ -203,6 +205,7 @@ names the images until someone publishes the draft.
 | Asset | What it is |
 |-------|------------|
 | `hvo-roof-linux-arm64`, `hvo-roof-linux-x64`, `hvo-roof-osx-arm64` | `hvo-roof`, for the Pi, a Linux workstation and an Apple silicon Mac (signed ad hoc) ([Install](cli.md#install)) |
+| `hvo-roof-install-linux-arm64`, `hvo-roof-install-linux-x64`, `hvo-roof-install-osx-arm64` | The installer, for the same three (signed ad hoc) ([Installing](install.md#getting-it)) |
 | `hvo-roof-kiosk-<version>-linux-arm64.tar.gz` | The kiosk's program, unit, udev rule and example settings, in a folder of that name ([Install](kiosk.md#install)) |
 | `HVO-Roof-<version>.zip` | The Mac app, signed ad hoc ([Install](mac.md#install)) |
 | `docker-compose.yaml` | The release compose file, each image pinned to its digest ([Deploying with Compose](deployment.md#deploying-with-compose)) |
@@ -249,7 +252,9 @@ What a program needs to know about a release, such as the installer and `install
     },
     "hatEmulator": { "...": "the same, for ghcr.io/hualapaivalley/roof-hat-emulator" }
   },
+  "upgradeNotes": "Nothing to do by hand.",
   "assets": [
+    { "name": "hvo-roof-install-linux-arm64", "kind": "installer", "platform": "linux-arm64", "size": 45234567, "sha256": "<hex>" },
     { "name": "hvo-roof-linux-arm64", "kind": "cli", "platform": "linux-arm64", "size": 41234567, "sha256": "<hex>" }
   ]
 }
@@ -260,7 +265,10 @@ What a program needs to know about a release, such as the installer and `install
 - `created` is when the release was built: the time in both images' labels, and the kiosk tarball's file times.
 - `images.<image>.reference` is what to pull or deploy (`IMAGE_REF`): the tag, for people, and the digest, which is
   what is pulled.
-- `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `kiosk`, `mac-app`,
+- `upgradeNotes` is the text of `docs/upgrade-notes/<version>.md`, which the installer prints before an upgrade
+  ([Upgrading](install.md#upgrading)), at most 16 KiB. It is left out when there are none, which only a release
+  candidate may have.
+- `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `installer`, `kiosk`, `mac-app`,
   `compose` or `deploy-script`. `platform` is the .NET runtime the file is for, or `null` for a file for any.
 
 ## Before publishing

@@ -137,7 +137,11 @@ starting the controller, so run it after a hand edit made while the controller i
 
 ### Backing up
 
-Back up `/etc/hvo-roof/config` and `/var/lib/hvo-roof/settings-secrets` with `/etc/hvo-roof/secrets` and
+On a controller the installer set up, `sudo hvo-roof-install backup` backs all of these up, with the certificate, its
+CA and the kiosk's device key, into one archive only root reads, and `restore` puts them back
+([Backing up and restoring](install.md#backing-up-and-restoring)). Keep a copy off the Pi.
+
+Otherwise, back up `/etc/hvo-roof/config` and `/var/lib/hvo-roof/settings-secrets` with `/etc/hvo-roof/secrets` and
 `/var/lib/hvo-roof/identity`, after each change. The settings file holds no secrets and can go in the private operations
 record. The managed secrets file holds the Blue Iris password: keep it as safe as the secrets directory.
 

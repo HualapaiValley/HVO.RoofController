@@ -1,9 +1,10 @@
 using System.Security.Cryptography;
 using HVO.RoofControllerV4.Installer.Deployment;
+using HVO.RoofControllerV4.Installer.Machine;
 
 namespace HVO.RoofControllerV4.Installer.Plan;
 
-/// <summary>A release's files other than its images: the kiosk's tarball, hvo-roof, the Mac app's zip.</summary>
+/// <summary>A release's files other than its images: the kiosk's tarball, hvo-roof, the Mac app's zip, the installer.</summary>
 public static class ReleaseFiles
 {
     /// <summary>The release's asset of <paramref name="kind"/> for <paramref name="platform"/>, or null when it has none.</summary>
@@ -62,5 +63,16 @@ public static class ReleaseFiles
         }
 
         return path;
+    }
+
+    /// <summary>A release's single-file program (<paramref name="asset"/>), fetched and checked, then copied to <paramref name="path"/> as a program.</summary>
+    public static async Task CopyProgramAsync(InstallContext context, ReleaseManifest release, ReleaseAsset asset, string path, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        using var work = new DeployScript.WorkFolder(context.Machine);
+        var file = await GetAsync(context, release, asset, work, cancellationToken).ConfigureAwait(false);
+
+        // A copy, not the download itself: it carries no extended attributes, so macOS has no quarantine mark to act on.
+        await context.Machine.CopyFileAsync(file, path, Modes.Program, cancellationToken).ConfigureAwait(false);
     }
 }

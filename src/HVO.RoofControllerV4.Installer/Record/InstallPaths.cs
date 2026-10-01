@@ -23,6 +23,16 @@ public static class InstallPaths
     public static string RecordFor(InstallScope scope, InstallerMachine machine)
         => scope == InstallScope.System ? SystemRecord : UserRecord(machine);
 
+    /// <summary>Where the installer keeps itself as root, for upgrade, rollback, backup and uninstall.</summary>
+    public const string SystemInstaller = "/usr/local/sbin/hvo-roof-install";
+
+    /// <summary>
+    /// Where the installer keeps itself for <paramref name="scope"/>: <see cref="SystemInstaller"/>, or for a person
+    /// <c>~/.local/bin/hvo-roof-install</c>, next to hvo-roof.
+    /// </summary>
+    public static string Installer(InstallScope scope, InstallerMachine machine)
+        => scope == InstallScope.System ? SystemInstaller : Path.Join(machine.Home, ".local", "bin", "hvo-roof-install");
+
     /// <summary>
     /// The installer's log: <see cref="SystemLog"/> as root; for a person, <c>~/Library/Logs/hvo-roof-install.log</c> on a
     /// Mac, or <c>$XDG_STATE_HOME/hvo-roof/install.log</c> (<c>~/.local/state</c> by default) on Linux.

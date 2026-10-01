@@ -26,7 +26,10 @@ anything, from an answers file that the wizard saves.
 > - sets up the touchscreen kiosk on the controller's Pi ([The kiosk](#the-kiosk));
 > - installs `hvo-roof` and the Mac app on other machines, connected to the controller and trusting its CA once you
 >   have checked its fingerprint ([hvo-roof and the Mac app](#hvo-roof-and-the-mac-app));
-> - writes the install record.
+> - writes the install record;
+> - upgrades what it installed, rolls it back, backs up and restores the controller's and the kiosk's data, and
+>   uninstalls ([Upgrading](#upgrading), [Rolling back](#rolling-back),
+>   [Backing up and restoring](#backing-up-and-restoring), [Uninstalling](#uninstalling)).
 >
 > It adopts a controller that the deploy script already runs.
 
@@ -35,8 +38,13 @@ anything, from an answers file that the wizard saves.
 `hvo-roof-install` is one self-contained file, so the machine needs no .NET runtime. It is built for linux-arm64 (the
 Pi), linux-x64 and osx-arm64 (Apple silicon). There is no build for an Intel Mac or for Windows.
 
-Every run of the `CI` workflow publishes the three builds as the `hvo-roof-install-<run id>` artifact. From #73, each
-release carries them as assets, with `install.sh` to download the right one.
+Each release carries the three builds as assets: `hvo-roof-install-linux-arm64`, `hvo-roof-install-linux-x64` and
+`hvo-roof-install-osx-arm64` ([The assets](releasing.md#the-assets)). From #73, `install.sh` downloads the right one.
+Every run of the `CI` workflow publishes them too, as the `hvo-roof-install-<run id>` artifact.
+
+An install puts the installer in place for the later runs that upgrade, roll back, back up and uninstall:
+`/usr/local/sbin/hvo-roof-install` for the machine's roles, and `~/.local/bin/hvo-roof-install` for yours. An upgrade
+replaces it with the new release's, and keeps the one it replaced beside it, as `hvo-roof-install.previous`.
 
 To build one yourself, run this from `src/`, so that `src/global.json` picks the SDK:
 
@@ -61,6 +69,11 @@ terminal, tmux, or Terminal on a Mac.
 | `hvo-roof-install cert` | Checks the controller's certificate and its CA, makes or renews what needs it, and redeploys the controller to serve it once the roof is idle and you agree. `--plan` shows what it would do. |
 | `hvo-roof-install cert show` | Shows the controller's certificate and CA: what they are for, until when, and their fingerprints. |
 | `hvo-roof-install cert import FILE` | Puts your own certificate in place for the controller. |
+| `hvo-roof-install upgrade` | Upgrades what is installed here to the latest release, or to `--version VERSION`, with the choices the record holds ([Upgrading](#upgrading)). |
+| `hvo-roof-install rollback` | Goes back to the release installed before the last upgrade ([Rolling back](#rolling-back)). |
+| `hvo-roof-install backup` | Backs up the controller's and the kiosk's files into one archive that only root reads ([Backing up and restoring](#backing-up-and-restoring)). |
+| `hvo-roof-install restore FILE` | Puts a backup's files back, on a new Pi or after an uninstall, and installs what its record says. |
+| `hvo-roof-install uninstall` | Removes what the installer installed here and keeps its data; `--purge` removes the data too ([Uninstalling](#uninstalling)). |
 
 The installer runs as root for the machine's roles, and as you for your own ([Roles](#roles)).
 
@@ -94,8 +107,8 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 |------|---------|
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
-| 2 | The command line or the answers file was not valid. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. |
+| 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes; or a `--purge` confirmed with another machine's name. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -478,6 +491,7 @@ Files
   create     /etc/hvo-roof/secrets/BlueIris__BaseUrl       the camera the controller shows: the HAT emulator's (http://hat-emulator:5290)
   create     /etc/hvo-roof/secrets/BlueIris__Password      the camera's password: none (empty)
   create     /etc/hvo-roof/secrets/BlueIris__UserName      the camera's user: none, the emulator asks for none (empty)
+  create     /usr/local/sbin/hvo-roof-install              hvo-roof-install: upgrade, rollback, backup and uninstall (release 4.0.0's, 0755)
   create     /etc/hvo-roof/install.json                    the install record: the roles, choices and versions (no secrets) (0644)
 Users
   create     tester                                        the first admin: signs in to the web UI and adds everyone else (added through the controller's API as RoofAdmin, with a password)
@@ -490,7 +504,7 @@ Ports
   info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)
   info       8088                                          the web UI (free; roof-controller will listen on it)
 
-21 to create, 0 to change, 0 unchanged.
+22 to create, 0 to change, 0 unchanged.
 
 The install asks for the first admin's password (or give it with --admin-password-file FILE).
 Installing a test rig needs root: run the installer with sudo.
@@ -565,11 +579,12 @@ Files
   create     /Users/roy/Library/Application Support/HVO Roof/device-key  the Mac app's device key: a Viewer's, which shows the roof and offers Stop when no one is signed in (a Viewer key (mac-studio-roy) made by ada, who signs in once; 0600, yours alone)
   create     /Users/roy/Library/Application Support/HVO Roof/appsettings.Local.json  the Mac app's settings: the controller's address, how it trusts it, and its key (https://roofpi.local:8443, trusting its CA (FB:26:8B:E2…))
   change     /Users/roy/Library/Keychains/login.keychain-db  trusts the controller's CA in your login keychain: Safari and Chrome open the web UI without a warning (HVO Roof CA (roofpi, 2026-10-01), trusted for websites: macOS asks for your password)
+  create     /Users/roy/.local/bin/hvo-roof-install        hvo-roof-install: upgrade, rollback, backup and uninstall (release 4.0.0's, 0755)
   create     /Users/roy/.config/hvo-roof/install.json      the install record: the roles, choices and versions (no secrets) (0600)
 Checks
   run        HVO Roof.app --check                          opens the app's window once, and closes it: it starts with these settings (after the changes above)
 
-8 to create, 1 to change, 1 unchanged, 1 check to run.
+9 to create, 1 to change, 1 unchanged, 1 check to run.
 
 The install asks for the Mac app's admin's password (or give it with --sign-in-password-file FILE).
 ```
@@ -798,6 +813,146 @@ shows what would change. It then redeploys the controller to serve it, as `cert`
 
 The installer never renews your certificate. Before it expires, import the new one.
 
+## Upgrading
+
+`sudo hvo-roof-install upgrade` upgrades what is installed here to the latest release, with the choices the record
+holds. Run it as yourself, without `sudo`, for `hvo-roof`, the Mac app or a rig on a Mac. `--version 4.0.1` names the
+release instead of the latest, and `--release DIR` reads it from a folder ([The release it installs](#the-release-it-installs)).
+`--plan` shows what the upgrade would change, as the installer running it sees it, and changes nothing.
+
+Each installer installs its own release, so the installer hands over to the new release's:
+
+1. It says what is installed and what replaces it, and prints the new release's upgrade notes: what someone upgrading
+   must do, such as a setting to change. Read them before the upgrade goes on.
+2. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
+   and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
+   of your own) is refused: download that release's installer and run its `upgrade`.
+3. The new installer installs its release, as `--answers` installs the record's choices
+   ([Running it again](#running-it-again)):
+   - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
+     controller, checked before the old one is let go and kept as `roof-controller-previous`;
+   - a rig's HAT emulator, from the new release;
+   - the kiosk's program, keeping the one it replaces as `hvo-roof-kiosk.previous`; and `hvo-roof` and the Mac app,
+     keeping the ones they replace beside them.
+4. The record then says the new release, and the one before it (`previousVersion`) for a rollback.
+
+```text
+$ sudo hvo-roof-install upgrade
+4.0.0 is installed here; 4.0.1 replaces it.
+
+Upgrade notes for 4.0.1:
+  Nothing to do by hand.
+Release 4.0.1: https://github.com/HualapaiValley/HVO.RoofController/releases/tag/v4.0.1
+
+/usr/local/sbin/hvo-roof-install: release 4.0.1's, 0755.
+Creating file /usr/local/sbin/hvo-roof-install…
+Creating file /usr/local/sbin/hvo-roof-install: done.
+Handing over to release 4.0.1's installer.
+
+Upgrading from 4.0.0 to 4.0.1.
+…
+```
+
+An upgrade never goes back: a release older than the one installed is refused, and [Rolling back](#rolling-back) is
+the way back. The release that is installed already is checked, and repaired, as a second run of the installer would
+be: "4.0.1 is installed here: checking that everything is as it should be." So after a failed step or Ctrl+C,
+`upgrade` again carries on, with the new installer already in place.
+
+## Rolling back
+
+`sudo hvo-roof-install rollback` goes back to the release installed before the last upgrade, the record's
+`previousVersion`. `--plan` shows what it would change, and changes nothing.
+
+- The deploy script's `--rollback` swaps the controller with `roof-controller-previous`, after a verified Stop of the
+  idle roof, and checks the one it puts back as it checks a new one
+  ([Rolling back](deployment.md#rolling-back)). Nothing is pulled. The controller from before keeps the settings and
+  data as they are now.
+- A rig's HAT emulator is replaced by the one of the release before, from that release's `release.json`: on GitHub,
+  or in `--release DIR`, which is then the release before's folder.
+- The kiosk, `hvo-roof`, the Mac app and the installer go back to the release before's, swapped with the copies the
+  upgrade kept beside them when those are the release before's. A release from before the installer was a release
+  asset has no installer, and the one here stays.
+- The record says the release before, and the release it went back from (`rolledBackFrom`).
+
+It goes back one release, once: a rollback leaves no `previousVersion`, and running it again says so, changes nothing
+and exits 0. `upgrade` goes forward again. A machine with only one release ever installed has nothing to go back to,
+and the rollback is refused (exit 3).
+
+## Backing up and restoring
+
+`sudo hvo-roof-install backup` writes one archive of the controller's and the kiosk's files:
+
+- `/etc/hvo-roof`: the settings, the secrets, the certificate, the CA with its key, and the install record;
+- `/var/lib/hvo-roof`: the people, the API keys and the settings set through the API;
+- `/etc/hvo-roof-kiosk` and `/opt/hvo-roof-kiosk/appsettings.Local.json`: the kiosk's device key and settings.
+
+The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,
+written whole or not at all. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
+SHA-256, the host and the release. `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
+only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs up.
+
+```text
+$ sudo hvo-roof-install backup --output /root/roofpi.tar.gz
+Backed up 18 files and 8 folders to /root/roofpi.tar.gz (0600, root's):
+  /etc/hvo-roof: 17 files
+  /var/lib/hvo-roof: 1 file
+
+Keep a copy of /root/roofpi.tar.gz off this machine, where only you can read it: it holds the controller's secrets, its certificate authority's key and the kiosk's device key. Anyone with it can act as the controller.
+```
+
+**Where to keep it.** The archive is not encrypted: anyone who reads it can act as the controller, issue certificates
+its clients trust, and sign in as the kiosk. Copy it off the Pi, with `scp` as root or with `sudo cat` over SSH, to a
+place only you can read: an encrypted disk, or a password manager's file store, kept offline. A copy on the Pi alone
+goes with the Pi's SD card. Back up after each change: a new person, a new key, a renewed certificate. Nothing it holds
+is ever printed or logged: only paths and counts.
+
+`sudo hvo-roof-install restore FILE` puts a backup back, on a new Pi or on this one after an uninstall, then installs
+what the backup's record says, with this installer's release. Download the installer first ([Getting it](#getting-it)):
+the backup's release's, or a newer one. `--plan` says what it would put back and
+changes nothing; `--release DIR` reads the release from a folder.
+
+- The archive must be root's and `0600` or `0400`. A backup a newer installer made, or of a newer release, is refused:
+  restore it with that release's installer.
+- A restore is for a machine with nothing installed. Uninstall first; a plain uninstall keeps the data, which the
+  restore then replaces only with `--replace`, so the data is never overwritten by mistake.
+- The files go back with their modes and owners, and the install that follows checks them as any run does. The first
+  admin, the keys and the passwords are the backup's: the restore asks for none.
+- **The same machine name** keeps the CA and the certificate, so clients go on trusting the controller as before.
+- **Another name** (a new Pi called something else) gets a certificate for its own names. It comes from the backup's CA
+  when that CA may issue for them, and otherwise from a new CA; the plan says which. Clients then trust the new CA in
+  place of the old one: run the installer for `hvo-roof` and the Mac app again, with the new CA's fingerprint, and trust
+  it again in each browser ([Trusting the CA](#trusting-the-ca)).
+
+## Uninstalling
+
+`sudo hvo-roof-install uninstall` removes what the installer installed here, from its record:
+
+- the kiosk's service, its program and the udev rule for the screen's backlight;
+- the controller, stopped by the deploy script's `--stop` after a verified Stop of the roof
+  ([Deploying](deployment.md#deploying-with-the-script)), with the one kept for a rollback, a rig's HAT emulator and
+  its network, each with its image when no other container uses it;
+- `hvo-roof` and the Mac app, with the copies kept beside them;
+- the installer itself.
+
+The data stays: the settings, secrets, certificate and CA, the people and the kiosk's device key. The record says when
+it was uninstalled, and keeps the choices, so an install that follows can offer them again. The `hvo-kiosk` user, the
+apt packages and the install log stay too. It shows what it will remove and asks first; `--yes` goes ahead without
+asking, and `--plan` only shows it. Running it again changes nothing.
+
+`--purge` removes the data too: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the kiosk's `/etc/hvo-roof-kiosk` and
+`/opt/hvo-roof-kiosk`, and the record. As yourself, it removes the Mac app's settings and device key and
+`~/.config/hvo-roof`. It cannot be undone, so it asks for two more things:
+
+- **this machine's name**, typed when asked or given with `--confirm HOST`, so that data is not removed from the wrong
+  machine over SSH;
+- **a backup** first: `--backup FILE` writes one, as `backup --output FILE` does; at the terminal it offers one in
+  `/var/backups/hvo-roof`, and `--no-backup` goes without. Keep a backup in `/var/backups/hvo-roof` off the machine
+  before it goes: a purge does not remove that folder, but the next owner of the Pi could read it.
+
+```bash
+sudo hvo-roof-install uninstall --purge --backup /root/roofpi.tar.gz --confirm roofpi
+```
+
 ## The record and the log
 
 The record says which roles are installed, with their choices and the release. Every later run reads it, for these
@@ -805,9 +960,19 @@ purposes:
 
 - to offer the same choices;
 - to refuse a test rig on the real HAT's machine;
-- from #72, to upgrade, roll back or uninstall.
+- to upgrade, roll back or uninstall.
 
-It is written last, once everything before it is in place, and it holds no secret.
+It is written last, once everything before it is in place, and it holds no secret. Besides the roles and their
+choices, it says:
+
+| Field | What it says |
+|-------|--------------|
+| `version` | The release installed. |
+| `installerVersion` | The installer that last wrote it. |
+| `previousVersion` | The release installed before the last upgrade: what `rollback` goes back to. A rollback clears it. |
+| `rolledBackFrom` | The release `rollback` went back from. An upgrade clears it. |
+| `uninstalledAt` | When `uninstall` removed the roles, keeping the data and the choices. An install clears it. |
+| `installedAt`, `updatedAt` | When it was first written, and last. |
 
 | File | Mode | Holds |
 |------|------|-------|
@@ -849,6 +1014,12 @@ machine has files, modes, containers and ports, and its programs are stubbed. Th
   saved only when its fingerprint is the one given, a connection to another controller replacing the old sign-in, the
   Mac app without its quarantine mark, its device key made through the controller's API (a real one, in process), its
   settings kept when you changed them, `--check`, and the login keychain;
+- upgrading, rolling back and uninstalling (`InstallerLifecycleTests`): the new release's installer put in place and
+  handed over to, the upgrade notes, an older release refused, the record's versions, a rollback once and only once,
+  the deploy script's `--stop` before the controller goes, the data kept, and `--purge` with its name and its backup;
+- backing up and restoring (`InstallerBackupTests`): the archive's entries, modes and owners, a backup that fails
+  leaving nothing, no secret printed or logged, a restore on a new machine with the same name or another, `--replace`,
+  and the archives a restore refuses;
 - the exit codes.
 
 The controller's side, `GET /ca.crt` and the `https_certificate` health check, has its own tests
@@ -883,14 +1054,29 @@ that names them by digest. The script checks:
 4. **Change.** A new time scale replaces the emulator and redeploys the controller against it.
 5. **Certificate.** `cert --renew --redeploy` serves a new certificate that the CA from before the renewal verifies,
    and leaves that CA unchanged. `hvo-roof`, which trusts the CA rather than the certificate, still signs in.
+6. **Backup.** The installer the install put in `/usr/local/sbin` backs up to a folder of the run's own, never
+   `RIG_RESULTS_DIR`: the archive is root's and `0600`, its manifest comes first, and it holds the record, the CA, the
+   certificate and the keys. No secret is in the output or the log.
+7. **Restore.** `uninstall --purge --no-backup` stops the controller with a verified Stop and removes the containers,
+   their images, the data, the record and the installer. `restore` then puts the backup back and installs from its
+   record: the same keys, CA and certificate, the first admin signing in with the same password, and the time scale
+   of step 4. `upgrade` to the same release then changes nothing.
+8. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs that
+   release. Its `upgrade` shows the new release's upgrade notes and hands over to the new installer, which it puts in
+   `/usr/local/sbin`. The controller and the emulator are then the new release's, the old controller is kept as
+   `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing.
+9. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
+   `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so and
+   changes nothing, and `upgrade` goes forward again.
 
 Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
 and no violation.
 
-It needs Docker with buildx, the .NET SDK, `curl`, `jq`, `openssl`, `ss`, and `sudo` without a password that reaches
-the same Docker daemon. It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a
-rig: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the installer's log, or its containers or network. It removes all of them
-when it ends. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and its registry's
+It needs Docker with buildx, the .NET SDK, git, `curl`, `jq`, `openssl`, `ss`, and `sudo` without a password that
+reaches the same Docker daemon. The release before is built from `RIG_PREVIOUS_REF` (by default `origin/main`) in a git
+worktree of its own, so a checkout needs that commit: the workflow fetches the whole history. It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a
+rig: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the installer's log, `/usr/local/sbin/hvo-roof-install`, or its containers
+or network. It removes all of them when it ends, with the backup and the worktree. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and its registry's
 15001. `RIG_HTTPS_PORT` and `RIG_WEB_PORT` move the controller off 8443 and 8088, and `RIG_REGISTRY_PORT` moves the
 registry. `RIG_RESULTS_DIR` writes each check's result and timing to `rig-scenario.md`.
 

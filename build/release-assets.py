@@ -4,22 +4,27 @@ and SHA256SUMS.
 
   build/release-assets.py --version <version> --commit <sha> --created <time>
                           --controller-digest sha256:<hex> --emulator-digest sha256:<hex>
-                          --cli <folder> --kiosk <folder> --mac-zip <file> [--registry <registry>/<owner>] -o <folder>
+                          --cli <folder> --installer <folder> --kiosk <folder> --mac-zip <file>
+                          [--upgrade-notes <file>] [--registry <registry>/<owner>] -o <folder>
 
---cli holds <runtime>/hvo-roof for each runtime in CLI_RUNTIMES (CI's hvo-roof artifact), --kiosk the kiosk's files
-(CI's hvo-roof-kiosk artifact) and --mac-zip is CI's HVO Roof.app zip. Each must be exactly what this script expects,
-for the right processor, and the output folder must be new or empty, so a release holds nothing stale and nothing
-missing. The images are <registry>/roof-controller and <registry>/roof-hat-emulator, on GHCR unless --registry names
-another (a test's local registry). The assets:
+--cli holds <runtime>/hvo-roof for each runtime in CLI_RUNTIMES (CI's hvo-roof artifact), --installer
+<runtime>/hvo-roof-install for the same runtimes (CI's hvo-roof-install artifact), --kiosk the kiosk's files (CI's
+hvo-roof-kiosk artifact) and --mac-zip is CI's HVO Roof.app zip. Each must be exactly what this script expects, for the
+right processor, and the output folder must be new or empty, so a release holds nothing stale and nothing missing.
+--upgrade-notes is the release's docs/upgrade-notes/<X.Y.Z>.md, if it has one: release.json carries its text, which the
+installer shows before it upgrades. The images are <registry>/roof-controller and <registry>/roof-hat-emulator, on GHCR
+unless --registry names another (a test's local registry). The assets:
 
   hvo-roof-<runtime>                          hvo-roof, one file per runtime (linux-arm64, linux-x64, osx-arm64)
+  hvo-roof-install-<runtime>                  the installer, one file per runtime (the same three)
   hvo-roof-kiosk-<version>-linux-arm64.tar.gz the kiosk's program, unit, udev rule and example settings, in one folder
   HVO-Roof-<version>.zip                      HVO Roof.app, signed ad hoc
   docker-compose.yaml                         the release compose file, each image pinned to its digest
   deploy-roofcontroller-rpi.sh                the deploy script
-  release.json                                the version, the commit, each image's digest, each asset's SHA-256, and
-                                              the SHA-256 of each file in the kiosk's tarball (the installer checks an
-                                              installed kiosk against them without downloading it)
+  release.json                                the version, the commit, each image's digest, each asset's SHA-256, the
+                                              SHA-256 of each file in the kiosk's tarball (the installer checks an
+                                              installed kiosk against them without downloading it) and the upgrade
+                                              notes
   SHA256SUMS                                  every asset's SHA-256, release.json's included, as sha256sum writes it
 """
 
@@ -48,8 +53,11 @@ _spec = importlib.util.spec_from_file_location("release_compose", REPOSITORY_ROO
 release_compose = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release_compose)
 
-# The runtimes hvo-roof is released for, and the processor each file must be built for.
+# The runtimes hvo-roof and hvo-roof-install are released for, and the processor each file must be built for.
 CLI_RUNTIMES = {"linux-arm64": "aarch64", "linux-x64": "x86-64", "osx-arm64": "macos-arm64"}
+
+# The longest upgrade notes release.json carries: the installer prints them whole before it upgrades.
+UPGRADE_NOTES_LIMIT = 16 * 1024
 
 # The kiosk's files and their modes: the program, and docs/kiosk.md's deploy files beside it.
 KIOSK_FILES = {
@@ -105,21 +113,37 @@ def exact_entries(folder, expected, what):
             + ".")
 
 
-def cli_assets(cli, out):
-    exact_entries(cli, CLI_RUNTIMES, "The hvo-roof folder")
-    names = []
+def program_assets(folder, program_name, out):
+    """<runtime>/<program_name> for each runtime in CLI_RUNTIMES, each for its processor, copied to
+    <program_name>-<runtime>; returns {name: runtime}."""
+    exact_entries(folder, CLI_RUNTIMES, f"The {program_name} folder")
+    names = {}
     for runtime, expected in CLI_RUNTIMES.items():
-        program = cli / runtime / "hvo-roof"
+        program = folder / runtime / program_name
         if not program.is_file():
             raise AssetError(f"{program} was not found.")
         actual = processor(program)
         if actual != expected:
             raise AssetError(f"{program} is built for {actual or 'no known processor'}, not {expected}.")
-        name = f"hvo-roof-{runtime}"
+        name = f"{program_name}-{runtime}"
         shutil.copyfile(program, out / name)
         (out / name).chmod(0o755)
-        names.append(name)
+        names[name] = runtime
     return names
+
+
+def upgrade_notes(path):
+    """The upgrade notes' text, without the blank lines around it: UTF-8, not empty, and short enough to print."""
+    try:
+        text = path.read_bytes().decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise AssetError(f"{path} is not UTF-8 text: {error}") from error
+    if not text:
+        raise AssetError(f"{path} is empty: a release's upgrade notes say what someone upgrading must do.")
+    if len(text) > UPGRADE_NOTES_LIMIT:
+        raise AssetError(f"{path} holds {len(text)} characters; the installer prints them whole, so keep them under"
+                         f" {UPGRADE_NOTES_LIMIT} and link to the rest.")
+    return text
 
 
 def kiosk_asset(kiosk, out, version, mtime):
@@ -185,9 +209,9 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def manifest(out, assets, version, commit, created, registry, digests, contents):
+def manifest(out, assets, version, commit, created, registry, digests, contents, notes=None):
     """release.json: what the installer and install.sh read to know the release, its images and its files; an archive
-    in contents lists its files' SHA-256 too."""
+    in contents lists its files' SHA-256 too, and notes are the upgrade notes."""
     images = {}
     for key, image in (("controller", "roof-controller"), ("hatEmulator", "roof-hat-emulator")):
         repository = f"{registry}/{image}"
@@ -208,6 +232,7 @@ def manifest(out, assets, version, commit, created, registry, digests, contents)
         "created": created,
         "repository": REPOSITORY_URL,
         "images": images,
+        **({"upgradeNotes": notes} if notes else {}),
         "assets": [
             {"name": name, "kind": kind, "platform": platform, "size": (out / name).stat().st_size,
              "sha256": sha256(out / name), **({"files": contents[name]} if name in contents else {})}
@@ -230,9 +255,12 @@ def build(arguments):
     version = arguments.version
     mtime = created_time(arguments.created)
 
+    notes = upgrade_notes(arguments.upgrade_notes) if arguments.upgrade_notes else None
     assets = {}
-    for name in cli_assets(arguments.cli, out):
-        assets[name] = ("cli", name.removeprefix("hvo-roof-"))
+    for name, runtime in program_assets(arguments.cli, "hvo-roof", out).items():
+        assets[name] = ("cli", runtime)
+    for name, runtime in program_assets(arguments.installer, "hvo-roof-install", out).items():
+        assets[name] = ("installer", runtime)
     kiosk, kiosk_files = kiosk_asset(arguments.kiosk, out, version, mtime)
     assets[kiosk] = ("kiosk", "linux-arm64")
     mac, mac_files = mac_asset(arguments.mac_zip, out, version)
@@ -253,7 +281,8 @@ def build(arguments):
     assets[DEPLOY_SCRIPT.name] = ("deploy-script", None)
 
     digests = {"controller": arguments.controller_digest, "hatEmulator": arguments.emulator_digest}
-    release = manifest(out, assets, version, arguments.commit, arguments.created, arguments.registry, digests, contents)
+    release = manifest(out, assets, version, arguments.commit, arguments.created, arguments.registry, digests, contents,
+                       notes)
     (out / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
 
     sums = "".join(f"{sha256(out / name)}  {name}\n" for name in sorted([*assets, "release.json"]))
@@ -269,8 +298,11 @@ def main(argv=None):
     parser.add_argument("--controller-digest", required=True, help="the controller image's digest (sha256:<hex>)")
     parser.add_argument("--emulator-digest", required=True, help="the HAT emulator image's digest (sha256:<hex>)")
     parser.add_argument("--cli", required=True, type=Path, help="CI's hvo-roof artifact: <runtime>/hvo-roof")
+    parser.add_argument("--installer", required=True, type=Path,
+                        help="CI's hvo-roof-install artifact: <runtime>/hvo-roof-install")
     parser.add_argument("--kiosk", required=True, type=Path, help="CI's hvo-roof-kiosk artifact")
     parser.add_argument("--mac-zip", required=True, type=Path, help="CI's HVO Roof.app zip")
+    parser.add_argument("--upgrade-notes", type=Path, help="the release's docs/upgrade-notes/<X.Y.Z>.md, if it has one")
     parser.add_argument("--registry", default=release_compose.REGISTRY,
                         help=f"where the images are, default {release_compose.REGISTRY}")
     parser.add_argument("-o", "--output", required=True, type=Path, help="the folder to write, new or empty")

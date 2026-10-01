@@ -92,6 +92,10 @@ public static class Installer
         root.Options.Add(pinFiles);
 
         root.Subcommands.Add(CertificateCommands.Create(host));
+        foreach (var command in LifecycleCommands.Create(host).Concat(BackupCommands.Create(host)))
+        {
+            root.Subcommands.Add(command);
+        }
         root.SetAction((parseResult, token) =>
         {
             if (parseResult.GetValue(version))
@@ -247,10 +251,20 @@ public static class Installer
     {
         var session = await InstallerSession.StartAsync(host.Machine, InstallLog.None, host.Version, host.Time, options.Release(host), cancellationToken).ConfigureAwait(false);
         WriteWarnings(host, session);
-        session.Answers = options.AnswersFile is { } answersFile
+        var answers = options.AnswersFile is { } answersFile
             ? ReadAnswers(host, answersFile)
             : InstallerSession.RecordedAnswers(session.Survey, includeSystem: true)
                 ?? throw new InstallerUsageException($"Nothing is recorded as installed here: give the answers to plan, {CommandName} --plan --answers FILE.");
+        return await PlanAsync(host, session, answers, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What <paramref name="answers"/> would make and change in <paramref name="session"/>, for <c>--plan</c> and
+    /// <c>upgrade --plan</c>. Nothing is changed.
+    /// </summary>
+    internal static async Task<int> PlanAsync(InstallerHost host, InstallerSession session, InstallAnswers answers, RunOptions options, CancellationToken cancellationToken)
+    {
+        session.Answers = answers;
 
         // An answers file gave them all (InstallAnswers.Parse), but a record an earlier release wrote may not.
         var problems = session.Problems(planOnly: true)
@@ -265,6 +279,11 @@ public static class Installer
         GiveSecretFiles(host, session, options);
         var checkedPlan = await session.CheckAsync(cancellationToken).ConfigureAwait(false);
         host.Out.WriteLine($"The plan for {InstallRoles.Describe(session.Answers.Roles)} on {session.Survey.HostName}, {session.Version}:");
+        if (session.UpgradeLine() is { } upgrade)
+        {
+            host.Out.WriteLine(upgrade);
+        }
+
         host.Out.WriteLine();
         foreach (var line in PlanText.Lines(checkedPlan))
         {
@@ -297,8 +316,24 @@ public static class Installer
         var log = InstallLog.Open(host.Machine, InstallPaths.Log(host.Machine), host.Time);
         var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, options.Release(host), cancellationToken).ConfigureAwait(false);
         WriteWarnings(host, session);
+        return await InstallAsync(host, session, answers, $"Installing from {Path.GetFullPath(answersFile, host.Machine.CurrentDirectory)}", options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Installs <paramref name="answers"/> in <paramref name="session"/>, asking nothing but a secret no file gave: for
+    /// <c>--answers</c>, and for <c>upgrade</c> and <c>restore</c> with what is recorded. <paramref name="doing"/> starts
+    /// the log's line.
+    /// </summary>
+    internal static async Task<int> InstallAsync(InstallerHost host, InstallerSession session, InstallAnswers answers, string doing, RunOptions options, CancellationToken cancellationToken)
+    {
+        var log = session.Log;
         session.Answers = answers;
-        log.Write($"Installing from {Path.GetFullPath(answersFile, host.Machine.CurrentDirectory)}: {InstallRoles.Describe(answers.Roles)}.");
+        log.Write($"{doing}: {InstallRoles.Describe(answers.Roles)}.");
+        if (session.UpgradeLine() is { } upgrade)
+        {
+            host.Out.WriteLine(upgrade);
+            log.Write(upgrade);
+        }
 
         var problems = session.Problems();
         if (problems.Count > 0)

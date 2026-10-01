@@ -150,7 +150,10 @@ public static class PlanText
         // A check (the Mac app opened with --check) changes nothing: it is counted on its own.
         var made = plan.Steps.Where(step => step.Step.Kind != StepKind.Check).ToArray();
         var checks = plan.Steps.Count(step => step.Step.Kind == StepKind.Check && step.Check.MakesChange);
-        var summary = $"{Count(made, StepChange.Create)} to create, {Count(made, StepChange.Change)} to change, {Count(made, StepChange.Unchanged)} unchanged";
+        var removed = Count(made, StepChange.Remove);
+        var summary = $"{Count(made, StepChange.Create)} to create, {Count(made, StepChange.Change)} to change, "
+            + (removed == 0 ? string.Empty : $"{removed} to remove, ")
+            + $"{Count(made, StepChange.Unchanged)} unchanged";
         return checks == 0 ? $"{summary}." : $"{summary}, {checks} {(checks == 1 ? "check" : "checks")} to run.";
     }
 
@@ -161,6 +164,7 @@ public static class PlanText
         StepChange.Create => "create",
         StepChange.Change => "change",
         StepChange.Unchanged => "unchanged",
+        StepChange.Remove => "remove",
         StepChange.Info => "info",
         StepChange.Blocked => "blocked",
         _ => throw new ArgumentOutOfRangeException(nameof(change), change, null)
@@ -170,7 +174,12 @@ public static class PlanText
     internal static string Doing(StepChange change, PlanStep step)
         => step.Kind == StepKind.Check ? $"Running {step.Target}" : $"{Verb(change)} {Noun(step.Kind)} {step.Target}";
 
-    internal static string Verb(StepChange change) => change == StepChange.Create ? "Creating" : "Changing";
+    internal static string Verb(StepChange change) => change switch
+    {
+        StepChange.Create => "Creating",
+        StepChange.Remove => "Removing",
+        _ => "Changing"
+    };
 
     internal static string Noun(StepKind kind) => kind switch
     {

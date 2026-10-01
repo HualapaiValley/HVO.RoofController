@@ -43,19 +43,25 @@ public static class DeployScript
     }
 
     /// <summary>
-    /// Runs the script from <paramref name="folder"/> with <paramref name="environment"/>, passing on each line it prints
-    /// to the context's progress. Throws <see cref="InstallerException"/> with the script's last words when it fails.
+    /// Runs the script from <paramref name="folder"/> with <paramref name="environment"/> and its
+    /// <paramref name="arguments"/> (<c>--rollback</c>, <c>--stop</c>; none deploys), passing on each line it prints to the
+    /// context's progress. Throws <see cref="InstallerException"/> with the script's last words when it fails.
     /// </summary>
-    public static async Task RunAsync(InstallContext context, WorkFolder folder, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
+    public static async Task RunAsync(
+        InstallContext context,
+        WorkFolder folder,
+        IReadOnlyDictionary<string, string> environment,
+        CancellationToken cancellationToken,
+        params IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(folder);
         var script = Path.Join(folder.Path, FileName);
         context.Machine.WriteAtomically(script, Text(), Modes.PrivateFolder);
         // Its settings are paths and choices, never a key, so the log may show them.
-        context.Log.Write($"Running the deploy script with {string.Join(' ', environment.Select(setting => $"{setting.Key}={Quote(setting.Value)}"))}.");
+        context.Log.Write($"Running the deploy script{string.Concat(arguments.Select(argument => $" {argument}"))} with {string.Join(' ', environment.Select(setting => $"{setting.Key}={Quote(setting.Value)}"))}.");
         var result = await context.Machine.Commands.RunAsync(
-            new CommandLine("bash", script)
+            new CommandLine("bash", [script, .. arguments])
             {
                 // Only the installer's settings: a variable the script reads that the person happened to have set (IMAGE_TAG,
                 // READY_TIMEOUT_SECONDS, a proxy its checks would go through) never reaches it.

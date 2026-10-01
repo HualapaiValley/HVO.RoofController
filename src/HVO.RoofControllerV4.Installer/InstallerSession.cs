@@ -61,8 +61,8 @@ public sealed class InstallerSession
 
     public InstallLog Log { get; }
 
-    /// <summary>The release this installer installs (its version without the commit).</summary>
-    public string Version { get; }
+    /// <summary>The release this installer installs (its version without the commit); <c>rollback</c> sets the one it goes back to.</summary>
+    public string Version { get; internal set; }
 
     public MachineSurvey Survey { get; }
 
@@ -130,7 +130,34 @@ public sealed class InstallerSession
     /// Why the installer refuses the answers here; empty when it may go ahead. Without <paramref name="clientChosen"/>,
     /// the client's controller is not checked (<see cref="RoleGuards.Check"/>).
     /// </summary>
-    public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true) => RoleGuards.Check(Survey, Answers, planOnly, clientChosen);
+    public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true)
+        => [.. VersionProblems(), .. RoleGuards.Check(Survey, Answers, planOnly, clientChosen)];
+
+    /// <summary>The record of this run's roles (the machine's as root, else the person's): what an upgrade starts from.</summary>
+    public InstallRecord? Record => Survey.IsRoot ? Survey.SystemRecord : Survey.UserRecord;
+
+    /// <summary>
+    /// Why this installer will not install over what the record says: a newer release is installed. Going back is
+    /// <c>rollback</c>'s, which knows what the release before left; an older installer does not.
+    /// </summary>
+    public IReadOnlyList<string> VersionProblems()
+    {
+        if (Record is not { } record || !RoofSemVer.IsValid(record.Version) || !RoofSemVer.IsValid(Version) || !RoofSemVer.IsOlder(Version, record.Version))
+        {
+            return [];
+        }
+
+        var sudo = Survey.IsRoot ? "sudo " : string.Empty;
+        return [record.UninstalledAt is null
+            ? $"{record.Version} is installed here, newer than this installer ({Version}). To go back to the release before it: {sudo}hvo-roof-install rollback"
+            : $"{record.Version} was uninstalled here, keeping its data, which is newer than this installer ({Version}). Install {record.Version} or newer, or remove the data first: {sudo}hvo-roof-install uninstall --purge"];
+    }
+
+    /// <summary>"Upgrading from 4.0.0 to 4.0.1." when the record has an older release installed; null otherwise.</summary>
+    public string? UpgradeLine()
+        => Record is { UninstalledAt: null } record && RoofSemVer.IsValid(record.Version) && RoofSemVer.IsValid(Version) && RoofSemVer.IsOlder(record.Version, Version)
+            ? $"Upgrading from {record.Version} to {Version}."
+            : null;
 
     public InstallContext Context => ContextFor(null);
 
@@ -219,7 +246,7 @@ public sealed class InstallerSession
             {
                 var layout = ControllerLayout.For(Machine);
                 lines.Add($"Back up {layout.Configuration} and {layout.Data} now, and after each change: they hold its keys, certificates, "
-                    + "people and settings (commissioning.md, \"Backing up\").");
+                    + "people and settings. sudo hvo-roof-install backup makes one archive of them (install.md, \"Backing up\").");
             }
 
             var trust = TrustLines(controller, $"{scheme}://{host}:{controller.ApiPort}/ca.crt").ToArray();

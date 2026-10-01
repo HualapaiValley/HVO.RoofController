@@ -69,7 +69,8 @@ public sealed class InstallerMachine
         DownloadToAsync = DownloadToAsync,
         FetchCaAsync = FetchCaAsync,
         ApiHandler = ApiHandler,
-        TemporaryDirectory = TemporaryDirectory
+        TemporaryDirectory = TemporaryDirectory,
+        RunProgramAsync = RunProgramAsync
     };
 
     /// <summary>
@@ -116,6 +117,13 @@ public sealed class InstallerMachine
 
     /// <summary>The folder for the installer's temporary files, as a path on this machine.</summary>
     public string TemporaryDirectory { get; init; } = Path.GetTempPath();
+
+    /// <summary>
+    /// Runs a program (a path on this machine) with the arguments and the variables added to the environment, on this
+    /// terminal, and gives its exit code once it ends: <c>upgrade</c> hands over to the new release's installer this way.
+    /// The program gets a Ctrl-C itself, so it is waited for, never killed.
+    /// </summary>
+    public Func<string, IReadOnlyList<string>, IReadOnlyDictionary<string, string>, Task<int>> RunProgramAsync { get; init; } = RunOnTerminalAsync;
 
     /// <summary>The platform as release assets name it: linux-arm64, linux-x64 or osx-arm64 (or another the installer refuses).</summary>
     public string RuntimeIdentifier => $"{(Os == InstallerOs.MacOS ? "osx" : "linux")}-{Architecture.ToString().ToLowerInvariant()}";
@@ -390,8 +398,20 @@ public sealed class InstallerMachine
         }
     }
 
-    /// <summary>Renames <paramref name="source"/> over <paramref name="destination"/>, in one step.</summary>
-    public void MoveFile(string source, string destination) => File.Move(OnDisk(source), OnDisk(destination), overwrite: true);
+    /// <summary>Renames <paramref name="source"/> over <paramref name="destination"/>, in one step (or only to where nothing is, without <paramref name="overwrite"/>).</summary>
+    public void MoveFile(string source, string destination, bool overwrite = true) => File.Move(OnDisk(source), OnDisk(destination), overwrite);
+
+    /// <summary>
+    /// A new file at <paramref name="path"/>, open to write, made with <paramref name="mode"/> from the start: it fails
+    /// when there is a file there already.
+    /// </summary>
+    public FileStream CreateNew(string path, UnixFileMode mode) => new(OnDisk(path), new FileStreamOptions
+    {
+        Mode = FileMode.CreateNew,
+        Access = FileAccess.Write,
+        UnixCreateMode = mode,
+        Options = FileOptions.Asynchronous
+    });
 
     /// <summary>Renames the folder <paramref name="source"/> to <paramref name="destination"/>, which must not be there.</summary>
     public void MoveDirectory(string source, string destination) => Directory.Move(OnDisk(source), OnDisk(destination));
@@ -432,6 +452,24 @@ public sealed class InstallerMachine
             HostName = System.Net.Dns.GetHostName(),
             CurrentDirectory = global::System.Environment.CurrentDirectory
         };
+    }
+
+    private static async Task<int> RunOnTerminalAsync(string program, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment)
+    {
+        var start = new global::System.Diagnostics.ProcessStartInfo(program) { UseShellExecute = false };
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        foreach (var (name, value) in environment)
+        {
+            start.Environment[name] = value;
+        }
+
+        using var process = global::System.Diagnostics.Process.Start(start) ?? throw new InstallerException($"Could not start {program}.");
+        await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        return process.ExitCode;
     }
 
     private static async Task<string> DownloadAsync(Uri uri, CancellationToken cancellationToken)

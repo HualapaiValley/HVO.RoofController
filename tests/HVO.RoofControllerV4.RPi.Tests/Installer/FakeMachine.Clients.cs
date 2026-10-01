@@ -129,9 +129,17 @@ internal sealed partial class FakeMachine
         return output.ToArray();
     }
 
-    /// <summary>The fake release's files for hvo-roof and the Mac app, by name.</summary>
+    /// <summary>The installer in the fake release, for <paramref name="platform"/>: a script that says which it is.</summary>
+    public static byte[] InstallerProgram(string version, string platform) => Encoding.UTF8.GetBytes($"#!/bin/sh\necho 'hvo-roof-install {version} ({platform})'\n");
+
+    /// <summary>The name of the fake release's installer for <paramref name="platform"/>, as build/release-assets.py names it.</summary>
+    public static string InstallerAssetName(string platform) => $"hvo-roof-install-{platform}";
+
+    /// <summary>The fake release's files for hvo-roof, the Mac app and the installer, by name.</summary>
     public static IEnumerable<(string Name, byte[] Content)> ClientAssets(string version)
-        => CliPlatforms.Select(platform => (CliAssetName(platform), CliProgram(version, platform))).Append((MacAssetName(version), MacAppZip(version)));
+        => CliPlatforms.Select(platform => (CliAssetName(platform), CliProgram(version, platform)))
+            .Append((MacAssetName(version), MacAppZip(version)))
+            .Concat(CliPlatforms.Select(platform => (InstallerAssetName(platform), InstallerProgram(version, platform))));
 
     /// <summary>
     /// Puts the release's Mac app of <paramref name="version"/> in <paramref name="folder"/>, as a person who downloaded it
@@ -185,6 +193,19 @@ internal sealed partial class FakeMachine
             sha256 = Convert.ToHexStringLower(SHA256.HashData(zip)),
             files = new Dictionary<string, string> { [ClientSteps.MacProgramName] = Convert.ToHexStringLower(SHA256.HashData(MacProgram(version))) }
         };
+
+        foreach (var platform in CliPlatforms)
+        {
+            var program = InstallerProgram(version, platform);
+            yield return new
+            {
+                name = InstallerAssetName(platform),
+                kind = InstallerProgramStep.AssetKind,
+                platform,
+                size = program.LongLength,
+                sha256 = Convert.ToHexStringLower(SHA256.HashData(program))
+            };
+        }
     }
 
     // A Mac's commands for hvo-roof and the Mac app; null for one this fake does not know.

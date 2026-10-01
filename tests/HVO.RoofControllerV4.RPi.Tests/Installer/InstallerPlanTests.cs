@@ -55,11 +55,12 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.Port).Should().Equal("8443", "8088");
         Change(plan, "8443").Detail.Should().Be("free; roof-controller will listen on it");
         Steps(plan, StepKind.File).Should().Equal(
-            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, InstallPaths.SystemRecord]);
+            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, InstallPaths.SystemInstaller, InstallPaths.SystemRecord]);
         Change(plan, NewKeys[0]).Should().Be(new StepCheck(StepChange.Create, "installer-operator (RoofOperator): a new random key, never shown"));
+        Change(plan, InstallPaths.SystemInstaller).Should().Be(new StepCheck(StepChange.Create, "release 4.0.0's, 0755"));
         Change(plan, InstallPaths.SystemRecord).Should().Be(new StepCheck(StepChange.Create, "0644"));
         plan.Steps[^1].Step.Should().BeOfType<RecordStep>("the record says the roles are installed once they are");
-        PlanText.Summary(plan).Should().Be("16 to create, 0 to change, 0 unchanged.");
+        PlanText.Summary(plan).Should().Be("17 to create, 0 to change, 0 unchanged.");
     }
 
     [TestMethod]
@@ -70,7 +71,7 @@ public sealed class InstallerPlanTests
         var lines = PlanText.Lines(await CheckAsync(pi, InstallRole.Controller));
 
         lines.Where(line => !line.StartsWith(' ') && line.Length > 0).Should().Equal(
-            "Folders", "Files", "Packages", "Containers", "Ports", "16 to create, 0 to change, 0 unchanged.");
+            "Folders", "Files", "Packages", "Containers", "Ports", "17 to create, 0 to change, 0 unchanged.");
         lines.Should().Contain(line => line.StartsWith("  create     /etc/hvo-roof/secrets ", StringComparison.Ordinal) && line.EndsWith("secrets the controller reads, one file per setting (0700)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  info       8443 ", StringComparison.Ordinal) && line.Contains("the controller's API (HTTPS)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  create     roof-controller ", StringComparison.Ordinal) && line.Contains("the controller, driving the real HAT (release 4.0.0 by digest, through the deploy script)", StringComparison.Ordinal));
@@ -100,7 +101,7 @@ public sealed class InstallerPlanTests
 
         Change(plan, MachineSurveyor.ControllerContainer).Should().Be(StepCheck.Unchanged("adopted: running, version 4.0.0"));
         Change(plan, "8443").Should().Be(new StepCheck(StepChange.Info, "roof-controller listens on it"));
-        plan.Steps.Where(step => step.Check.MakesChange).Select(step => step.Step.Target).Should().Equal([InstallPaths.SystemRecord], "it already runs the release, with the installer's keys");
+        plan.Steps.Where(step => step.Check.MakesChange).Select(step => step.Step.Target).Should().Equal([InstallPaths.SystemInstaller, InstallPaths.SystemRecord], "it already runs the release, with the installer's keys");
     }
 
     [TestMethod]
@@ -237,7 +238,7 @@ public sealed class InstallerPlanTests
         Steps(plan, StepKind.Container).Should().Equal(MachineSurveyor.HatEmulatorContainer, MachineSurveyor.ControllerContainer);
         plan.Steps.Single(step => step.Step.Target == MachineSurveyor.ControllerContainer).Step.Purpose.Should().Be("the controller, against the HAT emulator");
         Steps(plan, StepKind.File).Should().Equal(
-            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, .. RigCamera("/etc/hvo-roof/secrets"), InstallPaths.SystemRecord]);
+            ["/etc/hvo-roof/ca.crt", "/etc/hvo-roof/secrets/Kestrel__Certificates__Default__Password", "/etc/hvo-roof/https/roof-controller.pfx", .. NewKeys, .. RigCamera("/etc/hvo-roof/secrets"), InstallPaths.SystemInstaller, InstallPaths.SystemRecord]);
     }
 
     [TestMethod]
@@ -269,7 +270,7 @@ public sealed class InstallerPlanTests
             $"{root}/ca.crt", $"{root}/secrets/Kestrel__Certificates__Default__Password", $"{root}/https/roof-controller.pfx",
             $"{root}/secrets/RoofControllerSecurity__ApiKeys__0__Key", $"{root}/secrets/RoofControllerSecurity__ApiKeys__1__Key", $"{root}/secrets/RoofControllerSecurity__ApiKeys__2__Key",
             $"{root}/secrets/BlueIris__BaseUrl", $"{root}/secrets/BlueIris__Password", $"{root}/secrets/BlueIris__UserName",
-            "/Users/roy/.config/hvo-roof/install.json");
+            "/Users/roy/.local/bin/hvo-roof-install", "/Users/roy/.config/hvo-roof/install.json");
         Change(plan, "/Users/roy/.config/hvo-roof/install.json").Detail.Should().Be("0600", "the person's record is theirs alone");
     }
 
@@ -301,11 +302,13 @@ public sealed class InstallerPlanTests
         var shared = await CheckAsync(laptop, new InstallAnswers { Roles = [InstallRole.Cli], Cli = new CliSettings { Folder = CliSettings.SharedFolder }, Client = FakeMachine.ClientAnswers });
 
         Steps(own, StepKind.Folder).Should().Equal(["/home/roy/.local/bin"], "the record's and the log's folders are made as they are written, not planned");
-        Steps(own, StepKind.File).Should().Equal("/home/roy/.local/bin/hvo-roof", "/home/roy/.config/hvo-roof/credentials.json", "/home/roy/.config/hvo-roof/install.json");
+        Steps(own, StepKind.File).Should().Equal(
+            "/home/roy/.local/bin/hvo-roof", "/home/roy/.config/hvo-roof/credentials.json", "/home/roy/.local/bin/hvo-roof-install", "/home/roy/.config/hvo-roof/install.json");
         Change(own, "/home/roy/.local/bin/hvo-roof").Should().Be(new StepCheck(StepChange.Create, "release 4.0.0's, 0755"));
         Change(own, "/home/roy/.config/hvo-roof/credentials.json").Should().Be(new StepCheck(StepChange.Create, "https://roofpi.local:8443, trusting its CA (FB:26:8B:E2…)"));
         Steps(shared, StepKind.Folder).Should().NotContain("/usr/local/bin", "the shared folder is the machine's: the installer only writes in it");
-        Steps(shared, StepKind.File).Should().Equal("/usr/local/bin/hvo-roof", "/home/roy/.config/hvo-roof/credentials.json", "/home/roy/.config/hvo-roof/install.json");
+        Steps(shared, StepKind.File).Should().Equal(
+            "/usr/local/bin/hvo-roof", "/home/roy/.config/hvo-roof/credentials.json", "/home/roy/.local/bin/hvo-roof-install", "/home/roy/.config/hvo-roof/install.json");
         Change(shared, "/usr/local/bin/hvo-roof").Change.Should().Be(StepChange.Create);
     }
 
@@ -335,7 +338,8 @@ public sealed class InstallerPlanTests
 
         Steps(plan, StepKind.Folder).Should().Equal([settings], "the record's and the log's folders are made as they are written, not planned");
         Steps(plan, StepKind.File).Should().Equal(
-            "/Applications/HVO Roof.app", $"{settings}/ca.crt", $"{settings}/device-key", $"{settings}/appsettings.Local.json", "/Users/roy/.config/hvo-roof/install.json");
+            "/Applications/HVO Roof.app", $"{settings}/ca.crt", $"{settings}/device-key", $"{settings}/appsettings.Local.json",
+            "/Users/roy/.local/bin/hvo-roof-install", "/Users/roy/.config/hvo-roof/install.json");
         Steps(plan, StepKind.Check).Should().Equal("HVO Roof.app --check");
         Change(plan, "/Applications/HVO Roof.app").Should().Be(new StepCheck(StepChange.Create, "release 4.0.0's, without macOS's quarantine mark"));
         Change(plan, $"{settings}/device-key").Should().Be(new StepCheck(StepChange.Create, "a Viewer key (mac-studio-roy) made by ada, who signs in once; 0600, yours alone"));
@@ -353,7 +357,7 @@ public sealed class InstallerPlanTests
 
         var plan = await CheckAsync(laptop, InstallRole.Cli);
 
-        Steps(plan, StepKind.File)[^2..].Should().Equal("/home/roy/cfg/hvo-roof/credentials.json", "/home/roy/cfg/hvo-roof/install.json");
+        Steps(plan, StepKind.File)[^3..].Should().Equal("/home/roy/cfg/hvo-roof/credentials.json", "/home/roy/.local/bin/hvo-roof-install", "/home/roy/cfg/hvo-roof/install.json");
     }
 
     [TestMethod]
