@@ -1133,6 +1133,10 @@ machine has files, modes, containers and ports, and its programs are stubbed. Th
   logged, a restore on a new machine with the same name or another, `--replace`, and the archives a restore refuses,
   one swapped in after the check included (restore checks the file it opened through `/proc`, so its tests run on
   Linux only);
+- the controller with the real HAT (`InstallerRealHatTests`): the plan, files, modes and owners for the controller's
+  answers file above, and the controller's deployment check passing in the container the deploy script makes from the
+  installer's settings, and failing with a setting the installer never gives. That `/dev/i2c-1` is the HAT's bus, and
+  that Docker maps the devices and mounts the script names, are left to the Pi;
 - the exit codes.
 
 The controller's side, `GET /ca.crt` and the `https_certificate` health check, has its own tests
