@@ -1,0 +1,27 @@
+#!/bin/sh
+# A release's hvo-roof-install, as tests/install/install-sh-tests.sh serves it: it says its version (FAKE_INSTALLER_VERSION),
+# and logs in ${FAKE_STATE_DIR}/installer.log whether it ran as root, whether its standard input is a terminal, its
+# arguments, and the answer to FAKE_INSTALLER_ASKS (a question it asks on its standard input) or, without a terminal, how
+# many bytes its standard input held. It exits with FAKE_INSTALLER_EXIT; with FAKE_INSTALLER_NOEXEC, it cannot run at
+# all, as from a folder mounted noexec.
+[ -z "${FAKE_INSTALLER_NOEXEC:-}" ] || exit 126
+if [ "$*" = --version ]; then
+  printf '%s\n' "${FAKE_INSTALLER_VERSION}"
+  exit 0
+fi
+
+log="${FAKE_STATE_DIR}/installer.log"
+if [ "${FAKE_AS_ROOT:-}" = 1 ] || [ "${FAKE_UID:-1000}" = 0 ]; then echo "root=yes" >>"${log}"; else echo "root=no" >>"${log}"; fi
+if [ -t 0 ]; then echo "terminal=yes" >>"${log}"; else echo "terminal=no" >>"${log}"; fi
+printf 'args=' >>"${log}"
+for argument in "$@"; do printf '[%s]' "${argument}" >>"${log}"; done
+printf '\n' >>"${log}"
+if [ -n "${FAKE_INSTALLER_ASKS:-}" ]; then
+  printf '%s' "${FAKE_INSTALLER_ASKS}"
+  IFS= read -r answer || answer="(none)"
+  printf 'answer=%s\n' "${answer}" >>"${log}"
+elif [ ! -t 0 ]; then
+  printf 'stdin=%s\n' "$(wc -c | tr -d ' ')" >>"${log}"
+fi
+echo "hvo-roof-install ran"
+exit "${FAKE_INSTALLER_EXIT:-0}"
