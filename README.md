@@ -228,7 +228,7 @@ with the roof mechanism isolated.
 | [Versions and releases](docs/releasing.md) | The product version, where it shows, and the scripts that read and check it |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines and development workflow |
 | [CHANGELOG.md](CHANGELOG.md) | Version history and release notes |
-| [copilot-instructions.md](.github/copilot-instructions.md) | Architecture and coding standards |
+| [AGENTS.md](AGENTS.md) | Instructions for coding agents (Claude Code, Copilot, Codex): the rules that come first, architecture and safety systems, building and testing, the git and release workflow, and coding standards |
 
 ## Contributing
 

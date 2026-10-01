@@ -59,13 +59,18 @@ and instructions for contributing to this project.
 
 ### Branch Naming
 
-Use descriptive branch names with the following prefixes:
+Work on one issue per branch, from an up-to-date `main`. Name the branch
+`<type>/<short-name>`, with the issue's number where it helps (`fix/installer-small-95`),
+and the type one of:
 
-- `feature/` — new features
-- `bugfix/` — bug fixes
+- `feat/` — new features
+- `fix/` — bug fixes
 - `docs/` — documentation changes
 - `refactor/` — code refactoring
 - `test/` — test additions or changes
+- `chore/` — maintenance, such as a version bump
+- `release/` — a release's CHANGELOG section and upgrade notes
+  ([docs/releasing.md](docs/releasing.md))
 
 ### Commit Messages
 
@@ -81,9 +86,16 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ### Pull Requests
 
 - All changes must go through a pull request
-- PRs are squash-merged into `main`
-- Link the relevant issue in the PR description
+- Say `Fixes #<n>` in the PR description, so that merging closes the issue
+- A change a user or operator would notice adds its entry under `## [Unreleased]` in
+  [CHANGELOG.md](CHANGELOG.md), in the same PR. A change only contributors see (tests, CI,
+  contributor docs) needs none; say so in the PR
+- Update the docs, and any screenshots, in the same PR as the behaviour they describe
 - Ensure CI passes before requesting review
+- PRs are merged into `main` with a merge commit (not squashed or rebased), and the branch
+  is then deleted. To bring a branch up to date, merge `main` into it; never force-push
+- The repository is public: run `build/secret-scan.py` before committing, pushing or posting
+  an issue, PR or comment, and never commit a credential, key, PIN, token or private address
 - Changes to relays, inputs, limits, the watchdog, the operator lease, the fault latch or
   the Stop path need tests. A change a commissioning check covers needs its scenario on the
   emulated plant, named with `[CommissioningCheck]` and listed in
@@ -99,10 +111,16 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - Keep CI on hosted runners; do not attach a self-hosted runner to a public-repository
   pull-request workflow. See [docs/ci-runners.md](docs/ci-runners.md).
 
+### Releases
+
+Releases are cut as [docs/releasing.md](docs/releasing.md) describes: a version bump PR, a
+release PR (the CHANGELOG section and the upgrade notes), then a tag on `main`. A person
+checks the draft release and publishes it.
+
 ## Coding Standards
 
-See [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for
-detailed coding standards and architectural guidelines.
+See [AGENTS.md](AGENTS.md) for the architecture, the safety systems, coding standards and
+the rules every change follows. It is written for coding agents, and applies to people too.
 
 ## Dev Container
 
