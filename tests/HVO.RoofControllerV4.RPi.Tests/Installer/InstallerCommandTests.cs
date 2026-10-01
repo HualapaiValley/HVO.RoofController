@@ -1,6 +1,10 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using FluentAssertions;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
@@ -173,21 +177,40 @@ public sealed class InstallerCommandTests
     }
 
     [TestMethod]
-    public async Task Answers_ThatNeedWhatThisInstallerCannotInstallYet_AreRefused_BeforeAnythingChanges()
+    public async Task HvoRoof_IsInstalledForThePerson_ConnectedToTheController_AndASecondRunChangesNothing()
     {
         using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
-        var answers = laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli] });
-        var log = InstallPaths.Log(laptop.Machine);
-        laptop.Folder(Path.GetDirectoryName(log)!);
-        var before = laptop.Snapshot();
+        var answers = laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers });
 
         var run = await laptop.RunAsync("--answers", answers);
 
-        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-        run.Error.Should().Be("This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed. The plan (--plan) shows what an install will do." + Environment.NewLine);
-        run.Output.Should().NotContain("Creating");
-        laptop.Snapshot(log).Should().Equal(before, "only the log is written");
-        laptop.Read(log).Should().Contain("Refused: This installer cannot install /home/roy/.local/bin/hvo-roof yet");
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain($"hvo-roof: /home/roy/.local/bin/hvo-roof, connected to {FakeMachine.ControllerUrl} (/home/roy/.config/hvo-roof/credentials.json).")
+            .And.Contain("Next, sign in as yourself: hvo-roof login NAME")
+            .And.Contain($"trust the controller's CA ({FakeMachine.ControllerUrl}/ca.crt)")
+            .And.Contain("Firefox may use its own list");
+        laptop.Read("/home/roy/.local/bin/hvo-roof").Should().Be(Encoding.UTF8.GetString(FakeMachine.CliProgram("4.0.0", "linux-x64")));
+        laptop.Mode("/home/roy/.local/bin/hvo-roof").Should().Be(Modes.Program);
+        laptop.Exists("/home/roy/.local/bin/hvo-roof.previous").Should().BeFalse("there was no hvo-roof before");
+        laptop.Mode("/home/roy/.config/hvo-roof/credentials.json").Should().Be(Modes.PrivateFile);
+        var saved = RoofCredentialStore.Load(laptop.OnDisk("/home/roy/.config/hvo-roof/credentials.json"))!;
+        saved.Controller.Should().Be(new Uri(FakeMachine.ControllerUrl));
+        using (var authority = X509Certificate2.CreateFromPem(saved.CaCertificate))
+        {
+            Convert.ToHexString(SHA256.HashData(authority.RawData)).Should().Be(FakeMachine.ControllerCaSha256.Replace(":", string.Empty, StringComparison.Ordinal), "the CA saved is the one whose fingerprint was given");
+        }
+
+        saved.ApiKey.Should().BeNull();
+        saved.Session.Should().BeNull("the person signs in with hvo-roof login");
+        laptop.CaFetches.Should().HaveCount(2, "the CA is fetched once when the plan is checked and once as it is installed, not once for each step that needs it");
+        laptop.Unexpected.Should().BeEmpty();
+
+        var before = laptop.Snapshot(InstallPaths.Log(laptop.Machine));
+        var second = await laptop.RunAsync("--answers", answers);
+
+        second.ExitCode.Should().Be(0, second.ToString());
+        second.Output.Should().Contain("Nothing to change: this machine is already as the answers describe.");
+        laptop.Snapshot(InstallPaths.Log(laptop.Machine)).Should().Equal(before, "a second run changes nothing");
     }
 
     [TestMethod]
@@ -195,7 +218,7 @@ public sealed class InstallerCommandTests
     {
         using var pi = new FakeMachine().WithPi();
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli] }));
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers }));
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain("never installed as root").And.Contain("Nothing was changed.");
@@ -221,10 +244,10 @@ public sealed class InstallerCommandTests
     {
         using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy").WithCli("/home/roy/.local/bin/hvo-roof");
 
-        var run = await laptop.RunAsync("--answers", laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli] }));
+        var run = await laptop.RunAsync("--answers", laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers }));
 
         run.ExitCode.Should().Be(0, run.ToString());
-        run.Output.Should().Contain("hvo-roof: /home/roy/.local/bin/hvo-roof. Next, connect it to the controller: hvo-roof setup")
+        run.Output.Should().Contain($"hvo-roof: /home/roy/.local/bin/hvo-roof, connected to {FakeMachine.ControllerUrl}")
             .And.Contain("/home/roy/.local/bin is not on your PATH")
             .And.Contain("The install record: /home/roy/.config/hvo-roof/install.json")
             .And.Contain("The log: /home/roy/.local/state/hvo-roof/install.log");
@@ -370,7 +393,7 @@ public sealed class InstallerCommandTests
         using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy").WithCli("/home/roy/.local/bin/hvo-roof");
         laptop.Write("/home/roy/.local/state", "a file where the log's folder goes");
 
-        var run = await laptop.RunAsync("--answers", laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli] }));
+        var run = await laptop.RunAsync("--answers", laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers }));
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
         run.Error.Should().StartWith("The installer stopped: ");

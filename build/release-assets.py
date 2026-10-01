@@ -156,24 +156,25 @@ def kiosk_asset(kiosk, out, version, mtime):
 
 def mac_asset(mac_zip, out, version):
     """HVO Roof.app's zip as CI made, signed and checked it, renamed for the release; its Info.plist must carry this
-    version (CFBundleShortVersionString holds its X.Y.Z)."""
+    version (CFBundleShortVersionString holds its X.Y.Z). The program's SHA-256, under its file name (hvo-roof-mac),
+    lets the installer check what it unpacked."""
     try:
         with zipfile.ZipFile(mac_zip) as archive:
             names = archive.namelist()
             if any(not entry.startswith(MAC_APP + "/") for entry in names) or MAC_PROGRAM not in names:
                 raise AssetError(f"{mac_zip} must hold {MAC_APP} alone, with {MAC_PROGRAM}.")
             info = plistlib.loads(archive.read(f"{MAC_APP}/Contents/Info.plist"))
-            program = archive.read(MAC_PROGRAM)[:8]
+            program = archive.read(MAC_PROGRAM)
     except (OSError, KeyError, zipfile.BadZipFile, plistlib.InvalidFileException) as error:
         raise AssetError(f"{mac_zip} is not HVO Roof.app's zip: {error}") from error
     short = version.split("-", 1)[0]
     if info.get("CFBundleShortVersionString") != short:
         raise AssetError(f"{mac_zip} holds version {info.get('CFBundleShortVersionString')!r}, not {short}.")
-    if len(program) < 8 or struct.unpack("<II", program) != MACHO_ARM64:
+    if len(program) < 8 or struct.unpack("<II", program[:8]) != MACHO_ARM64:
         raise AssetError(f"{mac_zip}'s {MAC_PROGRAM} is not an arm64 Mac program.")
     name = f"HVO-Roof-{version}.zip"
     shutil.copyfile(mac_zip, out / name)
-    return name
+    return name, {MAC_PROGRAM.rsplit("/", 1)[1]: hashlib.sha256(program).hexdigest()}
 
 
 def sha256(path):
@@ -234,8 +235,9 @@ def build(arguments):
         assets[name] = ("cli", name.removeprefix("hvo-roof-"))
     kiosk, kiosk_files = kiosk_asset(arguments.kiosk, out, version, mtime)
     assets[kiosk] = ("kiosk", "linux-arm64")
-    contents = {kiosk: kiosk_files}
-    assets[mac_asset(arguments.mac_zip, out, version)] = ("mac-app", "osx-arm64")
+    mac, mac_files = mac_asset(arguments.mac_zip, out, version)
+    assets[mac] = ("mac-app", "osx-arm64")
+    contents = {kiosk: kiosk_files, mac: mac_files}
 
     try:
         compose = release_compose.convert(release_compose.SOURCE.read_text(encoding="utf-8"), version,

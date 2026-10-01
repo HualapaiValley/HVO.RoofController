@@ -262,6 +262,169 @@ public sealed class RoofCertificateAuthorityTests
         RoofCommandRules.MayHaveReachedController(failure).Should().BeFalse("a refused handshake sent nothing");
     }
 
+    [TestMethod]
+    [DataRow(false, DisplayName = "by address")]
+    [DataRow(true, DisplayName = "by name")]
+    public async Task TheCa_IsFetched_Anonymously_WhenItIssuedTheCertificateForTheHostReached(bool byName)
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.ServedAuthority = _authority;
+
+        using var fetched = await RoofCertificateAuthority.FetchAsync(byName ? host.LocalhostAddress : host.BaseAddress, FetchTimeout);
+
+        fetched.RawData.Should().Equal(_authority.RawData);
+        RoofCertificateAuthority.Fingerprint(fetched).Should().Be(RoofCertificateAuthority.Fingerprint(_authority));
+        host.CaRequestCredentials.Should().Equal([false], "nothing is trusted yet, so no key or session is sent");
+    }
+
+    [TestMethod]
+    public async Task TheRoot_IsFetched_WhenAnIntermediateIssuedTheCertificate()
+    {
+        using var intermediate = TestCertificates.CreateAuthority("HVO Roof Test Intermediate", issuer: _authority);
+        using var certificate = TestCertificates.Issue(intermediate);
+        await using var host = await TlsTestController.StartAsync(certificate, intermediate);
+        host.ServedAuthority = _authority;
+
+        using var fetched = await RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout);
+
+        fetched.RawData.Should().Equal(_authority.RawData);
+    }
+
+    [TestMethod]
+    public async Task ACaThatDidNotIssueTheCertificate_IsNotFetched()
+    {
+        // Served by something in the way, or after the CA was made again: the same name, another key.
+        using var remade = TestCertificates.CreateAuthority(AuthorityName);
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.ServedAuthority = remade;
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout);
+
+        (await fetching.Should().ThrowAsync<RoofCaFetchException>()).WithMessage(
+            $"The CA the controller serves ({AuthorityName}) did not issue the certificate it presents, so it is not saved.");
+    }
+
+    [TestMethod]
+    public async Task AControllerWithASelfSignedCertificate_ServesNoCa()
+    {
+        using var certificate = TestCertificates.CreateSelfSigned();
+        await using var host = await TlsTestController.StartAsync(certificate);
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout);
+
+        (await fetching.Should().ThrowAsync<RoofCaFetchException>()).WithMessage(
+            $"The controller serves no CA at {host.BaseAddress}ca.crt: a private CA did not issue its certificate, *");
+    }
+
+    [TestMethod]
+    [DataRow("leaf", "What the controller serves at *ca.crt is not a CA certificate: its basic constraints do not say CA.", DisplayName = "a leaf")]
+    [DataRow("text", "What the controller serves at *ca.crt does not hold a certificate in PEM or DER form.", DisplayName = "not a certificate")]
+    [DataRow("large", "What the controller serves as its CA is larger than 64 KiB, so it is not a CA certificate.", DisplayName = "too large")]
+    public async Task WhatIsNotACaCertificate_IsNotFetched(string served, string message)
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.ServedCaText = served switch
+        {
+            "leaf" => certificate.ExportCertificatePem(),
+            "text" => "<html>Sign in</html>",
+            _ => new string('A', 65 * 1024)
+        };
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout);
+
+        (await fetching.Should().ThrowAsync<RoofCaFetchException>()).WithMessage(message);
+    }
+
+    [TestMethod]
+    public async Task ACaThatStopsPartWay_IsNotWaitedForBeyondTheTimeout()
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.CaBodyEnds = CaBodyEnd.Stalls;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, TimeSpan.FromSeconds(1));
+
+        (await fetching.Should().ThrowAsync<TimeoutException>()).WithMessage($"{host.BaseAddress}ca.crt did not send the controller's CA within 1 s.");
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(8), "the timeout covers the body too");
+    }
+
+    [TestMethod]
+    public async Task ACaCutOffPartWay_IsAFailureToReachTheController()
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.CaBodyEnds = CaBodyEnd.IsCutOff;
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout);
+
+        // On a busy machine the cut can still overtake the headers, and HttpClient fails the request itself: the same
+        // failure to reach the controller.
+        (await fetching.Should().ThrowAsync<HttpRequestException>()).Which.Message.Should().Match(message =>
+            message.StartsWith($"The controller's answer at {host.BaseAddress}ca.crt was cut off: ", StringComparison.Ordinal)
+            || message == "An error occurred while sending the request.");
+    }
+
+    [TestMethod]
+    public async Task TheCallersCancellation_IsNotTakenForATimeout()
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.CaBodyEnds = CaBodyEnd.Stalls;
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout, cancel.Token);
+
+        await fetching.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [TestMethod]
+    public async Task TheCa_IsNotFetched_WhenItsCertificateIsForAnotherName()
+    {
+        using var certificate = TestCertificates.Issue(_authority, ["roof.example", "10.0.0.5"]);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.ServedAuthority = _authority;
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout);
+
+        var refusal = await fetching.Should().ThrowAsync<RoofCertificateRefusedException>();
+        refusal.Which.Reason.Should().Be(RoofCertificateRefusal.NameMismatch);
+        refusal.Which.Message.Should().Be("The controller's certificate is not for 127.0.0.1; it names roof.example, 10.0.0.5.");
+    }
+
+    [TestMethod]
+    [DataRow("http://127.0.0.1:5000/")]
+    [DataRow("ftp://roof.example/")]
+    public async Task TheCa_IsOnlyFetchedOverHttps(string address)
+    {
+        var fetching = () => RoofCertificateAuthority.FetchAsync(new Uri(address), FetchTimeout);
+
+        (await fetching.Should().ThrowAsync<ArgumentException>()).WithMessage("The CA is fetched over HTTPS, *");
+    }
+
+    [TestMethod]
+    public void TheFingerprint_IsColonSeparatedHex_AndIsMatchedWithOrWithoutSeparators()
+    {
+        var fingerprint = RoofCertificateAuthority.Fingerprint(_authority);
+        var hex = Convert.ToHexString(_authority.GetCertHash(System.Security.Cryptography.HashAlgorithmName.SHA256));
+        using var other = TestCertificates.CreateAuthority(AuthorityName);
+
+        fingerprint.Should().MatchRegex("^([0-9A-F]{2}:){31}[0-9A-F]{2}$").And.Be(string.Join(':', hex.Chunk(2).Select(pair => new string(pair))));
+        RoofCertificateAuthority.HasFingerprint(_authority, fingerprint).Should().BeTrue();
+        RoofCertificateAuthority.HasFingerprint(_authority, hex.ToLowerInvariant()).Should().BeTrue();
+        RoofCertificateAuthority.HasFingerprint(_authority, fingerprint.Replace(':', ' ')).Should().BeTrue();
+        RoofCertificateAuthority.HasFingerprint(_authority, fingerprint.Replace(':', '-')).Should().BeTrue();
+        RoofCertificateAuthority.HasFingerprint(other, fingerprint).Should().BeFalse("another key under the same name");
+        RoofCertificateAuthority.HasFingerprint(_authority, hex[..62]).Should().BeFalse("a fingerprint cut short");
+        RoofCertificateAuthority.HasFingerprint(_authority, hex[..62] + "ZZ").Should().BeFalse("not hex");
+        RoofCertificateAuthority.HasFingerprint(_authority, "").Should().BeFalse();
+    }
+
+    private static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(10);
+
     private static RoofControllerClient CreateClient(Uri address, X509Certificate2? authority = null) => new(new RoofConnectionOptions
     {
         BaseAddress = address,

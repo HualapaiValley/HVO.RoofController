@@ -1395,6 +1395,32 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void Setup_TheCallerToldAfterTheCheck_KeepsIt_AndANewConnectionClearsIt()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        _ = host.Server;
+        using var rig = new CliRig(host);
+        using var tui = new TuiDriver(rig);
+        var setup = (RoofUiSetupPage)tui.Ui.CurrentPage;
+        Click(tui, "Connection");
+        Fill(tui, "http://localhost/", string.Empty, string.Empty, TestApiKeys.Admin);
+        tui.Ui.Panel!.Press("Save and check");
+        tui.WaitIdle("the check", () => setup.LastCheck is not null);
+
+        // Who the caller is can come back after the check is done: the connection is the one it checked.
+        setup.ConnectionChanged();
+
+        setup.LastCheck.Should().NotBeNull("the connection it checked is still the one in use");
+        setup.Describe().Should().Contain("Check:");
+
+        tui.Ui.Reconnect();
+
+        setup.LastCheck.Should().BeNull("a new connection has not been checked");
+        setup.Describe().Should().NotContain("Check:");
+        tui.WaitIdle("the caller");
+    }
+
+    [TestMethod]
     public void Setup_FirstAdmin_WithAnOperatorKey_IsRefusedWithoutAPrompt()
     {
         using var host = RoofClientApiTests.CreateHost();

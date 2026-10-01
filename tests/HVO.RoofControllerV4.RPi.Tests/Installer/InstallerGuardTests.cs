@@ -100,9 +100,51 @@ public sealed class InstallerGuardTests
         using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
         using var rootMac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: true, hostName: "studio");
 
+        RoleGuards.Check(await MachineSurveyor.SurveyAsync(mac.Machine), Rig).Should().BeEmpty("a rig on a Mac runs in the person's Docker Desktop");
         RoleGuards.Check(await MachineSurveyor.SurveyAsync(mac.Machine), new InstallAnswers { Roles = [InstallRole.Rig, InstallRole.Cli, InstallRole.MacApp] })
-            .Should().BeEmpty("a rig on a Mac runs in the person's Docker Desktop, with the person's hvo-roof and Mac app");
+            .Should().Equal("hvo-roof and the Mac app are set up against a running controller: install the rig first, then run the installer again for them.");
         RoleGuards.Check(await MachineSurveyor.SurveyAsync(rootMac.Machine), Rig).Should().ContainSingle().Which.Should().Contain("without sudo");
+    }
+
+    [TestMethod]
+    public async Task TheKeychain_IsAMacs_AndRefusedOnLinux()
+    {
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
+        using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
+        var answers = new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers with { TrustInKeychain = true } };
+
+        RoleGuards.Check(await MachineSurveyor.SurveyAsync(laptop.Machine), answers).Should()
+            .Equal("The controller's CA is trusted in the keychain on a Mac only: docs/install.md says how to add it to a browser on Linux.");
+        RoleGuards.Check(await MachineSurveyor.SurveyAsync(mac.Machine), answers).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task OneClient_MovedToAnotherController_IsRefused_WhileTheOtherStaysOnTheRecordedOne()
+    {
+        using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
+        var recorded = FakeMachine.ClientAnswers;
+        mac.Write("/Users/roy/.config/hvo-roof/install.json", (Record(InstallRole.Cli, null) with
+        {
+            Scope = InstallScope.User,
+            Roles = [InstallRole.Cli, InstallRole.MacApp],
+            Client = recorded
+        }).ToJson());
+        var survey = await MachineSurveyor.SurveyAsync(mac.Machine);
+        var elsewhere = new ClientSettings { Controller = "https://spare-pi.local:8443", CaSha256 = recorded.CaSha256 };
+        IReadOnlyList<string> Check(ClientSettings client, params InstallRole[] roles) =>
+            RoleGuards.Check(survey, new InstallAnswers { Roles = roles, Client = client });
+
+        Check(elsewhere, InstallRole.Cli).Should().Equal(
+            $"hvo-roof and the Mac app connect to the same controller, and the Mac app connects to {recorded.Controller}: give the same controller and trust, or choose both to move them together.");
+        Check(recorded with { CaSha256 = null, CertificateSha256 = recorded.CaSha256 }, InstallRole.MacApp).Should().ContainSingle()
+            .Which.Should().StartWith("The Mac app and hvo-roof").And.Contain(", trusting it another way:");
+        Check(recorded, InstallRole.Cli).Should().BeEmpty();
+        Check(recorded with { Controller = recorded.Controller + "/ ", CaSha256 = recorded.CaSha256!.Replace(":", string.Empty).ToLowerInvariant() }, InstallRole.Cli)
+            .Should().BeEmpty("the same address and fingerprint, written another way");
+        Check(recorded with { TrustInKeychain = true }, InstallRole.MacApp).Should().BeEmpty("the keychain is the run's own");
+        Check(elsewhere, InstallRole.Cli, InstallRole.MacApp).Should().BeEmpty("both move together");
+        RoleGuards.Check(survey, new InstallAnswers { Roles = [InstallRole.Cli], Client = elsewhere }, clientChosen: false)
+            .Should().BeEmpty("the wizard's pages before its Client page, where the controller is changed, do not check it");
     }
 
     [TestMethod]

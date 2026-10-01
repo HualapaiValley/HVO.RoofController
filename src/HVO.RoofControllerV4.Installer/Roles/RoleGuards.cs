@@ -51,6 +51,14 @@ public static class RoleGuards
     public static string RigConfirmationPrompt(MachineSurvey survey)
         => $"This machine has the HAT's I2C bus ({HatDevices.I2c}). A test rig must never be installed on the observatory's Pi. Type this machine's host name ({survey.HostName}) to confirm it is not.";
 
+    // The same controller, trusted the same way: the keychain is this run's alone.
+    private static bool SameController(ClientSettings recorded, ClientSettings client)
+    {
+        var (a, b) = (recorded.Normalised(), client.Normalised());
+        return (a.Address is { } x && b.Address is { } y ? x == y : a.Controller == b.Controller)
+            && a.CaSha256 == b.CaSha256 && a.CertificateSha256 == b.CertificateSha256;
+    }
+
     /// <summary>What a person types to confirm plain HTTP.</summary>
     public const string HttpConfirmationWord = "http";
 
@@ -75,9 +83,10 @@ public static class RoleGuards
     /// <summary>
     /// Every reason the installer refuses <paramref name="answers"/> on this machine; empty when it may go ahead. With
     /// <paramref name="planOnly"/>, for <c>--plan</c>, which changes nothing, it needs neither root for the machine's roles
-    /// nor the confirmations a person types.
+    /// nor the confirmations a person types. Without <paramref name="clientChosen"/>, for the wizard's pages before its
+    /// Client page, the client's controller is not checked yet: that page is where it is changed.
     /// </summary>
-    public static IReadOnlyList<string> Check(MachineSurvey survey, InstallAnswers answers, bool planOnly = false)
+    public static IReadOnlyList<string> Check(MachineSurvey survey, InstallAnswers answers, bool planOnly = false, bool clientChosen = true)
     {
         ArgumentNullException.ThrowIfNull(survey);
         ArgumentNullException.ThrowIfNull(answers);
@@ -106,6 +115,33 @@ public static class RoleGuards
         if (roles.Contains(InstallRole.Controller) && roles.Contains(InstallRole.Rig))
         {
             problems.Add("The controller and a test rig cannot share a machine: both run as the roof-controller container.");
+        }
+
+        var clients = roles.Where(role => role is InstallRole.Cli or InstallRole.MacApp).ToArray();
+        if (roles.Contains(InstallRole.Rig) && clients.Length > 0 && survey.Os == InstallerOs.MacOS)
+        {
+            // Their trust is in the rig's CA, which is made in the same run, before anyone can compare its fingerprint.
+            problems.Add($"{Capitalise(InstallRoles.Describe(clients))} {Are(clients)} set up against a running controller: install the rig first, then run the installer again for {(clients.Length == 1 ? "it" : "them")}.");
+        }
+
+        if (answers.Client is { TrustInKeychain: true } && survey.Os != InstallerOs.MacOS)
+        {
+            problems.Add("The controller's CA is trusted in the keychain on a Mac only: docs/install.md says how to add it to a browser on Linux.");
+        }
+
+        // The person's record keeps one controller for hvo-roof and the Mac app: a run for one of them would move the
+        // other's (on its next run from the record) while its files still point at the one it has.
+        if (clientChosen && clients.Length == 1 && answers.Client is { } client
+            && survey.UserRecord is { Client: { } recorded } record
+            && !SameController(recorded, client))
+        {
+            var other = clients[0] == InstallRole.Cli ? InstallRole.MacApp : InstallRole.Cli;
+            if (record.Roles.Contains(other))
+            {
+                var how = recorded.Address is { } address && address == client.Address ? ", trusting it another way" : string.Empty;
+                problems.Add($"{Capitalise(InstallRoles.Describe([clients[0]]))} and {InstallRoles.Describe([other])} connect to the same controller, "
+                    + $"and {InstallRoles.Describe([other])} connects to {recorded.Controller}{how}: give the same controller and trust, or choose both to move them together.");
+            }
         }
 
         var system = roles.Where(role => InstallRoles.ScopeOf(role, survey.Os) == InstallScope.System).ToArray();
@@ -221,7 +257,5 @@ public static class RoleGuards
 
     private static string Are(IReadOnlyCollection<InstallRole> roles) => roles.Count == 1 ? "is" : "are";
 
-    // hvo-roof is a command's name, and keeps its case at the start of a sentence.
-    private static string Capitalise(string text)
-        => text.Length == 0 || text.StartsWith("hvo-roof", StringComparison.Ordinal) ? text : char.ToUpperInvariant(text[0]) + text[1..];
+    private static string Capitalise(string text) => InstallRoles.Capitalise(text);
 }

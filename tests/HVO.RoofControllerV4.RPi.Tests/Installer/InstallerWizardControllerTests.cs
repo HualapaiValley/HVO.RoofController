@@ -67,7 +67,7 @@ public sealed class InstallerWizardControllerTests
 
         page.ImportFrom.Text = Backup;
         wizard.Render(TestContext, "4-controller");
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.Controller.Should().BeEquivalentTo(new ControllerSettings
         {
             FirstAdmin = new FirstAdminSettings { Name = "roy", Pin = true },
@@ -117,7 +117,7 @@ public sealed class InstallerWizardControllerTests
         page.TimeScale.Text = "10";
         page.FramesPerSecond.Text = "2.5";
         page.OpenToLan.Value = CheckState.Checked;
-        wizard.NextTo(4);
+        wizard.NextTo(5);
         wizard.Session.Answers.Controller!.Rig.Should().Be(new RigSettings { TimeScale = 10, CameraFramesPerSecond = 2.5, OpenToLan = true });
         wizard.Session.Answers.Controller.Camera.Should().BeNull();
     }
@@ -131,16 +131,15 @@ public sealed class InstallerWizardControllerTests
         wizard.NextTo(1);
         ((RolesPage)wizard.Page).Choices[InstallRole.Cli].Value = CheckState.Checked;
         wizard.NextTo(2);
-        wizard.Wizard.Header.Should().Be("Step 3 of 6: Choices");
+        wizard.Wizard.Header.Should().Be("Step 3 of 7: Choices", "hvo-roof asks which controller it connects to");
         wizard.Page.MostFocused!.SuperView.Should().BeOfType<OptionSelector>("the folder is the page's one question");
 
         // Enter is Next, even from an option list, which would take it for itself.
         wizard.Press(Key.Enter);
-        wizard.WaitIdle("the plan's check");
+        wizard.WaitIdle("the next page");
 
-        wizard.Page.Should().BeOfType<ReviewPage>("hvo-roof has no controller to ask about");
-        wizard.Wizard.Header.Should().Be("Step 4 of 6: Review the plan");
-        wizard.Wizard.NextButton.Text.Should().Be("Install", "hvo-roof needs no password");
+        wizard.Page.Should().BeOfType<ClientPage>("hvo-roof has no controller of its own to ask about");
+        wizard.Wizard.Header.Should().Be("Step 4 of 7: Connecting to the controller");
         wizard.Press(Key.Esc);
         wizard.Page.Should().BeOfType<SettingsPage>("Back passes over it too");
     }
@@ -159,19 +158,19 @@ public sealed class InstallerWizardControllerTests
         controller.AdminPin!.Value = CheckState.Checked;
         controller.CameraServer!.Text = "http://192.168.0.4:81";
         controller.CameraUser!.Text = "roof-viewer";
-        wizard.NextTo(4);
+        wizard.NextTo(5);
 
         var review = (ReviewPage)wizard.Page;
         review.Plan!.IsBlocked.Should().BeFalse(string.Join('\n', review.Describe()));
         wizard.Wizard.Header.Should().Be("Step 5 of 8: Review the plan", "the plan needs passwords, which have a page of their own");
         wizard.Wizard.NextButton.Text.Should().Be("Next", "the passwords come before Install");
 
-        wizard.NextTo(5);
+        wizard.NextTo(6);
         var passwords = (PasswordsPage)wizard.Page;
         wizard.Wizard.Header.Should().Be("Step 6 of 8: Passwords");
         wizard.Wizard.NextButton.Text.Should().Be("Install");
         passwords.Fields.Select(field => field.Secret).Should().Equal(InstallSecret.AdminPassword, InstallSecret.AdminPin, InstallSecret.CameraPassword);
-        passwords.Fields.Should().OnlyContain(field => field.Typed.Secret && field.Again.Secret, "what is typed is masked");
+        passwords.Fields.Should().OnlyContain(field => field.Typed.Secret && field.Again!.Secret, "what is typed is masked");
         wizard.Screen.Should().Contain("Each is typed twice, and never shown, saved or logged.")
             .And.Contain("The first admin's password:")
             .And.Contain(RoofIdentityText.PasswordRule)
@@ -181,23 +180,23 @@ public sealed class InstallerWizardControllerTests
         // Typed as a person types them.
         passwords.Fields[0].Typed.SetFocus();
         wizard.Type("too short");
-        passwords.Fields[0].Again.SetFocus();
+        passwords.Fields[0].Again!.SetFocus();
         wizard.Type("too short");
         wizard.Press(Key.Enter);
         wizard.Page.Should().BeSameAs(passwords);
         wizard.Wizard.Message.Should().Be($"The first admin's password: {RoofIdentityText.PasswordRule}");
 
-        passwords.Fields[0].Typed.Text = passwords.Fields[0].Again.Text = Password;
+        passwords.Fields[0].Typed.Text = passwords.Fields[0].Again!.Text = Password;
         passwords.Fields[1].Typed.Text = Pin;
-        passwords.Fields[1].Again.Text = "1234567890";
-        passwords.Fields[2].Typed.Text = passwords.Fields[2].Again.Text = CameraPassword;
+        passwords.Fields[1].Again!.Text = "1234567890";
+        passwords.Fields[2].Typed.Text = passwords.Fields[2].Again!.Text = CameraPassword;
         wizard.Press(Key.Enter);
         wizard.Wizard.Message.Should().Be("The first admin's PIN: the two differ. Type it again in both.");
         wizard.Screen.Should().NotContain(Password).And.NotContain(Pin).And.NotContain(CameraPassword).And.Contain("∙∙∙∙∙∙∙∙∙∙∙∙∙∙∙∙∙∙∙∙", "what is typed shows only as dots");
         wizard.Render(TestContext, "6-passwords");
         pi.UserRequests.Should().BeEmpty("nothing is installed before Install");
 
-        passwords.Fields[1].Again.Text = Pin;
+        passwords.Fields[1].Again!.Text = Pin;
         wizard.Press(Key.Enter);
         wizard.WaitIdle("the install", () => wizard.Page is DonePage);
 
@@ -205,7 +204,7 @@ public sealed class InstallerWizardControllerTests
         wizard.Wizard.Header.Should().Be("Step 8 of 8: Done");
         pi.UserRequests.Should().ContainSingle().Which.Should().Match<FakeUserRequest>(request => request.Name == "roy" && request.Password == Password && request.Pin == Pin);
         pi.Read($"/etc/hvo-roof/secrets/{CameraSteps.PasswordSetting}").Should().Be(CameraPassword);
-        passwords.Fields.Should().OnlyContain(field => field.Typed.Text.Length == 0 && field.Again.Text.Length == 0, "what was typed is not kept");
+        passwords.Fields.Should().OnlyContain(field => field.Typed.Text.Length == 0 && field.Again!.Text.Length == 0, "what was typed is not kept");
         passwords.Describe().Should().NotContain(line => line.Contains(Password) || line.Contains(Pin) || line.Contains(CameraPassword));
         foreach (var secret in new[] { Password, Pin, CameraPassword })
         {
@@ -231,7 +230,7 @@ public sealed class InstallerWizardControllerTests
         controller.AdminPin!.Value = CheckState.Checked;
         controller.CameraServer!.Text = "http://192.168.0.4:81";
         controller.CameraUser!.Text = "roof-viewer";
-        wizard.NextTo(5);
+        wizard.NextTo(6);
 
         wizard.Page.Should().BeOfType<PasswordsPage>();
         wizard.Rows.Where(row => row.Contains("Again:", StringComparison.Ordinal)).Should().HaveCount(3, "each password's second field is shown");
@@ -261,7 +260,7 @@ public sealed class InstallerWizardControllerTests
         wizard.Press(Key.Space);
         wizard.NextTo(3);
         ((ControllerPage)wizard.Page).AdminName!.Text = "roy";
-        wizard.NextTo(4);
+        wizard.NextTo(5);
 
         wizard.Wizard.NextButton.Text.Should().Be("Install", "the only password the plan needs was given");
         wizard.Wizard.Header.Should().Be("Step 5 of 7: Review the plan");

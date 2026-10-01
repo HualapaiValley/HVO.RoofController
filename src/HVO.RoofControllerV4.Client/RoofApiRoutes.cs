@@ -38,6 +38,9 @@ internal static class RoofApiRoutes
     public const string HealthReady = "health/ready";
     public const string HealthLive = "health/live";
 
+    /// <summary>The CA that issued the controller's certificate, anonymous (404 when a private CA did not issue it).</summary>
+    public const string CaCertificate = "ca.crt";
+
     public static string User(string name) => $"{Users}/{Segment(name)}";
 
     public static string ApiKey(string name) => $"{ApiKeys}/{Segment(name)}";

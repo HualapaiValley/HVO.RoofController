@@ -49,13 +49,6 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
             throw new InstallerRefusedException("The plan has a step that cannot go ahead; nothing was installed.");
         }
 
-        var notYet = Steps.Where(step => step.Check.MakesChange && !step.Step.CanApply).Select(step => step.Step.Target).ToArray();
-        if (notYet.Length > 0)
-        {
-            throw new InstallerRefusedException(
-                $"This installer cannot install {string.Join(", ", notYet)} yet, so nothing was installed. The plan (--plan) shows what an install will do.");
-        }
-
         var missing = NeededSecrets().Where(secret => !context.Secrets.Has(secret)).ToArray();
         if (missing.Length > 0)
         {
@@ -71,7 +64,7 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var doing = $"{PlanText.Verb(planned.Change)} {PlanText.Noun(step.Kind)} {step.Target}";
+            var doing = PlanText.Doing(planned.Change, step);
             try
             {
                 var check = await step.CheckAsync(context, cancellationToken).ConfigureAwait(false);
@@ -86,7 +79,7 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
                     continue;
                 }
 
-                doing = $"{PlanText.Verb(check.Change)} {PlanText.Noun(step.Kind)} {step.Target}";
+                doing = PlanText.Doing(check.Change, step);
                 progress?.Invoke($"{doing}…");
                 await step.ApplyAsync(context, check, cancellationToken).ConfigureAwait(false);
                 context.MarkApplied(step);
@@ -127,7 +120,8 @@ public static class PlanText
             foreach (var (step, check) in steps)
             {
                 var detail = check.Detail is null || check.Change == StepChange.Blocked ? string.Empty : $" ({check.Detail})";
-                lines.Add($"  {Word(check.Change),-9}  {step.Target.PadRight(width)}  {step.Purpose}{detail}");
+                var word = kind == StepKind.Check && check.MakesChange ? "run" : Word(check.Change);
+                lines.Add($"  {word,-9}  {step.Target.PadRight(width)}  {step.Purpose}{detail}");
                 if (check.Change == StepChange.Blocked && check.Detail is not null)
                 {
                     lines.Add($"  {string.Empty,-9}  {check.Detail}");
@@ -148,10 +142,19 @@ public static class PlanText
             return $"Blocked: {blocked} {(blocked == 1 ? "step cannot" : "steps cannot")} go ahead, so nothing will be installed.";
         }
 
-        return plan.HasChanges
-            ? $"{plan.Count(StepChange.Create)} to create, {plan.Count(StepChange.Change)} to change, {plan.Count(StepChange.Unchanged)} unchanged."
-            : "Nothing to change: this machine is already as the answers describe.";
+        if (!plan.HasChanges)
+        {
+            return "Nothing to change: this machine is already as the answers describe.";
+        }
+
+        // A check (the Mac app opened with --check) changes nothing: it is counted on its own.
+        var made = plan.Steps.Where(step => step.Step.Kind != StepKind.Check).ToArray();
+        var checks = plan.Steps.Count(step => step.Step.Kind == StepKind.Check && step.Check.MakesChange);
+        var summary = $"{Count(made, StepChange.Create)} to create, {Count(made, StepChange.Change)} to change, {Count(made, StepChange.Unchanged)} unchanged";
+        return checks == 0 ? $"{summary}." : $"{summary}, {checks} {(checks == 1 ? "check" : "checks")} to run.";
     }
+
+    private static int Count(IEnumerable<CheckedStep> steps, StepChange change) => steps.Count(step => step.Check.Change == change);
 
     public static string Word(StepChange change) => change switch
     {
@@ -162,6 +165,10 @@ public static class PlanText
         StepChange.Blocked => "blocked",
         _ => throw new ArgumentOutOfRangeException(nameof(change), change, null)
     };
+
+    /// <summary>What applying <paramref name="step"/> is doing, for its progress line and a failure.</summary>
+    internal static string Doing(StepChange change, PlanStep step)
+        => step.Kind == StepKind.Check ? $"Running {step.Target}" : $"{Verb(change)} {Noun(step.Kind)} {step.Target}";
 
     internal static string Verb(StepChange change) => change == StepChange.Create ? "Creating" : "Changing";
 
@@ -174,6 +181,7 @@ public static class PlanText
         StepKind.Container => "container",
         StepKind.Service => "service",
         StepKind.Port => "port",
+        StepKind.Check => "check",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
@@ -186,6 +194,7 @@ public static class PlanText
         StepKind.Container => "Containers",
         StepKind.Service => "Services",
         StepKind.Port => "Ports",
+        StepKind.Check => "Checks",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 }

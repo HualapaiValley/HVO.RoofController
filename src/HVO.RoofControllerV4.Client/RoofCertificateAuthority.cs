@@ -70,6 +70,23 @@ public sealed class RoofCertificateRefusedException : AuthenticationException
 }
 
 /// <summary>
+/// The CA the controller serves could not be fetched, or is not one to trust (<see cref="RoofCertificateAuthority.FetchAsync"/>).
+/// The message is written for the operator.
+/// </summary>
+public sealed class RoofCaFetchException : Exception
+{
+    public RoofCaFetchException(string message)
+        : base(message)
+    {
+    }
+
+    public RoofCaFetchException(string message, Exception? innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
 /// Accepts the controller's certificate when a private CA issued it (#65), such as the one the installer makes. Only
 /// that CA is trusted, not the system's. The host name is checked as usual, and the CA's name constraints apply. The
 /// controller's certificate can be reissued under the same CA with no change to the client.
@@ -115,6 +132,171 @@ public static class RoofCertificateAuthority
     {
         ArgumentNullException.ThrowIfNull(certificate);
         return certificate.Extensions.OfType<X509BasicConstraintsExtension>().FirstOrDefault() is { CertificateAuthority: true };
+    }
+
+    /// <summary>
+    /// The certificate's SHA-256 fingerprint as colon-separated hex pairs, as the installer's Done page and
+    /// <c>hvo-roof-install cert show</c> give it (and as browsers and openssl show it).
+    /// </summary>
+    public static string Fingerprint(X509Certificate2 certificate)
+    {
+        ArgumentNullException.ThrowIfNull(certificate);
+        return string.Join(':', Convert.ToHexString(certificate.GetCertHash(HashAlgorithmName.SHA256)).Chunk(2).Select(pair => new string(pair)));
+    }
+
+    /// <summary>
+    /// True when <paramref name="text"/> is <paramref name="certificate"/>'s SHA-256: 64 hex digits, in either case, with
+    /// or without colons, spaces or dashes between them.
+    /// </summary>
+    public static bool HasFingerprint(X509Certificate2 certificate, string text)
+    {
+        ArgumentNullException.ThrowIfNull(certificate);
+        ArgumentNullException.ThrowIfNull(text);
+        var hex = new string(text.Where(c => c is not (':' or ' ' or '-')).ToArray());
+        return hex.Length == 64 && hex.All(char.IsAsciiHexDigit)
+            && string.Equals(hex, Convert.ToHexString(certificate.GetCertHash(HashAlgorithmName.SHA256)), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The CA the controller serves at <c>GET /ca.crt</c> (#71), for a client to save once the person has compared its
+    /// <see cref="Fingerprint"/> with the one the installer showed. The request is anonymous, and nothing about the
+    /// connection is trusted yet, so what is served is checked: it must be a CA's certificate, and the certificate the
+    /// controller presents must chain to it and name the host reached. A TLS handshake alone cannot give the CA, since a
+    /// server leaves its root out of the chain it sends.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="controller"/> is not an https address.</exception>
+    /// <exception cref="RoofCaFetchException">The controller serves no CA, or one that did not issue its certificate.</exception>
+    /// <exception cref="RoofCertificateRefusedException">
+    /// The CA issued the controller's certificate, which is refused anyway: it has expired, or does not name the host.
+    /// </exception>
+    /// <exception cref="HttpRequestException">The controller cannot be reached, or its answer is cut off part way.</exception>
+    /// <exception cref="TimeoutException">The CA did not arrive, its headers and body both, within <paramref name="timeout"/>.</exception>
+    public static async Task<X509Certificate2> FetchAsync(Uri controller, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(controller);
+        if (!controller.IsAbsoluteUri || controller.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new ArgumentException($"The CA is fetched over HTTPS, and {controller} is not an https address.", nameof(controller));
+        }
+
+        byte[]? presented = null;
+        List<byte[]> sent = [];
+        var errors = SslPolicyErrors.None;
+        string? host = null;
+        using var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            UseCookies = false,
+            UseProxy = false,
+            ConnectTimeout = timeout,
+            SslOptions =
+            {
+                // Nothing is trusted yet: what the controller presents is kept, and checked once the CA is in hand.
+                RemoteCertificateValidationCallback = (sender, certificate, chain, policyErrors) =>
+                {
+                    presented = certificate?.GetRawCertData();
+                    sent = chain is null ? [] : [.. chain.ChainPolicy.ExtraStore.Select(extra => extra.RawData)];
+                    errors = policyErrors;
+                    host = (sender as SslStream)?.TargetHostName;
+                    return true;
+                }
+            }
+        };
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var address = new Uri(controller.AbsoluteUri.EndsWith('/') ? controller : new Uri(controller.AbsoluteUri + "/"), RoofApiRoutes.CaCertificate);
+
+        // One limit for the answer and its body: HttpClient's own ends once the headers are in.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(timeout);
+        byte[] body;
+        try
+        {
+            using var response = await client.GetAsync(address, HttpCompletionOption.ResponseHeadersRead, limit.Token).ConfigureAwait(false);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                throw new RoofCaFetchException(
+                    $"The controller serves no CA at {address}: a private CA did not issue its certificate, which is self-signed or one of your own.");
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new RoofCaFetchException($"The controller answered {(int)response.StatusCode} {response.ReasonPhrase} for {address}.");
+            }
+
+            body = await ReadLimitedAsync(response, limit.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"{address} did not send the controller's CA within {timeout.TotalSeconds:0} s.", ex);
+        }
+        catch (IOException ex)
+        {
+            // The connection closed part way through the body: as unreachable as a connection refused.
+            throw new HttpRequestException($"The controller's answer at {address} was cut off: {ex.Message}", ex);
+        }
+
+        X509Certificate2 authority;
+        try
+        {
+            authority = FromBytes(body, $"What the controller serves at {address}");
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RoofCaFetchException(ex.Message, ex);
+        }
+
+        var extras = sent.Select(X509CertificateLoader.LoadCertificate).ToArray();
+        try
+        {
+            using var leaf = presented is null ? null : X509CertificateLoader.LoadCertificate(presented);
+            using var chain = new X509Chain();
+            chain.ChainPolicy.ExtraStore.AddRange(extras);
+            if (Check(authority, leaf, chain, errors, host) is { } refused)
+            {
+                if (refused.Reason is RoofCertificateRefusal.OtherAuthority or RoofCertificateRefusal.OutsideNameConstraints)
+                {
+                    throw new RoofCaFetchException(
+                        $"The CA the controller serves ({Describe(authority)}) did not issue the certificate it presents, so it is not saved.", refused);
+                }
+
+                throw refused;
+            }
+
+            return authority;
+        }
+        catch
+        {
+            authority.Dispose();
+            throw;
+        }
+        finally
+        {
+            foreach (var extra in extras)
+            {
+                extra.Dispose();
+            }
+        }
+    }
+
+    // A CA certificate is a few kilobytes: more than this is not one.
+    private static async Task<byte[]> ReadLimitedAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        const int Limit = 64 * 1024;
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > Limit)
+            {
+                throw new RoofCaFetchException($"What the controller serves as its CA is larger than {Limit / 1024} KiB, so it is not a CA certificate.");
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
     }
 
     /// <summary>The CA's name as the refusals give it: its common name, or its whole subject.</summary>

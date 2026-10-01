@@ -24,6 +24,9 @@ public sealed record InstallAnswers
 
     public MacAppSettings? MacApp { get; init; }
 
+    /// <summary>The controller hvo-roof and the Mac app use, and how they trust it (with either of them).</summary>
+    public ClientSettings? Client { get; init; }
+
     public KioskSettings? Kiosk { get; init; }
 
     /// <summary>
@@ -44,7 +47,8 @@ public sealed record InstallAnswers
     /// These answers with a section, with its defaults, for each role that has questions, and none for a role not
     /// chosen, so a saved file holds only what applies. A controller with no choices yet gets
     /// <paramref name="defaultController"/>'s, or the defaults. A rig has its emulator's choices and no camera (it shows
-    /// the emulator's); the controller has no rig's choices.
+    /// the emulator's); the controller has no rig's choices. The controller hvo-roof and the Mac app use has no default:
+    /// it is asked for.
     /// </summary>
     public InstallAnswers Normalised(ControllerSettings? defaultController = null)
     {
@@ -59,7 +63,8 @@ public sealed record InstallAnswers
             Roles = roles,
             Controller = controller,
             Cli = roles.Contains(InstallRole.Cli) ? Cli ?? new CliSettings() : null,
-            MacApp = roles.Contains(InstallRole.MacApp) ? MacApp ?? new MacAppSettings() : null,
+            MacApp = roles.Contains(InstallRole.MacApp) ? (MacApp ?? new MacAppSettings()).Normalised() : null,
+            Client = InstallRoles.UsesController(roles) ? Client?.Normalised() : null,
             Kiosk = roles.Contains(InstallRole.Kiosk) ? (Kiosk ?? new KioskSettings()).Normalised() : null,
             RigConfirmation = roles.Contains(InstallRole.Rig) ? RigConfirmation : null,
             HttpConfirmation = controller?.Connection == ConnectionMode.Http ? HttpConfirmation : null
@@ -94,14 +99,30 @@ public sealed record InstallAnswers
             yield return $"hvo-roof's folder must be {string.Join(" or ", CliSettings.Folders)}, not '{cli.Folder}'.";
         }
 
-        if (MacApp is { } macApp && !MacAppSettings.Folders.Contains(macApp.Folder))
-        {
-            yield return $"The Mac app's folder must be {string.Join(" or ", MacAppSettings.Folders)}, not '{macApp.Folder}'.";
-        }
-
-        foreach (var problem in Kiosk?.Problems() ?? [])
+        foreach (var problem in (MacApp?.Problems() ?? []).Concat(Client?.Problems() ?? []).Concat(Kiosk?.Problems() ?? []))
         {
             yield return problem;
+        }
+    }
+
+    /// <summary>
+    /// What the roles chosen need that these answers do not give yet: the controller hvo-roof and the Mac app use, and
+    /// the admin who makes the Mac's device key. Not among <see cref="Problems"/>, which the wizard checks as soon as the
+    /// roles are chosen: it asks for these after them. An answers file must give them.
+    /// </summary>
+    public IEnumerable<string> Missing()
+    {
+        var roles = InstallRoles.Ordered(Roles);
+        if (InstallRoles.UsesController(roles) && Client is null)
+        {
+            var clients = roles.Where(role => role is InstallRole.Cli or InstallRole.MacApp).ToArray();
+            yield return $"{InstallRoles.Capitalise(InstallRoles.Describe(clients))} {(clients.Length == 1 ? "needs" : "need")} the controller's address, and its CA's fingerprint "
+                + "(hvo-roof-install cert show on the controller): give \"client\": {\"controller\": \"https://roof.local:8443\", \"caSha256\": \"…\"}.";
+        }
+
+        if (roles.Contains(InstallRole.MacApp) && string.IsNullOrWhiteSpace(MacApp?.Admin))
+        {
+            yield return "The Mac app needs an admin on the controller, who signs in once to make its device key: give \"macApp\": {\"admin\": \"NAME\"}.";
         }
     }
 
@@ -131,7 +152,7 @@ public sealed record InstallAnswers
             throw new InstallerUsageException("The answers file names no roles: give \"roles\", for example [\"cli\"].");
         }
 
-        var problems = answers.Problems().ToArray();
+        var problems = answers.Problems().Concat(answers.Missing()).ToArray();
         if (problems.Length > 0)
         {
             throw new InstallerUsageException(string.Join(Environment.NewLine, problems));

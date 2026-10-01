@@ -7,7 +7,8 @@ name: Scenarios
 #   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
 #                        rollback, the Compose migration, and a deploy of a pulled image
 #                        (tests/emulator/deploy-scenarios.sh)
-#   installer-rig        hvo-roof-install's rig role end to end against the HAT emulator (tests/installer/rig-scenario.sh)
+#   installer-rig        hvo-roof-install's rig role end to end against the HAT emulator, and hvo-roof installed for
+#                        the person and signed in to it through its CA (tests/installer/rig-scenario.sh)
 #   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results
 #   kiosk-soak           nightly and on demand: the touchscreen kiosk against the emulated roof for
 #                        HVO_KIOSK_SOAK_DURATION, with its heap, threads and reconnects
@@ -176,7 +177,8 @@ jobs:
           retention-days: 7
 
   # hvo-roof-install's rig role end to end (#69): the installer as published, a release as the release workflow
-  # publishes one (in a registry on loopback), installed as root, run again, changed, and its certificate renewed.
+  # publishes one (in a registry on loopback), installed as root, run again, changed, and its certificate renewed; and
+  # hvo-roof (#71) installed for the person, trusting the rig's CA, and signed in to it before and after the renewal.
   installer-rig:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -193,7 +195,7 @@ jobs:
         with:
           global-json-file: src/global.json
 
-      - name: Install, again, change, renew the certificate
+      - name: Install, again, hvo-roof, change, renew the certificate
         run: tests/installer/rig-scenario.sh
 
       - name: Summary

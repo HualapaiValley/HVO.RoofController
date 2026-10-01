@@ -295,22 +295,31 @@ public sealed class InstallerPlanTests
     {
         using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
 
-        var own = await CheckAsync(laptop, InstallRole.Cli);
-        var shared = await CheckAsync(laptop, new InstallAnswers { Roles = [InstallRole.Cli], Cli = new CliSettings { Folder = CliSettings.SharedFolder } });
+        laptop.Folder("/usr/local/bin");
 
-        Steps(own, StepKind.File).Should().Equal("/home/roy/.local/bin/hvo-roof", "/home/roy/.config/hvo-roof/install.json");
-        Steps(shared, StepKind.File).Should().Equal("/usr/local/bin/hvo-roof", "/home/roy/.config/hvo-roof/install.json");
+        var own = await CheckAsync(laptop, InstallRole.Cli);
+        var shared = await CheckAsync(laptop, new InstallAnswers { Roles = [InstallRole.Cli], Cli = new CliSettings { Folder = CliSettings.SharedFolder }, Client = FakeMachine.ClientAnswers });
+
+        Steps(own, StepKind.Folder).Should().Equal(["/home/roy/.local/bin"], "the record's and the log's folders are made as they are written, not planned");
+        Steps(own, StepKind.File).Should().Equal("/home/roy/.local/bin/hvo-roof", "/home/roy/.config/hvo-roof/credentials.json", "/home/roy/.config/hvo-roof/install.json");
+        Change(own, "/home/roy/.local/bin/hvo-roof").Should().Be(new StepCheck(StepChange.Create, "release 4.0.0's, 0755"));
+        Change(own, "/home/roy/.config/hvo-roof/credentials.json").Should().Be(new StepCheck(StepChange.Create, "https://roofpi.local:8443, trusting its CA (FB:26:8B:E2…)"));
+        Steps(shared, StepKind.Folder).Should().NotContain("/usr/local/bin", "the shared folder is the machine's: the installer only writes in it");
+        Steps(shared, StepKind.File).Should().Equal("/usr/local/bin/hvo-roof", "/home/roy/.config/hvo-roof/credentials.json", "/home/roy/.config/hvo-roof/install.json");
+        Change(shared, "/usr/local/bin/hvo-roof").Change.Should().Be(StepChange.Create);
     }
 
     [TestMethod]
     public async Task HvoRoof_AlreadyThere_IsUnchanged()
     {
-        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy")
-            .WithCli("/home/roy/.local/bin/hvo-roof");
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
+        laptop.Folder("/home/roy/.local/bin");
+        File.WriteAllBytes(laptop.OnDisk("/home/roy/.local/bin/hvo-roof"), FakeMachine.CliProgram("4.0.0", "linux-x64"));
+        File.SetUnixFileMode(laptop.OnDisk("/home/roy/.local/bin/hvo-roof"), Modes.Program);
 
         var plan = await CheckAsync(laptop, InstallRole.Cli);
 
-        Change(plan, "/home/roy/.local/bin/hvo-roof").Should().Be(StepCheck.Unchanged("already there"));
+        Change(plan, "/home/roy/.local/bin/hvo-roof").Should().Be(StepCheck.Unchanged("release 4.0.0's"));
     }
 
     [TestMethod]
@@ -318,10 +327,21 @@ public sealed class InstallerPlanTests
     {
         using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
 
-        var plan = await CheckAsync(mac, InstallRole.MacApp);
-        var own = await CheckAsync(mac, new InstallAnswers { Roles = [InstallRole.MacApp], MacApp = new MacAppSettings { Folder = MacAppSettings.HomeFolder } });
+        mac.Folder("/Applications");
+        const string settings = "/Users/roy/Library/Application Support/HVO Roof";
 
-        Steps(plan, StepKind.File).Should().Equal("/Applications/HVO Roof.app", "/Users/roy/.config/hvo-roof/install.json");
+        var plan = await CheckAsync(mac, InstallRole.MacApp);
+        var own = await CheckAsync(mac, new InstallAnswers { Roles = [InstallRole.MacApp], MacApp = new MacAppSettings { Folder = MacAppSettings.HomeFolder, Admin = "ada" }, Client = FakeMachine.ClientAnswers });
+
+        Steps(plan, StepKind.Folder).Should().Equal([settings], "the record's and the log's folders are made as they are written, not planned");
+        Steps(plan, StepKind.File).Should().Equal(
+            "/Applications/HVO Roof.app", $"{settings}/ca.crt", $"{settings}/device-key", $"{settings}/appsettings.Local.json", "/Users/roy/.config/hvo-roof/install.json");
+        Steps(plan, StepKind.Check).Should().Equal("HVO Roof.app --check");
+        Change(plan, "/Applications/HVO Roof.app").Should().Be(new StepCheck(StepChange.Create, "release 4.0.0's, without macOS's quarantine mark"));
+        Change(plan, $"{settings}/device-key").Should().Be(new StepCheck(StepChange.Create, "a Viewer key (mac-studio-roy) made by ada, who signs in once; 0600, yours alone"));
+        Change(plan, "HVO Roof.app --check").Should().Be(new StepCheck(StepChange.Change, "after the changes above"));
+        PlanText.Lines(plan).Should().Contain(line => line.Contains("run", StringComparison.Ordinal) && line.Contains("HVO Roof.app --check", StringComparison.Ordinal));
+        Steps(own, StepKind.Folder).Should().Contain("/Users/roy/Applications");
         Steps(own, StepKind.File)[0].Should().Be("/Users/roy/Applications/HVO Roof.app");
     }
 
@@ -333,7 +353,7 @@ public sealed class InstallerPlanTests
 
         var plan = await CheckAsync(laptop, InstallRole.Cli);
 
-        Steps(plan, StepKind.File)[^1].Should().Be("/home/roy/cfg/hvo-roof/install.json");
+        Steps(plan, StepKind.File)[^2..].Should().Equal("/home/roy/cfg/hvo-roof/credentials.json", "/home/roy/cfg/hvo-roof/install.json");
     }
 
     [TestMethod]
@@ -381,20 +401,6 @@ public sealed class InstallerPlanTests
 
         pi.Mode("/etc/hvo-roof/secrets").Should().Be(Modes.PrivateFolder);
         pi.Read("/etc/hvo-roof/secrets/RoofController__Example").Should().Be("kept");
-    }
-
-    [TestMethod]
-    public async Task AStepThisInstallerCannotCarryOutYet_RefusesTheInstallBeforeAnythingChanges()
-    {
-        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
-        var session = await StartAsync(laptop, InstallRole.Cli);
-        var before = laptop.Snapshot();
-
-        var install = async () => await session.ApplyAsync(await session.CheckAsync());
-
-        (await install.Should().ThrowAsync<InstallerRefusedException>()).Which.Message.Should()
-            .Be("This installer cannot install /home/roy/.local/bin/hvo-roof yet, so nothing was installed. The plan (--plan) shows what an install will do.");
-        laptop.Snapshot().Should().Equal(before);
     }
 
     [TestMethod]
@@ -519,8 +525,14 @@ public sealed class InstallerPlanTests
         return session;
     }
 
+    // hvo-roof and the Mac app connect to the fake's controller, and the Mac app's key is made by ada.
     private static Task<CheckedPlan> CheckAsync(FakeMachine machine, params InstallRole[] roles)
-        => CheckAsync(machine, new InstallAnswers { Roles = roles });
+        => CheckAsync(machine, new InstallAnswers
+        {
+            Roles = roles,
+            Client = InstallRoles.UsesController(roles) ? FakeMachine.ClientAnswers : null,
+            MacApp = roles.Contains(InstallRole.MacApp) ? new MacAppSettings { Admin = "ada" } : null
+        });
 
     private static async Task<CheckedPlan> CheckAsync(FakeMachine machine, InstallAnswers answers)
     {

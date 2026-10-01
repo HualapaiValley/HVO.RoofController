@@ -95,6 +95,42 @@ uses the same words as every other client.
 
 ## Install
 
+### With the installer
+
+`hvo-roof-install`, run on the Mac as you (not with `sudo`), installs the app from a release and sets it up
+([install.md](install.md#hvo-roof-and-the-mac-app)). In the wizard, choose the Mac app on the Roles page. Then, on the
+Client page, give the controller's address, fetch its CA, and check that the fingerprint shown is the one on the
+controller's installer's Done page, or from `sudo hvo-roof-install cert show` on the controller. Name an admin who signs
+in once to make the Mac's key. Or give the same in an answers file:
+
+```json
+{
+  "roles": ["mac-app"],
+  "client": { "controller": "https://roof-pi.local:8443", "caSha256": "<the CA's SHA-256 fingerprint>" },
+  "macApp": { "admin": "ada" }
+}
+```
+
+```bash
+hvo-roof-install --answers mac.json    # asks for ada's password, or give it with --sign-in-password-file FILE
+```
+
+The installer then does steps 1 to 4 below:
+
+- it puts `HVO Roof.app`, checked against the release, in `/Applications` or `~/Applications`, without the quarantine
+  mark, so macOS opens it with no first-launch step;
+- it writes the controller's CA to the settings folder;
+- it makes the Mac's device key through the controller's API, a Viewer key named `mac-HOST-USER`, and writes it to
+  `device-key` (`0600`). The key is never shown and never goes through the clipboard, and the admin's session ends once
+  it is made;
+- it writes `appsettings.Local.json`;
+- it opens the app once with `--check`.
+
+With `client.trustInKeychain` it also trusts the CA in your login keychain, so Safari and Chrome open the web UI
+without a warning. Run it again, and it changes only what differs.
+
+### By hand
+
 1. **The app.** Each release has the app among its assets, as `HVO-Roof-<version>.zip`
    ([Versions and releases](releasing.md#the-assets)): download it, open it, and move `HVO Roof.app` to Applications.
    CI also builds, signs and checks the app on every run, as the `hvo-roof-mac-<run id>.zip` artifact on the run's
@@ -251,6 +287,10 @@ The app is tested without a Mac by the tests below, and then on a Mac by CI:
   Finder would, checks the signature with Apple's `codesign --verify --deep --strict`, and runs the app with
   `--check`: macOS runs the signed program, and Avalonia's windowing and Skia load and draw. It also checks exit code
   78 without settings. Gatekeeper's first-launch step, a person's clicks and the Mac's screen are not part of it.
+- **The installer on a Mac.** CI's `installer-mac` job installs the app with `hvo-roof-install` on the same runner
+  ([install.md](install.md#the-mac-app-end-to-end)): the real `ditto` and `xattr` take off the quarantine mark of a
+  zip marked as downloaded, the signature still verifies, and the app opens with the settings, CA and device key the
+  installer wrote. The keychain step is left out, since macOS asks for a password on the Mac's screen.
 - **Apple silicon.** The app is built for arm64 only. `Info.plist` asks for the oldest macOS its files are built for
   (12.0 today); use a macOS that .NET 10 supports.
 - **Gatekeeper.** An ad hoc signed app from a download is refused until it is allowed once (Install step 2), from

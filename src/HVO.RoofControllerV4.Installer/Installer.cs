@@ -252,8 +252,11 @@ public static class Installer
             : InstallerSession.RecordedAnswers(session.Survey, includeSystem: true)
                 ?? throw new InstallerUsageException($"Nothing is recorded as installed here: give the answers to plan, {CommandName} --plan --answers FILE.");
 
-        var problems = session.Problems(planOnly: true);
-        if (problems.Count > 0)
+        // An answers file gave them all (InstallAnswers.Parse), but a record an earlier release wrote may not.
+        var problems = session.Problems(planOnly: true)
+            .Concat(session.Answers.Missing().Select(missing => $"{missing} The record of what is installed here leaves it out: plan with {CommandName} --plan --answers FILE, or run {CommandName} to be asked."))
+            .ToArray();
+        if (problems.Length > 0)
         {
             WriteRefusal(host, problems);
             return (int)InstallerExitCode.Refused;
@@ -421,8 +424,8 @@ public static class Installer
     }
 
     /// <summary>
-    /// The passwords and PINs <paramref name="plan"/> needs that no file gave: each typed twice at the terminal, and never
-    /// shown. Without a terminal, the install is refused before anything changes.
+    /// The passwords and PINs <paramref name="plan"/> needs that no file gave: each typed at the terminal (a new one twice),
+    /// and never shown. Without a terminal, the install is refused before anything changes.
     /// </summary>
     internal static void AskForSecrets(InstallerHost host, InstallerSession session, CheckedPlan plan)
     {
@@ -455,6 +458,11 @@ public static class Installer
         {
             var typed = host.ReadSecret(what) ?? throw NoTerminal(missing);
             var problem = InstallSecrets.Problem(secret, typed);
+            if (problem is null && secret.IsExisting)
+            {
+                return typed;
+            }
+
             if (problem is null)
             {
                 var again = host.ReadSecret($"{what} again") ?? throw NoTerminal(missing);

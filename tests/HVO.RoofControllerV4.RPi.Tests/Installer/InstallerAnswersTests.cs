@@ -21,7 +21,8 @@ public sealed class InstallerAnswersTests
         {
             Roles = [InstallRole.Cli, InstallRole.Rig],
             Controller = new ControllerSettings { Connection = ConnectionMode.SelfSigned, HttpsPort = 9443, WebPort = 9088 },
-            Cli = new CliSettings { Folder = CliSettings.SharedFolder }
+            Cli = new CliSettings { Folder = CliSettings.SharedFolder },
+            Client = FakeMachine.ClientAnswers with { CaSha256 = FakeMachine.ControllerCaSha256.Replace(":", string.Empty, StringComparison.Ordinal).ToLowerInvariant() }
         };
 
         var json = answers.ToJson();
@@ -29,6 +30,7 @@ public sealed class InstallerAnswersTests
 
         read.Should().BeEquivalentTo(answers.Normalised());
         read.Roles.Should().Equal([InstallRole.Rig, InstallRole.Cli], "roles are kept in the order the installer offers them");
+        read.Client!.CaSha256.Should().Be(FakeMachine.ControllerCaSha256, "a fingerprint is kept as hvo-roof-install cert show gives it");
         read.ToJson().Should().Be(json);
     }
 
@@ -38,7 +40,9 @@ public sealed class InstallerAnswersTests
         var json = new InstallAnswers
         {
             Roles = [InstallRole.MacApp, InstallRole.Rig],
-            Controller = new ControllerSettings { Connection = ConnectionMode.OwnCertificate }
+            Controller = new ControllerSettings { Connection = ConnectionMode.OwnCertificate },
+            MacApp = new MacAppSettings { Admin = "ada" },
+            Client = FakeMachine.ClientAnswers with { TrustInKeychain = true }
         }.ToJson();
 
         using var document = JsonDocument.Parse(json);
@@ -50,6 +54,8 @@ public sealed class InstallerAnswersTests
             ["connection", "httpsPort", "httpPort", "webPort", "hostNames", "domains", "rig"], "only the choices are saved, not what follows from them");
         root.GetProperty("controller").GetProperty("httpsPort").GetInt32().Should().Be(8443);
         root.GetProperty("macApp").GetProperty("folder").GetString().Should().Be("/Applications");
+        root.GetProperty("client").EnumerateObject().Select(member => member.Name).Should().Equal(
+            ["controller", "caSha256", "trustInKeychain"], "the address is not saved twice, and a fingerprint not given is left out");
         root.TryGetProperty("cli", out _).Should().BeFalse("a role not chosen has no section");
         InstallAnswers.Parse(json).Controller!.Connection.Should().Be(ConnectionMode.OwnCertificate);
         new InstallAnswers { Roles = [InstallRole.Controller] }.ToJson().Should().Contain("\"private-ca\"");
@@ -79,7 +85,8 @@ public sealed class InstallerAnswersTests
 
         json.Should().NotContain("rigConfirmation").And.NotContain("bench-pi");
         InstallAnswers.Parse("""{ "roles": ["rig"], "rigConfirmation": "bench-pi" }""").RigConfirmation.Should().Be("bench-pi");
-        InstallAnswers.Parse("""{ "roles": ["cli"], "rigConfirmation": "bench-pi" }""").RigConfirmation.Should().BeNull("it applies to a rig only");
+        InstallAnswers.Parse("""{ "roles": ["cli"], "client": { "controller": "http://bench-pi:8080" }, "rigConfirmation": "bench-pi" }""").RigConfirmation
+            .Should().BeNull("it applies to a rig only");
     }
 
     [TestMethod]
@@ -105,7 +112,8 @@ public sealed class InstallerAnswersTests
         InstallAnswers.Parse("""
             {
               // hvo-roof for the observatory's laptop
-              "roles": ["cli"]
+              "roles": ["cli"],
+              "client": { "controller": "https://roofpi.local:8443" } // trusted as any website: its own certificate
             }
             """).Roles.Should().Equal(InstallRole.Cli);
     }
@@ -124,6 +132,38 @@ public sealed class InstallerAnswersTests
 
         var parse = () => InstallAnswers.Parse("""{ "roles": ["controller"], "controller": { "httpsPort": 8088 } }""");
         parse.Should().Throw<InstallerUsageException>().WithMessage("The web UI needs a port of its own: 8088 is the controller's API's port too.");
+    }
+
+    [TestMethod]
+    public void AClientsChoicesThatCannotWork_AreProblems()
+    {
+        new ClientSettings { Controller = "roofpi:8443" }.Problems().Should().ContainSingle().Which.Should().StartWith("The controller's address ");
+        new ClientSettings { Controller = "https://roofpi:8443/api" }.Problems().Should().ContainSingle().Which.Should().StartWith("The controller's address ");
+        new ClientSettings { Controller = FakeMachine.ControllerUrl, CaSha256 = "AB:CD" }.Problems()
+            .Should().Equal("The controller's CA's fingerprint must be 64 hex digits (colons between pairs allowed), not 'AB:CD'.");
+        new ClientSettings { Controller = FakeMachine.ControllerUrl, CaSha256 = FakeMachine.ControllerCaSha256, CertificateSha256 = FakeMachine.ControllerCaSha256 }.Problems()
+            .Should().ContainSingle().Which.Should().Contain("not both");
+        new ClientSettings { Controller = "http://roofpi:8080", CaSha256 = FakeMachine.ControllerCaSha256 }.Problems()
+            .Should().ContainSingle().Which.Should().Contain("plain HTTP has no certificate");
+        new ClientSettings { Controller = FakeMachine.ControllerUrl, TrustInKeychain = true }.Problems()
+            .Should().Equal("Only the controller's CA can be trusted in the keychain: give its fingerprint too.");
+        FakeMachine.ClientAnswers.Problems().Should().BeEmpty();
+        new ClientSettings { Controller = "http://roofpi:8080" }.Problems().Should().BeEmpty("a controller over plain HTTP has nothing to trust");
+        new MacAppSettings { Admin = "ada lovelace!" }.Problems().Should().ContainSingle().Which.Should().Contain("not a name the controller takes");
+    }
+
+    [TestMethod]
+    public void AnAnswersFileForAClient_MustSayWhichController_AndTheMacAppsAdmin()
+    {
+        var parse = () => InstallAnswers.Parse("""{ "roles": ["cli", "mac-app"] }""");
+
+        parse.Should().Throw<InstallerUsageException>().Which.Message.Should().Be(
+            "hvo-roof and the Mac app need the controller's address, and its CA's fingerprint (hvo-roof-install cert show on the controller): "
+            + "give \"client\": {\"controller\": \"https://roof.local:8443\", \"caSha256\": \"…\"}."
+            + Environment.NewLine
+            + "The Mac app needs an admin on the controller, who signs in once to make its device key: give \"macApp\": {\"admin\": \"NAME\"}.");
+        new InstallAnswers { Roles = [InstallRole.Cli] }.Problems().Should().BeEmpty("the wizard asks for the controller after the roles");
+        new InstallAnswers { Roles = [InstallRole.Controller], Client = FakeMachine.ClientAnswers }.Normalised().Client.Should().BeNull("only a client has one");
     }
 
     [TestMethod]

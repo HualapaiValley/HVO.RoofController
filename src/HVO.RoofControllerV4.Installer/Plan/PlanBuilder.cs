@@ -74,6 +74,11 @@ public static class PlanBuilder
         ArgumentNullException.ThrowIfNull(survey);
         ArgumentNullException.ThrowIfNull(answers);
         answers = answers.Normalised();
+        if (answers.Missing().ToArray() is { Length: > 0 } missing)
+        {
+            throw new InstallerException(string.Join(Environment.NewLine, missing));
+        }
+
         var roles = answers.Roles;
         var steps = new List<PlanStep>();
         var layout = ControllerLayout.For(machine);
@@ -159,14 +164,17 @@ public static class PlanBuilder
 
         if (roles.Contains(InstallRole.Cli))
         {
-            var path = Path.Join(InstallPaths.Expand(machine, answers.Cli!.Folder), "hvo-roof");
-            steps.Add(new LaterStep(StepKind.File, path, "hvo-roof, the command-line client", context => context.Machine.FileExists(path)));
+            steps.AddRange(ClientSteps.ForCli(machine, answers.Cli!, answers.Client!));
         }
 
         if (roles.Contains(InstallRole.MacApp))
         {
-            var path = Path.Join(InstallPaths.Expand(machine, answers.MacApp!.Folder), MachineSurveyor.MacAppBundle);
-            steps.Add(new LaterStep(StepKind.File, path, "the Mac app", context => context.Machine.DirectoryExists(path)));
+            steps.AddRange(ClientSteps.ForMacApp(machine, answers.MacApp!, answers.Client!));
+        }
+
+        if (InstallRoles.UsesController(roles))
+        {
+            steps.AddRange(ClientSteps.ForKeychain(machine, answers.Client!));
         }
 
         // The record comes last: it says the roles are installed once they are.
@@ -291,6 +299,7 @@ public static class PlanBuilder
             Controller = InstallRoles.RunsController(roles) ? answers.Controller! with { ImportSettingsFrom = null } : InstallRoles.RunsController(all) ? existing?.Controller : null,
             Cli = roles.Contains(InstallRole.Cli) ? answers.Cli : all.Contains(InstallRole.Cli) ? existing?.Cli : null,
             MacApp = roles.Contains(InstallRole.MacApp) ? answers.MacApp : all.Contains(InstallRole.MacApp) ? existing?.MacApp : null,
+            Client = InstallRoles.UsesController(roles) ? answers.Client : InstallRoles.UsesController(all) ? existing?.Client : null,
             // PINs are set once, and changed in the web UI: the record keeps none.
             Kiosk = roles.Contains(InstallRole.Kiosk) ? answers.Kiosk! with { Pins = [] } : all.Contains(InstallRole.Kiosk) ? existing?.Kiosk : null
         };

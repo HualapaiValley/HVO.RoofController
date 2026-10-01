@@ -19,7 +19,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Client;
 /// <summary>
 /// Only what the TLS tests need from a controller, over real HTTPS on a loopback port: liveness, who am I, Stop, and a status hub
 /// that offers WebSockets only, so a connected feed proves the certificate check reached the WebSocket as well as the
-/// negotiate request. <see cref="Present"/> changes the certificate for the connections that follow.
+/// negotiate request. <see cref="Present"/> changes the certificate for the connections that follow, and
+/// <see cref="ServedAuthority"/> is the CA it serves at <c>GET /ca.crt</c>.
 /// </summary>
 internal sealed class TlsTestController : IAsyncDisposable
 {
@@ -49,6 +50,21 @@ internal sealed class TlsTestController : IAsyncDisposable
     /// <summary>The thumbprint of the certificate each TLS handshake presented.</summary>
     public ConcurrentQueue<string> Presented { get; } = new();
 
+    /// <summary>The CA <c>GET /ca.crt</c> serves as PEM, as the controller does; null answers 404.</summary>
+    public X509Certificate2? ServedAuthority { get; set; }
+
+    /// <summary>What <c>GET /ca.crt</c> serves instead of <see cref="ServedAuthority"/>, when set.</summary>
+    public string? ServedCaText { get; set; }
+
+    /// <summary>
+    /// When set, <c>GET /ca.crt</c> sends its headers and the first bytes of a longer body, then
+    /// <see cref="CaBodyEnd.Stalls"/> (sends nothing more) or <see cref="CaBodyEnd.IsCutOff"/> (closes the connection).
+    /// </summary>
+    public CaBodyEnd? CaBodyEnds { get; set; }
+
+    /// <summary>For each <c>GET /ca.crt</c>, whether it carried a credential (an API key or a bearer token).</summary>
+    public ConcurrentQueue<bool> CaRequestCredentials { get; } = new();
+
     /// <summary>
     /// Starts on a free loopback port with <paramref name="certificate"/>, sending <paramref name="intermediates"/> with
     /// it.
@@ -73,6 +89,35 @@ internal sealed class TlsTestController : IAsyncDisposable
 
         var app = builder.Build();
         app.MapGet(RoofApiRoutes.HealthLive, () => Results.Text("Healthy"));
+        app.MapGet("ca.crt", async (HttpContext http) =>
+        {
+            var request = http.Request;
+            controller!.CaRequestCredentials.Enqueue(
+                request.Headers.ContainsKey(RoofControllerApiContract.ApiKeyHeaderName) || request.Headers.ContainsKey("Authorization"));
+            if (controller.CaBodyEnds is { } end)
+            {
+                http.Response.ContentType = "application/x-x509-ca-cert";
+                http.Response.ContentLength = 4000;
+                await http.Response.Body.WriteAsync("-----BEGIN CERTIFICATE-----\n"u8.ToArray());
+                await http.Response.Body.FlushAsync();
+                if (end == CaBodyEnd.IsCutOff)
+                {
+                    // Time for the headers to be read first: an abort that overtakes them fails the request itself.
+                    await Task.Delay(TimeSpan.FromMilliseconds(500), http.RequestAborted).ContinueWith(_ => { }, TaskScheduler.Default);
+                    http.Abort();
+                }
+                else
+                {
+                    await Task.Delay(Timeout.Infinite, http.RequestAborted).ContinueWith(_ => { }, TaskScheduler.Default);
+                }
+
+                return Results.Empty;
+            }
+
+            return controller.ServedCaText is { } text ? Results.Text(text, "application/x-x509-ca-cert")
+                : controller.ServedAuthority is { } authority ? Results.Text(authority.ExportCertificatePem() + "\n", "application/x-x509-ca-cert")
+                : Results.NotFound();
+        });
         app.MapGet("api/v4.0/Auth/Me", () => Results.Json(
             new RoofCallerResponse(CallerName, RoofControllerApiContract.ViewerRole, RoofCredentialKind.ApiKey, null, null, null, false),
             RoofClientJson.Options));
@@ -110,4 +155,11 @@ internal sealed class TlsTestController : IAsyncDisposable
                 new RoofStatusHubMessage(RoofServiceMock.Snapshot(), 1, DateTimeOffset.UtcNow, InstanceId));
         }
     }
+}
+
+/// <summary>How <see cref="TlsTestController"/>'s <c>GET /ca.crt</c> ends a body it does not finish.</summary>
+public enum CaBodyEnd
+{
+    Stalls,
+    IsCutOff
 }

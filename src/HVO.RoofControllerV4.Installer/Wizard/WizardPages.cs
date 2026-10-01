@@ -3,6 +3,7 @@ using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
+using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Roles;
 using Terminal.Gui.ViewBase;
@@ -219,7 +220,9 @@ internal sealed class RolesPage : WizardPage
             Roles = roles,
             RigConfirmation = _confirmation.Visible ? _confirmation.Text : null
         }).Normalised(Session.DefaultController);
-        var problems = Session.Problems();
+
+        // The Client page, after this one, is where the client's controller is changed.
+        var problems = Session.Problems(clientChosen: false);
         return problems.Count == 0 ? null : string.Join(" ", problems);
     }
 
@@ -338,7 +341,7 @@ internal sealed class SettingsPage : WizardPage
         if (answers.Cli is { } cli)
         {
             previous = Heading(previous, "Where hvo-roof goes");
-            _cliFolder = Selector(previous, CliSettings.Folders.Select(folder => folder == CliSettings.HomeFolder ? $"{folder} (yours)" : $"{folder} (everyone's; needs sudo to write)"), Index(CliSettings.Folders, cli.Folder));
+            _cliFolder = Selector(previous, CliSettings.Folders.Select(folder => folder == CliSettings.HomeFolder ? $"{folder} (yours)" : $"{folder} (everyone's: only if you may write to it without sudo)"), Index(CliSettings.Folders, cli.Folder));
             previous = _cliFolder;
             _description.Add($"hvo-roof: {cli.Folder}");
         }
@@ -402,10 +405,10 @@ internal sealed class SettingsPage : WizardPage
 
         if (answers.MacApp is not null && _macAppFolder is not null)
         {
-            answers = answers with { MacApp = new MacAppSettings { Folder = MacAppSettings.Folders[Math.Clamp(_macAppFolder.Value ?? 0, 0, MacAppSettings.Folders.Count - 1)] } };
+            answers = answers with { MacApp = answers.MacApp with { Folder = MacAppSettings.Folders[Math.Clamp(_macAppFolder.Value ?? 0, 0, MacAppSettings.Folders.Count - 1)] } };
         }
 
-        problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised()));
+        problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised(), clientChosen: false));
         if (problems.Count > 0)
         {
             return string.Join(" ", problems);
@@ -619,7 +622,7 @@ internal sealed class ControllerPage : WizardPage
 
         if (problems.Count == 0)
         {
-            problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised()));
+            problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised(), clientChosen: false));
         }
 
         if (problems.Count > 0)
@@ -667,6 +670,326 @@ internal sealed class ControllerPage : WizardPage
         problems.Add($"{name} must be a number, not '{field.Text}'.");
         return null;
     }
+}
+
+/// <summary>
+/// Step 4, when hvo-roof or the Mac app is installed: the controller they connect to, and how this machine trusts it. Its
+/// CA is fetched from it here, and trusted only once the person says its fingerprint is the one the controller shows (its
+/// installer's Done page, or <c>hvo-roof-install cert show</c>). The Mac app also needs an admin, who signs in once after
+/// the review so the installer can make the Mac's device key.
+/// </summary>
+internal sealed class ClientPage : WizardPage
+{
+    private static readonly string[] TrustLabels =
+    [
+        "Its private CA: fetched from it, and trusted once you check its fingerprint",
+        "Its self-signed certificate, pinned to its fingerprint",
+        "As this machine trusts any website: a certificate of your own, or plain HTTP"
+    ];
+
+    private const int ByCa = 0;
+    private const int ByPin = 1;
+
+    private TextField? _address;
+    private Button? _fetch;
+    private OptionSelector? _trust;
+    private TextField? _pin;
+    private View? _pinCaption;
+    private Label? _authority;
+    private CheckBox? _matches;
+    private CheckBox? _keychain;
+    private TextField? _admin;
+    private FetchedCa? _fetched;
+    private string? _failure;
+    private bool _fetching;
+    private int _fetches;
+
+    public ClientPage(InstallerWizard wizard)
+        : base(wizard, "Connecting to the controller")
+    {
+    }
+
+    public override bool Applies => InstallRoles.UsesController(Session.Answers.Roles);
+
+    public override bool CanGoNext => !_fetching;
+
+    // A fetch still running would land on the page shown again, its CA beside a box ticked for the recorded one.
+    public override bool CanGoBack => !_fetching;
+
+    public TextField? Address => _address;
+
+    public Button? FetchButton => _fetch;
+
+    /// <summary>How this machine trusts the controller: by its CA, by a pin on its certificate, or as it trusts any website.</summary>
+    public OptionSelector? Trust => _trust;
+
+    /// <summary>The fingerprint of a self-signed certificate, to pin.</summary>
+    public TextField? Pin => _pin;
+
+    /// <summary>What the fetch found: the CA the controller serves and its fingerprint, or why it could not be fetched.</summary>
+    public Label? Authority => _authority;
+
+    /// <summary>Ticked once the person has compared the CA's fingerprint with the one the controller shows.</summary>
+    public CheckBox? Matches => _matches;
+
+    /// <summary>On a Mac: trust the CA in the login keychain too, for Safari and Chrome.</summary>
+    public CheckBox? Keychain => _keychain;
+
+    /// <summary>The admin who makes the Mac's device key; null when the Mac app is not installed.</summary>
+    public TextField? Admin => _admin;
+
+    public override void Showing()
+    {
+        Clear();
+        _address = _pin = _admin = null;
+        _pinCaption = null;
+        _fetch = null;
+        _trust = null;
+        _authority = null;
+        _matches = _keychain = null;
+        _failure = null;
+        _fetching = false;
+
+        // Whatever an earlier visit's fetch brings back is not for this one.
+        _fetches++;
+        var answers = Session.Answers.Normalised();
+        var client = answers.Client ?? new ClientSettings();
+        _fetched = client.CaSha256 is { } recorded ? new FetchedCa(client.Controller, null, recorded) : null;
+        var who = Who(answers.Roles);
+
+        View previous = Heading(null, $"The controller {who.Name} {(who.Plural ? "connect" : "connects")} to");
+        _address = Field(ref previous, "Address", client.Controller, 44);
+        _fetch = Wizard.Theme.Styled(new Button { Text = "Fetch its CA", X = Pos.Right(_address) + 2, Y = Pos.Top(_address) });
+        _fetch.Accepting += (_, e) =>
+        {
+            e.Handled = true;
+            Fetch();
+        };
+        Add(_fetch);
+        _address.TextChanged += (_, _) =>
+        {
+            _failure = null;
+            UpdateAuthority();
+        };
+        previous = Hint(previous, "As this machine reaches it, with its port: https://roof.local:8443.");
+
+        previous = Heading(previous, $"How {who.Name} {(who.Plural ? "trust" : "trusts")} it");
+        _trust = Selector(previous, TrustLabels, client.CaSha256 is not null || client.Controller.Length == 0 ? ByCa : client.CertificateSha256 is not null ? ByPin : 2);
+        _trust.ValueChanged += (_, _) => UpdateTrust();
+        previous = _trust;
+
+        // The pin and the CA each in the same place under the choice: only the one chosen shows.
+        _pin = Field(ref previous, "Certificate's SHA-256", client.CertificateSha256 ?? string.Empty, 64);
+        _pinCaption = previous;
+        _authority = Wrapping(new Label { X = 2, Y = Pos.Top(_pinCaption) });
+        Add(_authority);
+        previous = _authority;
+        _matches = Check(ref previous, "It is the fingerprint the controller shows: trust this CA", _fetched is not null);
+        if (Session.Survey.Os == InstallerOs.MacOS)
+        {
+            _keychain = Check(ref previous, "Trust it in my login keychain too, for Safari and Chrome (macOS asks for your password)", client.TrustInKeychain);
+        }
+
+        if (answers.MacApp is { } macApp)
+        {
+            previous = Heading(previous, "The Mac app's device key");
+            _admin = Field(ref previous, "Made by the admin", macApp.Admin, 30);
+            previous = Hint(previous, "An admin on the controller, by the name they sign in with. They sign in once, after the review, so the installer "
+                + "can make the Mac's own key (a viewer's): it goes in a file only you can read, and is never shown.");
+        }
+
+        UpdateAuthority();
+        UpdateTrust();
+    }
+
+    public override string? Leave()
+    {
+        var answers = Session.Answers.Normalised();
+        var address = _address!.Text.Trim();
+        var trust = _trust!.Value ?? ByCa;
+        var client = new ClientSettings { Controller = address };
+        var problems = new List<string>();
+        if (trust == ByCa)
+        {
+            if (Confirmed(address) is { } fingerprint)
+            {
+                client = client with { CaSha256 = fingerprint, TrustInKeychain = _keychain?.Value == CheckState.Checked };
+            }
+            else if (client.Address is not null)
+            {
+                problems.Add("Fetch the controller's CA, check its fingerprint is the one the controller shows, and tick that it is: "
+                    + "or choose another way to trust it.");
+            }
+        }
+        else if (trust == ByPin)
+        {
+            client = client with { CertificateSha256 = _pin!.Text };
+        }
+
+        answers = answers with { Client = client.Normalised() };
+        if (answers.MacApp is { } macApp && _admin is not null)
+        {
+            answers = answers with { MacApp = macApp with { Admin = _admin.Text } };
+            if (string.IsNullOrWhiteSpace(_admin.Text))
+            {
+                problems.Add("Give the admin who makes the Mac's device key, by the name they sign in with.");
+            }
+        }
+
+        problems.AddRange(client.Problems());
+        if (problems.Count == 0)
+        {
+            problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised()));
+        }
+
+        if (problems.Count > 0)
+        {
+            return string.Join(" ", problems.Distinct());
+        }
+
+        Session.Answers = answers.Normalised();
+        return null;
+    }
+
+    public override IReadOnlyList<string> Describe()
+    {
+        var trust = _trust?.Value ?? ByCa;
+        var lines = new List<string> { $"Controller: {_address?.Text.Trim()}", $"Trusted by: {TrustLabels[trust]}" };
+        if (trust == ByPin)
+        {
+            lines.Add($"Certificate's SHA-256: {_pin?.Text}");
+        }
+        else if (trust == ByCa)
+        {
+            lines.Add(_authority?.Text ?? string.Empty);
+            lines.Add(_matches?.Value == CheckState.Checked ? "Its fingerprint checked: trusted" : "Its fingerprint not checked yet");
+            if (_keychain is not null)
+            {
+                lines.Add($"Login keychain: {(_keychain.Value == CheckState.Checked ? "trusted there too" : "not changed")}");
+            }
+        }
+
+        if (_admin is not null)
+        {
+            lines.Add($"The Mac's device key made by: {_admin.Text}");
+        }
+
+        return lines;
+    }
+
+    // The fingerprint fetched (or recorded) for this address, once the person has ticked that it matches.
+    private string? Confirmed(string address)
+        => _fetched is { } fetched && fetched.Address == address && _matches?.Value == CheckState.Checked ? fetched.Fingerprint : null;
+
+    private void Fetch()
+    {
+        var text = _address!.Text.Trim();
+        var problem = WebAddress.Problem(text, allowPath: false, "https://roof.local:8443") is { } wrong ? $"The controller's address {wrong}"
+            : !text.StartsWith("https:", StringComparison.OrdinalIgnoreCase) ? "Only an https address has a CA to fetch."
+            : null;
+        if (problem is not null)
+        {
+            Wizard.Say(problem, error: true);
+            return;
+        }
+
+        var address = new Uri(text);
+        var fetch = ++_fetches;
+        _fetching = true;
+        _fetched = null;
+        _failure = null;
+        UpdateAuthority();
+        _authority!.Text = $"Fetching the CA {address} serves…";
+        Wizard.Refresh();
+        Wizard.Run(
+            async () =>
+            {
+                using var authority = await Session.Machine.FetchCaAsync(address, CancellationToken.None).ConfigureAwait(false);
+                return new FetchedCa(text, RoofCertificateAuthority.Describe(authority), RoofCertificateAuthority.Fingerprint(authority));
+            },
+            (fetched, error) =>
+            {
+                if (fetch != _fetches)
+                {
+                    // A fetch the person has since started again.
+                    return;
+                }
+
+                _fetching = false;
+                if (error is not null)
+                {
+                    _failure = $"The installer could not fetch the controller's CA from {address}: {ClientTrust.Failure(error)}";
+                    Session.Log.Write(_failure);
+                }
+                else
+                {
+                    Session.Log.Write($"Fetched the controller's CA from {address}: {fetched!.Name} ({fetched.Fingerprint}).");
+
+                    // A CA just fetched is compared afresh, whatever was ticked before.
+                    _matches!.Value = CheckState.UnChecked;
+                    _fetched = fetched;
+                }
+
+                UpdateAuthority();
+                if (_fetched is not null)
+                {
+                    // What to do next: say whether it is the fingerprint the controller shows.
+                    _matches!.SetFocus();
+                }
+
+                Wizard.Refresh();
+            });
+    }
+
+    // What is known of the CA at the address typed now, and whether it may be ticked as matching.
+    private void UpdateAuthority()
+    {
+        if (_authority is null || _matches is null || _address is null)
+        {
+            return;
+        }
+
+        var address = _address.Text.Trim();
+        var current = _fetched is { } fetched && fetched.Address == address ? fetched : null;
+        _authority.Text = current is { Name: { } name } ? $"It serves {name}, whose SHA-256 fingerprint is\n{Halves(current.Fingerprint)}\nDoes it match the controller's installer's Done page, or hvo-roof-install cert show on it?"
+            : current is not null ? $"Trusted now: its CA, whose SHA-256 fingerprint is\n{Halves(current.Fingerprint)}\nFetch its CA again to check the one it serves now."
+            : _failure ?? "Fetch its CA to see its fingerprint, and compare it with the one the controller shows.";
+        _authority.SetScheme(current is null && _failure is not null ? Wizard.Theme.Danger : Wizard.Theme.Base);
+
+        _matches.Enabled = current is not null && _trust?.Value == ByCa;
+        if (current is null)
+        {
+            _matches.Value = CheckState.UnChecked;
+        }
+    }
+
+    private void UpdateTrust()
+    {
+        var trust = _trust?.Value ?? ByCa;
+        _fetch!.Enabled = trust == ByCa;
+        _authority!.Visible = trust == ByCa;
+        _matches!.Visible = trust == ByCa;
+        _pin!.Visible = trust == ByPin;
+        _pinCaption!.Visible = trust == ByPin;
+        if (_keychain is not null)
+        {
+            _keychain.Enabled = trust == ByCa;
+        }
+
+        UpdateAuthority();
+    }
+
+    // A fingerprint on two lines, indented, so it fits an 80-column terminal: 16 pairs, then 16.
+    private static string Halves(string fingerprint)
+        => fingerprint.Length == 95 ? $"  {fingerprint[..48]}\n  {fingerprint[48..]}" : $"  {fingerprint}";
+
+    private static (string Name, bool Plural) Who(IReadOnlyList<InstallRole> roles)
+        => roles.Contains(InstallRole.Cli) && roles.Contains(InstallRole.MacApp) ? ("hvo-roof and the Mac app", true)
+            : roles.Contains(InstallRole.MacApp) ? ("the Mac app", false)
+            : ("hvo-roof", false);
+
+    /// <summary>The CA the controller at <paramref name="Address"/> serves; <paramref name="Name"/> is null for one recorded, not fetched.</summary>
+    private sealed record FetchedCa(string Address, string? Name, string Fingerprint);
 }
 
 /// <summary>
@@ -782,12 +1105,12 @@ internal sealed class ReviewPage : WizardPage
 
 /// <summary>
 /// Step 6, when the plan needs them: the passwords and PINs no file gave (<c>--admin-password-file</c> and the others),
-/// each typed twice. They are never shown, saved or logged: Install uses them once.
+/// each new one typed twice. They are never shown, saved or logged: Install uses them once.
 /// </summary>
 internal sealed class PasswordsPage : WizardPage
 {
     private const int Column = 30;
-    private readonly List<(InstallSecret Secret, TextField Typed, TextField Again)> _fields = [];
+    private readonly List<(InstallSecret Secret, TextField Typed, TextField? Again)> _fields = [];
     private readonly List<string> _description = [];
     private bool _given;
 
@@ -801,8 +1124,8 @@ internal sealed class PasswordsPage : WizardPage
     // From the plan's check on, so the count of steps holds once they are given.
     public override bool Applies => _given || (Review.Plan is { } plan && Session.MissingSecrets(plan).Count > 0);
 
-    /// <summary>Each secret asked for, its field, and the field it is typed again in.</summary>
-    public IReadOnlyList<(InstallSecret Secret, TextField Typed, TextField Again)> Fields => _fields;
+    /// <summary>Each secret asked for, its field, and the field it is typed again in (none for a password a person has already).</summary>
+    public IReadOnlyList<(InstallSecret Secret, TextField Typed, TextField? Again)> Fields => _fields;
 
     private ReviewPage Review => Wizard.Pages.OfType<ReviewPage>().Single();
 
@@ -812,7 +1135,9 @@ internal sealed class PasswordsPage : WizardPage
         _fields.Clear();
         _description.Clear();
         var missing = Session.MissingSecrets(Review.Plan!);
-        const string intro = "Each is typed twice, and never shown, saved or logged.";
+        var intro = missing.All(secret => secret.IsExisting) ? "It is never shown, saved or logged."
+            : missing.Any(secret => secret.IsExisting) ? "Each new one is typed twice. None is shown, saved or logged."
+            : "Each is typed twice, and never shown, saved or logged.";
         View previous = Wrapping(new Label { Text = intro, X = 0, Y = 0 });
         Add(previous);
         _description.Add(intro);
@@ -821,9 +1146,9 @@ internal sealed class PasswordsPage : WizardPage
         {
             var what = InstallSecrets.Describe(secret);
             var typed = Field(ref previous, what, first: true);
-            var again = Field(ref previous, "Again", first: false);
+            var again = secret.IsExisting ? null : Field(ref previous, "Again", first: false);
             _fields.Add((secret, typed, again));
-            _description.Add($"{Capitalised(what)}: typed twice");
+            _description.Add($"{Capitalised(what)}: {(again is null ? "typed once" : "typed twice")}");
 
             // The PIN rule once, under the first PIN: the kiosk's people may each have one.
             var rule = secret.Kind == InstallSecretKind.AdminPassword ? RoofIdentityText.PasswordRule
@@ -846,7 +1171,7 @@ internal sealed class PasswordsPage : WizardPage
                 return $"{Capitalised(InstallSecrets.Describe(secret))}: {problem}";
             }
 
-            if (!string.Equals(typed.Text, again.Text, StringComparison.Ordinal))
+            if (again is not null && !string.Equals(typed.Text, again.Text, StringComparison.Ordinal))
             {
                 return $"{Capitalised(InstallSecrets.Describe(secret))}: the two differ. Type it again in both.";
             }
@@ -855,7 +1180,11 @@ internal sealed class PasswordsPage : WizardPage
         foreach (var (secret, typed, again) in _fields)
         {
             Session.GiveSecret(secret, typed.Text);
-            typed.Text = again.Text = string.Empty;
+            typed.Text = string.Empty;
+            if (again is not null)
+            {
+                again.Text = string.Empty;
+            }
         }
 
         _given = _fields.Count > 0;

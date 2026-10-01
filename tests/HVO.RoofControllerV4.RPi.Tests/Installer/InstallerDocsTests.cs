@@ -5,14 +5,16 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Roles;
+using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Versioning;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 
 /// <summary>
 /// docs/install.md and the installer agree (#67): every exit code, role, connection and default it lists, its answers
-/// file example, and a screenshot in docs/images/install for each page the wizard's tests draw, each shown on the page.
+/// file examples and plans, and a screenshot in docs/images/install for each page the wizard's tests draw, each shown on the page.
 /// </summary>
 [TestClass]
 [UnsupportedOSPlatform("windows")]
@@ -34,7 +36,7 @@ public sealed partial class InstallerDocsTests
     public void TheAnswersFileExamples_AreOnesTheInstallerReads()
     {
         var examples = JsonBlock().Matches(Page);
-        examples.Should().HaveCountGreaterThanOrEqualTo(3, "docs/install.md shows an answers file for the controller, one for a rig, and one with the kiosk");
+        examples.Should().HaveCountGreaterThanOrEqualTo(4, "docs/install.md shows an answers file for the controller, one for a rig, one with the kiosk, and one for hvo-roof and the Mac app");
 
         var answers = InstallAnswers.Parse(examples[0].Groups[1].Value);
         answers.Roles.Should().Equal(InstallRole.Controller);
@@ -57,6 +59,11 @@ public sealed partial class InstallerDocsTests
         kiosk.Roles.Should().Equal(InstallRole.Controller, InstallRole.Kiosk);
         kiosk.Kiosk.Should().BeEquivalentTo(new KioskSettings { HideCursor = true, Pins = ["olga"] });
         kiosk.Problems().Should().BeEmpty();
+
+        var mac = InstallAnswers.Parse(examples[3].Groups[1].Value);
+        mac.Roles.Should().Equal(InstallRole.Cli, InstallRole.MacApp);
+        mac.Client.Should().Be(FakeMachine.ClientAnswers with { TrustInKeychain = true }, "the example is the controller the tests' Mac connects to");
+        mac.MacApp.Should().Be(new MacAppSettings { Admin = "ada" });
     }
 
     [TestMethod]
@@ -76,6 +83,10 @@ public sealed partial class InstallerDocsTests
         page.Should().Contain(FormattableString.Invariant($"| A rig only: the emulated camera's frame rate, from `{RigSettings.MinimumCameraFramesPerSecond}` to `{RigSettings.MaximumCameraFramesPerSecond}` | `{RigSettings.DefaultCameraFramesPerSecond}` (the wizard offers the running emulator's) |"));
         page.Should().Contain($"| `cli.folder` | `{CliSettings.HomeFolder}` or `{CliSettings.SharedFolder}` | `{new CliSettings().Folder}` |");
         page.Should().Contain($"| `macApp.folder` | `{MacAppSettings.SharedFolder}` or `{MacAppSettings.HomeFolder}` | `{new MacAppSettings().Folder}` |");
+        foreach (var member in new[] { "macApp.admin", "client.controller", "client.caSha256", "client.certificateSha256", "client.trustInKeychain" })
+        {
+            page.Should().Contain($"| `{member}` |");
+        }
     }
 
     [TestMethod]
@@ -107,6 +118,25 @@ public sealed partial class InstallerDocsTests
         (run.Output + run.Error).Should().Be(example.Groups[1].Value.Replace("rig.json", answers, StringComparison.Ordinal));
     }
 
+    [TestMethod]
+    public async Task TheMacPlanExample_IsWhatTheInstallerPrints()
+    {
+        var example = MacPlanExample().Match(Page);
+        example.Success.Should().BeTrue("docs/install.md shows --plan for hvo-roof and the Mac app");
+        using var host = RoofClientApiTests.CreateHost();
+        await RoofClientApiTests.AddUserAsync(host, "ada", RoofControllerApiContract.AdminRole);
+        using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy")
+        {
+            ApiHandler = () => ClientTestSupport.CreateHandler(() => host.Server)
+        };
+        mac.Folder("/Applications").Folder("/Users/roy/.local/bin");
+        var answers = mac.WriteAnswers(InstallAnswers.Parse(JsonBlock().Matches(Page)[3].Groups[1].Value), "mac.json");
+
+        var run = await mac.RunAsync("--plan", "--answers", answers);
+
+        (run.Output + run.Error).Should().Be(example.Groups[1].Value.Replace("mac.json", answers, StringComparison.Ordinal));
+    }
+
     [GeneratedRegex(@"^\| (\d+) \|", RegexOptions.Multiline)]
     private static partial Regex ExitCodeRow();
 
@@ -118,6 +148,9 @@ public sealed partial class InstallerDocsTests
 
     [GeneratedRegex(@"```text\n\$ hvo-roof-install --plan --answers rig\.json\n(.*?)```", RegexOptions.Singleline)]
     private static partial Regex PlanExample();
+
+    [GeneratedRegex(@"```text\n\$ hvo-roof-install --plan --answers mac\.json\n(.*?)```", RegexOptions.Singleline)]
+    private static partial Regex MacPlanExample();
 
     [GeneratedRegex(@"\]\(images/install/([^)]+)\.svg\)")]
     private static partial Regex Screenshot();

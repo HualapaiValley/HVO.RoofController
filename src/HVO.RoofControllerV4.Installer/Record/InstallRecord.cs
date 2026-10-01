@@ -50,6 +50,9 @@ public sealed record InstallRecord
 
     public MacAppSettings? MacApp { get; init; }
 
+    /// <summary>The controller hvo-roof and the Mac app use, and how they trust it.</summary>
+    public ClientSettings? Client { get; init; }
+
     /// <summary>The kiosk's choices, without the people given PINs (they are given once).</summary>
     public KioskSettings? Kiosk { get; init; }
 
@@ -64,6 +67,7 @@ public sealed record InstallRecord
         Controller = Controller,
         Cli = Cli,
         MacApp = MacApp,
+        Client = Client,
         Kiosk = Kiosk
     }.Normalised();
 

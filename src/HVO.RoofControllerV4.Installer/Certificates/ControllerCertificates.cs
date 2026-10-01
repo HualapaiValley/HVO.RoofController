@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using HVO.RoofControllerV4.Client;
 
 namespace HVO.RoofControllerV4.Installer.Certificates;
 
@@ -255,7 +256,7 @@ public static class ControllerCertificates
     public static string Fingerprint(X509Certificate2 certificate)
     {
         ArgumentNullException.ThrowIfNull(certificate);
-        return Convert.ToHexString(certificate.GetCertHash(HashAlgorithmName.SHA256)).Chunk(2).Select(pair => new string(pair)).Aggregate((left, right) => $"{left}:{right}");
+        return RoofCertificateAuthority.Fingerprint(certificate);
     }
 
     private static CertificateRequest ServerRequest(ECDsa key, CertificateNames names)
