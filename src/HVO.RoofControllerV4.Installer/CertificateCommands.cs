@@ -692,7 +692,7 @@ internal static class CertificateCommands
     }
 
     // A rig on a Mac is the person's (its record and files), as every role there is: never root's.
-    private static void RefuseRootOnMac(InstallerMachine machine, string command)
+    internal static void RefuseRootOnMac(InstallerMachine machine, string command)
     {
         if (machine.IsRoot && machine.Os == InstallerOs.MacOS)
         {

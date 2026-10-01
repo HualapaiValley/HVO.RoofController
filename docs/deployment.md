@@ -279,6 +279,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `--dry-run` | Checks the Docker context, the key and the HTTPS choice. If the controller is running, it reads `GET Status` over loopback and from this machine at the final URL, and prints the relay state. It then prints the plan. Nothing is built or changed. |
 | `--force-unverified-stop` | Lets the deploy continue when the Stop cannot be verified, but only after you type `STOP-UNVERIFIED` at the terminal. See the steps below. |
 | `--rollback` | Swaps the running controller with `<name>-previous` instead of deploying. See [Rolling back](#rolling-back). |
+| `--stop` | Deploys nothing. It makes the verified Stop of step 2 (with `REQUIRE_IDLE_ROOF=true`, only while the roof is idle), then stops the controller gracefully and keeps it: `docker start <name>` runs it again. `<name>-previous` is left as it is, and a controller that is stopped or missing is left too. The [installer](install.md#uninstalling)'s `uninstall` uses it before it removes the controller. It cannot be combined with `--dry-run`, `--rollback` or `--verify-remote`. |
 | `--verify-remote` | Deploys nothing and makes no Docker call. It runs only the remote check of step 7 against the controller that answers at the published URL: an authenticated `GET Status` that must report the expected `hatMode`, then a `POST Stop` that must be verified. The Stop stops the roof. This is the remote check for a [Compose deployment](#deploying-with-compose). It cannot be combined with the other flags or with `SKIP_REMOTE_CHECK=true`. |
 
 | Variable | Default | Meaning |
@@ -439,7 +440,7 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   pre-flight, with the running controller untouched.
 - From the pre-flight on, the deploy is the same as for a built image, and the pre-flight and the new controller run
   the checked platform's image. `--dry-run` shows the pull in its plan and pulls nothing.
-- `--rollback` and `--verify-remote` ignore `IMAGE_REF`, and do not check it: a rollback restores `<name>-previous`
+- `--rollback`, `--stop` and `--verify-remote` ignore `IMAGE_REF`, and do not check it: a rollback restores `<name>-previous`
   however it was deployed, even with a reference a deploy would refuse still in the environment.
 - The released images are public once a maintainer has made the GHCR packages public, a step of the first release
   ([Versions and releases](releasing.md)); then the Pi needs no registry login. Until then, or for a registry that

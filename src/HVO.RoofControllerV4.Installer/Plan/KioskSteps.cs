@@ -115,6 +115,18 @@ public static class KioskSteps
         return [settings, new KioskServiceStep(layout, controller, [settings], unit: null, rule: null)];
     }
 
+    /// <summary>
+    /// What <c>rollback</c> changes for a kiosk installed here: its program, the release before's (swapped with the one
+    /// kept as <see cref="PreviousProgram"/> when that is it), and its service, started again to run it.
+    /// </summary>
+    public static IReadOnlyList<PlanStep> ForRollback(ControllerLayout layout, ControllerSettings controller)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(controller);
+        var program = new KioskProgramStep();
+        return [program, new KioskServiceStep(layout, controller, [program], unit: null, rule: null)];
+    }
+
     /// <summary>One of the kiosk's files from its deploy folder, as the installer carries it.</summary>
     public static string Resource(string name)
     {
@@ -282,11 +294,7 @@ public sealed class KioskProgramStep : PlanStep
             return new StepCheck(StepChange.Blocked, $"release {release.Version} has no kiosk for {KioskSteps.AssetPlatform} with its program's SHA-256 in {ReleaseManifest.FileName}");
         }
 
-        var current = await context.Machine.Sha256Async(Target, cancellationToken).ConfigureAwait(false);
-        return current is null ? new StepCheck(StepChange.Create, $"release {release.Version}'s, {Modes.Octal(Modes.Program)}")
-            : current != wanted.Sha256 ? new StepCheck(StepChange.Change, $"release {release.Version}'s; the one there now is kept as {Path.GetFileName(KioskSteps.PreviousProgram)}")
-            : context.Machine.GetMode(Target) is { } mode && mode != Modes.Program ? new StepCheck(StepChange.Change, $"{Modes.Octal(mode)} → {Modes.Octal(Modes.Program)}")
-            : StepCheck.Unchanged($"release {release.Version}'s");
+        return await ProgramFile.CheckAsync(context.Machine, Target, wanted.Sha256, release.Version, cancellationToken).ConfigureAwait(false);
     }
 
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
@@ -295,35 +303,14 @@ public sealed class KioskProgramStep : PlanStep
         var machine = context.Machine;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         var (asset, sha256) = Wanted(release) ?? throw new InstallerException($"Release {release.Version} has no kiosk for {KioskSteps.AssetPlatform}.");
-        if (await machine.Sha256Async(Target, cancellationToken).ConfigureAwait(false) == sha256)
+        async Task WriteAsync(string staged, CancellationToken token)
         {
-            machine.SetMode(Target, Modes.Program);
-            context.Log.Write($"Set {Target} to {Modes.Octal(Modes.Program)}.");
-            return;
+            using var work = new DeployScript.WorkFolder(machine);
+            var tarball = await ReleaseFiles.GetAsync(context, release, asset, work, token).ConfigureAwait(false);
+            await machine.WriteAtomicallyAsync(staged, (stream, inner) => ExtractAsync(machine, tarball, asset, sha256, stream, inner), Modes.Program, token).ConfigureAwait(false);
         }
 
-        using var work = new DeployScript.WorkFolder(machine);
-        var tarball = await ReleaseFiles.GetAsync(context, release, asset, work, cancellationToken).ConfigureAwait(false);
-        var staged = $"{Target}.new";
-        try
-        {
-            await machine.WriteAtomicallyAsync(staged, (stream, token) => ExtractAsync(machine, tarball, asset, sha256, stream, token), Modes.Program, cancellationToken).ConfigureAwait(false);
-            if (machine.FileExists(Target))
-            {
-                await machine.CopyFileAsync(Target, KioskSteps.PreviousProgram, Modes.Program, cancellationToken).ConfigureAwait(false);
-                context.Log.Write($"Kept the kiosk's program it replaces as {KioskSteps.PreviousProgram}.");
-            }
-
-            machine.MoveFile(staged, Target);
-        }
-        finally
-        {
-            if (machine.FileExists(staged))
-            {
-                machine.DeleteFile(staged);
-            }
-        }
-
+        await ProgramFile.ApplyAsync(context, Target, sha256, "kiosk's program", WriteAsync, cancellationToken).ConfigureAwait(false);
         context.Log.Write($"Installed the kiosk's program from {asset.Name} (release {release.Version}) as {Target}.");
     }
 

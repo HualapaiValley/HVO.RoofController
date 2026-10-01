@@ -1013,6 +1013,88 @@ test_rollback_without_previous_fails() {
   assert_container roof-controller current true
 }
 
+# --- --stop ---------------------------------------------------------------------------------------------------------
+
+test_stop_stops_the_controller_after_a_verified_stop_and_keeps_it() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" IMAGE_REF="not a reference" -- --stop
+
+  assert_status 0
+  assert_output_contains "Roof stop verified (relay register all off)."
+  assert_output_contains "[done] Stopped roof-controller after the roof's stop. It is kept: docker start roof-controller runs it again."
+  assert_container roof-controller current false unless-stopped
+  assert_container roof-controller-previous old false unless-stopped
+  [[ "$(docker_calls stop)" == '["stop","-t","30","roof-controller"]' ]] || fail_test "expected one graceful stop, got: $(docker_calls stop)"
+  [[ -z "$(docker_calls run)$(docker_calls rename)$(docker_calls rm)$(docker_calls pull)$(docker_calls buildx)" ]] \
+    || fail_test "--stop deployed, renamed or removed something"
+  local i_stop_request i_stop
+  i_stop_request=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')
+  i_stop=$(call_index '"stop", "-t"')
+  (( i_stop_request > 0 && i_stop_request < i_stop )) \
+    || fail_test "expected the roof's Stop before docker stop: stop-request=${i_stop_request} stop=${i_stop}"
+  [[ ! -s "${FAKE_STATE_DIR}/remote.log" ]] || fail_test "--stop called the remote URL"
+  assert_key_never_in_argv
+}
+
+test_stop_aborts_on_an_unverified_stop_or_a_moving_roof() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_STOP=unverified -- --stop
+  assert_status 1
+  assert_output_contains "The roof stop could not be verified"
+  assert_old_controller_untouched
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" REQUIRE_IDLE_ROOF=true FAKE_OLD_MOTION=Opening -- --stop
+  assert_status 1
+  assert_output_contains "The roof is moving (commandedMotion=Opening, isMoving=true)"
+  assert_output_contains "Nothing was changed; run again once the roof is idle."
+  assert_old_controller_untouched
+  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested of a moving roof"
+}
+
+test_stop_of_a_stopped_or_missing_controller_changes_nothing() {
+  deploy "${HTTPS_ENV[@]}" -- --stop
+  assert_status 0
+  assert_output_contains "[done] There is no roof-controller to stop. Nothing was changed."
+
+  seed_container roof-controller old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" -- --stop
+  assert_status 0
+  assert_output_contains "[done] roof-controller is already stopped. Nothing was changed."
+  assert_container roof-controller old false unless-stopped
+  [[ -z "$(docker_calls stop)$(docker_calls exec)" ]] || fail_test "--stop called a stopped controller"
+}
+
+test_stop_refuses_a_running_previous_and_a_failed_docker_stop() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" -- --stop
+  assert_status 1
+  assert_output_contains "roof-controller-previous is running: two controllers must never share the HAT."
+  [[ -z "$(docker_calls stop)" ]] || fail_test "--stop stopped a container"
+
+  teardown
+  setup
+  seed_container roof-controller current true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_STOP_FAIL=true -- --stop
+  assert_status 1
+  assert_output_contains "Could not stop roof-controller (see above). Check it: docker ps -a --filter name=roof-controller"
+}
+
+test_stop_refuses_other_modes() {
+  seed_container roof-controller old true 8443:8443
+  local other
+  for other in --dry-run --rollback --verify-remote; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" -- --stop "${other}"
+    assert_status_is 2
+    assert_output_contains "--stop cannot be combined with --dry-run, --rollback or --verify-remote"
+    assert_no_docker_calls "--stop ${other}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
 test_dry_run_changes_nothing() {
   seed_container roof-controller old true 8443:8443
   deploy "${HTTPS_ENV[@]}" -- --dry-run

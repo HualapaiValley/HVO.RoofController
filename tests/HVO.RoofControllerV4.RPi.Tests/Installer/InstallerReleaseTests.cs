@@ -41,6 +41,7 @@ public sealed class InstallerReleaseTests
     [DataRow("images.hatEmulator.reference", "ghcr.io/someone-else/roof-hat-emulator:4.0.0@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "the hatEmulator image's reference is not its repository, a tag and its digest")]
     [DataRow("images.hatEmulator.repository", "GHCR.IO/Roof", "the hatEmulator image's repository is not an image repository")]
     [DataRow("images.hatEmulator", null, "it has no hatEmulator image")]
+    [DataRow("upgradeNotes", "Nothing to do by hand.", "its upgrade notes are not a list")]
     public void AReleaseJson_ThatIsNotThisRelease_OrNotPinned_IsRefused(string path, object? value, string reason)
     {
         var json = JsonNode.Parse(FakeMachine.ReleaseJson())!;
@@ -60,6 +61,30 @@ public sealed class InstallerReleaseTests
         var parse = () => ReleaseManifest.Parse(json.ToJsonString(), "4.0.0");
 
         parse.Should().Throw<InstallerException>().WithMessage($"The installer will not use release.json: {reason}*");
+    }
+
+    [TestMethod]
+    public void AReleaseJson_GivesEveryReleasesUpgradeNotes()
+    {
+        UpgradeNote[] notes = [new("4.0.0", "Zero."), new("4.0.1", "One.\nNothing to do by hand.")];
+
+        ReleaseManifest.Parse(FakeMachine.ReleaseJson("4.0.1", upgradeNotes: notes), "4.0.1").UpgradeNotes.Should().Equal(notes);
+        ReleaseManifest.Parse(FakeMachine.ReleaseJson(), "4.0.0").UpgradeNotes.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow("{\"version\": \"4.0\", \"text\": \"Zero.\"}")]
+    [DataRow("{\"version\": \"4.0.0\"}")]
+    [DataRow("{\"version\": \"4.0.0\", \"text\": \"\"}")]
+    [DataRow("\"Zero.\"")]
+    public void AnUpgradeNote_WithoutAReleasesVersionAndItsText_IsRefused(string note)
+    {
+        var json = JsonNode.Parse(FakeMachine.ReleaseJson())!;
+        json["upgradeNotes"] = new JsonArray(JsonNode.Parse(note));
+
+        var parse = () => ReleaseManifest.Parse(json.ToJsonString(), "4.0.0");
+
+        parse.Should().Throw<InstallerException>().WithMessage("The installer will not use release.json: upgrade note 1 is not a release's version and its text.");
     }
 
     [TestMethod]

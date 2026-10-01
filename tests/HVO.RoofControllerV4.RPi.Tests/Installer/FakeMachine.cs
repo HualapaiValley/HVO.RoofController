@@ -130,13 +130,13 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
     public Architecture Architecture { get; }
 
-    public bool IsRoot { get; }
+    public bool IsRoot { get; private set; }
 
     public string HostName { get; }
 
-    public string UserName { get; }
+    public string UserName { get; private set; }
 
-    public string Home { get; }
+    public string Home { get; private set; }
 
     public string CurrentDirectory { get; set; }
 
@@ -315,7 +315,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             return FetchCa(controller, cancellationToken);
         },
         ApiHandler = ApiHandler,
-        TemporaryDirectory = TemporaryDirectory
+        TemporaryDirectory = TemporaryDirectory,
+        RunProgramAsync = RunProgramAsync
     };
 
     /// <summary>The kiosk's program in the fake release of <paramref name="version"/>: a script that says which it is.</summary>
@@ -357,7 +358,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     }
 
     /// <summary>A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests.</summary>
-    public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null)
+    public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null, IReadOnlyList<UpgradeNote>? upgradeNotes = null)
     {
         object Image(string name, string digest) => new
         {
@@ -378,6 +379,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             commit = "0123456789abcdef0123456789abcdef01234567",
             created = "2026-10-01T12:00:00Z",
             repository = "https://github.com/HualapaiValley/HVO.RoofController",
+            upgradeNotes = upgradeNotes?.Select(note => new { version = note.Version, text = note.Text }),
             images = new
             {
                 controller = Image("roof-controller", controllerDigest ?? ControllerDigest),
@@ -586,17 +588,20 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>The person's answer when the installer asks a yes-or-no question, by the question; null when no one can be asked.</summary>
     public Func<string, bool?> Replies { get; set; } = _ => null;
 
-    /// <summary>The yes-or-no questions the installer asked, in order.</summary>
+    /// <summary>What the person types when the installer asks a question that is not a secret; null when no one can be asked.</summary>
+    public Func<string, string?> Typed { get; set; } = _ => null;
+
+    /// <summary>The questions the installer asked (yes or no, and typed), in order.</summary>
     public List<string> Questions { get; } = [];
 
-    public InstallerHost Host(TextWriter output, TextWriter error, bool interactive = false, TimeProvider? time = null) => new()
+    public InstallerHost Host(TextWriter output, TextWriter error, bool interactive = false, TimeProvider? time = null, string version = "4.0.0") => new()
     {
         Out = output,
         Error = error,
         Machine = Machine,
         IsInteractive = interactive,
         Time = time ?? RunsAt,
-        Version = "4.0.0+0123456789abcdef0123456789abcdef01234567",
+        Version = $"{version}+0123456789abcdef0123456789abcdef01234567",
         ReadSecret = what =>
         {
             Asked.Add(what);
@@ -606,6 +611,11 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         {
             Questions.Add(question);
             return Replies(question);
+        },
+        Ask = question =>
+        {
+            Questions.Add(question);
+            return Typed(question);
         }
     };
 
@@ -617,8 +627,18 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var exit = await HVO.RoofControllerV4.Installer.Installer.RunAsync(args, Host(output, error), interrupt).ConfigureAwait(false);
-        return new InstallerRun(exit, output.ToString(), error.ToString());
+        _output = output;
+        _error = error;
+        try
+        {
+            var exit = await HVO.RoofControllerV4.Installer.Installer.RunAsync(args, Host(output, error, Interactive, version: InstallerVersion), interrupt).ConfigureAwait(false);
+            return new InstallerRun(exit, output.ToString(), error.ToString());
+        }
+        finally
+        {
+            _output = null;
+            _error = null;
+        }
     }
 
     /// <summary>
@@ -687,7 +707,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
             "docker" when arguments is ["rm", var name] => Docker(() => Containers.Remove(name) ? Answer(name) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
             "docker" when arguments is ["run", "-d", "--name", MachineSurveyor.HatEmulatorContainer, ..] => Docker(() => RunEmulator(arguments)),
-            "bash" when arguments is [var script] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, command, cancellationToken),
+            "bash" when arguments is [var script, ..] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, arguments.Skip(1).ToArray(), command, cancellationToken),
             "systemctl" when arguments is ["is-enabled", MachineSurveyor.KioskUnit] => !Exists(MachineSurveyor.KioskUnitFile)
                 ? new CommandResult(1, string.Empty, $"Failed to get unit file state for {MachineSurveyor.KioskUnit}: No such file or directory\n")
                 : Answer(Kiosk.Enabled ? "enabled" : "disabled", Kiosk.Enabled ? 0 : 1),
@@ -750,7 +770,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             "chown" when arguments is [var owner, "--", var path] => Chown(owner, path),
             "sw_vers" when arguments is ["-productVersion"] && Os == InstallerOs.MacOS => Answer("15.6.1"),
             _ when Programs.GetValueOrDefault("hvo-roof") == command.Program && arguments is ["--version"] => Answer("4.0.0+0123456789abcdef"),
-            _ => ClientCommand(command)
+            _ => ClientCommand(command) ?? LifecycleCommand(command)
         };
 
         if (result is null)
@@ -996,7 +1016,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
     // The deploy script, as far as the installer sees it: it stops the running controller only with a key it knows,
     // reads its key file as the script does, and leaves the new controller running with the settings it was given.
-    private CommandResult Deploy(string script, CommandLine command, CancellationToken cancellationToken)
+    private CommandResult Deploy(string script, IReadOnlyList<string> options, CommandLine command, CancellationToken cancellationToken)
     {
         var environment = command.Environment ?? new Dictionary<string, string>();
         Deploys.Add(environment);
@@ -1018,6 +1038,53 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var running) && running.State == "running" && !ControllerKeys.Contains(key))
         {
             return new CommandResult(1, string.Empty, "[deploy] ERROR: the running controller did not accept the Stop: HTTP 401. Nothing was changed.\n");
+        }
+
+        DeployOptions.Add(string.Join(' ', options));
+        if (options is ["--stop"])
+        {
+            // As the script's --stop: the verified Stop above, then the container stopped and kept.
+            if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var stopping) && stopping.State == "running")
+            {
+                Containers[MachineSurveyor.ControllerContainer] = stopping with { State = "exited" };
+                return new CommandResult(0, "[deploy] Stopped the controller after a verified Stop\n", string.Empty);
+            }
+
+            return new CommandResult(0, "[deploy] The controller is not running: nothing to stop\n", string.Empty);
+        }
+
+        if (options is ["--rollback"])
+        {
+            // As the script's --rollback: the one kept put back, the one it replaces kept in its turn.
+            if (!Containers.TryGetValue(ControllerRollbackStep.PreviousContainer, out var previous))
+            {
+                return new CommandResult(1, string.Empty, $"[deploy] ERROR: there is no {ControllerRollbackStep.PreviousContainer} to roll back to.\n");
+            }
+
+            if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var replaced))
+            {
+                Containers[ControllerRollbackStep.PreviousContainer] = replaced with { State = "exited" };
+            }
+            else
+            {
+                Containers.Remove(ControllerRollbackStep.PreviousContainer);
+            }
+
+            Containers[MachineSurveyor.ControllerContainer] = previous with { State = "running", StartedAt = DateTimeOffset.UtcNow };
+            ControllerKeys.Clear();
+            ControllerKeys.UnionWith(ApiKeyValues());
+            return new CommandResult(0, "[deploy] Rolled back\n", string.Empty);
+        }
+
+        if (options.Count > 0)
+        {
+            return new CommandResult(2, string.Empty, $"[deploy] ERROR: unknown option {options[0]}\n");
+        }
+
+        // The controller it replaces is stopped and kept (an older one kept goes).
+        if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var old))
+        {
+            Containers[ControllerRollbackStep.PreviousContainer] = old with { State = "exited" };
         }
 
         var image = environment["IMAGE_REF"];
@@ -1085,7 +1152,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
         var environment = new List<string> { "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" };
         var ports = new Dictionary<string, object[]>();
-        if (name == MachineSurveyor.ControllerContainer)
+        if (IsController(name))
         {
             // As the deploy script publishes them.
             var apiPort = container.ApiPort ?? (container.Https ? ControllerSettings.DefaultHttpsPort : ControllerSettings.DefaultHttpPort);
@@ -1118,9 +1185,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             environment.Add($"RoofControllerSecurity__ApiKeys__0__Key={secret}");
         }
 
-        var controllerImage = name == MachineSurveyor.ControllerContainer;
-        var digest = container.Digest ?? (controllerImage ? ControllerDigest : EmulatorDigest);
-        var image = $"ghcr.io/hualapaivalley/{(controllerImage ? "roof-controller" : "roof-hat-emulator")}:{container.Version ?? "4.0.0"}@{digest}";
+        var image = ImageOf(name, container);
         return JsonSerializer.Serialize(new[]
         {
             new

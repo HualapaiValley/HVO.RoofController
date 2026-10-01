@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Installer.Machine;
+using HVO.RoofControllerV4.Installer.Record;
 
 namespace HVO.RoofControllerV4.Installer.Deployment;
 
@@ -19,6 +20,11 @@ public sealed record ReleaseImage(string Repository, string Digest, string Refer
 /// <param name="Files">For an archive, the SHA-256 of each file in it, by name; empty otherwise.</param>
 public sealed record ReleaseAsset(string Name, string Kind, string? Platform, long Size, string Sha256, IReadOnlyDictionary<string, string> Files);
 
+/// <summary>What to know before upgrading to a release, from its docs/upgrade-notes/X.Y.Z.md.</summary>
+/// <param name="Version">The release the notes are for: X.Y.Z.</param>
+/// <param name="Text">The notes, a few lines.</param>
+public sealed record UpgradeNote(string Version, string Text);
+
 /// <summary>
 /// A release's <c>release.json</c> (build/release-assets.py writes it): its version, the images it is made of, each
 /// pinned to its digest, and its other files with their SHA-256. The installer deploys those images and files and no
@@ -34,6 +40,12 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
     /// <summary>Where a release's files are on GitHub.</summary>
     public const string ReleasesUrl = "https://github.com/HualapaiValley/HVO.RoofController/releases";
 
+    /// <summary>Where the latest release has its release.json: GitHub's latest release, drafts and pre-releases aside.</summary>
+    public static readonly Uri LatestUri = new($"{ReleasesUrl}/latest/download/{FileName}");
+
+    /// <summary>The release's page on GitHub, with its notes.</summary>
+    public static Uri PageUri(string version) => new($"{ReleasesUrl}/tag/v{version}");
+
     /// <summary>Where the release of <paramref name="version"/> has its release.json.</summary>
     public static Uri DownloadUri(string version) => DownloadUri(version, FileName);
 
@@ -42,6 +54,31 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
 
     /// <summary>The release's files besides its images; empty for a release.json that lists none.</summary>
     public IReadOnlyList<ReleaseAsset> Assets { get; init; } = [];
+
+    /// <summary>
+    /// Every release's upgrade notes up to this one's, oldest first: an upgrade shows each one newer than the release it
+    /// upgrades from. Empty when there are none.
+    /// </summary>
+    public IReadOnlyList<UpgradeNote> UpgradeNotes { get; init; } = [];
+
+    /// <summary>
+    /// The version a release.json is for, without checking the rest: what <c>upgrade</c> reads first to know which
+    /// release it goes to. Throws <see cref="InstallerException"/> when it is not a release.json of a version.
+    /// </summary>
+    public static string PeekVersion(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var version = document.RootElement.ValueKind == JsonValueKind.Object ? Text(document.RootElement, "version") : null;
+            return version is not null && RoofSemVer.IsValid(version) ? version : throw Invalid("it names no version");
+        }
+        catch (JsonException error)
+        {
+            throw new InstallerException($"The installer cannot read {FileName}: it is not valid JSON ({error.Message}).");
+        }
+    }
 
     /// <summary>
     /// The release's <paramref name="kind"/> for <paramref name="platform"/>. Throws <see cref="InstallerException"/>
@@ -90,7 +127,8 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
 
             return new ReleaseManifest(released, Text(root, "commit"), Image(images, "controller"), Image(images, "hatEmulator"))
             {
-                Assets = ReadAssets(root)
+                Assets = ReadAssets(root),
+                UpgradeNotes = ReadUpgradeNotes(root)
             };
         }
         catch (JsonException error)
@@ -126,6 +164,24 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
         }
 
         return new ReleaseImage(repository, digest, reference);
+    }
+
+    private static UpgradeNote[] ReadUpgradeNotes(JsonElement root)
+    {
+        if (!root.TryGetProperty("upgradeNotes", out var notes) || notes.ValueKind == JsonValueKind.Null)
+        {
+            return [];
+        }
+
+        if (notes.ValueKind != JsonValueKind.Array)
+        {
+            throw Invalid("its upgrade notes are not a list");
+        }
+
+        return [.. notes.EnumerateArray().Select((note, index) =>
+            note.ValueKind == JsonValueKind.Object && Text(note, "version") is { } version && RoofSemVer.IsValid(version) && Text(note, "text") is { } text
+                ? new UpgradeNote(version, text)
+                : throw Invalid($"upgrade note {index + 1} is not a release's version and its text"))];
     }
 
     private static ReleaseAsset[] ReadAssets(JsonElement root)
@@ -260,34 +316,43 @@ public sealed class ReleaseSource
         return _manifest ??= LoadAsync(machine, log, version, cancellationToken);
     }
 
+    /// <summary>
+    /// The version this source's release is for: the folder's release.json, or GitHub's latest release. What
+    /// <c>upgrade</c> goes to when it is not given a version.
+    /// </summary>
+    public async Task<string> LatestVersionAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        var (json, _) = await ReadAsync(machine, ReleaseManifest.LatestUri, "the latest release", cancellationToken).ConfigureAwait(false);
+        return ReleaseManifest.PeekVersion(json);
+    }
+
     private async Task<ReleaseManifest> LoadAsync(InstallerMachine machine, InstallLog log, string version, CancellationToken cancellationToken)
     {
-        string json;
-        string from;
-        if (_folder is not null)
-        {
-            from = Path.Join(_folder, ReleaseManifest.FileName);
-            json = machine.ReadText(from) ?? throw new InstallerUsageException($"There is no {ReleaseManifest.FileName} in {_folder}.");
-        }
-        else
-        {
-            var uri = ReleaseManifest.DownloadUri(version);
-            from = uri.ToString();
-            try
-            {
-                json = await machine.DownloadTextAsync(uri, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException
-                || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested))
-            {
-                throw new InstallerException(
-                    $"The installer could not get {ReleaseManifest.FileName} for {version} from {uri}: {error.Message} "
-                    + $"Download the release's files from {ReleaseManifest.ReleasesUrl} on a machine that can, and give their folder: --release DIR.");
-            }
-        }
-
+        var (json, from) = await ReadAsync(machine, ReleaseManifest.DownloadUri(version), version, cancellationToken).ConfigureAwait(false);
         var manifest = ReleaseManifest.Parse(json, version);
         log.Write($"The release: {manifest.Version} from {from}; the controller {manifest.Controller.Reference}, the HAT emulator {manifest.HatEmulator.Reference}.");
         return manifest;
+    }
+
+    private async Task<(string Json, string From)> ReadAsync(InstallerMachine machine, Uri uri, string what, CancellationToken cancellationToken)
+    {
+        if (_folder is not null)
+        {
+            var file = Path.Join(_folder, ReleaseManifest.FileName);
+            return (machine.ReadText(file) ?? throw new InstallerUsageException($"There is no {ReleaseManifest.FileName} in {_folder}."), file);
+        }
+
+        try
+        {
+            return (await machine.DownloadTextAsync(uri, cancellationToken).ConfigureAwait(false), uri.ToString());
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException
+            || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            throw new InstallerException(
+                $"The installer could not get {ReleaseManifest.FileName} for {what} from {uri}: {error.Message} "
+                + $"Download the release's files from {ReleaseManifest.ReleasesUrl} on a machine that can, and give their folder: --release DIR.");
+        }
     }
 }

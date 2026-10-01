@@ -63,12 +63,17 @@ class Release:
     def __init__(self, root):
         self.root = root
         self.cli = root / "cli"
+        self.installer = root / "installer"
         self.kiosk = root / "kiosk"
         self.mac = root / "hvo-roof-mac.zip"
         self.out = root / "out"
         for runtime, program in (("linux-arm64", AARCH64), ("linux-x64", X86_64), ("osx-arm64", mach_o_arm64(b"cli"))):
             (self.cli / runtime).mkdir(parents=True)
             (self.cli / runtime / "hvo-roof").write_bytes(program)
+        for runtime, program in (("linux-arm64", elf(183, b"install")), ("linux-x64", elf(62, b"install")),
+                                 ("osx-arm64", mach_o_arm64(b"install"))):
+            (self.installer / runtime).mkdir(parents=True)
+            (self.installer / runtime / "hvo-roof-install").write_bytes(program)
         self.kiosk.mkdir()
         (self.kiosk / "hvo-roof-kiosk").write_bytes(elf(183, b"kiosk"))
         for name in ("hvo-roof-kiosk.service", "99-hvo-roof-kiosk-backlight.rules", "appsettings.Local.example.json"):
@@ -79,11 +84,12 @@ class Release:
         values = {
             "--version": version, "--commit": COMMIT, "--created": CREATED,
             "--controller-digest": CONTROLLER_DIGEST, "--emulator-digest": EMULATOR_DIGEST,
-            "--cli": str(self.cli), "--kiosk": str(self.kiosk), "--mac-zip": str(self.mac),
+            "--cli": str(self.cli), "--installer": str(self.installer), "--kiosk": str(self.kiosk),
+            "--mac-zip": str(self.mac),
             "-o": str(out or self.out),
         }
         values.update(overrides)
-        return [item for pair in values.items() for item in pair]
+        return [item for pair in values.items() if pair[1] is not None for item in pair]
 
 
 def run(arguments):
@@ -119,6 +125,9 @@ class TheAssets(ReleaseTestCase):
         "hvo-roof-linux-arm64": ("cli", "linux-arm64"),
         "hvo-roof-linux-x64": ("cli", "linux-x64"),
         "hvo-roof-osx-arm64": ("cli", "osx-arm64"),
+        "hvo-roof-install-linux-arm64": ("installer", "linux-arm64"),
+        "hvo-roof-install-linux-x64": ("installer", "linux-x64"),
+        "hvo-roof-install-osx-arm64": ("installer", "osx-arm64"),
         "hvo-roof-kiosk-4.0.0-linux-arm64.tar.gz": ("kiosk", "linux-arm64"),
         "HVO-Roof-4.0.0.zip": ("mac-app", "osx-arm64"),
         "docker-compose.yaml": ("compose", None),
@@ -180,12 +189,16 @@ class TheAssets(ReleaseTestCase):
 
     def test_the_programs_are_ci_s_files_and_executable(self):
         for runtime in ("linux-arm64", "linux-x64", "osx-arm64"):
-            asset = self.out / f"hvo-roof-{runtime}"
-            self.assertEqual(asset.read_bytes(), (self.release.cli / runtime / "hvo-roof").read_bytes())
-            self.assertTrue(asset.stat().st_mode & stat.S_IXUSR, runtime)
+            for folder, program in ((self.release.cli, "hvo-roof"), (self.release.installer, "hvo-roof-install")):
+                asset = self.out / f"{program}-{runtime}"
+                self.assertEqual(asset.read_bytes(), (folder / runtime / program).read_bytes())
+                self.assertTrue(asset.stat().st_mode & stat.S_IXUSR, asset.name)
         script = self.out / "deploy-roofcontroller-rpi.sh"
         self.assertEqual(script.read_bytes(), release_assets.DEPLOY_SCRIPT.read_bytes())
         self.assertTrue(script.stat().st_mode & stat.S_IXUSR)
+
+    def test_a_release_without_upgrade_notes_has_none(self):
+        self.assertNotIn("upgradeNotes", self.manifest)
 
     def test_the_mac_app_is_ci_s_zip_renamed(self):
         self.assertEqual((self.out / "HVO-Roof-4.0.0.zip").read_bytes(), self.release.mac.read_bytes())
@@ -251,6 +264,76 @@ class AnotherRegistry(ReleaseTestCase):
         self.assertNotIn("ghcr.io", compose)
 
 
+class TheUpgradeNotes(ReleaseTestCase):
+    def notes(self, **files):
+        """docs/upgrade-notes, with each X_Y_Z keyword's text (or bytes) as X.Y.Z.md."""
+        folder = self.release.root / "upgrade-notes"
+        folder.mkdir(exist_ok=True)
+        for name, text in files.items():
+            (folder / (name.replace("_", ".") + ".md")).write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+        return str(folder)
+
+    def upgrade_notes(self):
+        return json.loads((self.release.out / "release.json").read_text(encoding="utf-8"))["upgradeNotes"]
+
+    def test_release_json_carries_the_notes_text_without_the_blank_lines_around_it(self):
+        self.build(**{"--upgrade-notes": self.notes(**{"4_0_0": "\nStop the roof before upgrading.\n\n- Then run it.\n\n"})})
+        self.assertEqual(self.upgrade_notes(), [{"version": "4.0.0", "text": "Stop the roof before upgrading.\n\n- Then run it."}])
+
+    def test_release_json_carries_every_releases_notes_up_to_its_own_oldest_first(self):
+        mac_zip(self.release.mac, version="4.10.0")
+        folder = self.notes(**{"4_10_0": "Ten.\n", "4_9_0": "Nine.\n", "4_0_0": "Zero.\n", "4_11_0": "Later.\n", "5_0_0": "Five.\n"})
+        self.build("4.10.0", **{"--upgrade-notes": folder})
+        self.assertEqual(self.upgrade_notes(), [{"version": "4.0.0", "text": "Zero."}, {"version": "4.9.0", "text": "Nine."},
+                                                {"version": "4.10.0", "text": "Ten."}])
+
+    def test_a_release_candidate_carries_its_final_releases_notes(self):
+        mac_zip(self.release.mac, version="4.1.0")
+        self.build("4.1.0-rc.1", **{"--upgrade-notes": self.notes(**{"4_0_0": "Zero.\n", "4_1_0": "One.\n", "4_2_0": "Two.\n"})})
+        self.assertEqual([note["version"] for note in self.upgrade_notes()], ["4.0.0", "4.1.0"])
+
+    def test_a_release_before_every_note_carries_none(self):
+        self.build(**{"--upgrade-notes": self.notes(**{"4_0_1": "Later.\n"})})
+        manifest = json.loads((self.release.out / "release.json").read_text(encoding="utf-8"))
+        self.assertNotIn("upgradeNotes", manifest)
+
+    def test_the_notes_are_not_an_asset(self):
+        printed = self.build(**{"--upgrade-notes": self.notes(**{"4_0_0": "Notes.\n"})}).split()
+        self.assertNotIn("4.0.0.md", printed)
+        self.assertNotIn("4.0.0.md", (self.release.out / "SHA256SUMS").read_text(encoding="utf-8"))
+
+    def test_empty_notes(self):
+        self.refused("is empty: a release's upgrade notes say what someone upgrading must do",
+                     **{"--upgrade-notes": self.notes(**{"4_0_0": " \n\n"})})
+
+    def test_notes_that_are_not_utf_8(self):
+        self.refused("is not UTF-8 text", **{"--upgrade-notes": self.notes(**{"4_0_0": b"caf\xe9\n"})})
+
+    def test_notes_too_long_to_print(self):
+        self.refused("keep them under 16384 and link to the rest",
+                     **{"--upgrade-notes": self.notes(**{"4_0_0": "x" * (16 * 1024 + 1)})})
+
+    def test_every_releases_notes_together_too_long_to_print(self):
+        mac_zip(self.release.mac, version="4.8.0")
+        folder = self.notes(**{f"4_{minor}_0": "x" * (16 * 1024) for minor in range(9)})
+        self.refused("hold 147456 characters together; the installer prints them whole, so keep them under 131072",
+                     "4.8.0", **{"--upgrade-notes": folder})
+
+    def test_a_file_that_is_not_a_releases_notes(self):
+        folder = self.notes(**{"4_0_0": "Zero.\n"})
+        (pathlib.Path(folder) / "README.md").write_text("Notes.\n", encoding="utf-8")
+        self.refused("README.md is not a release's upgrade notes", **{"--upgrade-notes": folder})
+
+    def test_notes_that_are_a_link(self):
+        folder = self.notes(**{"4_0_0": "Zero.\n"})
+        (pathlib.Path(folder) / "3.9.0.md").symlink_to(pathlib.Path(folder) / "4.0.0.md")
+        self.refused("3.9.0.md is not a release's upgrade notes", **{"--upgrade-notes": folder})
+
+    def test_missing_notes(self):
+        self.refused("is not a folder: --upgrade-notes is docs/upgrade-notes",
+                     **{"--upgrade-notes": str(self.release.root / "upgrade-notes")})
+
+
 class TheRefusals(ReleaseTestCase):
     def test_a_missing_runtime(self):
         (self.release.cli / "linux-x64" / "hvo-roof").unlink()
@@ -280,6 +363,20 @@ class TheRefusals(ReleaseTestCase):
     def test_a_program_that_is_not_one(self):
         (self.release.cli / "linux-x64" / "hvo-roof").write_bytes(b"#!/bin/sh\n")
         self.refused("linux-x64/hvo-roof is built for no known processor, not x86-64")
+
+    def test_an_installer_runtime_missing(self):
+        (self.release.installer / "osx-arm64" / "hvo-roof-install").unlink()
+        (self.release.installer / "osx-arm64").rmdir()
+        self.refused(f"The hvo-roof-install folder {self.release.installer} must hold exactly linux-arm64, linux-x64,"
+                     " osx-arm64; it lacks osx-arm64")
+
+    def test_an_installer_for_the_wrong_processor(self):
+        (self.release.installer / "linux-arm64" / "hvo-roof-install").write_bytes(X86_64)
+        self.refused("linux-arm64/hvo-roof-install is built for x86-64, not aarch64")
+
+    def test_a_folder_without_the_installer_in_it(self):
+        (self.release.installer / "linux-x64" / "hvo-roof-install").rename(self.release.installer / "linux-x64" / "hvo-roof")
+        self.refused("linux-x64/hvo-roof-install was not found")
 
     def test_a_kiosk_file_missing(self):
         (self.release.kiosk / "hvo-roof-kiosk.service").unlink()

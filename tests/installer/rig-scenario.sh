@@ -17,22 +17,37 @@
 #            again changing nothing, and no secret shown.
 #   cert     cert --renew --redeploy: a new certificate from the same CA, the CA unchanged, and the controller
 #            redeployed to serve it; hvo-roof, which trusts the CA, signs in and reads the status from it still.
+#   backup   backup, into a folder only root reads: one archive, root's and 0600, holding the keys, the CA, the
+#            certificate, the people and the record, with no secret in what it prints or logs.
+#   restore  uninstall --purge, as a script runs it (--confirm and --no-backup), with the installed hvo-roof-install:
+#            the containers, the network, the release's images, the data and the installer go, after a verified Stop.
+#            Then restore puts the backup back and installs what its record says: the same CA, certificate and keys,
+#            the admin signs in with the same password, and upgrade with the installed hvo-roof-install changes nothing.
+#   upgrade  The release before (RIG_PREVIOUS_REF, main's commit by default, built here as 4.0.0-rig.1 with its own
+#            images) installed by its own installer, after another purge. Then upgrade, run by this source's installer
+#            labelled 4.0.0-rig.1, as the one installed with the release before would be: it shows the upgrade notes,
+#            puts release 4.0.0-rig.2's installer in place and hands over to it, which redeploys the controller,
+#            keeping the old one as roof-controller-previous, with the data kept. Again: nothing to change.
+#   rollback rollback to 4.0.0-rig.1 (the kept controller put back), rollback again (nothing changes), then upgrade
+#            forward again.
 # Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
 # and no violation.
 #
-# Needs docker (buildx), the .NET SDK (to publish the installer), curl, jq, openssl, ss and sudo without a password: the
-# installer runs as root, as a rig on Linux needs. It runs only against the local Docker daemon, which sudo must reach
-# too, never on a Raspberry Pi, and only on a machine without the rig's folders (/etc/hvo-roof, /var/lib/hvo-roof), the
-# installer's log, the containers (roof-controller, roof-controller-previous, hat-emulator) and the hvo-emulator
-# network: it removes them all when it ends. The ports it uses must be free: RIG_HTTPS_PORT, RIG_WEB_PORT, 5290 (the
-# emulator's control API) and RIG_REGISTRY_PORT. The images it built stay (the build cache); the ones pulled from its
-# registry go.
+# Needs docker (buildx), git (the release before is built from a worktree of RIG_PREVIOUS_REF), the .NET SDK (to
+# publish the installer), curl, jq, openssl, ss and sudo without a password: the installer runs as root, as a rig on
+# Linux needs. It runs only against the local Docker daemon, which sudo must reach too, never on a Raspberry Pi, and
+# only on a machine without the rig's folders (/etc/hvo-roof, /var/lib/hvo-roof), the installer's log, the installed
+# installer (/usr/local/sbin/hvo-roof-install), the containers (roof-controller, roof-controller-previous, hat-emulator)
+# and the hvo-emulator network: it removes them all when it ends, with its backup folder and its worktree. The ports it
+# uses must be free: RIG_HTTPS_PORT, RIG_WEB_PORT, 5290 (the emulator's control API) and RIG_REGISTRY_PORT. The images
+# it built stay (the build cache); the ones pulled from its registry go.
 #
 #   tests/installer/rig-scenario.sh
 #
 # Settings (environment): RIG_HTTPS_PORT and RIG_WEB_PORT (the controller's API and web UI, default 8443 and 8088, as
-# the installer's), RIG_REGISTRY_PORT (the run's registry on loopback, default 15001) and RIG_RESULTS_DIR (writes
-# rig-scenario.md there: each check with its result and timing).
+# the installer's), RIG_REGISTRY_PORT (the run's registry on loopback, default 15001), RIG_PREVIOUS_REF (the commit
+# the release before is built from, default origin/main; a CI checkout needs fetch-depth 0) and RIG_RESULTS_DIR
+# (writes rig-scenario.md there: each check with its result and timing). The backup is never written there.
 # The installer runs as root; what it prints, and the files read with sudo, go to this run's own files.
 # shellcheck disable=SC2024
 set -euo pipefail
@@ -53,6 +68,10 @@ fi
 https_port=${RIG_HTTPS_PORT:-8443}
 web_port=${RIG_WEB_PORT:-8088}
 registry_port=${RIG_REGISTRY_PORT:-15001}
+previous_ref=${RIG_PREVIOUS_REF:-origin/main}
+# This source is the release; the release before is a build of previous_ref, labelled as the one before it.
+version=4.0.0-rig.2
+previous_version=4.0.0-rig.1
 registry_name=hvo-rig-scenario-registry
 registry_image=registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
 registry="127.0.0.1:${registry_port}/hualapaivalley"
@@ -64,6 +83,7 @@ roof="https://localhost:${https_port}"
 roof_api="${roof}/api/v4.0"
 web="https://localhost:${web_port}"
 install_log=/var/log/hvo-roof-install.log
+installed=/usr/local/sbin/hvo-roof-install
 ca=/etc/hvo-roof/ca.crt
 admin=tester
 case "$(uname -m)" in
@@ -76,6 +96,9 @@ chmod 700 "${work}"
 results="${work}/results.md"
 : > "${results}"
 owns_resources=0
+previous_root="${work}/previous"
+previous_worktree=0
+backup_dir=""
 relay_monitor_pid=""
 current_check="setup"
 
@@ -136,7 +159,12 @@ cleanup() {
     docker network rm "${network}" >/dev/null 2>&1
     docker images --digests --format '{{.Repository}}@{{.Digest}}' 2>/dev/null \
       | grep "^${registry}/.*@sha256:" | xargs -r docker rmi >/dev/null 2>&1
-    sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof "${install_log}"
+    sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof "${install_log}" "${installed}" "${installed}.previous"
+    [[ -z "${backup_dir}" ]] || sudo -n rm -rf "${backup_dir}"
+  fi
+  if (( previous_worktree == 1 )); then
+    git -C "${repo_root}" worktree remove --force "${previous_root}" >/dev/null 2>&1
+    git -C "${repo_root}" worktree prune >/dev/null 2>&1
   fi
   write_results
   rm -rf "${work}"
@@ -200,6 +228,18 @@ roof_still() {
   ROOF_SAMPLES=${samples}
 }
 
+# relays_still: the relay register was 0 in every sample the monitor took while the emulator was there (an uninstall
+# removes it, with its history).
+relays_still() {
+  stop_relay_monitor
+  local samples energized
+  samples=$(grep -c . "${work}/relays.log" || true)
+  energized=$(grep -vc '^0$' "${work}/relays.log" || true)
+  (( samples > 0 )) || fail "the relay monitor took no samples"
+  (( energized == 0 )) || fail "the relay register was energized in ${energized} of ${samples} samples: $(sort -u "${work}/relays.log" | tr '\n' ' ')"
+  ROOF_SAMPLES=${samples}
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # The installer, as root.
 
@@ -207,10 +247,15 @@ roof_still() {
 # its exit status in INSTALL_STATUS.
 INSTALL_STATUS=0
 install() {
-  local name=$1
-  shift
+  install_with "${installer}" "$@"
+}
+
+# install_with <program> <name> <arguments...>: install, with another hvo-roof-install: the installed one, or a release's.
+install_with() {
+  local program=$1 name=$2
+  shift 2
   INSTALL_STATUS=0
-  sudo -n "${installer}" "$@" > "${work}/${name}.txt" 2>&1 || INSTALL_STATUS=$?
+  sudo -n "${program}" "$@" > "${work}/${name}.txt" 2>&1 || INSTALL_STATUS=$?
   sed 's/^/[install] /' "${work}/${name}.txt"
 }
 
@@ -221,6 +266,40 @@ expect_installed() {
 
 expect_output() {
   grep -qF -- "$2" "${work}/$1.txt" || fail "hvo-roof-install ${1} did not say '$2'"
+}
+
+# record_says <jq filter>: the install record matches it.
+record_says() {
+  sudo -n jq -e "$1" /etc/hvo-roof/install.json >/dev/null \
+    || fail "the install record is not $1: $(sudo -n jq -c '{version, previousVersion, rolledBackFrom, roles}' /etc/hvo-roof/install.json 2>&1)"
+}
+
+# runs <container> <release folder> <controller|hatEmulator>: the container runs that release's image, by digest.
+runs() {
+  local expected
+  expected=$(jq -r ".images.$3.reference" "$2/release.json")
+  [[ "$(docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null)" == "${expected}" ]] \
+    || fail "$1 does not run ${expected}: $(docker inspect --format '{{.Config.Image}}' "$1" 2>&1)"
+}
+
+# keys_sha256: the SHA-256 of each key, the CA's files and the certificate (the values are never read here).
+keys_sha256() {
+  sudo -n find /etc/hvo-roof/secrets /etc/hvo-roof/ca /etc/hvo-roof/https "${ca}" -type f -exec sha256sum {} + | sort -k2
+}
+
+# purged: nothing the installer made is left: the containers, the network, the release's images (by digest), the data,
+# the record and the installed installer.
+purged() {
+  [[ -z "$(docker ps -aq --filter "name=^/(${controller}|${controller}-previous|${emulator})$")" ]] \
+    || fail "a container is left: $(docker ps -a --format '{{.Names}}' --filter "name=${controller}" --filter "name=${emulator}" | tr '\n' ' ')"
+  ! docker network inspect "${network}" >/dev/null 2>&1 || fail "the ${network} network is left"
+  local folder reference
+  for folder in /etc/hvo-roof /var/lib/hvo-roof "${installed}"; do
+    ! sudo -n test -e "${folder}" || fail "${folder} is left"
+  done
+  for reference in "$@"; do
+    ! docker image inspect "${reference}" >/dev/null 2>&1 || fail "the image ${reference} is left"
+  done
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -387,7 +466,7 @@ loopback_only() {
 
 setup() {
   local tool
-  for tool in docker curl jq openssl dotnet ss; do
+  for tool in docker git curl jq openssl dotnet ss; do
     command -v "${tool}" >/dev/null || fail "${tool} is required"
   done
   docker buildx version >/dev/null 2>&1 || fail "docker buildx is required"
@@ -397,9 +476,13 @@ setup() {
   daemon=$(docker info -f '{{.ID}}') || fail "docker cannot reach this machine's Docker daemon"
   [[ -n "${daemon}" && "${daemon}" == "$(sudo -n docker info -f '{{.ID}}' 2>/dev/null)" ]] \
     || fail "sudo reaches another Docker daemon than this shell's, or none: run the scenario where both reach this machine's"
-  if sudo -n test -e /etc/hvo-roof || sudo -n test -e /var/lib/hvo-roof || sudo -n test -e "${install_log}"; then
-    fail "/etc/hvo-roof, /var/lib/hvo-roof or ${install_log} exists: this machine has a controller or a rig. Run the scenario where there is none."
+  if sudo -n test -e /etc/hvo-roof || sudo -n test -e /var/lib/hvo-roof || sudo -n test -e "${install_log}" \
+    || sudo -n test -e "${installed}"; then
+    fail "/etc/hvo-roof, /var/lib/hvo-roof, ${install_log} or ${installed} exists: this machine has a controller or a rig. Run the scenario where there is none."
   fi
+  local previous_commit
+  previous_commit=$(git -C "${repo_root}" rev-parse --verify --quiet "${previous_ref}^{commit}") \
+    || fail "${previous_ref} is not a commit here: fetch it (a CI checkout needs fetch-depth 0), or set RIG_PREVIOUS_REF"
   if [[ -n "$(docker ps -aq --filter "name=^/(${controller}|${controller}-previous|${emulator}|${registry_name})$")" ]] \
     || docker network inspect "${network}" >/dev/null 2>&1; then
     fail "${controller}, ${emulator}, ${registry_name} or the ${network} network exists: remove them first."
@@ -411,15 +494,22 @@ setup() {
   done
   owns_resources=1
 
-  say "Publishing hvo-roof-install and hvo-roof for ${rid}"
-  (cd "${repo_root}/src" && dotnet publish HVO.RoofControllerV4.Installer -c Release -r "${rid}" -v quiet -nologo \
-    -o "${work}/installer" >/dev/null) || fail "could not publish hvo-roof-install"
-  (cd "${repo_root}/src" && dotnet publish HVO.RoofControllerV4.Cli -c Release -r "${rid}" -v quiet -nologo \
-    -o "${work}/cli" >/dev/null) || fail "could not publish hvo-roof"
+  say "Publishing hvo-roof-install and hvo-roof ${version} for ${rid}"
+  publish "${repo_root}" HVO.RoofControllerV4.Installer "${version}" "${work}/installer"
+  publish "${repo_root}" HVO.RoofControllerV4.Cli "${version}" "${work}/cli"
   installer="${work}/installer/hvo-roof-install"
-  version=$("${installer}" --version)
-  version=${version%%+*}
-  [[ -n "${version}" ]] || fail "hvo-roof-install printed no version"
+  says_version "${installer}" "${version}"
+  # This source's installer labelled as the release before: what upgrade runs as on a machine that has that release.
+  publish "${repo_root}" HVO.RoofControllerV4.Installer "${previous_version}" "${work}/installer-old"
+  old_installer="${work}/installer-old/hvo-roof-install"
+  says_version "${old_installer}" "${previous_version}"
+  say "Publishing the release before's hvo-roof-install (${previous_ref}, ${previous_commit:0:12}) as ${previous_version}"
+  git -C "${repo_root}" worktree add --quiet --detach "${previous_root}" "${previous_commit}" >/dev/null 2>&1 \
+    || fail "could not make a worktree of ${previous_ref}"
+  previous_worktree=1
+  publish "${previous_root}" HVO.RoofControllerV4.Installer "${previous_version}" "${work}/installer-previous"
+  previous_installer="${work}/installer-previous/hvo-roof-install"
+  says_version "${previous_installer}" "${previous_version}"
 
   docker run -d --name "${registry_name}" -p "127.0.0.1:${registry_port}:5000" "${registry_image}" >/dev/null \
     || fail "could not start the registry"
@@ -427,58 +517,96 @@ setup() {
 
   local started
   started=$(date +%s.%N)
-  say "Building and pushing the release's images (${version})"
-  push_release_image roof-controller "${repo_root}/src/HVO.RoofControllerV4.RPi/Dockerfile"
-  controller_digest=${PUSHED_INDEX}
-  push_release_image roof-hat-emulator "${repo_root}/src/HVO.RoofControllerV4.Emulator/Dockerfile"
-  emulator_digest=${PUSHED_INDEX}
-
-  # The release's files beside its images: hvo-roof for this platform, as build/release-assets.py names it.
+  say "Building and pushing the release's images (${version}) and the release before's (${previous_version})"
+  # The release: hvo-roof and hvo-roof-install for this platform beside its images, as build/release-assets.py names
+  # them, and upgrade notes, which upgrade shows.
   release_dir="${work}/release"
   mkdir -p "${release_dir}"
   cli_asset="hvo-roof-${rid}"
   cp "${work}/cli/hvo-roof" "${release_dir}/${cli_asset}"
-  chmod 755 "${release_dir}/${cli_asset}"
+  cp "${installer}" "${release_dir}/hvo-roof-install-${rid}"
+  chmod 755 "${release_dir}/${cli_asset}" "${release_dir}/hvo-roof-install-${rid}"
   cli_sha256=$(sha256sum "${release_dir}/${cli_asset}" | cut -d' ' -f1)
-  jq -n --arg version "${version}" --arg commit "$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || echo unknown)" \
-    --arg registry "${registry}" --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" \
-    --arg cli "${cli_asset}" --arg rid "${rid}" --argjson size "$(stat -c %s "${release_dir}/${cli_asset}")" --arg sha "${cli_sha256}" '
-    def image($name; $digest): { repository: "\($registry)/\($name)", tag: $version, digest: $digest,
-      reference: "\($registry)/\($name):\($version)@\($digest)", platforms: ["linux/amd64", "linux/arm64"] };
-    { schemaVersion: 1, product: "HVO Roof Controller", version: $version, tag: "v\($version)",
-      prerelease: ($version | contains("-")), commit: $commit,
-      images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) },
-      assets: [{ name: $cli, kind: "cli", platform: $rid, size: $size, sha256: $sha }] }' \
-    > "${release_dir}/release.json"
+  installer_sha256=$(sha256sum "${installer}" | cut -d' ' -f1)
+  release "${release_dir}" "${repo_root}" "${version}" "Nothing to do by hand: the rig scenario's upgrade notes." \
+    "${cli_asset}" cli "hvo-roof-install-${rid}" installer
+  # The release before: its images alone, as a release before the installer was released had them.
+  previous_dir="${work}/release-previous"
+  mkdir -p "${previous_dir}"
+  release "${previous_dir}" "${previous_root}" "${previous_version}" ""
 
   password_file="${work}/admin-password"
   (umask 077 && openssl rand -base64 24 > "${password_file}")
   answers "${work}/rig.json" 10
   answers "${work}/rig-faster.json" 20
   current_check="setup"
-  pass "published hvo-roof-install ${version} for ${rid}; the controller and the HAT emulator pushed as indexes of ${platform} and ${other_platform} in $(seconds_since "${started}") s"
+  pass "published hvo-roof-install ${version}, and ${previous_version} from this source and from ${previous_ref} (${previous_commit:0:12}), for ${rid}; each release's controller and HAT emulator pushed as indexes of ${platform} and ${other_platform} in $(seconds_since "${started}") s"
 }
 
-# push_release_image <name> <Dockerfile>: the image as a release publishes it, an index of two platforms: this
-# platform's image built from the Dockerfile with the release's version, and an empty image for the other one, which
-# builds without emulation. The index's digest is in PUSHED_INDEX.
+# publish <checkout> <project> <version> <folder>: the project, from the checkout, published for this machine with the
+# version.
+publish() {
+  (cd "$1/src" && Version="$3" dotnet publish "$2" -c Release -r "${rid}" -v quiet -nologo -o "$4" >/dev/null) \
+    || fail "could not publish $2 ${3} from $1"
+}
+
+# says_version <program> <version>: the program's --version is the version, with its commit.
+says_version() {
+  local actual
+  actual=$("$1" --version) || fail "$1 --version failed"
+  [[ "${actual}" == "$2+"* ]] || fail "$1 --version printed '${actual}', not $2+<commit>"
+}
+
+# release <folder> <checkout> <version> <upgrade notes> [<asset> <kind>]...: the release's images, built from the
+# checkout and pushed, and its release.json, with the assets (files in the folder, for this platform) and the notes, as
+# its final release's (4.0.0 for 4.0.0-rig.2), as build/release-assets.py gives a release candidate its release's.
+release() {
+  local folder=$1 checkout=$2 release_version=$3 notes=$4 commit controller_digest emulator_digest assets="[]"
+  shift 4
+  commit=$(git -C "${checkout}" rev-parse HEAD)
+  push_release_image roof-controller "${checkout}" src/HVO.RoofControllerV4.RPi/Dockerfile "${release_version}"
+  controller_digest=${PUSHED_INDEX}
+  push_release_image roof-hat-emulator "${checkout}" src/HVO.RoofControllerV4.Emulator/Dockerfile "${release_version}"
+  emulator_digest=${PUSHED_INDEX}
+  while (( $# >= 2 )); do
+    assets=$(jq --arg name "$1" --arg kind "$2" --arg rid "${rid}" --argjson size "$(stat -c %s "${folder}/$1")" \
+      --arg sha "$(sha256sum "${folder}/$1" | cut -d' ' -f1)" \
+      '. + [{ name: $name, kind: $kind, platform: $rid, size: $size, sha256: $sha }]' <<<"${assets}")
+    shift 2
+  done
+  jq -n --arg version "${release_version}" --arg commit "${commit}" --arg registry "${registry}" \
+    --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" --arg notes "${notes}" \
+    --argjson assets "${assets}" '
+    def image($name; $digest): { repository: "\($registry)/\($name)", tag: $version, digest: $digest,
+      reference: "\($registry)/\($name):\($version)@\($digest)", platforms: ["linux/amd64", "linux/arm64"] };
+    { schemaVersion: 1, product: "HVO Roof Controller", version: $version, tag: "v\($version)",
+      prerelease: ($version | contains("-")), commit: $commit,
+      images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) },
+      assets: $assets }
+    + (if $notes == "" then {} else { upgradeNotes: [{ version: ($version | split("-")[0]), text: $notes }] } end)' \
+    > "${folder}/release.json"
+}
+
+# push_release_image <name> <checkout> <Dockerfile> <version>: the image as a release publishes it, an index of two
+# platforms: this platform's image built from the checkout's Dockerfile with the version, and an empty image for the
+# other one, which builds without emulation. The index's digest is in PUSHED_INDEX.
 PUSHED_INDEX=""
 push_release_image() {
-  local repository="${registry}/$1" single other output
-  output=$(docker buildx build --quiet --provenance=false --platform "${platform}" -f "$2" \
-    --build-arg "ROOF_VERSION=${version}" --build-arg "ROOF_REVISION=$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || true)" \
-    -t "${repository}:${version}-${platform#linux/}" --load "${repo_root}" 2>&1) || fail "could not build $1 for ${platform}: $(tail -n 20 <<<"${output}")"
-  single=$(push_digest "${repository}:${version}-${platform#linux/}")
-  mkdir -p "${work}/other-$1"
-  printf 'FROM scratch\nLABEL org.opencontainers.image.version=%s\n' "${version}" > "${work}/other-$1/Dockerfile"
-  docker buildx build --quiet --provenance=false --platform "${other_platform}" -t "${repository}:${version}-${other_platform#linux/}" \
-    --load "${work}/other-$1" >/dev/null || fail "could not build the empty ${other_platform} image of $1"
-  other=$(push_digest "${repository}:${version}-${other_platform#linux/}")
-  docker buildx imagetools create --progress quiet -t "${repository}:${version}" "${repository}@${single}" "${repository}@${other}" >/dev/null \
-    || fail "could not push the index of $1"
-  PUSHED_INDEX=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${repository}:${version}" | jq -r .digest)
+  local repository="${registry}/$1" checkout=$2 image_version=$4 single other output
+  output=$(docker buildx build --quiet --provenance=false --platform "${platform}" -f "${checkout}/$3" \
+    --build-arg "ROOF_VERSION=${image_version}" --build-arg "ROOF_REVISION=$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" \
+    -t "${repository}:${image_version}-${platform#linux/}" --load "${checkout}" 2>&1) || fail "could not build $1 ${image_version} for ${platform}: $(tail -n 20 <<<"${output}")"
+  single=$(push_digest "${repository}:${image_version}-${platform#linux/}")
+  mkdir -p "${work}/other-$1-${image_version}"
+  printf 'FROM scratch\nLABEL org.opencontainers.image.version=%s\n' "${image_version}" > "${work}/other-$1-${image_version}/Dockerfile"
+  docker buildx build --quiet --provenance=false --platform "${other_platform}" -t "${repository}:${image_version}-${other_platform#linux/}" \
+    --load "${work}/other-$1-${image_version}" >/dev/null || fail "could not build the empty ${other_platform} image of $1 ${image_version}"
+  other=$(push_digest "${repository}:${image_version}-${other_platform#linux/}")
+  docker buildx imagetools create --progress quiet -t "${repository}:${image_version}" "${repository}@${single}" "${repository}@${other}" >/dev/null \
+    || fail "could not push the index of $1 ${image_version}"
+  PUSHED_INDEX=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${repository}:${image_version}" | jq -r .digest)
   [[ "${PUSHED_INDEX}" =~ ^sha256:[0-9a-f]{64}$ && "${PUSHED_INDEX}" != "${single}" ]] \
-    || fail "the registry reported no index digest for ${repository}:${version}: '${PUSHED_INDEX}'"
+    || fail "the registry reported no index digest for ${repository}:${image_version}: '${PUSHED_INDEX}'"
 }
 
 # push_digest <tag>: pushes the tag, removes it here (the installer pulls the release's images), and prints its digest.
@@ -683,11 +811,204 @@ scenario_cli() {
   pass "no secret (the password, the keys, the session) in the output, the log or the record; relay register 0 in ${ROOF_SAMPLES} samples"
 }
 
+scenario_backup() {
+  current_check="backup: one archive only root reads"
+  backup_dir=$(sudo -n mktemp -d /var/tmp/hvo-roof-rig-backup.XXXXXX) || fail "could not make a folder for the backup"
+  archive="${backup_dir}/rig.tar.gz"
+  keys_sha256 > "${work}/keys-before.txt"
+  sudo -n cat "${ca}" > "${work}/ca-backup.crt"
+  certificate_before=$(served_fingerprint)
+  install_with "${installed}" backup backup --output "${archive}"
+  expect_installed "backup"
+  expect_output backup "Backed up "
+  expect_output backup "to ${archive} (0600, root's):"
+  expect_output backup "Keep a copy of ${archive} off this machine, where only you can read it"
+  mode_is 600 "${archive}"
+  sudo -n tar -tzf "${archive}" > "${work}/backup-entries.txt" || fail "the backup is not a tar.gz"
+  [[ "$(head -n 1 "${work}/backup-entries.txt")" == hvo-roof-backup.json ]] || fail "the backup's first entry is not its manifest"
+  local entry
+  for entry in etc/hvo-roof/install.json etc/hvo-roof/ca.crt etc/hvo-roof/https/roof-controller.pfx; do
+    grep -qxF "${entry}" "${work}/backup-entries.txt" || fail "the backup lacks ${entry}"
+  done
+  grep -q '^etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__' "${work}/backup-entries.txt" || fail "the backup lacks the controller's keys"
+  sudo -n cat "${install_log}" > "${work}/install-log.txt"
+  no_secret_in "${work}/backup.txt" "${work}/install-log.txt" "${work}/backup-entries.txt"
+  pass "$(grep -oE 'Backed up [0-9]+ files and [0-9]+ folders' "${work}/backup.txt") by the installed ${installed}: root's, 0600, its manifest first; no secret in the output or the log"
+}
+
+scenario_restore() {
+  current_check="restore: uninstall --purge"
+  local release_images
+  release_images=$(jq -r '.images[].reference' "${release_dir}/release.json")
+  start_relay_monitor
+  install_with "${installed}" purge uninstall --purge --no-backup --confirm "$(hostname)" --yes
+  expect_installed "uninstall --purge"
+  expect_output purge "and removing its data:"
+  # shellcheck disable=SC2086 # one argument per image
+  purged ${release_images}
+  relays_still
+  pass "the containers, the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="restore: from the backup"
+  start_relay_monitor
+  install restore restore "${archive}" --release "${release_dir}"
+  expect_installed "restore"
+  expect_output restore "Put back "
+  wait_for "the controller" 60 ready
+  keys_sha256 > "${work}/keys-after.txt"
+  cmp -s "${work}/keys-before.txt" "${work}/keys-after.txt" || fail "the keys, the CA or the certificate are not the backup's"
+  [[ "$(served_fingerprint)" == "${certificate_before}" ]] || fail "the controller does not serve the certificate it had before the backup"
+  openssl verify -CAfile "${work}/ca-backup.crt" <(served_certificate) >/dev/null || fail "the certificate served does not verify with the backup's CA"
+  sign_in
+  emulated_status
+  curl -fsS --max-time 10 "${emulator_api}/status" | jq -e '.plant.timeScale == 20' >/dev/null || fail "the emulator does not run as the backup's record says (20 times as fast)"
+  runs "${controller}" "${release_dir}" controller
+  [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "${installer_sha256}" ]] || fail "${installed} is not the release's installer"
+  roof_still
+  sudo -n cat "${install_log}" > "${work}/install-log.txt"
+  no_secret_in "${work}/purge.txt" "${work}/restore.txt" "${work}/install-log.txt"
+  pass "$(grep -oE 'Put back [0-9]+ of the backup.s [0-9]+ files and folders' "${work}/restore.txt"), then installed as its record says: the same keys, CA and certificate, ${admin} signs in with the same password, hatMode Emulated at 20 times real time; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="restore: again"
+  local controller_id emulator_id
+  controller_id=$(container_id "${controller}")
+  emulator_id=$(container_id "${emulator}")
+  start_relay_monitor
+  install_with "${installed}" restored-again upgrade --release "${release_dir}"
+  expect_installed "upgrade (after the restore)"
+  expect_output restored-again "${version} is installed here: checking that everything is as it should be."
+  expect_output restored-again "Nothing to change"
+  [[ "$(container_id "${controller}")" == "${controller_id}" && "$(container_id "${emulator}")" == "${emulator_id}" ]] \
+    || fail "a container was replaced"
+  roof_still
+  pass "upgrade with the installed ${installed} finds nothing to change, and nothing is replaced; relay register 0 in ${ROOF_SAMPLES} samples"
+}
+
+scenario_upgrade() {
+  current_check="upgrade: the release before installed"
+  local release_images
+  release_images=$(jq -r '.images[].reference' "${release_dir}/release.json")
+  start_relay_monitor
+  install_with "${installed}" purge-again uninstall --purge --no-backup --confirm "$(hostname)" --yes
+  expect_installed "uninstall --purge (again)"
+  # shellcheck disable=SC2086 # one argument per image
+  purged ${release_images}
+  relays_still
+  start_relay_monitor
+  install_with "${previous_installer}" previous --answers "${work}/rig.json" --release "${previous_dir}" --admin-password-file "${password_file}"
+  expect_installed "--answers (${previous_version}, from ${previous_ref})"
+  runs "${controller}" "${previous_dir}" controller
+  runs "${emulator}" "${previous_dir}" hatEmulator
+  wait_for "the controller" 60 ready
+  sign_in
+  emulated_status
+  record_says ".version == \"${previous_version}\""
+  roof_still
+  pass "${previous_ref}'s installer installed ${previous_version} after another purge: its controller and emulator run, and ${admin} signs in; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="upgrade: to ${version}, the installer handing over"
+  local started
+  started=$(date +%s.%N)
+  collect_secrets
+  start_relay_monitor
+  install_with "${old_installer}" upgrade upgrade --release "${release_dir}"
+  expect_installed "upgrade"
+  expect_output upgrade "${previous_version} is installed here; ${version} replaces it."
+  expect_output upgrade "Upgrade notes for ${version%%-*}:"
+  expect_output upgrade "  Nothing to do by hand: the rig scenario's upgrade notes."
+  expect_output upgrade "Handing over to release ${version}'s installer."
+  local seconds
+  seconds=$(seconds_since "${started}")
+  [[ "$(sudo -n stat -c '%a %U' "${installed}")" == "755 root" ]] || fail "${installed} is $(sudo -n stat -c '%a %U' "${installed}"), not 755 root"
+  [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "${installer_sha256}" ]] || fail "${installed} is not release ${version}'s installer"
+  runs "${controller}" "${release_dir}" controller
+  runs "${controller}-previous" "${previous_dir}" controller
+  runs "${emulator}" "${release_dir}" hatEmulator
+  [[ "$(docker inspect --format '{{.State.Running}}' "${controller}-previous")" == false ]] || fail "${controller}-previous is running"
+  wait_for "the controller" 60 ready
+  sign_in
+  emulated_status
+  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null"
+  roof_still
+  sudo -n cat "${install_log}" > "${work}/install-log.txt"
+  sudo -n cat /etc/hvo-roof/install.json > "${work}/record.txt"
+  no_secret_in "${work}/previous.txt" "${work}/upgrade.txt" "${work}/install-log.txt" "${work}/record.txt"
+  pass "in ${seconds} s: the upgrade notes shown, release ${version}'s installer put in ${installed} and handed over to, the controller redeployed with ${previous_version}'s kept as ${controller}-previous, ${admin} signs in with the same password; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="upgrade: again"
+  local controller_id emulator_id
+  controller_id=$(container_id "${controller}")
+  emulator_id=$(container_id "${emulator}")
+  start_relay_monitor
+  install_with "${installed}" upgrade-again upgrade --release "${release_dir}"
+  expect_installed "upgrade (again)"
+  expect_output upgrade-again "Nothing to change"
+  [[ "$(container_id "${controller}")" == "${controller_id}" && "$(container_id "${emulator}")" == "${emulator_id}" ]] \
+    || fail "a container was replaced"
+  roof_still
+  pass "nothing to change, and nothing replaced; relay register 0 in ${ROOF_SAMPLES} samples"
+}
+
+scenario_rollback() {
+  current_check="rollback: the plan"
+  local controller_id emulator_id
+  controller_id=$(container_id "${controller}")
+  install_with "${installed}" rollback-plan rollback --plan --release "${previous_dir}"
+  expect_installed "rollback --plan"
+  expect_output rollback-plan "${version} is installed here; going back to ${previous_version}, the release before."
+  [[ "$(container_id "${controller}")" == "${controller_id}" ]] || fail "rollback --plan replaced ${controller}"
+  record_says ".version == \"${version}\""
+  pass "planned the rollback to ${previous_version}, and changed nothing"
+
+  current_check="rollback: to ${previous_version}"
+  start_relay_monitor
+  install_with "${installed}" rollback rollback --release "${previous_dir}"
+  expect_installed "rollback"
+  runs "${controller}" "${previous_dir}" controller
+  runs "${controller}-previous" "${release_dir}" controller
+  wait_for "the controller" 60 ready
+  sign_in
+  emulated_status
+  record_says ".version == \"${previous_version}\" and .rolledBackFrom == \"${version}\" and .previousVersion == null"
+  [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "${installer_sha256}" ]] \
+    || fail "${installed} was replaced, though release ${previous_version} has no installer"
+  roof_still
+  no_secret_in "${work}/rollback-plan.txt" "${work}/rollback.txt"
+  pass "the kept controller put back by the deploy script's --rollback, ${version}'s kept in its turn; ${admin} signs in; the record says ${previous_version}, rolled back from ${version}; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="rollback: again"
+  controller_id=$(container_id "${controller}")
+  emulator_id=$(container_id "${emulator}")
+  install_with "${installed}" rollback-again rollback --release "${previous_dir}"
+  expect_installed "rollback (again)"
+  expect_output rollback-again "rolled back from ${version} already"
+  [[ "$(container_id "${controller}")" == "${controller_id}" && "$(container_id "${emulator}")" == "${emulator_id}" ]] \
+    || fail "a container was replaced"
+  pass "already rolled back: exit 0, nothing replaced"
+
+  current_check="rollback: upgrade forward again"
+  start_relay_monitor
+  install_with "${installed}" forward upgrade --release "${release_dir}"
+  expect_installed "upgrade (forward again)"
+  runs "${controller}" "${release_dir}" controller
+  runs "${emulator}" "${release_dir}" hatEmulator
+  wait_for "the controller" 60 ready
+  sign_in
+  emulated_status
+  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null"
+  roof_still
+  pass "${version} again, the record saying ${previous_version} is the release before; relay register 0 in ${ROOF_SAMPLES} samples"
+}
+
 setup
 scenario_install
 scenario_again
 scenario_cli
 scenario_change
 scenario_cert
+scenario_backup
+scenario_restore
+scenario_upgrade
+scenario_rollback
 current_check="done"
 say "All checks passed."

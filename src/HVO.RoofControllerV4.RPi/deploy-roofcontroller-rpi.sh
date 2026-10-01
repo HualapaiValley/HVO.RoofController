@@ -29,17 +29,21 @@ set -euo pipefail
 #    call short: the restore begins once the call in progress returns.
 #
 # Usage: PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh [--dry-run] [--force-unverified-stop] [--rollback]
+#        PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh --stop [--force-unverified-stop]
 #        PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh --verify-remote
 # The image: by default the script builds IMAGE_TAG from this checkout for BUILD_PLATFORM and loads it into the Pi's
 #   Docker. With IMAGE_REF=<registry>/<name>[:<tag>]@sha256:<digest> (a release's image, from its release.json) the Pi's
 #   Docker pulls that image instead; it is deployed only if Docker reports that digest and BUILD_PLATFORM for it, and
 #   nothing is built, so the script runs without a checkout. Everything from the pre-flight on is the same. On the Pi
 #   itself, set DOCKER_CONTEXT=default: the remote check then runs from the Pi, so check from another machine afterwards
-#   too (--verify-remote). --rollback and --verify-remote ignore IMAGE_REF, and do not check it.
+#   too (--verify-remote). --rollback, --stop and --verify-remote ignore IMAGE_REF, and do not check it.
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
 #               rollback that could not be undone) exists.
+#   --stop      stops the running controller after the same verified stop of the roof (and, with
+#               REQUIRE_IDLE_ROOF=true, only while the roof is idle), and keeps it: docker start <name> runs it again.
+#               It deploys nothing and leaves <name>-previous as it is. The installer's uninstall uses it.
 #   --verify-remote  runs only the checks from this machine of step 3, against whatever controller answers at the
 #               published URL: an authenticated Status that reports the HAT this run expects, then a verified Stop (it
 #               stops the roof). It makes no Docker call and changes no container, so it also checks a controller that
@@ -63,17 +67,23 @@ usage() {
 DRY_RUN=false
 FORCE_UNVERIFIED_STOP=false
 ROLLBACK=false
+STOP=false
 VERIFY_REMOTE=false
 for arg in "$@"; do
   case "${arg}" in
     --dry-run) DRY_RUN=true ;;
     --force-unverified-stop) FORCE_UNVERIFIED_STOP=true ;;
     --rollback) ROLLBACK=true ;;
+    --stop) STOP=true ;;
     --verify-remote) VERIFY_REMOTE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: ${arg}" >&2; usage >&2; exit 2 ;;
   esac
 done
+if [[ "${STOP}" == "true" && ( "${DRY_RUN}" == "true" || "${ROLLBACK}" == "true" || "${VERIFY_REMOTE}" == "true" ) ]]; then
+  echo "--stop cannot be combined with --dry-run, --rollback or --verify-remote" >&2
+  exit 2
+fi
 if [[ "${VERIFY_REMOTE}" == "true" && ( "${DRY_RUN}" == "true" || "${FORCE_UNVERIFIED_STOP}" == "true" || "${ROLLBACK}" == "true" ) ]]; then
   echo "--verify-remote cannot be combined with --dry-run, --force-unverified-stop or --rollback" >&2
   exit 2
@@ -289,10 +299,10 @@ esac
 
 # Pull mode: a released image, named by its digest, so the Pi runs exactly the image the release lists. Checked here, so
 # that a malformed reference changes nothing, and never starts with '-', so docker cannot take it for an option.
-# --rollback and --verify-remote deploy no image: they ignore it, so a reference left in the environment cannot stop a
-# rollback.
+# --rollback, --stop and --verify-remote deploy no image: they ignore it, so a reference left in the environment cannot
+# stop a rollback.
 IMAGE_DIGEST=""
-if [[ -n "${IMAGE_REF}" && "${ROLLBACK}" != "true" && "${VERIFY_REMOTE}" != "true" ]]; then
+if [[ -n "${IMAGE_REF}" && "${ROLLBACK}" != "true" && "${STOP}" != "true" && "${VERIFY_REMOTE}" != "true" ]]; then
   image_ref_pattern='^[a-z0-9][A-Za-z0-9._/:-]*@(sha256:[0-9a-f]{64})$'
   [[ "${IMAGE_REF}" =~ ${image_ref_pattern} ]] \
     || fail "IMAGE_REF must name a released image by its digest, <registry>/<name>[:<tag>]@sha256:<64 hex digits> (e.g. ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:...), got '${IMAGE_REF}'. Nothing was changed."
@@ -1212,7 +1222,7 @@ fi
 resolve_operator_key
 read_container_states
 echo "[deploy] Existing container ${CONTAINER_NAME}: ${STATE}; ${PREVIOUS_CONTAINER_NAME}: ${PREVIOUS_STATE}"
-if [[ -n "${HAT_EMULATOR_ENDPOINT}" && "${ROLLBACK}" != "true" ]]; then
+if [[ -n "${HAT_EMULATOR_ENDPOINT}" && "${ROLLBACK}" != "true" && "${STOP}" != "true" ]]; then
   log_err "[deploy] WARNING: HAT emulator mode: the new controller will use the HAT emulator at ${HAT_EMULATOR_ENDPOINT} (ALLOW_EMULATED_HAT=true), not the physical HAT. It does not operate the roof."
 fi
 
@@ -1250,12 +1260,34 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   exit 0
 fi
 
-# The --verify-remote and dry-run blocks above and the rollback block below always exit. A top-level command that bash abandons (an
+# The --verify-remote and dry-run blocks above and the --stop and rollback blocks below always exit. A top-level command that bash abandons (an
 # expansion error does that without tripping set -e) must never fall through into a swap, a build or a deploy.
 [[ "${DRY_RUN}" != "true" ]] || fail "internal error: the --dry-run path did not finish; nothing was changed."
 [[ "${VERIFY_REMOTE}" != "true" ]] || fail "internal error: the --verify-remote path did not finish; nothing was changed."
 
 refuse_running_previous
+
+# --stop: the verified stop of step 2, then the controller is stopped gracefully and kept. Nothing else is changed.
+if [[ "${STOP}" == "true" ]]; then
+  case "${STATE}" in
+    missing)
+      echo "[done] There is no ${CONTAINER_NAME} to stop. Nothing was changed."
+      exit 0
+      ;;
+    stopped)
+      echo "[done] ${CONTAINER_NAME} is already stopped. Nothing was changed."
+      exit 0
+      ;;
+  esac
+  stop_roof_before_replacing
+  echo "[stop] Stopping ${CONTAINER_NAME} gracefully (SIGTERM, up to ${STOP_TIMEOUT_SECONDS}s)"
+  dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${CONTAINER_NAME}" >/dev/null \
+    || fail "Could not stop ${CONTAINER_NAME} (see above). Check it: docker ps -a --filter name=${CONTAINER_NAME}"
+  echo "[done] Stopped ${CONTAINER_NAME} after the roof's stop. It is kept: docker start ${CONTAINER_NAME} runs it again."
+  exit 0
+fi
+
+[[ "${STOP}" != "true" ]] || fail "internal error: the --stop path did not finish; nothing was built or deployed."
 
 if [[ "${ROLLBACK}" == "true" ]]; then
   lookup_container "$(name_filter "${SWAP_CONTAINER_NAME}")" \

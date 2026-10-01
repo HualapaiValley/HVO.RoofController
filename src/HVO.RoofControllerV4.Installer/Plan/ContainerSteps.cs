@@ -523,33 +523,64 @@ public sealed class ControllerStep(
             return StepCheck.Unchanged(adopted);
         }
 
+        var (blocked, keyFile) = await StopKeyAsync(context, candidates, ProbeAsync, reason, "replaces the controller").ConfigureAwait(false);
+        _deployKeyFile = keyFile;
+        return blocked ?? new StepCheck(StepChange.Change, reason);
+    }
+
+    /// <summary>
+    /// The key file the deploy script's verified Stop can use on the running controller before it <paramref name="doing"/>
+    /// (rolls it back, stops it): the first operator or admin key in the secrets folder it takes. Otherwise why that cannot
+    /// go ahead: it does not answer, the roof is moving, or it knows no such key. Only root reads the keys: throws
+    /// <see cref="UnauthorizedAccessException"/> otherwise.
+    /// </summary>
+    internal Task<(StepCheck? Blocked, string? KeyFile)> StopKeyAsync(InstallContext context, string reason, string doing, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var candidates = ControllerProbe.Candidates(context.Machine, layout, keys);
+        return StopKeyAsync(
+            context,
+            candidates,
+            async file => ControllerProbe.ReadKey(context.Machine, file) is { } key
+                ? await ControllerProbe.StatusAsync(context, Target, key, cancellationToken).ConfigureAwait(false)
+                : null,
+            reason,
+            doing);
+    }
+
+    private async Task<(StepCheck? Blocked, string? KeyFile)> StopKeyAsync(
+        InstallContext context,
+        IReadOnlyList<DeployKeyCandidate> candidates,
+        Func<string, Task<ProbeResult?>> probeAsync,
+        string reason,
+        string doing)
+    {
         foreach (var candidate in candidates)
         {
-            var probe = await ProbeAsync(candidate.File).ConfigureAwait(false);
+            var probe = await probeAsync(candidate.File).ConfigureAwait(false);
             if (probe is { Outcome: ProbeOutcome.NoAnswer })
             {
-                return NoAnswer(probe);
+                return (NoAnswer(probe), null);
             }
 
             if (probe is { IsAccepted: true })
             {
                 if (probe.IsMoving)
                 {
-                    return new StepCheck(
+                    return (new StepCheck(
                         StepChange.Blocked,
-                        $"the roof is moving{(probe.Motion is { } motion && motion != "None" ? $" ({motion})" : string.Empty)}, and the deploy script stops it before it replaces the controller: run the installer again once the roof is idle");
+                        $"the roof is moving{(probe.Motion is { } motion && motion != "None" ? $" ({motion})" : string.Empty)}, and the deploy script stops it before it {doing}: run the installer again once the roof is idle"), null);
                 }
 
-                _deployKeyFile = candidate.File;
                 context.Log.Write($"The deploy script will stop {Target} with {candidate.Description}, a key it knows.");
-                return new StepCheck(StepChange.Change, reason);
+                return (null, candidate.File);
             }
         }
 
-        return new StepCheck(
+        return (new StepCheck(
             StepChange.Blocked,
-            $"{reason}, but it runs, and it knows no operator or admin key in {layout.Secrets}, which the deploy script's verified Stop needs before it replaces it. "
-            + $"Put its operator key there (\"API keys\" in docs/deployment.md), or stop the controller yourself once the roof is idle (docker stop {Target}), then run the installer again.");
+            $"{reason}, but it runs, and it knows no operator or admin key in {layout.Secrets}, which the deploy script's verified Stop needs before it {doing}. "
+            + $"Put its operator key there (\"API keys\" in docs/deployment.md), or stop the controller yourself once the roof is idle (docker stop {Target}), then run the installer again."), null);
     }
 
     private StepCheck NoAnswer(ProbeResult probe)
@@ -561,9 +592,35 @@ public sealed class ControllerStep(
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
     {
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+        using var work = new DeployScript.WorkFolder(context.Machine);
+        var environment = await EnvironmentAsync(context, work, release.Controller.Reference, _deployKeyFile, cancellationToken).ConfigureAwait(false);
+        await RunScriptAsync(context, work, environment, cancellationToken).ConfigureAwait(false);
+        var deployed = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
+        if (deployed is not { IsRunning: true } || deployed.ImageDigest != release.Controller.Digest)
+        {
+            throw new InstallerException($"The deploy script finished, but {Target} does not run release {release.Version}'s image: see docker ps and the install log.");
+        }
+
+        context.Log.Write($"Deployed {Target}: release {release.Version}, verified by the deploy script.");
+    }
+
+    /// <summary>
+    /// What the deploy script runs with for this controller: <paramref name="imageReference"/> (a release's image by
+    /// digest; <c>--rollback</c> and <c>--stop</c> ignore it), and <paramref name="keyFile"/> for its verified Stop (the
+    /// operator key's file when null). The settings, names and trust are the plan's, so every mode checks the controller
+    /// the same way.
+    /// </summary>
+    internal async Task<Dictionary<string, string>> EnvironmentAsync(
+        InstallContext context,
+        DeployScript.WorkFolder work,
+        string imageReference,
+        string? keyFile,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(work);
         var operatorKey = keys.First(key => key.Use == ApiKeyUse.Operator);
         var webStop = keys.First(key => key.Use == ApiKeyUse.WebStop);
-        using var work = new DeployScript.WorkFolder(context.Machine);
         var (host, trust) = RemoteCheck(context.Machine, work);
         var dockerContext = await context.Machine.Commands.RunAsync(new CommandLine("docker", "context", "show"), cancellationToken).ConfigureAwait(false);
         var extra = $"--env {MachineSurveyor.WebStopKeyFileSetting}={ApiKeyFiles.ContainerKeyFile(webStop.Index)}{(rig ? $" --network {HatEmulatorStep.Network}" : string.Empty)}";
@@ -574,7 +631,7 @@ public sealed class ControllerStep(
             ["PI_HOST"] = host,
             ["REMOTE_CONNECT_TO"] = host == "localhost" ? string.Empty : "::127.0.0.1:",
             ["DOCKER_CONTEXT"] = dockerContext.Succeeded && dockerContext.Output.Trim() is { Length: > 0 } name ? name : "default",
-            ["IMAGE_REF"] = release.Controller.Reference,
+            ["IMAGE_REF"] = imageReference,
             ["BUILD_PLATFORM"] = Platform(context.Machine),
             ["CONTAINER_NAME"] = Target,
             ["HOST_PORT"] = Port(settings.HttpPort),
@@ -603,10 +660,23 @@ public sealed class ControllerStep(
             ["REQUIRE_IDLE_ROOF"] = "true",
 
             // The key for the Stop and Status checks, as a file only root reads; never the key itself.
-            ["OPERATOR_KEY_FILE"] = _deployKeyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),
+            ["OPERATOR_KEY_FILE"] = keyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),
             ["ROOF_OPERATOR_API_KEY"] = string.Empty
         };
+        return environment;
+    }
 
+    /// <summary>
+    /// Runs the deploy script with <paramref name="arguments"/> (none deploys), and says what runs now when it fails. It is
+    /// never killed: see the comment inside.
+    /// </summary>
+    internal static async Task RunScriptAsync(
+        InstallContext context,
+        DeployScript.WorkFolder work,
+        IReadOnlyDictionary<string, string> environment,
+        CancellationToken cancellationToken,
+        params IReadOnlyList<string> arguments)
+    {
         // The installer never kills the script: killed part-way through the switch, it would leave the old controller stopped.
         // A Ctrl-C at the terminal reaches the script too, which stops and puts the old controller back itself (its EXIT
         // trap), unless the new controller has passed its checks: from there it runs to its end, as it does for an
@@ -615,7 +685,7 @@ public sealed class ControllerStep(
         {
             try
             {
-                await DeployScript.RunAsync(context, work, environment, CancellationToken.None).ConfigureAwait(false);
+                await DeployScript.RunAsync(context, work, environment, CancellationToken.None, arguments).ConfigureAwait(false);
             }
             catch (InstallerException error)
             {
@@ -625,14 +695,6 @@ public sealed class ControllerStep(
                     stopped ? InstallerExitCode.Cancelled : error.ExitCode);
             }
         }
-
-        var deployed = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
-        if (deployed is not { IsRunning: true } || deployed.ImageDigest != release.Controller.Digest)
-        {
-            throw new InstallerException($"The deploy script finished, but {Target} does not run release {release.Version}'s image: see docker ps and the install log.");
-        }
-
-        context.Log.Write($"Deployed {Target}: release {release.Version}, verified by the deploy script.");
     }
 
     /// <summary>What an interrupt while the deploy script runs says: the script is not killed, so it finishes or puts the old controller back.</summary>

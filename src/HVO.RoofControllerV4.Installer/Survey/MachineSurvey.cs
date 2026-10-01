@@ -216,6 +216,12 @@ public sealed record ContainerSurvey
 
     public bool IsRunning => State == "running";
 
+    /// <summary>
+    /// True when it has stopped and stays stopped: made, exited or dead. A paused or restarting container is neither
+    /// running nor stopped: it may run the roof again at any moment, and Docker does not remove it.
+    /// </summary>
+    public bool IsStopped => State is "created" or "exited" or "dead";
+
     /// <summary>The digest of the image it runs (sha256:…), when it was deployed by one; null for a tag alone.</summary>
     public string? ImageDigest => Image.LastIndexOf('@') is > 0 and var at && Image[(at + 1)..].StartsWith("sha256:", StringComparison.Ordinal) ? Image[(at + 1)..] : null;
 }

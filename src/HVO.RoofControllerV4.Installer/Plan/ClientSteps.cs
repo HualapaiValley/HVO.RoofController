@@ -124,6 +124,22 @@ public static class ClientSteps
         return steps;
     }
 
+    /// <summary>hvo-roof's program alone: what <c>rollback</c> puts back.</summary>
+    public static CliProgramStep CliProgram(InstallerMachine machine, CliSettings cli)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(cli);
+        return new CliProgramStep(InstallPaths.Expand(machine, cli.Folder), false, Other(CliSettings.Folders, cli.Folder));
+    }
+
+    /// <summary>The Mac app alone: what <c>rollback</c> puts back.</summary>
+    public static MacAppStep MacApp(InstallerMachine machine, MacAppSettings mac)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(mac);
+        return new MacAppStep(InstallPaths.Expand(machine, mac.Folder), MacSettingsFolder(machine), false, Other(MacAppSettings.Folders, mac.Folder));
+    }
+
     /// <summary>The controller's CA trusted in the login keychain, when the person chose it (on a Mac).</summary>
     public static IReadOnlyList<PlanStep> ForKeychain(InstallerMachine machine, ClientSettings client)
     {
@@ -276,8 +292,6 @@ public sealed class CliProgramStep(string folder, bool planned, string instead) 
 
     public override string Purpose => "hvo-roof: the roof from the command line, and its terminal UI";
 
-    private string Previous => Target + ".previous";
-
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -298,11 +312,7 @@ public sealed class CliProgramStep(string folder, bool planned, string instead) 
             return new StepCheck(StepChange.Blocked, $"{Target} is a folder: move it aside, then run the installer again");
         }
 
-        var current = await machine.Sha256Async(Target, cancellationToken).ConfigureAwait(false);
-        return current is null ? new StepCheck(StepChange.Create, $"release {release.Version}'s, {Modes.Octal(Modes.Program)}")
-            : current != asset.Sha256 ? new StepCheck(StepChange.Change, $"release {release.Version}'s; the one there now is kept as {Path.GetFileName(Previous)}")
-            : machine.GetMode(Target) is { } mode && mode != Modes.Program ? new StepCheck(StepChange.Change, $"{Modes.Octal(mode)} → {Modes.Octal(Modes.Program)}")
-            : StepCheck.Unchanged($"release {release.Version}'s");
+        return await ProgramFile.CheckAsync(machine, Target, asset.Sha256, release.Version, cancellationToken).ConfigureAwait(false);
     }
 
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
@@ -312,37 +322,7 @@ public sealed class CliProgramStep(string folder, bool planned, string instead) 
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         var asset = ReleaseFiles.Find(release, ClientSteps.CliAssetKind, machine.RuntimeIdentifier)
             ?? throw new InstallerException($"Release {release.Version} has no hvo-roof for {machine.RuntimeIdentifier}.");
-        if (await machine.Sha256Async(Target, cancellationToken).ConfigureAwait(false) == asset.Sha256)
-        {
-            machine.SetMode(Target, Modes.Program);
-            context.Log.Write($"Set {Target} to {Modes.Octal(Modes.Program)}.");
-            return;
-        }
-
-        using var work = new DeployScript.WorkFolder(machine);
-        var file = await ReleaseFiles.GetAsync(context, release, asset, work, cancellationToken).ConfigureAwait(false);
-        var staged = $"{Target}.new";
-        try
-        {
-            // A copy, not the download itself: it carries no extended attributes, so macOS has no quarantine mark to act on.
-            await machine.CopyFileAsync(file, staged, Modes.Program, cancellationToken).ConfigureAwait(false);
-            if (machine.FileExists(Target))
-            {
-                await machine.CopyFileAsync(Target, Previous, Modes.Program, cancellationToken).ConfigureAwait(false);
-                context.Log.Write($"Kept the hvo-roof it replaces as {Previous}.");
-            }
-
-            // A new file in its place, not the old one written over: macOS checks a program's signature by its file.
-            machine.MoveFile(staged, Target);
-        }
-        finally
-        {
-            if (machine.FileExists(staged))
-            {
-                machine.DeleteFile(staged);
-            }
-        }
-
+        await ProgramFile.ApplyAsync(context, Target, asset.Sha256, "hvo-roof", (staged, token) => ReleaseFiles.CopyProgramAsync(context, release, asset, staged, token), cancellationToken).ConfigureAwait(false);
         context.Log.Write($"Installed hvo-roof from {asset.Name} (release {release.Version}) as {Target}.");
     }
 }
@@ -454,7 +434,8 @@ public sealed class MacAppStep(string folder, string settingsFolder, bool planne
 
     public override string Purpose => "the Mac app";
 
-    private string Previous => Path.Join(settingsFolder, $"{MachineSurveyor.MacAppBundle}.previous");
+    /// <summary>The app this one replaced, kept for a rollback beside its settings (not in the folder the Finder shows).</summary>
+    public string Previous => Path.Join(settingsFolder, $"{MachineSurveyor.MacAppBundle}.previous");
 
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
@@ -484,7 +465,11 @@ public sealed class MacAppStep(string folder, string settingsFolder, bool planne
 
         if (await machine.Sha256Async(ClientSteps.MacProgram(Target), cancellationToken).ConfigureAwait(false) != wanted.Sha256)
         {
-            return new StepCheck(StepChange.Change, $"release {release.Version}'s; the one there now is kept as {Previous}");
+            return new StepCheck(
+                StepChange.Change,
+                await PreviousIsAsync(machine, wanted.Sha256, cancellationToken).ConfigureAwait(false)
+                    ? $"release {release.Version}'s, kept as {Previous}: the two change places"
+                    : $"release {release.Version}'s; the one there now is kept as {Previous}");
         }
 
         if (await ClientSteps.QuarantinedAsync(machine, Target, cancellationToken).ConfigureAwait(false))
@@ -509,6 +494,19 @@ public sealed class MacAppStep(string folder, string settingsFolder, bool planne
 
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         var (asset, sha256) = Wanted(release) ?? throw new InstallerException($"Release {release.Version} has no Mac app.");
+        if (machine.DirectoryExists(Target) && await PreviousIsAsync(machine, sha256, cancellationToken).ConfigureAwait(false))
+        {
+            // The one kept is the release's (a rollback, or an upgrade again after one): the two change places.
+            var aside = Path.Join(settingsFolder, $"{MachineSurveyor.MacAppBundle}.swap");
+            machine.DeleteDirectory(aside);
+            machine.MoveDirectory(Target, aside);
+            machine.MoveDirectory(Previous, Target);
+            machine.MoveDirectory(aside, Previous);
+            await UnquarantineAsync(context, Target, cancellationToken).ConfigureAwait(false);
+            context.Log.Write($"Put the Mac app kept as {Previous} back as {Target} (release {release.Version}), and kept the one it replaces as {Previous}.");
+            return;
+        }
+
         using var work = new DeployScript.WorkFolder(machine);
         var zip = await ReleaseFiles.GetAsync(context, release, asset, work, cancellationToken).ConfigureAwait(false);
 
@@ -550,6 +548,10 @@ public sealed class MacAppStep(string folder, string settingsFolder, bool planne
 
         context.Log.Write($"Installed the Mac app from {asset.Name} (release {release.Version}) as {Target}.");
     }
+
+    private async Task<bool> PreviousIsAsync(InstallerMachine machine, string sha256, CancellationToken cancellationToken)
+        => machine.DirectoryExists(Previous)
+            && await machine.Sha256Async(ClientSteps.MacProgram(Previous), cancellationToken).ConfigureAwait(false) == sha256;
 
     private static (ReleaseAsset Asset, string Sha256)? Wanted(ReleaseManifest release)
         => ReleaseFiles.Find(release, ClientSteps.MacAssetKind, ClientSteps.MacAssetPlatform) is { } asset

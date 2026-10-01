@@ -97,7 +97,7 @@ public sealed class InstallerCommandTests
         run.ExitCode.Should().Be(0, run.ToString());
         var lines = run.Output.Split(Environment.NewLine);
         lines[0].Should().Be("The plan for the controller on roofpi, 4.0.0:");
-        lines.Should().Contain("Folders").And.Contain("Containers").And.Contain("16 to create, 0 to change, 0 unchanged.")
+        lines.Should().Contain("Folders").And.Contain("Containers").And.Contain("17 to create, 0 to change, 0 unchanged.")
             .And.Contain("Installing the controller needs root: run the installer with sudo.");
         run.Error.Should().BeEmpty();
         pi.Snapshot().Should().Equal(before, "--plan changes nothing and writes no log");

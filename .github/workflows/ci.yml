@@ -154,7 +154,8 @@ jobs:
       - name: Build (Release, warnings as errors)
         run: dotnet build HVO.RoofController.sln -c Release -v minimal -p:ContinuousIntegrationBuild=true
 
-      # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof for osx-arm64 and HVO Roof.app. Its release
+      # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof and hvo-roof-install for osx-arm64, and HVO
+      # Roof.app. A Mac with Apple silicon runs no program that is not signed, ad hoc at least. Its release
       # is checked against a pinned SHA-256. Not RCODESIGN_*: rcodesign reads those variables as its own settings, and
       # refuses ones it does not know.
       - name: Install rcodesign
@@ -226,8 +227,8 @@ jobs:
           ls -l kiosk-artifact
 
       # hvo-roof-install as one self-contained file for each machine it installs on: linux-arm64 (the Pi), linux-x64 (a
-      # PC test rig) and osx-arm64 (a Mac). The linux-x64 file is run: its version, and --plan with no answers on a
-      # machine with nothing recorded refuses (exit 2) and changes nothing.
+      # PC test rig) and osx-arm64 (a Mac, signed ad hoc as hvo-roof is). The linux-x64 file is run: its version, and
+      # --plan with no answers on a machine with nothing recorded refuses (exit 2) and changes nothing.
       - name: Publish hvo-roof-install
         run: |
           for rid in linux-arm64 linux-x64 osx-arm64; do
@@ -237,6 +238,11 @@ jobs:
           file hvo-roof-install/linux-arm64/hvo-roof-install | grep -q 'ARM aarch64'
           file hvo-roof-install/linux-x64/hvo-roof-install | grep -q 'x86-64'
           file hvo-roof-install/osx-arm64/hvo-roof-install | grep -q 'Mach-O 64-bit arm64'
+          "$APPLE_CODESIGN" sign --binary-identifier io.github.hualapaivalley.hvo-roof-install hvo-roof-install/osx-arm64/hvo-roof-install
+          "$APPLE_CODESIGN" print-signature-info hvo-roof-install/osx-arm64/hvo-roof-install > install-signature.txt
+          grep -E '^ +(flags|identifier): ' install-signature.txt
+          grep -q 'flags: CodeSignatureFlags(ADHOC)' install-signature.txt
+          grep -q 'identifier: io.github.hualapaivalley.hvo-roof-install$' install-signature.txt
           expected="${Version}+${GITHUB_SHA}"
           actual=$(./hvo-roof-install/linux-x64/hvo-roof-install --version)
           echo "hvo-roof-install --version: ${actual}"
