@@ -418,7 +418,9 @@ anything.
 
    Once the new controller passes every check in step 7, there is nothing left to undo: the script ignores signals
    and a lost terminal while it shows the containers, and ends with `[done] Deployment complete and verified` and
-   exit code 0.
+   exit code 0. That line also says what `--rollback` would return to: the replaced controller, kept as
+   `<name>-previous`. A first deploy replaced nothing, so the line says there is no previous version, or that an older
+   `<name>-previous` is left as it was.
 
 ### Deploying a released image
 

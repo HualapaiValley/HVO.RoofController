@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A first deploy no longer says that the previous version is kept for `--rollback`: the
+  deploy script now says there is none, or that an older `roof-controller-previous` is left as
+  it was (#95).
+- When a running controller accepts none of the keys the installer has, the installer's
+  message now leads with stopping the controller by hand, which always works. Copying its
+  operator key is offered second, for a controller that has one (#95).
+
 ## [4.0.0] - 2026-10-01
 
 Safety, security and operations fixes from the August 2026 architecture review

@@ -745,6 +745,7 @@ ensure_deployed() {
     (( DEPLOY_STATUS == 0 )) || fail "the first deploy failed (exit ${DEPLOY_STATUS})"
     expect_deploy_log "[deploy] No existing container."
     expect_deploy_log "[done] Deployment complete and verified at ${roof}"
+    ! deploy_log_has "The previous version is kept as" || fail "a first deploy said it kept a previous version"
     pass "deployed and verified in ${DEPLOY_SECONDS} s (the build included)"
   fi
   container_running "${controller}" || docker start "${controller}" >/dev/null
