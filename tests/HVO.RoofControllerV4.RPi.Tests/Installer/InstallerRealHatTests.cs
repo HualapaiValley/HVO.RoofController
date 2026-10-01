@@ -445,11 +445,16 @@ public sealed partial class InstallerRealHatTests
         return pi;
     }
 
-    // docs/install.md's answers file for the controller, saved in the home folder.
+    // docs/install.md's answers file for the controller alone, saved in the home folder.
     private static string DocsAnswers(FakeMachine pi)
     {
         var path = Path.Join(pi.Home, "controller.json");
-        pi.Write(path, JsonBlock().Match(File.ReadAllText(Path.Combine(Root, "docs", "install.md"))).Groups[1].Value);
+        var blocks = JsonBlock().Matches(File.ReadAllText(Path.Combine(Root, "docs", "install.md")))
+            .Select(block => block.Groups[1].Value)
+            .Where(block => block.Contains("\"roles\": [\"controller\"],", StringComparison.Ordinal))
+            .ToList();
+        blocks.Should().ContainSingle("docs/install.md has one answers file for the controller alone");
+        pi.Write(path, blocks[0]);
         return path;
     }
 
