@@ -5,15 +5,17 @@ repository, and every anchor (#...) a heading or an HTML anchor of the file it n
   build/check-doc-links.py [--root <folder>] [<file or folder>...]
 
 With no files or folders it checks every Markdown file git tracks. The root (by default this repository) is where a
-link starting with / points, and no link may point outside it. Links to the web (http, https, mailto) are left alone, as
-are links in code: fenced blocks and inline code. An anchor is checked as GitHub makes one from a
-heading: the heading's text in lower case, without its punctuation, with each space a hyphen, and -1, -2 and so on
-after a heading's text that came before. It prints each broken link as <file>:<line>: <link>: <why>, and exits 1 when
-there is one.
+link starting with / points, and no link may point outside it. In a git checkout a link must name a file git tracks, or
+a folder of them, so that it resolves in a fresh clone too. Links to the web (http, https, mailto) are left alone, as
+are links in code: fenced blocks and inline code. An anchor is checked as GitHub makes one from a heading (# or
+underlined): the heading's text as shown, in lower case, without its punctuation, with each space a hyphen, and -1, -2
+and so on after a heading's text that came before. It prints each broken link as <file>:<line>: <link>: <why>, and
+exits 1 when there is one.
 """
 
 import argparse
 import functools
+import os
 import re
 import subprocess
 import sys
@@ -24,12 +26,17 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
+# A line of = or - under a paragraph's text makes that text a heading (a setext heading).
+UNDERLINE = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+# A line that cannot be part of a paragraph's text: a list item, a quote, a table row, HTML, code by indent.
+NOT_PARAGRAPH = re.compile(r"^(?: {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)| {0,3}[>|<]| {4}|\t)")
 INLINE_CODE = re.compile(r"(`+)(.+?)\1")
-# [text](target "title") and ![alt](target): the target up to a space or the closing parenthesis, with one level of
-# parentheses inside it.
-LINK = re.compile(r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*<?((?:[^()\s<>]|\([^()\s]*\))*)>?(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
-# [label]: target, a reference definition.
-DEFINITION = re.compile(r"^ {0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s+.*)?$")
+# [text](target "title") and ![alt](target): the target in angle brackets, or up to a space or the closing
+# parenthesis, with one level of parentheses inside it. The text is kept, for an image inside a link.
+LINK = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*(?:<([^<>\n]*)>|((?:[^()\s<>]|\([^()\s]*\))*))"
+                  r"(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
+# [label]: target, a reference definition; [^label]: is a footnote's text, not a link.
+DEFINITION = re.compile(r"^ {0,3}\[(?!\^)[^\]]+\]:\s*(?:<([^<>\n]*)>|(\S+))")
 HTML_TARGET = re.compile(r"<(?:a|img|source)\b[^>]*?\b(?:href|src|srcset)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 HTML_ANCHOR = re.compile(r"<[a-z]+\b[^>]*?\b(?:id|name)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 EXTERNAL = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|//)", re.IGNORECASE)
@@ -71,12 +78,22 @@ def prose_lines(text):
         yield number, INLINE_CODE.sub(lambda match: " " * len(match.group(0)), line)
 
 
+def without_emphasis(text):
+    """Text without Markdown's emphasis: every * and ~~, and each run of _ that is not inside a word (as in
+    RoofWeb__StopKeyFile)."""
+    text = re.sub(r"\*+|~~", "", text)
+    return re.sub(r"(?<!\w)_+|_+(?!\w)", "", text)
+
+
 def slug(heading):
     """GitHub's anchor for a heading: its text as shown, in lower case, without punctuation, spaces as hyphens."""
     text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", heading)  # a link or image shows its text
     text = re.sub(r"<[^>]+>", "", text)  # HTML tags show nothing
-    text = text.replace("`", "")
-    text = re.sub(r"(\*\*|__|\*|~~)", "", text)
+    shown, at = [], 0
+    for code in INLINE_CODE.finditer(text):  # code shows as written
+        shown += [without_emphasis(text[at:code.start()]), code.group(2)]
+        at = code.end()
+    text = "".join(shown + [without_emphasis(text[at:])])
     text = text.lower()
     text = re.sub(r"[^\w\- ]", "", text)
     return text.replace(" ", "-")
@@ -87,23 +104,63 @@ def anchors(path):
     """The anchors a Markdown file has: its headings' slugs, numbered as GitHub numbers repeats, and its HTML ids."""
     seen = {}
     found = set()
-    for _, line in outside_fences(path.read_text(encoding="utf-8")):
+    paragraph = []
+
+    def add(text):
+        base = slug(text)
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        found.add(base if count == 0 else f"{base}-{count}")
+
+    previous = 0
+    for number, line in outside_fences(path.read_text(encoding="utf-8")):
+        if number != previous + 1:  # a fenced block ends a paragraph
+            paragraph = []
+        previous = number
         heading = HEADING.match(line)
         if heading:
-            base = slug(heading.group(2))
-            count = seen.get(base, 0)
-            seen[base] = count + 1
-            found.add(base if count == 0 else f"{base}-{count}")
+            add(heading.group(2))
+            paragraph = []
+        elif paragraph and UNDERLINE.match(line):
+            add(" ".join(paragraph))
+            paragraph = []
+        elif not line.strip() or NOT_PARAGRAPH.match(line):
+            paragraph = []
+        else:
+            paragraph.append(line.strip())
         found.update(HTML_ANCHOR.findall(line))
     return frozenset(found)
 
 
+@functools.lru_cache(maxsize=None)
+def tracked(root):
+    """The files git tracks under the root and the folders that hold them, or None outside a git checkout."""
+    try:
+        listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                                check=True, capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    paths = set()
+    for name in filter(None, listed.split("\0")):
+        path = root / name
+        paths.add(path)
+        paths.update(path.parents)
+    return frozenset(paths)
+
+
+def links(text):
+    """Each target of a [text](target) or ![alt](target) in the text, and of one in a link's text."""
+    for link in LINK.finditer(text):
+        yield link.group(3) if link.group(2) is None else link.group(2)
+        yield from links(link.group(1))
+
+
 def targets(line):
     """Each link target on a line of prose."""
-    yield from LINK.findall(line)
+    yield from links(line)
     definition = DEFINITION.match(line)
     if definition:
-        yield definition.group(1)
+        yield definition.group(2) if definition.group(1) is None else definition.group(1)
     for target in HTML_TARGET.findall(line):
         # srcset lists "url width" pairs.
         yield from (part.strip().split()[0] for part in target.split(",") if part.strip())
@@ -117,17 +174,21 @@ def problem(source, target, root):
     path_part = unquote(path_part.split("?", 1)[0])
     anchor = unquote(anchor)
     if path_part.startswith("/"):
-        resolved = (root / path_part.lstrip("/")).resolve()
+        named = root / path_part.lstrip("/")
     elif path_part:
-        resolved = (source.parent / path_part).resolve()
+        named = source.parent / path_part
     else:
-        resolved = source
+        named = source
+    resolved = named.resolve()
     try:
         resolved.relative_to(root)
     except ValueError:
         return "outside the repository"
     if not resolved.exists():
         return "no such file or folder"
+    known = tracked(root) if path_part else None
+    if known is not None and Path(os.path.normpath(named)) not in known and resolved not in known:
+        return "not in git: a fresh clone does not have it"
     if anchor and resolved.suffix.lower() == ".md" and resolved.is_file():
         if anchor not in anchors(resolved):
             return f"{resolved.relative_to(root).as_posix()} has no heading or anchor #{anchor}"

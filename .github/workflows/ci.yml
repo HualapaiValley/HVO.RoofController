@@ -654,8 +654,8 @@ jobs:
       - name: Release script tests
         run: python3 -m unittest discover -s tests/releasing -p 'test_*.py' -v
 
-      # build/check-doc-links.py: every relative link and anchor in the Markdown files resolves (its tests, then every
-      # Markdown file git tracks).
+      # build/check-doc-links.py: every relative link and anchor in the Markdown files resolves, to a file git tracks
+      # (its tests, then every Markdown file git tracks).
       - name: Docs links
         run: |
           python3 -m unittest discover -s tests/docs -p 'test_*.py' -v

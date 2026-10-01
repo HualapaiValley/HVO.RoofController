@@ -21,7 +21,8 @@ curl -fsSL https://github.com/HualapaiValley/HVO.RoofController/releases/latest/
 `install.sh` checks the machine, downloads the release's installer (`hvo-roof-install`), checks the download against
 the release, and starts the installer's wizard. On another machine, the same command installs `hvo-roof` with
 `--roles cli`, the Mac app (Apple silicon) with `--roles mac-app`, and a test rig against the HAT emulator with
-`--roles rig`. The installer later upgrades, rolls back, backs up and restores what it installed.
+`--roles rig`. The installer later upgrades and rolls back what it installed, and backs up and restores the
+controller's and the kiosk's settings and data.
 
 [docs/install.md](docs/install.md) has the rest: preparing the Pi, the roles, the wizard, answers files, certificates,
 upgrades and backups, and troubleshooting.

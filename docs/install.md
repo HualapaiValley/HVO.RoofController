@@ -93,9 +93,10 @@ roof with a verified Stop first, and puts the old controller back if the new one
 | The Mac app | A Mac with Apple silicon, and an admin's name and password, to make its device key. |
 | A test rig | Linux (64-bit ARM or x86-64) with Docker, or a Mac with Apple silicon and Docker Desktop. |
 
-`hvo-roof` and the Mac app need the controller's address and its CA's SHA-256 fingerprint, which the controller's
-installer shows on its Done page, and `sudo hvo-roof-install cert show` prints on the controller
-([Trusting the CA](#trusting-the-ca)). Install the controller first.
+`hvo-roof` and the Mac app need the controller's address and, with the installer's CA (the default), its CA's SHA-256
+fingerprint (with a self-signed certificate, the certificate's), which the controller's installer shows on its Done
+page, and `sudo hvo-roof-install cert show` prints on the controller ([Trusting the CA](#trusting-the-ca)). Install
+the controller first.
 
 ## Getting it
 
@@ -1195,8 +1196,8 @@ Start with what was said: each check that fails, each refusal and each failed st
 | It says | What to do |
 |---------|------------|
 | `This machine runs 32-bit ARM …`, or `… a 64-bit kernel and a 32-bit system …` | Write Raspberry Pi OS Lite (64-bit) to the Pi ([Before you start](#the-pi)). |
-| `FAIL  This machine's clock is … out …` | Turn synchronisation on (`sudo timedatectl set-ntp true`), wait until `timedatectl` says `System clock synchronized: yes`, then run it again. |
-| `FAIL  github.com did not answer …`, or `FAIL  ghcr.io did not answer …` | Check the machine's network and DNS: it needs both. On a machine that cannot reach GitHub, give the release's files with `--from DIR`; Docker still pulls the images from ghcr.io. |
+| `FAIL  This machine's clock is … out …` | Turn synchronisation on (`sudo timedatectl set-ntp true`), wait until `timedatectl` says `System clock synchronized: yes`, then run it again. On a Mac: System Settings → General → Date & Time, and turn on "Set time and date automatically". |
+| `FAIL  github.com did not answer …`, or `FAIL  ghcr.io did not answer …` | Check the machine's network and DNS: it needs both. If it says TLS failed, check the clock (`timedatectl`) and any proxy that intercepts HTTPS. On a machine that cannot reach GitHub, give the release's files with `--from DIR`; Docker still pulls the images from ghcr.io. |
 | `FAIL  I2C is off …` | Run it again with `--enable-i2c`, or turn I2C on with `sudo raspi-config nonint do_i2c 0`. |
 | `FAIL  raspi-config turned I2C on from the next start …` | Restart the Pi (`sudo reboot`), then run it again. |
 | `FAIL  Docker is not installed …` | Run it again with `--install-docker` (Raspberry Pi OS, Debian or Ubuntu), or install Docker Engine 20.10 or later yourself. On a Mac, install Docker Desktop and start it. |
@@ -1213,8 +1214,11 @@ Start with what was said: each check that fails, each refusal and each failed st
   [the guards](#the-guards); `--plan` shows the step it blocks.
 - **A step failed (exit code 1).** Nothing after that step changed. The log names the step, and ends with the last 40
   lines of the output of the command that failed. Put right what it says, then run the installer again.
-- **The deploy script stopped before it replaced the controller.** The roof was moving, or its status could not be
-  read. The old controller still runs. Run the installer again once the roof is idle.
+- **The deploy script stopped before it replaced the controller.** The old controller still runs, and the end of the
+  script's output in the log says why. If the roof was moving, or its status could not be read, run the installer
+  again once the roof is idle. If the new image failed its pre-flight or its image checks, put right what it names. If
+  the Stop could not be verified, the controller has latched `RelayVerificationFailed`: check the relays and the HAT,
+  clear the fault (`hvo-roof clear-fault`, or in the web UI), then run the installer again.
 - **The deploy script put the old controller back.** The new one failed a check, which the end of the script's output
   in the log names. The old controller runs as before.
 - **The wizard's keys do nothing, or it draws badly.** It needs a terminal of at least 80 × 24 that sends function
@@ -1224,10 +1228,11 @@ Start with what was said: each check that fails, each refusal and each failed st
 
 - **A browser warns that the connection is not private.** It does not trust the controller's CA yet: check the CA's
   fingerprint, then trust it ([Trusting the controller in a browser](#trusting-the-controller-in-a-browser)).
-- **A browser, `hvo-roof` or the Mac app stopped trusting the controller.** The controller has a new CA: `cert` made
-  one, such as after a change of host name ([Renewing](#renewing)). Trust the new CA in each browser, and run the
-  installer again for `hvo-roof` and the Mac app (both in one run, when both are installed) with the new CA's
-  fingerprint ([hvo-roof and the Mac app](#hvo-roof-and-the-mac-app)).
+- **A browser, `hvo-roof` or the Mac app stopped trusting the controller.** The controller has a new CA, or a new
+  self-signed certificate: `cert` made one, such as after a change of host name, or renewed a self-signed one
+  ([Renewing](#renewing)). Trust the new CA or certificate in each browser, and run the installer again for `hvo-roof`
+  and the Mac app (both in one run, when both are installed) with its new fingerprint
+  ([hvo-roof and the Mac app](#hvo-roof-and-the-mac-app)).
 - **The kiosk shows nothing.** `journalctl -u hvo-roof-kiosk` says why ([Install](kiosk.md#install)). A desktop that
   holds the display stops it: use Raspberry Pi OS Lite, or have the Pi boot to the console
   (`sudo systemctl set-default multi-user.target`, then restart it).

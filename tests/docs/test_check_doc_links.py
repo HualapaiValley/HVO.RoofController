@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for build/check-doc-links.py (#75): the links and anchors of made-up Markdown files that resolve and those that
-do not, GitHub's anchors for headings, and the links in code left alone; then this repository's own Markdown, which CI
-checks with the script too. From the repository root:
+do not, GitHub's anchors for headings, the links in code left alone, and in a git checkout the links to files git does
+not track; then this repository's own Markdown, which CI checks with the script too. From the repository root:
 
     python3 -m unittest discover -s tests/docs -p 'test_*.py'
 """
@@ -10,6 +10,7 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import subprocess
 import tempfile
 import textwrap
 import unittest
@@ -42,6 +43,9 @@ class TheSlug(unittest.TestCase):
             "**Bold** and *emphasis*": "bold-and-emphasis",
             "A [link](other.md) in it": "a-link-in-it",
             "RIG_RELEASE_DIR": "rig_release_dir",
+            "RoofWeb__StopKeyFile": "roofweb__stopkeyfile",
+            "__Strong__ and ~~gone~~": "strong-and-gone",
+            "`__init__` and `*`": "__init__-and-",
             "Upgrading: 4.0.0 → 4.1.0": "upgrading-400--410",
             "📖 Related Documentation": "-related-documentation",
         }
@@ -55,6 +59,7 @@ class AFolderOfMarkdown(unittest.TestCase):
         self._folder = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self._folder.name).resolve()
         check_doc_links.anchors.cache_clear()
+        check_doc_links.tracked.cache_clear()
         self.write("docs/guide.md", """\
             # The guide
 
@@ -130,6 +135,75 @@ class AFolderOfMarkdown(unittest.TestCase):
         self.assertEqual(self.broken("![Gone](images/gone.png)\n<img src=\"images/gone.svg\">\n"), [
             (1, "images/gone.png", "no such file or folder"),
             (2, "images/gone.svg", "no such file or folder"),
+        ])
+
+    def test_a_reference_definition_is_checked_and_a_footnote_is_not_a_link(self):
+        self.assertEqual(self.broken("""\
+            # Page
+
+            See [the guide][g], [gone][x] and a note.[^1]
+
+            [g]: <guide.md#steps> "The steps"
+            [x]: gone.md
+            [^1]: The guide says more.
+            """), [(6, "gone.md", "no such file or folder")])
+
+    def test_a_target_with_a_space_in_angle_brackets_or_escaped(self):
+        self.write("docs/a b.md", "# A B\n")
+        self.assertEqual(self.broken("""\
+            [A](<a b.md>), [A again](a%20b.md#a-b), [C](<c d.md>)
+            """), [(1, "c d.md", "no such file or folder")])
+
+    def test_an_underlined_heading_is_an_anchor(self):
+        self.write("docs/setext.md", """\
+            The title
+            =========
+
+            A section with
+            two lines
+            ---
+
+            - A list item
+            ---
+
+            Text.
+
+            ---
+            """)
+        self.assertEqual(self.broken("""\
+            [A](setext.md#the-title), [B](setext.md#a-section-with-two-lines), [C](setext.md#a-list-item),
+            [D](setext.md#text)
+            """), [
+            (1, "setext.md#a-list-item", "docs/setext.md has no heading or anchor #a-list-item"),
+            (2, "setext.md#text", "docs/setext.md has no heading or anchor #text"),
+        ])
+
+    def test_a_heading_with_underscores_in_a_word_keeps_them(self):
+        self.write("docs/settings.md", "# Settings\n\n## RoofWeb__StopKeyFile\n")
+        self.assertEqual(self.broken("[A](settings.md#roofweb__stopkeyfile)\n[B](settings.md#roofwebstopkeyfile)\n"), [
+            (2, "settings.md#roofwebstopkeyfile", "docs/settings.md has no heading or anchor #roofwebstopkeyfile"),
+        ])
+
+    def test_an_image_inside_a_link_is_checked_too(self):
+        self.assertEqual(self.broken("[![A screen](images/gone.svg)](guide.md) [![B](images/screen.svg)](gone.md)\n"), [
+            (1, "images/gone.svg", "no such file or folder"),
+            (1, "gone.md", "no such file or folder"),
+        ])
+
+    def test_in_a_git_checkout_a_file_git_does_not_track_is_reported(self):
+        self.write("docs/page.md", "# Page\n")
+        self.write("docs/notes/kept.md", "# Kept\n")
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "docs/guide.md", "docs/page.md", "docs/notes/kept.md"],
+                       check=True)
+        self.write("docs/local.md", "# Local\n")
+        self.assertEqual(self.broken("""\
+            # Page
+
+            [A](guide.md#steps), [B](notes), [C](notes/kept.md), [D](#page), [E](local.md), [F](images/screen.svg)
+            """), [
+            (3, "local.md", "not in git: a fresh clone does not have it"),
+            (3, "images/screen.svg", "not in git: a fresh clone does not have it"),
         ])
 
     def test_a_link_outside_the_repository_is_reported(self):
