@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-01
+
 Safety, security and operations fixes from the August 2026 architecture review
 (issues #16-#22). The commissioning checks in [docs/commissioning.md](docs/commissioning.md) run
 as automated scenarios against the emulated plant (#31). Each check lists the installation
