@@ -440,10 +440,12 @@ jobs:
       - name: Build the tests
         run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release -v minimal
 
-      # The test is skipped without HVO_MAC_INSTALL, so the summary must show it passed, not skipped.
+      # The test is skipped without HVO_MAC_INSTALL, so the summary must show it passed, not skipped. A runner has no one to
+      # answer the dialog macOS shows before sudo may change the admin trust settings, so CI allows that change outright.
       - name: Install the Mac app
         run: |
-          HVO_MAC_INSTALL=1 HVO_MAC_APP_ZIP="$RUNNER_TEMP/mac/hvo-roof-mac-${GITHUB_RUN_ID}.zip" \
+          sudo security authorizationdb write com.apple.trust-settings.admin allow
+          HVO_MAC_INSTALL=1 HVO_MAC_TRUST_SETTINGS=1 HVO_MAC_APP_ZIP="$RUNNER_TEMP/mac/hvo-roof-mac-${GITHUB_RUN_ID}.zip" \
             dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build \
             --filter "TestCategory=MacInstall" --logger "console;verbosity=normal" | tee mac-install.txt
           grep -q '^  Passed TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing ' mac-install.txt

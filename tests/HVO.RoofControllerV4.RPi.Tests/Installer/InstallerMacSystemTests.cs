@@ -132,8 +132,9 @@ public sealed class InstallerMacSystemTests
 
     /// <summary>
     /// The keychain step reads what macOS's own tools print: the controller's CA in a keychain of the test's own, found by
-    /// its SHA-256 with its SHA-1 beside it, and, where sudo needs no password (a CI runner), trusted for SSL in the admin
-    /// trust settings the way <c>add-trusted-cert</c> trusts it in the person's, then read back from their export.
+    /// its SHA-256 with its SHA-1 beside it, and, with HVO_MAC_TRUST_SETTINGS=1 (CI, which lets sudo change the admin trust
+    /// settings without the dialog that would otherwise wait for someone), trusted for SSL there the way
+    /// <c>add-trusted-cert</c> trusts it in the person's, then read back from their export.
     /// </summary>
     [TestMethod]
     public void TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem()
@@ -161,7 +162,7 @@ public sealed class InstallerMacSystemTests
             found.Exit.Should().Be(0, found.Output);
             KeychainTrustStep.KeychainHashes(found.Output).Should().Equal([(sha256, sha1)], found.Output);
 
-            if (Run("sudo", "-n", "true").Exit != 0)
+            if (Environment.GetEnvironmentVariable("HVO_MAC_TRUST_SETTINGS") != "1")
             {
                 return;
             }
@@ -279,10 +280,23 @@ public sealed class InstallerMacSystemTests
             start.Environment[name] = value;
         }
 
+        // A tool that waits for someone (an authorization dialog) fails the test instead of the job's timeout.
         using var process = Process.Start(start)!;
         var error = process.StandardError.ReadToEndAsync();
-        var output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, output + error.Result);
+        var output = process.StandardOutput.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(2)))
+        {
+            try
+            {
+                process.Kill();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.Fail($"{command} {string.Join(' ', arguments)} did not finish in 2 minutes.");
+        }
+
+        return (process.ExitCode, output.Result + error.Result);
     }
 }
