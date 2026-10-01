@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
-# The installer's rig role end to end (#69): hvo-roof-install, as published, on real Docker against the HAT emulator,
-# installing a release as the release workflow publishes one.
+# The installer's rig role end to end (#69, #74): install.sh and hvo-roof-install, as a release publishes them, on real
+# Docker against the HAT emulator.
 #
-#   install  The release (the controller and the HAT emulator, each an index of two platforms in a registry of this
-#            run's own on loopback, and the release.json that names them by digest) installed as a test rig with
-#            --answers and --release, as root: the plan, then the install. Then the folders and files with their modes,
-#            the controller running the release's image against the emulator and serving HTTPS with the installer's CA
-#            on loopback only, the web UI, the first admin signing in with the password given in a file, and no secret
-#            in the output, the log, the record or the controller's environment.
+#   install  The installer's plan for a test rig, as root; then the release installed as one by its install.sh, run as
+#            the one-line install runs it (bash reading the script on its standard input, here with no terminal, as
+#            cron or CI runs it) with --from (the release's files in a folder) and the installer's --answers: it checks
+#            this machine, takes hvo-roof-install from the folder, checks its SHA-256 against SHA256SUMS and, with gh
+#            signed in, its attestation, and starts it as root (sudo). Then the folders and files with their modes, the
+#            controller running the release's image against the emulator and serving HTTPS with the installer's CA on
+#            loopback only, the web UI, the first admin signing in with the password given in a file, and no secret in
+#            the output, the log, the record or the controller's environment.
 #   again    The same answers again: nothing to change, and nothing is replaced.
+#   cli      hvo-roof for the person running the scenario (not root, in a home of this run's own) with the rig as its
+#            controller, trusting the rig's CA by its fingerprint (#71): a wrong fingerprint refused with nothing
+#            changed, then install.sh installing the program and its connection, with their modes, hvo-roof login with
+#            the password on standard input, hvo-roof status reporting the emulated HAT, the same answers again changing
+#            nothing, and no secret shown.
+#   motion   hvo-roof open, followed to the open limit; close --no-wait at real time, and hvo-roof stop part way: the
+#            Stop acknowledged, the drive stopped between the limits with the relays open; then hvo-roof close, followed
+#            to the closed limit. The emulator records each direction relay closing, and no violation.
 #   change   A new time scale: the emulator is replaced and the controller redeployed against it.
-#   cli      hvo-roof from the release, installed for the person running the scenario (not root, in a home of this
-#            run's own) with the rig as its controller, trusting the rig's CA by its fingerprint (#71): a wrong
-#            fingerprint refused with nothing changed, then the program and its connection with their modes, hvo-roof
-#            login with the password on standard input, hvo-roof status reporting the emulated HAT, the same answers
-#            again changing nothing, and no secret shown.
 #   cert     cert --renew --redeploy: a new certificate from the same CA, the CA unchanged, and the controller
 #            redeployed to serve it; hvo-roof, which trusts the CA, signs in and reads the status from it still.
+#   names    A new address (a dummy interface with 10.213.47.1): cert issues the certificate again for it from the same
+#            CA, and redeploys the controller, which answers at the address; hvo-roof, its connection unchanged, signs
+#            in still. The address gone, cert drops it. Then a new name (controller.hostNames, roof-rig): the CA may not
+#            issue for it, so the installer makes a new CA and the controller answers to the name with a certificate
+#            from it; hvo-roof is given the new CA's fingerprint to trust in its place, and signs in.
 #   backup   backup, into a folder only root reads: one archive, root's and 0600, holding the keys, the CA, the
 #            certificate, the people and the record, with no secret in what it prints or logs.
 #   restore  uninstall --purge, as a script runs it (--confirm and --no-backup), with the installed hvo-roof-install:
@@ -30,24 +40,37 @@
 #            keeping the old one as roof-controller-previous, with the data kept. Again: nothing to change.
 #   rollback rollback to 4.0.0-rig.1 (the kept controller put back), rollback again (nothing changes), then upgrade
 #            forward again.
-# Throughout, the roof does not move: the relay register stays 0, and the emulator records no direction relay closing
-# and no violation.
+# Except in motion, the roof does not move: the relay register stays 0, and the emulator records no direction relay
+# closing and no violation.
 #
-# Needs docker (buildx), git (the release before is built from a worktree of RIG_PREVIOUS_REF), the .NET SDK (to
-# publish the installer), curl, jq, openssl, ss and sudo without a password: the installer runs as root, as a rig on
-# Linux needs. It runs only against the local Docker daemon, which sudo must reach too, never on a Raspberry Pi, and
-# only on a machine without the rig's folders (/etc/hvo-roof, /var/lib/hvo-roof), the installer's log, the installed
-# installer (/usr/local/sbin/hvo-roof-install), the containers (roof-controller, roof-controller-previous, hat-emulator)
-# and the hvo-emulator network: it removes them all when it ends, with its backup folder and its worktree. The ports it
-# uses must be free: RIG_HTTPS_PORT, RIG_WEB_PORT, 5290 (the emulator's control API) and RIG_REGISTRY_PORT. The images
-# it built stay (the build cache); the ones pulled from its registry go.
+# The release comes from one of two places:
+#   This source (the default). The release is made here as the release workflow makes one: install.sh with the
+#            release's version written in (build/release-assets.py), hvo-roof-install and hvo-roof published for this
+#            machine, the controller and the HAT emulator built and pushed, each an index of two platforms, to a
+#            registry of this run's own on loopback, release.json naming them by digest, and SHA256SUMS. install.sh
+#            does not see gh, so it notes that the attestation was not checked, as on a machine without gh.
+#   A release (RIG_RELEASE_DIR). The release's assets as the release workflow drafts them, its images in its registry
+#            (GHCR): sudo's Docker must be able to pull them. install.sh checks the installer's attestation with gh,
+#            which must be signed in (GH_TOKEN). upgrade and rollback, which need the release before built here, are
+#            left out: the run from this source checks them.
+#
+# Needs docker, curl, jq, openssl, ss, ip, setsid, python3 and sudo without a password: the installer runs as root, as
+# a rig on Linux needs. From this source, also docker buildx, git (the release before is built from a worktree of
+# RIG_PREVIOUS_REF) and the .NET SDK. It runs only against the local Docker daemon, which sudo must reach too, never on
+# a Raspberry Pi, and only on a machine without the rig's folders (/etc/hvo-roof, /var/lib/hvo-roof), the installer's
+# log, the installed installer (/usr/local/sbin/hvo-roof-install), the containers (roof-controller,
+# roof-controller-previous, hat-emulator), the hvo-emulator network and a network interface named hvorig0: it removes
+# them all when it ends, with its backup folder and its worktree. The ports it uses must be free: RIG_HTTPS_PORT,
+# RIG_WEB_PORT, 5290 (the emulator's control API) and, from this source, RIG_REGISTRY_PORT. The images it built stay
+# (the build cache); each release's images, by digest, go.
 #
 #   tests/installer/rig-scenario.sh
 #
 # Settings (environment): RIG_HTTPS_PORT and RIG_WEB_PORT (the controller's API and web UI, default 8443 and 8088, as
 # the installer's), RIG_REGISTRY_PORT (the run's registry on loopback, default 15001), RIG_PREVIOUS_REF (the commit
-# the release before is built from, default origin/main; a CI checkout needs fetch-depth 0) and RIG_RESULTS_DIR
-# (writes rig-scenario.md there: each check with its result and timing). The backup is never written there.
+# the release before is built from, default origin/main; a CI checkout needs fetch-depth 0), RIG_RELEASE_DIR (a
+# release's assets: see above) and RIG_RESULTS_DIR (writes rig-scenario.md there: each check with its result and
+# timing). The backup is never written there.
 # The installer runs as root; what it prints, and the files read with sudo, go to this run's own files.
 # shellcheck disable=SC2024
 set -euo pipefail
@@ -69,7 +92,9 @@ https_port=${RIG_HTTPS_PORT:-8443}
 web_port=${RIG_WEB_PORT:-8088}
 registry_port=${RIG_REGISTRY_PORT:-15001}
 previous_ref=${RIG_PREVIOUS_REF:-origin/main}
-# This source is the release; the release before is a build of previous_ref, labelled as the one before it.
+release_source=${RIG_RELEASE_DIR:-}
+# This source is the release, unless RIG_RELEASE_DIR gives one; the release before is a build of previous_ref, labelled
+# as the one before it.
 version=4.0.0-rig.2
 previous_version=4.0.0-rig.1
 registry_name=hvo-rig-scenario-registry
@@ -86,12 +111,17 @@ install_log=/var/log/hvo-roof-install.log
 installed=/usr/local/sbin/hvo-roof-install
 ca=/etc/hvo-roof/ca.crt
 admin=tester
+# The dummy interface that gives this machine a new address, and the address.
+interface=hvorig0
+new_address=10.213.47.1
 case "$(uname -m)" in
   aarch64|arm64) platform=linux/arm64 other_platform=linux/amd64 rid=linux-arm64 ;;
   *) platform=linux/amd64 other_platform=linux/arm64 rid=linux-x64 ;;
 esac
 
 work=$(mktemp -d)
+# As install.sh names it: the folder's physical path.
+work=$(cd "${work}" && pwd -P)
 chmod 700 "${work}"
 results="${work}/results.md"
 : > "${results}"
@@ -99,7 +129,12 @@ owns_resources=0
 previous_root="${work}/previous"
 previous_worktree=0
 backup_dir=""
+release_dir=""
+previous_dir=""
+made_interface=0
 relay_monitor_pid=""
+hide_gh=()
+attestation=""
 current_check="setup"
 
 say() {
@@ -128,10 +163,12 @@ seconds_since() {
 write_results() {
   [[ -n "${RIG_RESULTS_DIR:-}" ]] || return 0
   mkdir -p "${RIG_RESULTS_DIR}"
+  local where="a release in a registry on loopback"
+  [[ -z "${release_source}" ]] || where="the release's assets, its images from GHCR"
   {
     echo "# The installer's rig role end to end"
     echo
-    echo "hvo-roof-install for ${rid}, a release in a registry on loopback, the HAT emulator on real Docker. Timings are wall-clock seconds."
+    echo "hvo-roof-install for ${rid}, ${where}, the HAT emulator on real Docker. Timings are wall-clock seconds."
     echo
     echo "| Check | Result | Detail |"
     echo "|---|---|---|"
@@ -157,8 +194,13 @@ cleanup() {
     fi
     docker rm -f "${controller}" "${controller}-previous" "${emulator}" "${registry_name}" >/dev/null 2>&1
     docker network rm "${network}" >/dev/null 2>&1
-    docker images --digests --format '{{.Repository}}@{{.Digest}}' 2>/dev/null \
-      | grep "^${registry}/.*@sha256:" | xargs -r docker rmi >/dev/null 2>&1
+    # Each release's images, by digest: the ones the installer pulled.
+    local folder
+    for folder in "${release_dir}" "${previous_dir}"; do
+      [[ -n "${folder}" && -f "${folder}/release.json" ]] || continue
+      jq -r '.images[] | "\(.repository)@\(.digest)"' "${folder}/release.json" | xargs -r docker rmi >/dev/null 2>&1
+    done
+    (( made_interface == 0 )) || sudo -n ip link delete "${interface}" >/dev/null 2>&1
     sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof "${install_log}" "${installed}" "${installed}.previous"
     [[ -z "${backup_dir}" ]] || sudo -n rm -rf "${backup_dir}"
   fi
@@ -259,9 +301,38 @@ install_with() {
   sed 's/^/[install] /' "${work}/${name}.txt"
 }
 
+# install_sh <name> <arguments...>: the release's install.sh, run as the one-line install runs it (bash reading the
+# script on its standard input), in a session of its own with no terminal, as cron or CI runs it, with --from the
+# release's folder and the arguments; it starts the installer as root itself, with sudo. Its output in
+# ${work}/<name>.txt and its exit status in INSTALL_STATUS.
+install_sh() {
+  local name=$1
+  shift
+  INSTALL_STATUS=0
+  ${hide_gh[@]+"${hide_gh[@]}"} setsid -w bash -s -- --from "${release_dir}" "$@" < "${release_dir}/install.sh" \
+    > "${work}/${name}.txt" 2>&1 || INSTALL_STATUS=$?
+  sed 's/^/[install.sh] /' "${work}/${name}.txt"
+}
+
 # expect_installed <name>: the run exited 0.
 expect_installed() {
   (( INSTALL_STATUS == 0 )) || fail "hvo-roof-install ${1} exited ${INSTALL_STATUS}"
+}
+
+# expect_install_sh <name> <role> <as>: install.sh said what it does, for the role, installed as <as> (root or you),
+# took the release's installer from the folder, checked it, and started it.
+expect_install_sh() {
+  expect_output "$1" "HVO Roof Controller ${version}: install.sh"
+  expect_output "$1" "  ok    for $2 (from the answers file), installed as $3"
+  expect_output "$1" "Taking hvo-roof-install ${version} for ${rid} from ${release_dir}"
+  expect_output "$1" "  ok    hvo-roof-install-${rid}'s SHA-256 is the one SHA256SUMS lists"
+  expect_output "$1" "$4"
+  if [[ "$3" == root ]]; then
+    expect_output "$1" "Starting hvo-roof-install ${version} as root (sudo)"
+  else
+    expect_output "$1" "Starting hvo-roof-install ${version}"
+    ! grep -qF "as root (sudo)" "${work}/$1.txt" || fail "install.sh started hvo-roof-install ${2} as root"
+  fi
 }
 
 expect_output() {
@@ -323,6 +394,16 @@ person_install() {
   sed 's/^/[install] /' "${work}/${name}.txt"
 }
 
+# person_install_sh <name> <arguments...>: install_sh as the person, who has no gh signed in.
+person_install_sh() {
+  local name=$1
+  shift
+  INSTALL_STATUS=0
+  as_person setsid -w bash -s -- --from "${release_dir}" "$@" < "${release_dir}/install.sh" > "${work}/${name}.txt" 2>&1 \
+    || INSTALL_STATUS=$?
+  sed 's/^/[install.sh] /' "${work}/${name}.txt"
+}
+
 # hvo_roof <name> <arguments...>: the installed hvo-roof as the person, its standard input the caller's; its output in
 # ${work}/<name>.txt, which it prints.
 hvo_roof() {
@@ -331,6 +412,17 @@ hvo_roof() {
   as_person "${person_cli}" "$@" > "${work}/${name}.txt" 2>&1 || status=$?
   sed 's/^/[hvo-roof] /' "${work}/${name}.txt"
   (( status == 0 )) || fail "hvo-roof $* exited ${status}"
+}
+
+# hvo_roof_json <name> <arguments...>: hvo-roof as the person, its standard output (the JSON --json writes) in
+# ${work}/<name>.txt and its standard error in ${work}/<name>.err.txt, both printed; its exit status in CLI_STATUS.
+CLI_STATUS=0
+hvo_roof_json() {
+  local name=$1
+  shift
+  CLI_STATUS=0
+  as_person "${person_cli}" "$@" > "${work}/${name}.txt" 2> "${work}/${name}.err.txt" </dev/null || CLI_STATUS=$?
+  sed 's/^/[hvo-roof] /' "${work}/${name}.txt" "${work}/${name}.err.txt"
 }
 
 # cli_signs_in: hvo-roof signs in as the first admin with the password on standard input, and reads the status: the
@@ -350,17 +442,19 @@ cli_answers() {
   jq -n --arg controller "${roof}" --arg fingerprint "$2" '{ roles: ["cli"], client: { controller: $controller, caSha256: $fingerprint } }' > "$1"
 }
 
-# answers <file> <time scale>: a rig's answers, as docs/install.md has them.
+# answers <file> <time scale> [<host name>]: a rig's answers, as docs/install.md has them, with the other short name
+# clients use for it, if one is given.
 answers() {
-  jq -n --arg host "$(hostname)" --argjson https "${https_port}" --argjson web "${web_port}" --argjson scale "$2" '{
+  jq -n --arg host "$(hostname)" --argjson https "${https_port}" --argjson web "${web_port}" --argjson scale "$2" \
+    --arg name "${3:-}" '{
     schema: 1,
     roles: ["rig"],
-    controller: {
+    controller: ({
       httpsPort: $https,
       webPort: $web,
       firstAdmin: { name: "tester" },
       rig: { timeScale: $scale, cameraFramesPerSecond: 5 }
-    },
+    } + (if $name == "" then {} else { hostNames: [$name] } end)),
     rigConfirmation: $host
   }' > "$1"
 }
@@ -380,6 +474,15 @@ roof_call() {
 
 ready() {
   [[ "$(curl -sS --max-time 5 --cacert "${ca}" -o /dev/null -w '%{http_code}' "${roof}/health/ready" 2>/dev/null)" == 200 ]]
+}
+
+# answers_at <address or name> <CA file> [<curl options...>]: the controller, reached at the address or name (on
+# loopback, where it listens), is ready over HTTPS with a certificate the CA issued for it, and answers to it (its
+# AllowedHosts).
+answers_at() {
+  local at=$1 authority=$2
+  shift 2
+  [[ "$(curl -sS --max-time 10 --cacert "${authority}" "$@" -o /dev/null -w '%{http_code}' "https://${at}:${https_port}/health/ready")" == 200 ]]
 }
 
 # served_certificate: the certificate the controller serves, as PEM.
@@ -406,6 +509,27 @@ sign_in() {
   [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || fail "Auth/Me answered HTTP $(tail -n 1 <<<"${response}")"
   sed '$d' <<<"${response}" | jq -e --arg name "${admin}" '.name == $name and .role == "RoofAdmin"' >/dev/null \
     || fail "${admin} is not an admin: $(sed '$d' <<<"${response}" | jq -c '{name, role, kind}')"
+}
+
+# plant: the emulated roof, as the emulator's control API reports it. plant_is <jq filter>: it matches the filter.
+plant() {
+  curl -fsS --max-time 10 "${emulator_api}/status" | jq -c '.plant | {positionMeters, velocityMetersPerSecond, travelMeters, relayRegister, outputFrequencyHz, openLimitActuated, closedLimitActuated, timeScale}'
+}
+
+plant_is() {
+  curl -fsS --max-time 5 "${emulator_api}/status" 2>/dev/null | jq -e ".plant | $1" >/dev/null 2>&1
+}
+
+# time_scale <scale>: the emulator runs that many times as fast as real time from now.
+time_scale() {
+  curl -fsS --max-time 10 -H 'Content-Type: application/json' --data "{\"scale\": $1}" -o /dev/null "${emulator_api}/time-scale" \
+    || fail "the emulator's time scale could not be set to $1"
+  plant_is ".timeScale == $1" || fail "the emulator does not run at time scale $1: $(plant)"
+}
+
+# relay_closings <relay>: how many times the emulator's history has the relay's contact closing.
+relay_closings() {
+  curl -fsS --max-time 10 "${emulator_api}/history?limit=5000" | jq --arg relay "$1" '[.[] | select(.detail | startswith("\($relay) contact closed"))] | length'
 }
 
 # emulated_status: the controller reports the emulated HAT, and the roof as idle.
@@ -465,11 +589,12 @@ loopback_only() {
 # Setup: the installer, the release in a registry of this run's own, and the answers.
 
 setup() {
-  local tool
-  for tool in docker git curl jq openssl dotnet ss; do
+  local tool tools=(docker curl jq openssl ss ip setsid python3 sha256sum)
+  [[ -n "${release_source}" ]] || tools+=(git dotnet)
+  for tool in "${tools[@]}"; do
     command -v "${tool}" >/dev/null || fail "${tool} is required"
   done
-  docker buildx version >/dev/null 2>&1 || fail "docker buildx is required"
+  [[ -n "${release_source}" ]] || docker buildx version >/dev/null 2>&1 || fail "docker buildx is required"
   sudo -n true 2>/dev/null || fail "sudo must run without a password: the installer installs a rig as root"
   # The installer, as root, must install the rig on the daemon this run checks and cleans up.
   local daemon
@@ -480,20 +605,67 @@ setup() {
     || sudo -n test -e "${installed}"; then
     fail "/etc/hvo-roof, /var/lib/hvo-roof, ${install_log} or ${installed} exists: this machine has a controller or a rig. Run the scenario where there is none."
   fi
-  local previous_commit
-  previous_commit=$(git -C "${repo_root}" rev-parse --verify --quiet "${previous_ref}^{commit}") \
-    || fail "${previous_ref} is not a commit here: fetch it (a CI checkout needs fetch-depth 0), or set RIG_PREVIOUS_REF"
+  local previous_commit=""
+  if [[ -z "${release_source}" ]]; then
+    previous_commit=$(git -C "${repo_root}" rev-parse --verify --quiet "${previous_ref}^{commit}") \
+      || fail "${previous_ref} is not a commit here: fetch it (a CI checkout needs fetch-depth 0), or set RIG_PREVIOUS_REF"
+  fi
   if [[ -n "$(docker ps -aq --filter "name=^/(${controller}|${controller}-previous|${emulator}|${registry_name})$")" ]] \
     || docker network inspect "${network}" >/dev/null 2>&1; then
     fail "${controller}, ${emulator}, ${registry_name} or the ${network} network exists: remove them first."
   fi
-  local port out
-  for port in "${https_port}" "${web_port}" 5290 "${registry_port}"; do
+  ! ip link show "${interface}" >/dev/null 2>&1 || fail "this machine has a network interface named ${interface}: remove it first."
+  local port out ports=("${https_port}" "${web_port}" 5290)
+  [[ -n "${release_source}" ]] || ports+=("${registry_port}")
+  for port in "${ports[@]}"; do
     out=$(ss -ltnH "sport = :${port}") || fail "ss could not list the ports in use"
     [[ -z "${out}" ]] || fail "port ${port} is in use"
   done
   owns_resources=1
 
+  cli_asset="hvo-roof-${rid}"
+  if [[ -n "${release_source}" ]]; then
+    setup_from_release
+  else
+    setup_from_source "${previous_commit}"
+  fi
+
+  password_file="${work}/admin-password"
+  (umask 077 && openssl rand -base64 24 > "${password_file}")
+  answers "${work}/rig.json" 10
+  answers "${work}/rig-faster.json" 20
+  answers "${work}/rig-renamed.json" 20 roof-rig
+}
+
+# setup_from_release: the release's assets in RIG_RELEASE_DIR, checked against its SHA256SUMS, as the release workflow
+# drafts them; its images are in its registry.
+setup_from_release() {
+  local file
+  release_dir=$(cd "${release_source}" && pwd -P) || fail "RIG_RELEASE_DIR (${release_source}) is not a folder"
+  for file in release.json SHA256SUMS install.sh "hvo-roof-install-${rid}" "${cli_asset}"; do
+    [[ -f "${release_dir}/${file}" ]] || fail "${release_dir} has no ${file}: give it the release's assets, as the release workflow drafts them"
+  done
+  (cd "${release_dir}" && sha256sum --check --strict --quiet SHA256SUMS) || fail "the files in ${release_dir} are not the ones its SHA256SUMS lists"
+  version=$(jq -r .version "${release_dir}/release.json")
+  [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail "release.json names no version: '${version}'"
+  # install.sh checks the installer's attestation with gh.
+  gh auth status >/dev/null 2>&1 || fail "gh is not signed in: install.sh checks the installer's attestation with it (give GH_TOKEN)"
+  # An artifact's files lose their modes: the installer that runs here directly is a copy that runs.
+  mkdir -p "${work}/installer"
+  installer="${work}/installer/hvo-roof-install"
+  cp "${release_dir}/hvo-roof-install-${rid}" "${installer}"
+  chmod 755 "${installer}"
+  says_version "${installer}" "${version}"
+  cli_sha256=$(sha256sum "${release_dir}/${cli_asset}" | cut -d' ' -f1)
+  installer_sha256=$(sha256sum "${installer}" | cut -d' ' -f1)
+  attestation="  ok    its attestation says HualapaiValley/HVO.RoofController's release workflow built it"
+  pass "release ${version} from ${release_dir}: its files as its SHA256SUMS lists them, its images $(jq -r '[.images[].reference] | join(" and ")' "${release_dir}/release.json")"
+}
+
+# setup_from_source <the release before's commit>: the release made here from this source, and the release before from
+# the commit.
+setup_from_source() {
+  local previous_commit=$1
   say "Publishing hvo-roof-install and hvo-roof ${version} for ${rid}"
   publish "${repo_root}" HVO.RoofControllerV4.Installer "${version}" "${work}/installer"
   publish "${repo_root}" HVO.RoofControllerV4.Cli "${version}" "${work}/cli"
@@ -518,29 +690,44 @@ setup() {
   local started
   started=$(date +%s.%N)
   say "Building and pushing the release's images (${version}) and the release before's (${previous_version})"
-  # The release: hvo-roof and hvo-roof-install for this platform beside its images, as build/release-assets.py names
-  # them, and upgrade notes, which upgrade shows.
+  # The release: install.sh, and hvo-roof and hvo-roof-install for this platform, beside its images, as
+  # build/release-assets.py names them, with upgrade notes, which upgrade shows, and SHA256SUMS.
   release_dir="${work}/release"
   mkdir -p "${release_dir}"
-  cli_asset="hvo-roof-${rid}"
+  install_script "${release_dir}/install.sh"
   cp "${work}/cli/hvo-roof" "${release_dir}/${cli_asset}"
   cp "${installer}" "${release_dir}/hvo-roof-install-${rid}"
-  chmod 755 "${release_dir}/${cli_asset}" "${release_dir}/hvo-roof-install-${rid}"
+  chmod 755 "${release_dir}/install.sh" "${release_dir}/${cli_asset}" "${release_dir}/hvo-roof-install-${rid}"
   cli_sha256=$(sha256sum "${release_dir}/${cli_asset}" | cut -d' ' -f1)
   installer_sha256=$(sha256sum "${installer}" | cut -d' ' -f1)
   release "${release_dir}" "${repo_root}" "${version}" "Nothing to do by hand: the rig scenario's upgrade notes." \
-    "${cli_asset}" cli "hvo-roof-install-${rid}" installer
+    install.sh install-script "${cli_asset}" cli "hvo-roof-install-${rid}" installer
+  (cd "${release_dir}" && sha256sum -- *) > "${work}/SHA256SUMS" || fail "could not list the release's SHA-256s"
+  mv "${work}/SHA256SUMS" "${release_dir}/SHA256SUMS"
   # The release before: its images alone, as a release before the installer was released had them.
   previous_dir="${work}/release-previous"
   mkdir -p "${previous_dir}"
   release "${previous_dir}" "${previous_root}" "${previous_version}" ""
-
-  password_file="${work}/admin-password"
-  (umask 077 && openssl rand -base64 24 > "${password_file}")
-  answers "${work}/rig.json" 10
-  answers "${work}/rig-faster.json" 20
-  current_check="setup"
+  # install.sh does not see gh here, signed in or not: it notes that it checked no attestation, as without gh.
+  hide_gh=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN "GH_CONFIG_DIR=${work}/no-gh")
+  attestation="  note  its attestation was not checked: gh "
   pass "published hvo-roof-install ${version}, and ${previous_version} from this source and from ${previous_ref} (${previous_commit:0:12}), for ${rid}; each release's controller and HAT emulator pushed as indexes of ${platform} and ${other_platform} in $(seconds_since "${started}") s"
+}
+
+# install_script <file>: install.sh as build/release-assets.py writes a release's, with the release's version.
+install_script() {
+  python3 - "${repo_root}" "${version}" "$1" <<'PY' || fail "could not write the release's install.sh"
+import importlib.util
+import pathlib
+import sys
+
+root, version, out = sys.argv[1:]
+sys.path.insert(0, str(pathlib.Path(root) / "build"))
+spec = importlib.util.spec_from_file_location("release_assets", pathlib.Path(root) / "build" / "release-assets.py")
+assets = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(assets)
+pathlib.Path(out).write_text(assets.install_script(assets.INSTALL_SCRIPT.read_text(encoding="utf-8"), version), encoding="utf-8")
+PY
 }
 
 # publish <checkout> <project> <version> <folder>: the project, from the checkout, published for this machine with the
@@ -571,7 +758,8 @@ release() {
   while (( $# >= 2 )); do
     assets=$(jq --arg name "$1" --arg kind "$2" --arg rid "${rid}" --argjson size "$(stat -c %s "${folder}/$1")" \
       --arg sha "$(sha256sum "${folder}/$1" | cut -d' ' -f1)" \
-      '. + [{ name: $name, kind: $kind, platform: $rid, size: $size, sha256: $sha }]' <<<"${assets}")
+      '. + [{ name: $name, kind: $kind, platform: (if $kind == "install-script" then null else $rid end), size: $size, sha256: $sha }]' \
+      <<<"${assets}")
     shift 2
   done
   jq -n --arg version "${release_version}" --arg commit "${commit}" --arg registry "${registry}" \
@@ -632,13 +820,14 @@ scenario_install() {
   [[ -z "$(docker ps -aq --filter "name=^/(${controller}|${emulator})$")" ]] || fail "--plan started a container"
   pass "planned $(grep -oE '^[0-9]+ to create' "${work}/plan.txt"), and changed nothing"
 
-  current_check="install: a test rig from the release"
+  current_check="install: a test rig from the release, by install.sh"
   local started
   started=$(date +%s.%N)
   # The monitor samples once the install has started the emulator.
   start_relay_monitor
-  install install --answers "${work}/rig.json" --release "${release_dir}" --admin-password-file "${password_file}"
-  expect_installed "--answers"
+  install_sh install --answers "${work}/rig.json" --admin-password-file "${password_file}"
+  expect_installed "--answers (by install.sh)"
+  expect_install_sh install rig root "${attestation}"
   expect_output install "nothing here moves a roof."
   local seconds
   seconds=$(seconds_since "${started}")
@@ -649,7 +838,7 @@ scenario_install() {
   [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${controller}")" == "${network}" ]] || fail "${controller} is not on ${network}"
   loopback_only "${controller}"
   loopback_only "${emulator}"
-  pass "installed in ${seconds} s: ${controller} and ${emulator} run the release's images by digest on ${network}, published on loopback only"
+  pass "install.sh checked this machine, took hvo-roof-install from ${release_dir} with the SHA-256 SHA256SUMS lists ($(grep -qF '  ok    its attestation' "${work}/install.txt" && echo 'and its attestation' || echo 'no attestation checked, without gh')), and started it as root; installed in ${seconds} s: ${controller} and ${emulator} run the release's images by digest on ${network}, published on loopback only"
 
   current_check="install: folders and files"
   mode_is 755 /etc/hvo-roof /etc/hvo-roof/config /var/lib/hvo-roof
@@ -660,7 +849,9 @@ scenario_install() {
     mode_is 600 "${file}"
   done
   sudo -n jq -e '.roles == ["rig"]' /etc/hvo-roof/install.json >/dev/null || fail "the install record does not say the rig role"
-  pass "the folders, the keys, the CA and the certificate have the modes deployment.md gives, and the record says the rig role"
+  mode_is 755 "${installed}"
+  [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "${installer_sha256}" ]] || fail "${installed} is not the release's installer"
+  pass "the folders, the keys, the CA and the certificate have the modes deployment.md gives, the record says the rig role, and ${installed} is the release's installer"
 
   current_check="install: the controller"
   wait_for "the controller" 60 ready
@@ -776,9 +967,11 @@ scenario_cli() {
   [[ ! -e "${person_cli}" && ! -e "${credentials}" ]] || fail "--plan installed hvo-roof or its connection"
   pass "planned $(grep -oE '^[0-9]+ to create' "${work}/cli-plan.txt") as the person, not root, and changed nothing"
 
-  current_check="cli: installed"
-  person_install cli-install --answers "${work}/cli.json" --release "${release_dir}"
-  expect_installed "--answers (hvo-roof)"
+  current_check="cli: installed by install.sh"
+  person_install_sh cli-install --answers "${work}/cli.json"
+  expect_installed "--answers (hvo-roof, by install.sh)"
+  # The person has no gh signed in.
+  expect_install_sh cli-install cli you "  note  its attestation was not checked: gh "
   [[ "$(stat -c '%a %U' "${person_cli}")" == "755 $(id -un)" ]] || fail "${person_cli} is $(stat -c '%a %U' "${person_cli}"), not 755 $(id -un)"
   [[ "$(sha256sum "${person_cli}" | cut -d' ' -f1)" == "${cli_sha256}" ]] || fail "${person_cli} is not the release's ${cli_asset}"
   [[ "$(stat -c '%a %U' "${credentials}")" == "600 $(id -un)" ]] || fail "${credentials} is $(stat -c '%a %U' "${credentials}"), not 600 $(id -un)"
@@ -787,7 +980,7 @@ scenario_cli() {
   jq -r '.caCertificate' "${credentials}" | openssl x509 -noout -fingerprint -sha256 | grep -qF "=${fingerprint}" \
     || fail "hvo-roof's connection does not hold the rig's CA"
   jq -e '.roles == ["cli"]' "${person_home}/.config/hvo-roof/install.json" >/dev/null || fail "the person's install record does not say hvo-roof"
-  pass "the release's ${cli_asset} in ~/.local/bin (755), and its connection to ${roof} with the rig's CA (600), all the person's"
+  pass "install.sh, as the person, started the installer as them: the release's ${cli_asset} in ~/.local/bin (755), and its connection to ${roof} with the rig's CA (600), all the person's"
 
   current_check="cli: signed in"
   cli_signs_in
@@ -809,6 +1002,146 @@ scenario_cli() {
     "${work}/cli-status.txt" "${work}/cli-whoami.txt" "${work}/cli-again.txt" "${work}/cli-log.txt" "${person_home}/.config/hvo-roof/install.json"
   roof_still
   pass "no secret (the password, the keys, the session) in the output, the log or the record; relay register 0 in ${ROOF_SAMPLES} samples"
+}
+
+scenario_motion() {
+  # The drive stopped: the roof still, the relays open and the drive's output at 0 Hz.
+  local stopped='(.velocityMetersPerSecond == 0 and .relayRegister == 0 and .outputFrequencyHz == 0)'
+  local started seconds
+
+  current_check="motion: open"
+  plant_is ".closedLimitActuated and (.openLimitActuated | not) and ${stopped}" || fail "the roof is not closed and still before it opens: $(plant)"
+  started=$(date +%s.%N)
+  hvo_roof_json motion-open --json open
+  seconds=$(seconds_since "${started}")
+  (( CLI_STATUS == 0 )) || fail "hvo-roof open exited ${CLI_STATUS}"
+  jq -e '.status == "Open" and (.isMoving | not)' "${work}/motion-open.txt" >/dev/null \
+    || fail "hvo-roof open ended with $(jq -c '{status, isMoving, lastStopReason}' "${work}/motion-open.txt")"
+  wait_for "the drive to stop at the open limit" 30 plant_is ".openLimitActuated and (.closedLimitActuated | not) and ${stopped}"
+  pass "hvo-roof open followed the roof to the open limit in ${seconds} s at 10 times real time: status Open, the drive stopped and the relays open"
+
+  current_check="motion: Stop part way"
+  # At real time the roof takes a while to close: Stop reaches it on the way.
+  time_scale 1
+  hvo_roof_json motion-close --json close --no-wait
+  (( CLI_STATUS == 0 )) || fail "hvo-roof close --no-wait exited ${CLI_STATUS}"
+  jq -e '.status == "Closing" and .isMoving' "${work}/motion-close.txt" >/dev/null \
+    || fail "hvo-roof close --no-wait answered $(jq -c '{status, isMoving}' "${work}/motion-close.txt")"
+  wait_for "the roof to leave the open limit" 20 plant_is "(.openLimitActuated | not) and .velocityMetersPerSecond < 0 and .positionMeters < .travelMeters - 0.05"
+  hvo_roof_json motion-stop --json stop
+  (( CLI_STATUS == 0 )) || fail "hvo-roof stop exited ${CLI_STATUS}: $(jq -c '{outcome, code}' "${work}/motion-stop.txt" 2>/dev/null)"
+  jq -e '.outcome == "Acknowledged" and .exitCode == 0' "${work}/motion-stop.txt" >/dev/null \
+    || fail "hvo-roof stop answered $(jq -c '{outcome, exitCode, code}' "${work}/motion-stop.txt")"
+  wait_for "the drive to stop" 30 plant_is "${stopped}"
+  plant_is '(.openLimitActuated | not) and (.closedLimitActuated | not) and .positionMeters > 0.05' \
+    || fail "the roof did not stop between the limits: $(plant)"
+  hvo_roof_json motion-stopped --json status
+  (( CLI_STATUS == 0 )) || fail "hvo-roof status exited ${CLI_STATUS}"
+  jq -e '(.isMoving | not) and IN(.status; "Stopped", "PartiallyOpen", "PartiallyClose")' "${work}/motion-stopped.txt" >/dev/null \
+    || fail "hvo-roof status says $(jq -c '{status, isMoving, lastStopReason}' "${work}/motion-stopped.txt") after the Stop"
+  pass "hvo-roof stop, acknowledged, stopped a close at real time part way: the drive stopped at $(plant | jq -r '"\(.positionMeters * 100 | round / 100) m of \(.travelMeters) m"'), neither limit reached, the relays open; status $(jq -r .status "${work}/motion-stopped.txt"), last stop reason $(jq -r .lastStopReason "${work}/motion-stopped.txt")"
+
+  current_check="motion: close"
+  time_scale 10
+  started=$(date +%s.%N)
+  hvo_roof_json motion-closed --json close
+  seconds=$(seconds_since "${started}")
+  (( CLI_STATUS == 0 )) || fail "hvo-roof close exited ${CLI_STATUS}"
+  jq -e '.status == "Closed" and (.isMoving | not)' "${work}/motion-closed.txt" >/dev/null \
+    || fail "hvo-roof close ended with $(jq -c '{status, isMoving, lastStopReason}' "${work}/motion-closed.txt")"
+  wait_for "the drive to stop at the closed limit" 30 plant_is ".closedLimitActuated and (.openLimitActuated | not) and ${stopped}"
+  local rly1 rly2 violations
+  rly1=$(relay_closings RLY1) || fail "the emulator's history could not be read"
+  rly2=$(relay_closings RLY2) || fail "the emulator's history could not be read"
+  (( rly1 >= 1 && rly2 >= 1 )) || fail "the emulator recorded ${rly1} RLY1 and ${rly2} RLY2 contact closings, not one of each at least"
+  violations=$(curl -fsS --max-time 10 "${emulator_api}/violations" | jq 'length') || fail "the emulator's violations could not be read"
+  (( violations == 0 )) || fail "the emulator recorded ${violations} violations: $(curl -fsS --max-time 10 "${emulator_api}/violations")"
+  no_secret_in "${work}"/motion-*.txt
+  pass "hvo-roof close followed the roof to the closed limit in ${seconds} s: status Closed, the drive stopped; the emulator recorded ${rly1} RLY1 and ${rly2} RLY2 contact closings, and no violation"
+}
+
+scenario_names() {
+  local controller_id credentials="${person_home}/.config/hvo-roof/credentials.json" status
+  sudo -n cat "${ca}" > "${work}/ca-names.crt" || fail "could not read ${ca}"
+  jq -c '{controller, caCertificate}' "${credentials}" > "${work}/cli-connection.json"
+
+  current_check="names: a new address"
+  sudo -n ip link add "${interface}" type dummy || fail "could not add the dummy interface ${interface}"
+  made_interface=1
+  sudo -n ip address add "${new_address}/32" dev "${interface}" || fail "could not give ${interface} the address ${new_address}"
+  sudo -n ip link set "${interface}" up || fail "could not bring ${interface} up"
+  # Ready, so that only the certificate (curl's 60, the peer's certificate not verified) keeps the new address out.
+  ready || fail "the controller is not ready before the address change"
+  status=0
+  curl -sS --max-time 10 --cacert "${work}/ca-names.crt" --connect-to "${new_address}:${https_port}:127.0.0.1:${https_port}" \
+    -o /dev/null "https://${new_address}:${https_port}/health/ready" 2>/dev/null || status=$?
+  (( status == 60 )) || fail "expected a certificate that does not name ${new_address} (curl's exit 60), got curl's exit ${status}"
+  install cert-address-plan cert --plan --release "${release_dir}"
+  expect_installed "cert --plan (a new address)"
+  expect_output cert-address-plan "adds ${new_address}"
+  controller_id=$(container_id "${controller}")
+  start_relay_monitor
+  install cert-address cert --redeploy --release "${release_dir}"
+  expect_installed "cert --redeploy (a new address)"
+  expect_output cert-address "adds ${new_address}"
+  [[ "$(container_id "${controller}")" != "${controller_id}" ]] || fail "${controller} was not redeployed"
+  wait_for "the controller" 60 ready
+  sudo -n cmp -s "${work}/ca-names.crt" "${ca}" || fail "a new address replaced the CA"
+  answers_at "${new_address}" "${work}/ca-names.crt" --connect-to "${new_address}:${https_port}:127.0.0.1:${https_port}" \
+    || fail "the controller does not answer at ${new_address} with a certificate from its CA"
+  sign_in
+  collect_secrets
+  [[ "$(jq -c '{controller, caCertificate}' "${credentials}")" == "$(cat "${work}/cli-connection.json")" ]] \
+    || fail "hvo-roof's connection changed"
+  cli_signs_in
+  roof_still
+  sudo -n cat "${install_log}" > "${work}/install-log.txt"
+  no_secret_in "${work}/cert-address-plan.txt" "${work}/cert-address.txt" "${work}/install-log.txt"
+  pass "cert issued the certificate again for ${new_address} from the same CA and redeployed the controller, which answers there; hvo-roof, its connection unchanged, signs in; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="names: the address gone"
+  sudo -n ip link delete "${interface}" || fail "could not remove ${interface}"
+  made_interface=0
+  start_relay_monitor
+  install cert-gone cert --redeploy --release "${release_dir}"
+  expect_installed "cert --redeploy (the address gone)"
+  expect_output cert-gone "drops ${new_address}"
+  wait_for "the controller" 60 ready
+  sudo -n cmp -s "${work}/ca-names.crt" "${ca}" || fail "an address gone replaced the CA"
+  served_certificate > "${work}/served.crt" || fail "could not read the certificate the controller serves"
+  ! openssl x509 -in "${work}/served.crt" -noout -ext subjectAltName | grep -qF "${new_address}" \
+    || fail "the certificate the controller serves still names ${new_address}"
+  cli_signs_in
+  roof_still
+  pass "cert dropped ${new_address} from the certificate, from the same CA; hvo-roof signs in; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="names: a new name"
+  local fingerprint
+  start_relay_monitor
+  install renamed-plan --plan --answers "${work}/rig-renamed.json" --release "${release_dir}"
+  expect_installed "--plan (a new name)"
+  expect_output renamed-plan "it may not issue for roof-rig"
+  expect_output renamed-plan "a new CA, which every client must trust in place of this one"
+  install renamed --answers "${work}/rig-renamed.json" --release "${release_dir}"
+  expect_installed "--answers (a new name)"
+  wait_for "the controller" 60 ready
+  ! sudo -n cmp -s "${work}/ca-names.crt" "${ca}" || fail "the CA was kept, though it may not issue for roof-rig"
+  sudo -n cat "${ca}" > "${work}/ca-renamed.crt" || fail "could not read ${ca}"
+  answers_at roof-rig "${work}/ca-renamed.crt" --resolve "roof-rig:${https_port}:127.0.0.1" \
+    || fail "the controller does not answer at roof-rig with a certificate from the new CA"
+  sign_in
+  collect_secrets
+  fingerprint=$(openssl x509 -in "${work}/ca-renamed.crt" -noout -fingerprint -sha256 | cut -d= -f2)
+  cli_answers "${work}/cli-renamed.json" "${fingerprint}"
+  person_install cli-renamed --answers "${work}/cli-renamed.json" --release "${release_dir}"
+  expect_installed "--answers (hvo-roof, the new CA)"
+  jq -r '.caCertificate' "${credentials}" | openssl x509 -noout -fingerprint -sha256 | grep -qF "=${fingerprint}" \
+    || fail "hvo-roof's connection does not hold the new CA"
+  cli_signs_in
+  roof_still
+  sudo -n cat "${install_log}" > "${work}/install-log.txt"
+  no_secret_in "${work}/renamed-plan.txt" "${work}/renamed.txt" "${work}/cli-renamed.txt" "${work}/install-log.txt" "${work}/cli-login.txt" "${work}/cli-status.txt"
+  pass "a new name, which the CA may not issue for: a new CA, and the controller answers at roof-rig with a certificate from it; hvo-roof, given the new CA's fingerprint, trusts it in place of the old one and signs in; relay register 0 in ${ROOF_SAMPLES} samples"
 }
 
 scenario_backup() {
@@ -1004,11 +1337,16 @@ setup
 scenario_install
 scenario_again
 scenario_cli
+scenario_motion
 scenario_change
 scenario_cert
+scenario_names
 scenario_backup
 scenario_restore
-scenario_upgrade
-scenario_rollback
+# The release before is built from source.
+if [[ -z "${release_source}" ]]; then
+  scenario_upgrade
+  scenario_rollback
+fi
 current_check="done"
 say "All checks passed."

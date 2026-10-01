@@ -677,6 +677,13 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return text.ToString();
     }
 
+    /// <summary>Every file and folder under the machine's root, in order, as "path kind mode owner": never what a file holds.</summary>
+    public IReadOnlyList<string> Listing()
+        => [.. Directory.EnumerateFileSystemEntries(Root, "*", SearchOption.AllDirectories)
+            .Select(entry => entry[Root.Length..])
+            .Order(StringComparer.Ordinal)
+            .Select(path => $"{path} {(Directory.Exists(OnDisk(path)) ? "folder" : "file")} {Modes.Octal(Mode(path))} {Owners.GetValueOrDefault(path, "root:root")}")];
+
     public string? Find(string program) => Programs.GetValueOrDefault(program);
 
     public Task<CommandResult> RunAsync(CommandLine command, CancellationToken cancellationToken = default)

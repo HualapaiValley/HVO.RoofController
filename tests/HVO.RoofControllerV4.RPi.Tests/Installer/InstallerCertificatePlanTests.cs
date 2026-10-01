@@ -372,7 +372,7 @@ public sealed class InstallerCertificatePlanTests
         moved.Addresses[0] = new NetworkAddress("eth0", IPAddress.Parse("192.168.1.60"));
 
         Change(await BuildAsync(any), MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed to answer only to its names (it answers to any)"));
-        Change(await BuildAsync(moved), MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed to answer to its names as they are now"));
+        Change(await BuildAsync(moved), MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Change, "redeployed with the new certificate, and to answer to its names as they are now"));
     }
 
     [TestMethod]

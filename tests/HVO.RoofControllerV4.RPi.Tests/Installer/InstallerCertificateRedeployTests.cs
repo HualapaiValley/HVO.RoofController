@@ -1,3 +1,4 @@
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
@@ -465,6 +466,44 @@ public sealed class InstallerCertificateRedeployTests
         unrecorded.ExitCode.Should().Be((int)InstallerExitCode.Refused, unrecorded.ToString());
         unrecorded.Error.Should().Contain("Nothing here is recorded as running the controller, so the installer does not redeploy it (--redeploy).");
         pi.Exists(Layout.Pfx).Should().BeFalse("nothing was changed");
+    }
+
+    [TestMethod]
+    public async Task Cert_WhenTheMachinesAddressChanged_IssuesItAgain_AndRedeploysTheControllerToAnswerToIt()
+    {
+        using var pi = await InstalledAsync();
+        pi.Addresses[0] = new NetworkAddress("eth0", IPAddress.Parse("192.168.1.60"));
+
+        var run = await pi.RunAsync("cert", "--redeploy");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain("the names changed (adds 192.168.1.60; drops 192.168.1.50): issued again")
+            .And.Contain("To serve it, the controller must be deployed again (redeployed with the new certificate, and to answer to its names as they are now).")
+            .And.EndWith("The controller serves the new certificate.\n");
+        pi.Deploys.Should().HaveCount(2);
+        pi.Deploys[^1]["ALLOWED_HOSTS"].Split(';').Should().Contain("192.168.1.60").And.NotContain("192.168.1.50");
+        ServesTheCertificateInItsFile(pi).Should().BeTrue();
+
+        var again = await pi.RunAsync("cert");
+
+        again.ExitCode.Should().Be(0, again.ToString());
+        again.Output.Should().EndWith("Nothing to change: the controller's certificate is in place as it should be.\n");
+        pi.Deploys.Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    public async Task Redeploy_AfterTheAddressChanged_AndTheCertificateWasNotRedeployed_AnswersToTheNewNames()
+    {
+        using var pi = await InstalledAsync();
+        pi.Addresses[0] = new NetworkAddress("eth0", IPAddress.Parse("192.168.1.60"));
+        (await pi.RunAsync("cert", "--no-redeploy")).ExitCode.Should().Be(0);
+
+        var run = await pi.RunAsync("cert", "--redeploy");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain("To serve it, the controller must be deployed again (redeployed: it serves another certificate than /etc/hvo-roof/https/roof-controller.pfx, and answers to its names as they were).")
+            .And.EndWith("The controller serves the new certificate.\n");
+        pi.Deploys[^1]["ALLOWED_HOSTS"].Split(';').Should().Contain("192.168.1.60").And.NotContain("192.168.1.50");
     }
 
     private static async Task<FakeMachine> InstalledAsync(ControllerSettings? settings = null)

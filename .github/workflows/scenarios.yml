@@ -7,9 +7,11 @@ name: Scenarios
 #   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
 #                        rollback, the Compose migration, and a deploy of a pulled image
 #                        (tests/emulator/deploy-scenarios.sh)
-#   installer-rig        hvo-roof-install's rig role end to end against the HAT emulator, hvo-roof installed for
-#                        the person and signed in to it through its CA, and the rig backed up, purged, restored,
-#                        upgraded from main's build and rolled back (tests/installer/rig-scenario.sh)
+#   installer-rig        on x64 and arm64: hvo-roof-install's rig role end to end against the HAT emulator,
+#                        installed by install.sh, hvo-roof installed for the person and signed in to it through its
+#                        CA, the roof opened, stopped part way and closed through it, the rig's address and name
+#                        changed, and the rig backed up, purged, restored, upgraded from main's build and rolled back
+#                        (tests/installer/rig-scenario.sh)
 #   soak                 nightly and on demand: the C14 soak for HVO_SOAK_DURATION, with its invariant results
 #   kiosk-soak           nightly and on demand: the touchscreen kiosk against the emulated roof for
 #                        HVO_KIOSK_SOAK_DURATION, with its heap, threads and reconnects
@@ -183,7 +185,11 @@ jobs:
   # and (#72) backed up, purged and restored, then the release before (a build of main) upgraded, rolled back and
   # upgraded again. The whole history is fetched: the release before is built from origin/main.
   installer-rig:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ ubuntu-latest, ubuntu-24.04-arm ]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
     env:
       RIG_RESULTS_DIR: ${{ github.workspace }}/rig-scenario-results
@@ -198,7 +204,7 @@ jobs:
         with:
           global-json-file: src/global.json
 
-      - name: Install, again, hvo-roof, change, renew, back up, restore, upgrade, roll back
+      - name: Install by install.sh, again, hvo-roof, motion, change, renew, names, back up, restore, upgrade, roll back
         run: tests/installer/rig-scenario.sh
 
       - name: Summary
@@ -212,7 +218,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rig-scenario-results-${{ github.run_id }}
+          name: rig-scenario-results-${{ matrix.runner }}-${{ github.run_id }}
           path: rig-scenario-results/**
           if-no-files-found: warn
           retention-days: 7

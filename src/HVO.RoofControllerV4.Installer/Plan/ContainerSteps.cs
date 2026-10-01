@@ -339,11 +339,15 @@ public sealed class ControllerStep(
         var replacesEmulator = emulator is not null
             && (context.HasApplied(emulator) || (await emulator.CheckAsync(context, cancellationToken).ConfigureAwait(false)).MakesChange);
         var reason = await ReasonAsync(context, container, release, replacesEmulator, cancellationToken).ConfigureAwait(false);
-        if (reason is null && await CertificateReasonAsync(context, container, cancellationToken).ConfigureAwait(false) is { } certificateReason)
+        var namesChanged = !SameHosts(container.AllowedHosts, names.AllowedHosts);
+        if (reason is null && await CertificateReasonAsync(context, container, namesChanged, cancellationToken).ConfigureAwait(false) is { } certificateReason)
         {
+            // The names it answers to change with its certificate's: hvo-roof-install cert redeploys it for both.
             reason = certificateReason;
             OnlyCertificateDiffers = true;
         }
+
+        reason ??= namesChanged ? "redeployed to answer to its names as they are now" : null;
 
         if (container.State is "paused" or "restarting")
         {
@@ -407,11 +411,10 @@ public sealed class ControllerStep(
             return $"redeployed on {(network is null ? "Docker's default network" : $"the {network} network")}";
         }
 
-        if (!SameHosts(container.AllowedHosts, names.AllowedHosts))
+        // A list that differs is weighed with the certificate (CheckChangeAsync): the two change together.
+        if (container.AllowedHosts is null)
         {
-            return container.AllowedHosts is null
-                ? "redeployed to answer only to its names (it answers to any)"
-                : "redeployed to answer to its names as they are now";
+            return "redeployed to answer only to its names (it answers to any)";
         }
 
         if (container.ImageDigest != release.Controller.Digest)
@@ -451,8 +454,9 @@ public sealed class ControllerStep(
         return null;
     }
 
-    // Why the container must be deployed again for its certificate: a new one is put in place, or it serves another.
-    private async Task<string?> CertificateReasonAsync(InstallContext context, ContainerSurvey container, CancellationToken cancellationToken)
+    // Why the container must be deployed again for its certificate: a new one is put in place, or it serves another. With
+    // namesChanged, it also answers to names it no longer has.
+    private async Task<string?> CertificateReasonAsync(InstallContext context, ContainerSurvey container, bool namesChanged, CancellationToken cancellationToken)
     {
         if (certificate is null)
         {
@@ -461,11 +465,11 @@ public sealed class ControllerStep(
 
         if (certificate.Wrote || certificate.WillWrite(context))
         {
-            return "redeployed with the new certificate";
+            return namesChanged ? "redeployed with the new certificate, and to answer to its names as they are now" : "redeployed with the new certificate";
         }
 
         return settings.UsesHttps && container.IsRunning && await ServesAnotherCertificateAsync(context, cancellationToken).ConfigureAwait(false)
-            ? $"redeployed: it serves another certificate than {certificate.Target}"
+            ? $"redeployed: it serves another certificate than {certificate.Target}{(namesChanged ? ", and answers to its names as they were" : string.Empty)}"
             : null;
     }
 
