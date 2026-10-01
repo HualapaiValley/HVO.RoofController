@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-10-01
+
+Two messages corrected after the first install of 4.0.0 on the Pi (#95). What a deploy and
+the installer do is unchanged.
+
 ### Fixed
 
 - A first deploy no longer says that the previous version is kept for `--rollback`: the
