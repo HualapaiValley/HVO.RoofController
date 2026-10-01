@@ -89,9 +89,17 @@ def commits(repo, revisions):
     parts = log.split("\x00")
     for index in range(1, len(parts) - 2, 3):
         commit, message, patch = parts[index], parts[index + 1], parts[index + 2]
-        lines = patch.splitlines()
-        added = "\n".join(line[1:] for line in lines if line.startswith("+") and not line.startswith("+++"))
-        yield commit, message, added
+        # A file's header (diff --git ... +++ b/<path>) runs to its first hunk (@@): an added line that starts with ++
+        # looks like its +++ line, so the lines added are told by where they are, not how they start.
+        added, in_hunk = [], False
+        for line in patch.splitlines():
+            if line.startswith("diff --git "):
+                in_hunk = False
+            elif line.startswith("@@"):
+                in_hunk = True
+            elif in_hunk and line.startswith("+"):
+                added.append(line[1:])
+        yield commit, message, "\n".join(added)
 
 
 def scan(repo, revisions, leak, files):

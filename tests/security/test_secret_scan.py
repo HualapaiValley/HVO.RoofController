@@ -128,6 +128,16 @@ class TheCredential(ARepository):
         self.assertEqual(status, 1)
         self.assertEqual(out, f"commit {commit}, its added lines: the Blue Iris credential (#22)\nFAIL (1 found)\n")
 
+    def test_is_found_on_an_added_line_that_starts_like_a_files_header(self):
+        self.write("debug.txt", f"++{PASSWORD}\n")
+        self.commit("Debugging")
+        commit = self.git("rev-parse", "--short", "HEAD").strip()
+        self.write("debug.txt", "\n")
+        self.commit("Done debugging")
+        status, out, _ = self.scan()
+        self.assertEqual(status, 1)
+        self.assertEqual(out, f"commit {commit}, its added lines: the Blue Iris credential (#22)\nFAIL (1 found)\n")
+
     def test_in_the_commits_before_the_range_is_not_looked_for(self):
         self.write("debug.txt", f"{CREDENTIAL}\n")
         self.commit("Debugging")

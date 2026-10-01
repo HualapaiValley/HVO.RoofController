@@ -20,5 +20,5 @@ Run the commands from `src/` so `src/global.json` selects the SDK.
 - [ ] Safety-relevant changes (relays, inputs, limits, watchdog, lease, fault latch, Stop path) have tests, and `docs/commissioning.md` names the emulated scenario for each check they affect and any installation assumption it cannot prove
 - [ ] Documentation updated (if applicable), screenshots included
 - [ ] `CHANGELOG.md` has an entry under `## [Unreleased]` for a change a user or operator would notice (or the description says why none is needed)
-- [ ] `build/secret-scan.py` prints `PASS`
+- [ ] `build/secret-scan.py`, run from the repository root, prints `PASS`
 - [ ] Issue linked in PR description (`Fixes #`)
