@@ -824,7 +824,8 @@ Each installer installs its own release, so the installer hands over to the new 
 
 1. It says what is installed and what replaces it, and prints the upgrade notes of each release after the one installed,
    up to the new one, oldest first: what someone upgrading must do, such as a setting to change. An upgrade across
-   several releases shows every one's. Read them before the upgrade goes on.
+   several releases shows every one's. Read them before the upgrade goes on. The new release's installer, run by
+   you, shows them too; handed over to, it does not show them again.
 2. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
    and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
    of your own) is refused: download that release's installer and run its `upgrade`.
@@ -1032,13 +1033,15 @@ machine has files, modes, containers and ports, and its programs are stubbed. Th
   Mac app without its quarantine mark, its device key made through the controller's API (a real one, in process), its
   settings kept when you changed them, `--check`, and the login keychain;
 - upgrading, rolling back and uninstalling (`InstallerLifecycleTests`): the new release's installer put in place and
-  handed over to, every release's upgrade notes since the one installed, an older release refused, the record's
-  versions, a rollback once and only once, the deploy script's `--stop` before anything else goes and a controller it
-  cannot stop, the data kept, and `--purge` with its name and its backup, its order, and a controller it does not stop;
+  handed over to, every release's upgrade notes since the one installed (shown once, whichever installer runs the
+  upgrade), an older release refused, the record's versions, a rollback once and only once, the deploy script's
+  `--stop` before anything else goes and a controller it cannot stop, the data kept, and `--purge` with its name and
+  its backup, its order, and a controller it does not stop;
 - backing up and restoring (`InstallerBackupTests`): the archive's entries, modes and owners, a backup that fails
   leaving nothing, one a restore could not read back, folders someone other than root can change, no secret printed or
   logged, a restore on a new machine with the same name or another, `--replace`, and the archives a restore refuses,
-  one swapped in after the check included;
+  one swapped in after the check included (restore checks the file it opened through `/proc`, so its tests run on
+  Linux only);
 - the exit codes.
 
 The controller's side, `GET /ca.crt` and the `https_certificate` health check, has its own tests

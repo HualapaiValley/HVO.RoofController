@@ -42,7 +42,7 @@ public sealed class InstallerLifecycleTests
 
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain($"4.0.0 is installed here; {NewVersion} replaces it.")
-            .And.Contain($"Upgrade notes for {NewVersion}:\n  The kiosk's settings gain a brightness.\n  Nothing to do by hand.")
+            .And.Contain($"Upgrade notes for {NewVersion}:\n  The kiosk's settings gain a brightness.\n  Nothing to do by hand.", Exactly.Once(), "the installer handed over to does not show them again")
             .And.NotContain("Upgrade notes for 4.0.0:")
             .And.Contain($"Release {NewVersion}: {ReleaseManifest.PageUri(NewVersion)}")
             .And.Contain($"Handing over to release {NewVersion}'s installer.")
@@ -80,6 +80,23 @@ public sealed class InstallerLifecycleTests
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
         pi.Deploys.Should().HaveCount(2);
         pi.Launches.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task AnUpgrade_RunWithTheNewReleasesOwnInstaller_ShowsItsNotes()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, upgradeNotes: Notes);
+        pi.InstallerVersion = NewVersion;
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain($"Upgrade notes for {NewVersion}:\n  The kiosk's settings gain a brightness.\n  Nothing to do by hand.", Exactly.Once())
+            .And.NotContain("Upgrade notes for 4.0.0:")
+            .And.Contain($"Upgrading from 4.0.0 to {NewVersion}.");
+        pi.Launches.Should().BeEmpty();
+        Record(pi).Version.Should().Be(NewVersion);
     }
 
     [TestMethod]

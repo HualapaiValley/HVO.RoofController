@@ -46,6 +46,12 @@ internal sealed partial class FakeMachine
     /// </summary>
     public Dictionary<string, Action> AfterStat { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// What happens just before stat answers, for any path or open file: someone else on the machine acting between two
+    /// of the installer's checks.
+    /// </summary>
+    public Action? BeforeStat { get; set; }
+
     /// <summary>The same machine, with <paramref name="userName"/> running the installer without sudo.</summary>
     public FakeMachine AsPerson(string userName = "pi")
     {
@@ -137,6 +143,11 @@ internal sealed partial class FakeMachine
     private CommandResult? LifecycleCommand(CommandLine command)
     {
         var arguments = command.Arguments;
+        if (command.Program == "stat")
+        {
+            BeforeStat?.Invoke();
+        }
+
         return command.Program switch
         {
             "docker" when arguments is ["image", "rm", var image] => Docker(() => RemoveImage(image)),

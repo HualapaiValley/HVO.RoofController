@@ -558,7 +558,8 @@ says_version() {
 }
 
 # release <folder> <checkout> <version> <upgrade notes> [<asset> <kind>]...: the release's images, built from the
-# checkout and pushed, and its release.json, with the assets (files in the folder, for this platform) and the notes.
+# checkout and pushed, and its release.json, with the assets (files in the folder, for this platform) and the notes, as
+# its final release's (4.0.0 for 4.0.0-rig.2), as build/release-assets.py gives a release candidate its release's.
 release() {
   local folder=$1 checkout=$2 release_version=$3 notes=$4 commit controller_digest emulator_digest assets="[]"
   shift 4
@@ -582,7 +583,7 @@ release() {
       prerelease: ($version | contains("-")), commit: $commit,
       images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) },
       assets: $assets }
-    + (if $notes == "" then {} else { upgradeNotes: $notes } end)' \
+    + (if $notes == "" then {} else { upgradeNotes: [{ version: ($version | split("-")[0]), text: $notes }] } end)' \
     > "${folder}/release.json"
 }
 
@@ -913,7 +914,7 @@ scenario_upgrade() {
   install_with "${old_installer}" upgrade upgrade --release "${release_dir}"
   expect_installed "upgrade"
   expect_output upgrade "${previous_version} is installed here; ${version} replaces it."
-  expect_output upgrade "Upgrade notes for ${version}:"
+  expect_output upgrade "Upgrade notes for ${version%%-*}:"
   expect_output upgrade "  Nothing to do by hand: the rig scenario's upgrade notes."
   expect_output upgrade "Handing over to release ${version}'s installer."
   local seconds

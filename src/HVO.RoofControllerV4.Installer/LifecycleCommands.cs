@@ -154,10 +154,16 @@ internal static class LifecycleCommands
 
         if (target == session.Version)
         {
-            // This installer is the release's: it installs what is recorded.
+            // This installer is the release's: it installs what is recorded. Handed over to, the installer before it has
+            // shown the upgrade notes; run by the person, it shows them.
             if (record.Version == target)
             {
                 host.Out.WriteLine($"{target} is installed here: checking that everything is as it should be.");
+            }
+            else if (machine.Environment(ContinuedVariable) != target)
+            {
+                ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), record.Version, target);
+                host.Out.WriteLine();
             }
 
             return planOnly
@@ -174,20 +180,9 @@ internal static class LifecycleCommands
 
         host.Out.WriteLine(record.Version == target ? $"{target} is installed here: its installer checks it." : $"{record.Version} is installed here; {target} replaces it.");
         session.Version = target;
-        var manifest = await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
-        // Each release's notes from the one installed to this one, oldest first: a release candidate's are its release's.
-        var core = target.Split('-', '+')[0];
-        var notes = manifest.UpgradeNotes
-            .Where(note => record.Version != target && RoofSemVer.IsOlder(record.Version, note.Version) && !RoofSemVer.IsOlder(core, note.Version))
-            .OrderBy(note => note.Version, Comparer<string>.Create(RoofSemVer.Compare));
-        foreach (var note in notes)
+        if (record.Version != target)
         {
-            host.Out.WriteLine();
-            host.Out.WriteLine($"Upgrade notes for {note.Version}:");
-            foreach (var line in note.Text.Split('\n'))
-            {
-                host.Out.WriteLine($"  {line.TrimEnd('\r')}");
-            }
+            ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), record.Version, target);
         }
 
         host.Out.WriteLine($"Release {target}: {ReleaseManifest.PageUri(target)}");
@@ -438,6 +433,24 @@ internal static class LifecycleCommands
     /// The record in <paramref name="scope"/>, refused when there is none, it cannot be read, or nothing is installed (an
     /// uninstalled one is taken when <paramref name="uninstalled"/>), and, for the machine's, without root unless planning.
     /// </summary>
+    // Each release's notes from the one installed to the target, oldest first: a release candidate's are its release's.
+    private static void ShowUpgradeNotes(InstallerHost host, ReleaseManifest manifest, string installed, string target)
+    {
+        var core = target.Split('-', '+')[0];
+        var notes = manifest.UpgradeNotes
+            .Where(note => RoofSemVer.IsOlder(installed, note.Version) && !RoofSemVer.IsOlder(core, note.Version))
+            .OrderBy(note => note.Version, Comparer<string>.Create(RoofSemVer.Compare));
+        foreach (var note in notes)
+        {
+            host.Out.WriteLine();
+            host.Out.WriteLine($"Upgrade notes for {note.Version}:");
+            foreach (var line in note.Text.Split('\n'))
+            {
+                host.Out.WriteLine($"  {line.TrimEnd('\r')}");
+            }
+        }
+    }
+
     private static InstallRecord Installed(InstallerHost host, MachineSurvey survey, InstallScope scope, string command, bool planOnly, bool uninstalled = false)
     {
         var record = scope == InstallScope.System ? survey.SystemRecord : survey.UserRecord;

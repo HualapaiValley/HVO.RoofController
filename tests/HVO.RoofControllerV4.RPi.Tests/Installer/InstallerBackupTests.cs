@@ -149,7 +149,7 @@ public sealed class InstallerBackupTests
         using var mac = new FakeMachine(InstallerOs.MacOS, root: false, hostName: "mac", userName: "roy");
 
         var backup = await pi.RunAsync("backup");
-        var restore = await pi.RunAsync("restore", Kept);
+        var restore = await RestoreAsync(pi, Kept);
         var onMac = await mac.RunAsync("backup");
 
         backup.ExitCode.Should().Be((int)InstallerExitCode.Refused, backup.ToString());
@@ -185,7 +185,7 @@ public sealed class InstallerBackupTests
         var owners = new[] { KioskSteps.DeviceKeyFile, KioskSteps.ConfigurationFolder }.ToDictionary(path => path, path => pi.Owners[path]);
         await BackUpAndPurgeAsync(pi);
 
-        var run = await pi.RunAsync("restore", Kept);
+        var run = await RestoreAsync(pi, Kept);
 
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain($"The backup of roofpi, made 2026-10-01 09:00 UTC of 4.0.0, the controller and the kiosk, in {Kept}:")
@@ -240,14 +240,14 @@ public sealed class InstallerBackupTests
         (await pi.RunAsync("uninstall", "--yes")).ExitCode.Should().Be(0);
         var before = pi.Snapshot(InstallPaths.SystemLog);
 
-        var refused = await pi.RunAsync("restore", Kept);
+        var refused = await RestoreAsync(pi, Kept);
 
         refused.ExitCode.Should().Be((int)InstallerExitCode.Refused, refused.ToString());
         refused.Output.Should().Contain("/etc/hvo-roof: 1 file to replace, ");
         refused.Error.Should().Contain("1 file here differs from the backup's (the data an uninstall kept, or another install's): give --replace to put the backup's in its place.");
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
 
-        var run = await pi.RunAsync("restore", Kept, "--replace");
+        var run = await RestoreAsync(pi, Kept, "--replace");
 
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain("Put back ");
@@ -263,7 +263,7 @@ public sealed class InstallerBackupTests
         (await pi.RunAsync("backup", "--output", Kept)).ExitCode.Should().Be(0);
         var before = pi.Snapshot(InstallPaths.SystemLog);
 
-        var run = await pi.RunAsync("restore", Kept, "--replace");
+        var run = await RestoreAsync(pi, Kept, "--replace");
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain("the controller and the kiosk (4.0.0) is installed here: a restore is for a machine with nothing installed. Uninstall it first (sudo hvo-roof-install uninstall)");
@@ -277,7 +277,7 @@ public sealed class InstallerBackupTests
         await BackUpAndPurgeAsync(pi);
         var before = pi.Snapshot();
 
-        var run = await pi.RunAsync("restore", Kept, "--plan");
+        var run = await RestoreAsync(pi, Kept, "--plan");
 
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain("files to write")
@@ -295,7 +295,7 @@ public sealed class InstallerBackupTests
         await BackUpAndPurgeAsync(pi);
         pi.InstallerVersion = "4.0.0";
 
-        var run = await pi.RunAsync("restore", Kept);
+        var run = await RestoreAsync(pi, Kept);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain("The backup is of 4.0.1, newer than this installer (4.0.0): restore it with release 4.0.1's installer");
@@ -318,7 +318,7 @@ public sealed class InstallerBackupTests
         Damage(pi, damage);
         var before = pi.Snapshot();
 
-        var run = await pi.RunAsync("restore", Kept);
+        var run = await RestoreAsync(pi, Kept);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain(reason);
@@ -346,7 +346,7 @@ public sealed class InstallerBackupTests
             pi.Owners[Kept] = owner;
         }
 
-        var run = await pi.RunAsync("restore", path);
+        var run = await RestoreAsync(pi, path);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain($"{path} must be a file only root reads (root's, 0600 or 0400): it holds the controller's secrets.").And.Contain(reason);
@@ -359,20 +359,34 @@ public sealed class InstallerBackupTests
         using var pi = await InstallerLifecycleTests.InstalledPiAsync();
         await BackUpAndPurgeAsync(pi);
 
-        // Someone who can write /srv/keep puts their own archive in its place just after restore checks the path.
+        // Someone who can write /srv/keep puts their own archive (the same bytes, theirs) in its place just after
+        // restore checks the path, and puts root's back just after restore opens it: the path is root's archive at
+        // every check of the path, and only the open file is theirs.
         const string theirs = "/srv/keep/theirs.tar.gz";
+        const string roots = "/srv/keep/roots.tar.gz";
         File.Copy(pi.OnDisk(Kept), pi.OnDisk(theirs));
         File.SetUnixFileMode(pi.OnDisk(theirs), Modes.PrivateFile);
+        pi.Owners[theirs] = "pi:pi";
+        var swapped = false;
         pi.AfterStat[Kept] = () =>
         {
-            if (File.Exists(pi.OnDisk(theirs)))
+            if (!swapped)
             {
-                File.Move(pi.OnDisk(theirs), pi.OnDisk(Kept), overwrite: true);
-                pi.Owners[Kept] = "pi:pi";
+                swapped = true;
+                File.Move(pi.OnDisk(Kept), pi.OnDisk(roots));
+                File.Move(pi.OnDisk(theirs), pi.OnDisk(Kept));
+            }
+        };
+        pi.BeforeStat = () =>
+        {
+            if (swapped && File.Exists(pi.OnDisk(roots)))
+            {
+                File.Move(pi.OnDisk(Kept), pi.OnDisk(theirs));
+                File.Move(pi.OnDisk(roots), pi.OnDisk(Kept));
             }
         };
 
-        var run = await pi.RunAsync("restore", Kept);
+        var run = await RestoreAsync(pi, Kept);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain($"{Kept} must be a file only root reads (root's, 0600 or 0400)").And.Contain("It is regular file, pi:pi's, 0600.");
@@ -407,7 +421,7 @@ public sealed class InstallerBackupTests
         await BackUpAndPurgeAsync(pi);
 
         Manifest(Entries(pi, Kept)).Single(entry => entry["path"]!.GetValue<string>() == KioskSteps.ConfigurationFolder)["mode"]!.GetValue<string>().Should().Be("0750");
-        var run = await pi.RunAsync("restore", Kept);
+        var run = await RestoreAsync(pi, Kept);
 
         run.ExitCode.Should().Be(0, run.ToString());
         pi.Mode(KioskSteps.ConfigurationFolder).Should().Be(Modes.GroupFolder);
@@ -465,6 +479,17 @@ public sealed class InstallerBackupTests
     }
 
     // The controller and the kiosk, installed, with a secret set through the API (as the controller keeps one).
+    // restore checks the archive it opened through /proc/<pid>/fd, which only Linux has: elsewhere these tests cannot run.
+    private static Task<InstallerRun> RestoreAsync(FakeMachine pi, params string[] arguments)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            Assert.Inconclusive("restore checks the archive it opened through /proc/<pid>/fd, which only Linux has.");
+        }
+
+        return pi.RunAsync(["restore", .. arguments]);
+    }
+
     private static async Task<FakeMachine> InstalledPiAsync()
     {
         var pi = await InstallerLifecycleTests.InstalledPiAsync();
@@ -486,7 +511,7 @@ public sealed class InstallerBackupTests
         var next = new FakeMachine(hostName: hostName).WithPi().WithDisplay().Write(CommandLine, Booted + "\n").Folder("/srv/keep");
         File.WriteAllBytes(next.OnDisk(Kept), File.ReadAllBytes(pi.OnDisk(Kept)));
         File.SetUnixFileMode(next.OnDisk(Kept), Modes.PrivateFile);
-        return new Restored(next, await next.RunAsync("restore", Kept));
+        return new Restored(next, await RestoreAsync(next, Kept));
     }
 
     // A backup in Kept, then the machine purged: nothing installed, no data.
