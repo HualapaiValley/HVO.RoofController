@@ -33,13 +33,14 @@
 #            the containers, the network, the release's images, the data and the installer go, after a verified Stop.
 #            Then restore puts the backup back and installs what its record says: the same CA, certificate and keys,
 #            the admin signs in with the same password, and upgrade with the installed hvo-roof-install changes nothing.
-#   upgrade  The release before (RIG_PREVIOUS_REF, main's commit by default, built here as 4.0.0-rig.1 with its own
-#            images) installed by its own installer, after another purge. Then upgrade, run by this source's installer
-#            labelled 4.0.0-rig.1, as the one installed with the release before would be: it shows the upgrade notes,
-#            puts release 4.0.0-rig.2's installer in place and hands over to it, which redeploys the controller,
-#            keeping the old one as roof-controller-previous, with the data kept. Again: nothing to change.
-#   rollback rollback to 4.0.0-rig.1 (the kept controller put back), rollback again (nothing changes), then upgrade
-#            forward again.
+#   upgrade  The release before (RIG_PREVIOUS_REF, main's commit by default, built here with its own images as its
+#            VersionPrefix's -rig.1, 4.0.0-rig.1 say) installed by its own installer, after another purge. Then upgrade,
+#            run by this source's installer labelled the same, as the one installed with the release before would be:
+#            it shows the upgrade notes, puts the release's installer (this source's VersionPrefix's -rig.2) in place
+#            and hands over to it, which redeploys the controller, keeping the old one as roof-controller-previous,
+#            with the data kept. Again: nothing to change.
+#   rollback rollback to the release before (the kept controller put back), rollback again (nothing changes), then
+#            upgrade forward again.
 # Except in motion, the roof does not move: the relay register stays 0, and the emulator records no direction relay
 # closing and no violation.
 #
@@ -94,9 +95,9 @@ registry_port=${RIG_REGISTRY_PORT:-15001}
 previous_ref=${RIG_PREVIOUS_REF:-origin/main}
 release_source=${RIG_RELEASE_DIR:-}
 # This source is the release, unless RIG_RELEASE_DIR gives one; the release before is a build of previous_ref, labelled
-# as the one before it.
-version=4.0.0-rig.2
-previous_version=4.0.0-rig.1
+# as the one before it. setup_from_source and setup_from_release set them.
+version=""
+previous_version=""
 registry_name=hvo-rig-scenario-registry
 registry_image=registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
 registry="127.0.0.1:${registry_port}/hualapaivalley"
@@ -665,20 +666,28 @@ setup_from_release() {
 # setup_from_source <the release before's commit>: the release made here from this source, and the release before from
 # the commit.
 setup_from_source() {
-  local previous_commit=$1
+  local previous_commit=$1 prefix previous_prefix
+  git -C "${repo_root}" worktree add --quiet --detach "${previous_root}" "${previous_commit}" >/dev/null 2>&1 \
+    || fail "could not make a worktree of ${previous_ref}"
+  previous_worktree=1
+  # Each release is a prerelease of its own checkout's VersionPrefix, so each build passes Directory.Build.targets's
+  # check: with this source at 4.0.1 and the release before still at 4.0.0, 4.0.1-rig.2 and 4.0.0-rig.1.
+  prefix=$("${repo_root}/build/version.sh") || fail "could not read this source's VersionPrefix"
+  previous_prefix=$("${previous_root}/build/version.sh") || fail "could not read the VersionPrefix of ${previous_ref}"
+  [[ "$(printf '%s\n' "${previous_prefix}" "${prefix}" | sort -V | head -n 1)" == "${previous_prefix}" ]] \
+    || fail "${previous_ref} is at ${previous_prefix}, after this source's ${prefix}: merge it here first, or set RIG_PREVIOUS_REF"
+  version="${prefix}-rig.2"
+  previous_version="${previous_prefix}-rig.1"
   say "Publishing hvo-roof-install and hvo-roof ${version} for ${rid}"
   publish "${repo_root}" HVO.RoofControllerV4.Installer "${version}" "${work}/installer"
   publish "${repo_root}" HVO.RoofControllerV4.Cli "${version}" "${work}/cli"
   installer="${work}/installer/hvo-roof-install"
   says_version "${installer}" "${version}"
   # This source's installer labelled as the release before: what upgrade runs as on a machine that has that release.
-  publish "${repo_root}" HVO.RoofControllerV4.Installer "${previous_version}" "${work}/installer-old"
+  publish "${repo_root}" HVO.RoofControllerV4.Installer "${previous_version}" "${work}/installer-old" "${previous_prefix}"
   old_installer="${work}/installer-old/hvo-roof-install"
   says_version "${old_installer}" "${previous_version}"
   say "Publishing the release before's hvo-roof-install (${previous_ref}, ${previous_commit:0:12}) as ${previous_version}"
-  git -C "${repo_root}" worktree add --quiet --detach "${previous_root}" "${previous_commit}" >/dev/null 2>&1 \
-    || fail "could not make a worktree of ${previous_ref}"
-  previous_worktree=1
   publish "${previous_root}" HVO.RoofControllerV4.Installer "${previous_version}" "${work}/installer-previous"
   previous_installer="${work}/installer-previous/hvo-roof-install"
   says_version "${previous_installer}" "${previous_version}"
@@ -730,10 +739,12 @@ pathlib.Path(out).write_text(assets.install_script(assets.INSTALL_SCRIPT.read_te
 PY
 }
 
-# publish <checkout> <project> <version> <folder>: the project, from the checkout, published for this machine with the
-# version.
+# publish <checkout> <project> <version> <folder> [<version prefix>]: the project, from the checkout, published for this
+# machine with the version. A version prefix stands in for the checkout's VersionPrefix, so this source can be labelled
+# as a release before it at an older version.
 publish() {
-  (cd "$1/src" && Version="$3" dotnet publish "$2" -c Release -r "${rid}" -v quiet -nologo -o "$4" >/dev/null) \
+  (cd "$1/src" && Version="$3" dotnet publish "$2" -c Release -r "${rid}" -v quiet -nologo ${5:+"-p:VersionPrefix=$5"} \
+    -o "$4" >/dev/null) \
     || fail "could not publish $2 ${3} from $1"
 }
 
@@ -746,7 +757,7 @@ says_version() {
 
 # release <folder> <checkout> <version> <upgrade notes> [<asset> <kind>]...: the release's images, built from the
 # checkout and pushed, and its release.json, with the assets (files in the folder, for this platform) and the notes, as
-# its final release's (4.0.0 for 4.0.0-rig.2), as build/release-assets.py gives a release candidate its release's.
+# its final release's (4.0.1 for 4.0.1-rig.2), as build/release-assets.py gives a release candidate its release's.
 release() {
   local folder=$1 checkout=$2 release_version=$3 notes=$4 commit controller_digest emulator_digest assets="[]"
   shift 4
