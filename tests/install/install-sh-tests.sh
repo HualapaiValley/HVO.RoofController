@@ -225,6 +225,15 @@ assert_stopped_by_checks() {
   assert_installer_did_not_run
 }
 
+# A check failed after install.sh installed Docker or turned I2C on (made, as the verdict names it), and it stopped
+# before downloading anything.
+assert_stopped_after() {
+  assert_status 1
+  assert_output_contains "failed after $1, and nothing else was downloaded or installed."
+  assert_nothing_downloaded
+  assert_installer_did_not_run
+}
+
 run_test() {
   local name=$1
   CURRENT_FAILED=false
@@ -707,7 +716,7 @@ test_shasum_stands_in_for_sha256sum() {
 
   assert_status 0
   assert_output_contains "ok    curl, tar and shasum"
-  assert_called "shasum -a 256 ${WORK}/tmp/hvo-roof-install."
+  assert_called "shasum -a 256"
   assert_installer "root=yes"
 }
 
@@ -786,12 +795,35 @@ test_the_release_from_a_folder_needs_no_github() {
   assert_installer "args=[--release][${WORK}/release]"
 }
 
+# The machine's time is given in UTC (the tests run in MST7): the hour it says is the UTC hour before or after the run.
 test_a_clock_an_hour_out_fails() {
+  local before after
+  before=$(LC_ALL=C date -u '+%a, %d %b %Y %H:')
   install_sh FAKE_CLOCK_SKEW=3600 -- --roles rig
+  after=$(LC_ALL=C date -u '+%a, %d %b %Y %H:')
 
   assert_stopped_by_checks
   assert_output_contains "FAIL  This machine's clock is 60 minutes out"
+  [[ ${OUTPUT} == *"(it says ${before}"* || ${OUTPUT} == *"(it says ${after}"* ]] \
+    || fail_test "the machine's time is not UTC's (${before} or ${after}): ${OUTPUT##*it says }"
   assert_output_contains "set it, and synchronise it (sudo timedatectl set-ntp true), then run this again."
+}
+
+# 3585 s is 59.75 minutes: rounded, 60.
+test_a_clock_s_minutes_are_rounded() {
+  install_sh FAKE_CLOCK_SKEW=-3585 -- --roles rig
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  This machine's clock is 60 minutes out"
+}
+
+# Just past the limit, the difference is in seconds: "5 minutes out" would read as within it.
+test_a_clock_just_past_the_limit_says_seconds() {
+  install_sh FAKE_CLOCK_SKEW=310 -- --roles rig
+
+  assert_stopped_by_checks
+  [[ ${OUTPUT} =~ "FAIL  This machine's clock is "(309|310)" seconds out (it says" ]] \
+    || fail_test "the clock's difference is not in seconds: ${OUTPUT##*clock is }"
 }
 
 test_a_clock_two_minutes_out_passes() {
@@ -810,6 +842,13 @@ test_a_mac_reads_github_s_date_with_its_own_date() {
   assert_called "date -j -u -f %a, %d %b %Y %H:%M:%S GMT"
   assert_output_contains "FAIL  This machine's clock is 60 minutes out"
   assert_output_contains "set it, and synchronise it, then run this again."
+}
+
+test_a_proxy_s_date_is_not_github_s() {
+  install_sh FAKE_PROXY_DATE="Mon, 01 Jan 2024 00:00:00 GMT" -- --roles rig
+
+  assert_status 0
+  assert_output_contains "ok    the clock is within "
 }
 
 test_github_s_date_is_found_in_headers_of_any_length() {
@@ -867,9 +906,71 @@ test_docker_is_not_installed_when_another_check_failed() {
   install_sh FAKE_GITHUB_EXIT=6 -- --roles rig --install-docker
 
   assert_stopped_by_checks
-  assert_output_contains "FAIL  Docker is not installed, and rig needs it: it is installed only when the other checks pass, so put right what failed, then run this again."
+  assert_output_contains "FAIL  Docker is not installed, and rig needs it: it is installed only once every other check passes, so put right what failed, then run this again (or install Docker Engine 20.10 or later yourself: https://docs.docker.com/engine/install/)."
   assert_not_called "apt-get"
   assert_not_called "tee"
+}
+
+# Every check runs before Docker is installed: I2C's, here, which comes after Docker's.
+test_docker_is_not_installed_when_i2c_would_fail() {
+  without docker raspi-config
+  rm "${WORK}/root/dev/i2c-1"
+  install_sh -- --roles controller,kiosk --install-docker
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: turn it on (sudo raspi-config nonint do_i2c 0), then run this again."
+  assert_output_contains "FAIL  Docker is not installed, and controller and kiosk need it: it is installed only once every other check passes"
+  assert_not_called "apt-get"
+}
+
+# Both questions come before either change: no to I2C, and Docker is not installed either.
+test_docker_is_not_installed_when_i2c_is_refused() {
+  without docker
+  rm "${WORK}/root/dev/i2c-1"
+  EXPECT=(--expect "Install it from Docker's apt repository? [y/N] " y --expect "Turn it on with raspi-config? [y/N] " n)
+  install_sh_on_terminal -- --roles controller,kiosk
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  I2C is off: turn it on (sudo raspi-config nonint do_i2c 0, or run this with --enable-i2c), then run this again."
+  assert_output_contains "note  Docker was not installed: it is installed only once every other check passes, and one failed"
+  assert_not_called "apt-get"
+  assert_not_called "raspi-config"
+}
+
+test_docker_and_i2c_are_both_asked_about_before_either_is_made() {
+  without docker
+  rm "${WORK}/root/dev/i2c-1"
+  EXPECT=(--expect "Install it from Docker's apt repository? [y/N] " y --expect "Turn it on with raspi-config? [y/N] " y)
+  install_sh_on_terminal -- --roles controller,kiosk
+
+  assert_status 0
+  [[ ${OUTPUT%%Installing Docker from*} == *"Turn it on with raspi-config? [y/N] "* ]] \
+    || fail_test "Docker was installed before I2C was asked about"
+  assert_output_contains "ok    Docker 27.3.1, with Compose 2.29.7"
+  assert_output_contains "ok    I2C is on (/dev/i2c-1): raspi-config turned it on"
+  assert_installer "root=yes"
+}
+
+test_too_little_space_for_docker_s_images_is_found_before_it_is_installed() {
+  without docker
+  install_sh FAKE_DF_LOW_PATH="${WORK}/root" FAKE_DF_LOW_FREE=1500000 -- --roles rig --install-docker
+
+  assert_stopped_by_checks
+  assert_called "df -Pk ${WORK}/root"
+  assert_output_contains "FAIL  ${WORK}/root has 1.4 GB free, and Docker's images need 2.0 GB: free some space, then run this again."
+  assert_output_contains "FAIL  Docker is not installed, and rig needs it: it is installed only once every other check passes"
+  assert_not_called "apt-get"
+}
+
+# A check that can only fail after the change, the engine's, names the change.
+test_a_check_that_fails_after_docker_is_installed_names_it() {
+  without docker
+  install_sh FAKE_DOCKER_ENGINE=down -- --roles rig --install-docker
+
+  assert_stopped_after "Docker was installed"
+  assert_called "root apt-get install -y -q docker-ce"
+  assert_output_contains "FAIL  Docker is installed, and its engine did not answer"
+  assert_output_contains "install.sh: A check failed after Docker was installed, and nothing else was downloaded or installed."
 }
 
 test_docker_is_installed_when_the_person_says_yes() {
@@ -926,7 +1027,7 @@ test_docker_that_cannot_be_installed_fails() {
   without docker
   install_sh FAKE_APT=broken -- --roles rig --install-docker
 
-  assert_stopped_by_checks
+  assert_stopped_after "an attempt to install Docker"
   assert_output_contains "FAIL  Docker could not be installed: install it yourself (https://docs.docker.com/engine/install/), then run this again."
 }
 
@@ -1004,7 +1105,7 @@ test_i2c_is_not_turned_on_when_another_check_failed() {
   install_sh FAKE_GHCR_EXIT=7 -- --roles controller,kiosk --enable-i2c
 
   assert_stopped_by_checks
-  assert_output_contains "FAIL  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: it is turned on only when the other checks pass, so put right what failed, then run this again."
+  assert_output_contains "FAIL  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: it is turned on only once every other check passes, so put right what failed, then run this again (or turn it on yourself: sudo raspi-config nonint do_i2c 0)."
   assert_not_called "raspi-config"
 }
 
@@ -1021,15 +1122,35 @@ test_i2c_that_needs_a_restart_fails() {
   rm "${WORK}/root/dev/i2c-1"
   install_sh FAKE_I2C=reboot -- --roles controller,kiosk --enable-i2c
 
-  assert_stopped_by_checks
+  assert_stopped_after "I2C was turned on"
   assert_output_contains "FAIL  raspi-config turned I2C on from the next start: restart this Pi (sudo reboot), then run this again."
+}
+
+test_a_restart_after_docker_and_i2c_names_both() {
+  without docker
+  rm "${WORK}/root/dev/i2c-1"
+  install_sh FAKE_I2C=reboot -- --roles controller,kiosk --install-docker --enable-i2c
+
+  assert_stopped_after "Docker was installed and I2C was turned on"
+}
+
+# Agreed to, I2C is still not turned on once Docker's install has failed.
+test_i2c_is_not_turned_on_when_docker_could_not_be_installed() {
+  without docker
+  rm "${WORK}/root/dev/i2c-1"
+  install_sh FAKE_APT=broken -- --roles controller,kiosk --install-docker --enable-i2c
+
+  assert_stopped_after "an attempt to install Docker"
+  assert_output_contains "note  I2C was not turned on: it is turned on only once every other check passes, and one failed"
+  assert_output_contains "install.sh: A check failed after an attempt to install Docker"
+  assert_not_called "raspi-config"
 }
 
 test_i2c_that_raspi_config_cannot_turn_on_fails() {
   rm "${WORK}/root/dev/i2c-1"
   install_sh FAKE_I2C=fails -- --roles controller,kiosk --enable-i2c
 
-  assert_stopped_by_checks
+  assert_stopped_after "an attempt to turn I2C on"
   assert_output_contains "FAIL  raspi-config could not turn I2C on"
 }
 
@@ -1067,6 +1188,23 @@ test_a_port_in_use_is_only_noted() {
   assert_status 0
   assert_output_contains "note  port 8443, for the API over HTTPS, is in use: stop what listens on it, or choose another port in the installer"
   assert_output_contains "ok    ports 8088, 8080 are free"
+}
+
+# hvo-roof installed for the person is not a rig: a first rig, root's, still has its ports checked.
+test_a_person_s_record_does_not_skip_a_first_rig_s_ports() {
+  record "${WORK}/home/.config/hvo-roof/install.json" cli
+  install_sh FAKE_LISTENING=8443 -- --roles rig
+
+  assert_status 0
+  assert_output_contains "note  port 8443, for the API over HTTPS, is in use"
+}
+
+test_an_installed_rig_s_ports_are_not_checked() {
+  record "${WORK}/root/etc/hvo-roof/install.json" rig
+  install_sh FAKE_LISTENING=8443 -- --roles rig
+
+  assert_status 0
+  assert_output_not_contains "port 8443"
 }
 
 test_ports_are_found_with_lsof_without_ss() {
@@ -1109,6 +1247,15 @@ test_a_download_that_is_not_the_release_s_is_not_started() {
   assert_output_contains "the download is not the release's, and nothing was installed."
   assert_installer_did_not_run
   [ -z "$(ls -A "${WORK}/tmp")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${WORK}/tmp")"
+}
+
+test_a_tmpdir_with_a_backslash_in_its_name_is_hashed() {
+  mkdir -p "${WORK}/back\\slash"
+  install_sh TMPDIR="${WORK}/back\\slash" -- --roles rig
+
+  assert_status 0
+  assert_output_contains "ok    hvo-roof-install-linux-arm64's SHA-256 is the one SHA256SUMS lists"
+  assert_installer "root=yes"
 }
 
 test_sha256sums_without_the_installer_is_refused() {

@@ -137,6 +137,8 @@ case "${name}" in
       https://github.com)
         [ -z "${FAKE_GITHUB_EXIT:-}" ] || exit "${FAKE_GITHUB_EXIT}"
         ${head} || exit 2
+        # FAKE_PROXY_DATE: a proxy's reply to CONNECT, with a Date of its own, before github.com's headers.
+        [ -z "${FAKE_PROXY_DATE:-}" ] || printf 'HTTP/1.1 200 Connection established\r\ndate: %s\r\n\r\n' "${FAKE_PROXY_DATE}"
         printf 'HTTP/2 200\r\n'
         if [ "${FAKE_GITHUB_DATE:-yes}" = yes ]; then
           printf 'date: %s\r\n' "$(python 'import email.utils, sys, time
@@ -264,9 +266,10 @@ print(email.utils.formatdate(time.time() + int(sys.argv[1]), usegmt=True))' "${F
     real=${FAKE_REAL_SHA256SUM:-}
     [ "${name}" = sha256sum ] || real=${FAKE_REAL_SHASUM:-}
     [ -z "${real}" ] || exec "${real}" "$@"
-    [ "${name}" = sha256sum ] || { [ "$1 $2" = "-a 256" ] && shift 2; } || exit 1
+    [ "${name}" = sha256sum ] || { [ "${1:-} ${2:-}" = "-a 256" ] && shift 2; } || exit 1
+    # A file's name, or standard input ("-").
     printf '%s  %s\n' "$(python 'import hashlib, sys
-print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1")" "$1"
+print(hashlib.sha256(open(sys.argv[1], "rb").read() if len(sys.argv) > 1 else sys.stdin.buffer.read()).hexdigest())' "$@")" "${1:--}"
     ;;
 
   gh)

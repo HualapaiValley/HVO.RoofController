@@ -85,7 +85,8 @@ bash install.sh --roles controller,kiosk
 
 ### What install.sh checks
 
-It checks everything first, prints each check, and stops before downloading anything when one fails:
+It checks everything first, prints each check, and stops before downloading anything when one fails. It changes
+nothing until every check has passed: then it installs Docker, or turns I2C on, if you agree to it (see below):
 
 - **The platform.** Linux on 64-bit ARM or x86-64, with glibc and a 64-bit system, or a Mac with Apple silicon (under
   Rosetta too). It refuses a 32-bit Raspberry Pi OS (even on a 64-bit kernel), musl (Alpine), an Intel Mac, and any
@@ -96,19 +97,23 @@ It checks everything first, prints each check, and stops before downloading anyt
 - **Its commands.** curl, tar and sha256sum (shasum on a Mac).
 - **sudo**, when the installer runs as root and you are not root: sudo asks for your password on the terminal.
 - **Free space.** 200 MB in `TMPDIR` (or `/tmp`) for the download; 200 MB in your home for `hvo-roof` and the Mac app;
-  on Linux, 2 GB in Docker's folder for the images.
+  on Linux, 2 GB in Docker's folder for the images (`/var/lib/docker` when it installs Docker).
 - **The network and the clock.** github.com answers, and this machine's clock is within 5 minutes of github.com's: a
   clock further out breaks TLS, the attestation and the certificates the installer makes. On Linux it notes a clock
   that is not synchronised.
-- **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. Without Docker,
-  on Debian, Raspberry Pi OS or Ubuntu, it offers to install it from Docker's apt repository (`--install-docker` does
-  it without asking), once every check before it has passed. It notes a missing Compose v2, which the installer does
-  not need.
-- **For the controller on the Pi:** I2C is on (`/dev/i2c-1`). Once every other check has passed, it offers to turn it
-  on with raspi-config (`--enable-i2c` does it without asking); when raspi-config can only turn it on from the next
-  start, restart the Pi and run the script again.
-- **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080. A port in
-  use is only noted: the installer asks which ports to use, and checks the ones chosen (an answers file's too).
+- **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. It notes a
+  missing Compose v2, which the installer does not need.
+- **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
+- **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
+  install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
+  installer asks which ports to use, and checks the ones chosen (an answers file's too).
+
+When Docker is missing on Debian, Raspberry Pi OS or Ubuntu, or I2C is off on a Pi with raspi-config, it offers to
+install Docker from Docker's apt repository, or to turn I2C on with raspi-config (`--install-docker` and `--enable-i2c`
+agree without asking). It offers only once every other check has passed, asks about both before it makes either, and
+makes them last: a check that fails, or an offer you refuse, leaves the machine as it was. When something fails after a
+change (Docker's engine does not answer once installed, or raspi-config can only turn I2C on from the next start), its
+last line names the change. For I2C from the next start, restart the Pi and run the script again.
 
 Then it downloads `hvo-roof-install-<platform>` and `SHA256SUMS` into a folder of its own in `TMPDIR`, which it removes
 afterwards. It refuses the installer unless:
@@ -140,8 +145,8 @@ installer then reads nothing from its standard input, and refuses a question it 
 
 Its exit code is the installer's when the installer ran ([Exit codes](#exit-codes)). Otherwise it is 0 when `--check`
 passed; 1 when a check, the download or its verification failed (a Docker or I2C offer with no terminal to make it
-on is a failed check); and 2 for a command line that is not valid, or roles or a sudo password with no terminal to ask
-for them on.
+on is a failed check); and 2 for a command line, an answer or a role that is not valid, or roles or a sudo password
+with no terminal to ask for them on.
 
 ## Running it
 
@@ -1153,7 +1158,8 @@ types the answers. The tests check:
 - the roles from each source, and those it refuses, with whether the installer runs as root;
 - sudo's password, asked once, and refused;
 - each check failing, with what it says, and that nothing was downloaded;
-- installing Docker and turning I2C on, asked, refused, with their options, and with no terminal;
+- installing Docker and turning I2C on, asked, refused, with their options, and with no terminal; that neither is made
+  when a check fails, or when the other is refused; and the last line naming what was made when a check fails after it;
 - the download refused for a wrong `SHA256SUMS` entry, a SHA-256 that differs, an attestation that fails, and a
   wrong version, with its folder removed;
 - the hand-over: the installer's arguments, its exit code, its questions on the terminal, and `--from`;

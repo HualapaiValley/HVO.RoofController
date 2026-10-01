@@ -26,7 +26,8 @@ hvo_roof_install_sh() {
   local release_version=''  # build/release-assets.py writes the release's version here.
   local repository="HualapaiValley/HVO.RoofController"
   # tests/install puts the files this script reads (/etc/os-release, /proc/device-tree/model, /dev/i2c-1 and
-  # /etc/hvo-roof/install.json) in a folder of its own. Nothing else changes with it.
+  # /etc/hvo-roof/install.json), and /var/lib/docker, whose free space it checks before Docker is installed, in a folder
+  # of its own. Nothing else changes with it.
   local root="${HVO_ROOF_INSTALL_TEST_ROOT:-}"
 
   # The free space each place needs, in KiB: the installer's download, a person's programs, and Docker's images (the
@@ -75,7 +76,8 @@ Options, before the installer's arguments:
                     separated by commas. Without it: an answers file's roles, what is installed (for a command such as
                     upgrade), or a question.
   --from DIR        Take hvo-roof-install and SHA256SUMS from DIR, a folder holding the release's files, not from
-                    GitHub. The installer reads the release from DIR too (its --release DIR).
+                    GitHub. The installer reads the release from DIR too (its --release DIR), except for rollback,
+                    whose --release is the release before.
   --check           Check this machine, then stop: download nothing and change nothing.
   --install-docker  When Docker is needed and missing, install it from Docker's apt repository without asking
                     (Debian, Raspberry Pi OS and Ubuntu).
@@ -86,8 +88,8 @@ The first argument that is not one of these, and everything after it (or after -
 --answers FILE, --plan, --help and the rest.
 
 Exit codes: the installer's, when it ran; otherwise 0 when --check passed, 1 when a check, the download or its
-verification failed, and 2 for a command line that is not valid, or roles or a sudo password with no terminal to ask
-for them on.
+verification failed, and 2 for a command line, an answer or a role that is not valid, or roles or a sudo password with
+no terminal to ask for them on.
 EOF
   }
 
@@ -211,11 +213,13 @@ EOF
     curl -sS --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 30 "$@" "${url}"
   }
 
+  # The file's SHA-256, from its contents on standard input: given a name with a backslash or a newline in it, sha256sum
+  # escapes the name, and puts a backslash before the hash.
   sha256_of() {
     if have sha256sum; then
-      sha256sum "$1" | awk '{ print $1 }'
+      sha256sum <"$1" | awk '{ print $1 }'
     else
-      shasum -a 256 "$1" | awk '{ print $1 }'
+      shasum -a 256 <"$1" | awk '{ print $1 }'
     fi
   }
 
@@ -545,9 +549,9 @@ EOF
   fi
 
   # What the run needs: Docker for the controller, a rig and the kiosk (which the controller's container serves); I2C for
-  # the controller; the ports, for a first install's controller or rig. Uninstall and backup check what they need
-  # themselves, and a plan says what is missing.
-  local needs_docker=false needs_i2c=false needs_ports=false
+  # the controller; the ports, for a first install's controller or rig (one whose scope has a record with neither, or no
+  # record). Uninstall and backup check what they need themselves, and a plan says what is missing.
+  local needs_docker=false needs_i2c=false needs_ports=false record record_roles
   if ${reads_release} && ! ${plan}; then
     if contains "${roles}" controller || contains "${roles}" rig || contains "${roles}" kiosk || [ "${command}:${os}" = restore:linux ]; then
       needs_docker=true
@@ -555,9 +559,14 @@ EOF
     if contains "${roles}" controller && [ -n "${pi_model}" ] && [ "${command}" != cert ]; then
       needs_i2c=true
     fi
-    if { contains "${roles}" controller || contains "${roles}" rig; } && [ -z "${command}" ] && [ -z "${answers}" ] \
-      && [ ! -e "${system_record}" ] && [ ! -e "${user_record}" ]; then
-      needs_ports=true
+    if { contains "${roles}" controller || contains "${roles}" rig; } && [ -z "${command}" ] && [ -z "${answers}" ]; then
+      if [ "${scope}" = system ]; then record=${system_record}; else record=${user_record}; fi
+      if [ ! -e "${record}" ]; then
+        needs_ports=true
+      elif record_roles=$(json_roles "${record}" 2>/dev/null) \
+        && ! contains "${record_roles}" controller && ! contains "${record_roles}" rig; then
+        needs_ports=true
+      fi
     fi
   fi
 
@@ -616,14 +625,15 @@ EOF
     fi
   else
     ok "github.com answers"
-    # awk reads to the end: with pipefail, a printf cut off by an awk that stopped reading would end the script.
-    remote_date=$(printf '%s\n' "${headers}" | tr -d '\r' | awk '!found && tolower($1) == "date:" { sub(/^[^:]*:[ \t]*/, ""); print; found = 1 }')
+    # The last Date is github.com's: through a proxy, its reply to CONNECT comes first. awk reads to the end: with
+    # pipefail, a printf cut off by an awk that stopped reading would end the script.
+    remote_date=$(printf '%s\n' "${headers}" | tr -d '\r' | awk 'tolower($1) == "date:" { sub(/^[^:]*:[ \t]*/, ""); date = $0 } END { if (date != "") print date }')
     remote_seconds=$(http_date_seconds "${remote_date}" || true)
     if [[ ${remote_seconds} =~ ^[0-9]+$ ]]; then
       skew=$(($(date -u +%s) - remote_seconds))
       ((skew >= 0)) || skew=$((-skew))
       if ((skew > clock_tolerance_seconds)); then
-        failed "This machine's clock is $(((skew + 30) / 60)) minutes out (it says $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S') GMT, and github.com ${remote_date}): set it, and synchronise it$([ "${os}" = linux ] && printf ' (sudo timedatectl set-ntp true)'), then run this again."
+        failed "This machine's clock is $( ((skew < 600)) && printf '%d seconds' "${skew}" || printf '%d minutes' $(((skew + 30) / 60))) out (it says $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S') GMT, and github.com ${remote_date}): set it, and synchronise it$([ "${os}" = linux ] && printf ' (sudo timedatectl set-ntp true)'), then run this again."
       else
         ok "the clock is within ${skew} s of github.com's"
       fi
@@ -678,45 +688,22 @@ EOF
       && as_root apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin </dev/null >/dev/null
   }
 
-  check_docker() {
-    local version major minor compose docker_root needs
-    case "${roles}" in
-      "") needs="a restore needs" ;;
-      *,*) needs="${roles//,/ and } need" ;;
-      *) needs="${roles} needs" ;;
-    esac
-    if ! have docker; then
-      if [ "${os}" = macos ]; then
-        failed "Docker is not installed, and a test rig runs in Docker Desktop: install it (https://docs.docker.com/desktop/setup/install/mac-install/), start it, then run this again."
-        return
-      elif ${check_only} || ! apt_docker_os; then
-        failed "Docker is not installed, and ${needs} it: install Docker Engine 20.10 or later (https://docs.docker.com/engine/install/$(apt_docker_os && printf ', or run this with --install-docker')), then run this again."
-        return
-      elif ((failures > 0)); then
-        # Nothing is changed once a check has failed: the run stops before the download.
-        failed "Docker is not installed, and ${needs} it: it is installed only when the other checks pass, so put right what failed, then run this again."
-        return
-      elif ! ${install_docker} && ! ask_yes "  Docker is not installed, and ${needs} it. Install it from Docker's apt repository?"; then
-        failed "Docker is not installed: install Docker Engine 20.10 or later (https://docs.docker.com/engine/install/, or run this with --install-docker), then run this again."
-        return
-      elif ! install_docker_from_apt; then
-        failed "Docker could not be installed: install it yourself (https://docs.docker.com/engine/install/), then run this again."
-        return
-      fi
-    fi
+  # Docker's engine: it answers, its version is 20.10 or later, and whether Compose v2 is there. False when it fails.
+  check_docker_engine() {
+    local version major minor compose
     if ! version=$(as_root docker version --format '{{.Server.Version}}' 2>&1 </dev/null); then
       failed "Docker is installed, and its engine did not answer ($(printf '%s' "${version}" | tail -n 1)): start it$([ "${os}" = linux ] && printf ' (sudo systemctl enable --now docker)' || printf ' (open Docker Desktop)'), then run this again."
-      return
+      return 1
     fi
     if ! [[ ${version} =~ ^([0-9]+)\.([0-9]+) ]]; then
       failed "Docker's engine says its version is '${version}', which this script cannot read: the installer needs 20.10 or later."
-      return
+      return 1
     fi
     major=$((10#${BASH_REMATCH[1]}))
     minor=$((10#${BASH_REMATCH[2]}))
     if ((major < 20 || (major == 20 && minor < 10))); then
       failed "Docker ${version} is too old, and the installer needs Docker Engine 20.10 or later: upgrade it (https://docs.docker.com/engine/install/), then run this again."
-      return
+      return 1
     fi
     compose=$(as_root docker compose version --short 2>/dev/null </dev/null || true)
     compose=${compose#v}
@@ -726,32 +713,44 @@ EOF
       ok "Docker ${version}"
       note "Docker Compose v2 is not installed: the installer does not use it, and the release's docker-compose.yaml does (the docker-compose-plugin package)"
     fi
-    if [ "${os}" = linux ]; then
-      docker_root=$(as_root docker info --format '{{.DockerRootDir}}' 2>/dev/null </dev/null || true)
-      check_space "${docker_root:-/var/lib/docker}" "${need_docker_kib}" "Docker's images"
-    fi
   }
 
-  ! ${needs_docker} || check_docker
+  # Docker is checked here, and when it is missing and can be installed, its folder's free space too: whether to install
+  # it is decided once every other check has passed, and it is installed last.
+  local docker_missing=false docker_root needs=""
+  if ${needs_docker}; then
+    case "${roles}" in
+      "") needs="a restore needs" ;;
+      *,*) needs="${roles//,/ and } need" ;;
+      *) needs="${roles} needs" ;;
+    esac
+    if have docker; then
+      if check_docker_engine && [ "${os}" = linux ]; then
+        docker_root=$(as_root docker info --format '{{.DockerRootDir}}' 2>/dev/null </dev/null || true)
+        check_space "${docker_root:-/var/lib/docker}" "${need_docker_kib}" "Docker's images"
+      fi
+    elif [ "${os}" = macos ]; then
+      failed "Docker is not installed, and a test rig runs in Docker Desktop: install it (https://docs.docker.com/desktop/setup/install/mac-install/), start it, then run this again."
+    elif ${check_only} || ! apt_docker_os; then
+      failed "Docker is not installed, and ${needs} it: install Docker Engine 20.10 or later (https://docs.docker.com/engine/install/$(apt_docker_os && printf ', or run this with --install-docker')), then run this again."
+    else
+      docker_missing=true
+      check_space "${root}/var/lib/docker" "${need_docker_kib}" "Docker's images"
+    fi
+  fi
 
   # ---------------------------------------------------------------------------------------------------------------------
-  # I2C: the controller drives the HAT's relays and reads its inputs over /dev/i2c-1.
+  # I2C: the controller drives the HAT's relays and reads its inputs over /dev/i2c-1. When it is off and raspi-config can
+  # turn it on, whether to is decided with Docker's install, and it is turned on last.
 
+  local i2c_off=false
   if ${needs_i2c}; then
     if [ -e "${root}/dev/i2c-1" ]; then
       ok "I2C is on (/dev/i2c-1)"
     elif ${check_only} || ! have raspi-config; then
       failed "I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: turn it on (sudo raspi-config nonint do_i2c 0$(have raspi-config && printf ', or run this with --enable-i2c')), then run this again."
-    elif ((failures > 0)); then
-      failed "I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: it is turned on only when the other checks pass, so put right what failed, then run this again."
-    elif ! ${enable_i2c} && ! ask_yes "  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it. Turn it on with raspi-config?"; then
-      failed "I2C is off: turn it on (sudo raspi-config nonint do_i2c 0, or run this with --enable-i2c), then run this again."
-    elif ! as_root raspi-config nonint do_i2c 0 </dev/null; then
-      failed "raspi-config could not turn I2C on: turn it on yourself (sudo raspi-config, Interface Options), then run this again."
-    elif [ -e "${root}/dev/i2c-1" ]; then
-      ok "I2C is on (/dev/i2c-1): raspi-config turned it on"
     else
-      failed "raspi-config turned I2C on from the next start: restart this Pi (sudo reboot), then run this again."
+      i2c_off=true
     fi
   fi
 
@@ -791,9 +790,59 @@ EOF
     esac
   fi
 
+  # ---------------------------------------------------------------------------------------------------------------------
+  # What this script changes: Docker and I2C. Both are asked about (or taken from --install-docker and --enable-i2c)
+  # before either is made, and only once every other check has passed. What is made is named if a check fails after it.
+
+  local install_docker_now=false enable_i2c_now=false made=""
+  if ${docker_missing}; then
+    if ((failures > 0)); then
+      failed "Docker is not installed, and ${needs} it: it is installed only once every other check passes, so put right what failed, then run this again (or install Docker Engine 20.10 or later yourself: https://docs.docker.com/engine/install/)."
+    elif ${install_docker} || ask_yes "  Docker is not installed, and ${needs} it. Install it from Docker's apt repository?"; then
+      install_docker_now=true
+    else
+      failed "Docker is not installed: install Docker Engine 20.10 or later (https://docs.docker.com/engine/install/, or run this with --install-docker), then run this again."
+    fi
+  fi
+  if ${i2c_off}; then
+    if ((failures > 0)); then
+      failed "I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: it is turned on only once every other check passes, so put right what failed, then run this again (or turn it on yourself: sudo raspi-config nonint do_i2c 0)."
+    elif ${enable_i2c} || ask_yes "  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it. Turn it on with raspi-config?"; then
+      enable_i2c_now=true
+    else
+      failed "I2C is off: turn it on (sudo raspi-config nonint do_i2c 0, or run this with --enable-i2c), then run this again."
+    fi
+  fi
+
+  if ${install_docker_now}; then
+    if ((failures > 0)); then
+      note "Docker was not installed: it is installed only once every other check passes, and one failed"
+    elif install_docker_from_apt; then
+      made="Docker was installed"
+      check_docker_engine || true
+    else
+      made="an attempt to install Docker"
+      failed "Docker could not be installed: install it yourself (https://docs.docker.com/engine/install/), then run this again."
+    fi
+  fi
+  if ${enable_i2c_now}; then
+    if ((failures > 0)); then
+      note "I2C was not turned on: it is turned on only once every other check passes, and one failed"
+    elif ! as_root raspi-config nonint do_i2c 0 </dev/null; then
+      made="${made:+${made} and }an attempt to turn I2C on"
+      failed "raspi-config could not turn I2C on: turn it on yourself (sudo raspi-config, Interface Options), then run this again."
+    elif [ -e "${root}/dev/i2c-1" ]; then
+      made="${made:+${made} and }I2C was turned on"
+      ok "I2C is on (/dev/i2c-1): raspi-config turned it on"
+    else
+      made="${made:+${made} and }I2C was turned on"
+      failed "raspi-config turned I2C on from the next start: restart this Pi (sudo reboot), then run this again."
+    fi
+  fi
+
   say ""
   if ((failures > 0)); then
-    die "$( ((failures == 1)) && printf 'A check' || printf '%d checks' "${failures}") failed, and nothing was downloaded or installed."
+    die "$( ((failures == 1)) && printf 'A check' || printf '%d checks' "${failures}") failed${made:+ after ${made}}, and nothing ${made:+else }was downloaded or installed."
   fi
   if ${check_only}; then
     say "This machine is ready for hvo-roof-install ${release_version}."
