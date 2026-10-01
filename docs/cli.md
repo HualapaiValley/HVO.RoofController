@@ -112,12 +112,19 @@ hvo-roof setup --controller https://roof.local:5001/ --api-key
   is trusted, not the system's CAs; the certificate must still name the host in the address, and the CA's name
   constraints apply. The controller's certificate can then be reissued under the same CA, for a new address or when it
   expires, with no change here. `none` removes a saved CA.
+- **`--ca-sha256 <fingerprint>`** fetches that CA from the controller instead (`/ca.crt`, over HTTPS) and saves it only
+  when its SHA-256 is the one given: the fingerprint on the installer's Done page, or from `hvo-roof-install cert show`
+  on the controller (64 hex digits, colons allowed). The certificate the controller presents while it is fetched must be
+  one that CA issued, for the host in the address. A CA with another SHA-256 is not saved (exit 7), since something
+  between here and the controller may be answering for it. In a terminal, `fetch` at the CA prompt does the same: setup
+  shows the CA's SHA-256 and saves it once you say it is the one the controller's installer gave.
 - **`--certificate-sha256`** pins the controller's self-signed certificate by its SHA-256 (64 hex digits, colons
   allowed). A reissued certificate has a new SHA-256, so the pin must be saved again. `none` removes a saved pin.
-- **The CA or the pin, not both.** Saving one removes the other, and setup says so; giving both is an error (exit 2).
+- **The CA or the pin, not both.** Saving one removes the other, and setup says so; giving both, or `--ca-sha256` with
+  either, is an error (exit 2).
   In a terminal, setup asks for a CA file first and for a pin only when there is no CA. When the certificate is not
-  accepted, setup says why and which option would help: a certificate from another CA points to `--ca-certificate`, one
-  that is not the pinned one to either, and one for another host name to neither (the certificate needs reissuing).
+  accepted, setup says why and which option would help: a certificate from another CA points to `--ca-sha256` or
+  `--ca-certificate`, one that is not the pinned one to those or `--certificate-sha256`, and one for another host name to neither (the certificate needs reissuing).
 - **`--create-admin <name>`** adds the first admin person, with a password that setup asks for. It needs an admin API
   key, which is how a new installation gets its first person.
 

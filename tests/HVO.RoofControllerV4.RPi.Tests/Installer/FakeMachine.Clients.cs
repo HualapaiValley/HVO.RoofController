@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -69,8 +70,16 @@ internal sealed partial class FakeMachine
     /// <summary>True when macOS's quarantine mark stays on an app whatever xattr is told (a file the person cannot change).</summary>
     public bool QuarantineSticks { get; set; }
 
-    /// <summary>The certificates in the login keychain, trusted for websites, by their SHA-256 (hex): their names.</summary>
-    public Dictionary<string, string> KeychainTrusted { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The certificates in the login keychain: their SHA-256 and SHA-1 (hex, upper case), and their names.</summary>
+    public List<(string Sha256, string Sha1, string Name)> KeychainCertificates { get; } = [];
+
+    /// <summary>The person's trust settings for SSL, by each certificate's SHA-1: 1 trusted as a root, 3 denied.</summary>
+    public Dictionary<string, int> KeychainTrust { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The certificates in the login keychain trusted for websites, by their SHA-256 (hex): their names.</summary>
+    public IReadOnlyDictionary<string, string> KeychainTrusted => KeychainCertificates
+        .Where(certificate => KeychainTrust.GetValueOrDefault(certificate.Sha1) == 1)
+        .ToDictionary(certificate => certificate.Sha256, certificate => certificate.Name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>What <c>security add-trusted-cert</c> says when the person does not give their password; null when they do.</summary>
     public string? KeychainRefusal { get; set; }
@@ -201,18 +210,38 @@ internal sealed partial class FakeMachine
                     File.Delete(Path.Join(OnDisk(app), QuarantineMark));
                 }
             }),
-            "security" when arguments is ["find-certificate", "-a", "-Z", "-c", var name, _] => KeychainTrusted.Where(entry => entry.Value.Contains(name, StringComparison.Ordinal)).ToArray() is { Length: > 0 } found
-                ? Answer(string.Join('\n', found.Select(entry => $"SHA-256 hash: {entry.Key.ToUpperInvariant()}\nkeychain: \"login.keychain-db\"")))
+            "security" when arguments is ["find-certificate", "-a", "-Z", var keychain] => KeychainCertificates.Count > 0
+                ? Answer(string.Concat(KeychainCertificates.Select(certificate => $"""
+                    SHA-256 hash: {certificate.Sha256}
+                    SHA-1 hash: {certificate.Sha1}
+                    keychain: "{keychain}"
+                    version: 512
+                    class: 0x80001000
+                    attributes:
+                        "alis"<blob>="{certificate.Name}"
+                        "labl"<blob>="{certificate.Name}"
+
+                    """)))
                 : new CommandResult(44, string.Empty, "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n"),
-            "security" when arguments is ["dump-trust-settings"] => KeychainTrusted.Count > 0
-                ? Answer($"Number of trusted certs = {KeychainTrusted.Count}\n" + string.Join('\n', KeychainTrusted.Values.Select((name, index) => $"Cert {index}: {name}\n   Number of trust settings : 1")))
-                : new CommandResult(1, string.Empty, "SecTrustSettingsCopyCertificates: No Trust Settings were found.\n"),
+            "security" when arguments is ["trust-settings-export", var file] => KeychainTrust.Count > 0
+                ? Answer(string.Empty, after: () => File.WriteAllText(OnDisk(file), TrustSettingsPlist()))
+                : new CommandResult(1, string.Empty, "SecTrustSettingsCreateExternalRepresentation: No Trust Settings were found.\n"),
+            "plutil" when arguments is ["-convert", "xml1", "-o", "-", var file] => File.Exists(OnDisk(file))
+                ? Answer(File.ReadAllText(OnDisk(file)))
+                : new CommandResult(1, string.Empty, $"{file}: file does not exist or is not readable or is not a regular file\n"),
             "security" when arguments is ["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", _, var file] => KeychainRefusal is { } refusal
                 ? new CommandResult(1, string.Empty, refusal + "\n")
                 : Answer(string.Empty, after: () =>
                 {
                     using var authority = RoofCertificateAuthority.FromPem(Read(file));
-                    KeychainTrusted[Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA256))] = authority.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+                    var sha256 = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA256));
+                    var sha1 = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA1));
+                    if (!KeychainCertificates.Any(certificate => certificate.Sha256 == sha256))
+                    {
+                        KeychainCertificates.Add((sha256, sha1, authority.GetNameInfo(X509NameType.SimpleName, forIssuer: false)));
+                    }
+
+                    KeychainTrust[sha1] = 1;
                 }),
             _ when command.Program.EndsWith($"/Contents/MacOS/{ClientSteps.MacProgramName}", StringComparison.Ordinal) && arguments is ["--check"] => Exists(command.Program)
                 ? MacCheck(command)
@@ -230,6 +259,51 @@ internal sealed partial class FakeMachine
 
         ZipFile.ExtractToDirectory(OnDisk(zip), OnDisk(into));
         return Answer(string.Empty);
+    }
+
+    // The person's trust settings as security trust-settings-export writes them: each certificate's for SSL servers.
+    private string TrustSettingsPlist()
+    {
+        var entries = new StringBuilder();
+        foreach (var (sha1, result) in KeychainTrust)
+        {
+            entries.Append(CultureInfo.InvariantCulture, $"""
+                		<key>{sha1.ToUpperInvariant()}</key>
+                		<dict>
+                			<key>modDate</key>
+                			<date>2026-09-30T12:00:00Z</date>
+                			<key>trustSettings</key>
+                			<array>
+                				<dict>
+                					<key>kSecTrustSettingsPolicy</key>
+                					<data>
+                					KoZIhvdjZAED
+                					</data>
+                					<key>kSecTrustSettingsPolicyName</key>
+                					<string>sslServer</string>
+                					<key>kSecTrustSettingsResult</key>
+                					<integer>{result}</integer>
+                				</dict>
+                			</array>
+                		</dict>
+
+                """);
+        }
+
+        return $"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+            	<key>trustList</key>
+            	<dict>
+            {entries}	</dict>
+            	<key>trustVersion</key>
+            	<integer>1</integer>
+            </dict>
+            </plist>
+
+            """;
     }
 
     private CommandResult MacCheck(CommandLine command)

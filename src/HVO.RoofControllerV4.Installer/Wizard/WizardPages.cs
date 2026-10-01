@@ -711,6 +711,9 @@ internal sealed class ClientPage : WizardPage
 
     public override bool CanGoNext => !_fetching;
 
+    // A fetch still running would land on the page shown again, its CA beside a box ticked for the recorded one.
+    public override bool CanGoBack => !_fetching;
+
     public TextField? Address => _address;
 
     public Button? FetchButton => _fetch;
@@ -744,6 +747,9 @@ internal sealed class ClientPage : WizardPage
         _matches = _keychain = null;
         _failure = null;
         _fetching = false;
+
+        // Whatever an earlier visit's fetch brings back is not for this one.
+        _fetches++;
         var answers = Session.Answers.Normalised();
         var client = answers.Client ?? new ClientSettings();
         _fetched = client.CaSha256 is { } recorded ? new FetchedCa(client.Controller, null, recorded) : null;
@@ -916,6 +922,9 @@ internal sealed class ClientPage : WizardPage
                 else
                 {
                     Session.Log.Write($"Fetched the controller's CA from {address}: {fetched!.Name} ({fetched.Fingerprint}).");
+
+                    // A CA just fetched is compared afresh, whatever was ticked before.
+                    _matches!.Value = CheckState.UnChecked;
                     _fetched = fetched;
                 }
 

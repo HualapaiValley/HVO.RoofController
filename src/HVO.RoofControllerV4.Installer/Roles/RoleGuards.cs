@@ -51,6 +51,14 @@ public static class RoleGuards
     public static string RigConfirmationPrompt(MachineSurvey survey)
         => $"This machine has the HAT's I2C bus ({HatDevices.I2c}). A test rig must never be installed on the observatory's Pi. Type this machine's host name ({survey.HostName}) to confirm it is not.";
 
+    // The same controller, trusted the same way: the keychain is this run's alone.
+    private static bool SameController(ClientSettings recorded, ClientSettings client)
+    {
+        var (a, b) = (recorded.Normalised(), client.Normalised());
+        return (a.Address is { } x && b.Address is { } y ? x == y : a.Controller == b.Controller)
+            && a.CaSha256 == b.CaSha256 && a.CertificateSha256 == b.CertificateSha256;
+    }
+
     /// <summary>What a person types to confirm plain HTTP.</summary>
     public const string HttpConfirmationWord = "http";
 
@@ -118,6 +126,21 @@ public static class RoleGuards
         if (answers.Client is { TrustInKeychain: true } && survey.Os != InstallerOs.MacOS)
         {
             problems.Add("The controller's CA is trusted in the keychain on a Mac only: docs/install.md says how to add it to a browser on Linux.");
+        }
+
+        // The person's record keeps one controller for hvo-roof and the Mac app: a run for one of them would move the
+        // other's (on its next run from the record) while its files still point at the one it has.
+        if (clients.Length == 1 && answers.Client is { } client
+            && survey.UserRecord is { Client: { } recorded } record
+            && !SameController(recorded, client))
+        {
+            var other = clients[0] == InstallRole.Cli ? InstallRole.MacApp : InstallRole.Cli;
+            if (record.Roles.Contains(other))
+            {
+                var how = recorded.Address is { } address && address == client.Address ? ", trusting it another way" : string.Empty;
+                problems.Add($"{Capitalise(InstallRoles.Describe([clients[0]]))} and {InstallRoles.Describe([other])} connect to the same controller, "
+                    + $"and {InstallRoles.Describe([other])} connects to {recorded.Controller}{how}: give the same controller and trust, or choose both to move them together.");
+            }
         }
 
         var system = roles.Where(role => InstallRoles.ScopeOf(role, survey.Os) == InstallScope.System).ToArray();

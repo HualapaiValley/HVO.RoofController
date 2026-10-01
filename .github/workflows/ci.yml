@@ -406,7 +406,8 @@ jobs:
 
   # The installer's Mac app install (#71) for real on a Mac, as the person (InstallerMacSystemTests): the app the build
   # zipped, marked as downloaded, put in ~/Applications of a home of the test's own without the quarantine mark, its
-  # device key made through the controller's API in process, its settings, and --check.
+  # device key made through the controller's API in process, its settings, and --check. And what the keychain step reads:
+  # a keychain of the test's own listed by `security find-certificate -Z`, and SSL trust exported from the admin domain.
   installer-mac:
     needs: build-and-test
     runs-on: macos-latest
@@ -446,6 +447,7 @@ jobs:
             dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build \
             --filter "TestCategory=MacInstall" --logger "console;verbosity=normal" | tee mac-install.txt
           grep -q '^  Passed TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing ' mac-install.txt
+          grep -q '^  Passed TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem ' mac-install.txt
 
   mac-app:
     needs: build-and-test

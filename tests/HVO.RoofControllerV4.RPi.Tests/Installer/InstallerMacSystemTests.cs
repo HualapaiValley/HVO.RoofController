@@ -130,6 +130,64 @@ public sealed class InstallerMacSystemTests
         }
     }
 
+    /// <summary>
+    /// The keychain step reads what macOS's own tools print: the controller's CA in a keychain of the test's own, found by
+    /// its SHA-256 with its SHA-1 beside it, and, where sudo needs no password (a CI runner), trusted for SSL in the admin
+    /// trust settings the way <c>add-trusted-cert</c> trusts it in the person's, then read back from their export.
+    /// </summary>
+    [TestMethod]
+    public void TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem()
+    {
+        if (Environment.GetEnvironmentVariable("HVO_MAC_INSTALL") != "1")
+        {
+            Assert.Inconclusive("Reads a keychain and trust settings on this Mac: set HVO_MAC_INSTALL=1, as CI's installer-mac job does.");
+        }
+
+        var work = Directory.CreateTempSubdirectory("hvo-mac-keychain-");
+        var keychain = Path.Join(work.FullName, "test.keychain-db");
+        var ca = Path.Join(work.FullName, "ca.crt");
+        File.WriteAllText(ca, FakeMachine.ControllerCaPem);
+        using var authority = RoofCertificateAuthority.FromPem(FakeMachine.ControllerCaPem);
+        var sha256 = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA256));
+        var sha1 = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA1));
+        var trusted = false;
+        try
+        {
+            Run("security", "create-keychain", "-p", Guid.NewGuid().ToString("N"), keychain).Exit.Should().Be(0);
+            var added = Run("security", "add-certificates", "-k", keychain, ca);
+            added.Exit.Should().Be(0, added.Output);
+
+            var found = Run("security", "find-certificate", "-a", "-Z", keychain);
+            found.Exit.Should().Be(0, found.Output);
+            KeychainTrustStep.KeychainHashes(found.Output).Should().Equal([(sha256, sha1)], found.Output);
+
+            if (Run("sudo", "-n", "true").Exit != 0)
+            {
+                return;
+            }
+
+            var trust = Run("sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl", "-k", keychain, ca);
+            trust.Exit.Should().Be(0, trust.Output);
+            trusted = true;
+            var exported = Path.Join(work.FullName, "trust-settings.plist");
+            var export = Run("security", "trust-settings-export", "-d", exported);
+            export.Exit.Should().Be(0, export.Output);
+            var xml = Run("plutil", "-convert", "xml1", "-o", "-", exported);
+            xml.Exit.Should().Be(0, xml.Output);
+            KeychainTrustStep.TrustedForWebsites(xml.Output).Should().Contain(sha1, xml.Output);
+        }
+        finally
+        {
+            if (trusted)
+            {
+                Run("sudo", "-n", "security", "remove-trusted-cert", "-d", ca);
+            }
+
+            Run("security", "delete-keychain", keychain);
+            work.Delete(recursive: true);
+        }
+    }
+
     // This Mac as the person, but with home as their home, and the controller's API and CA the test's.
     private static InstallerMachine Mac(string home, Func<HttpMessageHandler> api)
     {

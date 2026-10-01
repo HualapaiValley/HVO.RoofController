@@ -169,7 +169,8 @@ public static class RoofCertificateAuthority
     /// <exception cref="RoofCertificateRefusedException">
     /// The CA issued the controller's certificate, which is refused anyway: it has expired, or does not name the host.
     /// </exception>
-    /// <exception cref="HttpRequestException">The controller cannot be reached.</exception>
+    /// <exception cref="HttpRequestException">The controller cannot be reached, or its answer is cut off part way.</exception>
+    /// <exception cref="TimeoutException">The CA did not arrive, its headers and body both, within <paramref name="timeout"/>.</exception>
     public static async Task<X509Certificate2> FetchAsync(Uri controller, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(controller);
@@ -201,21 +202,39 @@ public static class RoofCertificateAuthority
                 }
             }
         };
-        using var client = new HttpClient(handler) { Timeout = timeout };
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var address = new Uri(controller.AbsoluteUri.EndsWith('/') ? controller : new Uri(controller.AbsoluteUri + "/"), RoofApiRoutes.CaCertificate);
-        using var response = await client.GetAsync(address, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+
+        // One limit for the answer and its body: HttpClient's own ends once the headers are in.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(timeout);
+        byte[] body;
+        try
         {
-            throw new RoofCaFetchException(
-                $"The controller serves no CA at {address}: a private CA did not issue its certificate, which is self-signed or one of your own.");
+            using var response = await client.GetAsync(address, HttpCompletionOption.ResponseHeadersRead, limit.Token).ConfigureAwait(false);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                throw new RoofCaFetchException(
+                    $"The controller serves no CA at {address}: a private CA did not issue its certificate, which is self-signed or one of your own.");
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new RoofCaFetchException($"The controller answered {(int)response.StatusCode} {response.ReasonPhrase} for {address}.");
+            }
+
+            body = await ReadLimitedAsync(response, limit.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"{address} did not send the controller's CA within {timeout.TotalSeconds:0} s.", ex);
+        }
+        catch (IOException ex)
+        {
+            // The connection closed part way through the body: as unreachable as a connection refused.
+            throw new HttpRequestException($"The controller's answer at {address} was cut off: {ex.Message}", ex);
         }
 
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new RoofCaFetchException($"The controller answered {(int)response.StatusCode} {response.ReasonPhrase} for {address}.");
-        }
-
-        var body = await ReadLimitedAsync(response, cancellationToken).ConfigureAwait(false);
         X509Certificate2 authority;
         try
         {

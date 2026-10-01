@@ -65,7 +65,9 @@ terminal, tmux, or Terminal on a Mac.
 The installer runs as root for the machine's roles, and as you for your own ([Roles](#roles)).
 
 - **The controller, a rig on Linux or the kiosk:** run it with `sudo`.
-- **`hvo-roof`, the Mac app or a rig on a Mac:** run it as yourself, without `sudo`.
+- **`hvo-roof` or the Mac app:** run it as yourself, without `sudo`.
+- **A rig on a Mac:** run it as yourself too, and on its own: `hvo-roof` and the Mac app are installed in a later run,
+  once the rig is running ([The guards](#the-guards)).
 
 It refuses to mix the two in one run, and refuses the wrong one for a role. `--plan` does not need root, but planning
 the controller or a rig needs Docker access (on Linux, root or the `docker` group).
@@ -93,7 +95,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, a missing prerequisite (`sudo`, Docker), something the installer will not replace, a part it cannot install yet, or a certificate the controller could not serve. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -140,6 +142,14 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
   Once the kiosk is installed, a screen that is off or unplugged does not stop an update.
 - **Docker.** The controller and a rig need Docker running, and the right to use it.
 - **Root rules.** See [Running it](#running-it).
+- **The rig before its clients on a Mac.** A rig on a Mac is refused with `hvo-roof` or the Mac app in the same run:
+  they trust the rig's CA by its SHA-256, which you can compare only once the rig has made it. Install the rig, then
+  run the installer again for them.
+- **The keychain on a Mac.** `trustInKeychain` is refused anywhere but a Mac. On Linux, add the CA to a browser by
+  hand ([Trusting the controller in a browser](#trusting-the-controller-in-a-browser)).
+- **One controller for `hvo-roof` and the Mac app.** They share one controller, and your record keeps it once for
+  both. A run for one of them, with another controller address or another CA or certificate SHA-256 than the other
+  one was installed with, is refused: give the same controller, or choose both to move them together.
 - **Compose.** A container that Docker Compose made is described in the plan but never replaced. Move it first: see
   [Moving between Compose and the deploy script](deployment.md#moving-between-compose-and-the-deploy-script).
 - **Busy ports.** A port that something else already listens on blocks the plan.
@@ -600,7 +610,10 @@ Then sign in with `hvo-roof login`. Put `~/.local/bin` on your `PATH` if it is n
   these settings and closes it. It stops the install when the app cannot start. Over SSH, where the app cannot open a
   window, the plan says so, and you open HVO Roof on the Mac to check it.
 - **The keychain,** with `client.trustInKeychain`: the CA is trusted for websites in your login keychain. macOS asks
-  for your password, on the Mac's own screen: over SSH, the plan is blocked.
+  for your password, on the Mac's own screen: over SSH, the plan is blocked. The installer looks for the CA there by
+  its SHA-256, not its name, and reads its trust settings: once it is trusted for websites, a later run changes
+  nothing, even over SSH or with the controller out of reach. A certificate of the same name, or the CA with its trust
+  set to deny, does not count.
 
 ### The Mac app's device key
 
@@ -901,6 +914,11 @@ carries no quarantine mark and is still signed, the settings folder is `0700`, t
 viewer's key the controller takes, the CA's fingerprint is the one given, the settings are valid, `--check` opens the
 app's window with them, and a second run changes nothing. No key or password is in the output or the log. Anywhere
 without `HVO_MAC_INSTALL=1` and `HVO_MAC_APP_ZIP` the test is skipped.
+
+A second test reads a keychain as macOS writes it: it adds a CA to a keychain of its own, and checks that the
+installer finds it by its SHA-256 in `security find-certificate -Z`'s listing. Where `sudo` needs no password, as on
+the runner, it also trusts the CA for websites and checks that the installer reads that from the exported trust
+settings, then removes the trust and the keychain. It runs with `HVO_MAC_INSTALL=1`.
 
 ### Refreshing the screenshots
 

@@ -110,6 +110,40 @@ public sealed class InstallerWizardClientTests
     }
 
     [TestMethod]
+    public async Task WhileItsCaIsBeingFetched_ThePageCannotBeLeft_AndTheCaFetchedIsComparedAfresh()
+    {
+        using var laptop = Laptop();
+        using var wizard = await StartAsync(laptop, InstallRole.Cli);
+        var page = (ClientPage)wizard.Page;
+        page.Address!.Text = FakeMachine.ControllerUrl;
+        Fetch(wizard, page);
+        page.Matches!.Value = CheckState.Checked;
+        wizard.NextTo(5);
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().BeSameAs(page);
+        page.Matches!.Value.Should().Be(CheckState.Checked, "the CA checked before is this address's");
+
+        // Fetched again, slowly: the page is left neither way while it is on its way.
+        var answer = new TaskCompletionSource<System.Security.Cryptography.X509Certificates.X509Certificate2>(TaskCreationOptions.RunContinuationsAsynchronously);
+        laptop.FetchCa = (_, _) => answer.Task;
+        page.FetchButton!.SetFocus();
+        wizard.Press(Key.Enter);
+        wizard.PumpUntil("the fetch", () => page.Authority!.Text.StartsWith("Fetching", StringComparison.Ordinal));
+        wizard.Wizard.BackButton.Enabled.Should().BeFalse();
+        wizard.Wizard.NextButton.Enabled.Should().BeFalse();
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().BeSameAs(page, "a fetch still on its way would land on the page shown again");
+
+        answer.SetResult(RoofCertificateAuthority.FromPem(FakeMachine.ControllerCaPem));
+        wizard.WaitIdle("the CA", () => !page.Authority!.Text.StartsWith("Fetching", StringComparison.Ordinal));
+
+        page.Matches!.Value.Should().Be(CheckState.UnChecked, "a CA just fetched is compared again, whatever was ticked before");
+        wizard.Wizard.BackButton.Enabled.Should().BeTrue();
+        wizard.Press(Key.Esc);
+        wizard.Page.Should().NotBeSameAs(page);
+    }
+
+    [TestMethod]
     public async Task ACaThatCannotBeFetched_SaysWhy()
     {
         using var laptop = Laptop();

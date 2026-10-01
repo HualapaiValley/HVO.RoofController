@@ -339,6 +339,49 @@ public sealed class RoofCertificateAuthorityTests
     }
 
     [TestMethod]
+    public async Task ACaThatStopsPartWay_IsNotWaitedForBeyondTheTimeout()
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.CaBodyEnds = CaBodyEnd.Stalls;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, TimeSpan.FromSeconds(1));
+
+        (await fetching.Should().ThrowAsync<TimeoutException>()).WithMessage($"{host.BaseAddress}ca.crt did not send the controller's CA within 1 s.");
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(8), "the timeout covers the body too");
+    }
+
+    [TestMethod]
+    public async Task ACaCutOffPartWay_IsAFailureToReachTheController()
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.CaBodyEnds = CaBodyEnd.IsCutOff;
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout);
+
+        // On a busy machine the cut can still overtake the headers, and HttpClient fails the request itself: the same
+        // failure to reach the controller.
+        (await fetching.Should().ThrowAsync<HttpRequestException>()).Which.Message.Should().Match(message =>
+            message.StartsWith($"The controller's answer at {host.BaseAddress}ca.crt was cut off: ", StringComparison.Ordinal)
+            || message == "An error occurred while sending the request.");
+    }
+
+    [TestMethod]
+    public async Task TheCallersCancellation_IsNotTakenForATimeout()
+    {
+        using var certificate = TestCertificates.Issue(_authority);
+        await using var host = await TlsTestController.StartAsync(certificate);
+        host.CaBodyEnds = CaBodyEnd.Stalls;
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+
+        var fetching = () => RoofCertificateAuthority.FetchAsync(host.BaseAddress, FetchTimeout, cancel.Token);
+
+        await fetching.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [TestMethod]
     public async Task TheCa_IsNotFetched_WhenItsCertificateIsForAnotherName()
     {
         using var certificate = TestCertificates.Issue(_authority, ["roof.example", "10.0.0.5"]);

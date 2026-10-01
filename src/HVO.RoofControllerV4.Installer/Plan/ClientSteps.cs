@@ -1,14 +1,18 @@
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Xml;
+using System.Xml.Linq;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
+using HVO.RoofControllerV4.Installer.Roles;
 using HVO.RoofControllerV4.Installer.Survey;
 
 namespace HVO.RoofControllerV4.Installer.Plan;
@@ -116,7 +120,7 @@ public static class ClientSteps
         inputs.Add(new MacDeviceKeyStep(settings, mac.Admin, client));
         inputs.Add(new MacSettingsStep(settings, client));
         steps.AddRange(inputs);
-        steps.Add(new MacCheckStep(app.Target, settings, inputs));
+        steps.Add(new MacCheckStep(app.Target, settings, inputs, client));
         return steps;
     }
 
@@ -218,7 +222,8 @@ internal static class ClientTrust
         {
             authority = await context.ControllerCaAsync(address, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is ArgumentException or RoofCaFetchException or RoofCertificateRefusedException or HttpRequestException or TimeoutException)
+        catch (Exception error) when (error is ArgumentException or RoofCaFetchException or RoofCertificateRefusedException or HttpRequestException or TimeoutException
+            || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             return (null, $"the installer could not fetch the controller's CA from {address}: {Failure(error)}");
         }
@@ -249,10 +254,9 @@ internal static class ClientTrust
 
     /// <summary>Why the controller could not be reached or used, in a few words.</summary>
     public static string Failure(Exception error)
-        => RoofCertificateRefusedException.Find(error)?.Message ?? error switch
+        => error is RoofCaFetchException ? error.Message : RoofCertificateRefusedException.Find(error)?.Message ?? error switch
         {
             ArgumentException => "it is not an https address",
-            RoofCaFetchException => error.Message,
             HttpRequestException => $"{error.Message.TrimEnd('.')}.",
             _ => RoofText.DescribeFailure(error is OperationCanceledException ? new TimeoutException() : error)
         };
@@ -932,9 +936,10 @@ public sealed class MacSettingsStep(string settingsFolder, ClientSettings client
 
 /// <summary>
 /// The Mac app opened once with <c>--check</c>, which exits once its window is drawn: after any change to the app, its
-/// CA, its key or its settings. It needs the Mac's own screen: over SSH it is left to the person.
+/// CA, its key or its settings, or until a run has passed it: the person's install record, written last, shows the app at
+/// this release connected to this controller only then. It needs the Mac's own screen: over SSH it is left to the person.
 /// </summary>
-public sealed class MacCheckStep(string app, string settingsFolder, IReadOnlyList<PlanStep> inputs) : PlanStep
+public sealed class MacCheckStep(string app, string settingsFolder, IReadOnlyList<PlanStep> inputs, ClientSettings client) : PlanStep
 {
     public override StepKind Kind => StepKind.Check;
 
@@ -956,6 +961,15 @@ public sealed class MacCheckStep(string app, string settingsFolder, IReadOnlyLis
             {
                 return new StepCheck(StepChange.Change, "after the changes above");
             }
+        }
+
+        // A check that failed stopped the run before the record: everything else is in place, and it is still due. The
+        // keychain is not the app's, so trusting the CA there or not does not call for another.
+        if (context.Survey.UserRecord is not { } record || !record.Roles.Contains(InstallRole.MacApp)
+            || record.Version != context.Version || record.Client is not { } recorded
+            || recorded.Normalised() with { TrustInKeychain = false } != client.Normalised() with { TrustInKeychain = false })
+        {
+            return new StepCheck(StepChange.Change, "not checked yet with this release and controller");
         }
 
         return StepCheck.Unchanged("nothing changed since it was set up");
@@ -988,7 +1002,9 @@ public sealed class MacCheckStep(string app, string settingsFolder, IReadOnlyLis
 
 /// <summary>
 /// The controller's CA trusted for websites in the person's login keychain, so Safari and Chrome open the web UI without
-/// a warning. macOS asks for the person's password to change their trust settings, on the Mac's own screen.
+/// a warning. macOS asks for the person's password to change their trust settings, on the Mac's own screen. The CA is
+/// found by its fingerprint, and its trust by its SHA-1 (what the trust settings are keyed by), so a CA of the same name
+/// (one made again the same day) is not taken for it, and a run with the controller out of reach finds it trusted.
 /// </summary>
 public sealed class KeychainTrustStep(string keychain, ClientSettings client) : PlanStep
 {
@@ -1002,24 +1018,21 @@ public sealed class KeychainTrustStep(string keychain, ClientSettings client) : 
     {
         ArgumentNullException.ThrowIfNull(context);
         var machine = context.Machine;
+        var fingerprint = client.CaSha256!;
+        var described = $"the controller's CA ({Short(fingerprint)})";
+        if (await IsTrustedAsync(context, Hex(fingerprint), cancellationToken).ConfigureAwait(false))
+        {
+            return StepCheck.Unchanged($"{described}, trusted for websites");
+        }
+
+        // Not trusted yet: the CA is needed, from the controller, to add.
         var (authority, problem) = await ClientTrust.AuthorityAsync(context, client, cancellationToken).ConfigureAwait(false);
         if (authority is null)
         {
             return new StepCheck(StepChange.Blocked, problem);
         }
 
-        var name = authority.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
-        var hash = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA256));
-        var found = await machine.Commands.RunAsync(new CommandLine("security", "find-certificate", "-a", "-Z", "-c", name, keychain), cancellationToken).ConfigureAwait(false);
-        var trust = await machine.Commands.RunAsync(new CommandLine("security", "dump-trust-settings"), cancellationToken).ConfigureAwait(false);
-        var inKeychain = found.Succeeded && found.Output.Contains(hash, StringComparison.OrdinalIgnoreCase);
-        var trusted = trust.Succeeded && trust.Output.Split('\n', StringSplitOptions.TrimEntries)
-            .Any(line => line.StartsWith("Cert ", StringComparison.Ordinal) && line.EndsWith($": {name}", StringComparison.Ordinal));
-        if (inKeychain && trusted)
-        {
-            return StepCheck.Unchanged($"{name}, trusted for websites");
-        }
-
+        var name = RoofCertificateAuthority.Describe(authority);
         return await ClientSteps.OnOwnScreenAsync(machine, cancellationToken).ConfigureAwait(false)
             ? new StepCheck(StepChange.Change, $"{name}, trusted for websites: macOS asks for your password")
             : new StepCheck(StepChange.Blocked, "macOS asks for your password to trust a CA, on the Mac's own screen, and this is not it (over SSH, say): run the installer there, or leave the keychain out");
@@ -1046,4 +1059,144 @@ public sealed class KeychainTrustStep(string keychain, ClientSettings client) : 
             cancellationToken).ConfigureAwait(false);
         context.Log.Write($"Trusted the controller's CA ({RoofCertificateAuthority.Describe(authority)}, {RoofCertificateAuthority.Fingerprint(authority)}) for websites in {keychain}.");
     }
+
+    /// <summary>
+    /// The certificates <c>security find-certificate -a -Z</c> lists, each by its SHA-256 and SHA-1 (hex, upper case),
+    /// which it prints before the rest of each.
+    /// </summary>
+    public static IReadOnlyList<(string Sha256, string Sha1)> KeychainHashes(string output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var found = new List<(string, string)>();
+        string? sha256 = null;
+        string? sha1 = null;
+        foreach (var line in output.Split('\n', StringSplitOptions.TrimEntries))
+        {
+            if (line.StartsWith(Sha256Label, StringComparison.Ordinal))
+            {
+                sha256 = Hex(line[Sha256Label.Length..]);
+            }
+            else if (line.StartsWith(Sha1Label, StringComparison.Ordinal))
+            {
+                sha1 = Hex(line[Sha1Label.Length..]);
+            }
+            else if (line.StartsWith("keychain:", StringComparison.Ordinal))
+            {
+                // The hashes are each certificate's first lines: a pair not complete by now is not one.
+                sha256 = sha1 = null;
+            }
+
+            if (sha256 is not null && sha1 is not null)
+            {
+                found.Add((sha256, sha1));
+                sha256 = sha1 = null;
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The certificates trusted for websites in trust settings as <c>security trust-settings-export</c> writes them (as
+    /// XML), by their SHA-1 (hex, upper case): trusted as a root for every use or for SSL servers, and not denied there.
+    /// </summary>
+    public static IReadOnlySet<string> TrustedForWebsites(string plist)
+    {
+        ArgumentNullException.ThrowIfNull(plist);
+        using var reader = XmlReader.Create(new StringReader(plist), new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null });
+        var root = XDocument.Load(reader).Root?.Element("dict");
+        var trusted = new HashSet<string>(StringComparer.Ordinal);
+        if (root is null || Entries(root).FirstOrDefault(entry => entry.Key == "trustList").Value is not { Name.LocalName: "dict" } list)
+        {
+            return trusted;
+        }
+
+        foreach (var (sha1, certificate) in Entries(list))
+        {
+            var usages = Entries(certificate).FirstOrDefault(entry => entry.Key == "trustSettings").Value?.Elements("dict").ToList() ?? [];
+            var forWebsites = usages.Select(Entries).Select(usage => usage.ToDictionary(entry => entry.Key, entry => entry.Value)).Where(ForWebsites).ToList();
+            var results = forWebsites.Select(usage => usage.TryGetValue("kSecTrustSettingsResult", out var result) ? (int?)int.Parse(result.Value, CultureInfo.InvariantCulture) : TrustRoot).ToList();
+
+            // No usages at all is trust as a root for everything.
+            if ((usages.Count == 0 || results.Any(result => result is TrustRoot or TrustAsRoot)) && !results.Contains(Deny))
+            {
+                trusted.Add(Hex(sha1));
+            }
+        }
+
+        return trusted;
+    }
+
+    // Whether the CA with this SHA-256 is in the keychain, and trusted for websites in the person's trust settings.
+    private async Task<bool> IsTrustedAsync(InstallContext context, string sha256, CancellationToken cancellationToken)
+    {
+        var machine = context.Machine;
+        var found = await machine.Commands.RunAsync(new CommandLine("security", "find-certificate", "-a", "-Z", keychain), cancellationToken).ConfigureAwait(false);
+        if (!found.Succeeded || KeychainHashes(found.Output).FirstOrDefault(entry => entry.Sha256 == sha256).Sha1 is not { } sha1)
+        {
+            return false;
+        }
+
+        using var work = new DeployScript.WorkFolder(machine);
+        var file = Path.Join(work.Path, "trust-settings.plist");
+        var exported = await machine.Commands.RunAsync(new CommandLine("security", "trust-settings-export", file), cancellationToken).ConfigureAwait(false);
+        if (!exported.Succeeded)
+        {
+            // None at all: nothing is trusted.
+            return false;
+        }
+
+        var xml = await machine.Commands.RunAsync(new CommandLine("plutil", "-convert", "xml1", "-o", "-", file), cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return xml.Succeeded && TrustedForWebsites(xml.Output).Contains(sha1);
+        }
+        catch (Exception error) when (error is XmlException or FormatException or OverflowException)
+        {
+            context.Log.Write($"The trust settings macOS exported could not be read ({error.Message}): the CA is trusted again.");
+            return false;
+        }
+    }
+
+    // A plist dict's keys, each with the element after it.
+    private static IEnumerable<(string Key, XElement Value)> Entries(XElement dict)
+    {
+        XElement? key = null;
+        foreach (var element in dict.Elements())
+        {
+            if (key is null)
+            {
+                key = element.Name.LocalName == "key" ? element : null;
+                continue;
+            }
+
+            yield return (key.Value, element);
+            key = null;
+        }
+    }
+
+    // A usage that covers SSL servers: one for every policy, or for Apple's SSL policy by its name or its OID.
+    private static bool ForWebsites(Dictionary<string, XElement> usage)
+    {
+        var name = usage.GetValueOrDefault("kSecTrustSettingsPolicyName")?.Value;
+        var policy = usage.GetValueOrDefault("kSecTrustSettingsPolicy")?.Value;
+        return (name is null && policy is null)
+            || name == "sslServer"
+            || (policy is not null && string.Concat(policy.Where(c => !char.IsWhiteSpace(c))) == SslPolicy);
+    }
+
+    private static string Hex(string text) => string.Concat(text.Where(Uri.IsHexDigit)).ToUpperInvariant();
+
+    private static string Short(string fingerprint) => fingerprint.Length > 11 ? $"{fingerprint[..11]}…" : fingerprint;
+
+    private const string Sha256Label = "SHA-256 hash:";
+    private const string Sha1Label = "SHA-1 hash:";
+
+    // kSecTrustSettingsResult's values.
+    private const int TrustRoot = 1;
+    private const int TrustAsRoot = 2;
+    private const int Deny = 3;
+
+    // Apple's SSL policy, 1.2.840.113635.100.1.3, as the trust settings keep its OID (base64).
+    private const string SslPolicy = "KoZIhvdjZAED";
 }

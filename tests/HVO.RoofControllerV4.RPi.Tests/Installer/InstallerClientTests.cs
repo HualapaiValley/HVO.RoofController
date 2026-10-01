@@ -143,6 +143,21 @@ public sealed class InstallerClientTests
     }
 
     [TestMethod]
+    public async Task ARecordWithoutTheController_IsRefusedForAPlan_SayingHowToGiveIt()
+    {
+        using var laptop = Laptop();
+        // An earlier release recorded hvo-roof without the controller it connects to.
+        laptop.Write("/home/roy/.config/hvo-roof/install.json", (InstallerGuardTests.Record(InstallRole.Cli, null) with { Scope = InstallScope.User }).ToJson());
+
+        var plan = await laptop.RunAsync("--plan");
+
+        plan.ExitCode.Should().Be((int)InstallerExitCode.Refused, plan.ToString());
+        plan.Error.Should().Contain("  - hvo-roof needs the controller's address")
+            .And.Contain("The record of what is installed here leaves it out: plan with hvo-roof-install --plan --answers FILE, or run hvo-roof-install to be asked.")
+            .And.Contain("Nothing was changed.");
+    }
+
+    [TestMethod]
     public async Task AControllerThatDoesNotAnswer_IsBlocked()
     {
         using var laptop = Laptop();
@@ -498,6 +513,21 @@ public sealed class InstallerClientTests
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
         run.Error.Should().Contain(expected);
+        mac.MacChecks.Should().HaveCount(1);
+
+        // Run again with the app, its key and settings all in place: it is checked again until a check passes.
+        var again = await mac.RunAsync("--answers", mac.WriteAnswers(MacAnswers()), "--sign-in-password-file", PasswordFile);
+
+        again.ExitCode.Should().Be((int)InstallerExitCode.Failed, again.ToString());
+        mac.MacChecks.Should().HaveCount(2);
+        mac.MacCheckExitCode = 0;
+        var fixedRun = await mac.RunAsync("--answers", mac.WriteAnswers(MacAnswers()), "--sign-in-password-file", PasswordFile);
+        fixedRun.ExitCode.Should().Be((int)InstallerExitCode.Success, fixedRun.ToString());
+        mac.MacChecks.Should().HaveCount(3);
+        var last = await mac.RunAsync("--answers", mac.WriteAnswers(MacAnswers()));
+        last.ExitCode.Should().Be((int)InstallerExitCode.Success, last.ToString());
+        last.Output.Should().Contain("Nothing to change");
+        mac.MacChecks.Should().HaveCount(3, "the record shows it checked");
     }
 
     [TestMethod]
@@ -604,6 +634,99 @@ public sealed class InstallerClientTests
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain("For the web UI in Safari and Chrome, trust the controller's CA (https://roofpi.local:8443/ca.crt) in your login keychain");
         mac.Ran.Should().NotContain(command => command.Program == "security");
+    }
+
+    [TestMethod]
+    public async Task TheCaTrustedInTheKeychain_IsFoundByItsFingerprint_WithTheControllerOutOfReach()
+    {
+        using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
+        var answers = mac.WriteAnswers(CliAnswers() with { Client = FakeMachine.ClientAnswers with { TrustInKeychain = true } });
+        (await mac.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        var fetches = mac.CaFetches.Count;
+
+        // Away from the observatory: nothing to change, and the controller is not asked.
+        mac.FetchCa = (_, _) => throw new HttpRequestException("Name or service not known (roofpi.local:8443)");
+        var second = await mac.RunAsync("--answers", answers);
+
+        second.ExitCode.Should().Be(0, second.ToString());
+        second.Output.Should().Contain("Nothing to change");
+        mac.CaFetches.Count.Should().Be(fetches);
+    }
+
+    [TestMethod]
+    [DataRow(null, DisplayName = "In the keychain, not trusted")]
+    [DataRow(3, DisplayName = "Denied there")]
+    public async Task ACaOfTheSameName_TrustedThere_IsNotTakenForTheControllers(int? trust)
+    {
+        using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
+        using var authority = RoofCertificateAuthority.FromPem(FakeMachine.ControllerCaPem);
+        var sha1 = Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA1));
+
+        // Another CA made the same day on the controller's host: the same name, trusted.
+        mac.KeychainCertificates.Add((new string('A', 64), new string('B', 40), FakeMachine.ControllerCaName));
+        mac.KeychainTrust[new string('B', 40)] = 1;
+        mac.KeychainCertificates.Add((Convert.ToHexString(authority.GetCertHash(HashAlgorithmName.SHA256)), sha1, FakeMachine.ControllerCaName));
+        if (trust is { } result)
+        {
+            mac.KeychainTrust[sha1] = result;
+        }
+
+        var plan = await CheckAsync(mac, CliAnswers() with { Client = FakeMachine.ClientAnswers with { TrustInKeychain = true } });
+
+        Change(plan, Keychain).Should().Be(new StepCheck(StepChange.Change, $"{FakeMachine.ControllerCaName}, trusted for websites: macOS asks for your password"));
+    }
+
+    [TestMethod]
+    public void TheKeychainsCertificates_AreReadByBothTheirHashes()
+    {
+        const string Output = """
+            SHA-256 hash: 9A114025197C5BB95D94E63D55CD43790847B646B23CDF11ADA4A00EFFC15E8F
+            SHA-1 hash: D69B561148F01C77C54578C10926DF5B856976AD
+            keychain: "/Users/roy/Library/Keychains/login.keychain-db"
+            version: 512
+            class: 0x80001000
+            attributes:
+                "alis"<blob>="GlobalSign"
+                "hpky"<blob>=0x8FF04FBE2C7DCB4D4A5B07D1E9A7AA0E6C8E0A0B  "\217\360O\276"
+            SHA-1 hash: 0123456789ABCDEF0123456789ABCDEF01234567
+            keychain: "/Users/roy/Library/Keychains/login.keychain-db"
+            SHA-256 hash: fb268be2342052affbd8051487ebb5d64ad86d4e65bc3526c7d231112ad1c076
+            SHA-1 hash: 1111111111111111111111111111111111111111
+            keychain: "/Users/roy/Library/Keychains/login.keychain-db"
+            """;
+
+        KeychainTrustStep.KeychainHashes(Output).Should().Equal(
+            ("9A114025197C5BB95D94E63D55CD43790847B646B23CDF11ADA4A00EFFC15E8F", "D69B561148F01C77C54578C10926DF5B856976AD"),
+            ("FB268BE2342052AFFBD8051487EBB5D64AD86D4E65BC3526C7D231112AD1C076", "1111111111111111111111111111111111111111"));
+    }
+
+    [TestMethod]
+    public void TrustForWebsites_IsReadFromTheTrustSettings()
+    {
+        static string Entry(string sha1, string usages) => $"<key>{sha1}</key><dict><key>trustSettings</key><array>{usages}</array></dict>";
+        static string Usage(string? name, int? result) => "<dict>"
+            + (name is null ? string.Empty : $"<key>kSecTrustSettingsPolicyName</key><string>{name}</string>")
+            + (result is null ? string.Empty : $"<key>kSecTrustSettingsResult</key><integer>{result}</integer>")
+            + "</dict>";
+        var plist = $"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0"><dict><key>trustList</key><dict>
+            {Entry("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", string.Empty)}
+            {Entry("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Usage("sslServer", 1))}
+            {Entry("CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", Usage("sslServer", 3))}
+            {Entry("DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", Usage("smime", 1))}
+            {Entry("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE", Usage(null, null))}
+            {Entry("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", Usage(null, 1) + Usage("sslServer", 3))}
+            {Entry("1111111111111111111111111111111111111111", Usage("sslServer", 4))}
+            {Entry("2222222222222222222222222222222222222222", "<dict><key>kSecTrustSettingsPolicy</key><data>KoZIhvdjZAED</data><key>kSecTrustSettingsResult</key><integer>2</integer></dict>")}
+            </dict><key>trustVersion</key><integer>1</integer></dict></plist>
+            """;
+
+        KeychainTrustStep.TrustedForWebsites(plist).Should().BeEquivalentTo(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+            "2222222222222222222222222222222222222222");
+        KeychainTrustStep.TrustedForWebsites("""<?xml version="1.0"?><plist version="1.0"><dict><key>trustVersion</key><integer>1</integer></dict></plist>""").Should().BeEmpty();
     }
 
     // ---- helpers ----------------------------------------------------------------------------------------------------

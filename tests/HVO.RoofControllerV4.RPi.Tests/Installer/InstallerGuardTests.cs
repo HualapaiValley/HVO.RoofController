@@ -119,6 +119,33 @@ public sealed class InstallerGuardTests
     }
 
     [TestMethod]
+    public async Task OneClient_MovedToAnotherController_IsRefused_WhileTheOtherStaysOnTheRecordedOne()
+    {
+        using var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
+        var recorded = FakeMachine.ClientAnswers;
+        mac.Write("/Users/roy/.config/hvo-roof/install.json", (Record(InstallRole.Cli, null) with
+        {
+            Scope = InstallScope.User,
+            Roles = [InstallRole.Cli, InstallRole.MacApp],
+            Client = recorded
+        }).ToJson());
+        var survey = await MachineSurveyor.SurveyAsync(mac.Machine);
+        var elsewhere = new ClientSettings { Controller = "https://spare-pi.local:8443", CaSha256 = recorded.CaSha256 };
+        IReadOnlyList<string> Check(ClientSettings client, params InstallRole[] roles) =>
+            RoleGuards.Check(survey, new InstallAnswers { Roles = roles, Client = client });
+
+        Check(elsewhere, InstallRole.Cli).Should().Equal(
+            $"hvo-roof and the Mac app connect to the same controller, and the Mac app connects to {recorded.Controller}: give the same controller and trust, or choose both to move them together.");
+        Check(recorded with { CaSha256 = null, CertificateSha256 = recorded.CaSha256 }, InstallRole.MacApp).Should().ContainSingle()
+            .Which.Should().StartWith("The Mac app and hvo-roof").And.Contain(", trusting it another way:");
+        Check(recorded, InstallRole.Cli).Should().BeEmpty();
+        Check(recorded with { Controller = recorded.Controller + "/ ", CaSha256 = recorded.CaSha256!.Replace(":", string.Empty).ToLowerInvariant() }, InstallRole.Cli)
+            .Should().BeEmpty("the same address and fingerprint, written another way");
+        Check(recorded with { TrustInKeychain = true }, InstallRole.MacApp).Should().BeEmpty("the keychain is the run's own");
+        Check(elsewhere, InstallRole.Cli, InstallRole.MacApp).Should().BeEmpty("both move together");
+    }
+
+    [TestMethod]
     public async Task TheControllerAndARig_OnOneMachine_AreRefused()
     {
         using var pi = new FakeMachine().WithPi();
