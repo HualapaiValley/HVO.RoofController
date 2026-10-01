@@ -39,7 +39,7 @@ anything, from an answers file that the wizard saves.
 Pi), linux-x64 and osx-arm64 (Apple silicon). There is no build for an Intel Mac or for Windows.
 
 Each release carries the three builds as assets: `hvo-roof-install-linux-arm64`, `hvo-roof-install-linux-x64` and
-`hvo-roof-install-osx-arm64` ([The assets](releasing.md#the-assets)). From #73, `install.sh` downloads the right one.
+`hvo-roof-install-osx-arm64` ([The assets](releasing.md#the-assets)). [`install.sh`](#installsh) downloads the right one.
 Every run of the `CI` workflow publishes them too, as the `hvo-roof-install-<run id>` artifact.
 
 An install puts the installer in place for the later runs that upgrade, roll back, back up and uninstall:
@@ -56,6 +56,97 @@ dotnet publish HVO.RoofControllerV4.Installer -c Release -r linux-arm64 -o ../ou
 
 The wizard needs a terminal of at least 80 × 24 that sends function keys: the Linux console, SSH from any common
 terminal, tmux, or Terminal on a Mac.
+
+## install.sh
+
+Each release carries `install.sh`, a script that checks the machine, downloads the release's installer for it, checks
+the download, and starts it. On the observatory's Pi, for the controller and its kiosk:
+
+```bash
+curl -fsSL https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/install.sh | bash -s -- --roles controller,kiosk
+```
+
+Without `--roles` it asks what the machine is for, and the installer asks the rest. Pipe it to `bash`, not `sh`: it
+needs bash 3.2 or later, which a Mac has. Each release's `install.sh` installs that release: for another than the
+latest, take it from `releases/download/v4.0.0/install.sh`. The repository's copy names no release, and refuses to
+run.
+
+The script reads nothing from the download it runs from: its questions, sudo's and the installer's are on the terminal.
+A download cut short runs nothing. To read the script before you run it:
+
+```bash
+curl -fsSLO https://github.com/HualapaiValley/HVO.RoofController/releases/latest/download/install.sh
+less install.sh
+bash install.sh --roles controller,kiosk
+```
+
+`SHA256SUMS` lists it, and the release workflow's attestation covers it, as for every asset
+([The assets](releasing.md#the-assets)).
+
+### What install.sh checks
+
+It checks everything first, prints each check, and stops before downloading anything when one fails. It changes
+nothing until every check has passed: then it installs Docker, or turns I2C on, if you agree to it (see below):
+
+- **The platform.** Linux on 64-bit ARM or x86-64, with glibc and a 64-bit system, or a Mac with Apple silicon (under
+  Rosetta too). It refuses a 32-bit Raspberry Pi OS (even on a 64-bit kernel), musl (Alpine), an Intel Mac, and any
+  other system or processor.
+- **The roles.** From `--roles`, else the answers file's (`--answers FILE`), else what is installed (for a command such
+  as `upgrade`), else a question. It refuses what the installer would ([Roles](#roles)): the controller on a machine
+  that is not a Pi, a role installed as root with one installed as you, and a role of yours run as root.
+- **Its commands.** curl, tar and sha256sum (shasum on a Mac).
+- **sudo**, when the installer runs as root and you are not root: sudo asks for your password on the terminal.
+- **Free space.** 200 MB in `TMPDIR` (or `/tmp`) for the download; 200 MB in your home for `hvo-roof` and the Mac app;
+  on Linux, 2 GB in Docker's folder for the images (`/var/lib/docker` when it installs Docker).
+- **The network and the clock.** github.com answers, and this machine's clock is within 5 minutes of github.com's: a
+  clock further out breaks TLS, the attestation and the certificates the installer makes. On Linux it notes a clock
+  that is not synchronised.
+- **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. It notes a
+  missing Compose v2, which the installer does not need.
+- **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
+- **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
+  install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
+  installer asks which ports to use, and checks the ones chosen (an answers file's too).
+
+When Docker is missing on Debian, Raspberry Pi OS or Ubuntu, or I2C is off on a Pi with raspi-config, it offers to
+install Docker from Docker's apt repository, or to turn I2C on with raspi-config (`--install-docker` and `--enable-i2c`
+agree without asking). It offers only once every other check has passed, asks about both before it makes either, and
+makes them last: a check that fails, or an offer you refuse, leaves the machine as it was. When something fails after a
+change (Docker's engine does not answer once installed, or raspi-config can only turn I2C on from the next start), its
+last line names the change. For I2C from the next start, restart the Pi and run the script again.
+
+Then it downloads `hvo-roof-install-<platform>` and `SHA256SUMS` into a folder of its own in `TMPDIR`, which it removes
+afterwards. It refuses the installer unless:
+
+- its SHA-256 is the one `SHA256SUMS` lists;
+- its attestation, when `gh` is installed and signed in, says the release workflow built it from the release's tag;
+- its `--version` is the release's.
+
+It then starts the installer: with sudo for the machine's roles (the controller, a rig on Linux and the kiosk), and as
+you for yours.
+
+### install.sh's options
+
+Its options come first. The first argument that is not one of them, and everything after it (or after `--`), goes to
+the installer: `| bash -s -- upgrade`, `| bash -s -- --answers rig.json`, `| bash -s -- --plan`.
+
+| Option | What it does |
+|--------|--------------|
+| `--roles LIST` | What the machine is for, so that the right things are checked: `controller`, `rig`, `kiosk`, `cli` or `mac-app`, separated by commas. |
+| `--from DIR` | Takes the installer and `SHA256SUMS` from `DIR`, a folder holding the release's files, not from GitHub. The installer reads the release from it too (its `--release DIR`), except for `rollback`, whose `--release` is the release before. |
+| `--check` | Checks the machine, then stops: downloads nothing, installs nothing and changes nothing. |
+| `--install-docker` | When Docker is needed and missing, installs it from Docker's apt repository without asking. |
+| `--enable-i2c` | When the controller needs I2C and it is off, turns it on with raspi-config without asking. |
+| `-h`, `--help` | Its help. After the installer's arguments, `--help` is the installer's. |
+
+With no terminal (cron, CI, or SSH without one), it asks nothing: give `--roles` or `--answers FILE`, run it as root or
+where sudo asks for no password, and give `--install-docker` or `--enable-i2c` for what it would have offered. The
+installer then reads nothing from its standard input, and refuses a question it would have asked.
+
+Its exit code is the installer's when the installer ran ([Exit codes](#exit-codes)). Otherwise it is 0 when `--check`
+passed; 1 when a check, the download or its verification failed (a Docker or I2C offer with no terminal to make it
+on is a failed check); and 2 for a command line, an answer or a role that is not valid, or roles or a sudo password
+with no terminal to ask for them on.
 
 ## Running it
 
@@ -1052,6 +1143,30 @@ in a terminal.
 
 CI publishes the three builds and checks that each is the right platform. It also checks what the linux-x64 build
 prints for `--version` and `--plan`.
+
+### install.sh's tests
+
+`tests/install/install-sh-tests.sh` runs `install.sh` as a release publishes it (`build/release-assets.py` writes the
+release's version into it), piped to bash as the one-line install does. Every command it runs that looks at the machine
+or changes it is a stand-in (`tests/install/fakes/fake-command`): `uname`, `sudo`, `curl`, `docker`, `apt-get`,
+`raspi-config` and the rest. Each stand-in answers as the test sets it, and logs its arguments and whether it ran as
+root. The release's files are a stand-in installer (`tests/install/fakes/hvo-roof-install`) and its `SHA256SUMS`. A
+test with a person at the keyboard runs the script on a pseudo-terminal of its own (`tests/install/on-terminal`), which
+types the answers. The tests check:
+
+- every platform it refuses, and the three it takes;
+- the roles from each source, and those it refuses, with whether the installer runs as root;
+- sudo's password, asked once, and refused;
+- each check failing, with what it says, and that nothing was downloaded;
+- installing Docker and turning I2C on, asked, refused, with their options, and with no terminal; that neither is made
+  when a check fails, or when the other is refused; and the last line naming what was made when a check fails after it;
+- the download refused for a wrong `SHA256SUMS` entry, a SHA-256 that differs, an attestation that fails, and a
+  wrong version, with its folder removed;
+- the hand-over: the installer's arguments, its exit code, its questions on the terminal, and `--from`;
+- a download cut short at every point: nothing runs;
+- that nothing reads the download after the script.
+
+CI runs them on Linux with bash 5, and on a Mac with its own bash 3.2 (the `install-sh-mac` job).
 
 ### The rig end to end
 

@@ -613,6 +613,10 @@ jobs:
           bash -n tests/installer/rig-scenario.sh
           bash -n tests/cli/terminal-smoke.sh
           bash -n tests/cli/dotnet-run-smoke.sh
+          bash -n src/HVO.RoofControllerV4.Installer/install.sh
+          bash -n tests/install/install-sh-tests.sh
+          bash -n tests/install/fakes/fake-command
+          sh -n tests/install/fakes/hvo-roof-install
           for script in build/*.sh tests/versioning/*.sh tests/releasing/*.sh; do
             bash -n "${script}"
           done
@@ -622,12 +626,14 @@ jobs:
           python3 -m py_compile tests/cli/ansi-to-svg.py tests/cli/test_ansi_to_svg.py tests/mac/test_bundle.py \
             src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py \
             build/release-compose.py tests/releasing/test_release_compose.py build/release-assets.py \
-            tests/releasing/test_release_assets.py
+            tests/releasing/test_release_assets.py tests/install/on-terminal
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/installer/rig-scenario.sh tests/cli/terminal-smoke.sh \
             tests/cli/dotnet-run-smoke.sh src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-* \
             build/*.sh tests/versioning/*.sh tests/releasing/*.sh
+          shellcheck -x src/HVO.RoofControllerV4.Installer/install.sh tests/install/install-sh-tests.sh \
+            tests/install/fakes/fake-command tests/install/fakes/hvo-roof-install
 
       # build/version.sh (the product version and the release tag's check) and build/check-image-labels.sh.
       - name: Version script tests
@@ -659,6 +665,11 @@ jobs:
 
       - name: Deploy script tests
         run: tests/deploy/deploy-script-tests.sh
+
+      # install.sh (src/HVO.RoofControllerV4.Installer) as a release publishes it, against stand-ins for the commands
+      # it runs and a release's assets (see tests/install). The install-sh-mac job runs the same tests with a Mac's bash.
+      - name: install.sh tests
+        run: tests/install/install-sh-tests.sh
 
       # The container's supervisor and health check (src/HVO.RoofControllerV4.RPi/container), with stand-in processes.
       - name: Container supervisor tests
@@ -814,3 +825,21 @@ jobs:
             echo "::error file=src/docker-compose.yml::the development controller's stop grace period is less than the supervisor's waits need (${grace} s)"
             exit 1
           }
+
+  # install.sh's tests with a Mac's own bash (3.2) and its BSD date, shasum and pseudo-terminals: the commands install.sh
+  # finds on a Mac that it does not run in its tests are stand-ins, as on Linux (tests/install).
+  install-sh-mac:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: install.sh tests
+        env:
+          INSTALL_SH_BASH: /bin/bash
+        run: |
+          /bin/bash --version
+          /bin/bash tests/install/install-sh-tests.sh

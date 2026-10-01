@@ -13,7 +13,7 @@ public sealed record ReleaseImage(string Repository, string Digest, string Refer
 
 /// <summary>A file a release has besides its images, such as the kiosk's tarball.</summary>
 /// <param name="Name">Its name among the release's files: letters, digits, dots, dashes and underscores.</param>
-/// <param name="Kind">What it is: cli, kiosk, mac-app, compose or deploy-script.</param>
+/// <param name="Kind">What it is: cli, installer, kiosk, mac-app, compose, deploy-script or install-script.</param>
 /// <param name="Platform">The runtime it is built for (linux-arm64), or null when it runs anywhere.</param>
 /// <param name="Size">Its size in bytes.</param>
 /// <param name="Sha256">Its SHA-256, 64 lower-case hex digits.</param>

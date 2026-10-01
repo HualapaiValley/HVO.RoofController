@@ -132,6 +132,7 @@ class TheAssets(ReleaseTestCase):
         "HVO-Roof-4.0.0.zip": ("mac-app", "osx-arm64"),
         "docker-compose.yaml": ("compose", None),
         "deploy-roofcontroller-rpi.sh": ("deploy-script", None),
+        "install.sh": ("install-script", None),
     }
 
     def setUp(self):
@@ -197,6 +198,17 @@ class TheAssets(ReleaseTestCase):
         self.assertEqual(script.read_bytes(), release_assets.DEPLOY_SCRIPT.read_bytes())
         self.assertTrue(script.stat().st_mode & stat.S_IXUSR)
 
+    def test_install_sh_is_the_repository_s_with_the_release_s_version_written_in(self):
+        script = self.out / "install.sh"
+        repository = release_assets.INSTALL_SCRIPT.read_text(encoding="utf-8").splitlines()
+        published = script.read_text(encoding="utf-8").splitlines()
+        changed = [(before, after) for before, after in zip(repository, published) if before != after]
+        self.assertEqual(len(published), len(repository))
+        self.assertEqual(len(changed), 1, changed)
+        self.assertRegex(changed[0][0], r"^  local release_version=''")
+        self.assertEqual(changed[0][1], "  local release_version='4.0.0'")
+        self.assertEqual(stat.S_IMODE(script.stat().st_mode), 0o755)
+
     def test_a_release_without_upgrade_notes_has_none(self):
         self.assertNotIn("upgradeNotes", self.manifest)
 
@@ -250,6 +262,30 @@ class APrerelease(ReleaseTestCase):
         self.build("4.0.0-dryrun.7")
         manifest = json.loads((self.release.out / "release.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["prerelease"])
+
+
+class InstallSh(unittest.TestCase):
+    SCRIPT = "#!/usr/bin/env bash\nf() {\n  local release_version=''  # written here\n  echo\n}\n"
+
+    def test_a_release_candidate_s_version_is_written_in(self):
+        self.assertEqual(release_assets.install_script(self.SCRIPT, "4.0.0-rc.1"),
+                         "#!/usr/bin/env bash\nf() {\n  local release_version='4.0.0-rc.1'\n  echo\n}\n")
+
+    def test_a_script_without_the_line_is_refused(self):
+        for text in ("#!/usr/bin/env bash\n", "  local release_version='4.0.0'\n", self.SCRIPT + self.SCRIPT):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(release_assets.AssetError, "must name its release on one line"):
+                    release_assets.install_script(text, "4.0.0")
+
+    def test_a_version_that_is_not_a_release_s_is_refused(self):
+        for version in ("v4.0.0", "4.0.0'; rm -rf ~; '", ""):
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(release_assets.AssetError, "is not a release's version"):
+                    release_assets.install_script(self.SCRIPT, version)
+
+    def test_the_repository_s_copy_names_no_release(self):
+        text = release_assets.INSTALL_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(len(release_assets.INSTALL_SCRIPT_VERSION.findall(text)), 1)
 
 
 class AnotherRegistry(ReleaseTestCase):

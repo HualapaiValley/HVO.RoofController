@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# The commands install.sh runs, faked: tests/install/install-sh-tests.sh links each one's name to this file. What each
+# says and does comes from FAKE_* variables, and each call is logged in ${FAKE_STATE_DIR}/calls.log ("root " first when
+# it runs as root). Nothing here reaches the network, Docker or the machine's files outside the test's own folder.
+# Bash 3.2 or later.
+set -u
+
+name=${0##*/}
+is_root() { [ "${FAKE_AS_ROOT:-}" = 1 ] || [ "${FAKE_UID:-1000}" = 0 ]; }
+who=""
+! is_root || who="root "
+printf '%s%s %s\n' "${who}" "${name}" "$*" >>"${FAKE_STATE_DIR}/calls.log"
+
+# listening <port>: true when FAKE_LISTENING (ports separated by spaces) names the port.
+listening() {
+  case " ${FAKE_LISTENING:-} " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+python() { "${FAKE_PYTHON}" -c "$@"; }
+
+case "${name}" in
+  uname)
+    case "${1:-}" in
+      -s) printf '%s\n' "${FAKE_KERNEL:-Linux}" ;;
+      -m) printf '%s\n' "${FAKE_MACHINE:-aarch64}" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+
+  sysctl)
+    # hw.optional.arm64 is 1 on Apple silicon, 0 on an Intel Mac, and missing on old macOS.
+    [ "$*" = "-n hw.optional.arm64" ] || exit 1
+    [ "${FAKE_ARM64:-1}" != missing ] || { echo "sysctl: unknown oid 'hw.optional.arm64'" >&2; exit 1; }
+    printf '%s\n' "${FAKE_ARM64:-1}"
+    ;;
+
+  sw_vers) printf '%s\n' "${FAKE_MACOS_VERSION:-15.0}" ;;
+
+  getconf)
+    [ "$*" = LONG_BIT ] || exit 1
+    printf '%s\n' "${FAKE_LONG_BIT:-64}"
+    ;;
+
+  ldd)
+    if [ "${FAKE_LIBC:-glibc}" = musl ]; then
+      printf 'musl libc (aarch64)\nVersion 1.2.5\n' >&2
+      exit 1
+    fi
+    printf 'ldd (Debian GLIBC 2.36-9+rpt2+deb12u9) 2.36\n'
+    ;;
+
+  id)
+    [ "$*" = -u ] || exit 1
+    printf '%s\n' "${FAKE_UID:-1000}"
+    ;;
+
+  sudo)
+    # FAKE_SUDO: nopasswd (the default), password (sudo -v asks for "the right password" on the terminal) or denied.
+    mode=${FAKE_SUDO:-nopasswd}
+    case "${1:-}" in
+      -n)
+        if [ "${mode}" = nopasswd ] || [ -e "${FAKE_STATE_DIR}/sudo-allowed" ]; then exit 0; fi
+        echo "sudo: a password is required" >&2
+        exit 1
+        ;;
+      -v)
+        [ "${mode}" != nopasswd ] || exit 0
+        printf '[sudo] password for pi: ' >/dev/tty
+        IFS= read -r password </dev/tty || password=""
+        printf '\n' >/dev/tty
+        if [ "${mode}" = password ] && [ "${password}" = "the right password" ]; then
+          : >"${FAKE_STATE_DIR}/sudo-allowed"
+          exit 0
+        fi
+        echo "sudo: 1 incorrect password attempt" >&2
+        exit 1
+        ;;
+      --) shift ;;
+      *)
+        echo "fake sudo: unexpected: $*" >&2
+        exit 2
+        ;;
+    esac
+    if [ "${mode}" = denied ]; then
+      echo "pi is not in the sudoers file." >&2
+      exit 1
+    fi
+    if [ "${mode}" != nopasswd ] && [ ! -e "${FAKE_STATE_DIR}/sudo-allowed" ]; then
+      echo "sudo: a terminal is required to read the password" >&2
+      exit 1
+    fi
+    # What would change the machine's own files is only logged (tee's input is kept, to be read).
+    case "$1" in
+      install | chmod) exit 0 ;;
+      tee)
+        cat >"${FAKE_STATE_DIR}/tee-${2##*/}"
+        exit 0
+        ;;
+    esac
+    FAKE_AS_ROOT=1 exec "$@"
+    ;;
+
+  curl)
+    https=false head=false out="" write="" url=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --proto)
+          [ "${2:-}" != "=https" ] || https=true
+          shift 2
+          continue
+          ;;
+        -o | -w)
+          [ "$1" = -o ] && out=$2 || write=$2
+          shift 2
+          continue
+          ;;
+        --retry | --connect-timeout | --max-time)
+          shift 2
+          continue
+          ;;
+        -I) head=true ;;
+        -fsSL | -sS | --tlsv1.2) ;;
+        -*)
+          echo "fake curl: unexpected option $1" >&2
+          exit 2
+          ;;
+        *) url=$1 ;;
+      esac
+      shift
+    done
+    ${https} || { echo "fake curl: not limited to HTTPS (--proto =https): ${url}" >&2; exit 2; }
+    release_url="https://github.com/HualapaiValley/HVO.RoofController/releases/download/v${FAKE_RELEASE_VERSION}/"
+    case "${url}" in
+      https://github.com)
+        [ -z "${FAKE_GITHUB_EXIT:-}" ] || exit "${FAKE_GITHUB_EXIT}"
+        ${head} || exit 2
+        # FAKE_PROXY_DATE: a proxy's reply to CONNECT, with a Date of its own, before github.com's headers.
+        [ -z "${FAKE_PROXY_DATE:-}" ] || printf 'HTTP/1.1 200 Connection established\r\ndate: %s\r\n\r\n' "${FAKE_PROXY_DATE}"
+        printf 'HTTP/2 200\r\n'
+        if [ "${FAKE_GITHUB_DATE:-yes}" = yes ]; then
+          printf 'date: %s\r\n' "$(python 'import email.utils, sys, time
+print(email.utils.formatdate(time.time() + int(sys.argv[1]), usegmt=True))' "${FAKE_CLOCK_SKEW:-0}")"
+        fi
+        # FAKE_GITHUB_HEADER_KIB: headers after the date that come to about that many KiB, as a proxy may add.
+        index=0
+        while [ "${index}" -lt "${FAKE_GITHUB_HEADER_KIB:-0}" ]; do
+          printf 'x-padding-%d: %01020d\r\n' "${index}" 0
+          index=$((index + 1))
+        done
+        printf 'content-type: text/html; charset=utf-8\r\n\r\n'
+        ;;
+      https://ghcr.io/v2/)
+        [ -z "${FAKE_GHCR_EXIT:-}" ] || exit "${FAKE_GHCR_EXIT}"
+        [ "${out}" = /dev/null ] && [ "${write}" = '%{http_code}' ] || exit 2
+        printf 401
+        ;;
+      https://download.docker.com/*)
+        # Docker's apt key, written as root into /etc/apt/keyrings: only logged.
+        is_root || exit 23
+        ;;
+      "${release_url}"*)
+        file=${url#"${release_url}"}
+        [ "${file}" != "${FAKE_DOWNLOAD_FAILS:-}" ] || exit "${FAKE_DOWNLOAD_EXIT:-22}"
+        [ -f "${FAKE_RELEASE_DIR}/${file}" ] || exit 22
+        [ -n "${out}" ] || exit 2
+        cp "${FAKE_RELEASE_DIR}/${file}" "${out}"
+        ;;
+      *)
+        echo "fake curl: nothing answers at ${url}" >&2
+        exit 6
+        ;;
+    esac
+    ;;
+
+  docker)
+    # On Linux the engine answers root (and the docker group, which these tests leave out); Docker Desktop, anyone.
+    if [ "${FAKE_KERNEL:-Linux}" = Linux ] && ! is_root; then
+      echo "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock" >&2
+      exit 1
+    fi
+    case "$*" in
+      "version --format {{.Server.Version}}")
+        if [ "${FAKE_DOCKER_ENGINE:-up}" = down ]; then
+          echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+          exit 1
+        fi
+        printf '%s\n' "${FAKE_DOCKER_VERSION:-27.3.1}"
+        ;;
+      "compose version --short")
+        [ "${FAKE_COMPOSE:-2.29.7}" != missing ] || { echo "docker: 'compose' is not a docker command." >&2; exit 1; }
+        printf '%s\n' "${FAKE_COMPOSE:-2.29.7}"
+        ;;
+      "info --format {{.DockerRootDir}}") printf '%s\n' "${FAKE_DOCKER_ROOT}" ;;
+      *)
+        echo "fake docker: unexpected: $*" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+
+  dpkg)
+    [ "$*" = --print-architecture ] || exit 1
+    case "${FAKE_MACHINE:-aarch64}" in
+      x86_64) echo amd64 ;;
+      *) echo arm64 ;;
+    esac
+    ;;
+
+  apt-get)
+    is_root || { echo "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)" >&2; exit 100; }
+    [ "${FAKE_APT:-works}" = works ] || { echo "E: Unable to locate package docker-ce" >&2; exit 100; }
+    case " $* " in
+      *" docker-ce "*) ln -s "${FAKE_COMMAND}" "${FAKE_BIN}/docker" ;;
+    esac
+    ;;
+
+  raspi-config)
+    [ "$*" = "nonint do_i2c 0" ] || exit 1
+    is_root || { echo "Script must be run as root. Try 'sudo raspi-config'" >&2; exit 1; }
+    # FAKE_I2C: now (the device appears), reboot (it appears after a restart) or fails.
+    case "${FAKE_I2C:-now}" in
+      now)
+        mkdir -p "${HVO_ROOF_INSTALL_TEST_ROOT}/dev"
+        : >"${HVO_ROOF_INSTALL_TEST_ROOT}/dev/i2c-1"
+        ;;
+      reboot) ;;
+      *) exit 1 ;;
+    esac
+    ;;
+
+  timedatectl)
+    [ "$*" = "show --property=NTPSynchronized --value" ] || exit 1
+    printf '%s\n' "${FAKE_NTP:-yes}"
+    ;;
+
+  ss)
+    [ "$*" = -Hltn ] || exit 1
+    for port in ${FAKE_LISTENING:-}; do
+      printf 'LISTEN 0      4096         0.0.0.0:%s        0.0.0.0:*\n' "${port}"
+      printf 'LISTEN 0      4096            [::]:%s           [::]:*\n' "${port}"
+    done
+    printf 'LISTEN 0      128          0.0.0.0:22        0.0.0.0:*\n'
+    ;;
+
+  lsof)
+    [ "$#:$1:$3" = "3:-nP:-sTCP:LISTEN" ] && [[ $2 == -iTCP:* ]] || exit 2
+    listening "${2#-iTCP:}"
+    ;;
+
+  df)
+    [ "${1:-}" = -Pk ] || exit 1
+    free=${FAKE_DF_FREE:-50000000}
+    [ "$2" != "${FAKE_DF_LOW_PATH:-}" ] || free=${FAKE_DF_LOW_FREE:-1024}
+    [ "${FAKE_DF:-works}" = works ] || free="-"
+    printf 'Filesystem     1024-blocks      Used Available Capacity Mounted on\n'
+    printf '/dev/root         60000000  10000000 %9s      17%% /\n' "${free}"
+    ;;
+
+  tar) ;;
+
+  sha256sum | shasum)
+    # The machine's own, when it has one (a Mac's shasum, on the Mac job); otherwise a stand-in.
+    real=${FAKE_REAL_SHA256SUM:-}
+    [ "${name}" = sha256sum ] || real=${FAKE_REAL_SHASUM:-}
+    [ -z "${real}" ] || exec "${real}" "$@"
+    [ "${name}" = sha256sum ] || { [ "${1:-} ${2:-}" = "-a 256" ] && shift 2; } || exit 1
+    # A file's name, or standard input ("-").
+    printf '%s  %s\n' "$(python 'import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], "rb").read() if len(sys.argv) > 1 else sys.stdin.buffer.read()).hexdigest())' "$@")" "${1:--}"
+    ;;
+
+  gh)
+    case "$1 ${2:-}" in
+      "auth status")
+        [ "${FAKE_GH_AUTH:-yes}" = yes ] || { echo "You are not logged into any GitHub hosts. To log in, run: gh auth login" >&2; exit 1; }
+        ;;
+      "attestation verify")
+        if [ "${FAKE_ATTESTATION:-verifies}" != verifies ]; then
+          printf 'Loaded digest sha256:%s for file://%s\n' "0000" "$3"
+          printf 'Loaded 1 attestation from GitHub API\n'
+          printf 'Error: verifying with issuer "sigstore.dev"\n'
+          printf 'X Verification failed\n'
+          printf 'Error: no matching attestations found\n'
+          exit 1
+        fi
+        printf 'Loaded 1 attestation from GitHub API\nThe following policy criteria will be enforced:\n'
+        printf '\xe2\x9c\x93 Verification succeeded!\n'
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
+
+  date)
+    # The machine's own date runs the form it knows; the other kind's (BSD's -j -f on GNU, GNU's -d on BSD) is read here,
+    # so that both of install.sh's forms run on either.
+    gnu=false
+    "${FAKE_REAL_DATE}" --version >/dev/null 2>&1 && gnu=true
+    case " $* " in
+      *" -j "*) ${gnu} || exec "${FAKE_REAL_DATE}" "$@" ;;
+      *" -d "*) ! ${gnu} || exec "${FAKE_REAL_DATE}" "$@" ;;
+      *) exec "${FAKE_REAL_DATE}" "$@" ;;
+    esac
+    arguments=("$@")
+    index=0 text=""
+    while [ "${index}" -lt "${#arguments[@]}" ]; do
+      case "${arguments[index]}" in
+        -d) text=${arguments[index + 1]} ;;
+        -f) text=${arguments[index + 2]} ;;
+      esac
+      index=$((index + 1))
+    done
+    python 'import email.utils, sys
+print(int(email.utils.parsedate_to_datetime(sys.argv[1]).timestamp()))' "${text}" 2>/dev/null
+    ;;
+
+  *)
+    echo "fake-command: no fake for ${name}" >&2
+    exit 127
+    ;;
+esac

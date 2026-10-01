@@ -22,6 +22,8 @@ unless --registry names another (a test's local registry). The assets:
   HVO-Roof-<version>.zip                      HVO Roof.app, signed ad hoc
   docker-compose.yaml                         the release compose file, each image pinned to its digest
   deploy-roofcontroller-rpi.sh                the deploy script
+  install.sh                                  the script that checks a machine and starts its installer
+                                              (docs/install.md#installsh), with the release's version written in
   release.json                                the version, the commit, each image's digest, each asset's SHA-256, the
                                               SHA-256 of each file in the kiosk's tarball (the installer checks an
                                               installed kiosk against them without downloading it) and each
@@ -47,6 +49,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 DEPLOY_SCRIPT = REPOSITORY_ROOT / "src" / "HVO.RoofControllerV4.RPi" / "deploy-roofcontroller-rpi.sh"
+INSTALL_SCRIPT = REPOSITORY_ROOT / "src" / "HVO.RoofControllerV4.Installer" / "install.sh"
 REPOSITORY_URL = "https://github.com/HualapaiValley/HVO.RoofController"
 IMAGE_PLATFORMS = ["linux/amd64", "linux/arm64"]
 
@@ -233,6 +236,21 @@ def mac_asset(mac_zip, out, version):
     return name, {MAC_PROGRAM.rsplit("/", 1)[1]: hashlib.sha256(program).hexdigest()}
 
 
+# install.sh's line that names the release, empty in the repository's copy, which refuses to run.
+INSTALL_SCRIPT_VERSION = re.compile(r"^  local release_version=''(  #.*)?$", re.MULTILINE)
+
+
+def install_script(text, version):
+    """install.sh as a release publishes it: the repository's copy with the release's version written in."""
+    if not release_compose.VERSION.match(version):
+        raise AssetError(f"{version} is not a release's version.")
+    lines = INSTALL_SCRIPT_VERSION.findall(text)
+    if len(lines) != 1:
+        raise AssetError(f"{INSTALL_SCRIPT} must name its release on one line, \"  local release_version=''\", "
+                         f"and has {len(lines)}.")
+    return INSTALL_SCRIPT_VERSION.sub(f"  local release_version='{version}'", text)
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as file:
@@ -311,6 +329,10 @@ def build(arguments):
     shutil.copyfile(DEPLOY_SCRIPT, out / DEPLOY_SCRIPT.name)
     (out / DEPLOY_SCRIPT.name).chmod(0o755)
     assets[DEPLOY_SCRIPT.name] = ("deploy-script", None)
+    (out / INSTALL_SCRIPT.name).write_text(install_script(INSTALL_SCRIPT.read_text(encoding="utf-8"), version),
+                                           encoding="utf-8")
+    (out / INSTALL_SCRIPT.name).chmod(0o755)
+    assets[INSTALL_SCRIPT.name] = ("install-script", None)
 
     digests = {"controller": arguments.controller_digest, "hatEmulator": arguments.emulator_digest}
     release = manifest(out, assets, version, arguments.commit, arguments.created, arguments.registry, digests, contents,

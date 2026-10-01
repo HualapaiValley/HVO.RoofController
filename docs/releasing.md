@@ -211,6 +211,7 @@ names the images until someone publishes the draft.
 | `HVO-Roof-<version>.zip` | The Mac app, signed ad hoc ([Install](mac.md#install)) |
 | `docker-compose.yaml` | The release compose file, each image pinned to its digest ([Deploying with Compose](deployment.md#deploying-with-compose)) |
 | `deploy-roofcontroller-rpi.sh` | The deploy script, for a released image ([Deploying a released image](deployment.md#deploying-a-released-image)) |
+| `install.sh` | The script that checks a machine, then downloads the release's installer for it, checks it and starts it ([install.sh](install.md#installsh)) |
 | `release.json` | The release, its images and its files, for programs to read ([release.json](#releasejson)) |
 | `SHA256SUMS` | The SHA-256 of every other file, as `sha256sum` writes it |
 
@@ -275,7 +276,7 @@ What a program needs to know about a release, such as the installer and `install
   The folder holds `X.Y.Z.md` files alone. It is left out when there are none, which only a release candidate before
   any final release's notes may have.
 - `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `installer`, `kiosk`, `mac-app`,
-  `compose` or `deploy-script`. `platform` is the .NET runtime the file is for, or `null` for a file for any.
+  `compose`, `deploy-script` or `install-script`. `platform` is the .NET runtime the file is for, or `null` for a file for any.
 
 ## Before publishing
 
@@ -435,7 +436,9 @@ Once a release is published, its tag never moves.
   of it, and CI's "Compose profiles" step checks, profile by profile with Compose, that the file it makes differs from
   the source only in its images.
 - `tests/releasing/test_release_assets.py` checks `release-assets.py` with made-up CI artifacts: the assets, their
-  names and modes, the kiosk tarball's contents, `release.json`, `SHA256SUMS`, and every artifact it must refuse.
+  names and modes, the kiosk tarball's contents, `install.sh` with the release's version written in, `release.json`,
+  `SHA256SUMS`, and every artifact it must refuse. `tests/install/install-sh-tests.sh` runs that `install.sh`
+  ([install.sh's tests](install.md#installshs-tests)).
 - `tests/releasing/push-image-tests.sh` pushes two-platform OCI archives with `push-image.sh` to a registry of its own
   in Docker, checks every digest the registry then holds, and tags them `latest`, refusing a version tag pushed again.
 - `tests/releasing/release-latest-tests.sh` runs `release-latest.sh` against a stand-in for `gh` that serves made-up
