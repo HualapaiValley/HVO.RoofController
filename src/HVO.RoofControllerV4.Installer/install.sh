@@ -618,7 +618,7 @@ EOF
       skew=$(($(date -u +%s) - remote_seconds))
       ((skew >= 0)) || skew=$((-skew))
       if ((skew > clock_tolerance_seconds)); then
-        failed "This machine's clock is $((skew / 60)) minutes out (it says $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S') GMT, and github.com ${remote_date}): set it, and synchronise it$([ "${os}" = linux ] && printf ' (sudo timedatectl set-ntp true)'), then run this again."
+        failed "This machine's clock is $(((skew + 30) / 60)) minutes out (it says $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S') GMT, and github.com ${remote_date}): set it, and synchronise it$([ "${os}" = linux ] && printf ' (sudo timedatectl set-ntp true)'), then run this again."
       else
         ok "the clock is within ${skew} s of github.com's"
       fi
