@@ -220,7 +220,9 @@ internal sealed class RolesPage : WizardPage
             Roles = roles,
             RigConfirmation = _confirmation.Visible ? _confirmation.Text : null
         }).Normalised(Session.DefaultController);
-        var problems = Session.Problems();
+
+        // The Client page, after this one, is where the client's controller is changed.
+        var problems = Session.Problems(clientChosen: false);
         return problems.Count == 0 ? null : string.Join(" ", problems);
     }
 
@@ -406,7 +408,7 @@ internal sealed class SettingsPage : WizardPage
             answers = answers with { MacApp = answers.MacApp with { Folder = MacAppSettings.Folders[Math.Clamp(_macAppFolder.Value ?? 0, 0, MacAppSettings.Folders.Count - 1)] } };
         }
 
-        problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised()));
+        problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised(), clientChosen: false));
         if (problems.Count > 0)
         {
             return string.Join(" ", problems);
@@ -620,7 +622,7 @@ internal sealed class ControllerPage : WizardPage
 
         if (problems.Count == 0)
         {
-            problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised()));
+            problems.AddRange(RoleGuards.Check(Session.Survey, answers.Normalised(), clientChosen: false));
         }
 
         if (problems.Count > 0)

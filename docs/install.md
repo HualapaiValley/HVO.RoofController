@@ -149,7 +149,8 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
   hand ([Trusting the controller in a browser](#trusting-the-controller-in-a-browser)).
 - **One controller for `hvo-roof` and the Mac app.** They share one controller, and your record keeps it once for
   both. A run for one of them, with another controller address or another CA or certificate SHA-256 than the other
-  one was installed with, is refused: give the same controller, or choose both to move them together.
+  one was installed with, is refused: give the same controller, or choose both to move them together. The wizard
+  checks it on its Client page, where the controller is given.
 - **Compose.** A container that Docker Compose made is described in the plan but never replaced. Move it first: see
   [Moving between Compose and the deploy script](deployment.md#moving-between-compose-and-the-deploy-script).
 - **Busy ports.** A port that something else already listens on blocks the plan.

@@ -143,6 +143,8 @@ public sealed class InstallerGuardTests
             .Should().BeEmpty("the same address and fingerprint, written another way");
         Check(recorded with { TrustInKeychain = true }, InstallRole.MacApp).Should().BeEmpty("the keychain is the run's own");
         Check(elsewhere, InstallRole.Cli, InstallRole.MacApp).Should().BeEmpty("both move together");
+        RoleGuards.Check(survey, new InstallAnswers { Roles = [InstallRole.Cli], Client = elsewhere }, clientChosen: false)
+            .Should().BeEmpty("the wizard's pages before its Client page, where the controller is changed, do not check it");
     }
 
     [TestMethod]

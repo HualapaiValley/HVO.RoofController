@@ -271,6 +271,45 @@ public sealed class InstallerWizardClientTests
     }
 
     [TestMethod]
+    public async Task OneClientMovedFromTheRecordedController_IsRefusedOnTheClientPage_WhereItCanBeChanged()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var mac = Mac(host);
+        const string Recorded = "https://spare-pi.local:8443";
+        mac.Write("/Users/roy/.config/hvo-roof/install.json", (InstallerGuardTests.Record(InstallRole.Cli, null) with
+        {
+            Scope = InstallScope.User,
+            Roles = [InstallRole.Cli, InstallRole.MacApp],
+            MacApp = new MacAppSettings { Admin = Admin },
+            Client = new ClientSettings { Controller = Recorded, CaSha256 = FakeMachine.ControllerCaSha256 }
+        }).ToJson());
+        using var wizard = await WizardDriver.StartAsync(mac);
+        wizard.Session.Answers = wizard.Session.Answers with { Client = new ClientSettings { Controller = FakeMachine.ControllerUrl, CaSha256 = FakeMachine.ControllerCaSha256 } };
+        wizard.NextTo(1);
+        var roles = (RolesPage)wizard.Page;
+        roles.Choices[InstallRole.Cli].Value = CheckState.Checked;
+        roles.Choices[InstallRole.MacApp].Value = CheckState.UnChecked;
+
+        wizard.NextTo(4);
+
+        var page = (ClientPage)wizard.Page;
+        page.Address!.Text = FakeMachine.ControllerUrl;
+        Fetch(wizard, page);
+        page.Matches!.Value = CheckState.Checked;
+        page.Address.SetFocus();
+        wizard.Press(Key.Enter);
+        wizard.Page.Should().BeSameAs(page, "the controller is changed on this page");
+        wizard.Wizard.Message.Should().Be(
+            $"hvo-roof and the Mac app connect to the same controller, and the Mac app connects to {Recorded}: give the same controller and trust, or choose both to move them together.");
+
+        page.Address.Text = Recorded;
+        Fetch(wizard, page);
+        page.Matches.Value = CheckState.Checked;
+        wizard.NextTo(5);
+        wizard.Session.Answers.Client!.Controller.Should().Be(Recorded);
+    }
+
+    [TestMethod]
     public async Task AnInstallThatStops_SaysWhere_AndThatRunningItAgainCarriesOn()
     {
         using var laptop = Laptop();

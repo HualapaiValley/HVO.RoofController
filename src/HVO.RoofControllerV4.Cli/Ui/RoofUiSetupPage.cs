@@ -15,6 +15,7 @@ internal sealed class RoofUiSetupPage : RoofUiPage
     private readonly RoofCliSetup _setup;
     private readonly ListView _lines;
     private RoofCliSetup.Check? _check;
+    private RoofCliConnection? _checked;
 
     public RoofUiSetupPage(RoofTerminalUi ui)
         : base(ui, "Setup")
@@ -36,7 +37,13 @@ internal sealed class RoofUiSetupPage : RoofUiPage
 
     public override void ConnectionChanged()
     {
-        _check = null;
+        // The caller told for the connection it checked keeps the check; a new connection has not been checked.
+        if (!ReferenceEquals(_checked, Ui.Connection))
+        {
+            _check = null;
+            _checked = null;
+        }
+
         Show();
     }
 
@@ -155,6 +162,7 @@ internal sealed class RoofUiSetupPage : RoofUiPage
                 }
 
                 _check = check;
+                _checked = connection;
                 Show();
                 Ui.Say(
                     Join(

@@ -83,9 +83,10 @@ public static class RoleGuards
     /// <summary>
     /// Every reason the installer refuses <paramref name="answers"/> on this machine; empty when it may go ahead. With
     /// <paramref name="planOnly"/>, for <c>--plan</c>, which changes nothing, it needs neither root for the machine's roles
-    /// nor the confirmations a person types.
+    /// nor the confirmations a person types. Without <paramref name="clientChosen"/>, for the wizard's pages before its
+    /// Client page, the client's controller is not checked yet: that page is where it is changed.
     /// </summary>
-    public static IReadOnlyList<string> Check(MachineSurvey survey, InstallAnswers answers, bool planOnly = false)
+    public static IReadOnlyList<string> Check(MachineSurvey survey, InstallAnswers answers, bool planOnly = false, bool clientChosen = true)
     {
         ArgumentNullException.ThrowIfNull(survey);
         ArgumentNullException.ThrowIfNull(answers);
@@ -130,7 +131,7 @@ public static class RoleGuards
 
         // The person's record keeps one controller for hvo-roof and the Mac app: a run for one of them would move the
         // other's (on its next run from the record) while its files still point at the one it has.
-        if (clients.Length == 1 && answers.Client is { } client
+        if (clientChosen && clients.Length == 1 && answers.Client is { } client
             && survey.UserRecord is { Client: { } recorded } record
             && !SameController(recorded, client))
         {

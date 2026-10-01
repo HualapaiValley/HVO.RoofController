@@ -126,8 +126,11 @@ public sealed class InstallerSession
     private static double? Number(string? text)
         => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number) ? number : null;
 
-    /// <summary>Why the installer refuses the answers here; empty when it may go ahead.</summary>
-    public IReadOnlyList<string> Problems(bool planOnly = false) => RoleGuards.Check(Survey, Answers, planOnly);
+    /// <summary>
+    /// Why the installer refuses the answers here; empty when it may go ahead. Without <paramref name="clientChosen"/>,
+    /// the client's controller is not checked (<see cref="RoleGuards.Check"/>).
+    /// </summary>
+    public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true) => RoleGuards.Check(Survey, Answers, planOnly, clientChosen);
 
     public InstallContext Context => ContextFor(null);
 
