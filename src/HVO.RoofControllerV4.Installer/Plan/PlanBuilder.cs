@@ -325,11 +325,12 @@ public static class PlanBuilder
     }
 
     /// <summary>
-    /// <c>hvo-roof-install uninstall</c>: what <paramref name="record"/> installed in its scope, removed. The kiosk's service
-    /// goes first, then the controller after the deploy script's verified Stop of the roof, the container kept for a
-    /// rollback, a rig's HAT emulator and its network (each with its image), and the programs with the ones kept beside
-    /// them. The data stays, and the record says what was uninstalled, for a reinstall; with <paramref name="purge"/> the
-    /// data, the settings and the record go too. The kiosk's user, its packages and the install log stay.
+    /// <c>hvo-roof-install uninstall</c>: what <paramref name="record"/> installed in its scope, removed. The controller goes
+    /// first, after the deploy script's verified Stop of the roof, so nothing is removed while the roof may move; then the
+    /// container kept for a rollback, a rig's HAT emulator and its network (each with its image), the kiosk's service, and
+    /// the programs with the ones kept beside them. The data stays, and the record says what was uninstalled, for a
+    /// reinstall; with <paramref name="purge"/> the data, the settings and then the record go too. The installer goes last,
+    /// so a run that stops part way can be run again. The kiosk's user, its packages and the install log stay.
     /// </summary>
     public static InstallPlan BuildUninstall(InstallerMachine machine, MachineSurvey survey, InstallRecord record, bool purge)
     {
@@ -339,13 +340,6 @@ public static class PlanBuilder
         var steps = new List<PlanStep>();
         var roles = record.Roles;
         var layout = ControllerLayout.For(machine);
-        if (roles.Contains(InstallRole.Kiosk))
-        {
-            steps.Add(new KioskServiceRemovalStep());
-            steps.Add(new RemovalStep(KioskSteps.BacklightRuleFile, "lets the kiosk turn the screen's backlight off and on"));
-            steps.Add(new RemovalStep(KioskSteps.Program, "the kiosk's program", previous: KioskSteps.PreviousProgram));
-        }
-
         if (RecordedController(machine, survey, record) is var (controller, _, emulator))
         {
             var stop = new ControllerStopStep(controller);
@@ -360,6 +354,13 @@ public static class PlanBuilder
             }
         }
 
+        if (roles.Contains(InstallRole.Kiosk))
+        {
+            steps.Add(new KioskServiceRemovalStep());
+            steps.Add(new RemovalStep(KioskSteps.BacklightRuleFile, "lets the kiosk turn the screen's backlight off and on"));
+            steps.Add(new RemovalStep(KioskSteps.Program, "the kiosk's program", previous: KioskSteps.PreviousProgram));
+        }
+
         if (roles.Contains(InstallRole.Cli) && record.Cli is { } cli)
         {
             var program = ClientSteps.CliProgram(machine, cli);
@@ -372,8 +373,6 @@ public static class PlanBuilder
             steps.Add(new RemovalStep(app.Target, app.Purpose, StepKind.Folder, app.Previous));
         }
 
-        var installer = InstallPaths.Installer(record.Scope, machine);
-        steps.Add(new RemovalStep(installer, "hvo-roof-install", previous: ProgramFile.Previous(installer)));
         var recordPath = InstallPaths.RecordFor(record.Scope, machine);
         if (!purge)
         {
@@ -384,33 +383,44 @@ public static class PlanBuilder
                 RolledBackFrom = null,
                 UninstalledAt = existing?.UninstalledAt ?? context.Time.GetUtcNow()
             }));
-            return new InstallPlan(steps);
         }
-
-        foreach (var (folder, purpose) in PurgedFolders(machine, record, layout))
+        else
         {
-            steps.Add(new RemovalStep(folder, purpose, StepKind.Folder));
+            // The record goes last, with the folder holding it (which PurgedFolders lists last), so a purge that stops part
+            // way can be run again.
+            var recordFolder = Path.GetDirectoryName(recordPath);
+            var purged = PurgedFolders(machine, record, layout);
+            foreach (var (folder, purpose) in purged)
+            {
+                steps.Add(new RemovalStep(folder, purpose, StepKind.Folder, keepLast: folder == recordFolder ? Path.GetFileName(recordPath) : null));
+            }
+
+            if (!purged.Any(purgedFolder => purgedFolder.Folder == recordFolder))
+            {
+                steps.Add(new RemovalStep(recordPath, "the install record"));
+            }
         }
 
-        // The record is in the configuration folder on a Pi, and in the person's own on a Mac; either way it goes.
-        steps.Add(new RemovalStep(recordPath, "the install record"));
+        // The installer goes last, so it is there to run again if anything before it fails.
+        var installer = InstallPaths.Installer(record.Scope, machine);
+        steps.Add(new RemovalStep(installer, "hvo-roof-install", previous: ProgramFile.Previous(installer)));
         return new InstallPlan(steps);
     }
 
-    /// <summary>The folders <c>uninstall --purge</c> removes for <paramref name="record"/>'s scope: everything the roles kept.</summary>
+    /// <summary>
+    /// The folders <c>uninstall --purge</c> removes for <paramref name="record"/>'s scope: everything the roles kept. The
+    /// folder holding the install record (the controller's configuration, or the person's own) comes last.
+    /// </summary>
     public static IReadOnlyList<(string Folder, string Purpose)> PurgedFolders(InstallerMachine machine, InstallRecord record, ControllerLayout layout)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(layout);
         var folders = new List<(string, string)>();
-        if (InstallRoles.RunsController(record.Roles) || record.Controller is not null)
+        var controller = InstallRoles.RunsController(record.Roles) || record.Controller is not null;
+        if (controller && layout.Data != layout.Configuration)
         {
-            folders.Add((layout.Configuration, "the controller's configuration, secrets, certificate and CA"));
-            if (layout.Data != layout.Configuration)
-            {
-                folders.Add((layout.Data, "the controller's data: people, API keys and settings set through the API"));
-            }
+            folders.Add((layout.Data, "the controller's data: people, API keys and settings set through the API"));
         }
 
         if (record.Scope == InstallScope.System && (record.Roles.Contains(InstallRole.Kiosk) || record.Kiosk is not null))
@@ -419,13 +429,18 @@ public static class PlanBuilder
             folders.Add((KioskSteps.ProgramFolder, "the kiosk's settings"));
         }
 
+        if (record.Scope == InstallScope.User && (record.Roles.Contains(InstallRole.MacApp) || record.MacApp is not null))
+        {
+            folders.Add((ClientSteps.MacSettingsFolder(machine), "the Mac app's settings and device key"));
+        }
+
+        if (controller)
+        {
+            folders.Add((layout.Configuration, "the controller's configuration, secrets, certificate and CA"));
+        }
+
         if (record.Scope == InstallScope.User)
         {
-            if (record.Roles.Contains(InstallRole.MacApp) || record.MacApp is not null)
-            {
-                folders.Add((ClientSteps.MacSettingsFolder(machine), "the Mac app's settings and device key"));
-            }
-
             folders.Add((InstallPaths.UserConfigFolder(machine), "hvo-roof's connection, and the install record"));
         }
 

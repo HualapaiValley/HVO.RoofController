@@ -175,11 +175,16 @@ internal static class LifecycleCommands
         host.Out.WriteLine(record.Version == target ? $"{target} is installed here: its installer checks it." : $"{record.Version} is installed here; {target} replaces it.");
         session.Version = target;
         var manifest = await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
-        if (manifest.UpgradeNotes is { Length: > 0 } notes && record.Version != target)
+        // Each release's notes from the one installed to this one, oldest first: a release candidate's are its release's.
+        var core = target.Split('-', '+')[0];
+        var notes = manifest.UpgradeNotes
+            .Where(note => record.Version != target && RoofSemVer.IsOlder(record.Version, note.Version) && !RoofSemVer.IsOlder(core, note.Version))
+            .OrderBy(note => note.Version, Comparer<string>.Create(RoofSemVer.Compare));
+        foreach (var note in notes)
         {
             host.Out.WriteLine();
-            host.Out.WriteLine($"Upgrade notes for {target}:");
-            foreach (var line in notes.Split('\n'))
+            host.Out.WriteLine($"Upgrade notes for {note.Version}:");
+            foreach (var line in note.Text.Split('\n'))
             {
                 host.Out.WriteLine($"  {line.TrimEnd('\r')}");
             }
@@ -286,6 +291,7 @@ internal static class LifecycleCommands
         }
 
         var plan = PlanBuilder.BuildUninstall(machine, session.Survey, record, options.Purge);
+        RefusePurgeUnderController(machine, session.Survey, record, plan, options.Purge);
         var checkedPlan = await plan.CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
         var what = record.Roles.Count > 0 ? InstallRoles.Describe(record.Roles) : "what was installed";
         host.Out.WriteLine(options.Purge
@@ -315,6 +321,24 @@ internal static class LifecycleCommands
         }
 
         return await ApplyAsync(host, session, checkedPlan, "uninstalling", cancellationToken).ConfigureAwait(false);
+    }
+
+    // A purge removes the controller's files. When this uninstall does not stop the controller (it was uninstalled before,
+    // and deployed again since, by hand or with Compose), they would go from under one that may be running the roof.
+    private static void RefusePurgeUnderController(InstallerMachine machine, MachineSurvey survey, InstallRecord record, InstallPlan plan, bool purge)
+    {
+        if (!purge || plan.Steps.OfType<ControllerStopStep>().Any() || survey.Controller is not { } deployed)
+        {
+            return;
+        }
+
+        var layout = ControllerLayout.For(machine);
+        if (PlanBuilder.PurgedFolders(machine, record, layout).Any(purged => purged.Folder == layout.Configuration || purged.Folder == layout.Data))
+        {
+            throw new InstallerRefusedException(
+                $"A controller ({MachineSurveyor.ControllerContainer}, {deployed.State}) is deployed here, and this uninstall does not stop it: --purge would remove its files from under it. "
+                + "Remove it with the deploy script first (it stops the roof), then purge. Nothing was removed.");
+        }
     }
 
     // Before the data goes: a backup (or the person saying none), and the machine's name, so data is not removed from the

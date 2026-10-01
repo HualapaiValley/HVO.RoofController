@@ -198,9 +198,14 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
             return new StepCheck(StepChange.Blocked, $"Docker Compose made it (project {current.ComposeProject}), and the installer does not remove it: stop it with that project (docker compose down)");
         }
 
-        if (!current.IsRunning)
+        if (current.IsStopped)
         {
             return StepCheck.Unchanged($"stopped: it is {current.State}");
+        }
+
+        if (!current.IsRunning)
+        {
+            return new StepCheck(StepChange.Blocked, $"it is {current.State}, and the deploy script stops only a running controller: stop it once the roof is idle (docker stop {Target}), then run it again");
         }
 
         try
@@ -224,9 +229,9 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
         var environment = await controller.EnvironmentAsync(context, work, string.Empty, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--stop").ConfigureAwait(false);
         var now = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
-        if (now is { IsRunning: true })
+        if (now is { IsStopped: false })
         {
-            throw new InstallerException($"The deploy script's --stop finished, but {Target} still runs: see docker ps and the install log.");
+            throw new InstallerException($"The deploy script's --stop finished, but {Target} is {now.State}: see docker ps and the install log.");
         }
 
         context.Log.Write($"Stopped {Target} after a verified Stop of the roof.");
@@ -260,12 +265,12 @@ public sealed class ContainerRemovalStep(string name, string purpose, PlanStep? 
             return new StepCheck(StepChange.Blocked, $"Docker Compose made it (project {container.ComposeProject}), and the installer does not remove it: remove it with that project (docker compose down)");
         }
 
-        if (container.IsRunning && !stops && (stoppedBy is null || !await StoppedByAsync(context, cancellationToken).ConfigureAwait(false)))
+        if (!container.IsStopped && !stops && (stoppedBy is null || !await StoppedByAsync(context, cancellationToken).ConfigureAwait(false)))
         {
             return new StepCheck(StepChange.Blocked, $"it is {container.State}: stop it once the roof is idle (docker stop {name}), then run it again");
         }
 
-        return new StepCheck(StepChange.Remove, container.IsRunning ? "stopped, then removed with its image" : "removed with its image");
+        return new StepCheck(StepChange.Remove, container.IsStopped ? "removed with its image" : "stopped, then removed with its image");
     }
 
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
@@ -278,11 +283,11 @@ public sealed class ContainerRemovalStep(string name, string purpose, PlanStep? 
             return;
         }
 
-        if (container.IsRunning)
+        if (!container.IsStopped)
         {
             if (!stops)
             {
-                throw new InstallerException($"{name} runs again: stop it once the roof is idle (docker stop {name}), then run it again.");
+                throw new InstallerException($"{name} is {container.State} again: stop it once the roof is idle (docker stop {name}), then run it again.");
             }
 
             await DockerAsync(context, $"stop {name}", cancellationToken, "stop", name).ConfigureAwait(false);
@@ -382,9 +387,11 @@ public sealed class KioskServiceRemovalStep : PlanStep
 
 /// <summary>
 /// A file or folder the installer put in place, removed (<c>hvo-roof-install uninstall</c>): a program with the one kept
-/// for a rollback (<paramref name="previous"/>), or, with <c>--purge</c>, a folder of data.
+/// for a rollback (<paramref name="previous"/>), or, with <c>--purge</c>, a folder of data. A folder holding the install
+/// record names it (<paramref name="keepLast"/>): everything else in the folder goes first, so a removal that fails part
+/// way leaves the record, and <c>uninstall --purge</c> can be run again.
 /// </summary>
-public sealed class RemovalStep(string path, string purpose, StepKind kind = StepKind.File, string? previous = null) : PlanStep
+public sealed class RemovalStep(string path, string purpose, StepKind kind = StepKind.File, string? previous = null, string? keepLast = null) : PlanStep
 {
     public override StepKind Kind => kind;
 
@@ -410,6 +417,22 @@ public sealed class RemovalStep(string path, string purpose, StepKind kind = Ste
         {
             if (context.Machine.DirectoryExists(item))
             {
+                if (keepLast is not null)
+                {
+                    foreach (var name in context.Machine.ListNames(item).Where(name => name != keepLast))
+                    {
+                        var inside = Path.Join(item, name);
+                        if (context.Machine.DirectoryExists(inside))
+                        {
+                            context.Machine.DeleteDirectory(inside);
+                        }
+                        else
+                        {
+                            context.Machine.DeleteFile(inside);
+                        }
+                    }
+                }
+
                 context.Machine.DeleteDirectory(item);
                 context.Log.Write($"Removed {item} and everything in it.");
             }

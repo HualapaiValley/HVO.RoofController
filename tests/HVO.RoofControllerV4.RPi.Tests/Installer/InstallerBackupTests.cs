@@ -106,8 +106,9 @@ public sealed class InstallerBackupTests
     }
 
     [TestMethod]
-    [DataRow("/etc/hvo-roof/b.tar.gz", "/etc/hvo-roof/b.tar.gz is in /etc/hvo-roof, which the backup holds (and uninstall --purge removes): keep the backup somewhere else.")]
+    [DataRow("/etc/hvo-roof/b.tar.gz", "/etc/hvo-roof/b.tar.gz is in /etc/hvo-roof, which the backup holds or uninstall --purge removes: keep the backup somewhere else.")]
     [DataRow("/var/lib/hvo-roof", "/var/lib/hvo-roof is in /var/lib/hvo-roof, which the backup holds")]
+    [DataRow("/opt/hvo-roof-kiosk/b.tar.gz", "/opt/hvo-roof-kiosk/b.tar.gz is in /opt/hvo-roof-kiosk, which the backup holds or uninstall --purge removes")]
     [DataRow("/srv/keep/there.tar.gz", "/srv/keep/there.tar.gz is there already: a backup never replaces a file. Give a new file's name.")]
     [DataRow("/srv/keep", "/srv/keep is there already")]
     [DataRow("/nowhere/b.tar.gz", "/nowhere is not there: make it first, or give a file in a folder that is.")]
@@ -122,6 +123,23 @@ public sealed class InstallerBackupTests
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain(reason);
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
+    }
+
+    [TestMethod]
+    public async Task ABackup_IsRefused_InEveryFolderAPurgeRemoves()
+    {
+        using var pi = await InstallerLifecycleTests.InstalledPiAsync();
+        var record = InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord));
+        var purged = PlanBuilder.PurgedFolders(pi.Machine, record, ControllerLayout.System);
+
+        purged.Select(folder => folder.Folder).Should().Contain([KioskSteps.ProgramFolder, KioskSteps.ConfigurationFolder, "/etc/hvo-roof", "/var/lib/hvo-roof"]);
+        foreach (var (folder, _) in purged)
+        {
+            var run = await pi.RunAsync("backup", "--output", $"{folder}/b.tar.gz");
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+            run.Error.Should().Contain($"is in {folder}, which the backup holds or uninstall --purge removes");
+        }
     }
 
     [TestMethod]
@@ -333,6 +351,83 @@ public sealed class InstallerBackupTests
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain($"{path} must be a file only root reads (root's, 0600 or 0400): it holds the controller's secrets.").And.Contain(reason);
         pi.Exists("/etc/hvo-roof").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task ARestore_ChecksTheArchiveItOpened_NotOnlyThePath()
+    {
+        using var pi = await InstallerLifecycleTests.InstalledPiAsync();
+        await BackUpAndPurgeAsync(pi);
+
+        // Someone who can write /srv/keep puts their own archive in its place just after restore checks the path.
+        const string theirs = "/srv/keep/theirs.tar.gz";
+        File.Copy(pi.OnDisk(Kept), pi.OnDisk(theirs));
+        File.SetUnixFileMode(pi.OnDisk(theirs), Modes.PrivateFile);
+        pi.AfterStat[Kept] = () =>
+        {
+            if (File.Exists(pi.OnDisk(theirs)))
+            {
+                File.Move(pi.OnDisk(theirs), pi.OnDisk(Kept), overwrite: true);
+                pi.Owners[Kept] = "pi:pi";
+            }
+        };
+
+        var run = await pi.RunAsync("restore", Kept);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"{Kept} must be a file only root reads (root's, 0600 or 0400)").And.Contain("It is regular file, pi:pi's, 0600.");
+        pi.Exists("/etc/hvo-roof").Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow("/var/lib/hvo-roof/identity", "root:root", "0777")]
+    [DataRow("/etc/hvo-roof", "root:root", "0775")]
+    [DataRow(KioskSteps.ConfigurationFolder, "hvo-kiosk:hvo-kiosk", "0750")]
+    [DataRow(KioskSteps.ProgramFolder, "pi:pi", "0755")]
+    public async Task ABackup_OfAFolderSomeoneButRootCanChange_IsRefused_AndWritesNothing(string folder, string owner, string mode)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.Owners[folder] = owner;
+        File.SetUnixFileMode(pi.OnDisk(folder), (UnixFileMode)Convert.ToInt32(mode, 8));
+        pi.Folder("/srv/keep");
+
+        var run = await pi.RunAsync("backup", "--output", Kept);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"{folder} is {owner}'s, {mode}: someone other than root can change what is in it, so a backup cannot trust what it reads there.");
+        pi.Exists(Kept).Should().BeFalse();
+        pi.Exists(Kept + ".partial").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task ABackup_KeepsModesWithoutTheirSpecialBits_SoAFolderWithSetgid_IsRestored()
+    {
+        using var pi = await InstalledPiAsync();
+        File.SetUnixFileMode(pi.OnDisk(KioskSteps.ConfigurationFolder), Modes.GroupFolder | UnixFileMode.SetGroup);
+        await BackUpAndPurgeAsync(pi);
+
+        Manifest(Entries(pi, Kept)).Single(entry => entry["path"]!.GetValue<string>() == KioskSteps.ConfigurationFolder)["mode"]!.GetValue<string>().Should().Be("0750");
+        var run = await pi.RunAsync("restore", Kept);
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Mode(KioskSteps.ConfigurationFolder).Should().Be(Modes.GroupFolder);
+    }
+
+    [TestMethod]
+    public async Task ABackup_RestoreCouldNotRead_IsNotKept()
+    {
+        using var pi = await InstalledPiAsync();
+        var record = JsonNode.Parse(pi.Read(InstallPaths.SystemRecord))!;
+        record["version"] = "4.0";
+        pi.Write(InstallPaths.SystemRecord, record.ToJsonString());
+        pi.Folder("/srv/keep");
+
+        var run = await pi.RunAsync("backup", "--output", Kept);
+
+        run.ExitCode.Should().NotBe(0, run.ToString());
+        run.Error.Should().Contain("The backup was not kept: restore could not read it back. The backup's install record cannot be read: Its version, '4.0', is not a release version");
+        pi.Exists(Kept).Should().BeFalse();
+        pi.Exists(Kept + ".partial").Should().BeFalse();
     }
 
     [TestMethod]

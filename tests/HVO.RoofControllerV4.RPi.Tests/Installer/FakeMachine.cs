@@ -358,7 +358,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     }
 
     /// <summary>A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests.</summary>
-    public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null, string? upgradeNotes = null)
+    public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null, IReadOnlyList<UpgradeNote>? upgradeNotes = null)
     {
         object Image(string name, string digest) => new
         {
@@ -379,7 +379,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             commit = "0123456789abcdef0123456789abcdef01234567",
             created = "2026-10-01T12:00:00Z",
             repository = "https://github.com/HualapaiValley/HVO.RoofController",
-            upgradeNotes,
+            upgradeNotes = upgradeNotes?.Select(note => new { version = note.Version, text = note.Text }),
             images = new
             {
                 controller = Image("roof-controller", controllerDigest ?? ControllerDigest),

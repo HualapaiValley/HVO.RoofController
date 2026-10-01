@@ -88,14 +88,15 @@ build/release-compose.py --version 4.0.0 --controller-digest sha256:<hex> --emul
 [`build/release-assets.py`](../build/release-assets.py) gathers a release's assets ([The assets](#the-assets)) into
 one new folder, from what CI built: `hvo-roof` and `hvo-roof-install` for each platform, the kiosk's folder and the Mac
 app's zip. It checks that each is exactly what it expects, built for the right processor, and makes the kiosk's
-tarball, the compose file (with `release-compose.py`), `release.json` and `SHA256SUMS`. `--upgrade-notes FILE` puts the
-upgrade notes in `release.json`. `--registry` names another registry than GHCR, for a test:
+tarball, the compose file (with `release-compose.py`), `release.json` and `SHA256SUMS`. `--upgrade-notes DIR` puts
+every release's upgrade notes in the folder, up to this one's, in `release.json`. `--registry` names another registry
+than GHCR, for a test:
 
 ```bash
 build/release-assets.py --version 4.0.0 --commit "$(git rev-parse HEAD)" --created 2026-10-01T12:00:00Z \
   --controller-digest sha256:<hex> --emulator-digest sha256:<hex> \
   --cli ci/cli --installer ci/installer --kiosk ci/kiosk --mac-zip ci/mac/hvo-roof-mac-<run id>.zip \
-  --upgrade-notes docs/upgrade-notes/4.0.0.md -o dist
+  --upgrade-notes docs/upgrade-notes -o dist
 ```
 
 [`build/push-image.sh`](../build/push-image.sh) pushes an image from an OCI archive to a registry with
@@ -252,7 +253,9 @@ What a program needs to know about a release, such as the installer and `install
     },
     "hatEmulator": { "...": "the same, for ghcr.io/hualapaivalley/roof-hat-emulator" }
   },
-  "upgradeNotes": "Nothing to do by hand.",
+  "upgradeNotes": [
+    { "version": "4.0.0", "text": "Nothing to do by hand." }
+  ],
   "assets": [
     { "name": "hvo-roof-install-linux-arm64", "kind": "installer", "platform": "linux-arm64", "size": 45234567, "sha256": "<hex>" },
     { "name": "hvo-roof-linux-arm64", "kind": "cli", "platform": "linux-arm64", "size": 41234567, "sha256": "<hex>" }
@@ -265,9 +268,12 @@ What a program needs to know about a release, such as the installer and `install
 - `created` is when the release was built: the time in both images' labels, and the kiosk tarball's file times.
 - `images.<image>.reference` is what to pull or deploy (`IMAGE_REF`): the tag, for people, and the digest, which is
   what is pulled.
-- `upgradeNotes` is the text of `docs/upgrade-notes/<version>.md`, which the installer prints before an upgrade
-  ([Upgrading](install.md#upgrading)), at most 16 KiB. It is left out when there are none, which only a release
-  candidate may have.
+- `upgradeNotes` is every release's upgrade notes up to this one, oldest first: each `docs/upgrade-notes/X.Y.Z.md`
+  whose version is not newer than this release's (a release candidate's is its final release's), as its `version` and
+  its `text`, at most 16 KiB each and 128 KiB together. Before an upgrade, the installer prints those of each release
+  after the one installed ([Upgrading](install.md#upgrading)), so an upgrade across several releases shows them all.
+  The folder holds `X.Y.Z.md` files alone. It is left out when there are none, which only a release candidate before
+  any final release's notes may have.
 - `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `installer`, `kiosk`, `mac-app`,
   `compose` or `deploy-script`. `platform` is the .NET runtime the file is for, or `null` for a file for any.
 

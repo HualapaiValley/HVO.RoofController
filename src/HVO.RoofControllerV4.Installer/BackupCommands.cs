@@ -159,6 +159,7 @@ internal static class BackupCommands
                 stream.Flush(flushToDisk: true);
             }
 
+            await ReadBackAsync(machine, partial, path, cancellationToken).ConfigureAwait(false);
             machine.SetMode(partial, Modes.PrivateFile);
             machine.MoveFile(partial, path, overwrite: false);
         }
@@ -191,6 +192,23 @@ internal static class BackupCommands
         return path;
     }
 
+    // The archive just written, read as restore reads it: a backup restore would refuse fails now, not when it is needed.
+    private static async Task ReadBackAsync(InstallerMachine machine, string partial, string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var stream = machine.OpenRead(partial) ?? throw new InstallerException($"{partial} went while it was written.");
+            await using (stream.ConfigureAwait(false))
+            {
+                await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (InstallerRefusedException error)
+        {
+            throw new InstallerException($"The backup was not kept: restore could not read it back. {error.Message}");
+        }
+    }
+
     private static async Task WriteEntryAsync(TarWriter tar, string name, UnixFileMode mode, DateTimeOffset time, byte[]? content, CancellationToken cancellationToken)
     {
         var entry = new PaxTarEntry(content is null ? TarEntryType.Directory : TarEntryType.RegularFile, name)
@@ -209,7 +227,10 @@ internal static class BackupCommands
     }
 
     // Every folder and file the backup holds, parents first, each file's content read once (so the SHA-256 the manifest
-    // gives is of what the archive holds). Links and special files are left out, and never followed.
+    // gives is of what the archive holds). Links and special files are left out, and never followed. Each folder read,
+    // and each file's own folder, must be one only root changes: whoever else could would swap a file for a link, to
+    // somewhere the backup then reads and restore writes back. Modes are kept without their special bits (setuid,
+    // setgid, sticky): the installer sets none, and restore takes permission bits alone.
     private static async Task<List<BackupEntry>> CollectAsync(InstallerMachine machine, List<string> skipped, CancellationToken cancellationToken)
     {
         var entries = new List<BackupEntry>();
@@ -221,6 +242,15 @@ internal static class BackupCommands
 
         foreach (var file in Files)
         {
+            if (machine.FileExists(file))
+            {
+                var parent = Path.GetDirectoryName(file)!;
+                if (await StatAsync(machine, parent, cancellationToken).ConfigureAwait(false) is var (_, parentOwner))
+                {
+                    OnlyRootChanges(parent, parentOwner, machine.GetMode(parent));
+                }
+            }
+
             await AddAsync(file, recurse: false).ConfigureAwait(false);
         }
 
@@ -233,9 +263,10 @@ internal static class BackupCommands
                 return;
             }
 
-            var mode = machine.GetMode(path) ?? Modes.PrivateFile;
+            var mode = (UnixFileMode)((int)(machine.GetMode(path) ?? Modes.PrivateFile) & 0x1FF);
             if (kind == "directory" && recurse)
             {
+                OnlyRootChanges(path, owner, mode);
                 entries.Add(new BackupEntry(path, BackupEntry.Folder, Modes.Octal(mode), owner));
                 foreach (var name in machine.ListNames(path))
                 {
@@ -263,11 +294,24 @@ internal static class BackupCommands
         }
     }
 
-    // What the path is (as stat names it: "regular file", "directory", "symbolic link", …) and who owns it, without
-    // following a link; null when it is not there.
-    private static async Task<(string Kind, string? Owner)?> StatAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+    private static void OnlyRootChanges(string folder, string? owner, UnixFileMode? mode)
     {
-        var result = await machine.Commands.RunAsync(new CommandLine("stat", "-c", "%F|%U:%G", "--", path), cancellationToken).ConfigureAwait(false);
+        const UnixFileMode othersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
+        if (owner?.StartsWith("root:", StringComparison.Ordinal) != true || mode is not { } found || (found & othersWrite) != 0)
+        {
+            throw new InstallerRefusedException(
+                $"{folder} is {owner ?? "an unknown owner"}'s, {(mode is { } known ? Modes.Octal(known) : "unknown")}: someone other than root can change what is in it, "
+                + $"so a backup cannot trust what it reads there. Give it to root, with only root writing (sudo chown root {folder}; sudo chmod go-w {folder}), then back up. Nothing was written.");
+        }
+    }
+
+    // What the path is (as stat names it: "regular file", "directory", "symbolic link", …) and who owns it, without
+    // following a link (or, with follow, of what a link names); null when it is not there.
+    private static async Task<(string Kind, string? Owner)?> StatAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, bool follow = false)
+    {
+        var result = await machine.Commands.RunAsync(
+            follow ? new CommandLine("stat", "-L", "-c", "%F|%U:%G", "--", path) : new CommandLine("stat", "-c", "%F|%U:%G", "--", path),
+            cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded)
         {
             return machine.FileExists(path) || machine.DirectoryExists(path)
@@ -295,9 +339,9 @@ internal static class BackupCommands
         }
 
         var path = Path.GetFullPath(output, machine.CurrentDirectory);
-        if (Folders.Concat(Files).FirstOrDefault(root => Within(path, root)) is { } inside)
+        if (Folders.Concat(Files).Append(KioskSteps.ProgramFolder).FirstOrDefault(root => Within(path, root)) is { } inside)
         {
-            throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds (and uninstall --purge removes): keep the backup somewhere else.");
+            throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds or uninstall --purge removes: keep the backup somewhere else.");
         }
 
         if (machine.FileExists(path) || machine.DirectoryExists(path))
@@ -541,7 +585,9 @@ internal static class BackupCommands
     private sealed record ReadBackup(BackupManifest Manifest, IReadOnlyList<BackupEntry> Entries, InstallRecord? Record);
 
     // The backup, read whole and checked before anything is written: only root may read it; its manifest comes first; it
-    // holds only folders and files, each where a backup puts them, each as the manifest says (size and SHA-256).
+    // holds only folders and files, each where a backup puts them, each as the manifest says (size and SHA-256). The path
+    // is checked without following a link, then the file opened is checked again (through /proc, by its descriptor):
+    // whoever can write the folder holding it could swap the path for their own archive between a check and the open.
     private static async Task<ReadBackup> ReadAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
     {
         if (await StatAsync(machine, path, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
@@ -549,31 +595,49 @@ internal static class BackupCommands
             throw new InstallerRefusedException($"{path} is not there.");
         }
 
-        var mode = machine.GetMode(path);
-        if (kind is not ("regular file" or "regular empty file") || owner?.StartsWith("root:", StringComparison.Ordinal) != true || mode is not (Modes.PrivateFile or Modes.OwnerReadOnly))
+        if (!IsPrivate(kind, owner, machine.GetMode(path)))
         {
-            throw new InstallerRefusedException(
-                $"{path} must be a file only root reads (root's, 0600 or 0400): it holds the controller's secrets. It is {kind}, {owner ?? "an unknown owner"}'s, {(mode is { } found ? Modes.Octal(found) : "unknown")}. Fix that with sudo chown root: and sudo chmod 600.");
+            throw NotPrivate(path, kind, owner, machine.GetMode(path));
         }
 
+        var stream = machine.OpenRead(path) as FileStream ?? throw new InstallerRefusedException($"{path} is not there.");
+        await using (stream.ConfigureAwait(false))
+        {
+            var opened = await StatAsync(machine, $"/proc/{Environment.ProcessId}/fd/{stream.SafeFileHandle.DangerousGetHandle()}", cancellationToken, follow: true).ConfigureAwait(false)
+                ?? throw new InstallerRefusedException($"{path} went as it was opened.");
+            var openedMode = File.GetUnixFileMode(stream.SafeFileHandle);
+            if (!IsPrivate(opened.Kind, opened.Owner, openedMode))
+            {
+                throw NotPrivate(path, opened.Kind, opened.Owner, openedMode);
+            }
+
+            return await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static bool IsPrivate(string kind, string? owner, UnixFileMode? mode)
+        => kind is ("regular file" or "regular empty file") && owner?.StartsWith("root:", StringComparison.Ordinal) == true && mode is (Modes.PrivateFile or Modes.OwnerReadOnly);
+
+    private static InstallerRefusedException NotPrivate(string path, string kind, string? owner, UnixFileMode? mode)
+        => new($"{path} must be a file only root reads (root's, 0600 or 0400): it holds the controller's secrets. It is {kind}, {owner ?? "an unknown owner"}'s, {(mode is { } found ? Modes.Octal(found) : "unknown")}. Fix that with sudo chown root: and sudo chmod 600.");
+
+    // The archive in stream, which path names, read whole and checked.
+    private static async Task<ReadBackup> ReadArchiveAsync(Stream stream, string path, CancellationToken cancellationToken)
+    {
         try
         {
-            var stream = machine.OpenRead(path) ?? throw new InstallerRefusedException($"{path} is not there.");
-            await using (stream.ConfigureAwait(false))
+            if (stream.Length > MaxBytes)
             {
-                if (stream.Length > MaxBytes)
-                {
-                    throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
-                }
+                throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
+            }
 
-                var gzip = new GZipStream(stream, CompressionMode.Decompress);
-                await using (gzip.ConfigureAwait(false))
+            var gzip = new GZipStream(stream, CompressionMode.Decompress, leaveOpen: true);
+            await using (gzip.ConfigureAwait(false))
+            {
+                var tar = new TarReader(gzip);
+                await using (tar.ConfigureAwait(false))
                 {
-                    var tar = new TarReader(gzip);
-                    await using (tar.ConfigureAwait(false))
-                    {
-                        return await ReadEntriesAsync(tar, path, cancellationToken).ConfigureAwait(false);
-                    }
+                    return await ReadEntriesAsync(tar, path, cancellationToken).ConfigureAwait(false);
                 }
             }
         }

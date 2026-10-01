@@ -108,7 +108,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes; or a `--purge` confirmed with another machine's name. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -822,8 +822,9 @@ release instead of the latest, and `--release DIR` reads it from a folder ([The 
 
 Each installer installs its own release, so the installer hands over to the new release's:
 
-1. It says what is installed and what replaces it, and prints the new release's upgrade notes: what someone upgrading
-   must do, such as a setting to change. Read them before the upgrade goes on.
+1. It says what is installed and what replaces it, and prints the upgrade notes of each release after the one installed,
+   up to the new one, oldest first: what someone upgrading must do, such as a setting to change. An upgrade across
+   several releases shows every one's. Read them before the upgrade goes on.
 2. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
    and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
    of your own) is refused: download that release's installer and run its `upgrade`.
@@ -889,7 +890,15 @@ and the rollback is refused (exit 3).
 The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,
 written whole or not at all. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
 SHA-256, the host and the release. `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
-only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs up.
+only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs
+up or a purge removes, `/opt/hvo-roof-kiosk` included. Before it keeps the archive, it reads it back as a restore
+would: one a restore could not read is not kept, and the backup fails.
+
+- Each file and folder keeps its permission bits, without setuid, setgid or the sticky bit: the install that follows a
+  restore sets the modes it needs.
+- Every folder it reads must be root's, with only root writing to it: whoever else could change one could put a file of
+  theirs in place of another as it is read. Such a folder is refused, with the `chown` and `chmod` that fix it, and
+  nothing is written.
 
 ```text
 $ sudo hvo-roof-install backup --output /root/roofpi.tar.gz
@@ -911,7 +920,8 @@ what the backup's record says, with this installer's release. Download the insta
 the backup's release's, or a newer one. `--plan` says what it would put back and
 changes nothing; `--release DIR` reads the release from a folder.
 
-- The archive must be root's and `0600` or `0400`. A backup a newer installer made, or of a newer release, is refused:
+- The archive must be root's and `0600` or `0400`. The restore checks the file it opened, as well as the path, so a
+  file put in its place in between is refused too. A backup a newer installer made, or of a newer release, is refused:
   restore it with that release's installer.
 - A restore is for a machine with nothing installed. Uninstall first; a plain uninstall keeps the data, which the
   restore then replaces only with `--replace`, so the data is never overwritten by mistake.
@@ -925,14 +935,18 @@ changes nothing; `--release DIR` reads the release from a folder.
 
 ## Uninstalling
 
-`sudo hvo-roof-install uninstall` removes what the installer installed here, from its record:
+`sudo hvo-roof-install uninstall` removes what the installer installed here, from its record, in this order:
 
-- the kiosk's service, its program and the udev rule for the screen's backlight;
 - the controller, stopped by the deploy script's `--stop` after a verified Stop of the roof
   ([Deploying](deployment.md#deploying-with-the-script)), with the one kept for a rollback, a rig's HAT emulator and
   its network, each with its image when no other container uses it;
+- the kiosk's service, its program and the udev rule for the screen's backlight;
 - `hvo-roof` and the Mac app, with the copies kept beside them;
-- the installer itself.
+- the installer itself, last.
+
+The controller goes first. When it does not stop, nothing else is removed: the kiosk goes on showing the roof, and
+`uninstall` again carries on once the roof is idle. The deploy script stops only a running controller: one that is
+paused or restarting blocks the uninstall, which changes nothing; start it or let it settle, then uninstall.
 
 The data stays: the settings, secrets, certificate and CA, the people and the kiosk's device key. The record says when
 it was uninstalled, and keeps the choices, so an install that follows can offer them again. The `hvo-kiosk` user, the
@@ -941,7 +955,10 @@ asking, and `--plan` only shows it. Running it again changes nothing.
 
 `--purge` removes the data too: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the kiosk's `/etc/hvo-roof-kiosk` and
 `/opt/hvo-roof-kiosk`, and the record. As yourself, it removes the Mac app's settings and device key and
-`~/.config/hvo-roof`. It cannot be undone, so it asks for two more things:
+`~/.config/hvo-roof`. The folder holding the record goes last, with the record the last thing in it, then the
+installer, so a purge stopped part way can be run again. A controller deployed here that the uninstall does not stop
+(one deployed by hand after an uninstall) refuses a purge, which would remove its files from under it: remove it with
+the deploy script first. It cannot be undone, so it asks for two more things:
 
 - **this machine's name**, typed when asked or given with `--confirm HOST`, so that data is not removed from the wrong
   machine over SSH;
@@ -1015,11 +1032,13 @@ machine has files, modes, containers and ports, and its programs are stubbed. Th
   Mac app without its quarantine mark, its device key made through the controller's API (a real one, in process), its
   settings kept when you changed them, `--check`, and the login keychain;
 - upgrading, rolling back and uninstalling (`InstallerLifecycleTests`): the new release's installer put in place and
-  handed over to, the upgrade notes, an older release refused, the record's versions, a rollback once and only once,
-  the deploy script's `--stop` before the controller goes, the data kept, and `--purge` with its name and its backup;
+  handed over to, every release's upgrade notes since the one installed, an older release refused, the record's
+  versions, a rollback once and only once, the deploy script's `--stop` before anything else goes and a controller it
+  cannot stop, the data kept, and `--purge` with its name and its backup, its order, and a controller it does not stop;
 - backing up and restoring (`InstallerBackupTests`): the archive's entries, modes and owners, a backup that fails
-  leaving nothing, no secret printed or logged, a restore on a new machine with the same name or another, `--replace`,
-  and the archives a restore refuses;
+  leaving nothing, one a restore could not read back, folders someone other than root can change, no secret printed or
+  logged, a restore on a new machine with the same name or another, `--replace`, and the archives a restore refuses,
+  one swapped in after the check included;
 - the exit codes.
 
 The controller's side, `GET /ca.crt` and the `https_certificate` health check, has its own tests

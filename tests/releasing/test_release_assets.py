@@ -265,34 +265,73 @@ class AnotherRegistry(ReleaseTestCase):
 
 
 class TheUpgradeNotes(ReleaseTestCase):
-    def notes(self, text):
-        path = self.release.root / "4.0.0.md"
-        path.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
-        return str(path)
+    def notes(self, **files):
+        """docs/upgrade-notes, with each X_Y_Z keyword's text (or bytes) as X.Y.Z.md."""
+        folder = self.release.root / "upgrade-notes"
+        folder.mkdir(exist_ok=True)
+        for name, text in files.items():
+            (folder / (name.replace("_", ".") + ".md")).write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+        return str(folder)
+
+    def upgrade_notes(self):
+        return json.loads((self.release.out / "release.json").read_text(encoding="utf-8"))["upgradeNotes"]
 
     def test_release_json_carries_the_notes_text_without_the_blank_lines_around_it(self):
-        self.build(**{"--upgrade-notes": self.notes("\nStop the roof before upgrading.\n\n- Then run it.\n\n")})
+        self.build(**{"--upgrade-notes": self.notes(**{"4_0_0": "\nStop the roof before upgrading.\n\n- Then run it.\n\n"})})
+        self.assertEqual(self.upgrade_notes(), [{"version": "4.0.0", "text": "Stop the roof before upgrading.\n\n- Then run it."}])
+
+    def test_release_json_carries_every_releases_notes_up_to_its_own_oldest_first(self):
+        mac_zip(self.release.mac, version="4.10.0")
+        folder = self.notes(**{"4_10_0": "Ten.\n", "4_9_0": "Nine.\n", "4_0_0": "Zero.\n", "4_11_0": "Later.\n", "5_0_0": "Five.\n"})
+        self.build("4.10.0", **{"--upgrade-notes": folder})
+        self.assertEqual(self.upgrade_notes(), [{"version": "4.0.0", "text": "Zero."}, {"version": "4.9.0", "text": "Nine."},
+                                                {"version": "4.10.0", "text": "Ten."}])
+
+    def test_a_release_candidate_carries_its_final_releases_notes(self):
+        mac_zip(self.release.mac, version="4.1.0")
+        self.build("4.1.0-rc.1", **{"--upgrade-notes": self.notes(**{"4_0_0": "Zero.\n", "4_1_0": "One.\n", "4_2_0": "Two.\n"})})
+        self.assertEqual([note["version"] for note in self.upgrade_notes()], ["4.0.0", "4.1.0"])
+
+    def test_a_release_before_every_note_carries_none(self):
+        self.build(**{"--upgrade-notes": self.notes(**{"4_0_1": "Later.\n"})})
         manifest = json.loads((self.release.out / "release.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["upgradeNotes"], "Stop the roof before upgrading.\n\n- Then run it.")
+        self.assertNotIn("upgradeNotes", manifest)
 
     def test_the_notes_are_not_an_asset(self):
-        printed = self.build(**{"--upgrade-notes": self.notes("Notes.\n")}).split()
+        printed = self.build(**{"--upgrade-notes": self.notes(**{"4_0_0": "Notes.\n"})}).split()
         self.assertNotIn("4.0.0.md", printed)
         self.assertNotIn("4.0.0.md", (self.release.out / "SHA256SUMS").read_text(encoding="utf-8"))
 
     def test_empty_notes(self):
         self.refused("is empty: a release's upgrade notes say what someone upgrading must do",
-                     **{"--upgrade-notes": self.notes(" \n\n")})
+                     **{"--upgrade-notes": self.notes(**{"4_0_0": " \n\n"})})
 
     def test_notes_that_are_not_utf_8(self):
-        self.refused("is not UTF-8 text", **{"--upgrade-notes": self.notes(b"caf\xe9\n")})
+        self.refused("is not UTF-8 text", **{"--upgrade-notes": self.notes(**{"4_0_0": b"caf\xe9\n"})})
 
     def test_notes_too_long_to_print(self):
         self.refused("keep them under 16384 and link to the rest",
-                     **{"--upgrade-notes": self.notes("x" * (16 * 1024 + 1))})
+                     **{"--upgrade-notes": self.notes(**{"4_0_0": "x" * (16 * 1024 + 1)})})
+
+    def test_every_releases_notes_together_too_long_to_print(self):
+        mac_zip(self.release.mac, version="4.8.0")
+        folder = self.notes(**{f"4_{minor}_0": "x" * (16 * 1024) for minor in range(9)})
+        self.refused("hold 147456 characters together; the installer prints them whole, so keep them under 131072",
+                     "4.8.0", **{"--upgrade-notes": folder})
+
+    def test_a_file_that_is_not_a_releases_notes(self):
+        folder = self.notes(**{"4_0_0": "Zero.\n"})
+        (pathlib.Path(folder) / "README.md").write_text("Notes.\n", encoding="utf-8")
+        self.refused("README.md is not a release's upgrade notes", **{"--upgrade-notes": folder})
+
+    def test_notes_that_are_a_link(self):
+        folder = self.notes(**{"4_0_0": "Zero.\n"})
+        (pathlib.Path(folder) / "3.9.0.md").symlink_to(pathlib.Path(folder) / "4.0.0.md")
+        self.refused("3.9.0.md is not a release's upgrade notes", **{"--upgrade-notes": folder})
 
     def test_missing_notes(self):
-        self.refused("No such file", **{"--upgrade-notes": str(self.release.root / "4.0.0.md")})
+        self.refused("is not a folder: --upgrade-notes is docs/upgrade-notes",
+                     **{"--upgrade-notes": str(self.release.root / "upgrade-notes")})
 
 
 class TheRefusals(ReleaseTestCase):

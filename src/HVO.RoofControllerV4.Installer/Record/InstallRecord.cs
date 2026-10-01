@@ -101,7 +101,21 @@ public sealed record InstallRecord
 
         var record = JsonSerializer.Deserialize<InstallRecord>(json, InstallerJson.Options)
             ?? throw new JsonException("The record is empty.");
-        return record.Schema > CurrentSchema ? throw NewerSchema(record.Schema) : record;
+        if (record.Schema > CurrentSchema)
+        {
+            throw NewerSchema(record.Schema);
+        }
+
+        // upgrade, rollback and restore compare these: each must be a release version.
+        foreach (var (name, version) in new[] { ("version", record.Version), ("previousVersion", record.PreviousVersion), ("rolledBackFrom", record.RolledBackFrom) })
+        {
+            if (version is not null && !RoofSemVer.IsValid(version))
+            {
+                throw new JsonException($"Its {name}, '{version}', is not a release version (major.minor.patch, as 4.0.0 or 4.0.1-rc.1).");
+            }
+        }
+
+        return record;
     }
 
     private static JsonException NewerSchema(int schema)

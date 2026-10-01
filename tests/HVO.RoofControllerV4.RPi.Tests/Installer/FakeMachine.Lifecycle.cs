@@ -40,6 +40,12 @@ internal sealed partial class FakeMachine
     /// </summary>
     public Func<string, IReadOnlyList<string>, IReadOnlyDictionary<string, string>, Task<int>>? Launch { get; set; }
 
+    /// <summary>
+    /// What happens just after stat answers for a path without following a link (the backup's check of a file or
+    /// folder), as someone else on the machine might do it then: by path.
+    /// </summary>
+    public Dictionary<string, Action> AfterStat { get; } = new(StringComparer.Ordinal);
+
     /// <summary>The same machine, with <paramref name="userName"/> running the installer without sudo.</summary>
     public FakeMachine AsPerson(string userName = "pi")
     {
@@ -67,7 +73,7 @@ internal sealed partial class FakeMachine
     /// Publishes the fake release of <paramref name="version"/> on GitHub, with its own digests and files, and makes it the
     /// latest release when <paramref name="latest"/>.
     /// </summary>
-    public FakeMachine WithRelease(string version, bool latest = false, string? upgradeNotes = null)
+    public FakeMachine WithRelease(string version, bool latest = false, IReadOnlyList<UpgradeNote>? upgradeNotes = null)
     {
         var json = ReleaseJson(version, ControllerDigestFor(version), EmulatorDigestFor(version), upgradeNotes);
         Downloads[ReleaseManifest.DownloadUri(version).ToString()] = json;
@@ -139,7 +145,8 @@ internal sealed partial class FakeMachine
             "systemctl" when arguments is ["disable", MachineSurveyor.KioskUnit] => Exists(MachineSurveyor.KioskUnitFile)
                 ? Answer($"Removed \"/etc/systemd/system/graphical.target.wants/{MachineSurveyor.KioskUnit}\".", after: () => Kiosk = Kiosk with { Enabled = false })
                 : new CommandResult(1, string.Empty, $"Failed to disable unit: Unit file {MachineSurveyor.KioskUnit} does not exist.\n"),
-            "stat" when arguments is ["-c", "%F|%U:%G", "--", var path] => Stat(path),
+            "stat" when arguments is ["-c", "%F|%U:%G", "--", var path] => Stat(path, after: AfterStat.GetValueOrDefault(path)),
+            "stat" when arguments is ["-L", "-c", "%F|%U:%G", "--", var opened] => StatOpened(opened),
             _ when arguments is ["--version"] && CliVersion(command.Program) is { } line => Answer(line),
             _ => null
         };
@@ -181,7 +188,7 @@ internal sealed partial class FakeMachine
     }
 
     // stat -c '%F|%U:%G': its type as GNU stat names it, and its owner.
-    private CommandResult Stat(string path)
+    private CommandResult Stat(string path, Action? after = null)
     {
         var info = new FileInfo(OnDisk(path));
         if (!info.Exists && !Directory.Exists(OnDisk(path)) && info.LinkTarget is null)
@@ -193,7 +200,18 @@ internal sealed partial class FakeMachine
             : Directory.Exists(OnDisk(path)) ? "directory"
             : info.Length == 0 ? "regular empty file"
             : "regular file";
-        return Answer($"{type}|{Owners.GetValueOrDefault(path, "root:root")}");
+        var answer = $"{type}|{Owners.GetValueOrDefault(path, "root:root")}";
+        return after is null ? Answer(answer) : Answer(answer, after);
+    }
+
+    // stat -L -c '%F|%U:%G' /proc/<pid>/fd/<n>: the file the installer has open on that descriptor, wherever it is now.
+    private CommandResult StatOpened(string opened)
+    {
+        var target = opened.StartsWith("/proc/", StringComparison.Ordinal) ? new FileInfo(opened).LinkTarget : null;
+        var root = Root.TrimEnd('/');
+        return target is not null && target.StartsWith(root + "/", StringComparison.Ordinal)
+            ? Stat(target[root.Length..])
+            : new CommandResult(1, string.Empty, $"stat: cannot statx '{opened}': No such file or directory\n");
     }
 
     // The image a container runs, as Inspect reports it.

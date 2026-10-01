@@ -258,11 +258,11 @@ jobs:
             echo "::error::CI's HVO Roof.app artifact holds ${#mac[@]} files, not its one zip."
             exit 1
           fi
-          # The upgrade notes go in release.json too: the installer shows them before it upgrades.
+          # Every release's upgrade notes up to this one's go in release.json too: the installer shows each one newer
+          # than what it upgrades from, before it upgrades.
           notes=()
-          upgrade="docs/upgrade-notes/${VERSION%%-*}.md"
-          if [ -s "${upgrade}" ]; then
-            notes=(--upgrade-notes "${upgrade}")
+          if [ -d docs/upgrade-notes ]; then
+            notes=(--upgrade-notes docs/upgrade-notes)
           fi
           build/release-assets.py --version "${VERSION}" --commit "${GITHUB_SHA}" --created "${CREATED}" \
             --controller-digest "${CONTROLLER_DIGEST}" --emulator-digest "${EMULATOR_DIGEST}" \

@@ -26,7 +26,9 @@ public sealed class InstallerLifecycleTests
     private const string CommandLine = "/boot/firmware/cmdline.txt";
     private const string Booted = "console=serial0,115200 console=tty1 root=PARTUUID=0a1b2c3d-02 rootfstype=ext4 fsck.repair=yes rootwait";
     private const string NewVersion = "4.0.1";
-    private const string Notes = "The kiosk's settings gain a brightness.\nNothing to do by hand.";
+
+    // The release installed has notes too: an upgrade from it shows only the ones after it.
+    private static readonly UpgradeNote[] Notes = [new("4.0.0", "The first release."), new(NewVersion, "The kiosk's settings gain a brightness.\nNothing to do by hand.")];
 
     private static readonly InstallAnswers ControllerAndKiosk = new() { Roles = [InstallRole.Controller, InstallRole.Kiosk] };
 
@@ -41,6 +43,7 @@ public sealed class InstallerLifecycleTests
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain($"4.0.0 is installed here; {NewVersion} replaces it.")
             .And.Contain($"Upgrade notes for {NewVersion}:\n  The kiosk's settings gain a brightness.\n  Nothing to do by hand.")
+            .And.NotContain("Upgrade notes for 4.0.0:")
             .And.Contain($"Release {NewVersion}: {ReleaseManifest.PageUri(NewVersion)}")
             .And.Contain($"Handing over to release {NewVersion}'s installer.")
             .And.Contain($"Upgrading from 4.0.0 to {NewVersion}.");
@@ -77,6 +80,19 @@ public sealed class InstallerLifecycleTests
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
         pi.Deploys.Should().HaveCount(2);
         pi.Launches.Should().ContainSingle();
+    }
+
+    [TestMethod]
+    public async Task AnUpgradeAcrossSeveralReleases_ShowsEachOnesNotes_OldestFirst()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease("4.2.0", latest: true, upgradeNotes: [new("4.0.0", "Zero."), new("4.1.0", "Renew the certificate first."), new("4.2.0", "Two.")]);
+
+        var run = await pi.RunAsync("upgrade", "--plan");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain("Upgrade notes for 4.1.0:\n  Renew the certificate first.\n\nUpgrade notes for 4.2.0:\n  Two.\n")
+            .And.NotContain("Upgrade notes for 4.0.0:");
     }
 
     [TestMethod]
@@ -348,6 +364,98 @@ public sealed class InstallerLifecycleTests
         reinstall.ExitCode.Should().Be(0, reinstall.ToString());
         pi.ApiKeyValues().Should().BeEquivalentTo(keys);
         Record(pi).Should().Match<InstallRecord>(installed => installed.Roles.Count == 2 && installed.UninstalledAt == null);
+    }
+
+    [TestMethod]
+    public async Task AnUninstall_WhoseControllerDoesNotStop_RemovesNothingElse_AndCanBeRunAgain()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.DeployFailure = "[deploy] The roof did not report Stopped.";
+
+        var run = await pi.RunAsync("uninstall", "--yes");
+
+        run.ExitCode.Should().NotBe(0, run.ToString());
+        pi.Containers[MachineSurveyor.ControllerContainer].State.Should().Be("running");
+        foreach (var kept in new[] { KioskSteps.Program, MachineSurveyor.KioskUnitFile, KioskSteps.BacklightRuleFile, InstallPaths.SystemInstaller })
+        {
+            pi.Exists(kept).Should().BeTrue($"{kept} goes only after the controller has stopped");
+        }
+
+        pi.Kiosk.Should().Be((true, true), "the kiosk keeps showing the roof while the controller still runs it");
+        Record(pi).Roles.Should().BeEquivalentTo([InstallRole.Controller, InstallRole.Kiosk]);
+
+        pi.DeployFailure = null;
+        var again = await pi.RunAsync("uninstall", "--yes");
+
+        again.ExitCode.Should().Be(0, again.ToString());
+        pi.Containers.Should().BeEmpty();
+        pi.Exists(KioskSteps.Program).Should().BeFalse();
+        Record(pi).Roles.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task AnUninstall_StopsTheControllerFirst_AndRemovesTheRecordAndTheInstallerLast()
+    {
+        using var pi = await InstalledPiAsync();
+        var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
+
+        var plan = PlanBuilder.BuildUninstall(pi.Machine, survey, Record(pi), purge: true);
+
+        var steps = plan.Steps.ToList();
+        steps.FindIndex(step => step is ControllerStopStep).Should().BeLessThan(steps.FindIndex(step => step is KioskServiceRemovalStep));
+        steps[^1].Target.Should().Be(InstallPaths.SystemInstaller);
+        steps.Last(step => step.Kind == StepKind.Folder).Target.Should().Be(Path.GetDirectoryName(InstallPaths.SystemRecord));
+    }
+
+    [TestMethod]
+    [DataRow("paused")]
+    [DataRow("restarting")]
+    public async Task AnUninstall_OfAControllerTheDeployScriptCannotStop_IsBlocked_AndChangesNothing(string state)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { State = state };
+        var files = pi.Snapshot(InstallPaths.SystemLog);
+
+        var run = await pi.RunAsync("uninstall", "--yes");
+
+        run.ExitCode.Should().NotBe(0, run.ToString());
+        run.ToString().Should().Contain($"it is {state}, and the deploy script stops only a running controller");
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
+        pi.Containers.Should().ContainKey(MachineSurveyor.ControllerContainer);
+    }
+
+    [TestMethod]
+    public async Task APurge_UnderAControllerItDoesNotStop_IsRefused()
+    {
+        using var pi = await InstalledPiAsync();
+        (await pi.RunAsync("uninstall", "--yes")).ExitCode.Should().Be(0);
+
+        // Someone deployed a controller by hand since: the record says nothing is installed, so nothing stops it.
+        pi.Containers[MachineSurveyor.ControllerContainer] = new FakeContainer();
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain("this uninstall does not stop it: --purge would remove its files from under it");
+        pi.Exists("/etc/hvo-roof/secrets").Should().BeTrue();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeTrue();
+    }
+
+    [TestMethod]
+    [DataRow("version", "upgrade")]
+    [DataRow("previousVersion", "rollback")]
+    [DataRow("rolledBackFrom", "upgrade")]
+    public async Task ARecord_WhoseVersionsAreNotReleaseVersions_IsRefused(string name, string command)
+    {
+        using var pi = await UpgradedPiAsync();
+        var record = System.Text.Json.Nodes.JsonNode.Parse(pi.Read(InstallPaths.SystemRecord))!;
+        record[name] = "4.0.1; rm -rf /";
+        pi.Write(InstallPaths.SystemRecord, record.ToJsonString());
+
+        var run = await pi.RunAsync(command);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"is not a valid install record: Its {name}, '4.0.1; rm -rf /', is not a release version");
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion);
     }
 
     [TestMethod]

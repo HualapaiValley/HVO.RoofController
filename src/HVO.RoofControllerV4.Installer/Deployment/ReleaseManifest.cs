@@ -20,6 +20,11 @@ public sealed record ReleaseImage(string Repository, string Digest, string Refer
 /// <param name="Files">For an archive, the SHA-256 of each file in it, by name; empty otherwise.</param>
 public sealed record ReleaseAsset(string Name, string Kind, string? Platform, long Size, string Sha256, IReadOnlyDictionary<string, string> Files);
 
+/// <summary>What to know before upgrading to a release, from its docs/upgrade-notes/X.Y.Z.md.</summary>
+/// <param name="Version">The release the notes are for: X.Y.Z.</param>
+/// <param name="Text">The notes, a few lines.</param>
+public sealed record UpgradeNote(string Version, string Text);
+
 /// <summary>
 /// A release's <c>release.json</c> (build/release-assets.py writes it): its version, the images it is made of, each
 /// pinned to its digest, and its other files with their SHA-256. The installer deploys those images and files and no
@@ -50,8 +55,11 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
     /// <summary>The release's files besides its images; empty for a release.json that lists none.</summary>
     public IReadOnlyList<ReleaseAsset> Assets { get; init; } = [];
 
-    /// <summary>What to know before upgrading to it, in a few lines, or null when there is nothing.</summary>
-    public string? UpgradeNotes { get; init; }
+    /// <summary>
+    /// Every release's upgrade notes up to this one's, oldest first: an upgrade shows each one newer than the release it
+    /// upgrades from. Empty when there are none.
+    /// </summary>
+    public IReadOnlyList<UpgradeNote> UpgradeNotes { get; init; } = [];
 
     /// <summary>
     /// The version a release.json is for, without checking the rest: what <c>upgrade</c> reads first to know which
@@ -120,7 +128,7 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
             return new ReleaseManifest(released, Text(root, "commit"), Image(images, "controller"), Image(images, "hatEmulator"))
             {
                 Assets = ReadAssets(root),
-                UpgradeNotes = Text(root, "upgradeNotes")
+                UpgradeNotes = ReadUpgradeNotes(root)
             };
         }
         catch (JsonException error)
@@ -156,6 +164,24 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
         }
 
         return new ReleaseImage(repository, digest, reference);
+    }
+
+    private static UpgradeNote[] ReadUpgradeNotes(JsonElement root)
+    {
+        if (!root.TryGetProperty("upgradeNotes", out var notes) || notes.ValueKind == JsonValueKind.Null)
+        {
+            return [];
+        }
+
+        if (notes.ValueKind != JsonValueKind.Array)
+        {
+            throw Invalid("its upgrade notes are not a list");
+        }
+
+        return [.. notes.EnumerateArray().Select((note, index) =>
+            note.ValueKind == JsonValueKind.Object && Text(note, "version") is { } version && RoofSemVer.IsValid(version) && Text(note, "text") is { } text
+                ? new UpgradeNote(version, text)
+                : throw Invalid($"upgrade note {index + 1} is not a release's version and its text"))];
     }
 
     private static ReleaseAsset[] ReadAssets(JsonElement root)
