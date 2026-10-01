@@ -25,7 +25,8 @@ different commit in each. It orders the builds of one workflow; the commit ident
 [`Directory.Build.targets`](../Directory.Build.targets) stops any build whose version is neither the `VersionPrefix`
 nor a prerelease of it, so a `-p:Version=4.1.0` on a tree that says 4.0.0 fails with a message naming both.
 
-To move to the next version, change the `VersionPrefix` in a pull request of its own.
+To move to the next version, change the `VersionPrefix` in a pull request of its own. Its `installer-rig` job then
+upgrades a rig from main's version to the new one ([The rig end to end](install.md#the-rig-end-to-end)).
 
 ## Where it shows
 

@@ -1369,7 +1369,9 @@ The script checks:
 10. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs
     that release. Its `upgrade` shows the new release's upgrade notes and hands over to the new installer, which it
     puts in `/usr/local/sbin`. The controller and the emulator are then the new release's, the old controller is kept
-    as `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing.
+    as `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing. Each release
+    is a prerelease of its own checkout's `VersionPrefix`, the new one `-rig.2` and the release before `-rig.1`, so a
+    pull request that moves the version to 4.0.1 upgrades from `4.0.0-rig.1` to `4.0.1-rig.2`.
 11. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
     `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so
     and changes nothing, and `upgrade` goes forward again.
