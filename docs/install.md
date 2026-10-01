@@ -94,7 +94,7 @@ It checks everything first, prints each check, and stops before downloading anyt
   as `upgrade`), else a question. It refuses what the installer would ([Roles](#roles)): the controller on a machine
   that is not a Pi, a role installed as root with one installed as you, and a role of yours run as root.
 - **Its commands.** curl, tar and sha256sum (shasum on a Mac).
-- **sudo**, when the installer runs as root and you are not root: sudo asks for your password, once, on the terminal.
+- **sudo**, when the installer runs as root and you are not root: sudo asks for your password on the terminal.
 - **Free space.** 200 MB in `TMPDIR` (or `/tmp`) for the download; 200 MB in your home for `hvo-roof` and the Mac app;
   on Linux, 2 GB in Docker's folder for the images.
 - **The network and the clock.** github.com answers, and this machine's clock is within 5 minutes of github.com's: a
@@ -102,12 +102,13 @@ It checks everything first, prints each check, and stops before downloading anyt
   that is not synchronised.
 - **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. Without Docker,
   on Debian, Raspberry Pi OS or Ubuntu, it offers to install it from Docker's apt repository (`--install-docker` does
-  it without asking). It notes a missing Compose v2, which the installer does not need.
-- **For the controller on the Pi:** I2C is on (`/dev/i2c-1`). It offers to turn it on with raspi-config
-  (`--enable-i2c` does it without asking); when raspi-config can only turn it on from the next start, restart the Pi
-  and run the script again.
-- **For a first install of the controller or a rig:** ports 8443, 8088 and 8080. A port in use is only noted: the
-  installer asks which ports to use, and checks the ones chosen.
+  it without asking), once every check before it has passed. It notes a missing Compose v2, which the installer does
+  not need.
+- **For the controller on the Pi:** I2C is on (`/dev/i2c-1`). Once every other check has passed, it offers to turn it
+  on with raspi-config (`--enable-i2c` does it without asking); when raspi-config can only turn it on from the next
+  start, restart the Pi and run the script again.
+- **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080. A port in
+  use is only noted: the installer asks which ports to use, and checks the ones chosen (an answers file's too).
 
 Then it downloads `hvo-roof-install-<platform>` and `SHA256SUMS` into a folder of its own in `TMPDIR`, which it removes
 afterwards. It refuses the installer unless:
@@ -127,7 +128,7 @@ the installer: `| bash -s -- upgrade`, `| bash -s -- --answers rig.json`, `| bas
 | Option | What it does |
 |--------|--------------|
 | `--roles LIST` | What the machine is for, so that the right things are checked: `controller`, `rig`, `kiosk`, `cli` or `mac-app`, separated by commas. |
-| `--from DIR` | Takes the installer and `SHA256SUMS` from `DIR`, a folder holding the release's files, not from GitHub. The installer reads the release from it too (its `--release DIR`). |
+| `--from DIR` | Takes the installer and `SHA256SUMS` from `DIR`, a folder holding the release's files, not from GitHub. The installer reads the release from it too (its `--release DIR`), except for `rollback`, whose `--release` is the release before. |
 | `--check` | Checks the machine, then stops: downloads nothing, installs nothing and changes nothing. |
 | `--install-docker` | When Docker is needed and missing, installs it from Docker's apt repository without asking. |
 | `--enable-i2c` | When the controller needs I2C and it is off, turns it on with raspi-config without asking. |
@@ -138,8 +139,9 @@ where sudo asks for no password, and give `--install-docker` or `--enable-i2c` f
 installer then reads nothing from its standard input, and refuses a question it would have asked.
 
 Its exit code is the installer's when the installer ran ([Exit codes](#exit-codes)). Otherwise it is 0 when `--check`
-passed; 1 when a check, the download or its verification failed; and 2 for a command line that is not valid, or a
-question with no terminal to ask it on.
+passed; 1 when a check, the download or its verification failed (a Docker or I2C offer with no terminal to make it
+on is a failed check); and 2 for a command line that is not valid, or roles or a sudo password with no terminal to ask
+for them on.
 
 ## Running it
 

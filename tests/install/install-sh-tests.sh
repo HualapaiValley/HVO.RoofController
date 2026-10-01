@@ -137,6 +137,8 @@ build_command() {
     HVO_ROOF_INSTALL_TEST_ROOT="${WORK}/root" FAKE_STATE_DIR="${FAKE_STATE_DIR}"
     FAKE_COMMAND="${TESTS_DIR}/fakes/fake-command" FAKE_BIN="${WORK}/fakebin" FAKE_PYTHON="$(command -v python3)"
     FAKE_REAL_DATE="$(command -v date)" FAKE_RELEASE_DIR="${WORK}/release" FAKE_DOCKER_ROOT="${WORK}/docker"
+    FAKE_REAL_SHA256SUM="$(command -v sha256sum || true)" FAKE_REAL_SHASUM="$(command -v shasum || true)"
+    TZ=MST7
     FAKE_RELEASE_VERSION="${VERSION}" FAKE_INSTALLER_VERSION="${VERSION}+${COMMIT}"
     ${env_pairs[@]+"${env_pairs[@]}"}
     "${WORK}/realbin/bash" -c 'cat "$1" | "$2" -s -- "${@:3}"' install-sh "${SCRIPT_UNDER_TEST}" "${WORK}/realbin/bash"
@@ -175,12 +177,6 @@ fail_test() {
 }
 
 assert_status() {
-  if [[ "$1" == "0" && "${STATUS}" != "0" ]] || [[ "$1" != "0" && "${STATUS}" == "0" ]]; then
-    fail_test "expected exit status $1, got ${STATUS}"
-  fi
-}
-
-assert_status_is() {
   [[ "${STATUS}" == "$1" ]] || fail_test "expected exit status $1, got ${STATUS}"
 }
 
@@ -223,7 +219,7 @@ assert_nothing_downloaded() {
 
 # The checks failed, and install.sh stopped before downloading anything.
 assert_stopped_by_checks() {
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "nothing was downloaded or installed."
   assert_nothing_downloaded
   assert_installer_did_not_run
@@ -264,7 +260,7 @@ test_the_repository_s_copy_installs_nothing() {
   SCRIPT_UNDER_TEST=${REPOSITORY_SCRIPT}
   install_sh -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This is the repository's copy of install.sh, which names no release: use a release's copy."
   assert_output_contains "releases/latest/download/install.sh | bash"
   [ ! -s "${FAKE_STATE_DIR}/calls.log" ] || fail_test "it ran commands: $(head -n 1 "${FAKE_STATE_DIR}/calls.log")"
@@ -291,7 +287,7 @@ test_help_names_the_release_and_runs_nothing() {
 test_an_option_without_its_value_is_a_usage_error() {
   install_sh -- --roles
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "install.sh: --roles needs a value."
   assert_output_contains "install.sh --help lists its options."
 }
@@ -299,14 +295,14 @@ test_an_option_without_its_value_is_a_usage_error() {
 test_from_a_folder_that_is_not_there_is_a_usage_error() {
   install_sh -- --from "${WORK}/no-such-folder" --roles rig
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "--from ${WORK}/no-such-folder: there is no such folder."
 }
 
 test_an_answers_file_that_is_not_there_is_a_usage_error() {
   install_sh -- --answers "${WORK}/no-such-answers.json"
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "--answers ${WORK}/no-such-answers.json: there is no such file, or you cannot read it."
 }
 
@@ -375,7 +371,7 @@ test_nothing_reads_the_download_after_the_script() {
 test_freebsd_is_refused() {
   install_sh FAKE_KERNEL=FreeBSD FAKE_MACHINE=amd64 -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This machine runs FreeBSD: the roof controller's programs run on Linux (64-bit ARM or x86-64) and on Macs with Apple silicon."
   assert_installer_did_not_run
 }
@@ -383,7 +379,7 @@ test_freebsd_is_refused() {
 test_32_bit_arm_is_refused() {
   install_sh FAKE_MACHINE=armv7l -- --roles controller,kiosk
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This machine runs 32-bit ARM (armv7l), and the roof controller's programs are 64-bit: install the 64-bit Raspberry Pi OS"
   assert_installer_did_not_run
 }
@@ -391,7 +387,7 @@ test_32_bit_arm_is_refused() {
 test_a_32_bit_system_on_a_64_bit_kernel_is_refused() {
   install_sh FAKE_LONG_BIT=32 -- --roles controller,kiosk
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This machine has a 64-bit kernel and a 32-bit system"
   assert_installer_did_not_run
 }
@@ -399,14 +395,14 @@ test_a_32_bit_system_on_a_64_bit_kernel_is_refused() {
 test_another_processor_is_refused() {
   install_sh FAKE_MACHINE=riscv64 -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This machine's processor is riscv64: the roof controller's programs run on 64-bit ARM (aarch64) and x86-64."
 }
 
 test_musl_is_refused() {
   install_sh FAKE_LIBC=musl -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This Linux has musl (as Alpine does), and the roof controller's programs need glibc"
 }
 
@@ -414,7 +410,7 @@ test_an_intel_mac_is_refused() {
   make_mac
   install_sh FAKE_KERNEL=Darwin FAKE_MACHINE=x86_64 FAKE_ARM64=0 -- --roles mac-app,cli
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This Mac has an Intel processor: hvo-roof, the Mac app and the installer run on Macs with Apple silicon only."
   assert_installer_did_not_run
 }
@@ -423,7 +419,7 @@ test_an_old_mac_that_cannot_say_is_refused() {
   make_mac
   install_sh FAKE_KERNEL=Darwin FAKE_MACHINE=x86_64 FAKE_ARM64=missing -- --roles mac-app,cli
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "This Mac has an Intel processor"
 }
 
@@ -484,6 +480,16 @@ test_the_controller_on_a_pi_is_downloaded_checked_and_started_as_root() {
   [ -z "$(ls -A "${WORK}/tmp")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${WORK}/tmp")"
 }
 
+test_the_download_is_removed_from_a_tmpdir_with_a_quote_in_its_name() {
+  local tmpdir="${WORK}/it's here"
+  mkdir "${tmpdir}"
+  install_sh TMPDIR="${tmpdir}" -- --roles rig
+
+  assert_status 0
+  assert_output_contains "hvo-roof-install ran"
+  [ -z "$(ls -A "${tmpdir}")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${tmpdir}")"
+}
+
 test_the_controller_on_a_machine_that_is_not_a_pi_fails_its_check() {
   not_a_pi
   install_sh -- --roles controller
@@ -496,7 +502,7 @@ test_the_controller_on_a_machine_that_is_not_a_pi_fails_its_check() {
 test_roles_installed_as_root_and_as_the_person_are_installed_in_separate_runs() {
   install_sh -- --roles controller,cli
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "controller (installed as root) and cli (installed as you) are installed in separate runs."
   assert_installer_did_not_run
 }
@@ -504,7 +510,7 @@ test_roles_installed_as_root_and_as_the_person_are_installed_in_separate_runs() 
 test_an_unknown_role_is_a_usage_error() {
   install_sh -- --roles rig,server
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "'server', from --roles, is not a role: the roles are controller, rig, kiosk, cli and mac-app."
 }
 
@@ -526,7 +532,7 @@ test_the_person_s_roles_run_as_the_person() {
 test_the_person_s_roles_are_refused_as_root() {
   install_sh FAKE_UID=0 -- --roles cli
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "cli is yours, and never installed as root: run this as yourself, without sudo."
   assert_installer_did_not_run
 }
@@ -557,7 +563,7 @@ test_an_answers_file_that_names_no_roles_is_a_usage_error() {
   printf '{"controller": {}}\n' >"${WORK}/answers.json"
   install_sh -- --answers="${WORK}/answers.json"
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "--answers ${WORK}/answers.json names no roles."
 }
 
@@ -587,7 +593,7 @@ test_a_command_takes_the_roles_from_the_person_s_record() {
 test_without_roles_and_without_a_terminal_it_asks_for_them() {
   install_sh
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "There is no terminal to ask what this machine is for on: give --roles, or the installer's --answers FILE."
   assert_installer_did_not_run
 }
@@ -620,7 +626,7 @@ test_an_answer_that_is_not_a_choice_is_a_usage_error() {
   EXPECT=(--expect "Choose a number: " 3)
   install_sh_on_terminal
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "2) hvo-roof, the command-line client, for you"
   assert_output_contains "'3' is not one of the choices."
   assert_installer_did_not_run
@@ -663,7 +669,7 @@ test_a_wrong_sudo_password_installs_nothing() {
   EXPECT=(--expect "password for pi: " "not the password")
   install_sh_on_terminal FAKE_SUDO=password -- --roles controller,kiosk
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "sudo did not let you run commands as root, and the installer runs as root: nothing was installed."
   assert_installer_did_not_run
 }
@@ -671,7 +677,7 @@ test_a_wrong_sudo_password_installs_nothing() {
 test_sudo_with_a_password_and_no_terminal_is_a_usage_error() {
   install_sh FAKE_SUDO=password -- --roles controller,kiosk
 
-  assert_status_is 2
+  assert_status 2
   assert_output_contains "The installer runs as root, and there is no terminal for sudo to ask for your password on"
   assert_installer_did_not_run
 }
@@ -680,7 +686,7 @@ test_without_sudo_the_machine_s_roles_are_refused() {
   without sudo
   install_sh -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "The installer runs as root, and sudo is not installed: run this as root, or install sudo"
   assert_installer_did_not_run
 }
@@ -709,7 +715,7 @@ test_without_curl_nothing_more_is_checked() {
   without curl
   install_sh -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "FAIL  These commands are missing: curl."
   assert_output_contains "Without curl nothing more can be checked: install it, then run this again."
   assert_not_called "docker"
@@ -806,6 +812,13 @@ test_a_mac_reads_github_s_date_with_its_own_date() {
   assert_output_contains "set it, and synchronise it, then run this again."
 }
 
+test_github_s_date_is_found_in_headers_of_any_length() {
+  install_sh FAKE_GITHUB_HEADER_KIB=512 -- --roles rig
+
+  assert_status 0
+  assert_output_contains "ok    the clock is within "
+}
+
 test_no_date_from_github_is_only_noted() {
   install_sh FAKE_GITHUB_DATE=no -- --roles rig
 
@@ -849,6 +862,16 @@ test_docker_is_installed_from_its_apt_repository_with_install_docker() {
   assert_installer "root=yes"
 }
 
+test_docker_is_not_installed_when_another_check_failed() {
+  without docker
+  install_sh FAKE_GITHUB_EXIT=6 -- --roles rig --install-docker
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  Docker is not installed, and rig needs it: it is installed only when the other checks pass, so put right what failed, then run this again."
+  assert_not_called "apt-get"
+  assert_not_called "tee"
+}
+
 test_docker_is_installed_when_the_person_says_yes() {
   without docker
   EXPECT=(--expect "Install it from Docker's apt repository? [y/N] " y)
@@ -884,7 +907,7 @@ test_check_installs_no_docker() {
   without docker
   install_sh -- --check --install-docker -- restore "${WORK}/backup.tar.gz"
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "FAIL  Docker is not installed, and a restore needs it: install Docker Engine 20.10 or later (https://docs.docker.com/engine/install/, or run this with --install-docker), then run this again."
   assert_not_called "apt-get"
 }
@@ -976,6 +999,15 @@ test_i2c_is_turned_on_with_enable_i2c() {
   assert_installer "root=yes"
 }
 
+test_i2c_is_not_turned_on_when_another_check_failed() {
+  rm "${WORK}/root/dev/i2c-1"
+  install_sh FAKE_GHCR_EXIT=7 -- --roles controller,kiosk --enable-i2c
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: it is turned on only when the other checks pass, so put right what failed, then run this again."
+  assert_not_called "raspi-config"
+}
+
 test_i2c_is_turned_on_when_the_person_says_yes() {
   rm "${WORK}/root/dev/i2c-1"
   EXPECT=(--expect "Turn it on with raspi-config? [y/N] " yes)
@@ -1005,7 +1037,7 @@ test_check_turns_no_i2c_on() {
   rm "${WORK}/root/dev/i2c-1"
   install_sh -- --roles controller,kiosk --check --enable-i2c
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "FAIL  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: turn it on (sudo raspi-config nonint do_i2c 0, or run this with --enable-i2c), then run this again."
   assert_not_called "raspi-config"
 }
@@ -1072,7 +1104,7 @@ test_a_download_that_is_not_the_release_s_is_not_started() {
   printf 'extra\n' >>"${WORK}/release/hvo-roof-install-linux-arm64"
   install_sh -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "hvo-roof-install-linux-arm64's SHA-256 is "
   assert_output_contains "the download is not the release's, and nothing was installed."
   assert_installer_did_not_run
@@ -1083,7 +1115,7 @@ test_sha256sums_without_the_installer_is_refused() {
   grep -v linux-arm64 "${WORK}/release/SHA256SUMS" >"${WORK}/sums" && mv "${WORK}/sums" "${WORK}/release/SHA256SUMS"
   install_sh -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "SHA256SUMS does not list hvo-roof-install-linux-arm64 once, so the download cannot be checked: nothing was installed."
   assert_installer_did_not_run
 }
@@ -1093,7 +1125,7 @@ test_sha256sums_listing_the_installer_twice_is_refused() {
   cat "${WORK}/twice" >>"${WORK}/release/SHA256SUMS"
   install_sh -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "SHA256SUMS does not list hvo-roof-install-linux-arm64 once"
 }
 
@@ -1108,7 +1140,7 @@ test_sha256sums_in_binary_mode_is_read() {
 test_a_failed_download_says_why() {
   install_sh FAKE_DOWNLOAD_FAILS=hvo-roof-install-linux-arm64 -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "install.sh: hvo-roof-install-linux-arm64 could not be downloaded from ${RELEASE_URL}: it answered with an HTTP error."
   assert_installer_did_not_run
 }
@@ -1116,7 +1148,7 @@ test_a_failed_download_says_why() {
 test_sha256sums_that_cannot_be_downloaded_says_why() {
   install_sh FAKE_DOWNLOAD_FAILS=SHA256SUMS FAKE_DOWNLOAD_EXIT=28 -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "install.sh: SHA256SUMS could not be downloaded from ${RELEASE_URL}: it did not answer in time."
   assert_not_called "hvo-roof-install-linux-arm64"
 }
@@ -1125,14 +1157,14 @@ test_a_folder_without_the_installer_is_refused() {
   mkdir "${WORK}/empty"
   install_sh -- --from "${WORK}/empty" --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "${WORK}/empty has no hvo-roof-install-linux-arm64: download it from https://github.com/HualapaiValley/HVO.RoofController/releases/tag/v${VERSION} into it."
 }
 
 test_an_attestation_that_does_not_verify_is_not_started() {
   install_sh FAKE_ATTESTATION=fails -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "        X Verification failed"
   assert_output_contains "hvo-roof-install-linux-arm64's attestation did not verify, so it may not be the release's: nothing was installed."
   assert_installer_did_not_run
@@ -1151,7 +1183,7 @@ test_gh_not_signed_in_only_notes_the_attestation() {
   install_sh FAKE_GH_AUTH=no -- --roles rig
 
   assert_status 0
-  assert_output_contains "note  its attestation was not checked: gh is not signed in (gh auth login)"
+  assert_output_contains "note  its attestation was not checked: gh is not signed in (gh auth login), or did not reach GitHub (gh auth status)"
   assert_not_called "gh attestation"
 }
 
@@ -1169,7 +1201,7 @@ test_a_dry_run_s_attestation_is_checked_without_a_tag() {
 test_an_installer_of_another_release_is_not_started() {
   install_sh FAKE_INSTALLER_VERSION="4.0.0-rc.2+${COMMIT}" -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "hvo-roof-install-linux-arm64 says its version is '4.0.0-rc.2+${COMMIT}', and this is release ${VERSION}: nothing was installed."
   assert_installer_did_not_run
 }
@@ -1177,7 +1209,7 @@ test_an_installer_of_another_release_is_not_started() {
 test_an_installer_that_names_no_commit_is_not_started() {
   install_sh FAKE_INSTALLER_VERSION="${VERSION}+local" -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "says its version is '${VERSION}+local'"
   assert_installer_did_not_run
 }
@@ -1185,7 +1217,7 @@ test_an_installer_that_names_no_commit_is_not_started() {
 test_a_noexec_tmpdir_is_explained() {
   install_sh FAKE_INSTALLER_NOEXEC=1 -- --roles rig
 
-  assert_status_is 1
+  assert_status 1
   assert_output_contains "Programs cannot run from ${WORK}/tmp (it is mounted noexec): set TMPDIR to a folder they can run from"
 }
 
@@ -1210,7 +1242,7 @@ test_the_first_argument_that_is_not_an_option_starts_the_installer_s() {
 test_the_installer_s_exit_status_is_install_sh_s() {
   install_sh FAKE_INSTALLER_EXIT=3 -- --roles rig
 
-  assert_status_is 3
+  assert_status 3
   assert_output_contains "hvo-roof-install ran"
 }
 
@@ -1228,6 +1260,25 @@ test_a_release_from_a_folder_is_the_installer_s_too() {
 
   assert_status 0
   assert_installer "args=[--release][${WORK}/release]"
+}
+
+test_a_folder_given_from_where_it_is_ignores_cdpath() {
+  mkdir -p "${WORK}/elsewhere/release"
+  pushd "${WORK}" >/dev/null || return
+  install_sh CDPATH=".:${WORK}/elsewhere" -- --from release --roles rig
+  popd >/dev/null || return
+
+  assert_status 0
+  assert_output_contains "Taking hvo-roof-install ${VERSION} for linux-arm64 from ${WORK}/release"
+  assert_installer "args=[--release][${WORK}/release]"
+}
+
+test_a_rollback_from_a_folder_is_not_given_it_as_the_release_before() {
+  record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
+  install_sh -- --from "${WORK}/release" rollback
+
+  assert_status 0
+  assert_installer "args=[rollback]"
 }
 
 test_a_release_the_installer_is_given_is_kept() {

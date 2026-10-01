@@ -86,7 +86,8 @@ The first argument that is not one of these, and everything after it (or after -
 --answers FILE, --plan, --help and the rest.
 
 Exit codes: the installer's, when it ran; otherwise 0 when --check passed, 1 when a check, the download or its
-verification failed, and 2 for a command line that is not valid or a question with no terminal to ask it on.
+verification failed, and 2 for a command line that is not valid, or roles or a sudo password with no terminal to ask
+for them on.
 EOF
   }
 
@@ -225,8 +226,10 @@ EOF
     local release_page="https://github.com/${repository}/releases/tag/v${release_version}"
     local asset="hvo-roof-install-${rid}" work installer expected actual status=0
     work=$(mktemp -d "${TMPDIR:-/tmp}/hvo-roof-install.XXXXXXXX")
+    local quoted_work
+    printf -v quoted_work '%q' "${work}"
     # shellcheck disable=SC2064 # The folder is named now, so the trap needs no variable when it runs.
-    trap "rm -rf '${work}'" EXIT
+    trap "rm -rf ${quoted_work}" EXIT
     installer="${work}/hvo-roof-install"
 
     if [ -n "${from}" ]; then
@@ -259,7 +262,7 @@ EOF
     elif ! have gh; then
       note "its attestation was not checked: gh (GitHub's CLI, https://cli.github.com) is not installed"
     elif ! gh auth status >/dev/null 2>&1 </dev/null; then
-      note "its attestation was not checked: gh is not signed in (gh auth login)"
+      note "its attestation was not checked: gh is not signed in (gh auth login), or did not reach GitHub (gh auth status)"
     else
       local -a verify=(gh attestation verify "${installer}" --repo "${repository}"
         --signer-workflow "${repository}/.github/workflows/release.yml")
@@ -290,8 +293,9 @@ EOF
 
     # The hand-over. The installer reads the terminal, since this script's standard input is the download: with none
     # (cron, CI) it reads nothing, and refuses a question it would have asked.
+    # rollback's --release is the release before, not this one: it is given, or the installer downloads it.
     local -a arguments=(${passed[@]+"${passed[@]}"})
-    if [ -n "${from}" ] && ! ${quick} && ! ${has_release} && ${reads_release}; then
+    if [ -n "${from}" ] && ! ${quick} && ! ${has_release} && ${reads_release} && [ "${command}" != rollback ]; then
       arguments+=(--release "${from}")
     fi
     local input=/dev/null
@@ -389,7 +393,7 @@ EOF
   fi
   if [ -n "${from}" ]; then
     [ -d "${from}" ] || usage_error "--from ${from}: there is no such folder."
-    from=$(cd "${from}" && pwd)
+    from=$(CDPATH='' cd -- "${from}" && pwd)
   fi
 
   # ---------------------------------------------------------------------------------------------------------------------
@@ -612,7 +616,8 @@ EOF
     fi
   else
     ok "github.com answers"
-    remote_date=$(printf '%s\n' "${headers}" | tr -d '\r' | awk 'tolower($1) == "date:" { sub(/^[^:]*:[ \t]*/, ""); print; exit }')
+    # awk reads to the end: with pipefail, a printf cut off by an awk that stopped reading would end the script.
+    remote_date=$(printf '%s\n' "${headers}" | tr -d '\r' | awk '!found && tolower($1) == "date:" { sub(/^[^:]*:[ \t]*/, ""); print; found = 1 }')
     remote_seconds=$(http_date_seconds "${remote_date}" || true)
     if [[ ${remote_seconds} =~ ^[0-9]+$ ]]; then
       skew=$(($(date -u +%s) - remote_seconds))
@@ -687,6 +692,10 @@ EOF
       elif ${check_only} || ! apt_docker_os; then
         failed "Docker is not installed, and ${needs} it: install Docker Engine 20.10 or later (https://docs.docker.com/engine/install/$(apt_docker_os && printf ', or run this with --install-docker')), then run this again."
         return
+      elif ((failures > 0)); then
+        # Nothing is changed once a check has failed: the run stops before the download.
+        failed "Docker is not installed, and ${needs} it: it is installed only when the other checks pass, so put right what failed, then run this again."
+        return
       elif ! ${install_docker} && ! ask_yes "  Docker is not installed, and ${needs} it. Install it from Docker's apt repository?"; then
         failed "Docker is not installed: install Docker Engine 20.10 or later (https://docs.docker.com/engine/install/, or run this with --install-docker), then run this again."
         return
@@ -733,6 +742,8 @@ EOF
       ok "I2C is on (/dev/i2c-1)"
     elif ${check_only} || ! have raspi-config; then
       failed "I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: turn it on (sudo raspi-config nonint do_i2c 0$(have raspi-config && printf ', or run this with --enable-i2c')), then run this again."
+    elif ((failures > 0)); then
+      failed "I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it: it is turned on only when the other checks pass, so put right what failed, then run this again."
     elif ! ${enable_i2c} && ! ask_yes "  I2C is off (there is no /dev/i2c-1), and the controller drives the HAT over it. Turn it on with raspi-config?"; then
       failed "I2C is off: turn it on (sudo raspi-config nonint do_i2c 0, or run this with --enable-i2c), then run this again."
     elif ! as_root raspi-config nonint do_i2c 0 </dev/null; then

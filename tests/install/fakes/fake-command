@@ -142,6 +142,12 @@ case "${name}" in
           printf 'date: %s\r\n' "$(python 'import email.utils, sys, time
 print(email.utils.formatdate(time.time() + int(sys.argv[1]), usegmt=True))' "${FAKE_CLOCK_SKEW:-0}")"
         fi
+        # FAKE_GITHUB_HEADER_KIB: headers after the date that come to about that many KiB, as a proxy may add.
+        index=0
+        while [ "${index}" -lt "${FAKE_GITHUB_HEADER_KIB:-0}" ]; do
+          printf 'x-padding-%d: %01020d\r\n' "${index}" 0
+          index=$((index + 1))
+        done
         printf 'content-type: text/html; charset=utf-8\r\n\r\n'
         ;;
       https://ghcr.io/v2/)
@@ -254,6 +260,10 @@ print(email.utils.formatdate(time.time() + int(sys.argv[1]), usegmt=True))' "${F
   tar) ;;
 
   sha256sum | shasum)
+    # The machine's own, when it has one (a Mac's shasum, on the Mac job); otherwise a stand-in.
+    real=${FAKE_REAL_SHA256SUM:-}
+    [ "${name}" = sha256sum ] || real=${FAKE_REAL_SHASUM:-}
+    [ -z "${real}" ] || exec "${real}" "$@"
     [ "${name}" = sha256sum ] || { [ "$1 $2" = "-a 256" ] && shift 2; } || exit 1
     printf '%s  %s\n' "$(python 'import hashlib, sys
 print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1")" "$1"
