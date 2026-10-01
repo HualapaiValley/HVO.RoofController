@@ -585,7 +585,7 @@ public sealed class ControllerStep(
             StepChange.Blocked,
             $"{reason}, but it runs, and it knows no operator or admin key in {layout.Secrets}, which the deploy script's verified Stop needs before it {doing}. "
             + $"Stop the controller yourself once the roof is idle (docker stop {Target}), then run the installer again. "
-            + $"Or, if it has an operator key, put that key there (\"API keys\" in docs/deployment.md), and the deploy script stops it; a controller from before API keys has none."), null);
+            + $"Or, if it has an operator key, put that key in {layout.Secrets} (\"API keys\" in docs/deployment.md), and the deploy script stops it; a controller from before API keys has none."), null);
     }
 
     private StepCheck NoAnswer(ProbeResult probe)

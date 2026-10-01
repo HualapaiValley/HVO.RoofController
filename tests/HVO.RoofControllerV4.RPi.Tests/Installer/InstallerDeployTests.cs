@@ -228,7 +228,7 @@ public sealed class InstallerDeployTests
         check.Change.Should().Be(StepChange.Blocked);
         check.Detail.Should().StartWith("redeployed so the web UI's Stop has a key of its own, but it runs, and it knows no operator or admin key in /etc/hvo-roof/secrets")
             .And.Contain("Stop the controller yourself once the roof is idle (docker stop roof-controller), then run the installer again. ")
-            .And.EndWith("Or, if it has an operator key, put that key there (\"API keys\" in docs/deployment.md), and the deploy script stops it; a controller from before API keys has none.");
+            .And.EndWith("Or, if it has an operator key, put that key in /etc/hvo-roof/secrets (\"API keys\" in docs/deployment.md), and the deploy script stops it; a controller from before API keys has none.");
         var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }));
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         pi.Deploys.Should().BeEmpty();
