@@ -208,9 +208,10 @@ the roof against this server; use the web UI (port 8088) for operator access.
   checks, and `--from DIR` takes the release from a folder. Its tests (`tests/install/install-sh-tests.sh`) run on
   Linux and macOS. See [docs/install.md](docs/install.md#installsh).
 - The install end to end (#74). `tests/installer/rig-scenario.sh` installs a rig with `install.sh`, runs it again,
-  connects `hvo-roof`, opens, stops part way and closes the emulated roof, changes the rig's names and addresses,
-  renews the certificate, backs up, restores, upgrades and rolls back, on Linux amd64 and arm64 runners. The release
-  workflow's `e2e` job runs the same against the draft release's own assets and images before it is published. See
+  connects `hvo-roof`, opens, stops part way and closes the emulated roof, changes its time scale, renews the
+  certificate, changes the rig's addresses and host name, backs up, restores, upgrades and rolls back, on Linux amd64
+  and arm64 runners. The release workflow's `e2e` job runs it on both, without the upgrade and rollback, against the
+  draft release's own assets and images, and a draft is published only once that job has passed. See
   [docs/install.md](docs/install.md#the-rig-end-to-end).
 - The install guide (#75). [docs/install.md](docs/install.md) starts with preparing the Pi (Raspberry Pi OS Lite,
   64-bit, with Raspberry Pi Imager; a fixed address) and has a troubleshooting section; the README starts with the
