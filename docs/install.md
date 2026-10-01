@@ -857,10 +857,11 @@ controller, `cert` then redeploys it, through the deploy script as an install do
 - **Only while the roof is idle.** It reads the controller's status first, and again just before the deploy script
   runs. While the roof moves, it leaves the controller as it is and says to run `sudo hvo-roof-install cert --redeploy`
   once the roof is idle.
-- **Only when the certificate is all that would change.** When more would, it leaves the controller as it is and says
-  to run `sudo hvo-roof-install`, which redeploys it with the new certificate. More would change with a new release,
-  for example, or with camera settings or API keys that an install which stopped before its redeploy wrote. It checks
-  this again just before the deploy script runs, after you agree.
+- **Only when the certificate is all that would change.** The names the controller answers to (its `AllowedHosts`)
+  change with the certificate's, so a new name or address counts as part of it. When more would change, it leaves the
+  controller as it is and says to run `sudo hvo-roof-install`, which redeploys it with the new certificate. More would
+  change with a new release, for example, or with camera settings or API keys that an install which stopped before its
+  redeploy wrote. It checks this again just before the deploy script runs, after you agree.
 - **Only once you agree.** It asks `Redeploy the controller now? [y/N]`. With no one at a terminal, such as in a
   script, it does not ask and does not redeploy. `--redeploy` redeploys without asking. `--no-redeploy` puts the
   certificate in place and stops there.
