@@ -145,9 +145,8 @@ the roof against this server; use the web UI (port 8088) for operator access.
   differs, so a second run changes nothing. It records what it installed in `/etc/hvo-roof/install.json` (the
   controller, a rig on Linux, the kiosk) or `~/.config/hvo-roof/install.json` (`hvo-roof`, the Mac app, a rig on a
   Mac), and logs each command and change with no secret. It makes the controller's folders and adopts a controller the
-  deploy script runs; deploying the controller and a rig, the kiosk, `hvo-roof` and the Mac app follow (#69 to #71),
-  and an install that needs them is refused, with exit code 3, before anything changes. CI
-  keeps the wizard's pages as `installer-renders-<run id>`. HVO Dark for the terminal moves to
+  deploy script runs; it deploys the controller and a rig (#69), the kiosk (#70), and `hvo-roof` and the Mac app (#71).
+  CI keeps the wizard's pages as `installer-renders-<run id>`. HVO Dark for the terminal moves to
   `HVO.RoofControllerV4.TerminalUi`, which `hvo-roof ui` and the installer share. See [docs/install.md](docs/install.md).
 - Certificates in the installer (#68). The controller's connection is a private CA (the default), your own certificate,
   a self-signed certificate, or plain HTTP, which must be confirmed by typing `http`. The installer makes the CA
@@ -161,12 +160,59 @@ the roof against this server; use the web UI (port 8088) for operator access.
   record cannot be read. `cert show` prints what is served and the SHA-256 fingerprints, and `cert import FILE` puts
   your own certificate in place (PKCS#12, or PEM with its chain and key), refusing one that has expired, is not yet
   valid, is a CA's or is not for a server, and a key needing more than 300,000 iterations to open. Each has `--plan`,
-  and none restarts the controller: the output says to redeploy when the roof is idle. The wizard's settings page asks
+  and each redeploys a controller the installer runs to serve the new certificate, once the roof is idle and you agree
+  (#69). The wizard's settings page asks
   for the names and domains, listing no domain unasked and naming those the machine's resolver searches as a hint.
   Done shows where clients get the CA and its fingerprint. The controller serves its CA at the anonymous `GET /ca.crt`
   (the handshake leaves a self-signed root out), and `/health` reports `https_certificate`:
   Degraded within 30 days of expiry, Unhealthy when it has expired or cannot be read. See
   [docs/install.md](docs/install.md#certificates).
+- Deploying with the installer (#69). On the observatory's Pi it deploys the controller from the release's image, by its
+  digest, through the deploy script, which replaces a running controller only while the roof is idle and after a
+  verified Stop (`REQUIRE_IDLE_ROOF`). It makes the controller's API keys, the deploy script's operator key among them,
+  straight into files only root reads, adds the first admin with a password and PIN it never shows or logs, writes the
+  camera's secrets, and can start from the settings file of a backup (`controller.importSettingsFrom`). A test rig runs
+  the controller against the release's HAT emulator: on Linux (amd64 or arm64) as root, or on an Apple silicon Mac
+  with Docker Desktop as you. Each install reads the release's `release.json` from GitHub, or from `--release DIR`.
+  `cert` redeploys the controller to serve a new certificate once the roof is idle and you agree (`--redeploy`,
+  `--no-redeploy`). The `installer-rig` job installs a rig end to end against the HAT emulator. See
+  [docs/install.md](docs/install.md#running-it).
+- The kiosk from the installer (#70). On the controller's Pi it installs the kiosk's packages, its `hvo-kiosk` user, its
+  program from the release (checked by its SHA-256), its device key (a Viewer key only `hvo-kiosk` reads), its settings
+  (the controller on `localhost`, trusting the installer's CA or pinning the certificate), its service and the
+  backlight's udev rule, and gives each person in `kiosk.pins` a PIN. It refuses the kiosk without a connected screen,
+  or while a desktop holds the display now or at the next boot. `cert` re-pins a self-signed certificate it renews and
+  restarts the kiosk. See [docs/install.md](docs/install.md#the-kiosk).
+- `hvo-roof` and the Mac app from the installer (#71). On Linux or an Apple silicon Mac, as you, it installs `hvo-roof`
+  and the Mac app from the release, connected to the controller and trusting its CA once you have checked the CA's
+  SHA-256 fingerprint. An admin signs in once to make the Mac's device key (`mac-HOST-USER`, a Viewer key), which is
+  written to a file only you read and never shown or put on the clipboard. With `client.trustInKeychain` it trusts the
+  CA in your login keychain for Safari and Chrome. The app opens once with `--check`. The `installer-mac` job installs
+  the app on a macOS runner. See [docs/install.md](docs/install.md#hvo-roof-and-the-mac-app).
+- Upgrading, rolling back, backing up, restoring and uninstalling (#72). `hvo-roof-install upgrade` shows each
+  release's upgrade notes, puts the new release's installer in place and hands over to it, which deploys the new
+  controller through the deploy script and keeps what it replaces; `rollback` goes back one release, with the deploy
+  script's `--rollback`. `backup` writes one root-only archive of `/etc/hvo-roof`, `/var/lib/hvo-roof` and the kiosk's
+  key and settings, listing each file's mode, owner and SHA-256, and reads it back before keeping it; it prints only
+  paths and counts. `restore FILE` puts it back on a new Pi, keeping the CA for the same host name. `uninstall` stops
+  the controller after a verified Stop and removes what was installed, keeping the data; `--purge` removes the data too,
+  once the machine's name is typed and a backup is made or declined. The upgrade notes come from each release's
+  `release.json`. See [docs/install.md](docs/install.md#upgrading).
+- `install.sh`, the one-line install (#73). Each release carries it: it checks the platform, the roles, its commands,
+  sudo, the free space, the network and the clock, ghcr.io, Docker and I2C, before it downloads anything; offers to
+  install Docker or turn I2C on only once every other check has passed (`--install-docker`, `--enable-i2c`); and runs
+  the release's installer for this machine only when its SHA-256 matches `SHA256SUMS`, its version is the release's
+  and, with `gh` signed in, its attestation says the release workflow built it from the release's tag. `--check` only
+  checks, and `--from DIR` takes the release from a folder. Its tests (`tests/install/install-sh-tests.sh`) run on
+  Linux and macOS. See [docs/install.md](docs/install.md#installsh).
+- The install end to end (#74). `tests/installer/rig-scenario.sh` installs a rig with `install.sh`, runs it again,
+  connects `hvo-roof`, opens, stops part way and closes the emulated roof, changes the rig's names and addresses,
+  renews the certificate, backs up, restores, upgrades and rolls back, on Linux amd64 and arm64 runners. The release
+  workflow's `e2e` job runs the same against the draft release's own assets and images before it is published. See
+  [docs/install.md](docs/install.md#the-rig-end-to-end).
+- The install guide (#75). [docs/install.md](docs/install.md) starts with preparing the Pi (Raspberry Pi OS Lite,
+  64-bit, with Raspberry Pi Imager; a fixed address) and ends with troubleshooting; the README starts with the one-line
+  install. CI checks every relative link and anchor in the Markdown files (`build/check-doc-links.py`).
 - Live status hub (#40): the SignalR hub `/hubs/roof` pushes every status change, the current
   status on connect and a heartbeat after 1 s without a change, as `RoofStatusHubMessage`
   (status, sequence, server time, instance id). Any role may connect with the `X-Api-Key`

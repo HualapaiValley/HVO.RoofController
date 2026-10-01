@@ -10,6 +10,8 @@ person who unlocked it may do. The kiosk draws straight on the display through D
 libinput: there is no X11 or Wayland, and no desktop to escape to. Its screens (`HVO.RoofControllerV4.Screens`) are
 Avalonia controls, in HVO Dark, the observatory's web theme, as the web UI and the terminal interface use.
 
+The installer sets it up on the controller's Pi ([Install](#install)).
+
 ![The kiosk while the roof opens: the rail of pages, the badges (live status, the lease, who unlocked it), the position and the controls, the notices, and Stop at the right](images/kiosk/opening-1280x720.png)
 
 ## The screen

@@ -329,4 +329,4 @@ Use Bootstrap Icons (already integrated via CDN in consuming apps) or add custom
 - [Blazor Static Web Assets](https://learn.microsoft.com/en-us/aspnet/core/razor-pages/ui-class)
 - [CSS Custom Properties](https://developer.mozilla.org/en-US/docs/Web/CSS/--*)
 - [Bootstrap 5 Documentation](https://getbootstrap.com/docs/5.3/)
-- [HVOv9 Blazor Component Best Practices](../../docs/guides/blazor-component-best-practices.md)
+- HVOv9 Blazor Component Best Practices (`docs/guides/blazor-component-best-practices.md` in the HVOv9 repository)

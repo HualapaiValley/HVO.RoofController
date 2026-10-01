@@ -12,6 +12,8 @@ the person who signed in may do. Its screens are the kiosk's (`HVO.RoofControlle
 observatory's web theme, sized for a mouse and a keyboard. It is built on Linux, without Xcode, and signed there
 ([Build it yourself](#build-it-yourself)).
 
+The installer installs it and makes its device key ([With the installer](#with-the-installer)).
+
 ![The Mac app signed in: the rail of pages, the badges (live status, who signed in), the position and the controls, the notices, and Stop at the right](images/mac/roof-1280x800.png)
 
 ## The window
