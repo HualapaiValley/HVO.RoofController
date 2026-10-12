@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-10-12
+
 ### Fixed
 
 - Register the kiosk's HarfBuzz text shaper before DRM startup, so the display can render its text (#102).
