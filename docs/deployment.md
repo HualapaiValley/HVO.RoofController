@@ -987,3 +987,21 @@ The deploy script already made the authenticated remote Status and Stop calls un
 For a Compose controller, or once the port is reachable after a deploy with `SKIP_REMOTE_CHECK=true`, make them with
 `--verify-remote` ([Checking a Compose controller](#checking-a-compose-controller-from-another-machine)).
 `--verify-remote` does not check the web UI: open `https://roof-pi:8088/` in a browser, or use the `curl` line above.
+
+## Remote adapter access: deployment follow-up
+
+A web UI listener does not expose the controller API. When the API is bound to loopback, an adapter on another
+machine (for example a future ASCOM adapter) cannot use the website's port as its API address. Remote API access
+remains a separate deployment task: arrange an explicitly approved SSH tunnel, or a separately approved network
+route with TLS and API authentication. This documentation enables neither route and creates no credential.
+
+Use a dedicated `RoofOperator` API key in `X-Api-Key` for ordinary adapter operations, without `Kiosk` or `Local`
+privileges. Interactive clients may instead use a person's bearer session; see [security](security.md). The
+[client library](../src/HVO.RoofControllerV4.Client/README.md) provides REST commands and live status. The adapter
+must follow status through completion, faults and stale/disconnected periods, handle interlock refusals and ambiguous
+command timeouts, and renew the operator lease while moving if it is configured. It must not blindly retry motion or
+clear faults automatically. The watchdog remains an independent absolute cap (the production default is 150 seconds);
+all existing interlocks stay in force.
+
+Successful emulator tests do not validate physical VFD, relay-contact or limit-switch wiring. Complete the relevant
+[commissioning checks](commissioning.md) separately before physical operation.

@@ -28,9 +28,7 @@ public sealed class KioskAvalonia
     }
 
     /// <summary>The headless session's application: the kiosk's, drawn by Skia with the kiosk's font.</summary>
-    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<KioskApp>()
-        .UseSkia()
-        .WithInterFont()
+    public static AppBuilder BuildAvaloniaApp() => HVO.RoofControllerV4.Kiosk.Program.BuildAvaloniaApp()
         .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
 
     [AssemblyCleanup]

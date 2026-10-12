@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Register the kiosk's HarfBuzz text shaper before DRM startup, so the display can render its text (#102).
+- Include Blazor framework assets when Docker restores before copying Razor components, so the published web UI
+  starts its live connection after sign-in instead of failing to load `blazor.web.js` (#102).
+
 ## [4.0.1] - 2026-10-01
 
 Two messages corrected after the first install of 4.0.0 on the Pi (#95). What a deploy and

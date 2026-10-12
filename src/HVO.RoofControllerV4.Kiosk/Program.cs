@@ -25,6 +25,12 @@ public static class Program
     /// <summary>The settings file next to the program. Optional.</summary>
     public const string SettingsFile = "appsettings.Local.json";
 
+    /// <summary>The renderer, text shaper and fonts shared by the DRM and windowed startup paths.</summary>
+    internal static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<KioskApp>()
+        .UseSkia()
+        .UseHarfBuzz()
+        .WithInterFont();
+
     [STAThread]
     public static int Main(string[] args) => Run(args, AppContext.BaseDirectory, Console.Error);
 
@@ -88,7 +94,7 @@ public static class Program
         int exitCode;
         try
         {
-            var builder = AppBuilder.Configure<KioskApp>().UseSkia().WithInterFont();
+            var builder = BuildAvaloniaApp();
             if (options.Window)
             {
                 KioskOptions.TryParseSize(options.WindowSize, out var width, out var height);

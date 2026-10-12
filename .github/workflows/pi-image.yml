@@ -10,6 +10,7 @@ on:
       - 'src/HVO.RoofControllerV4.RPi/**'
       - 'src/HVO.RoofControllerV4.Common/**'
       - 'src/HVO.RoofControllerV4.Client/**'
+      - 'src/HVO.RoofControllerV4.Web/**'
       - 'src/HVO.WebSite.Themes/**'
       - 'src/global.json'
       - 'src/NuGet.config'
@@ -25,6 +26,7 @@ on:
       - 'src/HVO.RoofControllerV4.RPi/**'
       - 'src/HVO.RoofControllerV4.Common/**'
       - 'src/HVO.RoofControllerV4.Client/**'
+      - 'src/HVO.RoofControllerV4.Web/**'
       - 'src/HVO.WebSite.Themes/**'
       - 'src/global.json'
       - 'src/NuGet.config'
@@ -101,3 +103,15 @@ jobs:
 
       - name: Check the image's version labels
         run: build/check-image-labels.sh "$RUNNER_TEMP/image.tar" "${{ steps.version.outputs.version }}" "$GITHUB_SHA" linux/amd64,linux/arm64
+
+      - name: Load the native image for web asset checks
+        run: |
+          docker buildx build --platform linux/amd64 --load \
+            -f src/HVO.RoofControllerV4.RPi/Dockerfile \
+            --build-arg ROOF_VERSION="${{ steps.version.outputs.version }}" \
+            --build-arg ROOF_REVISION="$GITHUB_SHA" \
+            --build-arg ROOF_CREATED="${{ steps.version.outputs.created }}" \
+            -t hvo/roof-web-assets:check .
+
+      - name: Check published web startup assets and live connection protection
+        run: build/check-web-assets.sh hvo/roof-web-assets:check

@@ -23,6 +23,18 @@ public sealed partial class KioskProgramTests
 {
     private const string Pin = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
 
+    [TestMethod]
+    public void TheDrmStartup_RegistersTextShapingBeforeSelectingAWindowingBackend()
+    {
+        var builder = KioskProgram.BuildAvaloniaApp();
+
+        builder.RenderingSubsystemInitializer.Should().NotBeNull();
+        builder.TextShapingSubsystemInitializer.Should().NotBeNull(
+            "DRM startup does not call platform detection to provide a text shaper");
+        builder.WindowingSubsystemInitializer.Should().BeNull(
+            "the renderer must also be testable without opening DRM or a desktop display");
+    }
+
     // ---- Settings -------------------------------------------------------------------------------------------------------
 
     [TestMethod]
