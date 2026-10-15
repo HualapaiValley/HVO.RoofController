@@ -17,6 +17,7 @@ internal sealed class RoofUiSystemPage : RoofUiPage
     private string[] _information = [];
     private string[] _health = [];
     private bool _loaded;
+    private bool? _shownStale;
 
     public RoofUiSystemPage(RoofTerminalUi ui)
         : base(ui, "System")
@@ -38,6 +39,11 @@ internal sealed class RoofUiSystemPage : RoofUiPage
         }
     }
 
+    public override void StatusChanged()
+    {
+        if (_shownStale != Ui.IsStale) Show();
+    }
+
     public override void ConnectionChanged()
     {
         _loaded = false;
@@ -54,22 +60,24 @@ internal sealed class RoofUiSystemPage : RoofUiPage
 
     public void Reload()
     {
+        _information = [];
+        _health = [];
+        Show();
         var admin = Ui.Caller is null || IsAdmin;
         _ = Ui.Run("Reading the controller's health…", async (client, cancellationToken) =>
         {
             var report = await client.Health.GetReportAsync(cancellationToken).ConfigureAwait(false);
             // This program's own version for everyone: it may be older or newer than the controller's.
-            (string, string)[] self = [RoofSystemText.DescribeClient(RoofCli.CommandName, typeof(RoofCli).Assembly)];
             string[] information;
             if (admin)
             {
                 var info = await client.System.GetInformationAsync(cancellationToken).ConfigureAwait(false);
                 var metrics = await client.System.GetMetricsAsync(cancellationToken).ConfigureAwait(false);
-                information = Rows(self.Concat(RoofSystemText.DescribeInformation(info, metrics))).Split('\n');
+                information = Rows(RoofSystemText.DescribeInformation(info, metrics)).Split('\n');
             }
             else
             {
-                information = [.. Rows(self).Split('\n'), "The controller's version, host and resource use need the Admin role."];
+                information = ["The controller's version, host and resource use need the Admin role."];
             }
 
             var health = Table(
@@ -88,15 +96,23 @@ internal sealed class RoofUiSystemPage : RoofUiPage
         });
     }
 
+    private static string SelfVersion => $"{RoofCli.CommandName} version: {RoofSystemText.DescribeClient(RoofCli.CommandName, typeof(RoofCli).Assembly).Value}";
+
     private void Show()
     {
+        _shownStale = Ui.IsStale;
         if (Ui.Connection is null)
         {
-            SetLines(_lines, ["No controller is configured: use Setup (F5)."]);
+            SetLines(_lines, [SelfVersion, "Controller version: unavailable. No controller is configured: use Setup (F5)."]);
             return;
         }
 
-        SetLines(_lines, [.. _information, string.Empty, .. _health]);
+        if (Ui.IsStale)
+        {
+            SetLines(_lines, [SelfVersion, "Controller version: unavailable (controller status is not live)."]);
+            return;
+        }
+        SetLines(_lines, [SelfVersion, _information.Length == 0 ? "Controller version: unavailable (not read)." : "Controller information (last read):", .. _information, string.Empty, .. _health]);
     }
 
     private void CheckReadiness() => _ = Ui.Run("Asking whether the controller is ready…", async (client, cancellationToken) =>

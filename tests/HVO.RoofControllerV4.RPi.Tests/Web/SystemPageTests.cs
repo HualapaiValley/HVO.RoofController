@@ -23,6 +23,23 @@ namespace HVO.RoofControllerV4.RPi.Tests.Web;
 public sealed class SystemPageTests
 {
     [TestMethod]
+    public async Task FailedRefresh_KeepsLocalVersion_AndDropsPreviouslyReadControllerInformation()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        Fact(cut, "Application").Should().NotBeNullOrEmpty();
+        harness.LoseAnswer = _ => true;
+
+        cut.Click("[data-testid=system-reload]");
+
+        cut.WaitForAssertion(() => cut.Find("[data-testid=system-information]").TextContent.Should().Contain("Controller version unavailable"));
+        Fact(cut, SystemPage.WebUiLabel).Should().Be(RoofProductVersion.Describe(typeof(RoofWebOptions).Assembly));
+        cut.FindAll("[data-label=Application]").Should().BeEmpty();
+    }
+
+    [TestMethod]
     public async Task TheControllersInformation_IsShown()
     {
         using var harness = new WebAdminHarness();
@@ -78,7 +95,7 @@ public sealed class SystemPageTests
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Info)));
         Lines(cut).Last().Should().Be(RoofSystemText.RestartComingBack);
-        cut.FindAll("[data-testid=system-fact]").Should().BeEmpty("the information is out of date once the controller restarts");
+        cut.FindAll("[data-testid=system-information] [data-testid=system-fact]").Should().BeEmpty("the information is out of date once the controller restarts");
         signal.Requested.Should().BeTrue();
         harness.Roof.Mock.Verify(service => service.Stop(RoofControllerStopReason.HostShutdown), Times.Once());
     }
@@ -193,13 +210,13 @@ public sealed class SystemPageTests
         var cut = context.Render<SystemPage>();
 
         cut.WaitForAssertion(() => Message(cut).Should().Be(WebClientPage.SignedOut));
-        cut.Find("[data-testid=system-information] p[role=status]").TextContent.Should().Be("The controller's information is not read.");
+        cut.Find("[data-testid=system-information] p[role=status]").TextContent.Should().Be("Controller version unavailable: the controller's information is not read.");
     }
 
     private static IRenderedComponent<SystemPage> Loaded(BunitContext context)
     {
         var cut = context.Render<SystemPage>();
-        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-fact]").Should().NotBeEmpty(
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-information] [data-testid=system-fact]").Should().NotBeEmpty(
             cut.FindAll("[data-testid=page-message]").FirstOrDefault()?.TextContent ?? "the information to be read"));
         return cut;
     }

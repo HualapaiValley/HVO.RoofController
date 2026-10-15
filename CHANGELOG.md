@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - Detailed CLI health and the terminal System page now authorize GET /health as a native read operation in local Linux mode (#118).
+- Show the running GUI build in an always-accessible About view and keep local TUI/web versions visible when controller reads fail. Label controller metadata separately and suppress stale GUI/TUI values (#117).
 
 ## [4.1.0] - 2026-10-15
 

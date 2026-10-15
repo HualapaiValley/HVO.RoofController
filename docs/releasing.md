@@ -34,8 +34,9 @@ upgrades a rig from main's version to the new one ([The rig end to end](install.
 |-------|---------------|
 | `hvo-roof --version` | `4.0.0-dev+<commit>` |
 | `hvo-roof info`, and the terminal interface's System page | `hvo-roof`'s own version, then the controller's |
-| The web UI's System page | The web UI's version, then the controller's |
-| The Mac app's System page | `This kiosk` or `This app`, then the controller's (for an admin) |
+| The web UI's System page and footer | The local web UI version remains visible when controller reads fail; System separately labels last-read controller metadata |
+| The kiosk and Mac app's About view | The local app version, including while locked or offline; the Mac app separately labels last-read controller metadata for an admin |
+| The PIN kiosk's About view | The local kiosk version; controller version is unavailable in the PIN kiosk, with guidance to use an administrator CLI or web System session |
 | The controller's log | `HVO Roof Controller 4.0.0-dev+<commit> is starting.` |
 | `GET /api/v1.0/System/info` | `applicationVersion`: `4.0.0-dev+<commit>` |
 | The Mac app's `Info.plist` | `CFBundleShortVersionString` 4.0.0, and the build number in `CFBundleVersion` |

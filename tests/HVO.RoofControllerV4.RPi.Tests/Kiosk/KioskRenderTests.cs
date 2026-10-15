@@ -37,6 +37,34 @@ public sealed class KioskRenderTests
     [TestMethod]
     [DataRow(1280, 720, 8.2)]
     [DataRow(800, 480, 5.2)]
+    public async Task About_IsReadableWhileLockedAndOffline_AndKeepsStopVisible(int width, int height, double pixelsPerMillimetre)
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.About));
+        await screen.DrawAsync();
+        await OnUiAsync(() =>
+        {
+            screen.Text("about-client-version").Should().Contain("This kiosk version:")
+                .And.Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
+            screen.Text("about-controller-version").Should().Contain("unavailable in the PIN kiosk");
+            screen.Shell.Page.Should().Be(KioskPage.About);
+        });
+        await screen.RenderAsync("about-locked", TestContext);
+        await OnUiAsync(() =>
+        {
+            screen.Shell.Update(harness.Console.View with { IsUnreachable = true, StaleSince = DateTimeOffset.UtcNow });
+            screen.Window.UpdateLayout();
+            screen.Text("about-client-version").Should().Contain("This kiosk version:");
+            screen.Text("about-controller-version").Should().Contain("unavailable").And.Contain("not live");
+        });
+        await screen.RenderAsync("about-offline", TestContext);
+    }
+
+    [TestMethod]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
     public async Task Locked_ShowsTheStatus_AndStop_AndNothingThatMovesTheRoof(int width, int height, double pixelsPerMillimetre)
     {
         await using var harness = await KioskHarness.CreateAsync();
