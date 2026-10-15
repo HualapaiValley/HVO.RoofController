@@ -38,6 +38,8 @@ public static class RoofSecurityServiceCollectionExtensions
         services.AddSingleton<RoofSecretHasher>();
         services.AddSingleton<RoofSignInLockout>();
         services.AddSingleton<RoofSignInService>();
+        services.AddSingleton<RoofNativeAuthClient>();
+        services.AddSingleton<RoofProviderAuthService>();
         services.AddRoofSignInRateLimiting();
         services.AddSingleton(provider => new RoofApiKeyStore(
             provider.GetRequiredService<IOptionsMonitor<RoofControllerSecurityOptions>>(),
@@ -45,7 +47,9 @@ public static class RoofSecurityServiceCollectionExtensions
             provider.GetRequiredService<RoofIdentityStore>()));
         services.AddSingleton(provider => new RoofCredentialValidator(
             provider.GetRequiredService<RoofApiKeyStore>(),
-            provider.GetRequiredService<RoofIdentityStore>()));
+            provider.GetRequiredService<RoofIdentityStore>(),
+            provider.GetRequiredService<RoofProviderAuthService>()));
+        services.AddSingleton<IAuthorizationHandler, RoofScopeAuthorizationHandler>();
         services.AddSingleton<IAuthorizationHandler, RoofStopAuthorizationHandler>();
 
         // Every endpoint names its scheme; the default is the API's (a session or an API key), so an endpoint that does
@@ -61,9 +65,12 @@ public static class RoofSecurityServiceCollectionExtensions
                 _ => { })
             .AddPolicyScheme(RoofControllerSecurityDefaults.ApiScheme, displayName: "Session or API key", options =>
             {
-                options.ForwardDefaultSelector = context => RoofSessionAuthenticationHandler.HasBearerToken(context.Request)
-                    ? RoofControllerSecurityDefaults.SessionScheme
-                    : RoofControllerSecurityDefaults.ApiKeyScheme;
+                options.ForwardDefaultSelector = context =>
+                    HttpMethods.IsPost(context.Request.Method) && context.Request.Path.Equals(new PathString("/api/v4.0/RoofControl/Stop"), StringComparison.OrdinalIgnoreCase)
+                        ? RoofControllerSecurityDefaults.StopScheme
+                        : RoofSessionAuthenticationHandler.HasBearerToken(context.Request)
+                            ? RoofControllerSecurityDefaults.SessionScheme
+                            : RoofControllerSecurityDefaults.ApiKeyScheme;
             })
             .AddScheme<AuthenticationSchemeOptions, RoofStopAuthenticationHandler>(
                 RoofControllerSecurityDefaults.StopScheme,
@@ -73,13 +80,13 @@ public static class RoofSecurityServiceCollectionExtensions
         services.AddAuthorizationBuilder()
             .AddPolicy(RoofControllerSecurityDefaults.ViewerPolicy, policy => policy
                 .RequireAuthenticatedUser()
-                .RequireRole(RoofControllerApiContract.ViewerRole))
+                .RequireRole(RoofControllerApiContract.ViewerRole).AddRequirements(new RoofScopeRequirement("read")))
             .AddPolicy(RoofControllerSecurityDefaults.OperatorPolicy, policy => policy
                 .RequireAuthenticatedUser()
-                .RequireRole(RoofControllerApiContract.OperatorRole))
+                .RequireRole(RoofControllerApiContract.OperatorRole).AddRequirements(new RoofScopeRequirement("operate")))
             .AddPolicy(RoofControllerSecurityDefaults.AdminPolicy, policy => policy
                 .RequireAuthenticatedUser()
-                .RequireRole(RoofControllerApiContract.AdminRole))
+                .RequireRole(RoofControllerApiContract.AdminRole).AddRequirements(new RoofScopeRequirement("configure")))
             .AddPolicy(RoofControllerSecurityDefaults.StopPolicy, policy => policy
                 .AddRequirements(new RoofStopRequirement()));
 

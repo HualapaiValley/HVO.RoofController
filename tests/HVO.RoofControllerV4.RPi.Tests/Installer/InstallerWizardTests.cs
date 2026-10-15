@@ -52,7 +52,7 @@ public sealed class InstallerWizardTests
             .And.Contain("HAT devices: /dev/i2c-1, /dev/gpiomem, the thermal sensor present")
             .And.Contain("Container:   roof-controller: running, 4.0.0, the real HAT (made by the deploy script)")
             .And.NotContain(Secret);
-        wizard.Page.Describe().Should().Equal(InstallerSession.DescribeSurvey(wizard.Session.Survey, wizard.Session.Time.GetUtcNow()));
+        wizard.Page.Describe().Should().Equal([.. InstallerSession.DescribeSurvey(wizard.Session.Survey, wizard.Session.Time.GetUtcNow()), string.Empty, .. Prerequisites.Guidance(wizard.Session)]);
         wizard.Wizard.BackButton.Enabled.Should().BeFalse();
         wizard.Wizard.NextButton.Enabled.Should().BeTrue();
 

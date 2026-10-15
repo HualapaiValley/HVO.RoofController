@@ -48,6 +48,7 @@ macOS machine with Docker.
 | `HVO.RoofControllerV4.Kiosk` | `hvo-roof-kiosk`: the touchscreen on the Pi, full screen with no desktop, controls behind a PIN ([docs/kiosk.md](docs/kiosk.md)). |
 | `HVO.RoofControllerV4.Mac` | `hvo-roof-mac`: the kiosk's screens in a window on a Mac, built and signed ad hoc on Linux ([docs/mac.md](docs/mac.md)). |
 | `HVO.RoofControllerV4.Installer` | `hvo-roof-install` and `install.sh`: installs, upgrades, rolls back, backs up, restores and uninstalls every role ([docs/install.md](docs/install.md)). |
+| `HVO.RoofControllerV4.LinuxAuth` | Optional native Linux PAM and sudo authentication worker, installed only when explicitly enabled ([docs/install-linux-auth.md](docs/install-linux-auth.md)). |
 | `HVO.RoofControllerV4.Common` | The models, options and DTOs the controller and its clients share. |
 | `HVO.RoofControllerV4.Simulation` | The emulated drive, limit switches, HAT and wiring, used by the tests and the emulator. |
 | `HVO.RoofControllerV4.Emulator` | The HAT emulator: the emulated plant's HAT registers over TCP, and a control API for fault injection ([docs/emulator.md](docs/emulator.md)). |
@@ -205,7 +206,9 @@ observatory's Pi.
   deployment check, the verified Stop, the previous version and rollback are the deploy script's.
 - `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` deploys the controller, built from source or pulled from
   GHCR: it runs the image's `--validate-deployment` check first, requires a verified Stop before replacing the
-  container, verifies the new one, and restores `roof-controller-previous` on any failure
+  container, verifies the new one, and restores a preserved controller after a failure only when its image supports
+  the current identity-store schema. An incompatible or unreadable store leaves that controller stopped with restart
+  policy `no`; preserve the identity data and repair forward with a compatible release
   ([docs/deployment.md](docs/deployment.md)). Keep the script, its tests (`tests/deploy/deploy-script-tests.sh`) and
   the compose file (`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`) in step.
 - With HTTPS only port 8443 is published; plain HTTP on the LAN is an explicit opt-out (`ALLOW_INSECURE_HTTP=true`,

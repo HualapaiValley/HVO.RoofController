@@ -46,10 +46,10 @@ public sealed class KioskPinPad
 
     /// <summary>What to do next, for the line above the pad.</summary>
     public string Prompt => Selected is null ? "Choose your name, then enter your PIN."
-        : $"PIN for {Selected}: {RoofIdentityContract.MinimumPinLength} to {RoofIdentityContract.MaximumPinLength} digits.";
+        : $"PIN for {Selected}: four digits.";
 
     /// <summary>True when the PIN can be sent: a person is chosen and the PIN has an allowed length.</summary>
-    public bool CanUnlock => Selected is not null && !Unlocking && RoofIdentityContract.IsValidPin(_pin);
+    public bool CanUnlock => Selected is not null && !Unlocking && RoofIdentityContract.IsAcceptedPin(_pin);
 
     /// <summary>Raised after anything here changed.</summary>
     public event Action? Changed;
@@ -106,7 +106,7 @@ public sealed class KioskPinPad
     /// <summary>Types a digit. Nothing happens past the longest PIN, or while the PIN is on its way.</summary>
     public void Press(char digit)
     {
-        if (!char.IsAsciiDigit(digit) || Unlocking || _pin.Length >= RoofIdentityContract.MaximumPinLength)
+        if (!char.IsAsciiDigit(digit) || Unlocking || _pin.Length >= RoofIdentityContract.MaximumAcceptedPinLength)
         {
             return;
         }

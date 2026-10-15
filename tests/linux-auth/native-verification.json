@@ -1,0 +1,170 @@
+{
+  "nativeComponentOnly": true,
+  "productionApplication": false,
+  "exitCode": 0,
+  "fixture": {
+    "checks": [
+      {
+        "name": "private socket modes",
+        "passed": true
+      },
+      {
+        "name": "service readiness notification follows socket setup",
+        "passed": true
+      },
+      {
+        "name": "worker launched from filesystem root becomes ready within service deadline",
+        "passed": true
+      },
+      {
+        "name": "worker does not retain unused application configuration file watchers",
+        "passed": true
+      },
+      {
+        "name": "native sudo approved caller",
+        "passed": true
+      },
+      {
+        "name": "assertion MAC verifies",
+        "passed": true
+      },
+      {
+        "name": "bound native assertion claims",
+        "passed": true
+      },
+      {
+        "name": "unprivileged sudo denied",
+        "passed": true
+      },
+      {
+        "name": "direct unprivileged helper denied",
+        "passed": true
+      },
+      {
+        "name": "caller supplied UID rejected",
+        "passed": true
+      },
+      {
+        "name": "portable session input rejected",
+        "passed": true
+      },
+      {
+        "name": "unknown operation rejected",
+        "passed": true
+      },
+      {
+        "name": "assertion MAC verifies",
+        "passed": true
+      },
+      {
+        "name": "sudo protected origin and sanitized runtime",
+        "passed": true
+      },
+      {
+        "name": "controller root cannot call local signer",
+        "passed": true
+      },
+      {
+        "name": "wrong password PAM denial",
+        "passed": true
+      },
+      {
+        "name": "native PAM password authentication",
+        "passed": true
+      },
+      {
+        "name": "expired password denied",
+        "passed": true
+      },
+      {
+        "name": "expired revalidation denied",
+        "passed": true
+      },
+      {
+        "name": "locked password denied",
+        "passed": true
+      },
+      {
+        "name": "locked revalidation denied",
+        "passed": true
+      },
+      {
+        "name": "locked-password SSH-key administrator permitted native sudo",
+        "passed": true
+      },
+      {
+        "name": "expired administrator denied native sudo",
+        "passed": true
+      },
+      {
+        "name": "locked-password local proof revalidates independently of web password",
+        "passed": true
+      },
+      {
+        "name": "current enrollment revalidates",
+        "passed": true
+      },
+      {
+        "name": "native enrollment disable immediately revokes",
+        "passed": true
+      },
+      {
+        "name": "disabled enrollment blocks local helper",
+        "passed": true
+      },
+      {
+        "name": "changed enrollment stamp rejects old identity",
+        "passed": true
+      },
+      {
+        "name": "native UID mismatch fails closed",
+        "passed": true
+      },
+      {
+        "name": "hung PAM transaction fails closed within bounded child lifetime",
+        "passed": true
+      },
+      {
+        "name": "worker remains usable after PAM timeout",
+        "passed": true
+      },
+      {
+        "name": "unsafe enrollment permissions fail closed",
+        "passed": true
+      },
+      {
+        "name": "kernel peer UID gate denies filesystem-authorized outsider",
+        "passed": true
+      },
+      {
+        "name": "configured non-root controller peer succeeds",
+        "passed": true
+      },
+      {
+        "name": "active worker exclusive lock prevents socket replacement",
+        "passed": true
+      },
+      {
+        "name": "worker crash restart preserves mounted directory inode and recovers authentication",
+        "passed": true
+      },
+      {
+        "name": "restart announces fresh service readiness",
+        "passed": true
+      },
+      {
+        "name": "no TCP listener from worker",
+        "passed": true
+      }
+    ],
+    "passed": 38,
+    "failed": 0,
+    "fixtureOnly": true,
+    "nativePam": true,
+    "nativeSudo": true,
+    "productionApi": false
+  },
+  "containerRemoved": true,
+  "imageRemoved": true,
+  "hostAccountsAndFixturePoliciesUnchanged": true
+}

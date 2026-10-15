@@ -53,7 +53,7 @@ internal sealed class RoofStopper : IDisposable
             var (outcome, message) = RoofStopText.Classify(false, ex.RoofStatus, ex.Code, ex.Message);
             return new RoofStopResult(outcome, message, ex.RoofStatus, ex);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TimeoutException or RoofProtocolException
+        catch (Exception ex) when (ex is HttpRequestException or TimeoutException or RoofProtocolException or RoofLocalAuthorizationException
             || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             _logger.LogWarning(ex, "Stop could not be sent or was not answered");

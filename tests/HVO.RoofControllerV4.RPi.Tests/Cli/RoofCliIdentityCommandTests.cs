@@ -242,8 +242,8 @@ public sealed class RoofCliIdentityCommandTests
     }
 
     [TestMethod]
-    [DataRow("short-pass", false, "A password must be 12 to 256 characters.")]
-    [DataRow("12ab", true, "A PIN must be 6 to 12 digits.")]
+    [DataRow("short", false, "A password must be 7 to 256 characters.")]
+    [DataRow("12ab", true, "A PIN must be exactly 4 digits; the temporary commissioning PIN is reserved.")]
     [DataRow(null, false, "No value was given for: Password for alice.")]
     public async Task UsersAdd_WithAnUnusableSecret_IsAUsageError(string? answer, bool pinOnly, string expected)
     {
@@ -572,7 +572,7 @@ public sealed class RoofCliIdentityCommandTests
         var result = await rig.RunAsync("pins", "set", "alice");
 
         result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
-        result.Error.Should().Contain("A PIN must be 6 to 12 digits.");
+        result.Error.Should().Contain("A PIN must be exactly 4 digits; the temporary commissioning PIN is reserved.");
         (await UsersAsync(host)).Single().HasPin.Should().BeFalse();
     }
 

@@ -323,6 +323,8 @@ public sealed class ControllerStep(
         _deployKeyFile = null;
         OnlyCertificateDiffers = false;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+        if (IdentitySchemaGuard.Problem(context.Machine, layout.IdentityFile, release) is { } schemaProblem)
+            return new StepCheck(StepChange.Blocked, schemaProblem);
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)
         {
@@ -431,6 +433,9 @@ public sealed class ControllerStep(
         {
             return settings.TelemetryEndpoint is { } endpoint ? $"redeployed to send telemetry to {endpoint}" : "redeployed with telemetry off";
         }
+
+        if (container.LinuxAuthEnabled != (settings.LinuxAuth is { Enabled: true }))
+            return "redeployed with the requested host authentication adapter setting";
 
         if (replacesEmulator)
         {
@@ -668,6 +673,12 @@ public sealed class ControllerStep(
             ["OPERATOR_KEY_FILE"] = keyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),
             ["ROOF_OPERATOR_API_KEY"] = string.Empty
         };
+        if (settings.LinuxAuth is { Enabled: true })
+        {
+            environment["LINUX_AUTH_ENABLED"] = "true";
+            environment["LINUX_AUTH_CONTROLLER_DIR"] = LinuxAuthStep.ControllerSocketFolder;
+            environment["LINUX_AUTH_KEY_FILE"] = LinuxAuthStep.KeyFile;
+        }
         return environment;
     }
 

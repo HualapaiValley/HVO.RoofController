@@ -984,6 +984,8 @@ public sealed class RoofSettingsStore
     /// <summary>Why <paramref name="user"/> may not change <paramref name="definition"/>, or null.</summary>
     private Refusal? WriteRefusal(Layers layers, RoofSettingDefinition definition, ClaimsPrincipal user, bool local)
     {
+        if (RoofPrincipalFactory.GetCredentialKind(user) == RoofCredentialKind.Pin)
+            return new Refusal(RoofControllerErrorCode.CredentialNotAllowed, "A PIN session grants roof operation only; settings are read-only.");
         if (!user.IsInRole(definition.WriteRole))
         {
             return new Refusal(RoofControllerErrorCode.SettingNotPermitted, $"{definition.Key} needs the {definition.WriteRole} role.");

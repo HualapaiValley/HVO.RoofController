@@ -207,6 +207,12 @@ internal sealed class KioskHarness : IAsyncDisposable
         await WaitForAsync(view => view.UnlockedBy == name, $"the kiosk unlocked by {name}");
     }
 
+    public async Task PasswordAsync(string name)
+    {
+        (await Console.SignInAsync(name, TestSecrets.Password)).Should().BeNull();
+        await WaitForAsync(view => view.UnlockedBy == name, "password session");
+    }
+
     public Task WaitForAsync(Func<KioskView, bool> condition, string what)
         => ClientTestSupport.WaitUntilAsync(() => condition(Console.View), what);
 

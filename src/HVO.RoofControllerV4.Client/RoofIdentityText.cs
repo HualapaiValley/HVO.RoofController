@@ -20,7 +20,7 @@ public static class RoofIdentityText
 
     public static readonly string PinRule = string.Create(
         CultureInfo.InvariantCulture,
-        $"A PIN must be {RoofIdentityContract.MinimumPinLength} to {RoofIdentityContract.MaximumPinLength} digits.");
+        $"A PIN must be exactly {RoofIdentityContract.MinimumPinLength} digits; the temporary commissioning PIN is reserved.");
 
     public const string RoleChangeEndsSessions = "Changing the role ends every session of the person.";
 

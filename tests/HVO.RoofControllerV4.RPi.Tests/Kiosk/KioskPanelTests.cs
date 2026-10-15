@@ -48,16 +48,16 @@ public sealed class KioskPanelTests
         changes.Should().Be(2, "once as the read starts, once as it ends");
 
         pad.Select(KioskHarness.Operator);
-        pad.Prompt.Should().Be("PIN for olga: 6 to 12 digits.");
-        foreach (var digit in "24681")
+        pad.Prompt.Should().Be("PIN for olga: four digits.");
+        foreach (var digit in "246")
         {
             pad.Press(digit);
         }
 
         pad.Press('x');
-        pad.Masked.Should().Be("●●●●●");
-        pad.CanUnlock.Should().BeFalse("five digits are too few");
-        pad.Press('0');
+        pad.Masked.Should().Be("●●●");
+        pad.CanUnlock.Should().BeFalse("three digits are too few");
+        pad.Press('8');
         pad.CanUnlock.Should().BeTrue();
 
         foreach (var digit in "1234567890")
@@ -65,9 +65,9 @@ public sealed class KioskPanelTests
             pad.Press(digit);
         }
 
-        pad.Length.Should().Be(RoofIdentityContract.MaximumPinLength, "digits past the longest PIN are ignored");
+        pad.Length.Should().Be(RoofIdentityContract.MaximumAcceptedPinLength, "digits past the longest PIN are ignored");
         pad.Backspace();
-        pad.Length.Should().Be(RoofIdentityContract.MaximumPinLength - 1);
+        pad.Length.Should().Be(RoofIdentityContract.MaximumAcceptedPinLength - 1);
         pad.Clear();
         pad.Masked.Should().BeEmpty();
 
@@ -153,7 +153,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         await harness.WaitForAsync(view => view.ScreenTimeout == TimeSpan.FromMinutes(5), "the default screen timeout");
         var settings = new KioskSettingsPanel(harness.Console);
         settings.Header.Should().Be(KioskSettingsPanel.NotReadYet);
@@ -190,7 +190,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
         var version = settings.Form!.Version;
@@ -219,7 +219,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
         settings.SelectField(AtSpeed);
@@ -251,7 +251,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
 
@@ -280,7 +280,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
         settings.SelectField(DefaultCamera);
@@ -301,7 +301,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
 
@@ -315,25 +315,16 @@ public sealed class KioskPanelTests
     }
 
     [TestMethod]
-    public async Task ALocalOnlySetting_IsChangedByAnAdminAtTheControllersKiosk()
+    public async Task APasswordSession_DoesNotInheritTheKioskDevicesLocalAuthority()
     {
         await using var harness = await KioskHarness.CreateAsync(localKey: true);
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
         settings.SelectField(Departure);
-        settings.Field!.CanWrite.Should().BeTrue();
-
-        settings.BeginEdit();
-        settings.ClearText();
-        settings.Type("25");
-        await settings.ReviewAsync();
-
-        settings.Message!.Text.Should().StartWith("Saved (settings version ");
-        var applied = harness.Roof.Applied.Should().ContainSingle().Subject;
-        applied.IncludeLocalOnly.Should().BeTrue();
-        applied.Options.DepartureReleaseTimeout.Should().Be(TimeSpan.FromSeconds(25));
+        settings.Field!.CanWrite.Should().BeFalse();
+        harness.Roof.Applied.Should().BeEmpty();
     }
 
     [TestMethod]
@@ -341,7 +332,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync(localKey: false);
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
         settings.SelectField(Departure);
@@ -360,7 +351,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         EditSettingsFile(harness, "{ \"RoofControllerUi\": { \"DefaultCamera\": \"Yard\" } }");
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
@@ -384,7 +375,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         EditSettingsFile(harness, "{ \"RoofControllerUi\": { \"DefaultCamera\": \"Yard\" } }");
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
@@ -409,7 +400,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         EditSettingsFile(harness, "{ \"RoofControllerUi\": { \"DefaultCamera\": \"Yard\" } }");
         var settings = new KioskSettingsPanel(harness.Console);
         settings.ReviewHandEdit();
@@ -427,7 +418,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
         settings.SelectField(KioskTimeout);
@@ -454,7 +445,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var settings = new KioskSettingsPanel(harness.Console);
         await using var held = HoldNext(harness, HttpMethod.Get, RoofApiRoutes.Settings);
         var adminsRead = settings.LoadAsync();
@@ -463,7 +454,7 @@ public sealed class KioskPanelTests
 
         await harness.Console.LockAsync();
         settings.Reset();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         settings.Reset();
         await settings.LoadAsync();
         var operators = settings.Form;
@@ -482,7 +473,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         await harness.WaitForAsync(view => view.ScreenTimeout == TimeSpan.FromMinutes(5), "the default screen timeout");
         var settings = new KioskSettingsPanel(harness.Console);
         await settings.LoadAsync();
@@ -513,7 +504,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         var system = new KioskSystemPanel(harness.Console);
 
         await system.LoadAsync();
@@ -537,7 +528,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var system = new KioskSystemPanel(harness.Console);
         await using var held = HoldNext(harness, HttpMethod.Get, RoofApiRoutes.SystemMetrics);
         var adminsRead = system.LoadAsync();
@@ -545,7 +536,7 @@ public sealed class KioskPanelTests
 
         await harness.Console.LockAsync();
         system.Reset();
-        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.PasswordAsync(KioskHarness.Operator);
         system.Reset();
         await system.LoadAsync();
         var operators = system.Message;
@@ -564,7 +555,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         var system = new KioskSystemPanel(harness.Console);
         var signal = harness.Host.Services.GetRequiredService<RoofRestartSignal>();
 
@@ -592,7 +583,7 @@ public sealed class KioskPanelTests
     {
         await using var harness = await KioskHarness.CreateAsync();
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         EditSettingsFile(harness, "{ \"RoofControllerOptionsV4\": { \"OpenRelayId\": 2, \"CloseRelayId\": 1 } }");
         var system = new KioskSystemPanel(harness.Console);
 

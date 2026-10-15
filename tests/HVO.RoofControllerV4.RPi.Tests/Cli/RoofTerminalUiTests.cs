@@ -41,6 +41,10 @@ public sealed class RoofTerminalUiTests
 {
     private const string WrongKey = "test-wrong-key-not-a-real-secret-99";
 
+
+    /// <summary>Where the test framework attaches the rendered documentation screen.</summary>
+    public TestContext TestContext { get; set; } = null!;
+
     // ---- Stop --------------------------------------------------------------------------------------------------------
 
     [TestMethod]
@@ -134,6 +138,37 @@ public sealed class RoofTerminalUiTests
         ShouldHaveColours(tui.ColoursOf(RoofStopText.KeyRefused[..30]), RoofUiPalette.DangerText, RoofUiPalette.Background, "a refused Stop is an error");
         ShouldHaveColours(tui.ColoursOf("No status: the controller refused"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    [TestMethod]
+    public void LocalTerminal_DeniedGate_DoesNotUseSavedKey_AndKeepsStopVisible()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        RoofCredentialStore.Save(rig.CredentialsPath, rig.Stored! with { AuthMode = "local" });
+        var saved = File.ReadAllBytes(rig.CredentialsPath);
+        rig.ObtainLocalAssertion = (_, _) => throw new RoofCliRefusedException("Native gate refused (test).", RoofExitCode.Forbidden);
+        var requests = 0;
+        rig.WrapHandler = _ => new RoofCliProviderTests.Handler((_, _) =>
+        {
+            Interlocked.Increment(ref requests);
+            throw new AssertFailedException("A denied native gate cannot use the saved API key.");
+        });
+        using var tui = new TuiDriver(rig);
+        tui.WaitIdle("local denial", () => tui.Ui.Message.Contains("Local Linux authorization", StringComparison.Ordinal));
+
+        tui.Ui.StopButton.Enabled.Should().BeTrue();
+        tui.Press(Key.F9);
+        tui.WaitIdle("local Stop refusal", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Ui.StopButton.Enabled.Should().BeTrue();
+        requests.Should().Be(0);
+
+        tui.Press(Key.F5);
+        Click(tui, "Sign in");
+        tui.Ui.Panel.Should().BeNull();
+        tui.Ui.Message.Should().Contain("checked for each request");
+        File.ReadAllBytes(rig.CredentialsPath).Should().Equal(saved);
     }
 
     // ---- Colours -----------------------------------------------------------------------------------------------------
@@ -1287,7 +1322,63 @@ public sealed class RoofTerminalUiTests
         page.OpenButton.Enabled.Should().BeTrue("the command is no longer on its way");
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void RemoteUi_WithNoCredential_OffersSignIn_AndCancelDoesNotLoop(bool expired)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host) { Interactive = true };
+        rig.UseApiKey(null);
+        if (expired)
+            RoofCredentialStore.Save(rig.CredentialsPath, new RoofStoredCredentials
+            {
+                Controller = ClientTestSupport.BaseAddress,
+                Session = new("test-expired-session", "ada", "RoofAdmin", "test", DateTimeOffset.UtcNow.AddMinutes(-1))
+            });
+        var before = File.ReadAllBytes(rig.CredentialsPath);
+        using var tui = new TuiDriver(rig);
+        tui.WaitIdle("automatic remote sign-in", () => tui.Ui.Panel is not null);
+        tui.Ui.Panel!.Fields[0].Text.Should().Be("ada");
+        tui.Ui.Panel.Fields[1].Secret.Should().BeTrue();
+        tui.Ui.Panel.Press("Cancel");
+        tui.WaitIdle("cancelled sign-in");
+        tui.Ui.Panel.Should().BeNull();
+        File.ReadAllBytes(rig.CredentialsPath).Should().Equal(before);
+        tui.Ui.StopButton.Enabled.Should().BeTrue();
+    }
+
     // ---- Setup -------------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void Setup_ProviderSignIn_RendersEditableOsNameForDocumentation()
+    {
+        using var directory = new HVO.RoofControllerV4.RPi.Tests.Security.TemporaryDirectory();
+        using var host = RoofClientApiTests.CreateHost(settings: new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true"
+        });
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        tui.Press(Key.F5);
+        Click(tui, "Sign in");
+        tui.WaitIdle("provider sign-in prompt", () => tui.Ui.Panel is not null);
+
+        var panel = tui.Ui.Panel!;
+        panel.Fields.Should().HaveCount(3);
+        panel.Fields[0].Text.Should().Be("ada");
+        panel.Fields[1].Text.Should().BeEmpty();
+        panel.Fields[1].Secret.Should().BeTrue();
+        panel.Fields[2].Text.Should().Be("virtual");
+        tui.Screen.Should().Contain("Account type (virtual or linux)")
+            .And.Contain($"{RoofStopText.ButtonLabel} (F9)")
+            .And.NotContain(TestApiKeys.Admin);
+
+        var path = tui.Render(TestContext, "08-provider-signin");
+        File.ReadAllText(path).Should().Contain("\u001b[", "the capture retains the rendered colours");
+    }
 
     [TestMethod]
     public void Setup_FromNothing_SavesTheConnection_AddsTheFirstAdmin_SignsInAndOut()
@@ -1322,6 +1413,18 @@ public sealed class RoofTerminalUiTests
         tui.Ui.Message.Should().Be("Added ada (admin). Sign in as ada here, with Sign in. The connection works.");
 
         Click(tui, "Sign in");
+        tui.WaitIdle("account provider discovery", () => tui.Ui.Panel is not null);
+        Fill(tui, "ada", TestSecrets.OtherPassword);
+        tui.Ui.Panel!.Press("Sign in");
+        tui.WaitIdle("retry after a failed sign-in", () => tui.Ui.Panel is not null);
+        tui.Ui.Panel!.Fields[0].Text.Should().Be("ada");
+        tui.Ui.Panel.Fields[1].Text.Should().BeEmpty("passwords are never retained for retry");
+        rig.Stored!.Session.Should().BeNull();
+        tui.Ui.Panel.Press("Cancel");
+        tui.Ui.Panel.Should().BeNull();
+        rig.Stored.Session.Should().BeNull("cancel does not change credentials");
+        Click(tui, "Sign in");
+        tui.WaitIdle("sign-in after cancel", () => tui.Ui.Panel is not null);
         Fill(tui, "ada", TestSecrets.Password);
         tui.Ui.Panel!.Fields[1].Secret.Should().BeTrue();
         tui.Ui.Panel.Press("Sign in");
@@ -1436,6 +1539,34 @@ public sealed class RoofTerminalUiTests
     }
 
     // ---- People ------------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void People_LinuxRoleAndAccess_AreChangedThroughTheApi()
+    {
+        using var directory = new HVO.RoofControllerV4.RPi.Tests.Security.TemporaryDirectory();
+        using var host = RoofClientApiTests.CreateHost(settings: new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true"
+        });
+        var store = host.Server.Services.GetRequiredService<HVO.RoofControllerV4.RPi.Security.Identity.RoofIdentityStore>();
+        var person = store.EnrollLinux(new RoofPrincipalEnrollRequest { Subject = Guid.NewGuid().ToString(), Name = "fixture-linux", EnrollmentStamp = Guid.NewGuid().ToString(), Role = "RoofViewer" }).Value!;
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        tui.Press(Key.F3);
+        tui.WaitIdle("people");
+        Click(tui, "Linux users");
+        var page = (RoofUiPeoplePage)tui.Ui.CurrentPage;
+        tui.WaitIdle("Linux users", () => page.Describe().Contains("fixture-linux", StringComparison.Ordinal));
+        tui.Render(TestContext, "09-linux-users");
+        page.Select(person.Id);
+        Click(tui, "Role / access");
+        Fill(tui, "operator", "false");
+        tui.Ui.Panel!.Press("Save");
+        tui.WaitIdle("updated Linux access", () => store.ProviderPrincipals.Single(item => item.Id == person.Id).Enabled == false);
+        store.ProviderPrincipals.Single(item => item.Id == person.Id).Role.Should().Be("RoofOperator");
+    }
 
     [TestMethod]
     public void People_AddsAPerson_AndShowsANewKeysSecretOnce()

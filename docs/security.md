@@ -125,6 +125,70 @@ which turns them off. Some changes also need `"confirmSafetyCriticalChange": tru
 Every applied change is written to the log as an `AUDIT` entry. The entry holds the caller's key or person name, the
 old and new versions, and the changed fields.
 
+## Optional Linux identities and personal keys
+
+The Linux identity adapter is off by default. Enable it through the installer's
+[Linux authentication options](install-linux-auth.md), which install a native PAM/sudo worker and explicitly enroll
+existing Linux accounts. Enabling it does not make every Linux user a controller user, and Linux administrators do
+not automatically become controller administrators. Each enrolled account has a separate controller role.
+A Linux account and a virtual account with the same display name remain different principals.
+
+The web sign-in page offers a provider choice only while the feature is enabled. Virtual passwords stay in the
+controller's identity store; Linux passwords are checked by PAM through the protected native socket. Both require
+the account's enrollment and controller role. Existing password, PIN, configured API key and managed kiosk flows
+remain available.
+
+An installed local CLI connection uses a fixed sudo helper for every protected request and status-hub connection.
+It does not fall back to a saved web session or API key if the helper denies access. The helper needs the host's
+sudo authorization and the controller still applies its enrolled role. Explicit remote CLI mode instead uses its
+remote credentials. The root-owned helper accepts an operation category, never a caller-supplied identity.
+Kernel peer credentials identify the privileged helper; its protected sudo origin supplies the original caller's UID. Root is part of this trust boundary.
+The controller verifies HMAC assertions using signing-capable material. The current controller/web container is also
+trusted: compromise of that container can expose application secrets and forge assertions. This feature does not
+provide isolation from a compromised frontend or root; asymmetric assertions and separate process trust boundaries
+would require additional hardening.
+
+The native assertion is audience-bound, expires within 30 seconds and can be exchanged only once. Its consumed
+nonce and the resulting session are saved atomically. The returned session is a reusable bearer lease for the same
+operation category until its short expiry; the API does not independently prove a fresh sudo invocation on each
+use of that lease. The installed CLI obtains fresh authority for each protected request and does not persist it.
+
+Linux sessions and personal keys are checked against the native account and enrollment on every protected request
+and during status-hub credential validation. Missing or unavailable native authentication fails closed for these
+credentials. A Linux password lock prevents password-based sign-in; a locked password alone does not disqualify a
+valid sudo-authorized local account. Account expiry denies both. Restoring native account eligibility can restore an
+otherwise unexpired credential; controller disablement, role changes, enrollment rotation and explicit key
+revocation provide durable invalidation. If an account is deleted and recreated with the same name and UID, the
+administrator must rotate its enrollment stamp; numeric identity alone cannot prove continuity.
+
+Authenticated Linux and virtual password sessions can create personal keys at `POST /api/v4.0/Auth/Keys`, list their
+own metadata with `GET`, and revoke an owned key with `DELETE /api/v4.0/Auth/Keys/{id}`. Keys have an owner, an expiry,
+and explicit `read`, `operate` or `configure` scopes, bounded by the owner's current role. They cannot grant identity
+administration, create more keys, or manage another person's keys. The secret is returned only at creation.
+PIN sessions and native operation leases cannot mint personal keys.
+
+`GET /api/v4.0/Auth/Providers` reports capability; `POST .../ProviderSession` signs in with an explicit provider;
+`POST .../LocalSession` exchanges the native assertion. Controller admins manage Linux principal enrollment through
+`GET`/`POST /api/v4.0/Identity/Principals` and `PUT .../Principals/{id}`. Enrollment also has to exist in the protected
+native configuration. These optional routes deny provider operations while the feature is disabled.
+
+Stop continues to accept any valid authenticated role, independent of a personal key's operation scopes. When an
+expired or refused session accompanies a valid kiosk key, Stop can use that key. Native worker failure does not
+remove the independent configured kiosk-key Stop path. Other routes do not fall back from a refused session.
+
+### Identity store migration and rollback
+
+The first startup with Linux identities enabled copies the schema 1 store to a preserved recovery copy and
+migrates the live store to schema 2. Starting with the feature disabled does not migrate a schema 1 store. Disabling
+the feature after migration retains the schema 2 data and legacy authentication while disabling the optional
+provider credentials and routes.
+
+A release advertises the identity schema it can read. Installer rollback refuses an older release that cannot read
+the active schema before replacing the current application. It does not restore the old identity backup, because
+doing so could revive revoked credentials. Roll back only to a compatible release; manual recovery must preserve
+current revocations. The native worker and its protected configuration are covered by the installer's managed-file
+ownership and recovery checks.
+
 ## Provisioning API keys
 
 Keys are secrets. Never put them in `appsettings*.json`, `launchSettings.json`, compose files or the `.http` samples.
@@ -137,7 +201,7 @@ Each entry has these settings:
 | `RoofControllerSecurity:ApiKeys:N:Key` | The key, at least 24 characters. |
 | `RoofControllerSecurity:ApiKeys:N:KeySha256` | Alternative to `Key`: 64 hex characters of SHA-256 over the key's UTF-8 bytes. Use it so the controller never stores the key itself. |
 | `RoofControllerSecurity:ApiKeys:N:Kiosk` | Optional, default `false`. `true` marks a kiosk's key, at which people sign in with a PIN. A kiosk key must have the `RoofViewer` role. |
-| `RoofControllerSecurity:ApiKeys:N:Local` | Optional, default `false`. `true` marks a key kept only on the controller or the kiosk beside it. It makes the key a [local credential](#local-only-settings): a local admin key, or an admin's PIN session at a local kiosk, may change the local-only settings. |
+| `RoofControllerSecurity:ApiKeys:N:Local` | Optional, default `false`. `true` marks a key kept only on the controller or the kiosk beside it. It makes the key a [local credential](#local-only-settings): a local admin key may change the local-only settings. |
 
 Set exactly one of `Key` or `KeySha256`. An entry that is incomplete, too short, has an unknown role, sets both, or is
 a kiosk key without the `RoofViewer` role is skipped. The startup log reports it by index and name, never by value. If no usable key remains, the controller logs a
@@ -238,7 +302,7 @@ API in its identity store.
 - **Own password.** `POST /api/v4.0/Auth/Password` with `currentPassword` and `newPassword` changes a signed-in
   person's password. Their other sessions end; this one stays open.
 
-Passwords are 12 to 256 characters. PINs are 6 to 12 digits. Names are 1 to 64 letters, digits, `.`, `_`, `@` or `-`,
+New virtual passwords are 7 to 256 characters with no composition rule. New personal PINs are exactly four ASCII digits; the temporary commissioning code is reserved. Existing credentials are preserved. Linux passwords retain PAM policy. Names are 1 to 64 letters, digits, `.`, `_`, `@` or `-`,
 starting with a letter or digit. Passwords and PINs are stored as PBKDF2 hashes. Session tokens and managed keys are
 stored as SHA-256 hashes.
 
@@ -297,16 +361,14 @@ Admins manage everything under `/api/v4.0/Identity`:
 | `GET/POST Identity/ApiKeys`, `PUT/DELETE Identity/ApiKeys/{name}`, `POST Identity/ApiKeys/{name}/Rotate` | API keys. The list includes the configured keys, marked `Configuration` and read-only (409 `IdentityReadOnly`). The controller generates a managed key's value and returns it once, on create and on rotate. A kiosk key must have the `RoofViewer` role. |
 | `GET Identity/Sessions`, `DELETE Identity/Sessions/{id}` | Open sessions (never their tokens), and ending one. |
 
-A PIN session cannot use these routes, even an admin's: it gets 403 `CredentialNotAllowed`. A PIN is short and typed
+A PIN session cannot use these routes, even an admin's: it gets 403 (authorization can refuse it before the action filter). A PIN is short and typed
 where others can see it, so it must not be able to create people or keys that work from anywhere and outlive the
 session. Use an admin API key, or sign in with a password.
 
-Everything else an admin may do, an admin's PIN session may do too, by design: run the roof, clear faults, read and
-change the settings (including ignoring the limit switches where local configuration allows it, and turning off the
-operator lease or the IN4 interlock, each with `ConfirmSafetyCriticalChange`; the [local-only settings](#local-only-settings)
-only at a kiosk marked `Local`), restart the controller, and read the `System` routes and the OpenAPI document. Only a
-kiosk's key can open a PIN session, but the bearer token it returns is not tied to the kiosk: whoever holds it can use
-it from anywhere until it idles out (`PinSessionIdleTimeout`, default 10 minutes) or is ended. A kiosk must keep it as safe as its own key.
+PIN sessions grant roof operation only, including Clear fault. An administrator's PIN grants Operator claims,
+not administrative rights. Settings writes, identity management and administrative system actions are refused.
+Read-only configuration required for the screen remains available. See [Authentication and interface rights](authentication-interfaces.md)
+for first-install enrollment, temporary commissioning access and each client's rights.
 
 A change that would leave no admin credential is refused with 409 `LastAdministrator`. An admin credential is an admin
 API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed
@@ -421,8 +483,10 @@ takes only `Trace`, `Debug` or `Information`, through the API and in the setting
 local-only, so that no one can, for example, allow ignoring the limit switches on the real roof from across the network.
 Only a local credential may change them:
 
-- an admin API key configured with `Local: true` and kept only on the controller, for the CLI in its shell; or
-- an admin's PIN session at a kiosk whose configured key has both `Kiosk: true` and `Local: true`.
+- an admin API key configured with `Local: true` and kept only on the controller; or
+- an explicitly enrolled Linux controller administrator using verified native local authorization.
+
+A kiosk PIN never grants these administrative rights, even when its device key is marked `Local`.
 
 A password session and a key added through the API are never local. The check is on the credential, never on the
 caller's address: behind Docker's port publishing, and with the web UI in the same container, an address does not show

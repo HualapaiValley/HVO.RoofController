@@ -16,11 +16,13 @@ public sealed class RoofCredentialValidator
 {
     private readonly RoofApiKeyStore _keys;
     private readonly RoofIdentityStore? _identity;
+    private readonly RoofProviderAuthService? _providers;
 
-    internal RoofCredentialValidator(RoofApiKeyStore keys, RoofIdentityStore? identity)
+    internal RoofCredentialValidator(RoofApiKeyStore keys, RoofIdentityStore? identity, RoofProviderAuthService? providers = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
         _identity = identity;
+        _providers = providers;
     }
 
     /// <summary>A validator for API keys only (no people or sessions).</summary>
@@ -38,6 +40,9 @@ public sealed class RoofCredentialValidator
         switch (RoofPrincipalFactory.GetCredentialKind(user))
         {
             case RoofCredentialKind.ApiKey:
+                if (user.HasClaim(RoofPrincipalFactory.OwnedKeyClaimType, "true"))
+                    return _identity?.OwnedKeyIsCurrent(user.FindFirst(RoofPrincipalFactory.KeyIdClaimType)!.Value) == true
+                        && _providers?.PrincipalIsCurrent(user.FindFirst(RoofPrincipalFactory.PrincipalIdClaimType)?.Value) == true;
                 return _keys.TryFindByKeyId(user.FindFirst(RoofPrincipalFactory.KeyIdClaimType)?.Value, out var key)
                     && string.Equals(key.Name, user.Identity.Name, StringComparison.Ordinal)
                     && string.Equals(key.Role, role, StringComparison.Ordinal);
@@ -47,8 +52,10 @@ public sealed class RoofCredentialValidator
                 return _identity is not null
                     && _identity.TryGetLiveSession(user.FindFirst(RoofPrincipalFactory.SessionIdClaimType)?.Value, out var session)
                     && string.Equals(session.UserName, user.Identity.Name, StringComparison.Ordinal)
-                    && string.Equals(session.Role, role, StringComparison.Ordinal)
-                    && IsDeviceStillKiosk(session);
+                    && string.Equals(session.Kind == RoofCredentialKind.Pin && session.Role == RoofControllerApiContract.AdminRole
+                        ? RoofControllerApiContract.OperatorRole : session.Role, role, StringComparison.Ordinal)
+                    && IsDeviceStillKiosk(session)
+                    && (session.PrincipalId is null || _providers?.PrincipalIsCurrent(session.PrincipalId, session.Scope is not null) == true);
 
             default:
                 return false;
@@ -89,6 +96,11 @@ public sealed class RoofCredentialValidator
             return false;
         }
 
+        if (found.PrincipalId is not null && _providers?.PrincipalIsCurrent(found.PrincipalId, found.Scope is not null) != true)
+        {
+            failure = "the provider identity is unavailable or changed";
+            return false;
+        }
         session = found;
         return true;
     }

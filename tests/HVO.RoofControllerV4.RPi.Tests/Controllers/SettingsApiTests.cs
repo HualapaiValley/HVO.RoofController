@@ -433,22 +433,16 @@ public sealed class SettingsApiTests
         roof.Applied.Should().ContainSingle().Which.IncludeLocalOnly.Should().BeTrue();
         roof.Current.DepartureReleaseTimeout.Should().Be(TimeSpan.FromSeconds(9));
 
-        // An admin's PIN at the controller's own kiosk is a local credential; at another kiosk it is not.
+        // A PIN grants roof operation only, even at the controller's own kiosk.
         await AddUserAsync(host, "lena", RoofControllerApiContract.AdminRole);
-        using var atTheController = await PinSessionAsync(host, LocalKioskKey, "lena");
-        var pin = await ReadGroupAsync(atTheController, RoofSettingsContract.RoofGroup, values => values[Departure] = Json("10"));
-        var pinAccepted = await PostGroupAsync(atTheController, RoofSettingsContract.RoofGroup, pin);
-        pinAccepted.StatusCode.Should().Be(HttpStatusCode.OK, await pinAccepted.Content.ReadAsStringAsync());
-        roof.Current.DepartureReleaseTimeout.Should().Be(TimeSpan.FromSeconds(10));
-        logs.Entries.Should().Contain(entry => entry.Message.StartsWith("AUDIT settings changed by lena (PIN at test-local-kiosk)", StringComparison.Ordinal));
-
-        using var elsewhere = await PinSessionAsync(host, RemoteKioskKey, "lena");
-        State(await GetAsync(elsewhere), Departure).CanWrite.Should().BeFalse();
-        var fromElsewhere = await ReadGroupAsync(elsewhere, RoofSettingsContract.RoofGroup);
-        (await ProblemAsync(await PostGroupAsync(elsewhere, RoofSettingsContract.RoofGroup,
-            fromElsewhere with { Values = new(fromElsewhere.Values!) { [Departure] = Json("11") } })))
-            .Code.Should().Be(nameof(RoofControllerErrorCode.SettingNotPermitted));
-        roof.Current.DepartureReleaseTimeout.Should().Be(TimeSpan.FromSeconds(10));
+        foreach (var key in new[] { LocalKioskKey, RemoteKioskKey })
+        {
+            using var kiosk = await PinSessionAsync(host, key, "lena");
+            var current = await ReadGroupAsync(kiosk, RoofSettingsContract.RoofGroup);
+            var response = await PostGroupAsync(kiosk, RoofSettingsContract.RoofGroup, current with { Values = new(current.Values!) { [Departure] = Json("10") } });
+            response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+        roof.Current.DepartureReleaseTimeout.Should().Be(TimeSpan.FromSeconds(9));
     }
 
     [TestMethod]

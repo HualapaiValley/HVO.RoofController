@@ -10,19 +10,29 @@ public static partial class RoofCli
     {
         private Command CreateLoginCommand()
         {
-            var name = new Argument<string>("name") { Description = "The person to sign in as." };
+            var provider = new Option<string?>("--provider")
+            {
+                Description = "Explicit account provider: virtual or linux. Omit for the controller's legacy sign-in."
+            };
+            var name = new Argument<string?>("name") { Description = "The person to sign in as; defaults to the effective OS username.", Arity = ArgumentArity.ZeroOrOne };
             var command = new Command(
                 "login",
                 "Sign in with a password and save the session in the credentials file. The password is read from the terminal, or from standard input.")
             {
-                name
+                name, provider
             };
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
-                var person = parseResult.GetRequiredValue(name);
+                var selected = parseResult.GetValue(provider);
+                if (selected is not (null or "virtual" or "linux"))
+                {
+                    throw new RoofCliUsageException("--provider must be virtual or linux.");
+                }
+
+                var person = parseResult.GetValue(name) ?? context.Host.GetUserName();
                 var connection = context.ResolveConnection();
                 var password = context.ReadSecret($"Password for {person}: ");
-                var session = await new RoofCliSetup(context).SignInAsync(connection, person, password, cancellationToken).ConfigureAwait(false);
+                var session = await new RoofCliSetup(context).SignInAsync(connection, person, password, cancellationToken, selected).ConfigureAwait(false);
                 if (context.Json)
                 {
                     context.WriteJson(new { name = session.Name, role = session.Role, session.ExpiresUtc, credentialsFile = context.CredentialsPath });

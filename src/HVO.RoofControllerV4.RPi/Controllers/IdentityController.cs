@@ -136,7 +136,7 @@ public sealed class IdentityController : ControllerBase
         }
 
         return Change(
-            () => _identity.AddUser(request.Name!, role, passwordHash, pinHash),
+            () => _identity.AddUser(request.Name!, role, passwordHash, pinHash, request.TemporaryPin),
             user =>
             {
                 _logger.LogWarning(
@@ -486,7 +486,7 @@ public sealed class IdentityController : ControllerBase
         {
             return string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
-                $"A PIN has {RoofIdentityContract.MinimumPinLength} to {RoofIdentityContract.MaximumPinLength} digits.");
+                $"A PIN has exactly {RoofIdentityContract.MinimumPinLength} digits.");
         }
 
         return null;
@@ -529,7 +529,7 @@ public sealed class IdentityController : ControllerBase
             user.PinHash is not null,
             user.CreatedUtc,
             user.UpdatedUtc,
-            sessions.Count(session => string.Equals(session.UserName, user.Name, StringComparison.OrdinalIgnoreCase)));
+            sessions.Count(session => string.Equals(session.UserName, user.Name, StringComparison.OrdinalIgnoreCase))) { HasTemporaryPin = user.TemporaryPin };
 
     private static RoofApiKeyResponse ToResponse(StoredApiKey key)
         => new(key.Name, key.Role, key.Kiosk, RoofApiKeySource.Managed, key.CreatedUtc, key.UpdatedUtc);

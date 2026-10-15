@@ -1,0 +1,39 @@
+[Unit]
+Description=HVO opt-in native Linux authentication worker
+After=local-fs.target
+Before=docker.service
+ConditionPathExists=/etc/hvo-roof/linux-auth/worker.json
+
+[Service]
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=15
+User=root
+Group=root
+WorkingDirectory=/opt/hvo-roof-linux-auth
+UMask=0077
+RuntimeDirectory=hvo-roof-linux-auth
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStartPre=/usr/bin/mkdir -p /run/hvo-roof-linux-auth/controller
+ExecStart=/opt/hvo-roof-linux-auth/HVO.RoofControllerV4.LinuxAuth serve
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/hvo-roof-linux-auth
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+LimitCORE=0
+TasksMax=64
+MemoryMax=256M
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

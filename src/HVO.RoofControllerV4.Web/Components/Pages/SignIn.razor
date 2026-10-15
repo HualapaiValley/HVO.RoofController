@@ -1,4 +1,5 @@
 @page "/signin"
+@inject RoofControllerConnector Connector
 @layout SignInLayout
 @attribute [AllowAnonymous]
 @attribute [ExcludeFromInteractiveRouting]
@@ -21,6 +22,17 @@
     <form method="post" action="@WebAuthentication.SignInPostPath.TrimStart('/')" data-enhance="false">
         <AntiforgeryToken />
         <input type="hidden" name="@WebAuthentication.ReturnUrlField" value="@WebAccountEndpoints.GetSafeReturnUrl(ReturnUrl)" />
+
+        @if (_linuxEnabled)
+        {
+            <div class="mb-3">
+                <label for="signin-provider" class="form-label">Account type</label>
+                <select id="signin-provider" name="@WebAuthentication.ProviderField" class="form-select form-select-lg">
+                    <option value="virtual">Roof Controller account</option>
+                    <option value="linux">Linux account</option>
+                </select>
+            </div>
+        }
 
         <div class="mb-3">
             <label for="signin-name" class="form-label">Name</label>
@@ -45,6 +57,21 @@
 </div>
 
 @code {
+    private bool _linuxEnabled;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            using var client = Connector.Create(null, WebSession.RequestTimeout);
+            _linuxEnabled = (await client.Auth.GetProvidersAsync()).LinuxEnabled;
+        }
+        catch (Exception ex) when (ex is RoofApiException or RoofProtocolException or HttpRequestException or TimeoutException)
+        {
+            // Legacy controllers have no capability endpoint. Keep their original sign-in form.
+        }
+    }
+
     [SupplyParameterFromQuery(Name = WebAuthentication.ReturnUrlField)]
     public string? ReturnUrl { get; set; }
 

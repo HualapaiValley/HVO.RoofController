@@ -77,7 +77,7 @@ public static partial class RoofCli
             user.Name,
             RoofCliFormat.Role(user.Role),
             user.HasPassword ? "yes" : "no",
-            user.HasPin ? "yes" : "no",
+            user.HasTemporaryPin ? "temporary" : user.HasPin ? "yes" : "no",
             user.ActiveSessions.ToString(System.Globalization.CultureInfo.InvariantCulture),
             RoofCliFormat.Time(user.UpdatedUtc)
         ];
@@ -111,7 +111,7 @@ public static partial class RoofCli
             yield return ("Name", user.Name);
             yield return ("Role", RoofCliFormat.Role(user.Role));
             yield return ("Password", user.HasPassword ? "set" : "not set");
-            yield return ("PIN", user.HasPin ? "set" : "not set");
+            yield return ("PIN", user.HasTemporaryPin ? "temporary commissioning grant" : user.HasPin ? "set" : "not set");
             yield return ("Sessions", user.ActiveSessions.ToString(System.Globalization.CultureInfo.InvariantCulture));
             yield return ("Created", RoofCliFormat.Time(user.CreatedUtc));
             yield return ("Updated", RoofCliFormat.Time(user.UpdatedUtc));
@@ -123,17 +123,20 @@ public static partial class RoofCli
             var role = RoleOption(required: true);
             var password = new Option<bool>("--password") { Description = "Give the person a password, for the web UI and the CLI (the default)." };
             var pin = new Option<bool>("--pin") { Description = "Give the person a PIN, for a kiosk (operators and admins)." };
-            var command = new Command("add", "Add a person. Asks for the password, the PIN, or both.") { name, role, password, pin };
+            var temporary = new Option<bool>("--temporary-pin") { Description = "Explicit initial emulator-only kiosk commissioning access; requires a password and no personal PIN." };
+            var command = new Command("add", "Add a person. Asks for the password, the PIN, or both.") { name, role, password, pin, temporary };
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
                 var person = RequireName(parseResult.GetRequiredValue(name));
                 var withPin = parseResult.GetValue(pin);
+                if (withPin && parseResult.GetValue(temporary)) throw new RoofCliUsageException("Choose a personal PIN or temporary commissioning access, not both.");
                 var withPassword = parseResult.GetValue(password) || !withPin;
                 var request = new RoofUserCreateRequest
                 {
                     Name = person,
                     Role = parseResult.GetRequiredValue(role),
                     Password = withPassword ? ReadNewPassword(context, $"Password for {person}: ") : null,
+                    TemporaryPin = parseResult.GetValue(temporary),
                     Pin = withPin ? ReadNewPin(context, $"PIN for {person}: ") : null
                 };
 
@@ -255,7 +258,7 @@ public static partial class RoofCli
             SetAction(list, async (context, _, cancellationToken) =>
             {
                 using var client = context.Connect();
-                var users = (await client.Identity.GetUsersAsync(cancellationToken).ConfigureAwait(false)).Where(user => user.HasPin).ToArray();
+                var users = (await client.Identity.GetUsersAsync(cancellationToken).ConfigureAwait(false)).Where(user => user.HasPin || user.HasTemporaryPin).ToArray();
                 if (context.Json)
                 {
                     context.WriteJson(users.Select(user => new { user.Name, user.Role }));
@@ -276,7 +279,7 @@ public static partial class RoofCli
             });
 
             var setName = NameArgument("The person (an operator or an admin).");
-            var set = new Command("set", "Set or change a person's PIN (6 to 12 digits). Ends their PIN sessions.") { setName };
+            var set = new Command("set", "Set or change a person's PIN (4 digits). Ends their PIN sessions.") { setName };
             SetAction(set, async (context, parseResult, cancellationToken) =>
             {
                 var person = parseResult.GetRequiredValue(setName);

@@ -37,7 +37,11 @@ public sealed class SecurityHostingTests
         // How the roof is driven (emulator, simulation, limit switches ignored), so a sign-in page can warn of it.
         "GET /api/v4.0/RoofControl/Mode",
         // Signing in with a name and password is how a person without a key gets a session token.
-        "POST /api/v4.0/Auth/Session"
+        "POST /api/v4.0/Auth/Session",
+        // Provider capabilities and credential exchanges deliberately precede authentication; all key/enrollment routes remain protected.
+        "GET /api/v4.0/Auth/Providers",
+        "POST /api/v4.0/Auth/ProviderSession",
+        "POST /api/v4.0/Auth/LocalSession"
     ];
 
     /// <summary>Development only: the OpenAPI document and the Scalar reference are open for local work.</summary>

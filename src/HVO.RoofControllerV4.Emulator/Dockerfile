@@ -72,7 +72,7 @@ RUN dotnet publish "HVO.RoofControllerV4.Emulator/HVO.RoofControllerV4.Emulator.
 # -------------------------
 # Runtime image
 # -------------------------
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.12 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13 AS runtime
 WORKDIR /app
 
 # curl for the health check only.

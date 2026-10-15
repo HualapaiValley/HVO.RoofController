@@ -99,3 +99,59 @@ cd src
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
 ```
 Most tests use a scripted HAT (`TestSupport/FakeRoofHat`). The emulated-plant tests (`Plant/`) run this controller, through the real `FourRelayFourInputHat` library, against `HVO.RoofControllerV4.Simulation`: an SMVector drive, two ME-8108 limit switches, the SM-I-010 HAT and the documented wiring, modelled from the vendor documentation, with the production `appsettings.json`. What software cannot prove (wiring, contact movement, the hardwired stop path) is a documented assumption; see the [tests README](../../tests/HVO.RoofControllerV4.RPi.Tests/README.md) and [docs/commissioning.md](../../docs/commissioning.md).
+
+## Optional Linux identity integration
+
+Linux authentication is disabled by default. The installer enables it only with explicit Linux identity settings;
+the controller options under RoofControllerSecurity:Identity:LinuxAuth are Enabled, SocketPath, AssertionKeyPath and
+Audience. A persistent Identity:StorePath is required. Enabling the feature requires a controller restart.
+The separate native worker owns PAM and fixed sudo-helper verification. The controller never reads the password
+database or accepts a user-supplied UID as proof of Linux identity. Native enrollment and controller enrollment
+must both exist. They bind a native subject identifier and enrollment stamp to a canonical account name;
+operators must rotate the enrollment when replacing an account or reusing its UID.
+
+The additive API (all routes under api/v4.0):
+
+| Route | Purpose |
+| --- | --- |
+| GET Auth/Providers | Advertise enabled providers. |
+| POST Auth/ProviderSession | Provider, name and password using virtual or linux; returns the existing session response. |
+| POST Auth/LocalSession | Exchange an assertion from the native helper for a short operation-bound session. |
+| GET/POST Auth/Keys, DELETE Auth/Keys/{id} | List, create and revoke the signed-in person's scoped keys. |
+| GET/POST Identity/Principals, PUT Identity/Principals/{id} | Explicit Linux enrollment and role/enabled changes by an administrator. |
+
+Legacy password sign-in, configured/managed keys, PINs and kiosk device binding keep their existing behavior.
+Virtual and Linux identities with the same display name are different principals. Linux sessions cannot change
+a same-named virtual user's password. Role or enabled changes invalidate provider sessions and owned keys by epoch.
+Linux sessions and keys additionally recheck native enrollment and account status on each authenticated request;
+an unavailable worker fails closed. Local sudo grants recheck account expiry without requiring a usable password,
+so an SSH-key-only administrator can use the explicit local flow; password sessions and keys also require the
+password account to remain enabled.
+
+Personal keys have an owner, expiration (at most 366 days), scopes and revocation state. Read, operate and
+configure scopes restrict access in addition to the owner's controller role. Personal keys cannot administer
+identities or mint credentials; identity scope is reserved for fresh native interactive authority. A key cannot
+be exchanged for a session or used to create more keys. Stop accepts any valid authenticated role independently
+of scope, and the kiosk's existing fallback Stop credential remains unchanged.
+
+Native assertions are HMAC-SHA256 signed, audience/purpose/provider/operation bound and valid for at most 30 seconds.
+Their random nonce is consumed atomically with session creation and persisted, so concurrent exchange or a restart
+does not permit replay. Local session tokens expire with the assertion, are restricted to its operation category,
+and must never be saved by clients. Within that short lifetime they remain bearer credentials, including for a
+live status connection; clients obtain a new native proof for each REST request. A local session cannot create
+personal keys. The native worker/key and controller are trusted privileged components; this is not a boundary
+against compromise of root or the controller itself.
+
+With the feature enabled, startup upgrades schema 1 to schema 2 and preserves the original bytes in
+the .schema1.bak sibling of the store without replacing an existing backup. Legacy passwords, PINs, device sessions
+and keys are preserved. Schema 2 remains readable with the feature disabled, while provider entry points and
+credentials are denied. Do not automatically restore the schema 1 backup during rollback: that can resurrect
+revoked credentials. Roll back only to a compatible binary; an older schema 1 binary must refuse the newer store.
+The backup is sensitive and receives owner-only permissions.
+
+RoofProviderIdentityTests exercise production persistence, migration, signature rejection, replay concurrency,
+provider isolation, HTTP role/scope enforcement and the Stop invariant with a fake roof service. They do not
+stand in for native PAM/sudo or a real installation; the disposable installation acceptance suite supplies those
+separate checks.
+
+PIN sessions are limited to roof operation; settings writes and identity administration are refused. See [Authentication and interface rights](../../docs/authentication-interfaces.md) for enrollment and credential policies.

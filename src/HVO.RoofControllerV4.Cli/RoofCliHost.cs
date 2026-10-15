@@ -16,6 +16,9 @@ public sealed class RoofCliHost
     /// <summary>Errors and prompts, so <see cref="Out"/> stays clean for scripts.</summary>
     public required TextWriter Error { get; init; }
 
+    /// <summary>The effective OS username: an editable default, never authority.</summary>
+    public Func<string> GetUserName { get; init; } = () => Environment.UserName;
+
     public Func<string, string?> GetEnvironmentVariable { get; init; } = Environment.GetEnvironmentVariable;
 
     /// <summary>
@@ -27,6 +30,9 @@ public sealed class RoofCliHost
 
     /// <summary>True when a person can answer a prompt (the input is a terminal).</summary>
     public bool IsInteractive { get; init; }
+
+    /// <summary>Native local authorization. Tests replace it; the real implementation uses the fixed sudo helper.</summary>
+    public Func<string, CancellationToken, Task<string>> ObtainLocalAssertion { get; init; } = RoofCliLocalAuthority.ObtainAsync;
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 

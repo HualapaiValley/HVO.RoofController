@@ -75,7 +75,8 @@ public sealed class KioskRenderTests
             roof.Close.IsEffectivelyVisible.Should().BeTrue();
             roof.Close.IsEffectivelyEnabled.Should().BeFalse("the roof is closed");
             screen.Text("nav-lock").Should().Be("Lock");
-            screen.Visible("nav-settings").Should().BeTrue();
+            screen.Visible("nav-settings").Should().BeFalse();
+            screen.Visible("nav-system").Should().BeFalse();
         });
     }
 
@@ -300,9 +301,9 @@ public sealed class KioskRenderTests
     [DataRow(800, 480, 5.2)]
     public async Task AnAdmin_SeesTheSystem_AndRestart(int width, int height, double pixelsPerMillimetre)
     {
-        await using var harness = await KioskHarness.CreateAsync();
+        await using var harness = await KioskHarness.CreateAsync(options: new KioskConsoleOptions { Wording = KioskWording.Kiosk with { SignIn = KioskSignIn.Password } });
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
 
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.System));
@@ -319,9 +320,9 @@ public sealed class KioskRenderTests
     [DataRow(800, 480, 5.2)]
     public async Task TheSettings_TheirKeypad_AndTheirKeyboard(int width, int height, double pixelsPerMillimetre)
     {
-        await using var harness = await KioskHarness.CreateAsync();
+        await using var harness = await KioskHarness.CreateAsync(options: new KioskConsoleOptions { Wording = KioskWording.Kiosk with { SignIn = KioskSignIn.Password } });
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
 
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Settings));
@@ -365,9 +366,9 @@ public sealed class KioskRenderTests
     [TestMethod]
     public async Task EverySettingsEditor_FitsTheSmallestScreen_WithItsCaptionWhole()
     {
-        await using var harness = await KioskHarness.CreateAsync();
+        await using var harness = await KioskHarness.CreateAsync(options: new KioskConsoleOptions { Wording = KioskWording.Kiosk with { SignIn = KioskSignIn.Password } });
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         await using var screen = await KioskScreen.ShowAsync(harness, 800, 480, 5.2);
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Settings));
         await UntilAsync(() => screen.Shell.Settings is { Form: not null, Busy: null }, "the settings");
@@ -402,9 +403,9 @@ public sealed class KioskRenderTests
     {
         // As long as a camera name may be (64 characters).
         var camera = "Pier camera number one on the north side of the observatory roof"[..RoofControllerUiOptions.MaximumCameraNameLength];
-        await using var harness = await KioskHarness.CreateAsync();
+        await using var harness = await KioskHarness.CreateAsync(options: new KioskConsoleOptions { Wording = KioskWording.Kiosk with { SignIn = KioskSignIn.Password } });
         await harness.StartLiveAsync();
-        await harness.UnlockAsync(KioskHarness.Admin);
+        await harness.PasswordAsync(KioskHarness.Admin);
         await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
 
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Settings));

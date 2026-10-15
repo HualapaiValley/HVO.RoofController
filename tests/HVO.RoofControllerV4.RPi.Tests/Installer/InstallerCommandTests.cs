@@ -156,9 +156,12 @@ public sealed class InstallerCommandTests
             .And.Contain("The controller's API:  https://roofpi.local:8443/")
             .And.Contain("The web UI:            https://roofpi.local:8088/")
             .And.Contain("The roof has not moved.")
+            .And.Contain("The hvo-roof command is a separate per-user CLI; this run did not install it.")
+            .And.Contain("run /usr/local/sbin/hvo-roof-install as your SSH user (without sudo)")
             .And.Contain("The install record: /etc/hvo-roof/install.json")
             .And.Contain("The log: /var/log/hvo-roof-install.log");
         InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).Roles.Should().Equal(InstallRole.Controller);
+        pi.Exists("/root/.local/bin/hvo-roof").Should().BeFalse("the server install must not silently install a root CLI client");
         pi.Mode(InstallPaths.SystemLog).Should().Be(Modes.GroupFile);
         var log = pi.Read(InstallPaths.SystemLog);
         log.Should().Contain($"hvo-roof-install {Version} on roofpi (linux-arm64), as root.")
@@ -187,8 +190,10 @@ public sealed class InstallerCommandTests
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain($"hvo-roof: /home/roy/.local/bin/hvo-roof, connected to {FakeMachine.ControllerUrl} (/home/roy/.config/hvo-roof/credentials.json).")
             .And.Contain("Next, sign in as yourself: hvo-roof login NAME")
+            .And.Contain("After signing in: hvo-roof status. Terminal interface: hvo-roof ui.")
             .And.Contain($"trust the controller's CA ({FakeMachine.ControllerUrl}/ca.crt)")
             .And.Contain("Firefox may use its own list");
+        run.Output.Should().NotContain("this run did not install it");
         laptop.Read("/home/roy/.local/bin/hvo-roof").Should().Be(Encoding.UTF8.GetString(FakeMachine.CliProgram("4.0.0", "linux-x64")));
         laptop.Mode("/home/roy/.local/bin/hvo-roof").Should().Be(Modes.Program);
         laptop.Exists("/home/roy/.local/bin/hvo-roof.previous").Should().BeFalse("there was no hvo-roof before");

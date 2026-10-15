@@ -19,17 +19,17 @@ public sealed class RoofClientTextTests
     [DataRow(Password, Password, null)]
     [DataRow("", Password, "The two passwords differ.")]
     [DataRow(Password, Password + "!", "The two passwords differ.")]
-    [DataRow("too-short", "too-short", "A password must be 12 to 256 characters.")]
+    [DataRow("short", "short", "A password must be 7 to 256 characters.")]
     public void ANewPassword_IsCheckedTwice(string? value, string? again, string? expected)
         => RoofIdentityText.CheckNewPassword(value, again).Should().Be(expected);
 
     [TestMethod]
     [DataRow("", "", null)]
-    [DataRow("246810", "246810", null)]
-    [DataRow("246810", "135790", "The two PINs differ.")]
-    [DataRow("", "246810", "The two PINs differ.")]
-    [DataRow("12345", "12345", "A PIN must be 6 to 12 digits.")]
-    [DataRow("24681a", "24681a", "A PIN must be 6 to 12 digits.")]
+    [DataRow("2468", "2468", null)]
+    [DataRow("2468", "1357", "The two PINs differ.")]
+    [DataRow("", "2468", "The two PINs differ.")]
+    [DataRow("12345", "12345", "A PIN must be exactly 4 digits; the temporary commissioning PIN is reserved.")]
+    [DataRow("24681a", "24681a", "A PIN must be exactly 4 digits; the temporary commissioning PIN is reserved.")]
     public void ANewPin_IsCheckedTwice(string? value, string? again, string? expected)
         => RoofIdentityText.CheckNewPin(value, again).Should().Be(expected);
 

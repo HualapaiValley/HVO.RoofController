@@ -54,7 +54,7 @@ public sealed class ChangePasswordPageTests
 
     [TestMethod]
     [DataRow("", NewPassword, NewPassword, "Enter your current password.")]
-    [DataRow(FakeController.AdaPassword, "too short", "too short", "A password has 12 to 256 characters.")]
+    [DataRow(FakeController.AdaPassword, "short", "short", "A password has 7 to 256 characters.")]
     [DataRow(FakeController.AdaPassword, NewPassword, NewPassword + "!", "The two new passwords are not the same.")]
     public async Task AFormThatCannotBeRight_IsNotSent(string current, string newPassword, string again, string message)
     {
@@ -129,7 +129,7 @@ public sealed class ChangePasswordPageTests
 
         var cut = context.Render<ChangePassword>();
 
-        cut.Find("p.web-muted").TextContent.Should().Contain("A password has 12 to 256 characters.");
+        cut.Find("p.web-muted").TextContent.Should().Contain("A password has 7 to 256 characters.");
         cut.FindAll("input").Select(input => (input.GetAttribute("type"), input.GetAttribute("autocomplete"))).Should().Equal(
             ("password", "current-password"), ("password", "new-password"), ("password", "new-password"));
         cut.FindAll("[data-testid=password-message]").Should().BeEmpty();

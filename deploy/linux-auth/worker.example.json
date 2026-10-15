@@ -1,0 +1,10 @@
+{
+  "controllerUid": 0,
+  "controllerGroupId": 0,
+  "audience": "hvo-roof-controller",
+  "assertionKeyPath": "/etc/hvo-roof/linux-auth/assertion.key",
+  "enrollmentPath": "/etc/hvo-roof/linux-auth/enrollment.json",
+  "controllerSocketPath": "/run/hvo-roof-linux-auth/controller/worker.sock",
+  "localSocketPath": "/run/hvo-roof-linux-auth/local.sock",
+  "pamService": "hvo-roof-linux-auth"
+}

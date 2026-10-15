@@ -51,6 +51,10 @@ public static class Installer
         {
             Description = "Print every folder, file, container, service and port the install would make or change, and change nothing. Uses --answers, or what is installed."
         };
+        var setupPrerequisites = new Option<bool>("--setup-prerequisites")
+        {
+            Description = "Explicitly approve installing missing kiosk display libraries with apt. Never enables Docker, I2C, a desktop change or a reboot."
+        };
         var release = ReleaseOption("Read the release");
         var version = new Option<bool>("--version")
         {
@@ -82,6 +86,7 @@ public static class Installer
 
         root.Options.Add(answers);
         root.Options.Add(plan);
+        root.Options.Add(setupPrerequisites);
         root.Options.Add(release);
         root.Options.Add(version);
         foreach (var option in secretFiles.Values)
@@ -110,6 +115,7 @@ public static class Installer
                     .Select(option => (option.Key, File: parseResult.GetValue(option.Value)))
                     .Where(option => option.File is not null)
                     .ToDictionary(option => option.Key, option => option.File!),
+                SetupPrerequisites = parseResult.GetValue(setupPrerequisites),
                 PinFiles = parseResult.GetValue(pinFiles) ?? []
             };
             return RunAsync(host, options, token);
@@ -149,6 +155,8 @@ public static class Installer
 
         /// <summary><c>--pin-file NAME=FILE</c>, as given: the files that hold people's PINs for the kiosk.</summary>
         public IReadOnlyList<string> PinFiles { get; init; } = [];
+
+        public bool SetupPrerequisites { get; init; }
 
         /// <summary>Every file that holds a secret, <see cref="PinFiles"/> included. Throws <see cref="InstallerUsageException"/> for a <c>--pin-file</c> that is not NAME=FILE.</summary>
         public IReadOnlyDictionary<InstallSecret, string> AllSecretFiles()
@@ -265,6 +273,7 @@ public static class Installer
     internal static async Task<int> PlanAsync(InstallerHost host, InstallerSession session, InstallAnswers answers, RunOptions options, CancellationToken cancellationToken)
     {
         session.Answers = answers;
+        session.SetupPrerequisites = options.SetupPrerequisites;
 
         // An answers file gave them all (InstallAnswers.Parse), but a record an earlier release wrote may not.
         var problems = session.Problems(planOnly: true)
@@ -272,7 +281,7 @@ public static class Installer
             .ToArray();
         if (problems.Length > 0)
         {
-            WriteRefusal(host, problems);
+            WriteRefusal(host, [.. problems, .. Prerequisites.Guidance(session)]);
             return (int)InstallerExitCode.Refused;
         }
 
@@ -328,6 +337,7 @@ public static class Installer
     {
         var log = session.Log;
         session.Answers = answers;
+        session.SetupPrerequisites = options.SetupPrerequisites;
         log.Write($"{doing}: {InstallRoles.Describe(answers.Roles)}.");
         if (session.UpgradeLine() is { } upgrade)
         {
@@ -346,6 +356,9 @@ public static class Installer
             WriteRefusal(host, problems);
             return (int)InstallerExitCode.Refused;
         }
+
+        foreach (var line in Prerequisites.Guidance(session)) host.Out.WriteLine(line);
+        await Prerequisites.PrepareAsync(session, cancellationToken).ConfigureAwait(false);
 
         GiveSecretFiles(host, session, options);
         var checkedPlan = await session.CheckAsync(cancellationToken).ConfigureAwait(false);

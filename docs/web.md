@@ -273,3 +273,33 @@ Nothing here needs the Pi, the HAT or the roof.
   WEB_SCREENS_OUT="$PWD/../docs/images/web" dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
     --filter "TestCategory=Browser&FullyQualifiedName~WebScreenshotTests"
   ```
+
+## Opt-in Linux and Roof Controller accounts
+
+When the controller enables provider accounts, the sign-in form offers an **Account type**:
+**Roof Controller account** or **Linux account**. Choose the provider explicitly; equal names
+in the two providers refer to separate people. Passwords still pass through the shared Client
+API. Refused Linux credentials never fall back to a Roof Controller account.
+
+![Provider sign-in on the installed emulator website, with the account-type selector and empty credential fields](images/web/08-provider-signin-desktop.png)
+
+The **My API keys** page appears only when provider accounts are enabled. A signed-in person
+can create an expiring automation key with selected scopes, list their own keys, and revoke
+them. The key value is returned only at creation. Scope and ownership checks run in the
+controller API in addition to the person's current role.
+
+![My API keys on the installed emulator website, showing key scopes and expiry with the one-time secret panel closed](images/web/09-provider-owned-keys-desktop.png)
+
+These two screenshots come from the installed website and controller in the
+[disposable Linux guest](../tests/installer/disposable-guest/README.md), using the emulated HAT and fixture accounts.
+The [provider browser acceptance script](../tests/auth-integration/run_browser.py) captures them in Chromium:
+before entering sign-in credentials, and after closing the new-key secret panel. The same run checks Linux and
+Roof Controller sign-in, roles, scoped-key access, and revocation against the real controller API.
+
+Existing sign-in remains the default when provider accounts are disabled. Kiosk PIN, device
+credentials, and the existing Stop behavior are unchanged. A Linux password is managed by the
+Linux host; the website does not change it.
+
+See [Authentication and interface rights](authentication-interfaces.md) for verified local Linux identity, enrolled Linux users, virtual passwords, kiosk PIN restrictions and first-install setup-user selection.
+
+![Linux users and controller access in the web People page](images/web/10-linux-users-desktop.jpg)

@@ -740,12 +740,12 @@ public sealed class RoofCliSystemCommandTests
         using var host = RoofClientApiTests.CreateHost();
         using var rig = new CliRig(host);
         rig.UseApiKey(TestApiKeys.Admin);
-        rig.Input.Enqueue("too-short");
+        rig.Input.Enqueue("short");
 
         var result = await rig.RunAsync("setup", "--create-admin", "root");
 
         result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
-        result.Error.Should().Contain("A password must be 12 to 256 characters.");
+        result.Error.Should().Contain("A password must be 7 to 256 characters.");
         (await UsersAsync(host)).Should().BeEmpty();
     }
 

@@ -14,9 +14,39 @@ The installer sets it up on the controller's Pi ([Install](#install)).
 
 ![The kiosk while the roof opens: the rail of pages, the badges (live status, the lease, who unlocked it), the position and the controls, the notices, and Stop at the right](images/kiosk/opening-1280x720.png)
 
+## Emulated rig orientation
+
+For a fresh `rig` plus `kiosk` installation, the default rotation is 0 degrees. An explicit
+`kiosk.rotation` wins; existing kiosk settings are preserved when rotation is omitted.
+The physical controller's fresh-install default remains 90 degrees. This does not change
+the production Pi or any existing deployment.
+
+A Pi running the emulated HAT still has a physical display. Do not reuse a VM's zero-degree
+answers unchanged. Choose the mounted screen's angle explicitly (90 or 270 for a portrait
+panel mounted in landscape), and request the optional splash separately. For example:
+
+```json
+{
+  "roles": ["rig", "kiosk"],
+  "kiosk": {
+    "card": "",
+    "rotation": 90,
+    "splash": { "enabled": true, "image": "/operator/approved-scene.png" }
+  }
+}
+```
+
+Add the current machine's required rig confirmation and the explicitly selected administrator
+as described in [Install](install.md). The image must remain available for later upgrades;
+never substitute a test screenshot or infer permission to distribute the artwork.
+The installer's completion text reports effective rotation and whether managed splash state
+exists. A healthy kiosk process does not verify the picture, touch alignment, or boot/shutdown
+appearance. Record those checks separately, and keep a reported failure open until the operator
+confirms the correction after a coordinated restart.
+
 ## The screen
 
-- **The rail** at the left: Roof, and Unlock. Once the kiosk is unlocked: Roof, Settings, System and Lock.
+- **The rail** at the left: Roof, and Unlock. Once unlocked: Roof and Lock. Administration belongs in the CLI/TUI or web UI.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the kiosk renews it (`Renewing lease (6 s left)`), and
   who unlocked the kiosk (`olga (Operator)`), or `Locked`.
@@ -83,36 +113,13 @@ What an unlocked kiosk offers depends on the person's role, as the controller gi
 
 ### Settings
 
-An unlocked kiosk shows the controller's settings by group, from the controller's catalogue, as the web UI and
-`hvo-roof settings` do ([Settings](security.md#settings)). The controller says which settings the person may change:
-an operator the UI group (for example `KioskScreenTimeout`), an admin the rest.
-
-- **Change** opens a touch editor: a keypad for numbers and durations (`120`, `90 s`, `00:05:00`), a keyboard for text
-  (letters, and a page of digits and symbols), and a button per value for true or false and a setting's choices.
-- **Save** checks the value, then shows the change for review before anything is sent. A safety-critical change needs
-  **Confirm and send**; a change that applies after a restart says so.
-- **Secrets are not typed on the kiosk**, where others can watch:
-  `Secrets are not typed on the kiosk: set them in the web UI or with hvo-roof.`
-- **Hand edits** to the settings file are shown, to apply or discard.
-- **Local-only settings** ([Local-only settings](security.md#local-only-settings)), such as ignoring the limit
-  switches, can be changed only by an admin at a kiosk whose key is marked both `Kiosk` and `Local`.
-
-<p>
-  <img src="images/kiosk/settings-1280x720.png" alt="The settings: the groups and their settings" width="400">
-  <img src="images/kiosk/settings-keyboard-1280x720.png" alt="Changing a text setting on the keyboard" width="400">
-</p>
-<p>
-  <img src="images/kiosk/settings-keypad-800x480.png" alt="Changing the kiosk screen timeout on the keypad, on the first 7-inch display" width="400">
-</p>
+The kiosk offers roof operation only. Configure the controller using the web UI or CLI/TUI. The shared desktop
+screens remain available in the password-authenticated Mac app. PIN sessions cannot write settings.
 
 ### System
 
-The kiosk's own version, the controller's health checks and readiness, and for an admin its version, host and
-resource use, and **Restart**:
-the controller stops the roof, verifies the stop, and exits, and its supervisor starts it again. A restart that would
-load a pending hand edit shows it first.
-
-![The System page for an admin: the kiosk's and the controller's versions, the host, health, readiness, and Restart](images/kiosk/admin-system-1280x720.png)
+Use an authorized administrative password session or local CLI/TUI for host information and restart. A PIN
+session does not gain these rights, even when its account is an administrator.
 
 ## The status
 
@@ -291,7 +298,7 @@ The steps the installer takes, for a Pi set up without it:
    and `The roof kiosk did not start: …` in the journal (`journalctl -u hvo-roof-kiosk`), and systemd does not restart
    it: fix them, then `sudo systemctl restart hvo-roof-kiosk`.
 
-7. **PINs.** An admin gives each operator a PIN (6 to 12 digits) with `hvo-roof pins set <name>`, or on the web UI's
+7. **PINs.** An admin gives each operator a personal PIN (exactly four digits) with `hvo-roof pins set <name>`, or on the web UI's
    People page. The installer gives one to each person named in `kiosk.pins` who has none.
 
 ## Settings
@@ -389,3 +396,94 @@ Nothing here needs the Pi, the display or the roof.
   within 45 s of each restart, that the emulated plant saw no violation, and, on a run long enough, that memory and
   threads stay flat. It runs nightly for 30 minutes (`scenarios.yml`); see the
   [tests' README](../tests/HVO.RoofControllerV4.RPi.Tests/README.md#kiosk-renders-and-soak).
+
+## Optional boot and shutdown image
+
+The canonical `hvo-roof-install` kiosk plan supports an opt-in Plymouth theme through
+`kiosk.splash` in an answers file; see [installer choices](install.md#the-kiosk).
+Omitting it preserves any existing splash and installs no splash packages. Headless machines
+should omit both the kiosk role and this option. The installer requires a connected DRM display,
+Python 3, and either Raspberry Pi boot files with official `debian.sources`, or Ubuntu with GRUB
+and official `/etc/apt/sources.list.d/ubuntu.sources`. Ubuntu uses a separate managed
+`/etc/default/grub.d/90-hvo-roof-splash.cfg` fragment and regenerates GRUB after initramfs. A managed initramfs hook includes the HVO artwork
+and script renderer without changing Ubuntu theme alternatives. The explicit ThemeDir also
+supports Ubuntu releases using dracut rather than initramfs-tools; each rebuilt image is checked
+for those assets before success.
+A VM uses the emulated rig, rotation 0, and no Pi I2C setup; nonzero rotation and real-HAT
+controller choices are rejected unless a Raspberry Pi model is detected. It does not add repositories or use a curl-to-shell package installer.
+It installs `plymouth`, `plymouth-themes`, `python3-pil` and their dependencies only from the official
+distribution sources in that file, with noninteractive apt. Other distributions and boot loaders need separate reviewed support.
+
+Supply a local PNG (up to 25 MiB and 16 million pixels) whose use is authorized. The project does not
+bundle the observatory hero or assume it has a public redistribution license. The tested operator image,
+`HVO_Corrected_Hero_Concept_v5.png`, was an operator-selected generated Library asset, version 2,
+1672×941, SHA-256 `8a0137ecf638047238945a86d38c8cca8df2769c8f94eb57a96b7f4dccfbf984`.
+That provenance establishes which image was tested, not a license to redistribute it. Keep the source
+outside the public repository and available at the answers file's path for subsequent upgrades.
+The installer rotates a copy by the selected clockwise angle without cropping and fits the full scene
+on a dark background, reserving margins for status. It never edits the supplied source.
+
+Use `kiosk.card: ""` for the kiosk's connected-display discovery on every boot. If multiple displays
+need a fixed choice, use the desired display's existing `/dev/dri/by-path/…-card` symlink and verify
+its corresponding connector is connected; do not copy a different Pi's platform path. A rendering GPU
+can be `card1` while the screen is `card0`, and numbering may change. Numbered paths supplied in new
+answers are refused. Omitted card/rotation choices preserve installed settings, including an old explicit
+card choice: migrate that intentionally with an empty card or a verified stable path. `rotation` accepts
+0, 90, 180 or 270 on a Pi; other hosts use 0. Native panel dimensions alone do not establish its mounted orientation.
+
+The theme shows “Starting Roof Controller…” in boot mode, “Restarting…” in reboot mode,
+“Shutting down…” in shutdown mode, and “Please wait…” in other modes. An animated dot spinner
+indicates activity, not a measured percentage. Plymouth quits normally and restores the console terminal mode before the kiosk acquires DRM.
+It must not retain the splash: a later getty terminal reset can otherwise restore the boot console
+resolution and crop a larger kiosk framebuffer. The handoff may briefly clear the artwork. On reboot, power-off, halt and kexec,
+Plymouth startup waits for the kiosk to stop and release DRM; the distribution selects
+the corresponding reboot or shutdown label. A separate
+read-only service holds only `getty@tty1` until the active framebuffer belongs to the kiosk, or for at most
+10 seconds, whichever comes first. A service-level timeout also bounds it. Console authentication,
+getty's terminal policies, serial recovery, and SSH are unchanged. Missing debugfs/readiness information
+falls back to the timeout; JSON comments or trailing commas in manually edited kiosk settings also
+use this safe fallback because the gate reads strict JSON; the controller and kiosk do not depend on successful console detection.
+A seamless visual transition is not guaranteed on every DRM driver.
+
+Before writing files or running apt hooks, the helper saves configuration and existing boot images in a
+private `/var/backups/hvo-roof-splash-*` directory. It records ownership and content hashes in
+`/etc/hvo-roof-kiosk/splash/state.json`. A repeat with the same artwork, options, assets and installed
+packages makes no changes. Manual edits to owned files stop the next apply instead of being overwritten.
+A failed rebuild is not marked complete: inspect the reported backup and error before retrying.
+An interrupted disable can be retried; it accepts only the recorded installed or restored file contents.
+All installed kernel initramfs updates run synchronously. At least one supported Pi kernel image must
+exist, and each installed Pi kernel family needs a matching firmware image before success is reported.
+On Ubuntu, every installed kernel must have a completed initramfs image and `update-grub` must succeed. The installer never reboots to test this step.
+
+To remove the managed theme, review a plan with `kiosk.splash: { "enabled": false }`, then apply it.
+It restores recorded originals, removes only created files and rebuilds initramfs; packages remain
+installed, so pre-existing distribution Plymouth behavior remains available. Omission is not removal.
+For manual recovery, use the backup's `originals.json` and mirrored file tree; preserve any later edits,
+restore the affected boot configuration and matching images, and reload systemd. Do not blindly extract
+an older backup over newer controller settings. The splash backup contains no controller credentials;
+normal installer backup/restore remains the workflow for controller state. Uninstalling a kiosk with managed splash state restores that boot configuration first, even if a later
+answers file omitted the splash choice.
+Ordinary program rollback does not roll back this independent boot configuration. An older/manual splash
+without this ownership record requires separate review.
+
+Non-actuating checks after a separately authorized restart: inspect `journalctl -b -u plymouth-quit
+-u hvo-roof-display-gate -u hvo-roof-kiosk -u getty@tty1`, confirm a bounded handoff and stable kiosk
+restart count, and inspect controller/emulator health and mode without issuing movement commands.
+The operator confirms rotation, complete image, labels and the visual transition. Automated tests use
+fake files and commands, including missing displays, altered files and the timeout path.
+
+## DRM video mode
+
+`Kiosk:VideoMode` requests a physical DRM mode as `WIDTHxHEIGHT`, for example `1920x1080`.
+Use `Kiosk__VideoMode=1920x1080`, `--Kiosk:VideoMode=1920x1080`, or the `Kiosk` object in
+`appsettings.Local.json`. Empty/unset uses the display's preferred mode. Dimensions must be decimal integers
+between 200 and 8000; malformed values fail validation before display startup. Avalonia falls back to the
+preferred connector mode when a syntactically valid requested mode is unavailable; verify the actual capture
+or DRM state rather than treating the request log as proof.
+
+Installer answers accept `kiosk.videoMode`. Null preserves an existing choice; an empty string returns to
+preferred mode. This selects pixel resolution independently of `PixelsPerMillimetre`, DRM scaling (still 1),
+rotation and development-only `WindowSize`. It does not set firmware, GRUB or Plymouth's pre-kiosk mode.
+Boot/shutdown splash can use the boot display mode until the kiosk takes DRM ownership.
+
+See [Authentication and interface rights](authentication-interfaces.md) for personal/temporary PIN policy.

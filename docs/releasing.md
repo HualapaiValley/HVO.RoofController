@@ -35,7 +35,7 @@ upgrades a rig from main's version to the new one ([The rig end to end](install.
 | `hvo-roof --version` | `4.0.0-dev+<commit>` |
 | `hvo-roof info`, and the terminal interface's System page | `hvo-roof`'s own version, then the controller's |
 | The web UI's System page | The web UI's version, then the controller's |
-| The kiosk's and the Mac app's System page | `This kiosk` or `This app`, then the controller's (for an admin) |
+| The Mac app's System page | `This kiosk` or `This app`, then the controller's (for an admin) |
 | The controller's log | `HVO Roof Controller 4.0.0-dev+<commit> is starting.` |
 | `GET /api/v1.0/System/info` | `applicationVersion`: `4.0.0-dev+<commit>` |
 | The Mac app's `Info.plist` | `CFBundleShortVersionString` 4.0.0, and the build number in `CFBundleVersion` |

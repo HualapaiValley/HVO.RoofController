@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fixed root-owned command: no arguments, shell input, config overrides or Python hooks.
+if [ "$#" -ne 0 ]; then exit 1; fi
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin SUDO_UID="$SUDO_UID" SUDO_COMMAND="$SUDO_COMMAND" /opt/hvo-roof-linux-auth/HVO.RoofControllerV4.LinuxAuth helper

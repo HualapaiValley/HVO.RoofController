@@ -7,11 +7,32 @@ and status hub, using the client library
 controller's process. `hvo-roof ui` opens a full-screen terminal interface (Terminal.Gui). It has the roof, the
 settings, people and keys, the controller's health and restart, and setup, with **Stop roof (F9)** on every page.
 
+## Sign-in defaults and retry
+
+`hvo-roof login [NAME]` defaults to the effective OS username; an explicit NAME overrides it.
+Under sudo this is the effective account, usually root. The default is a convenience, never
+proof of authority. `--provider linux` and `--provider virtual` stay distinct explicit choices.
+
+Interactive remote `hvo-roof ui` offers sign-in when no credential is configured or the
+controller rejects it. The name remains editable, passwords are masked, and a failed
+sign-in offers a fresh empty password field with retry or Cancel. Cancel leaves saved
+credentials unchanged. A failed control command is never replayed after sign-in.
+
+Native local authorization never falls back to a password session. An environment
+credential continues to take precedence and is never silently replaced by the offer.
+Noninteractive commands do not acquire automatic login prompts. Kiosk PIN unlock is
+unchanged and separate from this password flow.
+
 ## Install
 
 `hvo-roof` is one self-contained file, so the machine needs no .NET runtime.
 
 ### With the installer
+
+Installing the `controller`, `rig` or `kiosk` roles does not install `hvo-roof` for SSH
+users. The installer program is named `hvo-roof-install`; it is separate from the client.
+On the Pi, install the `cli` role in another run as your normal SSH user, without sudo.
+If the installer is not on that user's PATH, start `/usr/local/sbin/hvo-roof-install`.
 
 On a Linux machine or a Mac that reaches the controller, `hvo-roof-install` installs the release's build for the
 machine and saves the controller's address and how to trust it
@@ -36,6 +57,13 @@ It puts `hvo-roof` in `~/.local/bin` (or `/usr/local/bin`, when you may write th
 controller's CA in the credentials file, as `hvo-roof setup --ca-certificate` would ([Setup](#setup)). A CA whose
 fingerprint is not the one given is refused, and nothing is changed. Run it again, and it changes only what differs;
 the sign-in you saved is kept.
+
+If the current SSH shell was opened before `~/.local/bin` existed, start a new login
+session or run `export PATH="$HOME/.local/bin:$PATH"` in that shell. The full path
+`~/.local/bin/hvo-roof --help` works immediately. No sudo wrapper or copy of the server's
+API keys is needed: sign in with `hvo-roof login NAME`, then use `hvo-roof status` for a
+status report or `hvo-roof ui` for the terminal interface. Installing the client configures
+its connection and trust; it does not sign the person in.
 
 ### By hand
 
@@ -482,3 +510,64 @@ Nothing here needs the Pi, the HAT or the roof.
   ```bash
   HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/screens tests/cli/dotnet-run-smoke.sh
   ```
+
+## Opt-in provider accounts and local Linux authorization
+
+The provider authentication feature is disabled by default. Existing installations keep their
+saved API key and session behavior. When provider accounts are enabled on the controller, select
+the account explicitly:
+
+```bash
+hvo-roof --remote login ada --provider virtual
+hvo-roof --remote login ada --provider linux
+```
+
+The password is read from the terminal or standard input; it is never a command-line argument.
+Linux and Roof Controller accounts with the same name remain separate identities. A failed
+Linux sign-in is never retried as a virtual account. The terminal interface offers an account-type
+field only when the controller advertises the feature.
+
+![The real terminal Sign in prompt with an editable OS username and empty password, the account-type field, and Stop still visible](images/terminal/08-provider-signin.svg)
+
+This capture uses the actual Terminal.Gui view and its rendered ANSI cells and colors, through
+[the focused provider-prompt test](../tests/HVO.RoofControllerV4.RPi.Tests/Cli/RoofTerminalUiTests.cs).
+The test calls the in-process controller API with a mocked roof; it opens no listener and submits no password.
+After building the Release tests, regenerate it from the repository root:
+
+```bash
+HVO_CLI_RENDERS_DIR=/tmp/hvo-cli-provider-capture dotnet test tests/HVO.RoofControllerV4.RPi.Tests \
+  -c Release --no-build --filter FullyQualifiedName~Setup_ProviderSignIn_RendersEditableOsNameForDocumentation
+python3 tests/cli/ansi-to-svg.py /tmp/hvo-cli-provider-capture/08-provider-signin.ans \
+  docs/images/terminal/08-provider-signin.svg --title "hvo-roof ui · provider sign-in"
+```
+
+For an opt-in native installation, the installer can set `authMode` to `local` in the
+protected credentials file. Each protected request then obtains a fresh assertion from the
+fixed installed helper through `sudo -n`. `--local` selects this mode explicitly.
+The CLI and terminal interface use a short-lived, operation-scoped credential only in memory.
+Neither a saved web session nor an environment API key can substitute when the native gate
+refuses. Sudo never asks for a password; batch failures return immediately after the bounded
+helper invocation. No local token is written to the credentials file.
+
+`--remote` explicitly chooses the ordinary API/session client behavior, including on a
+computer whose installed default is local. Remote credentials intentionally authorize the
+remote API; local mode is not an operating-system prohibition on calling that API. The
+`--local` and `--remote` switches are mutually exclusive. Local mode does not offer
+password login, logout, password changes or personal-key creation.
+
+A remote provider session can manage personal automation keys:
+
+```bash
+hvo-roof --remote my-keys list
+hvo-roof --remote my-keys create status-job --scopes read --hours 24
+hvo-roof --remote my-keys revoke KEY-ID
+```
+
+Key creation returns the secret once on standard output (or in the requested JSON). Redirect
+it to protected storage. Keys expire, can be revoked, belong to their provider identity, and
+remain constrained by the owner's current role as well as their selected scopes. Local
+credentials cannot create these reusable personal keys.
+
+See [Authentication and interface rights](authentication-interfaces.md) for verified local Linux identity, enrolled Linux users, virtual passwords, kiosk PIN restrictions and first-install setup-user selection.
+
+![Enrolled Linux users in the terminal People page](images/terminal/09-linux-users.svg)

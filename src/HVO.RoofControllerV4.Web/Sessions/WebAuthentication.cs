@@ -45,6 +45,8 @@ public static class WebAuthentication
 
     public const string NameField = "name";
 
+    public const string ProviderField = "provider";
+
     public const string PasswordField = "password";
 
     /// <summary>The query field on the sign-in page naming why the person is there (see <see cref="SignInMessages"/>).</summary>

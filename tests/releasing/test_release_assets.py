@@ -103,6 +103,37 @@ def run(arguments):
     return status, out.getvalue(), err.getvalue()
 
 
+class LinuxAuthAssets(unittest.TestCase):
+    def test_optional_workers_are_hashed_and_mark_schema_compatibility(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            release = Release(root)
+            native = root / "native"
+            for rid, content in (("linux-arm64", AARCH64), ("linux-x64", X86_64)):
+                (native / rid).mkdir(parents=True)
+                (native / rid / "HVO.RoofControllerV4.LinuxAuth").write_bytes(content)
+            status, _, error = run(release.arguments(**{"--linux-auth": str(native)}))
+            self.assertEqual(0, status, error)
+            manifest = json.loads((release.out / "release.json").read_text())
+            self.assertEqual(2, manifest["identityStoreSchema"])
+            workers = [item for item in manifest["assets"] if item["kind"] == "linux-auth"]
+            self.assertEqual(["linux-arm64", "linux-x64"], [item["platform"] for item in workers])
+            for item in workers:
+                self.assertEqual(sha256(release.out / item["name"]), item["sha256"])
+
+    def test_optional_worker_wrong_architecture_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            release = Release(root)
+            native = root / "native"
+            for rid in ("linux-arm64", "linux-x64"):
+                (native / rid).mkdir(parents=True)
+                (native / rid / "HVO.RoofControllerV4.LinuxAuth").write_bytes(AARCH64)
+            status, _, error = run(release.arguments(**{"--linux-auth": str(native)}))
+            self.assertEqual(1, status)
+            self.assertIn("must be the self-contained worker for linux-x64", error)
+
+
 class ReleaseTestCase(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

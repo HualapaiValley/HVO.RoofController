@@ -15,13 +15,15 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
     {
         Users,
         Keys,
-        Sessions
+        Sessions,
+        Linux
     }
 
     private readonly Label _header;
     private readonly ListView _rows;
     private readonly Dictionary<Mode, List<Button>> _actions = [];
     private RoofUserResponse[] _users = [];
+    private RoofPrincipalResponse[] _principals = [];
     private RoofApiKeyResponse[] _keys = [];
     private RoofSessionInfoResponse[] _sessions = [];
     private bool _loaded;
@@ -31,7 +33,8 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
     {
         var users = AddButton("Users", null, () => Switch(Mode.Users), y: 0);
         var keys = AddButton("API keys", users, () => Switch(Mode.Keys), y: 0);
-        AddButton("Sessions", keys, () => Switch(Mode.Sessions), y: 0);
+        var sessions = AddButton("Sessions", keys, () => Switch(Mode.Sessions), y: 0);
+        AddButton("Linux users", sessions, () => Switch(Mode.Linux), y: 0);
         _header = new Label { X = 0, Y = 2, Width = Dim.Fill() };
         _rows = new ListView { X = 0, Y = 3, Width = Dim.Fill(), Height = Dim.Fill(1), CanFocus = true };
         Add(_header, _rows);
@@ -48,6 +51,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
             ("Change", ChangeKey),
             ("Rotate", RotateKey),
             ("Remove", RemoveKey));
+        _actions[Mode.Linux] = Buttons(("Role / access", ChangePrincipal));
         _actions[Mode.Sessions] = Buttons(("End", EndSession));
         Switch(Mode.Users);
     }
@@ -66,6 +70,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
     {
         _loaded = false;
         _users = [];
+        _principals = [];
         _keys = [];
         _sessions = [];
         Show();
@@ -89,6 +94,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
         }
 
         Show();
+        if (mode == Mode.Linux) ReloadPrincipals();
     }
 
     /// <summary>Selects the row of <paramref name="name"/> (a user or key name, or a session ID).</summary>
@@ -96,6 +102,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
     {
         var index = Showing switch
         {
+            Mode.Linux => Array.FindIndex(_principals, person => person.Id == name),
             Mode.Users => Array.FindIndex(_users, user => user.Name == name),
             Mode.Keys => Array.FindIndex(_keys, key => key.Name == name),
             _ => Array.FindIndex(_sessions, session => session.Id == name)
@@ -154,6 +161,10 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
         switch (Showing)
         {
+            case Mode.Linux:
+                _header.Text = "Linux users: controller roles and access; native enrollment and passwords are managed on Linux";
+                SetLines(_rows, Table(RoofCli.CommandBuilder.PrincipalHeaders, _principals.Select(RoofCli.CommandBuilder.PrincipalRow)));
+                break;
             case Mode.Users:
                 _header.Text = _users.Length == 0 && _loaded ? "No people yet: Add one. The first admin can also be made on Setup (F5)." : "People";
                 SetLines(_rows, Table(RoofCli.CommandBuilder.UserHeaders, _users.Select(RoofCli.CommandBuilder.UserRow)));
@@ -198,6 +209,31 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
             var done = await send(client, cancellationToken).ConfigureAwait(false);
             Ui.Post(() => Reload(done));
         });
+
+    private void ReloadPrincipals() => _ = Ui.Run("Reading Linux users…", async (client, cancellationToken) =>
+    {
+        var people = await client.Identity.GetPrincipalsAsync(cancellationToken).ConfigureAwait(false);
+        Ui.Post(() => { _principals = people.Where(person => person.Provider == "linux").ToArray(); Show(); });
+    });
+
+    private void ChangePrincipal()
+    {
+        if (Selected < 0 || Selected >= _principals.Length) { Ui.Say("Select a Linux user first."); return; }
+        var person = _principals[Selected];
+        Ui.Ask(new RoofUiPrompt("Linux user access", $"{person.Name}: changes revoke existing credentials. Linux passwords are unchanged.",
+            [new RoofUiField("Role", Initial: RoofCliFormat.Role(person.Role)), new RoofUiField("Enabled (true/false)", Initial: person.Enabled ? "true" : "false")],
+            [new RoofUiAction("Save", values =>
+            {
+                var role = RoofCliFormat.ParseRole(values[0]);
+                if (role is null || !bool.TryParse(values[1], out var enabled)) return "Give viewer, operator or admin and true or false.";
+                _ = Ui.Run("Updating Linux access…", async (client, cancellationToken) =>
+                {
+                    await client.Identity.UpdatePrincipalAsync(person.Id, new RoofPrincipalUpdateRequest { Role = role, Enabled = enabled }, cancellationToken).ConfigureAwait(false);
+                    Ui.Post(ReloadPrincipals);
+                });
+                return null;
+            })]));
+    }
 
     private void AddUser() => Ui.Ask(new RoofUiPrompt(
         "Add a person",

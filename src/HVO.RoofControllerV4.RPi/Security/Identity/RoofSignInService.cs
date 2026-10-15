@@ -189,6 +189,11 @@ public sealed class RoofSignInService
         RoofSecretCheck check;
         try
         {
+            if (kind == RoofCredentialKind.Pin && user is not null && _identity.CanUseTemporaryPin(user))
+            {
+                hash = await _hasher.HashAsync("0000", cancellationToken).ConfigureAwait(false);
+                if (hash is null) return Busy();
+            }
             check = await _hasher.VerifyAsync(hash, secret, cancellationToken).ConfigureAwait(false);
             outcome = Outcome(check);
         }

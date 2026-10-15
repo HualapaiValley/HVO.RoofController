@@ -1,0 +1,231 @@
+{
+  "started_utc": "2026-10-14T09:45:46.986687+00:00",
+  "finished_utc": "2026-10-14T09:45:49.679476+00:00",
+  "isolation": {
+    "network": "none",
+    "privileged": false,
+    "binds": null,
+    "ports": {},
+    "devices": [],
+    "capabilities": [
+      "CAP_AUDIT_WRITE",
+      "CAP_CHOWN",
+      "CAP_DAC_OVERRIDE",
+      "CAP_FOWNER",
+      "CAP_SETGID",
+      "CAP_SETUID"
+    ],
+    "tmpfs": {
+      "/run": "rw,nosuid,nodev,size=16m",
+      "/tmp": "rw,nosuid,nodev,size=32m"
+    }
+  },
+  "exit_code": 0,
+  "result": {
+    "scope": "disposable integrated prototype install, not production full install",
+    "install": {
+      "version": 1,
+      "scope": "disposable-integrated-prototype",
+      "prefix": "/opt/hvo-auth-fixture",
+      "users": {
+        "fixture-admin": 26001,
+        "fixture-limited": 26002,
+        "fixture-user": 26003,
+        "fixture-expired": 26004
+      },
+      "policy": "sudo fixed-helper command only",
+      "production_installer": false,
+      "production_website": false
+    },
+    "passed": 31,
+    "failed": 0,
+    "tests": [
+      {
+        "test": "installed_package_and_private_policy",
+        "passed": true
+      },
+      {
+        "test": "authorized_sudo_linux_admin",
+        "passed": true
+      },
+      {
+        "test": "nonadmin_cannot_use_sudo_helper",
+        "passed": true
+      },
+      {
+        "test": "direct_unprivileged_helper_rejected",
+        "passed": true
+      },
+      {
+        "test": "sudo_authorized_viewer_still_denied_admin_role",
+        "passed": true
+      },
+      {
+        "test": "forged_sudo_environment_cannot_promote_nonadmin",
+        "passed": true
+      },
+      {
+        "test": "sudo_overwrites_forged_origin_for_authorized_caller",
+        "passed": true
+      },
+      {
+        "test": "request_username_or_uid_claim_rejected",
+        "passed": true
+      },
+      {
+        "test": "wrong_linux_password_denied_by_pam",
+        "passed": true
+      },
+      {
+        "test": "expired_linux_account_denied_by_pam",
+        "passed": true
+      },
+      {
+        "test": "linux_web_login_maps_real_uid",
+        "passed": true
+      },
+      {
+        "test": "virtual_web_login_has_separate_identity",
+        "passed": true
+      },
+      {
+        "test": "linux_nonadmin_can_login_web_with_viewer_role",
+        "passed": true
+      },
+      {
+        "test": "linux_web_viewer_role_denied",
+        "passed": true
+      },
+      {
+        "test": "virtual_web_viewer_role_denied",
+        "passed": true
+      },
+      {
+        "test": "linux_web_admin_role_allowed",
+        "passed": true
+      },
+      {
+        "test": "accepted_web_session_reused",
+        "passed": true
+      },
+      {
+        "test": "saved_web_session_cannot_override_local_gate",
+        "passed": true
+      },
+      {
+        "test": "local_protocol_rejects_saved_session_even_for_admin",
+        "passed": true
+      },
+      {
+        "test": "linux_owned_scoped_key_works",
+        "passed": true
+      },
+      {
+        "test": "linux_key_cannot_write_settings",
+        "passed": true
+      },
+      {
+        "test": "linux_owner_revokes_key",
+        "passed": true
+      },
+      {
+        "test": "linux_revoked_key_denied",
+        "passed": true
+      },
+      {
+        "test": "virtual_owned_scoped_key_works",
+        "passed": true
+      },
+      {
+        "test": "virtual_key_cannot_write_settings",
+        "passed": true
+      },
+      {
+        "test": "virtual_owner_revokes_key",
+        "passed": true
+      },
+      {
+        "test": "virtual_revoked_key_denied",
+        "passed": true
+      },
+      {
+        "test": "viewer_cannot_mint_broader_key",
+        "passed": true
+      },
+      {
+        "test": "real_elapsed_session_expiry",
+        "passed": true
+      },
+      {
+        "test": "logout_invalidates_saved_session",
+        "passed": true
+      },
+      {
+        "test": "role_change_invalidates_session",
+        "passed": true
+      }
+    ],
+    "evidence": {
+      "native_sudo_peer_uids": [
+        0,
+        0
+      ],
+      "native_web_provider_checks": true
+    },
+    "real": [
+      "container Linux accounts",
+      "fixed-command sudo policy and original UID",
+      "kernel Unix peer credentials",
+      "PAM pam_unix password/account validation",
+      "loopback HTTP requests",
+      "virtual password hashing",
+      "wall-clock session expiry"
+    ],
+    "prototype": [
+      "application roles/scopes/session model",
+      "fixture HTTP endpoints, not HVO web UI",
+      "predictable inert process-local credential handles"
+    ],
+    "not_covered": [
+      "production installer auth adapter integration",
+      "production website Linux-provider wiring",
+      "polkit route",
+      "host/container deployment boundary",
+      "graphical kiosk UI"
+    ],
+    "secrets": "only public disposable test fixtures; no host credentials used"
+  },
+  "container_removed": true,
+  "host_account_and_policy_state_unchanged": true,
+  "cleanup": {
+    "fixture_image_removed": true,
+    "runtime_container_removed": true,
+    "host_fixture_accounts_present": [],
+    "host_fixture_pam_exists": false,
+    "host_fixture_sudo_policy_exists": false,
+    "verified_utc": "2026-10-14T09:51:52.128905+00:00",
+    "original_cached_images_preserved": true,
+    "preexisting_worktrees_unchanged": 4,
+    "preexisting_dirty_file_hash_unchanged": true,
+    "no_containers_remain": true,
+    "final_verified_utc": "2026-10-14T09:59:47.719427+00:00"
+  },
+  "existing_production_auth_tests": {
+    "passed": 122,
+    "failed": 0,
+    "skipped": 0,
+    "configuration": "Release",
+    "baseline_commit": "26fe1b461899731456aa238d6d1202ec06472b34",
+    "filter": "FullyQualifiedName~RoofSignInServiceTests|FullyQualifiedName~RoofCredentialValidatorTests|FullyQualifiedName~IdentityApiTests|FullyQualifiedName~WebSessionTests|FullyQualifiedName~WebSessionStopTests|FullyQualifiedName~RoofCliIdentityCommandTests",
+    "scope": "Existing application in-process/emulated auth semantics; not installed kiosk UI or new provider integration"
+  },
+  "existing_installer_regression_tests": {
+    "passed": 557,
+    "failed": 0,
+    "skipped": 0,
+    "configuration": "Release",
+    "baseline_commit": "26fe1b461899731456aa238d6d1202ec06472b34",
+    "filter": "FullyQualifiedName~.Installer.&TestCategory!=KioskInstall&TestCategory!=MacInstall",
+    "scope": "Isolated test roots and command fixtures; real host system-install categories excluded"
+  }
+}

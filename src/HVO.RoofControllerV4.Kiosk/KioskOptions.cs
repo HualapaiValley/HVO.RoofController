@@ -57,6 +57,17 @@ public sealed class KioskOptions
     /// </summary>
     public int Rotation { get; set; }
 
+    /// <summary>Optional DRM pixel mode, WIDTHxHEIGHT. Empty uses the connector preferred mode; scaling is independent.</summary>
+    public string? VideoMode { get; set; }
+
+    public Avalonia.LinuxFramebuffer.DrmOutputOptions DrmOptions()
+        => new()
+        {
+            Orientation = KioskDisplay.Orientation(Rotation),
+            VideoMode = HVO.RoofControllerV4.Common.Models.RoofDisplayMode.TryParse(VideoMode, out var width, out var height)
+                ? new Avalonia.PixelSize(width, height) : null
+        };
+
     /// <summary>
     /// The touchscreen's input devices, such as /dev/input/by-path/…-event. None: every input device libinput finds on
     /// the seat.
@@ -114,6 +125,9 @@ public sealed class KioskOptions
         {
             problems.Add($"{SectionName}:PixelsPerMillimetre must be between 2 and 40, got {PixelsPerMillimetre}.");
         }
+
+        if (!string.IsNullOrEmpty(VideoMode) && !HVO.RoofControllerV4.Common.Models.RoofDisplayMode.TryParse(VideoMode, out _, out _))
+            problems.Add("Kiosk:VideoMode must be WIDTHxHEIGHT, each from 200 to 8000 pixels, or empty for the preferred mode.");
 
         if (Rotation is not (0 or 90 or 180 or 270))
         {

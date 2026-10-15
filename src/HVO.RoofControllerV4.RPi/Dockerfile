@@ -85,7 +85,7 @@ RUN dotnet publish "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
 # -------------------------
 # Runtime image
 # -------------------------
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.12 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13 AS runtime
 ARG HVO_FORCE_RASPBERRY_PI=false
 ARG HVO_CONTAINER_RPI_HINT=""
 WORKDIR /app
@@ -132,7 +132,8 @@ EXPOSE 8080 8088
 ARG ROOF_VERSION=""
 ARG ROOF_REVISION=""
 ARG ROOF_CREATED=""
-LABEL org.opencontainers.image.title="HVO Roof Controller" \
+LABEL io.hvo.roof.identity-schema="2" \
+      org.opencontainers.image.title="HVO Roof Controller" \
       org.opencontainers.image.description="The roll-off roof controller and its web UI: on a Raspberry Pi 5 with its HAT, or anywhere with the HAT emulator." \
       org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \
       org.opencontainers.image.vendor="Hualapai Valley Observatory" \

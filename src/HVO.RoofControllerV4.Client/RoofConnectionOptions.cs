@@ -18,6 +18,13 @@ public sealed class RoofConnectionOptions
     /// <summary>The initial credential. <see cref="RoofControllerClient.Credential"/> can change it later.</summary>
     public RoofCredential? Credential { get; init; }
 
+    /// <summary>
+    /// Optional local authority, invoked afresh for each protected REST request and hub connection. Receives the
+    /// required operation (read, operate, configure or identity). Its result is used only for that request.
+    /// Failure never falls back to Credential; no local credential is saved or used to authenticate anonymous calls.
+    /// </summary>
+    public Func<string, CancellationToken, Task<RoofCredential>>? LocalAuthorization { get; init; }
+
     /// <summary>How long an ordinary request may take. Default 30 s.</summary>
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
 

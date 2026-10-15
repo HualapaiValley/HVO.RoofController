@@ -101,7 +101,7 @@ public sealed class AuthController : ControllerBase
             return refusal;
         }
 
-        if (!RoofIdentityContract.IsValidName(request.Name) || request.Pin is not { Length: > 0 and <= RoofIdentityContract.MaximumPinLength })
+        if (!RoofIdentityContract.IsValidName(request.Name) || request.Pin is not { Length: > 0 and <= RoofIdentityContract.MaximumAcceptedPinLength })
         {
             return RoofProblemResults.Create(this, RoofControllerErrorCode.SignInFailed, RoofSignInService.WrongCredentials);
         }
@@ -132,7 +132,7 @@ public sealed class AuthController : ControllerBase
         }
 
         return _identity.Users
-            .Where(user => user.PinHash is not null && user.Role != RoofControllerApiContract.ViewerRole)
+            .Where(user => (user.PinHash is not null || _identity.CanUseTemporaryPin(user)) && user.Role != RoofControllerApiContract.ViewerRole)
             .OrderBy(user => user.Name, StringComparer.OrdinalIgnoreCase)
             .Select(user => new RoofPinUserResponse(user.Name, user.Role))
             .ToArray();
@@ -204,6 +204,7 @@ public sealed class AuthController : ControllerBase
     /// <response code="401">The current password is not correct (<c>SignInFailed</c>).</response>
     /// <response code="429">Locked out after repeated failures, or too many sign-ins at once.</response>
     /// <response code="503">The identity store is unavailable.</response>
+    [RoofRefusePinSession]
     [HttpPost("Password", Name = nameof(ChangePassword))]
     [EnableRateLimiting(RoofSignInRateLimiting.PolicyName)]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
@@ -222,6 +223,9 @@ public sealed class AuthController : ControllerBase
                 RoofControllerErrorCode.InvalidRequest,
                 "Only a signed-in person can change their password; this request used an API key.");
         }
+
+        if (User.HasClaim(RoofPrincipalFactory.ProviderClaimType, "linux") || User.HasClaim(RoofPrincipalFactory.LocalClaimType, "true"))
+            return Forbid();
 
         if (!RoofIdentityContract.IsValidPassword(request.NewPassword))
         {
@@ -282,7 +286,7 @@ public sealed class AuthController : ControllerBase
             result.Issued.Token,
             session.Id,
             session.UserName,
-            session.Role,
+            session.Kind == RoofCredentialKind.Pin && session.Role == RoofControllerApiContract.AdminRole ? RoofControllerApiContract.OperatorRole : session.Role,
             session.Kind,
             session.ExpiresUtc,
             session.Kind == RoofCredentialKind.Pin ? _options.CurrentValue.PinSessionIdleTimeout.TotalSeconds : null));

@@ -1,0 +1,4 @@
+install-test-result.json
+run.stdout.json
+run.stderr.txt
+__pycache__/

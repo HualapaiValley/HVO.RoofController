@@ -50,11 +50,35 @@ public sealed class RoofClientCoverageTests
         ("Roof.UpdateConfiguration", client => client.Roof.UpdateConfigurationAsync(new RoofConfigurationRequest())),
         ("Stop", client => client.StopAsync()),
         ("Auth.SignIn", client => client.Auth.SignInAsync("alice", "not-a-password")),
+        ("Auth.GetProviders", client => client.Auth.GetProvidersAsync()),
+        ("Auth.SignInWithProvider", client => client.Auth.SignInWithProviderAsync("linux", "alice", "not-a-password")),
+        ("Auth.SignInLocally", client => client.Auth.SignInLocallyAsync("not-an-assertion")),
+        ("Auth.GetOwnedKeys", client => client.Auth.GetOwnedKeysAsync()),
+        ("Auth.CreateOwnedKey", client => client.Auth.CreateOwnedKeyAsync(
+            new RoofOwnedKeyCreateRequest
+            {
+                Name = "fixture-job",
+                Scopes = [RoofIdentityScopes.Read],
+                ExpiresUtc = new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero)
+            })),
+        ("Auth.RevokeOwnedKey", client => client.Auth.RevokeOwnedKeyAsync("fixture-key")),
         ("Auth.SignInWithPin", client => client.Auth.SignInWithPinAsync("alice", "0000")),
         ("Auth.GetPinUsers", client => client.Auth.GetPinUsersAsync()),
         ("Auth.GetCaller", client => client.Auth.GetCallerAsync()),
         ("Auth.SignOut", client => client.Auth.SignOutAsync()),
         ("Auth.ChangePassword", client => client.Auth.ChangePasswordAsync("not-a-password", "not-a-password-either")),
+        ("Identity.GetPrincipals", client => client.Identity.GetPrincipalsAsync()),
+        ("Identity.EnrollPrincipal", client => client.Identity.EnrollPrincipalAsync(
+            new RoofPrincipalEnrollRequest
+            {
+                Provider = "linux",
+                Subject = "fixture-subject",
+                Name = "alice",
+                EnrollmentStamp = "fixture-enrollment",
+                Role = RoofControllerApiContract.ViewerRole
+            })),
+        ("Identity.UpdatePrincipal", client => client.Identity.UpdatePrincipalAsync(
+            "fixture-principal", new RoofPrincipalUpdateRequest { Role = RoofControllerApiContract.OperatorRole })),
         ("Identity.GetUsers", client => client.Identity.GetUsersAsync()),
         ("Identity.GetUser", client => client.Identity.GetUserAsync("alice")),
         ("Identity.AddUser", client => client.Identity.AddUserAsync(

@@ -36,9 +36,10 @@ internal sealed class RoofCliRefusedException(string message, RoofExitCode code 
 /// <summary>One run of a command: its global options, its output, and the connection to the controller.</summary>
 internal sealed class RoofCliContext
 {
-    public RoofCliContext(RoofCliHost host, bool json, Uri? controller, string? credentialsFile)
+    public RoofCliContext(RoofCliHost host, bool json, Uri? controller, string? credentialsFile, bool local = false, bool remote = false)
     {
         Host = host;
+        _modeOverride = local ? true : remote ? false : null;
         Json = json;
         ControllerOverride = controller;
         CredentialsPath = string.IsNullOrWhiteSpace(credentialsFile)
@@ -47,6 +48,10 @@ internal sealed class RoofCliContext
     }
 
     public RoofCliHost Host { get; }
+
+    private readonly bool? _modeOverride;
+    private bool? _resolvedLocal;
+    public bool Local => _resolvedLocal ??= _modeOverride ?? RoofCredentialStore.Load(CredentialsPath)?.AuthMode == "local";
 
     /// <summary>True with <c>--json</c>: results are written as JSON to standard output.</summary>
     public bool Json { get; }
@@ -60,15 +65,18 @@ internal sealed class RoofCliContext
     /// <summary>The environment's credentials, then the file's; throws when the file cannot be used.</summary>
     public RoofCliConnection ResolveConnection()
     {
-        var environment = RoofCredentialStore.FromEnvironment(Host.GetEnvironmentVariable);
+        var environment = RoofCredentialStore.FromEnvironment(name =>
+            Local && name is RoofCredentialStore.ApiKeyVariable or RoofCredentialStore.SessionVariable or RoofCredentialStore.OnBehalfOfVariable
+                ? null : Host.GetEnvironmentVariable(name));
         var file = RoofCredentialStore.Load(CredentialsPath);
         var controller = ControllerOverride ?? environment?.Controller ?? file?.Controller
             ?? throw new RoofCliNotConfiguredException(
                 $"No controller address. Run 'hvo-roof setup', set {RoofCredentialStore.ControllerVariable}, or pass --controller.");
 
-        var fromEnvironment = environment?.ToCredential();
-        var credential = fromEnvironment ?? file?.ToCredential();
-        var source = fromEnvironment is not null ? "environment" : credential is not null ? CredentialsPath : "none";
+        var fromEnvironment = Local ? null : environment?.ToCredential();
+        var credential = Local ? null : fromEnvironment ?? file?.ToCredential();
+        var source = Local ? "local Linux authorization (fresh per request)"
+            : fromEnvironment is not null ? "environment" : credential is not null ? CredentialsPath : "none";
 
         // The pin and the CA go together: when the environment sets either, the file's are not used, so a pin in one
         // and a CA in the other are never both in force.
@@ -110,7 +118,22 @@ internal sealed class RoofCliContext
     public RoofControllerClient CreateClient(RoofCliConnection connection) => new(new RoofConnectionOptions
     {
         BaseAddress = connection.Controller,
-        Credential = connection.Credential,
+        Credential = Local ? null : connection.Credential,
+        LocalAuthorization = Local ? async (operation, cancellationToken) =>
+        {
+            // The native gate runs before any authenticated network request. Neither a saved token nor a supplied
+            // API key can substitute for this proof; the exchange client itself has no credential or local callback.
+            var assertion = await Host.ObtainLocalAssertion(operation, cancellationToken).ConfigureAwait(false);
+            using var exchange = new RoofControllerClient(new RoofConnectionOptions
+            {
+                BaseAddress = connection.Controller,
+                ServerCertificateSha256 = connection.CertificateSha256,
+                ServerCaCertificate = connection.CaCertificate,
+                CreateHandler = Host.CreateHandler,
+                TimeProvider = Host.Time
+            });
+            return await exchange.Auth.SignInLocallyAsync(assertion, cancellationToken).ConfigureAwait(false);
+        } : null,
         ServerCertificateSha256 = connection.CertificateSha256,
         ServerCaCertificate = connection.CaCertificate,
         CreateHandler = Host.CreateHandler,
@@ -204,6 +227,7 @@ internal sealed class RoofCliContext
 
     internal static (RoofExitCode Code, string Message) Classify(Exception error) => error switch
     {
+        RoofLocalAuthorizationException local => (RoofExitCode.Forbidden, local.Message),
         RoofCliUsageException usage => (RoofExitCode.Usage, usage.Message),
         RoofCliRefusedException refused => (refused.Code, refused.Message),
         RoofCliNotConfiguredException missing => (RoofExitCode.NotConfigured, missing.Message),

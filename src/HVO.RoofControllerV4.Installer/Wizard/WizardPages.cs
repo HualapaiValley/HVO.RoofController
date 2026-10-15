@@ -144,7 +144,7 @@ internal sealed class MachinePage : WizardPage
             Y = 0
         });
         intro.SetScheme(_problem is null ? Wizard.Theme.Base : Wizard.Theme.Danger);
-        _lines = InstallerSession.DescribeSurvey(Session.Survey, Session.Time.GetUtcNow());
+        _lines = [.. InstallerSession.DescribeSurvey(Session.Survey, Session.Time.GetUtcNow()), string.Empty, .. Prerequisites.Guidance(Session)];
         var text = Lines(Pos.Bottom(intro) + 1);
         text.Show(_lines);
         Add(intro, text);
@@ -395,7 +395,7 @@ internal sealed class SettingsPage : WizardPage
 
         if (answers.Kiosk is not null && _hideCursor is not null && _pins is not null)
         {
-            answers = answers with { Kiosk = new KioskSettings { HideCursor = _hideCursor.Value == CheckState.Checked, Pins = Names(_pins.Text) } };
+            answers = answers with { Kiosk = answers.Kiosk with { HideCursor = _hideCursor.Value == CheckState.Checked, Pins = Names(_pins.Text) } };
         }
 
         if (answers.Cli is not null && _cliFolder is not null)
@@ -999,6 +999,7 @@ internal sealed class ClientPage : WizardPage
 internal sealed class ReviewPage : WizardPage
 {
     private readonly ReadingView _plan;
+    private readonly Button _setup;
     private readonly TextField _savePath;
     private readonly Button _save;
     private IReadOnlyList<string> _lines = [];
@@ -1009,7 +1010,35 @@ internal sealed class ReviewPage : WizardPage
     public ReviewPage(InstallerWizard wizard)
         : base(wizard, "Review the plan")
     {
-        _plan = Lines(0, 3);
+        var setup = Wizard.Theme.Styled(new Button { Text = "Approve kiosk library setup", X = 0, Y = 0 });
+        setup.Accepting += (_, e) =>
+        {
+            e.Handled = true;
+            if (_checking) return;
+            Session.SetupPrerequisites = true;
+            _checking = true;
+            Wizard.Installing = true;
+            Wizard.Refresh();
+            Wizard.Run(async () =>
+            {
+                await Prerequisites.PrepareAsync(Session).ConfigureAwait(false);
+                return true;
+            }, (_, error) =>
+            {
+                Wizard.Installing = false;
+                _checking = false;
+                if (error is not null)
+                {
+                    _checked = null;
+                    Show([error.Message, "No application changes were made. Correct the prerequisite or reboot when instructed, then retry."]);
+                    Wizard.Say("Prerequisite setup stopped.", error: true);
+                    Wizard.Refresh();
+                }
+                else Showing();
+            });
+        };
+        _setup = setup;
+        _plan = Lines(2, 3);
         var caption = new Label { Text = "Save these answers (no secrets) to:", X = 0, Y = Pos.AnchorEnd(2) };
         _savePath = new TextField { X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill(20) };
         _save = Wizard.Theme.Styled(new Button { Text = "Save answers", X = Pos.AnchorEnd(18), Y = Pos.AnchorEnd(1) });
@@ -1024,7 +1053,7 @@ internal sealed class ReviewPage : WizardPage
             e.Handled = true;
             Save();
         };
-        Add(_plan, caption, _savePath, _save);
+        Add(_plan, caption, _savePath, _save, _setup);
     }
 
     public override string NextLabel => Wizard.Pages.OfType<PasswordsPage>().Single().Applies ? "Next" : "Install";
@@ -1042,6 +1071,7 @@ internal sealed class ReviewPage : WizardPage
 
     public override void Showing()
     {
+        _setup.Visible = Session.Answers.Roles.Contains(InstallRole.Kiosk);
         _savePath.Text = Session.DefaultAnswersPath;
         _checked = null;
         _checking = true;

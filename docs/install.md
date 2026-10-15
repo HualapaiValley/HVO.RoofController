@@ -10,6 +10,11 @@
 
 It records what it installed, so a later run can check, repair and upgrade what is there. It never moves the roof.
 
+The `controller`, `rig` and `kiosk` roles do not include the per-user `cli` role. To use
+`hvo-roof status` over SSH on the same Pi, install `cli` separately as that SSH user,
+without sudo, then sign in. The completion message points to this separate step; see
+[installing the CLI](cli.md#with-the-installer), including PATH setup for an existing shell.
+
 It runs as a wizard in the terminal, in the same HVO Dark look as the other interfaces. It can also run without asking
 anything, from an answers file that the wizard saves.
 
@@ -32,6 +37,25 @@ anything, from an answers file that the wizard saves.
 >   [Backing up and restoring](#backing-up-and-restoring), [Uninstalling](#uninstalling)).
 >
 > It adopts a controller that the deploy script already runs.
+
+## Prerequisites and consent
+
+The machine page explains Docker, physical-role HAT devices, console/display readiness,
+optional splash requirements, and per-user CLI/PATH setup. Unavailable roles remain blocked.
+The installer never enables I2C, changes desktop boot policy, grants Docker access, edits
+shell profiles, or reboots automatically. Follow the displayed instructions, then rerun.
+
+Missing kiosk display libraries require a separate **Approve kiosk library setup** action
+on the review page. For unattended installs, explicitly pass `--setup-prerequisites` with
+`--answers FILE`. This authorizes only the listed kiosk libraries through apt. The flag is
+not saved in answers or install records. `--plan` remains read-only. Setup rechecks package
+readiness and stops before application changes on failure or an OS reboot-required marker.
+For restore on a new OS, install its prerequisites manually first.
+
+Splash remains a separate explicit choice: it requires Python 3 and a supported Raspberry
+Pi OS Debian boot layout. Its reviewed plan includes official Plymouth/Pillow packages,
+boot-file backups and rebuilding initramfs. It is unsupported on the Ubuntu Parallels rig;
+leave splash disabled there. No default first-admin password is introduced.
 
 ## Before you start
 
@@ -571,7 +595,12 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
+| `kiosk.card` | Empty string selects a connected display on every boot; an explicit `/dev/dri/by-path/…-card` selects a stable display. Numbered card paths are refused in new answers. | Preserve existing setting |
+| `kiosk.rotation` | Clockwise 0, 90, 180 or 270 degrees, shared by the kiosk and optional splash | Preserve existing setting; new kiosk uses 90 |
+| `kiosk.splash` | Optional `{ "enabled": true, "image": "/operator/scene.png" }`; `enabled: false` restores the managed splash's originals | Leave existing splash alone |
 | `kiosk.hideCursor` | `true` to hide the console's cursor behind the kiosk, from the next reboot (`vt.global_cursor_default=0` in `/boot/firmware/cmdline.txt`). `false` leaves `cmdline.txt` as it is. | `true` |
+| `kiosk.videoMode` | DRM pixel mode such as `1920x1080`; empty selects preferred, null preserves existing. Independent of scale and rotation. | Preserve existing/preferred |
+| `controller.linuxAuth.enrollSetupUser` | Explicitly resolve the non-root sudo caller by UID and name, enroll only that user as controller admin, and save the resolved enrollment. | `false` |
 | `kiosk.pins` | People on the controller, operators or admins, by the name they sign in with, to give a PIN for signing in at the kiosk. Someone who has one keeps it. Not recorded. | None |
 | `cli.folder` | `~/.local/bin` or `/usr/local/bin` | `~/.local/bin` |
 | `macApp.folder` | `/Applications` or `~/Applications` | `/Applications` |
@@ -1374,7 +1403,9 @@ The script checks:
     pull request that moves the version to 4.0.1 upgrades from `4.0.0-rig.1` to `4.0.1-rig.2`.
 11. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
     `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so
-    and changes nothing, and `upgrade` goes forward again.
+    and changes nothing, and `upgrade` goes forward again. When the upgrade migrated the identity store beyond the
+    previous release's supported schema, the scenario instead verifies that both rollback planning and execution
+    refuse it, preserving the live identity bytes, installation record and running containers.
 
 Except in step 4, the roof does not move: the relay register stays 0, and the emulator records no direction relay
 closing and no violation.
@@ -1382,7 +1413,11 @@ closing and no violation.
 It needs Docker, `curl`, `jq`, `openssl`, `ss`, `ip`, `setsid`, `python3`, and `sudo` without a password that reaches
 the same Docker daemon. From the checkout it also needs Docker's buildx, the .NET SDK and git. The release before is
 built from `RIG_PREVIOUS_REF` (by default `origin/main`) in a git worktree of its own, so a checkout needs that commit:
-the workflow fetches the whole history. From a release (`RIG_RELEASE_DIR`), sudo's Docker must be able to pull the
+the workflow fetches the whole history. The disposable historical source baseline receives the Microsoft 10.0.13
+security patch when its packages still use 10.0.10, including its ASP.NET and self-contained runtimes. NuGet auditing
+stays enabled. This exercises the old application and installer with patched dependencies; it does not reproduce
+the old published binaries. The candidate checkout is unchanged by this preparation.
+From a release (`RIG_RELEASE_DIR`), sudo's Docker must be able to pull the
 release's images, and `gh` must be signed in (`GH_TOKEN`).
 
 It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`,
@@ -1434,3 +1469,51 @@ for ans in /tmp/installer-renders/*.ans; do
   python3 ../tests/cli/ansi-to-svg.py "$ans" "../docs/images/install/$(basename "${ans%.ans}").svg" --title hvo-roof-install
 done
 ```
+
+## Fresh media and display migration
+
+A larger replacement SD card is a fresh-install target, not authorization to reimage or modify the
+working card. Keep the working card intact and labelled as the fallback until the replacement is
+accepted. This checklist does not copy, partition or erase either card.
+
+1. Record non-secret choices: release version, emulated `rig` role, display model/overlay requirements,
+   native mode, mounted orientation, kiosk rotation, stable display/input identifiers, UI scale, and
+   desired splash image path and checksum. Keep network-specific details in private site documentation.
+   Do not copy the whole installed JSON, install record, key files, certificates with private keys,
+   environment files or logs into an answers file or this public repository.
+2. When the operator separately authorizes fresh-media setup, prepare the supported 64-bit Lite OS
+   using [Before you start](#before-you-start). Install the panel's documented support independently;
+   this splash option does not guess overlays, touch mappings or hardware drivers.
+3. Use the canonical installer with `rig,kiosk` for an emulated first startup, never `controller` as an
+   accidental default. The normal rig guard still requires explicit host confirmation if I2C exists.
+   Inspect `--plan` before applying. Provision credentials through the existing secure installer flow;
+   this checklist exports none. Omit kiosk/splash for a headless rig.
+4. Add these non-secret kiosk choices to the answers the existing installer saved:
+
+   ```json
+   "kiosk": {
+     "card": "",
+     "rotation": 90,
+     "splash": { "enabled": true, "image": "/operator/scene.png" }
+   }
+   ```
+
+   The image is operator supplied, not a public-project asset. The wizard preserves these advanced
+   choices when editing an answers file; they are configured through that file rather than new wizard
+   controls. See [optional image splash](kiosk.md#optional-boot-and-shutdown-image) for prerequisites,
+   provenance, supported rotations, idempotence and rollback.
+5. Wait for the installer and **all** initramfs rebuilds to finish successfully. Do not reboot while a
+   rebuild is running. Review the recovery backup path and boot-image verification before the operator
+   schedules a restart.
+6. On the replacement only, confirm emulated mode, healthy controller/emulator, stable kiosk, the full
+   scene and matching boot/reboot/shutdown labels, correct touch orientation, and retained console
+   recovery. Do not issue roof/relay commands as an installation test. Moving to real hardware control
+   remains a separate commissioning decision under the existing safety workflow.
+
+Installing a newer program, restoring controller data, and rolling back boot configuration are distinct
+operations. Use the existing [backup and restore workflow](#backing-up-and-restoring) for authorized
+controller recovery; the splash's own backup restores only its boot/display integration.
+
+For the disabled-by-default native provider, explicit Linux account enrollment and recovery behavior,
+see [optional Linux authentication installation](install-linux-auth.md).
+See [Authentication and interface rights](authentication-interfaces.md) for verified local Linux identity, enrolled Linux users, virtual passwords, kiosk PIN restrictions and first-install setup-user selection.

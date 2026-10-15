@@ -27,7 +27,7 @@ public sealed class RoofRefusePinSessionAttribute : Attribute, IActionFilter, IO
             context.Result = RoofProblemResults.Create(
                 controller,
                 RoofControllerErrorCode.CredentialNotAllowed,
-                "A PIN session cannot manage people, API keys or sessions. Use an admin API key, or sign in with a password.");
+                "A PIN session grants roof operation only. Use authorized local access, an appropriate API key, or a password session for administration.");
         }
     }
 

@@ -197,13 +197,13 @@ public sealed class InstallerAnswersTests
 
     [TestMethod]
     [DataRow("""{ "roles": ["controller"], "controller": { "firstAdmin": { "name": "observer", "password": "correct horse battery" } } }""", DisplayName = "The first admin's password")]
-    [DataRow("""{ "roles": ["controller"], "controller": { "firstAdmin": { "name": "observer", "pinCode": "123456" } } }""", DisplayName = "The first admin's PIN")]
+    [DataRow("""{ "roles": ["controller"], "controller": { "firstAdmin": { "name": "observer", "pinCode": "1234" } } }""", DisplayName = "The first admin's PIN")]
     [DataRow("""{ "roles": ["controller"], "controller": { "camera": { "baseUrl": "http://192.168.0.4:81", "userName": "v", "password": "p" } } }""", DisplayName = "The camera's password")]
     public void AnAnswersFile_HasNoPlaceForASecret(string json)
     {
         var parse = () => InstallAnswers.Parse(json);
 
-        parse.Should().Throw<InstallerUsageException>().Which.Message.Should().Contain("is not valid").And.NotContain("correct horse").And.NotContain("123456");
+        parse.Should().Throw<InstallerUsageException>().Which.Message.Should().Contain("is not valid").And.NotContain("correct horse").And.NotContain("1234");
     }
 
     [TestMethod]
