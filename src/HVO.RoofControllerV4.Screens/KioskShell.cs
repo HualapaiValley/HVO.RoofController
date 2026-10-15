@@ -16,7 +16,8 @@ public enum KioskPage
     Roof,
     Unlock,
     Settings,
-    System
+    System,
+    About
 }
 
 /// <summary>
@@ -37,6 +38,7 @@ public sealed class KioskShell : UserControl
     private readonly Button _navRoof;
     private readonly Button _navSettings;
     private readonly Button _navSystem;
+    private readonly Button _navAbout;
     private readonly Button _navLock;
     private readonly TextBlock _stopMessage;
     private readonly Border _blank;
@@ -58,6 +60,7 @@ public sealed class KioskShell : UserControl
         SignInPage = new KioskSignInPage(PasswordForm, metrics, () => ShowPage(KioskPage.Roof));
         SettingsPage = new KioskSettingsPage(Settings, console, metrics);
         SystemPage = new KioskSystemPage(System, console, metrics);
+        AboutPage = new KioskAboutPage(console, System, metrics);
         Background = KioskTheme.Background;
         Foreground = KioskTheme.Text;
         FontSize = metrics.Font;
@@ -92,8 +95,9 @@ public sealed class KioskShell : UserControl
         _navRoof = Nav("Roof", "nav-roof", () => ShowPage(KioskPage.Roof));
         _navSettings = Nav("Settings", "nav-settings", () => ShowPage(KioskPage.Settings));
         _navSystem = Nav("System", "nav-system", () => ShowPage(KioskPage.System));
+        _navAbout = Nav("About", "nav-about", () => ShowPage(KioskPage.About));
         _navLock = Nav(console.Wording.SignInAction, "nav-lock", LockOrUnlock);
-        var navTop = new StackPanel { Spacing = metrics.Gap, Children = { _navRoof, _navSettings, _navSystem } };
+        var navTop = new StackPanel { Spacing = metrics.Gap, Children = { _navRoof, _navSettings, _navSystem, _navAbout } };
         var nav = new DockPanel { Width = metrics.NavWidth, Margin = new Thickness(metrics.Gap) };
         DockPanel.SetDock(_navLock, Dock.Bottom);
         nav.Children.Add(_navLock);
@@ -173,6 +177,9 @@ public sealed class KioskShell : UserControl
 
     public KioskSystemPage SystemPage { get; }
 
+    /// <summary>Build identification, available without unlocking.</summary>
+    public KioskAboutPage AboutPage { get; }
+
     /// <summary>The page shown.</summary>
     public KioskPage Page { get; private set; } = KioskPage.Roof;
 
@@ -195,6 +202,7 @@ public sealed class KioskShell : UserControl
             KioskPage.Unlock => PinPage,
             KioskPage.Settings => SettingsPage,
             KioskPage.System => SystemPage,
+            KioskPage.About => AboutPage,
             _ => RoofPage
         };
         _scroller.Offset = default;
@@ -244,6 +252,7 @@ public sealed class KioskShell : UserControl
         UpdateBadges(view);
         UpdateBanners(view);
         RoofPage.Update(view);
+        AboutPage.Update(view);
         UpdateNav(view);
 
         _stopMessage.Text = view.StopMessage;
@@ -316,7 +325,7 @@ public sealed class KioskShell : UserControl
         _navSettings.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         _navSystem.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         KioskTheme.SetText(_navLock, view.IsUnlocked ? _console.Wording.SignOutAction : _console.Wording.SignInAction);
-        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navLock, KioskPage.Unlock) })
+        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navLock, KioskPage.Unlock) })
         {
             if (page == Page)
             {

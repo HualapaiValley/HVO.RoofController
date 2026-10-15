@@ -571,3 +571,9 @@ credentials cannot create these reusable personal keys.
 See [Authentication and interface rights](authentication-interfaces.md) for verified local Linux identity, enrolled Linux users, virtual passwords, kiosk PIN restrictions and first-install setup-user selection.
 
 ![Enrolled Linux users in the terminal People page](images/terminal/09-linux-users.svg)
+
+### Finding the interactive version
+
+Open **System (F4)** for the running CLI build and commit. The local version remains visible if the health read fails or no controller is configured. Controller information is separately labelled as last read and is hidden when status becomes stale; Refresh clears previous results before rereading.
+
+![Local terminal build when the controller health read fails](images/terminal/10-system-offline.svg)

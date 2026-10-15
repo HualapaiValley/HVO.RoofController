@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Show the running GUI build in an always-accessible About view and keep local TUI/web versions visible when controller reads fail. Label controller metadata separately and suppress stale GUI/TUI values (#117).
+
 ## [4.1.0] - 2026-10-15
 
 Installer readiness, optional native authentication and kiosk display updates (#111).

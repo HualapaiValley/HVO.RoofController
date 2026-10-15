@@ -56,6 +56,9 @@
     <main class="app-main web-main">
         @Body
     </main>
+    <footer class="web-muted px-3 pb-2 text-break" data-testid="web-version">
+        Web UI version: @RoofSystemText.DescribeClient("Web UI", typeof(RoofWebOptions).Assembly).Value
+    </footer>
 </div>
 
 @code {

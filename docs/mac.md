@@ -343,3 +343,9 @@ HVO_MAC_ICON_DIR=/tmp/mac-icon dotnet test ../tests/HVO.RoofControllerV4.RPi.Tes
 python3 HVO.RoofControllerV4.Mac/bundle/make-icns.py HVO.RoofControllerV4.Mac/bundle/AppIcon.icns /tmp/mac-icon/icon-*.png
 cp /tmp/mac-icon/icon-256.png ../docs/images/mac/icon-256.png
 ```
+
+### Finding the installed version
+
+Choose **About** for this app's installed build and commit. After an administrator reads **System**, About shows the separately labelled controller build as last read. A stale connection or sign-out removes that value; the local version remains available.
+
+![App and controller build identification](images/mac/mac-about-960x600.png)

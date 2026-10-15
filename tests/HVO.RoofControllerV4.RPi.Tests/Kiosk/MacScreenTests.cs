@@ -34,6 +34,37 @@ public sealed class MacScreenTests
         => KioskScreen.ShowAsync(harness, width, height, KioskMetrics.DeskPixelsPerMillimetre);
 
     [TestMethod]
+    public async Task About_DistinguishesBuilds_AndDropsControllerVersionWhenStaleOrSignedOut()
+    {
+        await using var harness = await CreateAsync();
+        harness.ControllerVersion = "9.8.7-rc.2+abcdef1234567890";
+        await harness.StartLiveAsync();
+        await harness.Console.SignInAsync(KioskHarness.Admin, TestSecrets.Password);
+        await using var screen = await ShowAsync(harness, 960, 600);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.System));
+        await UntilAsync(() => screen.Shell.System is { Health: not null, Busy: null }, "system metadata");
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.About));
+        await screen.DrawAsync();
+        await OnUiAsync(() =>
+        {
+            screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly))
+                .And.NotContain("9.8.7");
+            screen.Text("about-controller-version").Should().Contain("Controller (last read):").And.Contain("9.8.7-rc.2 (commit abcdef123456)");
+        });
+        await screen.RenderAsync("mac-about", TestContext);
+        await OnUiAsync(() =>
+        {
+            screen.Shell.Update(harness.Console.View with { StaleSince = DateTimeOffset.UtcNow });
+            screen.Window.UpdateLayout();
+            screen.Text("about-controller-version").Should().Contain("unavailable").And.NotContain("9.8.7");
+            screen.Shell.Update(harness.Console.View with { UnlockedBy = null, Role = null });
+            screen.Shell.ShowPage(KioskPage.About);
+            screen.Window.UpdateLayout();
+            screen.Text("about-controller-version").Should().NotContain("9.8.7");
+        });
+    }
+
+    [TestMethod]
     [DataRow(1280, 800)]
     [DataRow(960, 600)]
     public async Task SignedOut_TheAppOffersSignIn_AndStop_InItsWords(int width, int height)

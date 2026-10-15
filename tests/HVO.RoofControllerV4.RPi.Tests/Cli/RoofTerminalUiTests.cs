@@ -1869,6 +1869,25 @@ public sealed class RoofTerminalUiTests
     // ---- System ------------------------------------------------------------------------------------------------------
 
     [TestMethod]
+    [DataRow(80, 24)]
+    [DataRow(120, 36)]
+    public void System_HealthFailureStillShowsLocalVersion_WithoutControllerVersion(int width, int height)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.WrapHandler = handler => new UnreachableHandler(handler, null, "/health");
+        using var tui = new TuiDriver(rig, width, height);
+        tui.WaitIdle("the first status", () => tui.Ui.Status is not null && !tui.Ui.IsStale && tui.Ui.Caller is not null);
+        tui.Press(Key.F4);
+        tui.WaitIdle("the failed health read", () => tui.Ui.Message.Contains("reach", StringComparison.OrdinalIgnoreCase));
+        tui.Ui.CurrentPage.Describe().Should().Contain(RoofProductVersion.Describe(typeof(RoofCli).Assembly))
+            .And.Contain("Controller version: unavailable");
+        tui.Screen.Should().Contain("hvo-roof version:").And.Contain("Stop roof (F9)");
+        tui.Render(TestContext, $"10-system-offline-{width}x{height}");
+    }
+
+    [TestMethod]
     public void System_ShowsHealth_AndRestartsOnlyWhenConfirmed()
     {
         using var host = RoofClientApiTests.CreateHost();

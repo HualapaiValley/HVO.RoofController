@@ -303,3 +303,7 @@ Linux host; the website does not change it.
 See [Authentication and interface rights](authentication-interfaces.md) for verified local Linux identity, enrolled Linux users, virtual passwords, kiosk PIN restrictions and first-install setup-user selection.
 
 ![Linux users and controller access in the web People page](images/web/10-linux-users-desktop.jpg)
+
+### Finding the installed version
+
+The footer shows the running **Web UI version**, including build identification. Administrators can read **System** for separately labelled last-read controller information. The local web version remains visible if the controller request fails; Refresh discards previous controller information before rereading.

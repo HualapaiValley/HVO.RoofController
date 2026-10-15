@@ -12,9 +12,16 @@
 
 <PageMessage Message="Message" />
 
+<section class="web-card" aria-label="Web UI version">
+    <dl class="web-facts">
+        <dt>@WebUiLabel</dt>
+        <dd data-testid="system-fact" data-label="@WebUiLabel">@RoofSystemText.DescribeClient(WebUiLabel, typeof(RoofWebOptions).Assembly).Value</dd>
+    </dl>
+</section>
+
 <section class="web-card" aria-labelledby="system-information-title" data-testid="system-information">
     <div class="web-health-head">
-        <h2 id="system-information-title">Controller</h2>
+        <h2 id="system-information-title">Controller (last read)</h2>
         <div class="web-actions">
             <button type="button" class="btn btn-sm btn-outline-light" data-testid="system-readiness" disabled="@Busy" @onclick="CheckReadinessAsync">
                 <i class="bi bi-heart-pulse" aria-hidden="true"></i> Readiness
@@ -26,7 +33,7 @@
     </div>
     @if (_information is null)
     {
-        <p class="web-muted" role="status">@(Busy || Message is null ? "Reading the controller's information…" : "The controller's information is not read.")</p>
+        <p class="web-muted" role="status">@(Busy || Message is null ? "Reading the controller's information…" : "Controller version unavailable: the controller's information is not read.")</p>
     }
     else
     {
@@ -133,13 +140,14 @@
     /// <summary>Reads the supervisor's state (which needs no controller) and the controller's information.</summary>
     private async Task ReloadAsync()
     {
+        _information = null;
         await ReadSupervisorAsync();
         if (await SendAsync("The controller's information could not be read.", async (session, cancellationToken) =>
         {
             var information = await session.Client.System.GetInformationAsync(cancellationToken);
             var metrics = await session.Client.System.GetMetricsAsync(cancellationToken);
             // The web UI's own version first: it runs beside the controller, but is its own program.
-            _information = [RoofSystemText.DescribeClient(WebUiLabel, typeof(RoofWebOptions).Assembly), .. RoofSystemText.DescribeInformation(information, metrics)];
+            _information = [.. RoofSystemText.DescribeInformation(information, metrics)];
             _readAt = Time.GetUtcNow();
         }))
         {

@@ -142,6 +142,9 @@ internal sealed class KioskHarness : IAsyncDisposable
     /// </summary>
     public Func<HttpRequestMessage, bool>? CutAnswer { get; set; }
 
+    /// <summary>Optional controller build metadata override for cross-version UI tests, after normal authorization.</summary>
+    public string? ControllerVersion { get; set; }
+
     /// <summary>
     /// Awaited after the controller handled each request and before its answer reaches the kiosk: a slow network, or
     /// (with a task the test completes) an answer held on its way.
@@ -305,6 +308,14 @@ internal sealed class KioskHarness : IAsyncDisposable
                     }
                 }
 
+                if (response.IsSuccessStatusCode && harness.ControllerVersion is { } version
+                    && request.RequestUri.AbsolutePath.TrimStart('/') == RoofApiRoutes.SystemInformation)
+                {
+                    var json = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken))!;
+                    json["applicationVersion"] = version;
+                    response.Content.Dispose();
+                    response.Content = new StringContent(json.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+                }
                 return response;
             }
             finally
