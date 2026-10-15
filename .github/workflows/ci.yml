@@ -296,7 +296,7 @@ jobs:
           done
 
       - name: Upload optional native authentication worker
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hvo-roof-linux-auth-${{ github.run_id }}
           path: src/hvo-roof-linux-auth/*/HVO.RoofControllerV4.LinuxAuth
@@ -304,7 +304,7 @@ jobs:
           retention-days: 14
 
       - name: Upload hvo-roof
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hvo-roof-${{ github.run_id }}
           path: |
@@ -313,7 +313,7 @@ jobs:
           retention-days: 14
 
       - name: Upload hvo-roof-install
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hvo-roof-install-${{ github.run_id }}
           path: |
@@ -322,7 +322,7 @@ jobs:
           retention-days: 14
 
       - name: Upload hvo-roof-kiosk
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hvo-roof-kiosk-${{ github.run_id }}
           path: src/kiosk-artifact/
@@ -331,7 +331,7 @@ jobs:
 
       # The zip as it is (archive: false): its name is the artifact's.
       - name: Upload HVO Roof.app
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: src/mac-artifact/hvo-roof-mac-${{ github.run_id }}.zip
           archive: false
@@ -342,7 +342,7 @@ jobs:
       # Mac app's (mac-*) at 1280x800 and 960x600.
       - name: Upload kiosk renders
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kiosk-renders-${{ github.run_id }}
           path: src/TestResults/kiosk-renders/*.png
@@ -361,7 +361,7 @@ jobs:
 
       - name: Upload installer renders
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-renders-${{ github.run_id }}
           path: |
@@ -372,7 +372,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-${{ github.run_id }}
           path: src/TestResults/**
@@ -603,7 +603,7 @@ jobs:
       # controller and the emulator, and the certificate tests' results.
       - name: Upload the terminal screens
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-terminal-screens-${{ github.run_id }}
           path: ${{ runner.temp }}/mac-terminal-screens
