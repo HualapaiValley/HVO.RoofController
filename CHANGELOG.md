@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Detailed CLI health and the terminal System page now authorize GET /health as a native read operation in local Linux mode (#118).
+
 ## [4.1.0] - 2026-10-15
 
 Installer readiness, optional native authentication and kiosk display updates (#111).

@@ -611,6 +611,51 @@ public sealed class RoofClientApiTests
     }
 
     [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task HealthReport_WithSession_WorksWithLocalReadAuthorization(bool local, bool unhealthy)
+    {
+        using var host = CreateHost(configureServices: services =>
+        {
+            if (unhealthy)
+            {
+                services.AddHealthChecks().AddCheck("test_failing",
+                    () => HealthCheckResult.Unhealthy("Failing on purpose (test)."), tags: ["hardware"]);
+            }
+        });
+        await AddUserAsync(host, "health-viewer", RoofControllerApiContract.ViewerRole);
+        using var signIn = CreateClient(host);
+        var session = await signIn.Auth.SignInAsync("health-viewer", TestSecrets.Password);
+        var operations = new List<string>();
+        using var client = new RoofControllerClient(new RoofConnectionOptions
+        {
+            BaseAddress = ClientTestSupport.BaseAddress,
+            Credential = local ? null : session,
+            LocalAuthorization = local ? (operation, _) =>
+            {
+                operations.Add(operation);
+                return Task.FromResult<RoofCredential>(session);
+            } : null,
+            CreateHandler = () => ClientTestSupport.CreateHandler(() => host.Server)
+        });
+
+        var report = await client.Health.GetReportAsync();
+        report.Checks.Should().NotBeEmpty();
+        if (unhealthy)
+        {
+            report.Status.Should().Be("Unhealthy");
+            report.Checks.Should().Contain(check => check.Name == "test_failing");
+        }
+        else
+        {
+            report.Status.Should().BeOneOf("Healthy", "Degraded", "Unhealthy");
+        }
+        operations.Should().Equal(local ? new[] { "read" } : Array.Empty<string>());
+    }
+
+    [TestMethod]
     public async Task TheHealthEndpoints_AreRead_EvenWhenUnhealthy()
     {
         using var host = CreateHost();
