@@ -408,7 +408,7 @@ jobs:
           global-json-file: src/global.json
 
       - name: Download hvo-roof-kiosk
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: hvo-roof-kiosk-${{ github.run_id }}
           path: ${{ runner.temp }}/kiosk
@@ -454,7 +454,7 @@ jobs:
           global-json-file: src/global.json
 
       - name: Download HVO Roof.app
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: hvo-roof-mac-${{ github.run_id }}.zip
           path: ${{ runner.temp }}/mac
@@ -478,7 +478,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download HVO Roof.app
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: hvo-roof-mac-${{ github.run_id }}.zip
           skip-decompress: true
@@ -544,7 +544,7 @@ jobs:
           persist-credentials: false
 
       - name: Download hvo-roof
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: hvo-roof-${{ github.run_id }}
           path: ${{ runner.temp }}/hvo-roof
