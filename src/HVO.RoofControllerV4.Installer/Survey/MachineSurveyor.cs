@@ -316,6 +316,7 @@ public static partial class MachineSurveyor
                 Network = network,
                 WebStopKeyFile = environment.GetValueOrDefault(WebStopKeyFileSetting) is { Length: > 0 } stopKey ? stopKey : null,
                 TelemetryEndpoint = environment.GetValueOrDefault(TelemetryEndpointSetting),
+                LinuxAuthEnabled = environment.GetValueOrDefault("RoofControllerSecurity__Identity__LinuxAuth__Enabled") == "true",
                 EmulatorTimeScale = environment.GetValueOrDefault(EmulatorTimeScaleSetting),
                 EmulatorCameraFramesPerSecond = environment.GetValueOrDefault(EmulatorCameraFramesSetting),
                 StartedAt = container.TryGetProperty("State", out var started) ? StartedAt(started) : null

@@ -37,6 +37,9 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
     /// <summary>The schema this installer reads.</summary>
     public const int Schema = 1;
 
+    /// <summary>The largest identity store schema this release reads. Old manifests safely default to schema 1.</summary>
+    public int IdentityStoreSchema { get; init; } = 1;
+
     /// <summary>Where a release's files are on GitHub.</summary>
     public const string ReleasesUrl = "https://github.com/HualapaiValley/HVO.RoofController/releases";
 
@@ -127,6 +130,7 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
 
             return new ReleaseManifest(released, Text(root, "commit"), Image(images, "controller"), Image(images, "hatEmulator"))
             {
+                IdentityStoreSchema = ReadIdentitySchema(root),
                 Assets = ReadAssets(root),
                 UpgradeNotes = ReadUpgradeNotes(root)
             };
@@ -135,6 +139,14 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
         {
             throw new InstallerException($"The installer cannot read {FileName}: it is not valid JSON ({error.Message}).");
         }
+    }
+
+    private static int ReadIdentitySchema(JsonElement root)
+    {
+        if (!root.TryGetProperty("identityStoreSchema", out var value)) return 1;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var schema) || schema is < 1 or > 2)
+            throw Invalid("identityStoreSchema must be 1 or 2");
+        return schema;
     }
 
     private static ReleaseImage Image(JsonElement images, string key)

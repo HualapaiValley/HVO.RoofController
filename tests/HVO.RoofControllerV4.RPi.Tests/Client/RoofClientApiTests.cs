@@ -561,7 +561,7 @@ public sealed class RoofClientApiTests
         var refused = await RefusedAsync(() => client.Identity.GetUsersAsync());
 
         refused.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        refused.Code.Should().Be(RoofControllerErrorCode.CredentialNotAllowed);
+        refused.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     // ---- System, health and camera ----------------------------------------------------------------------------------

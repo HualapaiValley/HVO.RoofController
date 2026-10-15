@@ -279,7 +279,10 @@ public sealed class RoofStatusFeed : IAsyncDisposable
             HubConnection? connection = null;
             try
             {
-                connection = Build(out var closed);
+                var credential = _options.LocalAuthorization is { } local
+                    ? await RoofLocalAuthorization.ObtainAsync(local, "read", stopping).ConfigureAwait(false)
+                    : _client.Credential;
+                connection = Build(credential, out var closed);
                 await ConnectAsync(connection, stopping).ConfigureAwait(false);
                 OnConnected();
 
@@ -364,9 +367,9 @@ public sealed class RoofStatusFeed : IAsyncDisposable
         }
     }
 
-    private HubConnection Build(out Task<Exception?> closed)
+    private HubConnection Build(RoofCredential? credential, out Task<Exception?> closed)
     {
-        var headers = _client.Credential?.GetHeaders(RoofCredentialUse.StatusHub) ?? [];
+        var headers = credential?.GetHeaders(RoofCredentialUse.StatusHub) ?? [];
         var hubUri = new Uri(_options.NormalizedBaseAddress, RoofStatusHubContract.Path.TrimStart('/'));
         var builder = new HubConnectionBuilder()
             .WithUrl(hubUri, http =>

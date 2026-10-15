@@ -65,6 +65,9 @@ public sealed class InstallContext
     /// <summary>The installer's version (without its commit): the release it installs.</summary>
     public required string Version { get; init; }
 
+    /// <summary>Explicit consent for this run to install missing kiosk libraries. Never persisted.</summary>
+    public bool SetupPrerequisites { get; init; }
+
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
     /// <summary>Where the release's release.json comes from: read once a run, the first time a step needs it.</summary>

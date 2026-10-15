@@ -19,6 +19,12 @@ public sealed class RoofIdentityOptions
     /// </summary>
     public string? StorePath { get; set; }
 
+    /// <summary>Explicit emulator-only commissioning access for accounts created with TemporaryPin. Never enabled automatically.</summary>
+    public bool AllowTemporaryKioskPin { get; set; }
+
+    /// <summary>Provider authentication is opt-in; legacy credentials and PIN behavior remain the default.</summary>
+    public RoofLinuxAuthOptions LinuxAuth { get; set; } = new();
+
     /// <summary>How long a name-and-password session lasts. Default 12 hours.</summary>
     public TimeSpan SessionLifetime { get; set; } = TimeSpan.FromHours(12);
 
@@ -52,6 +58,9 @@ public sealed class RoofIdentityOptions
     internal IReadOnlyList<string> Validate()
     {
         var problems = new List<string>();
+        if (LinuxAuth.Enabled && (string.IsNullOrWhiteSpace(StorePath) || string.IsNullOrWhiteSpace(LinuxAuth.SocketPath)
+            || string.IsNullOrWhiteSpace(LinuxAuth.AssertionKeyPath) || string.IsNullOrWhiteSpace(LinuxAuth.Audience)))
+            problems.Add("Enabled Linux authentication requires a persistent identity store, private socket, assertion key path and audience.");
         Positive(nameof(SessionLifetime), SessionLifetime);
         Positive(nameof(PinSessionIdleTimeout), PinSessionIdleTimeout);
         Positive(nameof(PinSessionLifetime), PinSessionLifetime);
@@ -88,4 +97,13 @@ public sealed class RoofIdentityOptions
             }
         }
     }
+}
+
+/// <summary>Private native worker connection and assertion verification configuration.</summary>
+public sealed class RoofLinuxAuthOptions
+{
+    public bool Enabled { get; set; }
+    public string SocketPath { get; set; } = "/run/hvo-roof-linux-auth/controller/worker.sock";
+    public string AssertionKeyPath { get; set; } = "/etc/hvo-roof/linux-auth/assertion.key";
+    public string Audience { get; set; } = "hvo-roof-controller";
 }

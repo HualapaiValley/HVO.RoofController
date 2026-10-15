@@ -56,7 +56,7 @@ upgrades and backups, and troubleshooting.
   ([docs/cli.md](docs/cli.md))
 - **Touchscreen kiosk** — `hvo-roof-kiosk`, full screen on a Raspberry Pi touch display at the
   roof, drawn through DRM with no desktop: anyone can watch the roof and press Stop, and a person
-  unlocks it with their name and PIN to open or close the roof or change settings
+  unlocks it with their name and PIN to operate the roof; administration uses the CLI, terminal interface or web UI
   ([docs/kiosk.md](docs/kiosk.md))
 - **Mac app** — `HVO Roof.app`, the kiosk's screens in a window on a Mac with Apple silicon:
   the roof and Stop with the Mac's own device key, and a person signs in with their name and

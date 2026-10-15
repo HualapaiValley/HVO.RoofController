@@ -183,7 +183,7 @@ public sealed class KioskShell : UserControl
     public void ShowPage(KioskPage page)
     {
         var view = _console.View;
-        if ((page is KioskPage.Settings or KioskPage.System && !view.IsUnlocked) || (page == KioskPage.Unlock && view.IsUnlocked))
+        if ((page is KioskPage.Settings or KioskPage.System && (!view.IsUnlocked || _console.Wording.SignIn == KioskSignIn.Pin)) || (page == KioskPage.Unlock && view.IsUnlocked))
         {
             page = KioskPage.Roof;
         }
@@ -313,8 +313,8 @@ public sealed class KioskShell : UserControl
 
     private void UpdateNav(KioskView view)
     {
-        _navSettings.IsVisible = view.IsUnlocked;
-        _navSystem.IsVisible = view.IsUnlocked;
+        _navSettings.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
+        _navSystem.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         KioskTheme.SetText(_navLock, view.IsUnlocked ? _console.Wording.SignOutAction : _console.Wording.SignInAction);
         foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navLock, KioskPage.Unlock) })
         {

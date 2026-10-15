@@ -1,3 +1,4 @@
+using System.Linq;
 using System.ComponentModel.DataAnnotations;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -33,16 +34,19 @@ public static class RoofIdentityContract
 
     public const int MaximumNameLength = 64;
 
-    public const int MinimumPasswordLength = 12;
+    public const int MinimumPasswordLength = 7;
 
     public const int MaximumPasswordLength = 256;
 
     /// <summary>PINs are digits only.</summary>
     public const string PinPattern = "^[0-9]+$";
 
-    public const int MinimumPinLength = 6;
+    public const int MinimumPinLength = 4;
 
-    public const int MaximumPinLength = 12;
+    public const int MaximumPinLength = 4;
+
+    /// <summary>Existing PIN hashes are retained until their owner changes them.</summary>
+    public const int MaximumAcceptedPinLength = 12;
 
     /// <summary>True when <paramref name="name"/> is a valid user or API key name.</summary>
     public static bool IsValidName(string? name)
@@ -66,7 +70,7 @@ public static class RoofIdentityContract
     /// <summary>True when <paramref name="pin"/> has only digits and an allowed length.</summary>
     public static bool IsValidPin(string? pin)
     {
-        if (pin is null || pin.Length < MinimumPinLength || pin.Length > MaximumPinLength)
+        if (pin is null || pin == "0000" || pin.Length < MinimumPinLength || pin.Length > MaximumPinLength)
         {
             return false;
         }
@@ -81,6 +85,10 @@ public static class RoofIdentityContract
 
         return true;
     }
+
+    /// <summary>Sign-in accepts existing legacy PINs and the reserved temporary code; enrollment uses IsValidPin.</summary>
+    public static bool IsAcceptedPin(string? pin)
+        => pin is { Length: >= MinimumPinLength and <= MaximumAcceptedPinLength } && pin.All(char.IsAsciiDigit);
 
     /// <summary>True when <paramref name="password"/> has an allowed length.</summary>
     public static bool IsValidPassword(string? password)
@@ -221,7 +229,11 @@ public sealed record RoofUserResponse(
     bool HasPin,
     DateTimeOffset CreatedUtc,
     DateTimeOffset UpdatedUtc,
-    int ActiveSessions);
+    int ActiveSessions)
+{
+    /// <summary>The account has an explicit initial emulator commissioning grant, not a personal PIN.</summary>
+    public bool HasTemporaryPin { get; init; }
+}
 
 /// <summary>Body of <c>POST Identity/Users</c>. A person needs a password, a PIN or both.</summary>
 public sealed record class RoofUserCreateRequest
@@ -240,6 +252,9 @@ public sealed record class RoofUserCreateRequest
 
     /// <summary>For signing in at a kiosk. Operators and admins only.</summary>
     public string? Pin { get; init; }
+
+    /// <summary>Explicit emulator-only temporary kiosk access before a personal PIN is set. Requires a password and no PIN.</summary>
+    public bool TemporaryPin { get; init; }
 
     // The password and PIN are left out, so the request can be logged.
     private bool PrintMembers(StringBuilder builder)

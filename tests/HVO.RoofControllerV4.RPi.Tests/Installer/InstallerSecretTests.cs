@@ -25,7 +25,7 @@ public sealed class InstallerSecretTests
 {
     private const string Secrets = "/etc/hvo-roof/secrets";
     private const string Password = "a long test password";
-    private const string Pin = "9081726354";
+    private const string Pin = "9081";
     private const string CameraPassword = "camera test password";
     private const string AdminKeyFile = $"{Secrets}/RoofControllerSecurity__ApiKeys__1__Key";
 
@@ -148,7 +148,7 @@ public sealed class InstallerSecretTests
     public async Task ASecretTypedDifferentlyTwice_OrOneTheControllerWouldRefuse_IsAskedForAgain()
     {
         using var pi = new FakeMachine().WithPi();
-        var typed = new Queue<string>(["too short", Password, "another long password", Password, Password]);
+        var typed = new Queue<string>(["short", Password, "another long password", Password, Password]);
         pi.Types = _ => typed.Dequeue();
         var answers = pi.WriteAnswers(Answers(new FirstAdminSettings { Name = "roy" }));
 

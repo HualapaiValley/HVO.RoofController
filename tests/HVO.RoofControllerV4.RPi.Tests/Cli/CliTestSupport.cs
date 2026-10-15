@@ -62,6 +62,8 @@ internal sealed class CliRig : IDisposable
     /// <summary>Whether the input is a terminal (a person can answer prompts).</summary>
     public bool Interactive { get; set; }
 
+    public Func<string, CancellationToken, Task<string>>? ObtainLocalAssertion { get; set; }
+
     public TimeProvider Time { get; set; } = TimeProvider.System;
 
     /// <summary>
@@ -82,6 +84,7 @@ internal sealed class CliRig : IDisposable
     {
         Out = output,
         Error = error,
+        GetUserName = () => "ada",
         GetEnvironmentVariable = name => Environment.GetValueOrDefault(name),
         ReadLine = (prompt, secret) =>
         {
@@ -93,6 +96,7 @@ internal sealed class CliRig : IDisposable
         },
         IsInteractive = Interactive,
         Time = Time,
+        ObtainLocalAssertion = ObtainLocalAssertion ?? RoofCliLocalAuthority.ObtainAsync,
         CreateHandler = _server is null ? null : () => (WrapHandler ?? (handler => handler))(ClientTestSupport.CreateHandler(_server)),
         WebSocketFactory = _server is null ? null
             : WrapHandler is null ? ClientTestSupport.WebSocketFactory(_server)
@@ -179,6 +183,20 @@ internal sealed class TuiDriver : IDisposable
             App.LayoutAndDraw(true);
             return App.Driver!.ToString() ?? string.Empty;
         }
+    }
+
+    /// <summary>Saves the actual rendered cells and colours as ANSI for reproducible documentation captures.</summary>
+    public string Render(TestContext context, string name)
+    {
+        App.LayoutAndDraw(true);
+        var directory = Environment.GetEnvironmentVariable("HVO_CLI_RENDERS_DIR") is { Length: > 0 } configured
+            ? configured
+            : Path.Combine(context.TestRunResultsDirectory ?? Path.GetTempPath(), "terminal");
+        System.IO.Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, $"{name}.ans");
+        File.WriteAllText(path, App.Driver!.ToAnsi());
+        context.AddResultFile(path);
+        return path;
     }
 
     /// <summary>

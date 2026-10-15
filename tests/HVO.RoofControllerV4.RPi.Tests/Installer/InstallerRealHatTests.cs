@@ -39,7 +39,7 @@ public sealed partial class InstallerRealHatTests
     private const string Secrets = "/etc/hvo-roof/secrets";
     private const string CertificatePassword = $"{Secrets}/Kestrel__Certificates__Default__Password";
     private const string Password = "a long test password";
-    private const string Pin = "9081726354";
+    private const string Pin = "9081";
     private const string CameraPassword = "camera test password";
     private const string PreFlightFailed = "[deploy] ERROR: Pre-flight failed (see above). The running controller was not touched.";
 
@@ -141,6 +141,9 @@ public sealed partial class InstallerRealHatTests
         ("SECRETS_DIR", "/etc/hvo-roof/secrets", true),
         ("IDENTITY_DIR", "/var/lib/hvo-roof/identity", false),
         ("CONFIG_DIR", "/etc/hvo-roof/config", false),
+        ("LINUX_AUTH_ENABLED", "false", true),
+        ("LINUX_AUTH_CONTROLLER_DIR", "/run/hvo-roof-linux-auth/controller", true),
+        ("LINUX_AUTH_KEY_FILE", "/etc/hvo-roof/linux-auth/assertion.key", true),
         ("MANAGED_SECRETS_DIR", "/var/lib/hvo-roof/settings-secrets", false),
         ("HTTPS_CERT_DIR", "", true),
         ("HTTPS_CERT_FILE", "roof-controller.pfx", true),
@@ -148,7 +151,7 @@ public sealed partial class InstallerRealHatTests
     ];
 
     // The deploy script's container_args, line for line and in its order, each group with the setting it needs: set, or
-    // (after a !) empty.
+    // (after a !) empty, or equal to the explicit value after an =.
     private static readonly (string? When, string[] Lines)[] ContainerArgs =
     [
         (null,
@@ -171,6 +174,15 @@ public sealed partial class InstallerRealHatTests
         [
             "--mount \"type=bind,src=${CONFIG_DIR},dst=/etc/hvo-roof/config\"",
             "--env \"RoofControllerSettings__FilePath=/etc/hvo-roof/config/appsettings.Local.json\""
+        ]),
+        ("LINUX_AUTH_ENABLED=true",
+        [
+            "--mount \"type=bind,src=${LINUX_AUTH_CONTROLLER_DIR},dst=/run/hvo-roof-linux-auth/controller,readonly\"",
+            "--mount \"type=bind,src=${LINUX_AUTH_KEY_FILE},dst=/etc/hvo-roof/linux-auth/assertion.key,readonly\"",
+            "--env \"RoofControllerSecurity__Identity__LinuxAuth__Enabled=true\"",
+            "--env \"RoofControllerSecurity__Identity__LinuxAuth__SocketPath=/run/hvo-roof-linux-auth/controller/worker.sock\"",
+            "--env \"RoofControllerSecurity__Identity__LinuxAuth__AssertionKeyPath=/etc/hvo-roof/linux-auth/assertion.key\"",
+            "--env \"RoofControllerSecurity__Identity__LinuxAuth__Audience=hvo-roof-controller\""
         ]),
         ("MANAGED_SECRETS_DIR",
         [
@@ -410,7 +422,15 @@ public sealed partial class InstallerRealHatTests
             .Should().Equal(ContainerArgs.SelectMany(group => group.Lines), "the check is run with the script's container arguments, in its order");
         foreach (var name in ContainerArgs.Select(group => group.When).OfType<string>().Where(when => !when.StartsWith('!')))
         {
-            script.Should().Contain($"if [[ -n \"${{{name}}}\" ]]; then", "each group is given when its setting is set");
+            if (name == "LINUX_AUTH_ENABLED=true")
+            {
+                script.Should().Contain("if [[ \"${LINUX_AUTH_ENABLED}\" == true ]]; then",
+                    "native authentication arguments are given only for the exact value true");
+            }
+            else
+            {
+                script.Should().Contain($"if [[ -n \"${{{name}}}\" ]]; then", "each group is given when its setting is set");
+            }
         }
 
         foreach (var (name, value, orEmpty) in ScriptDefaults)
@@ -503,7 +523,12 @@ public sealed partial class InstallerRealHatTests
         List<string> arguments =
         [
             .. ContainerArgs
-                .Where(group => group.When is null || (variables[group.When.TrimStart('!')].Length == 0) == group.When.StartsWith('!'))
+                .Where(group => group.When switch
+                {
+                    null => true,
+                    "LINUX_AUTH_ENABLED=true" => variables["LINUX_AUTH_ENABLED"] == "true",
+                    var condition => (variables[condition.TrimStart('!')].Length == 0) == condition.StartsWith('!')
+                })
                 .SelectMany(group => group.Lines)
                 .SelectMany(line => Words(line, variables)),
             .. variables["EXTRA_DOCKER_ARGS"].Split([' ', '\t', '\n'], StringSplitOptions.RemoveEmptyEntries),

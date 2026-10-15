@@ -1,0 +1,112 @@
+@page "/account/keys"
+@attribute [Authorize]
+@inherits WebClientPage
+
+<PageTitle>My API keys · HVO Roof Controller</PageTitle>
+<h1>My API keys</h1>
+<PageMessage Message="Message" />
+
+@if (_enabled)
+{
+    <p class="web-muted">Keys belong to the account you signed in with. A key's scopes restrict what it can do; your current role still applies.</p>
+    @if (_secret is { } secret)
+    {
+        <section class="web-card web-secret" data-testid="owned-key-secret">
+            <h2>New key: @secret.Key.Name</h2>
+            <p>@RoofIdentityText.SecretShownOnce</p>
+            <label for="owned-secret" class="form-label">Secret</label>
+            <input id="owned-secret" type="password" readonly class="form-control" value="@secret.Secret" />
+            <button type="button" class="btn btn-primary" @onclick="() => _secret = null">Done</button>
+        </section>
+    }
+    <section class="web-card">
+        <h2>Create a key</h2>
+        <label for="owned-name" class="form-label">Name</label>
+        <input id="owned-name" class="form-control" @bind="_name" autocomplete="off" />
+        <fieldset>
+            <legend class="form-label">Allowed operations</legend>
+            <label class="me-3"><input type="checkbox" @bind="_read" /> Read</label>
+            <label class="me-3"><input type="checkbox" @bind="_operate" /> Operate</label>
+            <label class="me-3"><input type="checkbox" @bind="_configure" /> Configure</label>
+        </fieldset>
+        <label for="owned-hours" class="form-label">Expires after hours (1–720)</label>
+        <input id="owned-hours" class="form-control" type="number" min="1" max="720" @bind="_hours" />
+        <button type="button" class="btn btn-primary mt-3" disabled="@Busy" @onclick="CreateAsync">Create key</button>
+    </section>
+    <section class="web-card">
+        <h2>Your keys</h2>
+        @foreach (var key in _keys)
+        {
+            <div class="mb-3" data-testid="owned-key">
+                <strong>@key.Name</strong> · @string.Join(", ", key.Scopes) · expires @RoofStatusText.Time(key.ExpiresUtc)
+                @if (key.Revoked)
+                {
+                    <span>Revoked</span>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-sm btn-outline-danger" disabled="@Busy" @onclick="() => RevokeAsync(key.Id)">Revoke</button>
+                }
+            </div>
+        }
+    </section>
+}
+
+@code {
+    private bool _enabled;
+    private string _name = "";
+    private bool _read = true, _operate, _configure;
+    private int _hours = 24;
+    private RoofOwnedKeyResponse[] _keys = [];
+    private RoofOwnedKeySecretResponse? _secret;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await SendAsync("Could not read personal keys.", async (session, ct) =>
+        {
+            _enabled = (await session.Client.Auth.GetProvidersAsync(ct)).LinuxEnabled;
+            if (_enabled)
+            {
+                _keys = await session.Client.Auth.GetOwnedKeysAsync(ct);
+            }
+            else
+            {
+                Message = Info("Provider accounts are not enabled on this controller.");
+            }
+        });
+    }
+
+    private async Task CreateAsync()
+    {
+        var scopes = new List<string>();
+        if (_read) scopes.Add("read");
+        if (_operate) scopes.Add("operate");
+        if (_configure) scopes.Add("configure");
+        if (string.IsNullOrWhiteSpace(_name) || scopes.Count == 0 || _hours is < 1 or > 720)
+        {
+            Message = Danger("Give a name, at least one scope, and a lifetime from 1 to 720 hours.");
+            return;
+        }
+
+        await SendAsync("Could not create the key.", async (session, ct) =>
+        {
+            _secret = await session.Client.Auth.CreateOwnedKeyAsync(new RoofOwnedKeyCreateRequest
+            {
+                Name = _name, Scopes = scopes.ToArray(), ExpiresUtc = DateTimeOffset.UtcNow.AddHours(_hours)
+            }, ct);
+            _keys = await session.Client.Auth.GetOwnedKeysAsync(ct);
+            Message = Success("Key created. Save its value before closing this page.");
+        });
+    }
+
+    private async Task RevokeAsync(string id)
+    {
+        await SendAsync("Could not revoke the key.", async (session, ct) =>
+        {
+            await session.Client.Auth.RevokeOwnedKeyAsync(id, ct);
+            _secret = null;
+            _keys = await session.Client.Auth.GetOwnedKeysAsync(ct);
+            Message = Success("Key revoked.");
+        });
+    }
+}

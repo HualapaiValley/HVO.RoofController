@@ -36,7 +36,7 @@ public sealed record RoofUserChange(StoredUser User, int SessionsEnded);
 /// When the file cannot be read, the store is unavailable: sign-in and management answer 503, managed keys and sessions
 /// do not authenticate, and configured API keys (and so Stop and the roof itself) keep working.
 /// </remarks>
-public sealed class RoofIdentityStore
+public sealed partial class RoofIdentityStore
 {
     /// <summary>A person's oldest sessions are ended beyond this many.</summary>
     internal const int MaximumSessionsPerUser = 20;
@@ -60,6 +60,7 @@ public sealed class RoofIdentityStore
     private readonly TimeProvider _time;
     private readonly ILogger<RoofIdentityStore> _logger;
     private readonly IOptionsMonitor<RoofIdentityOptions> _options;
+    private readonly IOptions<HatEmulatorOptions>? _emulator;
     private readonly IOptionsMonitor<RoofControllerSecurityOptions> _securityOptions;
 
     // Session id -> UTC ticks of its last request. PIN sessions end after the idle timeout; after a restart every PIN
@@ -74,8 +75,10 @@ public sealed class RoofIdentityStore
         IOptionsMonitor<RoofIdentityOptions> options,
         IOptionsMonitor<RoofControllerSecurityOptions> securityOptions,
         TimeProvider time,
-        ILogger<RoofIdentityStore> logger)
+        ILogger<RoofIdentityStore> logger,
+        IOptions<HatEmulatorOptions>? emulator = null)
     {
+        _emulator = emulator;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _securityOptions = securityOptions ?? throw new ArgumentNullException(nameof(securityOptions));
         _time = time ?? throw new ArgumentNullException(nameof(time));
@@ -116,6 +119,12 @@ public sealed class RoofIdentityStore
                     "Identity store unavailable: {Reason} Sign-in and identity management are refused; configured API keys still work.",
                     ex.Message);
             }
+        }
+
+        if (UnavailableReason is null && options.CurrentValue.LinuxAuth.Enabled)
+        {
+            try { MigrateProviderIdentity(); }
+            catch (RoofIdentityStoreException ex) { UnavailableReason = ex.Message; }
         }
 
         var now = _time.GetUtcNow();
@@ -233,6 +242,8 @@ public sealed class RoofIdentityStore
                     "The name, password or PIN is not correct.");
             }
 
+            if (kind == RoofCredentialKind.Pin && user.TemporaryPin && !CanUseTemporaryPin(user))
+                return RoofIdentityResult<RoofIssuedSession>.Failure(RoofControllerErrorCode.SignInFailed, "Temporary kiosk commissioning access is unavailable.");
             var options = _options.CurrentValue;
             var lifetime = kind == RoofCredentialKind.Pin ? options.PinSessionLifetime : options.SessionLifetime;
             var session = new StoredSession(
@@ -244,7 +255,13 @@ public sealed class RoofIdentityStore
                 device,
                 deviceKeyId,
                 now,
-                now + lifetime);
+                now + lifetime)
+            {
+                TemporaryPin = kind == RoofCredentialKind.Pin && CanUseTemporaryPin(user),
+                PrincipalId = ProviderEnabled && kind == RoofCredentialKind.Session ? user.PrincipalId : null,
+                PrincipalStamp = ProviderEnabled && kind == RoofCredentialKind.Session ? user.AuthenticationEpoch ?? user.Stamp : null,
+                Provider = ProviderEnabled && kind == RoofCredentialKind.Session ? "virtual" : null
+            };
             document.Sessions.Add(session);
             _lastActivity[session.Id] = now.UtcTicks;
             return RoofIdentityResult<RoofIssuedSession>.Success(new RoofIssuedSession(token, session));
@@ -266,7 +283,12 @@ public sealed class RoofIdentityStore
             return RoofIdentityResult<StoredSession>.Success(ended);
         });
 
-    public RoofIdentityResult<StoredUser> AddUser(string name, string role, string? passwordHash, string? pinHash)
+    public bool TemporaryPinEnabled => _options.CurrentValue.AllowTemporaryKioskPin && _emulator?.Value.Enabled == true;
+
+    public bool CanUseTemporaryPin(StoredUser user)
+        => TemporaryPinEnabled && user.TemporaryPin && user.PinHash is null && user.Role != RoofControllerApiContract.ViewerRole;
+
+    public RoofIdentityResult<StoredUser> AddUser(string name, string role, string? passwordHash, string? pinHash, bool temporaryPin = false)
         => Mutate<StoredUser>((document, now) =>
         {
             if (document.Users.Exists(user => Same(user.Name, name)))
@@ -274,7 +296,15 @@ public sealed class RoofIdentityStore
                 return RoofIdentityResult<StoredUser>.Failure(RoofControllerErrorCode.IdentityNameConflict, $"A person named '{name}' already exists.");
             }
 
-            var user = new StoredUser(name, role, passwordHash, pinHash, NewStamp(), now, now);
+            if (temporaryPin && (!TemporaryPinEnabled || pinHash is not null || passwordHash is null || role == RoofControllerApiContract.ViewerRole))
+                return RoofIdentityResult<StoredUser>.Failure(RoofControllerErrorCode.InvalidRequest, "Temporary kiosk access requires explicit emulator commissioning, an operator or admin password account, and no personal PIN.");
+            var stamp = NewStamp();
+            var user = new StoredUser(name, role, passwordHash, pinHash, stamp, now, now)
+            {
+                TemporaryPin = temporaryPin,
+                PrincipalId = document.SchemaVersion == 2 ? Guid.NewGuid().ToString("N") : null,
+                AuthenticationEpoch = document.SchemaVersion == 2 ? stamp : null
+            };
             document.Users.Add(user);
             return RoofIdentityResult<StoredUser>.Success(user);
         });
@@ -315,15 +345,17 @@ public sealed class RoofIdentityStore
                 Role = role,
                 PasswordHash = passwordHash,
                 PinHash = pinHash,
+                TemporaryPin = pinChanged ? false : before.TemporaryPin,
                 Stamp = roleChanged || passwordChanged || pinChanged ? NewStamp() : before.Stamp,
+                AuthenticationEpoch = document.SchemaVersion == 2 && (roleChanged || passwordChanged) ? NewStamp() : before.AuthenticationEpoch,
                 UpdatedUtc = now
             };
             document.Users[index] = after;
 
             var ended = roleChanged || passwordChanged
-                ? document.Sessions.RemoveAll(session => Same(session.UserName, before.Name))
+                ? document.Sessions.RemoveAll(session => session.Provider != "linux" && Same(session.UserName, before.Name))
                 : pinChanged
-                    ? document.Sessions.RemoveAll(session => Same(session.UserName, before.Name) && session.Kind == RoofCredentialKind.Pin)
+                    ? document.Sessions.RemoveAll(session => session.Provider != "linux" && Same(session.UserName, before.Name) && session.Kind == RoofCredentialKind.Pin)
                     : 0;
             return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(after, ended));
         });
@@ -341,10 +373,12 @@ public sealed class RoofIdentityStore
                 return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.SignInFailed, "The current password is not correct.");
             }
 
-            var after = document.Users[index] with { PasswordHash = newPasswordHash, Stamp = NewStamp(), UpdatedUtc = now };
+            var after = document.Users[index] with { PasswordHash = newPasswordHash, Stamp = NewStamp(), AuthenticationEpoch = document.SchemaVersion == 2 ? NewStamp() : null, UpdatedUtc = now };
             document.Users[index] = after;
+            var retainedIndex = document.Sessions.FindIndex(session => session.Id == keepSessionId && session.Provider == "virtual" && session.PrincipalId == after.PrincipalId);
+            if (retainedIndex >= 0) document.Sessions[retainedIndex] = document.Sessions[retainedIndex] with { PrincipalStamp = after.AuthenticationEpoch ?? after.Stamp };
             var ended = document.Sessions.RemoveAll(session =>
-                Same(session.UserName, name) && !string.Equals(session.Id, keepSessionId, StringComparison.Ordinal));
+                session.Provider != "linux" && Same(session.UserName, name) && !string.Equals(session.Id, keepSessionId, StringComparison.Ordinal));
             return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(after, ended));
         });
 
@@ -393,7 +427,7 @@ public sealed class RoofIdentityStore
 
             var removed = document.Users[index];
             document.Users.RemoveAt(index);
-            var ended = document.Sessions.RemoveAll(session => Same(session.UserName, removed.Name));
+            var ended = document.Sessions.RemoveAll(session => session.Provider != "linux" && Same(session.UserName, removed.Name));
             return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(removed, ended));
         });
 
@@ -535,7 +569,9 @@ public sealed class RoofIdentityStore
 
             PruneSessions(working, now);
             working.Revision++;
-            if (_file?.Save(working) == false && OperatingSystem.IsLinux() && !_reportedUnflushedSave)
+            var persisted = working.Clone();
+            persisted.Sessions.RemoveAll(session => session.TemporaryPin);
+            if (_file?.Save(persisted) == false && OperatingSystem.IsLinux() && !_reportedUnflushedSave)
             {
                 _reportedUnflushedSave = true;
                 _logger.LogWarning(
@@ -568,7 +604,9 @@ public sealed class RoofIdentityStore
             return false;
         }
 
-        if (!_snapshot.UsersByName.TryGetValue(found.UserName, out var user) || user.Role != found.Role)
+        if (found.PrincipalId is not null
+            ? !ProviderSessionIsCurrent(found)
+            : !_snapshot.UsersByName.TryGetValue(found.UserName, out var user) || user.Role != found.Role)
         {
             // Changes end sessions as they are saved; this also covers a store edited by hand.
             failure = "the person was removed or changed";
@@ -586,6 +624,11 @@ public sealed class RoofIdentityStore
 
     private bool IsLive(StoredSession session, DateTimeOffset now, out string? failure)
     {
+        if (session.TemporaryPin && !TemporaryPinEnabled)
+        {
+            failure = "temporary kiosk commissioning access ended";
+            return false;
+        }
         if (now >= session.ExpiresUtc)
         {
             failure = "session expired";
@@ -609,7 +652,7 @@ public sealed class RoofIdentityStore
     private void PruneSessions(RoofIdentityDocument document, DateTimeOffset now)
     {
         document.Sessions.RemoveAll(session => !IsLive(session, now, out _));
-        foreach (var crowded in document.Sessions.GroupBy(session => session.UserName, StringComparer.OrdinalIgnoreCase)
+        foreach (var crowded in document.Sessions.GroupBy(session => (session.Scope is null ? "remote:" : "local:") + (session.PrincipalId ?? "legacy:" + session.UserName.ToLowerInvariant()), StringComparer.Ordinal)
                      .Where(group => group.Count() > MaximumSessionsPerUser)
                      .ToList())
         {

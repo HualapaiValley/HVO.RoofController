@@ -208,7 +208,7 @@ internal sealed class RoofIdentityFile
     private static List<string> Check(RoofIdentityDocument document)
     {
         var problems = new List<string>();
-        if (document.SchemaVersion != RoofIdentityDocument.CurrentSchemaVersion)
+        if (document.SchemaVersion is not (1 or 2))
         {
             problems.Add($"schemaVersion {document.SchemaVersion} is not supported (expected {RoofIdentityDocument.CurrentSchemaVersion}).");
             return problems;
@@ -271,6 +271,30 @@ internal sealed class RoofIdentityFile
         if (HasDuplicates(sessions.Select(session => session?.TokenSha256)))
         {
             problems.Add("two sessions have the same token.");
+        }
+
+        if (document.SchemaVersion == 2)
+        {
+            var principals = document.LinuxPrincipals;
+            var owned = document.OwnedKeys;
+            if (users.Any(user => string.IsNullOrEmpty(user.PrincipalId))
+                || HasDuplicates(users.Select(user => user.PrincipalId).Concat(principals.Select(principal => principal.Id)))
+                || HasDuplicates(principals.Select(principal => principal.Subject)) || HasDuplicates(principals.Select(principal => principal.Name))
+                || principals.Any(principal => string.IsNullOrEmpty(principal.Id) || !Guid.TryParse(principal.Subject, out _)
+                    || !Guid.TryParse(principal.EnrollmentStamp, out _) || string.IsNullOrEmpty(principal.Stamp)
+                    || !RoofIdentityContract.IsValidName(principal.Name) || RoofPrincipalFactory.NormalizeRole(principal.Role) != principal.Role))
+                problems.Add("Provider principals are incomplete or duplicated.");
+            if (HasDuplicates(owned.Select(key => key.Id)) || HasDuplicates(owned.Select(key => key.KeySha256))
+                || owned.Any(key => string.IsNullOrEmpty(key.Id) || string.IsNullOrEmpty(key.OwnerId) || string.IsNullOrEmpty(key.OwnerStamp)
+                    || !RoofIdentityContract.IsValidName(key.Name) || !IsSha256Hex(key.KeySha256) || key.Scopes.Length == 0
+                    || key.Scopes.Any(scope => !RoofIdentityScopes.IsValid(scope) || scope == RoofIdentityScopes.Identity)))
+                problems.Add("Personal keys are incomplete or invalid.");
+            if (HasDuplicates(document.AssertionNonces.Select(nonce => nonce.Nonce)))
+                problems.Add("Assertion nonces are duplicated.");
+            if (sessions.Any(session => session.PrincipalId is not null &&
+                (string.IsNullOrEmpty(session.PrincipalStamp) || session.Provider is not ("virtual" or "linux")
+                    || (session.Scope is not null && (!RoofIdentityScopes.IsValid(session.Scope) || session.Provider != "linux")))))
+                problems.Add("Provider session metadata is invalid.");
         }
 
         return problems;

@@ -22,15 +22,20 @@ public sealed class ApiKeyAuthenticationOptions : AuthenticationSchemeOptions
 public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthenticationOptions>
 {
     private readonly RoofApiKeyStore _keyStore;
+    private readonly Identity.RoofIdentityStore? _identity;
+    private readonly Identity.RoofProviderAuthService? _providers;
 
     public ApiKeyAuthenticationHandler(
         IOptionsMonitor<ApiKeyAuthenticationOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
-        RoofApiKeyStore keyStore)
+        RoofApiKeyStore keyStore,
+        Identity.RoofIdentityStore? identity = null,
+        Identity.RoofProviderAuthService? providers = null)
         : base(options, logger, encoder)
     {
         _keyStore = keyStore ?? throw new ArgumentNullException(nameof(keyStore));
+        _identity = identity; _providers = providers;
     }
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
@@ -44,6 +49,13 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAu
         {
             LogRejected("malformed header");
             return Task.FromResult(AuthenticateResult.Fail("Malformed API key header."));
+        }
+
+        if (_identity?.TryOwnedKey(values[0], out var owned, out var ownerName, out var ownerRole) == true
+            && _providers?.PrincipalIsCurrent(owned!.OwnerId) == true)
+        {
+            var ownedPrincipal = RoofPrincipalFactory.CreateForOwnedKey(owned!, ownerName!, ownerRole!, Scheme.Name);
+            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(ownedPrincipal, Scheme.Name)));
         }
 
         if (!_keyStore.TryValidate(values[0], out var identity))

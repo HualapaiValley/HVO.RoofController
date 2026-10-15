@@ -18,8 +18,39 @@ namespace HVO.RoofControllerV4.RPi.Tests.Web;
 [TestClass]
 public sealed class PeoplePageTests
 {
+    [TestMethod]
+    public async Task LinuxUsers_ChangeControllerRoleAndDisableAccess_WithoutTouchingVirtualUsers()
+    {
+        using var directory = new TemporaryDirectory();
+        using var harness = new WebAdminHarness(new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true"
+        });
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        using var admin = harness.Admin();
+        var person = await admin.Identity.EnrollPrincipalAsync(new RoofPrincipalEnrollRequest
+        {
+            Subject = Guid.NewGuid().ToString(), Name = "fixture-linux", EnrollmentStamp = Guid.NewGuid().ToString(), Role = "RoofViewer"
+        });
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        cut.Click("[data-testid=people-tab][data-tab=linux]");
+        cut.Find("[data-testid=linux-users] button").Click();
+        cut.WaitForElement("[data-testid=linux-user]");
+        cut.Find("[data-testid=linux-user] button").Click();
+        cut.Change("[data-testid=linux-role]", RoofControllerApiContract.OperatorRole);
+        cut.Find("[data-testid=linux-user] input[type=checkbox]").Change(false);
+        cut.Click("[data-testid=linux-save]");
+        cut.WaitForAssertion(() => cut.Find("[data-testid=linux-user]").TextContent.Should().Contain("Disabled"));
+        var changed = (await admin.Identity.GetPrincipalsAsync()).Single(item => item.Id == person.Id);
+        changed.Enabled.Should().BeFalse();
+        changed.Role.Should().Be(RoofControllerApiContract.OperatorRole);
+        (await admin.Identity.GetUsersAsync()).Should().ContainSingle(item => item.Name == "ada");
+    }
+
     private const string NewPassword = "test-new-password-not-real";
-    private const string NewPin = "864209";
+    private const string NewPin = "8642";
 
     [TestMethod]
     public async Task TheLists_AreRead_WithTheAdminsSession()

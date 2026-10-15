@@ -12,6 +12,16 @@ public sealed class RoofIdentityApi
 
     internal RoofIdentityApi(RoofHttp http) => _http = http;
 
+    /// <summary>Provider-qualified controller enrollments. Native host enrollment is configured separately.</summary>
+    public Task<RoofPrincipalResponse[]> GetPrincipalsAsync(CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofPrincipalResponse[]>(RoofApiRoutes.Principals, cancellationToken);
+
+    public Task<RoofPrincipalResponse> EnrollPrincipalAsync(RoofPrincipalEnrollRequest request, CancellationToken cancellationToken = default)
+        => _http.SendAsync<RoofPrincipalResponse>(HttpMethod.Post, RoofApiRoutes.Principals, request, cancellationToken);
+
+    public Task<RoofPrincipalResponse> UpdatePrincipalAsync(string id, RoofPrincipalUpdateRequest request, CancellationToken cancellationToken = default)
+        => _http.SendAsync<RoofPrincipalResponse>(HttpMethod.Put, RoofApiRoutes.Principals + "/" + Uri.EscapeDataString(id), request, cancellationToken);
+
     public Task<RoofUserResponse[]> GetUsersAsync(CancellationToken cancellationToken = default)
         => _http.GetAsync<RoofUserResponse[]>(RoofApiRoutes.Users, cancellationToken);
 

@@ -31,6 +31,38 @@ public sealed class RoofAuthApi
         return new RoofSessionCredential(session);
     }
 
+    /// <summary>Available password identity providers; anonymous and safe before sign-in.</summary>
+    public Task<RoofAuthProvidersResponse> GetProvidersAsync(CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofAuthProvidersResponse>(RoofApiRoutes.Providers, cancellationToken, use: null);
+
+    /// <summary>Signs in to an explicit provider without changing this client's credential.</summary>
+    public async Task<RoofSessionCredential> SignInWithProviderAsync(
+        string provider, string name, string password, CancellationToken cancellationToken = default)
+    {
+        if (provider is not ("virtual" or "linux"))
+        {
+            throw new ArgumentException("Choose the virtual or linux identity provider.", nameof(provider));
+        }
+
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(password);
+        var session = await _http.SendAsync<RoofSessionResponse>(
+            HttpMethod.Post, RoofApiRoutes.ProviderSession,
+            new RoofProviderSignInRequest { Provider = provider, Name = name, Password = password },
+            cancellationToken, use: null).ConfigureAwait(false);
+        return new RoofSessionCredential(session);
+    }
+
+    /// <summary>Exchanges a short-lived native assertion. The result must remain in memory and is operation scoped.</summary>
+    public async Task<RoofSessionCredential> SignInLocallyAsync(string assertion, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(assertion);
+        var session = await _http.SendAsync<RoofSessionResponse>(
+            HttpMethod.Post, RoofApiRoutes.LocalSession, new RoofLocalSignInRequest { Assertion = assertion },
+            cancellationToken, use: null).ConfigureAwait(false);
+        return new RoofSessionCredential(session);
+    }
+
     /// <summary>
     /// Unlocks a kiosk with a person's PIN. The client's credential must be a <see cref="RoofKioskCredential"/>; the
     /// request is made with the device key alone, and on success the kiosk uses the new PIN session.
@@ -127,6 +159,24 @@ public sealed class RoofAuthApi
             RoofApiRoutes.Password,
             new RoofPasswordChangeRequest { CurrentPassword = currentPassword, NewPassword = newPassword },
             cancellationToken);
+    }
+
+    /// <summary>The signed-in provider identity's scoped automation keys, without secrets.</summary>
+    public Task<RoofOwnedKeyResponse[]> GetOwnedKeysAsync(CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofOwnedKeyResponse[]>(RoofApiRoutes.OwnKeys, cancellationToken);
+
+    /// <summary>Creates a bounded personal automation key. Only this response contains its secret.</summary>
+    public Task<RoofOwnedKeySecretResponse> CreateOwnedKeyAsync(RoofOwnedKeyCreateRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return _http.SendAsync<RoofOwnedKeySecretResponse>(HttpMethod.Post, RoofApiRoutes.OwnKeys, request, cancellationToken);
+    }
+
+    /// <summary>Revokes one of the current identity's personal automation keys.</summary>
+    public Task RevokeOwnedKeyAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        return _http.SendAsync(HttpMethod.Delete, RoofApiRoutes.OwnKeys + "/" + Uri.EscapeDataString(id), null, cancellationToken);
     }
 
     private RoofKioskCredential RequireKiosk()

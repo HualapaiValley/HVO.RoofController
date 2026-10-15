@@ -88,10 +88,10 @@ public sealed record MachineSurvey
     /// <summary>The installer's certificate authority (the certificate clients trust), when there is one.</summary>
     public AuthoritySurvey? Authority { get; init; }
 
-    public bool IsPi => PiModel is not null;
+    public bool IsPi => PiModel?.StartsWith("Raspberry Pi", StringComparison.Ordinal) == true;
 
     /// <summary>True when this machine can drive the real HAT: a 64-bit Linux Pi with the HAT's three devices.</summary>
-    public bool HasHat => Os == InstallerOs.Linux && Architecture == Architecture.Arm64 && HasI2c && HasGpioMemory && HasThermalSensor;
+    public bool HasHat => IsPi && Os == InstallerOs.Linux && Architecture == Architecture.Arm64 && HasI2c && HasGpioMemory && HasThermalSensor;
 
     /// <summary>The HAT's devices this machine lacks, by path.</summary>
     public IEnumerable<string> MissingHatDevices()
@@ -204,6 +204,9 @@ public sealed record ContainerSurvey
 
     /// <summary>Where it exports telemetry (OTEL_EXPORTER_OTLP_ENDPOINT): empty when export is off; null when it is not set.</summary>
     public string? TelemetryEndpoint { get; init; }
+
+    /// <summary>Whether the optional host authentication adapter is enabled.</summary>
+    public bool LinuxAuthEnabled { get; init; }
 
     /// <summary>The HAT emulator's time scale (Emulator__TimeScale), when set.</summary>
     public string? EmulatorTimeScale { get; init; }

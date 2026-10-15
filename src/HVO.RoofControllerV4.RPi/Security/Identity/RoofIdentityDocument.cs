@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
 using HVO.RoofControllerV4.Common.Models;
 
@@ -24,6 +25,9 @@ internal sealed class RoofIdentityDocument
     public List<StoredApiKey> ApiKeys { get; set; } = new();
 
     public List<StoredSession> Sessions { get; set; } = new();
+    public List<StoredLinuxPrincipal> LinuxPrincipals { get; set; } = new();
+    public List<StoredOwnedKey> OwnedKeys { get; set; } = new();
+    public List<StoredAssertionNonce> AssertionNonces { get; set; } = new();
 
     public RoofIdentityDocument Clone() => new()
     {
@@ -31,7 +35,10 @@ internal sealed class RoofIdentityDocument
         Revision = Revision,
         Users = Users.ConvertAll(user => user with { }),
         ApiKeys = ApiKeys.ConvertAll(key => key with { }),
-        Sessions = Sessions.ConvertAll(session => session with { })
+        Sessions = Sessions.ConvertAll(session => session with { }),
+        LinuxPrincipals = LinuxPrincipals.ConvertAll(principal => principal with { }),
+        OwnedKeys = OwnedKeys.ConvertAll(key => key with { Scopes = key.Scopes.ToArray() }),
+        AssertionNonces = AssertionNonces.ConvertAll(nonce => nonce with { })
     };
 }
 
@@ -44,7 +51,15 @@ public sealed record StoredUser(
     string? PinHash,
     string Stamp,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset UpdatedUtc);
+    DateTimeOffset UpdatedUtc)
+{
+    /// <summary>Explicit, initial emulator access; permanently cleared on setting or removing a personal PIN.</summary>
+    public bool TemporaryPin { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PrincipalId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? AuthenticationEpoch { get; init; }
+}
 
 /// <summary>An API key added through the API.</summary>
 /// <param name="KeySha256">Lower-case hex SHA-256 of the key's UTF-8 bytes.</param>
@@ -70,7 +85,20 @@ public sealed record StoredSession(
     string? Device,
     string? DeviceKeyId,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset ExpiresUtc);
+    DateTimeOffset ExpiresUtc)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? PrincipalId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? PrincipalStamp { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Provider { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Scope { get; init; }
+    /// <summary>Temporary kiosk sessions are never written to disk.</summary>
+    [JsonIgnore] public bool TemporaryPin { get; init; }
+}
+
+public sealed record StoredLinuxPrincipal(string Id, string Subject, string Name, string Role, string EnrollmentStamp, string Stamp, bool Enabled);
+public sealed record StoredOwnedKey(string Id, string Name, string OwnerId, string OwnerStamp, string[] Scopes, string KeySha256, DateTimeOffset ExpiresUtc, bool Revoked);
+public sealed record StoredAssertionNonce(string Nonce, DateTimeOffset ExpiresUtc);
+
 
 [JsonSourceGenerationOptions(
     WriteIndented = true,

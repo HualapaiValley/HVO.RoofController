@@ -1,0 +1,85 @@
+{
+  "checked_utc": "2026-10-14T09:08:40.373662+00:00",
+  "system": "Darwin",
+  "architecture": "arm64",
+  "python": "3.14.5",
+  "tests_run": 65,
+  "passed": 60,
+  "skipped": [
+    {
+      "test": "test_datagram_socket_is_rejected (test_linux_peer.LinuxKernelTests.test_datagram_socket_is_rejected)",
+      "reason": "Linux kernel unavailable on this host"
+    },
+    {
+      "test": "test_named_socket_ignores_user_supplied_identity (test_linux_peer.LinuxKernelTests.test_named_socket_ignores_user_supplied_identity)",
+      "reason": "Linux kernel unavailable on this host"
+    },
+    {
+      "test": "test_socketpair_returns_kernel_credentials (test_linux_peer.LinuxKernelTests.test_socketpair_returns_kernel_credentials)",
+      "reason": "Linux kernel unavailable on this host"
+    },
+    {
+      "test": "test_tcp_socket_is_rejected (test_linux_peer.LinuxKernelTests.test_tcp_socket_is_rejected)",
+      "reason": "Linux kernel unavailable on this host"
+    },
+    {
+      "test": "test_unconnected_stream_is_rejected (test_linux_peer.LinuxKernelTests.test_unconnected_stream_is_rejected)",
+      "reason": "Linux kernel unavailable on this host"
+    }
+  ],
+  "failures": 0,
+  "errors": 0,
+  "mechanisms": {
+    "policy_and_mock_session_lifecycle": "executed",
+    "linux_so_peercred": "not verified",
+    "pidfd_and_polkit": "mocked; no native integration",
+    "sudo_origin_and_policy": "not implemented or tested",
+    "pam_authentication_and_account_policy": "mocked; no PAM calls",
+    "real_credentials_or_persistent_keys": "none",
+    "kiosk_pin_runtime": "not exercised; production source unchanged",
+    "live_controller_or_hardware": "never contacted by this prototype"
+  },
+  "demo": {
+    "warning": "Policy simulation only; credentials are inert public fixtures",
+    "scenarios": [
+      {
+        "scenario": "verified-admin-and-controller-role",
+        "result": "allowed-mock-only"
+      },
+      {
+        "scenario": "spoofed-username-and-sudo-fields",
+        "result": "InvalidRequest",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "unapproved-linux-caller",
+        "result": "LinuxAdminPermissionDenied",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "web-session-cannot-bypass-local-admin",
+        "result": "WrongAudience",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "viewer-cannot-write-settings",
+        "result": "ControllerRoleDenied",
+        "ux": "show-error-no-login-loop"
+      },
+      {
+        "scenario": "scoped-virtual-user-key",
+        "result": "allowed-mock-only"
+      },
+      {
+        "scenario": "revoked-key",
+        "result": "AuthenticationRequired",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "expired-web-session",
+        "result": "AuthenticationRequired",
+        "ux": "inline-application-login-retry-or-cancel"
+      }
+    ]
+  }
+}

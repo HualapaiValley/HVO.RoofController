@@ -117,6 +117,9 @@ public static class RoleGuards
             problems.Add("The controller and a test rig cannot share a machine: both run as the roof-controller container.");
         }
 
+        if (roles.Contains(InstallRole.Kiosk) && !survey.IsPi && answers.Kiosk?.Rotation is > 0)
+            problems.Add("Display rotation is Pi-only. Set kiosk.rotation to 0 on a VM or other non-Pi host.");
+
         var clients = roles.Where(role => role is InstallRole.Cli or InstallRole.MacApp).ToArray();
         if (roles.Contains(InstallRole.Rig) && clients.Length > 0 && survey.Os == InstallerOs.MacOS)
         {
@@ -197,7 +200,7 @@ public static class RoleGuards
 
     private static string? ControllerProblem(MachineSurvey survey)
     {
-        if (survey.RuntimeIdentifier != "linux-arm64")
+        if (survey.RuntimeIdentifier != "linux-arm64" || !survey.IsPi)
         {
             return "The controller drives the real HAT, only from the observatory's Raspberry Pi (64-bit Raspberry Pi OS). Choose a test rig to run it against the HAT emulator.";
         }

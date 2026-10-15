@@ -77,7 +77,7 @@ public static class KioskSteps
         ArgumentNullException.ThrowIfNull(kiosk);
         var program = new KioskProgramStep();
         var key = new KioskDeviceKeyStep(layout, kioskKey);
-        var settings = new KioskSettingsStep(layout, controller, certificate);
+        var settings = new KioskSettingsStep(layout, controller, certificate, kiosk);
         var unit = new KioskFileStep(MachineSurveyor.KioskUnitFile, "hvo-roof-kiosk.service", "the kiosk's systemd unit");
         var rule = new KioskFileStep(BacklightRuleFile, "99-hvo-roof-kiosk-backlight.rules", "lets the kiosk turn the screen's backlight off and on");
         var steps = new List<PlanStep>
@@ -97,6 +97,12 @@ public static class KioskSteps
         if (kiosk.HideCursor)
         {
             steps.Add(new KioskCursorStep());
+        }
+
+        if (kiosk.Splash is { } splash)
+        {
+            // Runs after the ordinary kiosk setup; changes boot files only, never restarts the kiosk or the Pi.
+            steps.Add(new KioskSplashStep(splash, kiosk.Rotation, kiosk.Card));
         }
 
         steps.AddRange(kiosk.Normalised().Pins.Select(name => new KioskPinStep(layout, name, adminKey, firstAdmin)));
@@ -178,12 +184,19 @@ public sealed class KioskPackagesStep : PlanStep
         _missing = [.. KioskSteps.Packages.Where(package => !installed.Contains(package))];
         return _missing.Count == 0
             ? StepCheck.Unchanged("installed")
-            : new StepCheck(StepChange.Create, $"installs {string.Join(", ", _missing)} with apt");
+            : context.SetupPrerequisites
+                ? new StepCheck(StepChange.Create, $"installs {string.Join(", ", _missing)} with apt (explicitly approved)")
+                : new StepCheck(StepChange.Blocked, $"Missing kiosk libraries: {string.Join(", ", _missing)}. Approve package setup in the wizard or pass --setup-prerequisites; alternatively run sudo apt-get update && sudo apt-get install --no-install-recommends {string.Join(" ", _missing)}, then retry.");
     }
 
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        if (!context.SetupPrerequisites)
+            throw new InstallerRefusedException("Kiosk package setup requires explicit consent.");
+        var before = await CheckAsync(context, cancellationToken).ConfigureAwait(false);
+        if (before.Change == StepChange.Unchanged) return;
+        if (before.Change == StepChange.Blocked) throw new InstallerRefusedException(before.Detail!);
         var environment = new Dictionary<string, string> { ["DEBIAN_FRONTEND"] = "noninteractive" };
         await KioskSteps.Run(
             context,
@@ -195,7 +208,10 @@ public sealed class KioskPackagesStep : PlanStep
             $"install {string.Join(", ", _missing)}",
             new CommandLine("apt-get", ["install", "-y", "--no-install-recommends", .. _missing]) { Environment = environment, Timeout = TimeSpan.FromMinutes(30), OnOutputLine = context.Progress },
             cancellationToken).ConfigureAwait(false);
-        context.Log.Write($"Installed {string.Join(", ", _missing)}.");
+        var installed = string.Join(", ", _missing);
+        if ((await CheckAsync(context, cancellationToken).ConfigureAwait(false)).Change != StepChange.Unchanged)
+            throw new InstallerRefusedException("Kiosk libraries are still missing after apt completed. Installation stopped; correct the package failure and retry.");
+        context.Log.Write($"Installed {installed}.");
     }
 }
 
@@ -451,7 +467,7 @@ public sealed class KioskDeviceKeyStep(ControllerLayout layout, ApiKeyAllocation
 /// how to trust it (its CA, or its certificate's pin; neither under plain HTTP) and the device key's file. Settings a
 /// person changed by hand are kept.
 /// </summary>
-public sealed class KioskSettingsStep(ControllerLayout layout, ControllerSettings controller, CertificateStep? issuing = null) : PlanStep
+public sealed class KioskSettingsStep(ControllerLayout layout, ControllerSettings controller, CertificateStep? issuing = null, KioskSettings? choices = null) : PlanStep
 {
     private const string Section = "Kiosk";
 
@@ -557,6 +573,24 @@ public sealed class KioskSettingsStep(ControllerLayout layout, ControllerSetting
         Set(kiosk, "ServerCaCertificateFile", controller.Connection == ConnectionMode.PrivateCa ? layout.CaCertificate : null);
         Set(kiosk, "ServerCertificateSha256", pin);
         Set(kiosk, "DeviceKeyFile", KioskSteps.DeviceKeyFile);
+        if (choices?.Card is { } card)
+        {
+            if (!string.IsNullOrWhiteSpace(card))
+            {
+                var selected = new FileInfo(context.Machine.OnDisk(card));
+                var target = selected.Exists ? selected.ResolveLinkTarget(true)?.Name : null;
+                var drm = context.Machine.OnDisk("/sys/class/drm");
+                if (target is null || !Directory.Exists(drm) || !Directory.EnumerateDirectories(drm, target + "-*")
+                    .Any(connector => File.Exists(Path.Combine(connector, "status")) && File.ReadAllText(Path.Combine(connector, "status")).Trim() == "connected"))
+                    return (current, null, new StepCheck(StepChange.Blocked, "The selected stable DRM link does not resolve to a connected display."));
+            }
+            Set(kiosk, "Card", string.IsNullOrWhiteSpace(card) ? null : card);
+        }
+        if (choices?.VideoMode is { } videoMode) kiosk["VideoMode"] = videoMode;
+        if (choices?.Rotation is { } rotation) kiosk["Rotation"] = rotation;
+        else if (current is null && (!context.Survey.IsPi || context.Answers.Roles.Contains(Roles.InstallRole.Rig))) kiosk["Rotation"] = 0;
+        if (!context.Survey.IsPi && kiosk["Rotation"]?.GetValue<int>() is > 0)
+            return (current, null, new StepCheck(StepChange.Blocked, "Display rotation is Pi-only. Explicitly set rotation 0 on this non-Pi host."));
         return (current, wanted, null);
     }
 

@@ -115,6 +115,11 @@ public static class WebAccountEndpoints
 
         var name = form[WebAuthentication.NameField].ToString().Trim();
         var password = form[WebAuthentication.PasswordField].ToString();
+        var provider = form[WebAuthentication.ProviderField].ToString();
+        if (provider.Length > 0 && provider is not ("virtual" or "linux"))
+        {
+            return Results.Redirect(BuildSignInUrl(SignInMessages.Refused, returnUrl));
+        }
         if (name.Length == 0 || password.Length == 0)
         {
             return Results.Redirect(BuildSignInUrl(SignInMessages.Missing, returnUrl));
@@ -130,7 +135,9 @@ public static class WebAccountEndpoints
         try
         {
             using var client = connector.Create(credential: null, WebSession.RequestTimeout);
-            credential = await client.Auth.SignInAsync(name, password, http.RequestAborted);
+            credential = provider.Length == 0
+                ? await client.Auth.SignInAsync(name, password, http.RequestAborted)
+                : await client.Auth.SignInWithProviderAsync(provider, name, password, http.RequestAborted);
         }
         catch (RoofApiException ex)
         {

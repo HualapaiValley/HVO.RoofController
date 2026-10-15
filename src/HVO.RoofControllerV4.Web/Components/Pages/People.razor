@@ -85,7 +85,7 @@ else if (_tab == UsersTab)
                                 <th scope="row">@user.Name</th>
                                 <td>@WebRoles.Describe(user.Role)</td>
                                 <td>@YesNo(user.HasPassword)</td>
-                                <td>@YesNo(user.HasPin)</td>
+                                <td>@(user.HasTemporaryPin ? "temporary" : YesNo(user.HasPin))</td>
                                 <td>@user.ActiveSessions</td>
                                 <td>@RoofStatusText.Time(user.UpdatedUtc)</td>
                             </tr>
@@ -135,7 +135,7 @@ else if (_tab == UsersTab)
                                             <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-role-change" disabled="@Busy" @onclick="() => Open(RolePanel, user.Name, user.Role)">Role</button>
                                             <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-password-set" disabled="@Busy" @onclick="() => Open(PasswordPanel, user.Name)">Password</button>
                                             <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-pin-set" disabled="@Busy" @onclick="() => Open(PinPanel, user.Name)">PIN</button>
-                                            @if (user.HasPin)
+                                            @if (user.HasPin || user.HasTemporaryPin)
                                             {
                                                 <button type="button" class="btn btn-sm btn-outline-danger" data-testid="user-pin-remove" disabled="@Busy" @onclick="() => Open(RemovePinPanel, user.Name)">Remove PIN</button>
                                             }
@@ -147,6 +147,32 @@ else if (_tab == UsersTab)
                         }
                     </tbody>
                 </table>
+            </div>
+        }
+    </section>
+}
+else if (_tab == LinuxTab)
+{
+    <section class="web-card" aria-labelledby="linux-title" data-testid="linux-users">
+        <h2 id="linux-title">Enrolled Linux users</h2>
+        <p class="web-muted">Change controller roles and access here. Linux account enrollment and Linux passwords are managed on the host; virtual accounts remain separate. Saving revokes existing sessions and personal keys.</p>
+        <button class="btn btn-sm btn-outline-light" disabled="@Busy" @onclick="ReadPrincipalsAsync">Read Linux users</button>
+        @foreach (var person in _principals)
+        {
+            <div class="web-editor" data-testid="linux-user" data-id="@person.Id">
+                <h3>@person.Name</h3>
+                <p>@WebRoles.Describe(person.Role) · @(person.Enabled ? "Enabled" : "Disabled")</p>
+                @if (_target == person.Id && _panel == LinuxTab)
+                {
+                    <label for="linux-role" class="form-label">Controller role</label>
+                    <RoleSelect Id="linux-role" TestId="linux-role" @bind-Value="_role" />
+                    <label><input type="checkbox" @bind="_linuxEnabled" /> Enabled</label>
+                    <PanelActions Error="@_panelError" Action="Save" TestId="linux-save" Busy="Busy" OnAction="() => SavePrincipalAsync(person)" OnCancel="Close" />
+                }
+                else
+                {
+                    <button class="btn btn-sm btn-outline-light" disabled="@Busy" @onclick="() => OpenPrincipal(person)">Role / access</button>
+                }
             </div>
         }
     </section>
@@ -297,6 +323,7 @@ else
 
 @code {
     private const string UsersTab = "users";
+    private const string LinuxTab = "linux";
     private const string KeysTab = "keys";
     private const string SessionsTab = "sessions";
     private const string AddUserPanel = "add-user";
@@ -312,11 +339,13 @@ else
     private const string EndSessionPanel = "end-session";
     private const string KioskHelp = "A kiosk's key must have the viewer role: people sign in at the kiosk with a PIN for more.";
 
-    private static readonly (string Tab, string Title)[] Tabs = [(UsersTab, "People"), (KeysTab, "API keys"), (SessionsTab, "Sessions")];
+    private static readonly (string Tab, string Title)[] Tabs = [(UsersTab, "People"), (KeysTab, "API keys"), (SessionsTab, "Sessions"), (LinuxTab, "Linux users")];
 
     private string _tab = UsersTab;
     private bool _loaded;
     private RoofUserResponse[] _users = [];
+    private RoofPrincipalResponse[] _principals = [];
+    private bool _linuxEnabled;
     private RoofApiKeyResponse[] _keys = [];
     private RoofSessionInfoResponse[] _sessions = [];
     private string? _ownSessionId;
@@ -360,6 +389,28 @@ else
         _ownSessionId = session.Id;
         _loaded = true;
     });
+
+    private async Task ReadPrincipalsAsync()
+        => await SendAsync("Linux users could not be read. Enable Linux authentication through the installer first.", async (session, cancellationToken) =>
+        {
+            _principals = (await session.Client.Identity.GetPrincipalsAsync(cancellationToken)).Where(person => person.Provider == "linux").ToArray();
+        });
+
+    private void OpenPrincipal(RoofPrincipalResponse person)
+    {
+        Open(LinuxTab, person.Id, person.Role);
+        _linuxEnabled = person.Enabled;
+    }
+
+    private async Task SavePrincipalAsync(RoofPrincipalResponse person)
+    {
+        await ChangeAsync("Linux access could not be changed.", async (client, cancellationToken) =>
+        {
+            await client.Identity.UpdatePrincipalAsync(person.Id, new RoofPrincipalUpdateRequest { Role = _role, Enabled = _linuxEnabled }, cancellationToken);
+            return $"Updated Linux access for {person.Name}.";
+        }, readAgain: false);
+        await ReadPrincipalsAsync();
+    }
 
     private void SelectTab(string tab)
     {

@@ -72,6 +72,9 @@ public sealed record ControllerSettings
     /// <summary>A test rig's HAT emulator, and who may reach the rig (a rig only).</summary>
     public RigSettings? Rig { get; init; }
 
+    /// <summary>Explicit opt-in host authentication. Omitted leaves legacy authentication unchanged.</summary>
+    public LinuxAuthSettings? LinuxAuth { get; init; }
+
     /// <summary>
     /// An <c>appsettings.Local.json</c> from a backup (its full path), to start the controller with: copied into the
     /// settings folder as it is when the controller has no settings yet, and never over settings it has. Not recorded:
@@ -112,7 +115,7 @@ public sealed record ControllerSettings
             yield return $"'{domain}' is not a domain: give names of letters, digits and hyphens joined by dots (observatory.example).";
         }
 
-        foreach (var problem in (FirstAdmin?.Problems() ?? []).Concat(Camera?.Problems() ?? []).Concat(Rig?.Problems() ?? []))
+        foreach (var problem in (FirstAdmin?.Problems() ?? []).Concat(Camera?.Problems() ?? []).Concat(Rig?.Problems() ?? []).Concat(LinuxAuth?.Problems() ?? []))
         {
             yield return problem;
         }
@@ -158,10 +161,11 @@ public sealed record ControllerSettings
             && Equals(Camera, other.Camera)
             && string.Equals(TelemetryEndpoint, other.TelemetryEndpoint, StringComparison.Ordinal)
             && Equals(Rig, other.Rig)
+            && Equals(LinuxAuth, other.LinuxAuth)
             && string.Equals(ImportSettingsFrom, other.ImportSettingsFrom, StringComparison.Ordinal);
 
     public override int GetHashCode()
-        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig, ImportSettingsFrom));
+        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig, ImportSettingsFrom, LinuxAuth));
 
     public static string Describe(ConnectionMode mode) => mode switch
     {
@@ -444,6 +448,18 @@ public sealed record ClientSettings
 /// <summary>The kiosk's choices: the touchscreen on the controller's own Pi.</summary>
 public sealed record KioskSettings
 {
+    /// <summary>Null preserves the existing selection; empty selects a connected display on each boot. Prefer a by-path link for an explicit selection.</summary>
+    public string? Card { get; init; }
+
+    /// <summary>Optional clockwise display rotation; null preserves the installed setting.</summary>
+    public int? Rotation { get; init; }
+
+    /// <summary>Null preserves the installed DRM mode; empty restores the preferred mode.</summary>
+    public string? VideoMode { get; init; }
+
+    /// <summary>Optional boot splash setup. Null leaves any existing splash alone.</summary>
+    public KioskSplashSettings? Splash { get; init; }
+
     /// <summary>
     /// True (the default) to hide the console's blinking cursor, which shows through the kiosk's screen otherwise: a
     /// setting in the Pi's <c>cmdline.txt</c>, which takes effect at the next reboot.
@@ -459,6 +475,14 @@ public sealed record KioskSettings
 
     public IEnumerable<string> Problems()
     {
+        if (!string.IsNullOrEmpty(VideoMode) && !RoofDisplayMode.TryParse(VideoMode, out _, out _))
+            yield return "The kiosk videoMode must be WIDTHxHEIGHT, each from 200 to 8000 pixels, or empty for preferred.";
+        if (Rotation is not null and not (0 or 90 or 180 or 270))
+            yield return "The kiosk rotation must be 0, 90, 180 or 270.";
+        if (!string.IsNullOrEmpty(Card) && !Card.StartsWith("/dev/dri/by-path/", StringComparison.Ordinal))
+            yield return "Use an empty kiosk card for connected-display discovery, or an explicit /dev/dri/by-path/ link; numbered cards are not stable.";
+        if (Splash is { Enabled: true } splash && (string.IsNullOrWhiteSpace(splash.Image) || !Path.IsPathFullyQualified(splash.Image)))
+            yield return "An enabled kiosk splash needs an absolute path to an operator-supplied PNG image.";
         foreach (var name in Pins.Where(name => !RoofIdentityContract.IsValidName(name)))
         {
             yield return $"'{name}' is not a name the controller takes: give the kiosk's PINs to people by the name they sign in with.";
@@ -474,7 +498,18 @@ public sealed record KioskSettings
     public bool Equals(KioskSettings? other)
         => other is not null
             && HideCursor == other.HideCursor
+            && Card == other.Card && VideoMode == other.VideoMode && Rotation == other.Rotation && Splash == other.Splash
             && Pins.SequenceEqual(other.Pins, StringComparer.OrdinalIgnoreCase);
 
-    public override int GetHashCode() => HashCode.Combine(HideCursor, Pins.Count);
+    public override int GetHashCode() => HashCode.Combine(HideCursor, Pins.Count, Card, Rotation, Splash, VideoMode);
+}
+
+/// <summary>Opt-in Plymouth artwork supplied by the operator, never downloaded by the installer.</summary>
+public sealed record KioskSplashSettings
+{
+    /// <summary>False restores the configuration this installer owned before enabling the splash.</summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>Absolute path to a PNG the operator has permission to use. Keep it available for future upgrades.</summary>
+    public string? Image { get; init; }
 }

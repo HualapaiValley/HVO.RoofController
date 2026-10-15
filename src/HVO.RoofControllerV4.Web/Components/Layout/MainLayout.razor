@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@inject RoofControllerConnector Connector
 
 <div class="app-frame">
     <header>
@@ -20,6 +21,10 @@
                             <li class="nav-item">
                                 <NavLink class="nav-link" href="settings">Settings</NavLink>
                             </li>
+                            @if (_providerAccounts)
+                            {
+                                <li class="nav-item"><NavLink class="nav-link" href="account/keys">My API keys</NavLink></li>
+                            }
                             @if (context.User.IsInRole(WebRoles.Admin))
                             {
                                 <li class="nav-item">
@@ -54,6 +59,20 @@
 </div>
 
 @code {
+    private bool _providerAccounts;
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            using var client = Connector.Create(null, WebSession.RequestTimeout);
+            _providerAccounts = (await client.Auth.GetProvidersAsync()).LinuxEnabled;
+        }
+        catch (Exception error) when (error is RoofApiException or RoofProtocolException or HttpRequestException or TimeoutException)
+        {
+            // Legacy controllers keep their original navigation.
+        }
+    }
+
     private static string? HighestRole(ClaimsPrincipal user)
         => user.IsInRole(WebRoles.Admin) ? WebRoles.Admin
             : user.IsInRole(WebRoles.Operator) ? WebRoles.Operator

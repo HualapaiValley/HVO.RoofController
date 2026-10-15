@@ -1,0 +1,3 @@
+# Replace the explicit enrolled account during installation. No wildcard command arguments.
+# The empty argument string requires an invocation with no arguments.
+fixture-admin ALL=(root) NOPASSWD: /usr/local/libexec/hvo-roof-local-auth ""

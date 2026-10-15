@@ -60,7 +60,8 @@ internal sealed class RoofUiSetupPage : RoofUiPage
                 : "the credentials file";
             lines.Add($"Controller:  {connection.Controller} (from {from})");
             lines.Add($"Certificate: {DescribeTrust(connection)}");
-            lines.Add(connection.Credential is null
+            lines.Add(context.Local ? "Credential:  local Linux authorization, checked for each request; no saved web session."
+                : connection.Credential is null
                 ? "Credential:  none. Sign in, or save an admin's API key under Connection."
                 : $"Credential:  {connection.Credential} (from {(connection.Source == "environment" ? "the environment" : connection.Source)})");
         }
@@ -71,7 +72,7 @@ internal sealed class RoofUiSetupPage : RoofUiPage
         }
 
         lines.Add($"Credentials file: {context.CredentialsPath}");
-        if (Environment(context)?.ToCredential() is not null)
+        if (!context.Local && Environment(context)?.ToCredential() is not null)
         {
             lines.Add($"{RoofCredentialStore.ApiKeyVariable} or {RoofCredentialStore.SessionVariable} is set, and this interface uses it instead of the saved credential.");
         }
@@ -88,6 +89,12 @@ internal sealed class RoofUiSetupPage : RoofUiPage
 
     private void EditConnection()
     {
+        if (Ui.Context.Local)
+        {
+            Ui.Say("Local authorization uses the installed connection. Change remote credentials with --remote setup.", error: true);
+            return;
+        }
+
         RoofStoredCredentials stored;
         try
         {
@@ -175,7 +182,31 @@ internal sealed class RoofUiSetupPage : RoofUiPage
         });
     }
 
-    private void SignIn()
+    internal void SignIn()
+    {
+        if (Ui.Context.Local)
+        {
+            Ui.Say("Local Linux authorization is checked for each request. Use --remote login for a remote password session.");
+            return;
+        }
+
+        _ = Ui.Run("Checking account types…", async (client, cancellationToken) =>
+        {
+            var enabled = false;
+            try
+            {
+                enabled = (await client.Auth.GetProvidersAsync(cancellationToken).ConfigureAwait(false)).LinuxEnabled;
+            }
+            catch (Exception error) when (error is RoofApiException or RoofProtocolException or HttpRequestException or TimeoutException)
+            {
+                // Older controllers keep their original form.
+            }
+
+            Ui.Post(() => ShowSignIn(enabled));
+        });
+    }
+
+    private void ShowSignIn(bool providersEnabled, string? retryName = null, string? retryProvider = null, string? failure = null)
     {
         if (Ui.Connection is not { } connection)
         {
@@ -185,10 +216,20 @@ internal sealed class RoofUiSetupPage : RoofUiPage
 
         Ui.Ask(new RoofUiPrompt(
             "Sign in",
-            $"Sign in to {connection.Controller} with a password. The session is saved in {Ui.Context.CredentialsPath}.",
-            [new RoofUiField("Name", Initial: Ui.Caller?.Kind == RoofCredentialKind.Session ? Ui.Caller.Name : string.Empty), new RoofUiField("Password", Secret: true)],
+            $"{failure} Sign in to {connection.Controller} with a password. The session is saved in {Ui.Context.CredentialsPath}. Cancel leaves credentials unchanged.",
+            [
+                new RoofUiField("Name", Initial: retryName ?? (Ui.Caller?.Kind == RoofCredentialKind.Session ? Ui.Caller.Name : Ui.Context.Host.GetUserName())),
+                new RoofUiField("Password", Secret: true),
+                .. providersEnabled ? new[] { new RoofUiField("Account type (virtual or linux)", Initial: retryProvider ?? "virtual") } : []
+            ],
             [new RoofUiAction("Sign in", values =>
             {
+                var provider = providersEnabled ? values[2].Trim() : null;
+                if (provider is not (null or "virtual" or "linux"))
+                {
+                    return "Account type must be virtual or linux.";
+                }
+
                 var name = values[0].Trim();
                 if (name.Length == 0 || values[1].Length == 0)
                 {
@@ -197,7 +238,9 @@ internal sealed class RoofUiSetupPage : RoofUiPage
 
                 _ = Ui.Run($"Signing in as {name}…", async (_, cancellationToken) =>
                 {
-                    var session = await _setup.SignInAsync(connection, name, values[1], cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                    var session = await _setup.SignInAsync(connection, name, values[1], cancellationToken, provider).ConfigureAwait(false);
                     Ui.Post(() =>
                     {
                         Ui.Reconnect();
@@ -205,12 +248,30 @@ internal sealed class RoofUiSetupPage : RoofUiPage
                         var note = Environment(Ui.Context)?.ToCredential() is null ? string.Empty : " The credential in the environment is still used instead.";
                         Ui.Say($"Signed in as {session.Name} ({(session.Role is { } role ? RoofCliFormat.Role(role) : "role not given")}){expires}.{note}");
                     });
+                    }
+                    catch (Exception error) when (error is RoofApiException or RoofProtocolException or HttpRequestException or TimeoutException)
+                    {
+                        // Retry is a new explicit action with an empty password. No rejected operation is replayed.
+                        Ui.Post(() =>
+                        {
+                            if (ReferenceEquals(connection, Ui.Connection))
+                                ShowSignIn(providersEnabled, name, provider, RoofCliContext.Classify(error).Message + " Try again or cancel.");
+                        });
+                    }
                 });
                 return null;
             })]));
     }
 
-    private void SignOut() => _ = Ui.Run("Signing out…", async (_, cancellationToken) =>
+    private void SignOut()
+    {
+        if (Ui.Context.Local)
+        {
+            Ui.Say("Local mode has no saved session to sign out.");
+            return;
+        }
+
+        _ = Ui.Run("Signing out…", async (_, cancellationToken) =>
     {
         var message = await _setup.SignOutAsync(cancellationToken).ConfigureAwait(false);
         Ui.Post(() =>
@@ -225,6 +286,7 @@ internal sealed class RoofUiSetupPage : RoofUiPage
             Ui.Say($"{message} The session was removed from {Ui.Context.CredentialsPath}.");
         });
     });
+    }
 
     private void AddFirstAdmin()
     {

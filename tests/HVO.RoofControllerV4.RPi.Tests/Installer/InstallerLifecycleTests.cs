@@ -369,14 +369,14 @@ public sealed class InstallerLifecycleTests
 
         // An older release does not take over the newer one's data.
         pi.InstallerVersion = "4.0.0";
-        var older = await pi.RunAsync("--answers", pi.WriteAnswers(ControllerAndKiosk));
+        var older = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(ControllerAndKiosk));
 
         older.ExitCode.Should().Be((int)InstallerExitCode.Refused, older.ToString());
         older.Error.Should().Contain($"{NewVersion} was uninstalled here, keeping its data, which is newer than this installer (4.0.0)");
 
         // A reinstall finds the data: the controller's keys are the ones it had.
         pi.InstallerVersion = NewVersion;
-        var reinstall = await pi.RunAsync("--answers", pi.WriteAnswers(ControllerAndKiosk));
+        var reinstall = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(ControllerAndKiosk));
 
         reinstall.ExitCode.Should().Be(0, reinstall.ToString());
         pi.ApiKeyValues().Should().BeEquivalentTo(keys);
@@ -647,7 +647,7 @@ public sealed class InstallerLifecycleTests
     internal static async Task<FakeMachine> InstalledPiAsync()
     {
         var pi = KioskPi();
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(ControllerAndKiosk));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(ControllerAndKiosk));
         run.ExitCode.Should().Be(0, run.ToString());
         return pi;
     }

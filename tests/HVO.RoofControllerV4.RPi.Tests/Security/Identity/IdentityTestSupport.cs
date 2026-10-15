@@ -15,8 +15,8 @@ internal static class TestSecrets
 {
     public const string Password = "test-password-not-real-01";
     public const string OtherPassword = "test-password-not-real-02";
-    public const string Pin = "246810";
-    public const string OtherPin = "135790";
+    public const string Pin = "2468";
+    public const string OtherPin = "1357";
 
     /// <summary>A configured admin key (at least 24 characters, as the key store requires).</summary>
     public const string AdminKey = "test-identity-admin-key-not-a-real-secret";
@@ -38,7 +38,8 @@ internal sealed class IdentityRig : IDisposable
         RoofIdentityOptions? options = null,
         TestOptionsMonitor<RoofControllerSecurityOptions>? security = null,
         int hashIterations = 1_000,
-        ManualTimeProvider? time = null)
+        ManualTimeProvider? time = null,
+        HatEmulatorOptions? emulator = null)
     {
         Time = time ?? new ManualTimeProvider(Start);
         Options = options ?? new RoofIdentityOptions();
@@ -49,7 +50,7 @@ internal sealed class IdentityRig : IDisposable
             new RoofApiKeyOptions { Name = "cfg-kiosk", Role = RoofControllerApiContract.ViewerRole, Key = TestSecrets.KioskKey, Kiosk = true });
         StoreLogger = new CapturingLogger<RoofIdentityStore>();
         SignInLogger = new CapturingLogger<RoofSignInService>();
-        Store = new RoofIdentityStore(OptionsMonitor, Security, Time, StoreLogger);
+        Store = new RoofIdentityStore(OptionsMonitor, Security, Time, StoreLogger, Microsoft.Extensions.Options.Options.Create(emulator ?? new HatEmulatorOptions()));
         Keys = new RoofApiKeyStore(Security, NullLogger<RoofApiKeyStore>.Instance, Store);
         Hasher = CreateHasher(hashIterations);
         Lockout = new RoofSignInLockout(OptionsMonitor, Time);

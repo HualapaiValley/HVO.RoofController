@@ -74,6 +74,8 @@ public static class PlanBuilder
         ArgumentNullException.ThrowIfNull(survey);
         ArgumentNullException.ThrowIfNull(answers);
         answers = answers.Normalised();
+        if (answers.Controller?.LinuxAuth?.EnrollSetupUser == true)
+            throw new InstallerUsageException("Resolve the setup user through InstallerSession.CheckAsync before building a plan.");
         if (answers.Missing().ToArray() is { Length: > 0 } missing)
         {
             throw new InstallerException(string.Join(Environment.NewLine, missing));
@@ -91,7 +93,7 @@ public static class PlanBuilder
         ControllerSettings? controller = null;
         if (InstallRoles.RunsController(roles))
         {
-            (controllerRoles, controller) = (roles, answers.Controller);
+            (controllerRoles, controller) = (roles, answers.Controller! with { LinuxAuth = answers.Controller?.LinuxAuth ?? survey.SystemRecord?.Controller?.LinuxAuth });
         }
         else if (roles.Contains(InstallRole.Kiosk) && survey.SystemRecord is { Controller: { } recorded } record)
         {
@@ -139,7 +141,13 @@ public static class PlanBuilder
                 steps.Add(emulator);
             }
 
+            if (settings.LinuxAuth is { Enabled: true } linuxAuth)
+                steps.Add(new LinuxAuthStep(linuxAuth));
             steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator, camera, import));
+            if (settings.LinuxAuth is { Enabled: true })
+                steps.Add(new LinuxAuthEnrollmentStep(layout, settings.LinuxAuth, keys.First(key => key.Use == ApiKeyUse.Admin)));
+            else if (settings.LinuxAuth is { Enabled: false } && machine.FileExists(LinuxAuthStep.StateFile))
+                steps.Add(new LinuxAuthRemovalStep());
             if (settings.FirstAdmin is { } admin)
             {
                 steps.Add(new FirstAdminStep(layout, admin, keys.First(key => key.Use == ApiKeyUse.Admin)));
@@ -296,6 +304,8 @@ public static class PlanBuilder
                 steps.Add(emulator);
             }
 
+            if (settings.LinuxAuth is { Enabled: true } linuxAuth)
+                steps.Add(new LinuxAuthStep(linuxAuth));
             steps.Add(new ControllerRollbackStep(controller));
             if (roles.Contains(InstallRole.Kiosk))
             {
@@ -354,8 +364,15 @@ public static class PlanBuilder
             }
         }
 
+        if (machine.FileExists(LinuxAuthStep.StateFile))
+            steps.Add(new LinuxAuthRemovalStep());
+
         if (roles.Contains(InstallRole.Kiosk))
         {
+            // An upgrade may omit splash choices while leaving its owned configuration in place.
+            // The helper validates this ownership record before restoring anything.
+            if (record.Kiosk?.Splash is { Enabled: true } || machine.FileExists("/etc/hvo-roof-kiosk/splash/state.json"))
+                steps.Add(new KioskSplashStep(new KioskSplashSettings { Enabled = false }));
             steps.Add(new KioskServiceRemovalStep());
             steps.Add(new RemovalStep(KioskSteps.BacklightRuleFile, "lets the kiosk turn the screen's backlight off and on"));
             steps.Add(new RemovalStep(KioskSteps.Program, "the kiosk's program", previous: KioskSteps.PreviousProgram));
@@ -502,7 +519,7 @@ public static class PlanBuilder
             InstalledAt = existing?.InstalledAt ?? default,
             UpdatedAt = existing?.UpdatedAt ?? default,
             // An import is done once: the record keeps the settings, not where they came from.
-            Controller = InstallRoles.RunsController(roles) ? answers.Controller! with { ImportSettingsFrom = null } : InstallRoles.RunsController(all) ? existing?.Controller : null,
+            Controller = InstallRoles.RunsController(roles) ? answers.Controller! with { ImportSettingsFrom = null, LinuxAuth = answers.Controller!.LinuxAuth ?? existing?.Controller?.LinuxAuth } : InstallRoles.RunsController(all) ? existing?.Controller : null,
             Cli = roles.Contains(InstallRole.Cli) ? answers.Cli : all.Contains(InstallRole.Cli) ? existing?.Cli : null,
             MacApp = roles.Contains(InstallRole.MacApp) ? answers.MacApp : all.Contains(InstallRole.MacApp) ? existing?.MacApp : null,
             Client = InstallRoles.UsesController(roles) ? answers.Client : InstallRoles.UsesController(all) ? existing?.Client : null,

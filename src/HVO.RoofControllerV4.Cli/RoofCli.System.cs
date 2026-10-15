@@ -543,11 +543,18 @@ internal sealed class RoofCliSetup(RoofCliContext context)
     /// Signs in with a password over <paramref name="connection"/>'s address and pin or CA, and saves the session in
     /// the credentials file beside them.
     /// </summary>
-    public async Task<RoofSessionCredential> SignInAsync(RoofCliConnection connection, string name, string password, CancellationToken cancellationToken)
+    public async Task<RoofSessionCredential> SignInAsync(RoofCliConnection connection, string name, string password, CancellationToken cancellationToken, string? provider = null)
     {
+        if (context.Local)
+        {
+            throw new RoofCliUsageException("Local mode cannot save a password session. Use --remote for remote sign-in.");
+        }
+
         var stored = RoofCredentialStore.Load(context.CredentialsPath);
         using var client = context.CreateClient(connection with { Credential = null });
-        var session = await client.Auth.SignInAsync(name, password, cancellationToken).ConfigureAwait(false);
+        var session = provider is null
+            ? await client.Auth.SignInAsync(name, password, cancellationToken).ConfigureAwait(false)
+            : await client.Auth.SignInWithProviderAsync(provider, name, password, cancellationToken).ConfigureAwait(false);
         RoofCredentialStore.Save(context.CredentialsPath, (stored ?? new RoofStoredCredentials()) with
         {
             Controller = connection.Controller,

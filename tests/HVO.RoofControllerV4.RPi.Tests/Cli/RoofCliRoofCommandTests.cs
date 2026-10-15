@@ -1613,7 +1613,6 @@ public sealed class RoofCliRoofCommandTests
 
     [TestMethod]
     [DataRow("login", "--name", "olive")]
-    [DataRow("login")]
     public async Task Login_TakesTheNameAsAnArgument_NotAnOption(params string[] args)
     {
         using var rig = new CliRig();

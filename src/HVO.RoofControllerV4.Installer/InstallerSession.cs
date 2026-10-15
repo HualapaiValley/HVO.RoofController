@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Deployment;
@@ -64,7 +66,13 @@ public sealed class InstallerSession
     /// <summary>The release this installer installs (its version without the commit); <c>rollback</c> sets the one it goes back to.</summary>
     public string Version { get; internal set; }
 
-    public MachineSurvey Survey { get; }
+    public MachineSurvey Survey { get; private set; }
+
+    /// <summary>Explicit package-setup consent for this run only.</summary>
+    public bool SetupPrerequisites { get; set; }
+
+    public async Task RefreshSurveyAsync(CancellationToken cancellationToken = default)
+        => Survey = await MachineSurveyor.SurveyAsync(Machine, cancellationToken).ConfigureAwait(false);
 
     public TimeProvider Time { get; }
 
@@ -172,12 +180,20 @@ public sealed class InstallerSession
         Time = Time,
         Release = Release,
         Secrets = Secrets,
+        SetupPrerequisites = SetupPrerequisites,
         Progress = progress
     };
 
     /// <summary>What the answers make and change here: it only looks.</summary>
-    public Task<CheckedPlan> CheckAsync(CancellationToken cancellationToken = default)
-        => PlanBuilder.Build(Machine, Survey, Answers).CheckAsync(Context, cancellationToken);
+    public async Task<CheckedPlan> CheckAsync(CancellationToken cancellationToken = default)
+    {
+        if (Answers.Controller?.LinuxAuth is { EnrollSetupUser: true } settings)
+        {
+            var resolved = await SetupUserEnrollment.ResolveAsync(Machine, settings, cancellationToken).ConfigureAwait(false);
+            Answers = Answers with { Controller = Answers.Controller with { LinuxAuth = resolved } };
+        }
+        return await PlanBuilder.Build(Machine, Survey, Answers).CheckAsync(Context, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Installs <paramref name="plan"/>: each step checked again as it comes, and logged.</summary>
     public async Task ApplyAsync(CheckedPlan plan, Action<string>? progress = null, CancellationToken cancellationToken = default)
@@ -189,6 +205,7 @@ public sealed class InstallerSession
             throw new InstallerRefusedException(string.Join(Environment.NewLine, problems));
         }
 
+        await Prerequisites.PrepareAsync(this, cancellationToken).ConfigureAwait(false);
         Log.Write($"Installing {InstallRoles.Describe(Answers.Roles)}: {PlanText.Summary(plan)}");
         await plan.ApplyAsync(ContextFor(progress), progress, cancellationToken).ConfigureAwait(false);
         Log.Write($"Installed {InstallRoles.Describe(Answers.Roles)}.");
@@ -261,6 +278,21 @@ public sealed class InstallerSession
         {
             lines.Add(string.Empty);
             lines.Add($"The kiosk runs on the touchscreen, and starts when the Pi does ({MachineSurveyor.KioskUnit}). Its log: journalctl -u {MachineSurveyor.KioskUnit}");
+            var rotation = "unknown";
+            try
+            {
+                var settings = Machine.ReadText(KioskSteps.SettingsFile);
+                var value = settings is null ? null : JsonNode.Parse(settings, documentOptions: new JsonDocumentOptions
+                { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })?["Kiosk"]?["Rotation"];
+                if (value is JsonValue angle && angle.TryGetValue<int>(out var degrees))
+                    rotation = degrees.ToString(CultureInfo.InvariantCulture) + " degrees clockwise";
+            }
+            catch (JsonException) { /* Report unknown; completion text must not claim an unverified setting. */ }
+            lines.Add($"Kiosk rotation: {rotation}. Confirm the picture and touch alignment at the display.");
+            lines.Add(Machine.FileExists("/etc/hvo-roof-kiosk/splash/state.json")
+                ? "Managed boot/shutdown splash is configured; its physical appearance still needs operator confirmation."
+                : "No managed boot/shutdown splash is configured. To request it, set kiosk.splash.enabled and kiosk.splash.image to an authorized local PNG.");
+            lines.Add("Service health does not confirm physical touchscreen or boot/shutdown splash acceptance.");
             if (answers.Kiosk?.HideCursor == true && !KioskCursorStep.Hidden(Machine))
             {
                 lines.Add("Reboot to hide the console's cursor behind the kiosk: sudo reboot");
@@ -273,10 +305,18 @@ public sealed class InstallerSession
             lines.Add(string.Empty);
             lines.Add($"hvo-roof: {Path.Join(folder, ClientSteps.CliProgramName)}, connected to {answers.Client?.Controller} ({ClientSteps.CredentialsFile(Machine)}).");
             lines.Add("Next, sign in as yourself: hvo-roof login NAME");
+            lines.Add("After signing in: hvo-roof status. Terminal interface: hvo-roof ui.");
             if (!(Machine.Environment("PATH") ?? string.Empty).Split(':').Contains(folder))
             {
                 lines.Add($"{folder} is not on your PATH: add it (export PATH=\"{folder}:$PATH\" in your shell's profile), or run hvo-roof by its full path.");
             }
+        }
+        else if (answers.Roles.Any(role => InstallRoles.ScopeOf(role, Machine.Os) == InstallScope.System))
+        {
+            lines.Add(string.Empty);
+            lines.Add("The hvo-roof command is a separate per-user CLI; this run did not install it.");
+            lines.Add($"For command-line access, run {InstallPaths.SystemInstaller} as your SSH user (without sudo) and choose hvo-roof on the Roles page.");
+            lines.Add("Then sign in with hvo-roof login NAME; use hvo-roof status or hvo-roof ui.");
         }
 
         if (answers.MacApp is { } macApp)
@@ -378,6 +418,9 @@ public sealed class InstallerSession
         {
             lines.Add($"Pi:          {model}");
         }
+
+        if (!survey.IsPi)
+            lines.Add("Pi-only:     real HAT/I2C and display rotation are unavailable here; use an emulated rig and rotation 0. Ubuntu GRUB splash is supported.");
 
         var devices = new[] { (Name: HatDevices.I2c, Present: survey.HasI2c), (Name: HatDevices.GpioMemory, Present: survey.HasGpioMemory), (Name: "the thermal sensor", Present: survey.HasThermalSensor) };
         var present = devices.Where(device => device.Present).Select(device => device.Name).ToArray();

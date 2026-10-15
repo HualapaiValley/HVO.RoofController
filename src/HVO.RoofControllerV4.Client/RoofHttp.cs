@@ -15,6 +15,7 @@ internal sealed class RoofHttp : IDisposable
     private readonly Func<RoofCredential?> _credential;
     private readonly TimeSpan _timeout;
     private readonly TimeProvider _time;
+    private readonly Func<string, CancellationToken, Task<RoofCredential>>? _localAuthorization;
 
     public RoofHttp(RoofConnectionOptions options, Func<RoofCredential?> credential, TimeSpan timeout)
     {
@@ -26,6 +27,7 @@ internal sealed class RoofHttp : IDisposable
         _credential = credential;
         _timeout = timeout;
         _time = options.TimeProvider;
+        _localAuthorization = options.LocalAuthorization;
     }
 
     public Uri BaseAddress => _client.BaseAddress!;
@@ -50,7 +52,10 @@ internal sealed class RoofHttp : IDisposable
         while (true)
         {
             using var request = new HttpRequestMessage(method, path);
-            var credential = use is null ? null : _credential();
+            var credential = use is null ? null
+                : _localAuthorization is { } local
+                    ? await RoofLocalAuthorization.ObtainAsync(local, RoofLocalAuthorization.Operation(method, path), cancellationToken).ConfigureAwait(false)
+                    : _credential();
             if (credential is not null)
             {
                 foreach (var header in credential.GetHeaders(use!.Value))

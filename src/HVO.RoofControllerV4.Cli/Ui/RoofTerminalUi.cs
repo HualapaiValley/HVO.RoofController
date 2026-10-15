@@ -37,6 +37,7 @@ internal sealed class RoofTerminalUi : IDisposable
     private RoofStatusFeed? _feed;
     private object? _timer;
     private int _pending;
+    private bool _signInOffered;
 
     // Ticks of the one-second timer until the lease of a motion started here is renewed: -1 when this interface holds
     // no motion, 0 while a renewal is on its way.
@@ -216,6 +217,7 @@ internal sealed class RoofTerminalUi : IDisposable
         Connect();
         ShowPage(Connection is null ? _pages.Length - 1 : 0);
         _timer = _app.AddTimeout(TimeSpan.FromSeconds(1), OnTick);
+        if (Connection is { Credential: null }) OfferSignIn();
     }
 
     /// <summary>(Re)reads the connection from the environment and the credentials file, and restarts the status feed.</summary>
@@ -265,6 +267,7 @@ internal sealed class RoofTerminalUi : IDisposable
                     if (ReferenceEquals(current, _client))
                     {
                         Caller = caller;
+                        _signInOffered = false;
                         UpdateHeader();
                         _page?.ConnectionChanged();
                     }
@@ -597,9 +600,19 @@ internal sealed class RoofTerminalUi : IDisposable
 
     public void ShowError(Exception error)
     {
-        var (_, message) = RoofCliContext.Classify(error);
+        var (code, message) = RoofCliContext.Classify(error);
         var detail = error is RoofApiException { Detail: { Length: > 0 } text } && text != message ? $" {text}" : string.Empty;
         Say(message + detail, error: true);
+        if (code == RoofExitCode.SignedOut) OfferSignIn();
+    }
+
+    private void OfferSignIn()
+    {
+        // Never replace an environment credential, recover from a native denial, or replay a command.
+        if (_signInOffered || !_context.Host.IsInteractive || _context.Local || Connection is null
+            || Connection.Source == "environment" || Panel is not null || QuitRequested) return;
+        _signInOffered = true;
+        _pages.OfType<RoofUiSetupPage>().Single().SignIn();
     }
 
     /// <summary>Takes <paramref name="status"/> when it is newer than the one shown, and tells the page.</summary>
@@ -827,7 +840,7 @@ internal sealed class RoofTerminalUi : IDisposable
 
         var who = Caller is { } caller
             ? $"{caller.Name} ({RoofCliFormat.Role(caller.Role)}{(caller.Kind == RoofCredentialKind.ApiKey ? ", API key" : string.Empty)})"
-            : connection.Credential is null ? "no credential: sign in on Setup (F5)" : "checking the credential…";
+            : _context.Local ? "checking local Linux authorization…" : connection.Credential is null ? "no credential: sign in on Setup (F5)" : "checking the credential…";
         Window.Title = WindowTitle(connection.Controller);
         _header.Text = $"{who} · status {DescribeFeed()}";
     }
@@ -868,6 +881,8 @@ internal sealed class RoofTerminalUi : IDisposable
             StaleSince = null;
             _banner.Text = string.Empty;
         }
+
+        if (feed.State == RoofStatusFeedState.Unauthorized) OfferSignIn();
 
         _banner.SetScheme(_banner.Text.Length == 0 ? Theme.Base
             : feed.State == RoofStatusFeedState.Unauthorized ? Theme.Danger

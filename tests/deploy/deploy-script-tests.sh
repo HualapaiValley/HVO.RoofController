@@ -60,7 +60,8 @@ seed_container() {
 seed_env() {
   local name=$1 options
   shift
-  options=$(for pair in "$@"; do printf '%s\n%s\n' --env "${pair}"; done | jq -R . | jq -s .)
+  # Preserve each value as one Docker environment entry, including embedded newlines.
+  options=$(python3 -c 'import json,sys; print(json.dumps([part for value in sys.argv[1:] for part in ("--env",value)]))' "$@")
   jq --arg name "${name}" --argjson options "${options}" '.containers[$name].options = $options' \
     "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
 }
@@ -521,6 +522,179 @@ test_empty_otlp_endpoint_turns_export_off() {
     <<<"$(controller_run_args)" >/dev/null || fail_test "an empty OTEL_EXPORTER_OTLP_ENDPOINT does not turn export off"
 }
 
+
+# Identity compatibility is checked from the preserved container's immutable image and live store.
+schema_migration_fixture() {
+  printf '{"schemaVersion":1,"marker":"current"}\n' >"$WORK/identity.json"
+  printf '{"schemaVersion":1,"marker":"backup-must-not-be-replayed"}\n' >"$WORK/identity.json.schema1.bak"
+}
+
+assert_old_not_restarted_for_schema() {
+  assert_status 1
+  assert_container roof-controller-previous old false no
+  assert_container roof-controller missing false
+  assert_output_contains "Automatic recovery refused"
+  assert_output_contains "repair forward"
+  [[ -z "$(docker_calls start)" ]] || fail_test "an incompatible or unknown old controller was started"
+  docker_calls update | jq -es 'all(.[]; .[2] != "unless-stopped")' >/dev/null \
+    || fail_test "an incompatible old restart policy was enabled"
+  docker_calls rename | jq -es 'all(.[]; .[2] != "roof-controller")' >/dev/null \
+    || fail_test "an incompatible old controller was renamed back"
+}
+
+test_schema_migration_blocks_automatic_legacy_restart_and_preserves_data() {
+  seed_container roof-controller old true 8443:8443
+  schema_migration_fixture
+  local backup_before migrated='{"schemaVersion":2,"marker":"revoked-credential-stays-revoked"}'
+  backup_before=$(cat "$WORK/identity.json.schema1.bak")
+  cp "$WORK/identity.json.schema1.bak" "$WORK/expected-backup"
+  printf '%s' "$migrated" >"$WORK/expected-live"
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false FAKE_IDENTITY_SOURCE="$WORK/identity.json" FAKE_NEW_IDENTITY_DOCUMENT="$migrated"
+  assert_old_not_restarted_for_schema
+  [[ "$(cat "$WORK/identity.json")" == "$migrated" ]] || fail_test "the migrated store changed during recovery"
+  [[ "$(cat "$WORK/identity.json.schema1.bak")" == "$backup_before" ]] || fail_test "the schema1 backup changed"
+  cmp "$WORK/identity.json" "$WORK/expected-live" || fail_test "live identity bytes changed"
+  cmp "$WORK/identity.json.schema1.bak" "$WORK/expected-backup" || fail_test "backup bytes changed"
+}
+
+test_schema_migration_signal_after_creation_refuses_legacy_restart() {
+  seed_container roof-controller old true 8443:8443
+  schema_migration_fixture
+  deploy "${HTTPS_ENV[@]}" FAKE_SIGNAL_ON="run -d" FAKE_IDENTITY_SOURCE="$WORK/identity.json" FAKE_NEW_IDENTITY_DOCUMENT='{"schemaVersion":2}'
+  assert_status_is 143
+  assert_container roof-controller-previous old false no
+  assert_output_contains "Automatic recovery refused"
+  [[ -z "$(docker_calls start)" ]] || fail_test "signal recovery started an incompatible controller"
+  [[ "$(cat "$WORK/identity.json")" == '{"schemaVersion":2}' ]] || fail_test "signal recovery replaced the live identity store"
+}
+
+test_schema_two_compatible_automatic_restore() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false FAKE_IDENTITY_DOCUMENT='{"schemaVersion":2}' FAKE_OLD_IDENTITY_CAPABILITY=2
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  assert_output_contains "Rolled back: the previous controller is running and ready."
+}
+
+test_schema_two_raw_legacy_rollback_refuses_before_current_stop() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_IDENTITY_DOCUMENT='{"schemaVersion":2}' -- --rollback
+  assert_status 1
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false no
+  assert_output_contains "current controller was not stopped"
+  [[ -z "$(docker_calls stop)$(docker_calls start)$(docker_calls rename)" ]] || fail_test "raw incompatible rollback disturbed current or started old"
+}
+
+test_schema_two_raw_compatible_rollback() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_IDENTITY_DOCUMENT='{"schemaVersion":2}' FAKE_OLD_IDENTITY_CAPABILITY=2 -- --rollback
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous current false no
+}
+
+schema_unknown_auto_recovery() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false "$@"
+  assert_old_not_restarted_for_schema
+}
+
+test_schema_decimal_integer_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":1.0}'; }
+test_schema_exponent_integer_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":2e0}'; }
+test_schema_invalid_then_valid_duplicate_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":"invalid","schemaVersion":1}'; }
+test_schema_identical_duplicate_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":1,"schemaVersion":1}'; }
+test_schema_missing_python_refuses_before_stopping_current() {
+  seed_container roof-controller old true 8443:8443
+  # This test function is interpreted by the child bash, not expanded by this shell.
+  # shellcheck disable=SC2016
+  deploy "${HTTPS_ENV[@]}" 'BASH_FUNC_command%%=() { if [ "$1" = -v ] && [ "$2" = python3 ]; then return 1; fi; builtin command "$@"; }'
+  assert_status 1
+  assert_output_contains "require Python 3"
+  assert_container roof-controller old true unless-stopped
+  [[ -z "$(docker_calls stop)$(docker_calls start)$(docker_calls rename)$(docker_calls update)" ]] \
+    || fail_test "missing parser disturbed the current controller"
+}
+test_schema_non_json_constant_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":1,"ignored":NaN}'; }
+test_schema_malformed_json_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{'; }
+test_schema_future_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":3}'; }
+test_schema_string_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":"2"}'; }
+test_schema_null_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":null}'; }
+test_schema_boolean_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":true}'; }
+test_schema_zero_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":0}'; }
+test_schema_invalid_capability_blocks_recovery() { schema_unknown_auto_recovery FAKE_OLD_IDENTITY_CAPABILITY=3; }
+test_schema_malformed_capability_blocks_recovery() { schema_unknown_auto_recovery FAKE_OLD_IDENTITY_CAPABILITY=garbage; }
+test_schema_copy_failure_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_COPY_FAIL=true; }
+test_schema_inspect_failure_blocks_recovery() { schema_unknown_auto_recovery FAKE_FAIL='image inspect --format'; }
+
+test_schema_container_label_cannot_spoof_immutable_image_capability() {
+  seed_container roof-controller old true 8443:8443
+  seed_label roof-controller io.hvo.roof.identity-schema 2
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false FAKE_IDENTITY_DOCUMENT='{"schemaVersion":2}'
+  assert_old_not_restarted_for_schema
+  docker_calls image | jq -es 'any(.[]; .[1] == "inspect" and .[3] == "{{index .Config.Labels \"io.hvo.roof.identity-schema\"}}" and (.[4] | test("^sha256:[0-9a-f]{64}$")))' >/dev/null \
+    || fail_test "capability was not inspected from an immutable image ID"
+}
+
+test_schema_quarantine_update_failure_never_starts_old() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false FAKE_FAIL='update --restart no@2'
+  assert_old_not_restarted_for_schema
+  assert_output_contains "Docker could not confirm"
+}
+
+test_schema_custom_store_path_is_read_from_preserved_configuration() {
+  seed_container roof-controller old true 8443:8443
+  seed_env roof-controller RoofControllerSecurity__Identity__StorePath=/custom/private/identities.json
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false FAKE_IDENTITY_DOCUMENT='{"schemaVersion":2}' FAKE_OLD_IDENTITY_CAPABILITY=2
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  docker_calls cp | jq -es 'any(.[]; .[1] | endswith(":/custom/private/identities.json"))' >/dev/null \
+    || fail_test "configured identity store path was not copied"
+}
+
+
+test_schema_secret_override_refuses_ambiguous_effective_store() {
+  schema_unknown_auto_recovery FAKE_IDENTITY_SECRET_OVERRIDE=roofcontrollersecurity__identity__storepath
+}
+test_schema_missing_secrets_configuration_refuses_recovery() {
+  schema_unknown_auto_recovery FAKE_SECRETS_COPY_FAIL=true
+}
+test_schema_missing_explicit_store_refuses_recovery() {
+  schema_unknown_auto_recovery FAKE_IDENTITY_ENV_MISSING=true
+}
+test_schema_conflicting_case_insensitive_store_paths_refuse_recovery() {
+  seed_container roof-controller old true 8443:8443
+  seed_env roof-controller RoofControllerSecurity__Identity__StorePath=/first.json roofcontrollersecurity:identity:storepath=/second.json
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
+  assert_old_not_restarted_for_schema
+}
+test_schema_case_insensitive_colon_store_path_is_honored() {
+  seed_container roof-controller old true 8443:8443
+  seed_env roof-controller roofcontrollersecurity:identity:storepath=/custom/identities.json
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  docker_calls cp | jq -es 'any(.[]; .[1] | endswith(":/custom/identities.json"))' >/dev/null \
+    || fail_test "normalized environment store path was not copied"
+}
+test_schema_embedded_newline_store_path_is_never_truncated() {
+  seed_container roof-controller old true 8443:8443
+  seed_env roof-controller $'RoofControllerSecurity__Identity__StorePath=/safe-schema-one.json\n/actual-schema-two.json'
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
+  assert_old_not_restarted_for_schema
+  [[ -z "$(docker_calls cp)" ]] || fail_test "ambiguous multiline environment triggered a file copy"
+}
+
+test_schema_copied_symlink_is_never_followed() {
+  seed_container roof-controller old true 8443:8443
+  schema_migration_fixture
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false FAKE_IDENTITY_SYMLINK=true FAKE_IDENTITY_SOURCE="$WORK/identity.json"
+  assert_old_not_restarted_for_schema
+}
+
 test_new_controller_never_ready_rolls_back_to_previous() {
   seed_container roof-controller old true 8080:8080
   deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
@@ -784,24 +958,25 @@ test_failed_docker_stop_does_not_remove_old_controller() {
 
   assert_status 1
   assert_output_contains "Could not stop roof-controller; it was not replaced"
-  assert_output_contains "Rolled back: the previous controller is running and ready."
-  assert_container roof-controller old true unless-stopped
+  assert_output_contains "Automatic recovery refused: Docker could not confirm"
+  assert_container roof-controller old true no
   assert_container roof-controller-previous older false
-  [[ -z "$(docker_calls rm)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "a container was removed, renamed or replaced"
+  [[ -z "$(docker_calls start)$(docker_calls rm)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "a container was removed, renamed or replaced"
 }
 
 # Docker restarted the old controller before this deploy. With its stop failing, the restore's docker start does nothing
 # and keeps that restart count, which must not read as an exit.
-test_failed_docker_stop_restores_a_controller_that_docker_restarted_before() {
+test_failed_docker_stop_never_starts_a_controller_whose_state_is_unconfirmed() {
   seed_container roof-controller old true 8080:8080
   seed_restart_count roof-controller 2
   deploy "${HTTPS_ENV[@]}" FAKE_STOP_FAIL=true
 
   assert_status_is 1
-  assert_output_contains "WARNING: could not stop the original controller; starting it anyway"
-  assert_output_contains "Rolled back: the previous controller is running and ready."
+  assert_output_not_contains "starting it anyway"
+  assert_output_contains "Automatic recovery refused: Docker could not confirm"
   assert_output_not_contains "exited before it became ready"
-  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller old true no
+  [[ -z "$(docker_calls start)" ]] || fail_test "unconfirmed controller was started"
 }
 
 test_restore_that_cannot_read_docker_does_not_claim_the_controller_is_gone() {
@@ -811,10 +986,10 @@ test_restore_that_cannot_read_docker_does_not_claim_the_controller_is_gone() {
 
   assert_status 1
   assert_output_contains "Could not stop roof-controller; it was not replaced"
-  assert_output_contains "Docker could not report the state of the original controller"
-  assert_output_contains "it may be running or stopped"
+  assert_output_contains "Docker could not confirm the original controller is stopped with restart=no"
+  assert_output_contains "It may still be running or stopped"
   assert_output_not_contains "could not be found"
-  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller old true no
   [[ -z "$(docker_calls start)$(docker_calls rename)$(controller_run_args)" ]] || fail_test "a container was started, renamed or replaced"
 }
 
@@ -1153,6 +1328,27 @@ test_key_file_is_used_and_never_passed_as_argument() {
 
 # --- The web UI and the container's supervisor ------------------------------------------------------------------------
 
+test_native_auth_mounts_only_controller_endpoint_and_readonly_key() {
+  deploy ALLOW_INSECURE_HTTP=true LINUX_AUTH_ENABLED=true
+  assert_status 0
+  local run
+  run=$(controller_run_args)
+  jq -e 'index("RoofControllerSecurity__Identity__LinuxAuth__Enabled=true")
+    and index("type=bind,src=/run/hvo-roof-linux-auth/controller,dst=/run/hvo-roof-linux-auth/controller,readonly")
+    and index("type=bind,src=/etc/hvo-roof/linux-auth/assertion.key,dst=/etc/hvo-roof/linux-auth/assertion.key,readonly")
+    and (map(select(contains("local.sock") or contains("enrollments.json") or contains("/etc/shadow"))) | length == 0)' <<<"${run}" >/dev/null \
+    || fail_test "native authentication exposes incorrect host paths: ${run}"
+  preflight_args | jq -e 'index("RoofControllerSecurity__Identity__LinuxAuth__Enabled=true")' >/dev/null \
+    || fail_test "preflight does not use the same native adapter setting"
+}
+
+test_native_auth_default_leaves_legacy_mounts_unchanged() {
+  deploy ALLOW_INSECURE_HTTP=true
+  assert_status 0
+  controller_run_args | jq -e 'map(select(contains("LinuxAuth") or contains("hvo-roof-linux-auth"))) | length == 0' >/dev/null \
+    || fail_test "legacy deployment unexpectedly enables or mounts native authentication"
+}
+
 test_web_ui_is_published_on_its_own_port_with_the_controllers_scheme() {
   seed_container roof-controller old true 8080:8080
   deploy "${HTTPS_ENV[@]}" REMOTE_CA_CERT="${WORK}/ca.pem" FAKE_REQUIRE_CACERT=true WEB_HOST_PORT=9443
@@ -1285,14 +1481,13 @@ test_web_ui_unreachable_from_this_machine_rolls_back() {
   assert_container roof-controller-previous missing false
 }
 
-test_web_ui_whose_environment_docker_cannot_report_rolls_back() {
+test_unreadable_environment_also_prevents_unsafe_automatic_recovery() {
   seed_container roof-controller old true 8080:8080
   deploy "${HTTPS_ENV[@]}" FAKE_FAIL=.Config.Env
 
   assert_status_is 1
   assert_output_contains "could not read the environment of roof-controller from Docker to find its web UI"
-  assert_output_contains "Rolled back: the previous controller is running and ready."
-  assert_container roof-controller old true unless-stopped
+  assert_old_not_restarted_for_schema
 }
 
 # The scheme is the first URL's, as the web UI listens on each and the check needs one.

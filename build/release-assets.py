@@ -274,6 +274,7 @@ def manifest(out, assets, version, commit, created, registry, digests, contents,
         }
     return {
         "schemaVersion": 1,
+        "identityStoreSchema": 2,
         "product": "HVO Roof Controller",
         "version": version,
         "tag": f"v{version}",
@@ -311,6 +312,18 @@ def build(arguments):
         assets[name] = ("cli", runtime)
     for name, runtime in program_assets(arguments.installer, "hvo-roof-install", out).items():
         assets[name] = ("installer", runtime)
+    if getattr(arguments, "linux_auth", None):
+        folder = arguments.linux_auth
+        expected_runtimes = {"linux-arm64": "aarch64", "linux-x64": "x86-64"}
+        exact_entries(folder, expected_runtimes, "The Linux authentication folder")
+        for runtime, expected in expected_runtimes.items():
+            worker = folder / runtime / "HVO.RoofControllerV4.LinuxAuth"
+            if not worker.is_file() or worker.is_symlink() or processor(worker) != expected:
+                raise AssetError(f"{worker} must be the self-contained worker for {runtime}.")
+            name = f"hvo-roof-linux-auth-{runtime}"
+            shutil.copyfile(worker, out / name)
+            (out / name).chmod(0o755)
+            assets[name] = ("linux-auth", runtime)
     kiosk, kiosk_files = kiosk_asset(arguments.kiosk, out, version, mtime)
     assets[kiosk] = ("kiosk", "linux-arm64")
     mac, mac_files = mac_asset(arguments.mac_zip, out, version)
@@ -354,6 +367,8 @@ def main(argv=None):
     parser.add_argument("--cli", required=True, type=Path, help="CI's hvo-roof artifact: <runtime>/hvo-roof")
     parser.add_argument("--installer", required=True, type=Path,
                         help="CI's hvo-roof-install artifact: <runtime>/hvo-roof-install")
+    parser.add_argument("--linux-auth", type=Path,
+                        help="optional native worker: <linux-arm64|linux-x64>/HVO.RoofControllerV4.LinuxAuth, self-contained single files")
     parser.add_argument("--kiosk", required=True, type=Path, help="CI's hvo-roof-kiosk artifact")
     parser.add_argument("--mac-zip", required=True, type=Path, help="CI's HVO Roof.app zip")
     parser.add_argument("--upgrade-notes", type=Path,

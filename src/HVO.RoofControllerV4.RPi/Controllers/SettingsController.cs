@@ -13,7 +13,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers;
 /// Remote configuration (#42): every setting in the catalogue, read by role and changed one group at a time. Changes are
 /// saved to the settings file (<c>appsettings.Local.json</c>; secrets to the managed secrets file) and take effect at
 /// once unless the catalogue says a restart is needed. Every change is logged as an <c>AUDIT</c> line naming the caller.
-/// A PIN session is accepted: the kiosk changes local-only settings with an admin PIN.
+/// PIN sessions may read screen configuration but cannot write settings.
 /// </summary>
 [ApiController, ApiVersion("4.0")]
 [Route(RoofSettingsContract.SettingsRoute)]
@@ -55,6 +55,7 @@ public sealed class SettingsController : ControllerBase
     /// <response code="404">No such group.</response>
     /// <response code="409">Version conflict, pending hand edit, unconfirmed safety-critical change, or the roof is moving.</response>
     /// <response code="503">The settings could not be saved; nothing was changed.</response>
+    [RoofRefusePinSession]
     [HttpPost("{group}", Name = nameof(UpdateSettings))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
     [ProducesResponseType(typeof(RoofSettingsResponse), StatusCodes.Status200OK)]
@@ -78,6 +79,7 @@ public sealed class SettingsController : ControllerBase
     /// Send the edit's token; a safety-critical edit also needs ConfirmSafetyCriticalChange=true, and an edit to a
     /// local-only setting needs a local credential.
     /// </summary>
+    [RoofRefusePinSession]
     [HttpPost("Reload", Name = nameof(ReloadSettings))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
     [ProducesResponseType(typeof(RoofSettingsResponse), StatusCodes.Status200OK)]
@@ -96,6 +98,7 @@ public sealed class SettingsController : ControllerBase
     }
 
     /// <summary>Overwrites the pending hand edit with the settings in effect (Admin). Send the edit's token.</summary>
+    [RoofRefusePinSession]
     [HttpPost("Discard", Name = nameof(DiscardSettingsEdit))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AdminPolicy)]
     [ProducesResponseType(typeof(RoofSettingsResponse), StatusCodes.Status200OK)]

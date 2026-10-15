@@ -1,0 +1,3 @@
+# The worker accepts one password, never password-change or interactive challenge flows.
+auth required pam_unix.so nodelay
+account required pam_unix.so

@@ -95,6 +95,35 @@ public sealed class WebScreenshotTests
         await shots.TakeAsync("07-system", mask: page.Locator("[data-testid=system-fact][data-label=Host]"));
     }
 
+    [TestMethod]
+    public async Task EnrolledLinuxAccess_IsCapturedWithoutCredentials()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = Scenario.Production(travelMeters: 2.0) with
+        {
+            Settings = new Dictionary<string, string?>
+            {
+                ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+                ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true"
+            }
+        };
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, options, WebDevices.Desktop);
+        using var admin = browser.AdminClient();
+        await admin.Identity.EnrollPrincipalAsync(new HVO.RoofControllerV4.Common.Models.RoofPrincipalEnrollRequest
+        {
+            Subject = Guid.NewGuid().ToString(), EnrollmentStamp = Guid.NewGuid().ToString(), Name = "fixture-linux", Role = "RoofOperator"
+        });
+        await browser.SignInAsync(WebBrowser.Admin);
+        var page = browser.Page;
+        await page.GotoAsync("/people");
+        await page.Locator("[data-testid=people-tab][data-tab=linux]").ClickAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Read Linux users" }).ClickAsync();
+        await Expect(page.GetByTestId("linux-user")).ToBeVisibleAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Role / access" }).ClickAsync();
+        await Expect(page.GetByTestId("linux-role")).ToBeVisibleAsync();
+        await new Screens(this, browser, "desktop").TakeAsync("10-linux-users");
+    }
+
     private sealed class Screens(WebScreenshotTests test, WebBrowser browser, string device)
     {
         private static readonly string[] Secrets = [TestApiKeys.Viewer, TestApiKeys.Operator, TestApiKeys.Admin, TestSecrets.Password];

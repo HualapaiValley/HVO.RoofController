@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Installer readiness, optional native authentication and kiosk display updates (#111).
+
+### Added
+
+- Configurable validated DRM video mode, independent of UI scale; installer preserves the requested mode.
+- Explicit verified sudo-caller enrollment and Linux-user role/access management in CLI, TUI and web.
+
+- Ubuntu GRUB splash installation with official archive validation; explicit Pi-only real-HAT
+  and rotation guards keep virtual machines unrotated and in emulation.
+
+- Explicit kiosk-library setup consent, prerequisite guidance and readiness/reboot checks before application installation.
+- Optional OS username defaults and interactive remote sign-in retry/cancel, preserving native local authorization and credential precedence.
+
+- Optional Linux account sign-in and sudo-authorized local CLI access, with explicit controller enrollment,
+  separate Linux and virtual identities, personal expiring scoped keys, and installer-managed native authentication.
+  Existing installations retain their current authentication until the feature is enabled.
+- Optional installer-managed image splash with mode-aware labels, bounded console handoff,
+  explicit stable display choices, recovery backups and fresh-media setup guidance.
+
+### Security
+
+- Kiosk PIN sessions grant roof operation only; administrative accounts do not gain configuration or identity rights through a PIN.
+- New virtual passwords require seven characters without composition rules; new personal PINs use four digits. Existing credential hashes and legacy PIN sign-in are preserved.
+- Explicit emulator-only temporary kiosk grants cannot survive restart or return after a personal PIN is configured; no default credential is installed.
+
+- Update Microsoft packages and container ASP.NET runtime to 10.0.13 for the SignalR security fix (GHSA-334f-vvp4-7g6p).
+
+### Fixed
+
+- Preserve live status for operation-only admin PIN sessions, and complete Ubuntu splash disable after restoring the distribution theme.
+
+- Finish Plymouth console restoration before kiosk DRM initialization, preventing the later getty reset from cropping a requested video mode to the boot console resolution. Console recovery and terminal policies remain unchanged.
+
+- Include and verify the configured HVO theme and script renderer in Ubuntu initramfs images,
+  independently of the distribution theme alternatives.
+
+- Verify Ubuntu initramfs files against bootable kernel images, ignoring leftover module directories
+  from removed kernels; wait briefly for a concurrent package transaction.
+
+- Order reboot, power-off, halt and kexec Plymouth startup after the kiosk releases DRM.
+  Upgrade existing splash installations with new managed files and preserve their removal backups.
+
+- Report effective kiosk rotation and managed splash state after installation, and distinguish
+  service health from physical display acceptance. Document explicit Pi display choices for emulator installs.
+
+- Default a fresh emulated rig kiosk to zero-degree rotation while preserving explicit and existing settings.
+
+- Explain the separate per-user CLI installation after a controller, rig or kiosk install,
+  and show the status and terminal-interface commands after installing the client.
+- Accept the official Debian `.pgp` archive keyring used by Raspberry Pi OS Trixie when
+  planning the optional splash, while requiring an official signing key in every archive entry.
+
 ## [4.0.2] - 2026-10-12
 
 ### Fixed

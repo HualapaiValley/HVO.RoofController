@@ -111,12 +111,13 @@ public static class Program
                     options.Rotation,
                     options.InputDevices is { Length: > 0 } devices ? string.Join(", ", devices) : "every device on the seat",
                     options.ControllerUrl);
+                logger.LogInformation("DRM requested mode {VideoMode}; unsupported modes fall back to the connector preferred mode. UI scale is unchanged.", options.VideoMode ?? "preferred");
                 var input = new LibInputBackend(new LibInputBackendOptions { Events = options.InputDevices is { Length: > 0 } ? options.InputDevices : null });
                 exitCode = builder.StartLinuxDrm(
                     args,
                     card,
                     connectorsForceProbe: false,
-                    new DrmOutputOptions { Orientation = KioskDisplay.Orientation(options.Rotation) },
+                    options.DrmOptions(),
                     input);
             }
         }

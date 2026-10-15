@@ -67,6 +67,18 @@ public static partial class RoofCli
             Recursive = true
         };
 
+        public Option<bool> Local { get; } = new("--local")
+        {
+            Description = "Authorize each request through the local Linux sudo helper. Never use or save a web credential; sudo never prompts.",
+            Recursive = true
+        };
+
+        public Option<bool> Remote { get; } = new("--remote")
+        {
+            Description = "Explicitly use remote API/session credentials, overriding an installed local authMode.",
+            Recursive = true
+        };
+
         public Option<Uri?> Controller { get; } = new("--controller")
         {
             Description = $"The controller's address, for example https://roof.local:5001/. Overrides {Client.RoofCredentialStore.ControllerVariable} and the credentials file.",
@@ -81,7 +93,7 @@ public static partial class RoofCli
         };
 
         public RoofCliContext CreateContext(RoofCliHost host, ParseResult parseResult)
-            => new(host, parseResult.GetValue(Json), parseResult.GetValue(Controller), parseResult.GetValue(CredentialsFile));
+            => new(host, parseResult.GetValue(Json), parseResult.GetValue(Controller), parseResult.GetValue(CredentialsFile), parseResult.GetValue(Local), parseResult.GetValue(Remote));
     }
 
     internal static RootCommand CreateRootCommand(RoofCliHost host)
@@ -91,6 +103,8 @@ public static partial class RoofCli
             "The roof controller's command-line client. Stop: 'hvo-roof stop' (never needs a sign-in beyond the credential in use).")
         {
             options.Json,
+            options.Local,
+            options.Remote,
             options.Controller,
             options.CredentialsFile
         };
@@ -122,8 +136,10 @@ public static partial class RoofCli
             yield return CreatePasswordCommand();
             yield return CreateConfigCommand();
             yield return CreateUsersCommand();
+            yield return CreatePrincipalsCommand();
             yield return CreatePinsCommand();
             yield return CreateKeysCommand();
+            yield return CreateMyKeysCommand();
             yield return CreateSessionsCommand();
             yield return CreateInfoCommand();
             yield return CreateRestartCommand();
@@ -152,6 +168,16 @@ public static partial class RoofCli
 
             try
             {
+                if (parseResult.GetValue(options.Local) && parseResult.GetValue(options.Remote))
+                {
+                    throw new RoofCliUsageException("Choose --local or --remote, not both.");
+                }
+
+                if (context.Local && DescribeCommand(parseResult).Split(' ')[0] is "login" or "logout" or "passwd" or "setup")
+                {
+                    throw new RoofCliUsageException("Local mode authorizes each request without a saved login. Account credential commands require explicit remote mode (use --remote).");
+                }
+
                 return await action(context, parseResult, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

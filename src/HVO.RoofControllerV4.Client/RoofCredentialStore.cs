@@ -20,6 +20,9 @@ public sealed record RoofStoredCredentials
     /// <summary>The controller's base address.</summary>
     public Uri? Controller { get; init; }
 
+    /// <summary>Opt-in native authorization: "local"; null or "remote" preserves legacy remote credentials.</summary>
+    public string? AuthMode { get; init; }
+
     public string? ApiKey { get; init; }
 
     public string? OnBehalfOf { get; init; }
@@ -205,7 +208,13 @@ public static class RoofCredentialStore
         try
         {
             using var stream = File.OpenRead(path);
-            return JsonSerializer.Deserialize<RoofStoredCredentials>(stream, RoofClientJson.Options);
+            var stored = JsonSerializer.Deserialize<RoofStoredCredentials>(stream, RoofClientJson.Options);
+            if (stored?.AuthMode is not (null or "local" or "remote"))
+            {
+                throw new RoofCredentialFileException("The saved authMode must be local or remote.");
+            }
+
+            return stored;
         }
         catch (JsonException ex)
         {

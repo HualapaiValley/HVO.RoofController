@@ -234,7 +234,9 @@ It prints a report and exits 0 when the deployment is usable, 1 otherwise. It fa
 - API key entries that would be ignored, no usable key, or no `RoofOperator`/`RoofAdmin` key
 - `RoofControllerSecurity:Identity` settings that the controller would refuse, or an identity store that cannot be
   used: its directory is missing, a probe file cannot be written next to it, or the store file is not valid. The
-  check reads the file without changing it, so it is safe to run next to a running controller.
+  check reads the file without changing it, so it is safe to run next to a running controller. It does not construct
+  the identity store or migrate its schema. The opt-in Linux-auth migration happens only when the new controller
+  starts normally, after the old controller has stopped.
 - a settings file or managed secrets file whose directory is missing or not writable (checked with a probe file, as
   for the identity store), a file that is not valid or holds a secret it must not hold, or settings the controller
   would refuse at startup. The report names the setting, never its value.
@@ -398,11 +400,18 @@ anything.
      (`[verify] Web UI live at ...: OK`). A web UI that cannot start fails this at once: the supervisor starts it
      again, which the script reads as an exit. A version from before the web UI (which a rollback can restore) is
      not checked for one.
-8. **Restores the old controller on failure.** Once the old controller's stop begins in step 5, any failure restores
-   it. That includes a failed `docker stop` and an interruption: Ctrl-C, SIGTERM, or a closed terminal or SSH
-   session. The script:
+8. **Restores a compatible old controller on failure.** Once the old controller's stop begins in step 5, a failure
+   triggers recovery. That includes a failed `docker stop` and an interruption: Ctrl-C, SIGTERM, or a closed terminal
+   or SSH session. The script:
    - prints the new container's last 60 log lines, then stops (SIGTERM) and removes it
-   - renames `<name>-previous` back to `<name>` and starts it if it was running before, then waits for readiness
+   - checks that the preserved controller's exact image supports the current identity-store schema
+   - only after that check passes, renames `<name>-previous` back to `<name>` and starts it if it was running before,
+     then waits for readiness
+
+   If compatibility cannot be established, the original controller stays stopped with restart policy `no`. The
+   script preserves identity data and backups, reports `Automatic recovery refused:`, and requires repair forward
+   with a compatible release. It never restores a schema-1 backup over a migrated store: doing so could resurrect
+   revoked credentials. See [Rolling back](#rolling-back) for the compatibility check.
 
    It removes only the container it created, found by the ID Docker wrote to the run's `--cidfile`. If another
    container has taken `<name>` meanwhile, the script leaves it alone and keeps the old controller, stopped, as
@@ -411,14 +420,14 @@ anything.
    From the stop on, docker runs in its own session (`setsid`, or `perl` on macOS), so an interrupt never cuts a
    docker call short: the restore starts once the call in progress returns. If the old controller is still running
    by then (its stop never finished, for example because the connection to the Pi dropped while the daemon was still
-   stopping it), the restore stops it fully before starting it again. During the restore, further signals are ignored
+   stopping it), the restore stops it fully before checking compatibility and starting it again. During the restore, further signals are ignored
    and failed writes to the terminal are skipped. The last line is `[deploy] ERROR: Deployment failed (<reason>). <outcome>`; the outcome starts with
    `Rolled back:` when the old controller is back. The script exits 1, or 129, 130 or 143 after SIGHUP, SIGINT or
    SIGTERM. With no previous controller (a first deploy), the outcome says the roof controller is not running.
 
    Once the new controller passes every check in step 7, there is nothing left to undo: the script ignores signals
    and a lost terminal while it shows the containers, and ends with `[done] Deployment complete and verified` and
-   exit code 0. That line also says what `--rollback` would return to: the replaced controller, kept as
+   exit code 0. That line names the controller kept for a possible `--rollback`: the replaced controller, kept as
    `<name>-previous`. A first deploy replaced nothing, so the line says there is no previous version, or that an older
    `<name>-previous` is left as it was.
 
@@ -446,8 +455,9 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   pre-flight, with the running controller untouched.
 - From the pre-flight on, the deploy is the same as for a built image, and the pre-flight and the new controller run
   the checked platform's image. `--dry-run` shows the pull in its plan and pulls nothing.
-- `--rollback`, `--stop` and `--verify-remote` ignore `IMAGE_REF`, and do not check it: a rollback restores `<name>-previous`
-  however it was deployed, even with a reference a deploy would refuse still in the environment.
+- `--rollback`, `--stop` and `--verify-remote` ignore `IMAGE_REF`, and do not check it. A rollback uses the exact image
+  of `<name>-previous`, however it was deployed, and still requires identity-schema compatibility; a reference a deploy
+  would refuse can remain in the environment.
 - The released images are public once a maintainer has made the GHCR packages public, a step of the first release
   ([Versions and releases](releasing.md)); then the Pi needs no registry login. Until then, or for a registry that
   needs one, an anonymous pull fails with `unauthorized` or `denied`: run `docker login ghcr.io` in the Pi's Docker
@@ -531,9 +541,26 @@ controller against the emulator without the script, use the compose `emulator` p
 PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./deploy-roofcontroller-rpi.sh --rollback
 ```
 
-`--rollback` swaps the running controller with `<name>-previous`. It uses the same checks from step 1 and the same
-verified stop gate as a deploy. It then swaps the names and restart policies through a temporary `<name>-swap`, starts
-the restored controller and runs the checks from step 7 against it. Nothing is built. Run it again to swap back.
+`--rollback` swaps the running controller with a compatible `<name>-previous`. Before stopping the current controller,
+it checks the target's identity-schema compatibility. It then uses the same checks from step 1 and the same verified
+stop gate as a deploy, swaps the names and restart policies through a temporary `<name>-swap`, starts the restored
+controller and runs the checks from step 7 against it. Nothing is built. A later swap back requires the same checks.
+
+Schema compatibility verification requires Python 3 on the machine running the script and refuses recovery when it
+is absent. The check reads the live persisted store's `schemaVersion` and the `io.hvo.roof.identity-schema` capability
+label from the preserved container's exact immutable image before restarting it. A missing schema field or image label means schema 1;
+this release declares support through schema 2 and reads both 1 and 2. Malformed or unsupported schema values, an
+unreadable expected store, conflicting store paths, a store-path secret override, or unavailable image metadata refuse
+recovery. An explicitly empty store path represents an in-memory store. Neither a mutable image tag nor a product
+version string proves compatibility.
+
+If the target cannot read the current store, raw `--rollback` leaves the current controller untouched and keeps the
+target stopped with restart policy `no`. After a failed upgrade has already stopped the old controller, automatic
+recovery keeps it stopped instead of restarting an incompatible binary. Identity data and backups remain intact in
+both cases. If Docker cannot confirm the stopped state and restart policy, the script reports that uncertainty and
+does not start the target; inspect its state before further recovery. Repair forward with a release that supports the
+persisted schema; do not replace the migrated store with its schema-1 backup, which could undo revocations. The optional migration is described in
+[Linux authentication](install-linux-auth.md).
 
 Set `HTTPS_CERT_DIR` or `ALLOW_INSECURE_HTTP=true` as for the version being restored, since that decides the URL of
 the remote check. Without either, `--rollback` stops before contacting Docker.
@@ -541,10 +568,12 @@ the remote check. Without either, `--rollback` stops before contacting Docker.
 A version from before the settings file ignores it, so the settings changed through the API are not in effect after a
 rollback to one. Check them as [Upgrading to the settings file](#upgrading-to-the-settings-file) describes.
 
-If the swap or the start fails, or the script is interrupted before the start, the swap is undone. The original
-controller is back as `<name>` and restarted if it was running, `<name>-previous` is unchanged, and the outcome starts
-with `Undone:`. Once the start has succeeded, the restored controller is left running, even when the checks after it
-fail or the script is interrupted, and the script exits non-zero.
+If the swap or the start fails, or the script is interrupted before the start, recovery checks the original controller's
+compatibility before undoing the swap. When compatible, the original is back as `<name>` and restarted if it was
+running, `<name>-previous` is unchanged, and the outcome starts with `Undone:`. Otherwise recovery is refused and the
+original stays stopped with restart policy `no`, with identity data preserved for forward repair. Once the start has
+succeeded, the restored controller is left running, even when the checks after it fail or the script is interrupted,
+and the script exits non-zero.
 
 The restored version's HAT is checked twice. Before anything is stopped, the script reads the environment
 `<name>-previous` was deployed with: a version deployed for the HAT emulator is refused, with nothing changed, unless
@@ -571,8 +600,9 @@ them. For that one deploy:
 2. Run the script with `--force-unverified-stop` and type `STOP-UNVERIFIED` when asked.
 3. The old container still gets SIGTERM with the 30-second grace period.
 
-The old controller is kept as `<name>-previous`. An automatic rollback to it restores the unauthenticated controller
-on its old port; `--rollback` to it fails the remote check (it has no `POST` Stop), so check it by hand. Swapping
+The old controller is kept as `<name>-previous`. If its identity-schema compatibility can be established, an automatic
+rollback to it restores the unauthenticated controller on its old port; `--rollback` to it fails the remote check
+(it has no `POST` Stop), so check it by hand. Swapping
 back from it with `--rollback` runs the verified stop gate against that old controller, which always fails, so it
 needs `--force-unverified-stop` and the typed confirmation as well.
 

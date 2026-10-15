@@ -1,0 +1,152 @@
+{
+  "checked_utc": "2026-10-14T09:28:03.491762+00:00",
+  "system": "Linux",
+  "architecture": "aarch64",
+  "python": "3.14.4",
+  "kernel": "7.0.0-38-generic",
+  "passed_by_class": {
+    "test_auth_model.InteractionTests": 7,
+    "test_auth_model.PolicyTests": 52,
+    "test_linux_peer.LinuxKernelTests": 5,
+    "test_native_linux.NativePamFixtureTests": 3,
+    "test_native_linux.NativeProcessTests": 4
+  },
+  "passed_test_ids": [
+    "test_auth_model.InteractionTests.test_local_challenge_uses_os_agent_not_app_password",
+    "test_auth_model.InteractionTests.test_no_local_application_password_fallback",
+    "test_auth_model.InteractionTests.test_noninteractive_never_requests_input",
+    "test_auth_model.InteractionTests.test_remote_expiry_allows_inline_login",
+    "test_auth_model.InteractionTests.test_role_failure_is_not_a_login_loop",
+    "test_auth_model.InteractionTests.test_service_failure_is_not_a_password_prompt",
+    "test_auth_model.InteractionTests.test_valid_session_opens_directly",
+    "test_auth_model.PolicyTests.test_admin_authority_unavailable_fails_closed",
+    "test_auth_model.PolicyTests.test_admin_expiry_is_checked_during_local_session",
+    "test_auth_model.PolicyTests.test_admin_grant_is_operation_specific",
+    "test_auth_model.PolicyTests.test_admin_rights_do_not_override_controller_role",
+    "test_auth_model.PolicyTests.test_ambiguous_enrollment_is_denied",
+    "test_auth_model.PolicyTests.test_api_key_cannot_replace_local_linux_rights",
+    "test_auth_model.PolicyTests.test_approved_but_unenrolled_user_is_denied",
+    "test_auth_model.PolicyTests.test_both_provider_types_can_own_scoped_mock_keys",
+    "test_auth_model.PolicyTests.test_challenge_does_not_grant_access",
+    "test_auth_model.PolicyTests.test_disabled_account_revokes_access",
+    "test_auth_model.PolicyTests.test_duplicate_json_field_rejected",
+    "test_auth_model.PolicyTests.test_explicit_provider_required",
+    "test_auth_model.PolicyTests.test_forged_environment_does_not_authorize",
+    "test_auth_model.PolicyTests.test_key_creation_requires_valid_owner_authentication",
+    "test_auth_model.PolicyTests.test_key_expiration",
+    "test_auth_model.PolicyTests.test_key_lifetime_is_bounded",
+    "test_auth_model.PolicyTests.test_key_revocation",
+    "test_auth_model.PolicyTests.test_key_scopes_cannot_exceed_owner_role",
+    "test_auth_model.PolicyTests.test_keys_cannot_mint_other_keys",
+    "test_auth_model.PolicyTests.test_local_admin_and_controller_role_both_pass",
+    "test_auth_model.PolicyTests.test_local_session_bound_to_exact_connection",
+    "test_auth_model.PolicyTests.test_local_session_cannot_be_replayed_over_web",
+    "test_auth_model.PolicyTests.test_local_session_denied_after_admin_permission_removed",
+    "test_auth_model.PolicyTests.test_local_session_requires_peer",
+    "test_auth_model.PolicyTests.test_local_wire_rejects_saved_web_session",
+    "test_auth_model.PolicyTests.test_logout_revokes_session",
+    "test_auth_model.PolicyTests.test_malformed_or_oversized_requests_rejected",
+    "test_auth_model.PolicyTests.test_owner_disable_invalidates_key",
+    "test_auth_model.PolicyTests.test_owner_role_change_invalidates_key",
+    "test_auth_model.PolicyTests.test_pam_account_failure_after_authentication_denies_session",
+    "test_auth_model.PolicyTests.test_pam_authentication_failure_does_not_fallback_to_virtual",
+    "test_auth_model.PolicyTests.test_provider_canonical_identity_controls_mapping",
+    "test_auth_model.PolicyTests.test_provider_unavailable_fails_closed",
+    "test_auth_model.PolicyTests.test_role_change_invalidates_session",
+    "test_auth_model.PolicyTests.test_role_claim_is_not_authority",
+    "test_auth_model.PolicyTests.test_same_name_in_two_providers_is_not_same_identity",
+    "test_auth_model.PolicyTests.test_scoped_key_does_not_inherit_all_owner_permissions",
+    "test_auth_model.PolicyTests.test_session_expiry",
+    "test_auth_model.PolicyTests.test_sudo_claim_is_not_authority",
+    "test_auth_model.PolicyTests.test_uid_claim_is_not_identity",
+    "test_auth_model.PolicyTests.test_uid_reuse_does_not_reuse_old_enrollment",
+    "test_auth_model.PolicyTests.test_uid_zero_is_not_an_implicit_application_bypass",
+    "test_auth_model.PolicyTests.test_unapproved_os_user_is_denied",
+    "test_auth_model.PolicyTests.test_unknown_and_empty_scopes_denied",
+    "test_auth_model.PolicyTests.test_unknown_user_has_same_public_failure",
+    "test_auth_model.PolicyTests.test_unlisted_operation_has_no_execution_path",
+    "test_auth_model.PolicyTests.test_username_claim_is_not_identity",
+    "test_auth_model.PolicyTests.test_valid_local_request",
+    "test_auth_model.PolicyTests.test_web_identity_does_not_need_local_admin_grant",
+    "test_auth_model.PolicyTests.test_web_identity_still_obeys_controller_role",
+    "test_auth_model.PolicyTests.test_web_session_cannot_satisfy_local_admin_requirement",
+    "test_auth_model.PolicyTests.test_wrong_password_fixture_rejected",
+    "test_linux_peer.LinuxKernelTests.test_datagram_socket_is_rejected",
+    "test_linux_peer.LinuxKernelTests.test_named_socket_ignores_user_supplied_identity",
+    "test_linux_peer.LinuxKernelTests.test_socketpair_returns_kernel_credentials",
+    "test_linux_peer.LinuxKernelTests.test_tcp_socket_is_rejected",
+    "test_linux_peer.LinuxKernelTests.test_unconnected_stream_is_rejected",
+    "test_native_linux.NativePamFixtureTests.test_real_pam_account_rejection_after_authentication",
+    "test_native_linux.NativePamFixtureTests.test_real_pam_auth_rejection_does_not_proceed_to_account",
+    "test_native_linux.NativePamFixtureTests.test_real_pam_library_accepts_private_permit_fixture",
+    "test_native_linux.NativeProcessTests.test_connected_child_has_kernel_child_pid",
+    "test_native_linux.NativeProcessTests.test_inherited_socket_keeps_connection_time_pid",
+    "test_native_linux.NativeProcessTests.test_kernel_rejects_forged_root_ancillary_credentials",
+    "test_native_linux.NativeProcessTests.test_pidfd_tracks_child_exit_without_pid_lookup"
+  ],
+  "tests_run": 72,
+  "passed": 71,
+  "skipped": [
+    {
+      "test": "test_no_username_environment_fallback (test_linux_peer.PlatformGuardTests.test_no_username_environment_fallback)",
+      "reason": "Non-Linux refusal check"
+    }
+  ],
+  "failures": 0,
+  "errors": 0,
+  "mechanisms": {
+    "policy_and_mock_session_lifecycle": "executed",
+    "linux_so_peercred": "executed",
+    "pidfd_lifecycle": "executed",
+    "polkit_authorization": "mocked; no native authorization integration",
+    "sudo_origin_and_policy": "not implemented or tested",
+    "pam_transaction_api": "real libpam with private permit/deny fixture stacks",
+    "linux_password_and_account_policy": "mocked; no real account/password validation",
+    "real_credentials_or_persistent_keys": "none",
+    "kiosk_pin_runtime": "not exercised; production source unchanged",
+    "live_controller_or_hardware": "never contacted by this prototype"
+  },
+  "demo": {
+    "warning": "Policy simulation only; credentials are inert public fixtures",
+    "scenarios": [
+      {
+        "scenario": "verified-admin-and-controller-role",
+        "result": "allowed-mock-only"
+      },
+      {
+        "scenario": "spoofed-username-and-sudo-fields",
+        "result": "InvalidRequest",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "unapproved-linux-caller",
+        "result": "LinuxAdminPermissionDenied",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "web-session-cannot-bypass-local-admin",
+        "result": "WrongAudience",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "viewer-cannot-write-settings",
+        "result": "ControllerRoleDenied",
+        "ux": "show-error-no-login-loop"
+      },
+      {
+        "scenario": "scoped-virtual-user-key",
+        "result": "allowed-mock-only"
+      },
+      {
+        "scenario": "revoked-key",
+        "result": "AuthenticationRequired",
+        "ux": "error-no-prompt"
+      },
+      {
+        "scenario": "expired-web-session",
+        "result": "AuthenticationRequired",
+        "ux": "inline-application-login-retry-or-cancel"
+      }
+    ]
+  }
+}

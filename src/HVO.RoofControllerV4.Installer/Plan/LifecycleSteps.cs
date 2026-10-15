@@ -88,6 +88,8 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
         _deployKeyFile = null;
         var machine = context.Machine;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+        if (IdentitySchemaGuard.Problem(machine, ControllerLayout.For(machine).IdentityFile, release) is { } schemaProblem)
+            return new StepCheck(StepChange.Blocked, schemaProblem);
         var current = await MachineSurveyor.SurveyContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
         if (current is { IsRunning: true } && current.ImageDigest == release.Controller.Digest)
         {

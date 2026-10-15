@@ -509,6 +509,7 @@ public sealed class InstallerBackupTests
         pi.Folder("/srv/keep");
         (await pi.RunAsync("backup", "--output", Kept)).ExitCode.Should().Be(0);
         var next = new FakeMachine(hostName: hostName).WithPi().WithDisplay().Write(CommandLine, Booted + "\n").Folder("/srv/keep");
+        next.Packages!.UnionWith(KioskSteps.Packages); // Restore requires OS prerequisites to be ready.
         File.WriteAllBytes(next.OnDisk(Kept), File.ReadAllBytes(pi.OnDisk(Kept)));
         File.SetUnixFileMode(next.OnDisk(Kept), Modes.PrivateFile);
         return new Restored(next, await RestoreAsync(next, Kept));

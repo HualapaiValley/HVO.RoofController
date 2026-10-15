@@ -1,0 +1,79 @@
+# Operator artwork is pre-rotated without cropping by the installer.
+# The installer substitutes the explicitly selected clockwise rotation.
+Window.SetBackgroundTopColor(0.0157, 0.0235, 0.0471);
+Window.SetBackgroundBottomColor(0.0157, 0.0235, 0.0471);
+rotation = @ROTATION@;
+hero = Image("hero.png");
+hero_sprite = Sprite(hero);
+last_width = 0;
+last_height = 0;
+fun layout_hero ()
+{
+    width = Window.GetWidth(); height = Window.GetHeight();
+    if (width <= 120 || height <= 120) return;
+    if (width == last_width && height == last_height) return;
+    global.last_width = width; global.last_height = height;
+    available_width = width; available_height = height - 120;
+    if (rotation == 90 || rotation == 270) { available_width = width-120; available_height = height; }
+    scale = available_width / hero.GetWidth();
+    if (available_height / hero.GetHeight() < scale) scale = available_height / hero.GetHeight();
+    fitted = hero.Scale(hero.GetWidth()*scale+0.5, hero.GetHeight()*scale+0.5);
+    hero_sprite.SetImage(fitted);
+    hero_sprite.SetPosition(Window.GetX()+(width-fitted.GetWidth())/2,
+                            Window.GetY()+(height-fitted.GetHeight())/2, 0);
+}
+mode = Plymouth.GetMode();
+status_text = "Please wait…";
+if (mode == "boot") status_text = "Starting Roof Controller…";
+if (mode == "reboot") status_text = "Restarting…";
+if (mode == "shutdown") status_text = "Shutting down…";
+label_image = Image.Text(status_text, 1, 1, 1, 1, "DejaVu Sans 24");
+label_width = label_image.GetWidth();
+label_height = label_image.GetHeight();
+label_side = label_width;
+if (label_height > label_side) label_side = label_height;
+label_square = label_image.Crop((label_width-label_side)/2,
+                                (label_height-label_side)/2, label_side, label_side);
+label_rotated = label_square.Rotate(rotation * 0.017453292519943295);
+label_sprite = Sprite();
+dot_image = Image.Text("●", 1, 1, 1, 1, "DejaVu Sans 7");
+for (i = 0; i < 8; i++) dots[i] = Sprite(dot_image);
+animation_phase = 0;
+
+fun refresh_scene ()
+{
+    layout_hero();
+    width = Window.GetWidth();
+    height = Window.GetHeight();
+    portrait = rotation == 90 || rotation == 270;
+    landscape_width = width;
+    landscape_height = height;
+    if (portrait) { landscape_width = height; landscape_height = width; }
+    center_y = landscape_height - 30;
+    text_x = landscape_width / 2 + 18;
+    spinner_x = landscape_width / 2 - label_width / 2 - 12;
+    label_sprite.SetImage(label_rotated);
+    label_x = text_x; label_y = center_y;
+    if (rotation == 90) { label_x = width-center_y; label_y = text_x; }
+    if (rotation == 180) { label_x = width-text_x; label_y = height-center_y; }
+    if (rotation == 270) { label_x = center_y; label_y = height-text_x; }
+    label_sprite.SetPosition(Window.GetX()+label_x-label_side/2,
+                             Window.GetY()+label_y-label_side/2, 10);
+    global.animation_phase += 0.125663706;
+    for (i = 0; i < 8; i++)
+    {
+        angle = i * 0.785398163;
+        x = spinner_x + Math.Cos(angle)*10;
+        y = center_y + Math.Sin(angle)*10;
+        native_x = x; native_y = y;
+        if (rotation == 90) { native_x = width-y; native_y = x; }
+        if (rotation == 180) { native_x = width-x; native_y = height-y; }
+        if (rotation == 270) { native_x = y; native_y = height-x; }
+        dots[i].SetPosition(Window.GetX()+native_x-dot_image.GetWidth()/2,
+                            Window.GetY()+native_y-dot_image.GetHeight()/2, 10);
+        dots[i].SetOpacity(0.25 + 0.75*(Math.Cos(angle-animation_phase)+1)/2);
+    }
+}
+
+refresh_scene();
+Plymouth.SetRefreshFunction(refresh_scene);

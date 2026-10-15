@@ -134,6 +134,10 @@ ALLOW_EMULATED_HAT=${ALLOW_EMULATED_HAT:-false}
 # Directory ON THE PI holding one file per secret setting (API keys, Blue Iris password, certificate password),
 # mounted read-only at /run/secrets. See docs/security.md for the file names.
 SECRETS_DIR=${SECRETS_DIR:-/etc/hvo-roof/secrets}
+# Optional host authentication: only its controller socket directory and assertion key are exposed.
+LINUX_AUTH_ENABLED=${LINUX_AUTH_ENABLED:-false}
+LINUX_AUTH_CONTROLLER_DIR=${LINUX_AUTH_CONTROLLER_DIR:-/run/hvo-roof-linux-auth/controller}
+LINUX_AUTH_KEY_FILE=${LINUX_AUTH_KEY_FILE:-/etc/hvo-roof/linux-auth/assertion.key}
 # Directory ON THE PI holding the identity store (people, sessions and managed API keys), mounted read-write at
 # /var/lib/hvo-roof/identity. It must exist (sudo install -d -m 0700 /var/lib/hvo-roof/identity). Set it to an empty
 # value to keep them in memory instead, where a restart forgets them (test rigs only; the pre-flight check warns).
@@ -1038,6 +1042,136 @@ retire_switch_container() {
   fi
 }
 
+# Identity schema compatibility is checked against the exact immutable image of the preserved
+# container, never its mutable tag, container labels or version string. Store bytes stay private.
+parse_identity_schema() {
+  # Preserve numeric token types and duplicate properties: jq/object-model readers
+  # can otherwise accept a document the controller's integer serializer rejects.
+  python3 -c 'import json,sys
+class ObjectPairs(list): pass
+def reject_constant(_): raise ValueError("non-JSON constant")
+d=json.load(sys.stdin, object_pairs_hook=ObjectPairs, parse_constant=reject_constant)
+if not isinstance(d,ObjectPairs): sys.exit(1)
+values=[value for key,value in d if key == "schemaVersion"]
+if len(values)>1: sys.exit(1)
+v=values[0] if values else 1
+if type(v) is not int or v not in (1,2): sys.exit(1)
+print(v)'
+}
+
+# Sets SCHEMA_FAILURE; a missing expected store, unsupported metadata or failed read is unknown.
+identity_schema_compatible() {
+  local target=$1 image capability env key secret secrets_dir store_path="" schema schema_file
+  SCHEMA_FAILURE="identity schema compatibility could not be established"
+  if ! command -v python3 >/dev/null 2>&1; then
+    SCHEMA_FAILURE="strict identity schema recovery checks require Python 3"
+    return 1
+  fi
+  image=$(dockerc inspect --format '{{.Image}}' "${target}" 2>/dev/null) || return 1
+  [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  capability=$(dockerc image inspect --format '{{index .Config.Labels "io.hvo.roof.identity-schema"}}' "${image}" 2>/dev/null) || return 1
+  case "${capability}" in
+    ""|"<no value>") capability=1 ;;
+    1|2) ;;
+    *) SCHEMA_FAILURE="the target image declares an unsupported identity schema"; return 1 ;;
+  esac
+  env=$(dockerc inspect --format '{{json .Config.Env}}' "${target}" 2>/dev/null) || return 1
+  # JSON preserves embedded newlines and delimiters. Line-formatted inspect output
+  # could otherwise truncate a path and inspect a different file from the process.
+  if ! store_path=$(printf '%s' "${env}" | python3 -c 'import json,sys
+entries=json.load(sys.stdin)
+if not isinstance(entries,list): sys.exit(1)
+paths=[]
+for entry in entries:
+    if not isinstance(entry,str): sys.exit(1)
+    key,sep,value=entry.partition("=")
+    if sep and key.replace("__",":").lower()=="roofcontrollersecurity:identity:storepath":
+        paths.append(value)
+if not paths or any(value!=paths[0] for value in paths): sys.exit(1)
+if "\n" in paths[0] or "\r" in paths[0]: sys.exit(1)
+print(paths[0],end="")' 2>/dev/null); then
+    SCHEMA_FAILURE="the preserved container has no unambiguous explicit identity store path"
+    return 1
+  fi
+  if [[ -z "${WORK_DIR}" ]]; then
+    WORK_DIR=$(mktemp -d) || return 1
+  fi
+  # AddKeyPerFile has higher precedence than environment. Refuse an override rather
+  # than guess which store is live; the normal deployed secrets directory is required.
+  secrets_dir="${WORK_DIR}/identity-schema-secrets"
+  rm -rf "${secrets_dir}" || return 1
+  if ! dockerc cp "${target}:/run/secrets" "${secrets_dir}" >/dev/null 2>&1 \
+      || [[ ! -d "${secrets_dir}" || -L "${secrets_dir}" ]]; then
+    SCHEMA_FAILURE="the preserved secrets configuration could not be checked"
+    return 1
+  fi
+  for secret in "${secrets_dir}"/* "${secrets_dir}"/.[!.]* "${secrets_dir}"/..?*; do
+    [[ -e "${secret}" || -L "${secret}" ]] || continue
+    key=${secret##*/}
+    key=${key//__/:}
+    key=$(printf '%s' "${key}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+    if [[ "${key}" == roofcontrollersecurity:identity:storepath ]]; then
+      rm -rf "${secrets_dir}"
+      SCHEMA_FAILURE="an identity store path secret override requires explicit forward repair"
+      return 1
+    fi
+  done
+  rm -rf "${secrets_dir}" || return 1
+  if [[ -z "${store_path}" ]]; then
+    # An explicitly empty environment override means the profile is in-memory.
+    schema=1
+  else
+    [[ "${store_path}" == /* && "${store_path}" != *$'\n'* && "${store_path}" != *$'\r'* ]] || return 1
+    if [[ -z "${WORK_DIR}" ]]; then
+      WORK_DIR=$(mktemp -d) || return 1
+    fi
+    schema_file="${WORK_DIR}/identity-schema-check.json"
+    rm -f "${schema_file}" || return 1
+    if ! dockerc cp "${target}:${store_path}" "${schema_file}" >/dev/null 2>&1 \
+        || [[ ! -f "${schema_file}" || -L "${schema_file}" ]]; then
+      SCHEMA_FAILURE="the preserved identity store could not be read"
+      return 1
+    fi
+    if ! schema=$(parse_identity_schema <"${schema_file}" 2>/dev/null); then
+      rm -f "${schema_file}"
+      SCHEMA_FAILURE="the preserved identity schema is malformed or unsupported"
+      return 1
+    fi
+    rm -f "${schema_file}"
+  fi
+  if (( schema > capability )); then
+    SCHEMA_FAILURE="identity schema ${schema} is not supported by the preserved image (maximum ${capability})"
+    return 1
+  fi
+}
+
+# Prevent a rejected restore from coming back on a daemon restart. Never claim success
+# when Docker cannot confirm both the stopped state and restart policy.
+quarantine_controller() {
+  local target=$1 policy_ok=true policy
+  dockerc update --restart no "${target}" >/dev/null 2>&1 || policy_ok=false
+  if ! lookup_container "id=${target}"; then return 1; fi
+  if [[ "${CSTATE}" == running ]]; then
+    log_err "[rollback] The original controller is still running; stopping it fully before checking identity compatibility."
+    dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${target}" >/dev/null 2>&1 || true
+  fi
+  lookup_container "id=${target}" && [[ "${CSTATE}" == stopped ]] || return 1
+  policy=$(dockerc inspect --format '{{.HostConfig.RestartPolicy.Name}}' "${target}" 2>/dev/null) || return 1
+  [[ "${policy_ok}" == true && "${policy}" == no ]]
+}
+
+prepare_original_restore() {
+  [[ -n "${ORIGINAL_ID}" ]] || return 0
+  if ! quarantine_controller "${ORIGINAL_ID}"; then
+    RESTORE_OUTCOME="Automatic recovery refused: Docker could not confirm the original controller is stopped with restart=no. It may still be running or stopped. It was NOT started; check its state and repair forward. Identity data and backups were not changed."
+    return 1
+  fi
+  if ! identity_schema_compatible "${ORIGINAL_ID}"; then
+    RESTORE_OUTCOME="Automatic recovery refused: ${SCHEMA_FAILURE}. The original controller is kept stopped with restart=no. Identity data and backups were not changed; repair forward with a compatible release."
+    return 1
+  fi
+}
+
 # Puts the rollback target back as <name>-previous (restart policy no) and the original controller back as <name>
 # (restart policy unless-stopped), wherever the switch got to. Sets RESTORE_OUTCOME and returns 1 on failure.
 put_names_back() {
@@ -1087,6 +1221,8 @@ put_names_back() {
       return 1
     fi
     rename_back "${ORIGINAL_ID}" "${CONTAINER_NAME}" || return 1
+  fi
+  if [[ -n "${original_name}" ]]; then
     dockerc update --restart unless-stopped "${ORIGINAL_ID}" >/dev/null \
       || log_err "[rollback] WARNING: could not set restart policy unless-stopped on ${CONTAINER_NAME}"
   fi
@@ -1152,7 +1288,7 @@ restore_original() {
   log_err "[rollback] ${reason}"
 
   RESTORE_OUTCOME=""
-  if retire_switch_container && put_names_back; then
+  if retire_switch_container && prepare_original_restore && put_names_back; then
     restart_original "${mode}"
   fi
 
@@ -1308,6 +1444,13 @@ if [[ "${ROLLBACK}" == "true" ]]; then
     log_err "[rollback] WARNING: ${PREVIOUS_CONTAINER_NAME} was deployed for the HAT emulator at ${PREVIOUS_EMULATOR} (ALLOW_EMULATED_HAT=true): the restored controller does not operate the roof."
   fi
 
+  if ! identity_schema_compatible "${PREVIOUS_ID}"; then
+    if ! quarantine_controller "${PREVIOUS_ID}"; then
+      fail "Rollback refused: ${SCHEMA_FAILURE}. Docker could not confirm the target is stopped with restart=no; the current controller was not stopped. Identity data and backups were not changed."
+    fi
+    fail "Rollback refused: ${SCHEMA_FAILURE}. The target is kept stopped with restart=no; the current controller was not stopped. Identity data and backups were not changed; repair forward with a compatible release."
+  fi
+
   if [[ "${STATE}" == "running" ]]; then
     stop_roof_before_replacing
   fi
@@ -1425,6 +1568,19 @@ if [[ -n "${CONFIG_DIR}" ]]; then
   )
 fi
 
+if [[ "${LINUX_AUTH_ENABLED}" == true ]]; then
+  container_args+=(
+    --mount "type=bind,src=${LINUX_AUTH_CONTROLLER_DIR},dst=/run/hvo-roof-linux-auth/controller,readonly"
+    --mount "type=bind,src=${LINUX_AUTH_KEY_FILE},dst=/etc/hvo-roof/linux-auth/assertion.key,readonly"
+    --env "RoofControllerSecurity__Identity__LinuxAuth__Enabled=true"
+    --env "RoofControllerSecurity__Identity__LinuxAuth__SocketPath=/run/hvo-roof-linux-auth/controller/worker.sock"
+    --env "RoofControllerSecurity__Identity__LinuxAuth__AssertionKeyPath=/etc/hvo-roof/linux-auth/assertion.key"
+    --env "RoofControllerSecurity__Identity__LinuxAuth__Audience=hvo-roof-controller"
+  )
+elif [[ "${LINUX_AUTH_ENABLED}" != false ]]; then
+  fail "LINUX_AUTH_ENABLED must be true or false."
+fi
+
 if [[ -n "${MANAGED_SECRETS_DIR}" ]]; then
   container_args+=(
     --mount "type=bind,src=${MANAGED_SECRETS_DIR},dst=/var/lib/hvo-roof/settings-secrets"
@@ -1494,6 +1650,12 @@ fi
 # The build and the pre-flight take minutes: decide on the containers as they are now.
 read_container_states
 refuse_running_previous
+
+# Confirm the recovery parser exists before stopping a controller. A later parser
+# failure is still handled fail-closed by identity_schema_compatible.
+if [[ "${STATE}" != missing ]] && ! command -v python3 >/dev/null 2>&1; then
+  fail "Controller replacement and strict identity recovery checks require Python 3. The current controller was not stopped."
+fi
 
 # From the first change on, a failure or an interrupt restores the original controller (restore_original).
 ORIGINAL_ID=${CURRENT_ID}

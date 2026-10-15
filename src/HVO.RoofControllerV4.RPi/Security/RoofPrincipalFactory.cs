@@ -14,6 +14,12 @@ namespace HVO.RoofControllerV4.RPi.Security;
 public static class RoofPrincipalFactory
 {
     /// <summary>Claim carrying a non-secret identifier of the key that authenticated the principal.</summary>
+    public const string PrincipalIdClaimType = "hvo:roof:principal_id";
+    public const string ProviderClaimType = "hvo:roof:provider";
+    public const string ScopeClaimType = "hvo:roof:scope";
+    public const string OwnedKeyClaimType = "hvo:roof:owned_key";
+    public const string LocalClaimType = "hvo:roof:local";
+
     public const string KeyIdClaimType = "hvo:roof:key_id";
 
     /// <summary>Claim carrying how the caller proved who it is (a <see cref="RoofCredentialKind"/> name).</summary>
@@ -119,13 +125,37 @@ public static class RoofPrincipalFactory
             new(SessionIdClaimType, session.Id)
         };
 
+        if (session.PrincipalId is not null)
+        {
+            claims.Add(new Claim(PrincipalIdClaimType, session.PrincipalId));
+            claims.Add(new Claim(ProviderClaimType, session.Provider!));
+        }
+        if (session.Scope is not null)
+        {
+            claims.Add(new Claim(ScopeClaimType, session.Scope));
+            claims.Add(new Claim(LocalClaimType, "true"));
+        }
+
         if (session.Kind == RoofCredentialKind.Pin)
         {
             claims.Add(new Claim(DeviceClaimType, session.Device ?? string.Empty));
             claims.Add(new Claim(DeviceKeyIdClaimType, session.DeviceKeyId ?? string.Empty));
         }
 
-        return Finish(claims, session.Role, authenticationType);
+        return Finish(claims, session.Kind == RoofCredentialKind.Pin && session.Role == RoofControllerApiContract.AdminRole
+            ? RoofControllerApiContract.OperatorRole : session.Role, authenticationType);
+    }
+
+    public static ClaimsPrincipal CreateForOwnedKey(StoredOwnedKey key, string name, string role, string authenticationType)
+    {
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.Name, name), new(ClaimTypes.NameIdentifier, key.OwnerId),
+            new(CredentialClaimType, nameof(RoofCredentialKind.ApiKey)),
+            new(KeyIdClaimType, key.Id), new(OwnedKeyClaimType, "true"), new(PrincipalIdClaimType, key.OwnerId)
+        };
+        claims.AddRange(key.Scopes.Select(scope => new Claim(ScopeClaimType, scope)));
+        return Finish(claims, role, authenticationType);
     }
 
     /// <summary>

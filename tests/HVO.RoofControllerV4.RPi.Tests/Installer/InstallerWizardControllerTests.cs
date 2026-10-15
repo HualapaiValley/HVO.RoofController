@@ -24,7 +24,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 public sealed class InstallerWizardControllerTests
 {
     private const string Password = "a long test password";
-    private const string Pin = "9081726354";
+    private const string Pin = "9081";
     private const string CameraPassword = "camera test password";
     private const string Backup = "/root/backup/appsettings.Local.json";
 
@@ -179,9 +179,9 @@ public sealed class InstallerWizardControllerTests
 
         // Typed as a person types them.
         passwords.Fields[0].Typed.SetFocus();
-        wizard.Type("too short");
+        wizard.Type("short");
         passwords.Fields[0].Again!.SetFocus();
-        wizard.Type("too short");
+        wizard.Type("short");
         wizard.Press(Key.Enter);
         wizard.Page.Should().BeSameAs(passwords);
         wizard.Wizard.Message.Should().Be($"The first admin's password: {RoofIdentityText.PasswordRule}");

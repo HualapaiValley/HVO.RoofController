@@ -16,11 +16,16 @@ internal static class RoofApiRoutes
     public const string Configuration = V4 + "RoofControl/Configuration";
 
     public const string Session = V4 + "Auth/Session";
+    public const string Providers = V4 + "Auth/Providers";
+    public const string ProviderSession = V4 + "Auth/ProviderSession";
+    public const string LocalSession = V4 + "Auth/LocalSession";
+    public const string OwnKeys = V4 + "Auth/Keys";
     public const string Pin = V4 + "Auth/Pin";
     public const string PinUsers = V4 + "Auth/Pin/Users";
     public const string Me = V4 + "Auth/Me";
     public const string Password = V4 + "Auth/Password";
 
+    public const string Principals = V4 + "Identity/Principals";
     public const string Users = V4 + "Identity/Users";
     public const string ApiKeys = V4 + "Identity/ApiKeys";
     public const string Sessions = V4 + "Identity/Sessions";

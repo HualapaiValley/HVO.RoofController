@@ -30,7 +30,7 @@ public sealed class InstallerKioskTests
     private const string Secrets = "/etc/hvo-roof/secrets";
     private const string CommandLine = "/boot/firmware/cmdline.txt";
     private const string Booted = "console=serial0,115200 console=tty1 root=PARTUUID=0a1b2c3d-02 rootfstype=ext4 fsck.repair=yes rootwait";
-    private const string Pin = "735193";
+    private const string Pin = "7351";
 
     private static readonly string TarballUri = ReleaseManifest.DownloadUri("4.0.0", FakeMachine.KioskAssetName("4.0.0")).ToString();
 
@@ -42,7 +42,7 @@ public sealed class InstallerKioskTests
         using var pi = KioskPi();
         var answers = pi.WriteAnswers(WithTheController);
 
-        var run = await pi.RunAsync("--answers", answers);
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         run.ExitCode.Should().Be(0, run.ToString());
         pi.Packages.Should().BeEquivalentTo(KioskSteps.Packages);
@@ -85,7 +85,7 @@ public sealed class InstallerKioskTests
         pi.Unexpected.Should().BeEmpty();
 
         var files = pi.Snapshot(InstallPaths.SystemLog);
-        var second = await pi.RunAsync("--answers", answers);
+        var second = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         second.ExitCode.Should().Be(0, second.ToString());
         second.Output.Should().Contain("Nothing to change");
@@ -100,11 +100,11 @@ public sealed class InstallerKioskTests
     {
         using var pi = KioskPi();
         var answers = pi.WriteAnswers(WithTheController);
-        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", answers)).ExitCode.Should().Be(0);
         pi.KioskRestarting = true;
 
-        var plan = await pi.RunAsync("--answers", answers, "--plan");
-        var second = await pi.RunAsync("--answers", answers);
+        var plan = await pi.RunAsync("--setup-prerequisites", "--answers", answers, "--plan");
+        var second = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         plan.Output.Should().Contain($"enabled, and systemd is starting it again: if it keeps stopping, see journalctl -u {MachineSurveyor.KioskUnit}");
         second.ExitCode.Should().Be(0, second.ToString());
@@ -117,9 +117,9 @@ public sealed class InstallerKioskTests
     {
         using var pi = KioskPi();
         var controller = new InstallAnswers { Roles = [InstallRole.Controller], Controller = new ControllerSettings { Connection = ConnectionMode.SelfSigned } };
-        (await pi.RunAsync("--answers", pi.WriteAnswers(controller))).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(controller))).ExitCode.Should().Be(0);
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Kiosk] }, "kiosk.json"));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Kiosk] }, "kiosk.json"));
 
         run.ExitCode.Should().Be(0, run.ToString());
         pi.Deploys.Should().HaveCount(2, "the controller is redeployed to know the kiosk's key");
@@ -140,7 +140,7 @@ public sealed class InstallerKioskTests
         answers["httpConfirmation"] = "http";
         pi.Write("/root/answers.json", answers.ToJsonString());
 
-        var run = await pi.RunAsync("--answers", "/root/answers.json");
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", "/root/answers.json");
 
         run.ExitCode.Should().Be(0, run.ToString());
         var options = Options(pi);
@@ -155,7 +155,7 @@ public sealed class InstallerKioskTests
     {
         using var pi = KioskPi();
         var answers = WithTheController with { Controller = new ControllerSettings { Connection = ConnectionMode.SelfSigned } };
-        (await pi.RunAsync("--answers", pi.WriteAnswers(answers))).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(answers))).ExitCode.Should().Be(0);
         var first = ServedFingerprint(pi);
         Options(pi).ServerCertificateSha256.Should().Be(first);
         pi.Replies = _ => true;
@@ -182,12 +182,12 @@ public sealed class InstallerKioskTests
     {
         using var pi = KioskPi();
         var answers = WithTheController with { Controller = new ControllerSettings { Connection = ConnectionMode.SelfSigned } };
-        (await pi.RunAsync("--answers", pi.WriteAnswers(answers))).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(answers))).ExitCode.Should().Be(0);
         var first = ServedFingerprint(pi);
         var named = pi.WriteAnswers(answers with { Controller = answers.Controller! with { HostNames = ["roof"] } }, "named.json");
 
-        var plan = await pi.RunAsync("--answers", named, "--plan");
-        var run = await pi.RunAsync("--answers", named);
+        var plan = await pi.RunAsync("--setup-prerequisites", "--answers", named, "--plan");
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", named);
 
         plan.Output.Should().Contain("pinning the controller's certificate once it is in place")
             .And.Contain($"started again to read its new {Path.GetFileName(KioskSteps.SettingsFile)}");
@@ -203,15 +203,15 @@ public sealed class InstallerKioskTests
     {
         using var pi = KioskPi();
         var answers = pi.WriteAnswers(WithTheController);
-        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", answers)).ExitCode.Should().Be(0);
         var settings = pi.Read(KioskSteps.SettingsFile);
         var layout = ControllerLayout.For(pi.Machine);
         var authority = pi.Read(layout.CaCertificate);
         File.Delete(pi.OnDisk(layout.CaCertificate));
         File.Delete(pi.OnDisk(layout.CaKey));
 
-        var plan = await pi.RunAsync("--answers", answers, "--plan");
-        var run = await pi.RunAsync("--answers", answers);
+        var plan = await pi.RunAsync("--setup-prerequisites", "--answers", answers, "--plan");
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         plan.Output.Should().Contain("started again to read its new ca.crt");
         run.ExitCode.Should().Be(0, run.ToString());
@@ -227,8 +227,8 @@ public sealed class InstallerKioskTests
         pi.Users[KioskSteps.User] = ["nogroup", .. KioskSteps.Groups];
         var answers = pi.WriteAnswers(WithTheController);
 
-        var plan = await pi.RunAsync("--answers", answers, "--plan");
-        var run = await pi.RunAsync("--answers", answers);
+        var plan = await pi.RunAsync("--setup-prerequisites", "--answers", answers, "--plan");
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         plan.Output.Should().Contain($"the {KioskSteps.User} group made, and the user added to {KioskSteps.User}");
         run.ExitCode.Should().Be(0, run.ToString());
@@ -244,7 +244,7 @@ public sealed class InstallerKioskTests
         using var pi = KioskPi();
         pi.Groups.Add(KioskSteps.User);
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController));
 
         run.ExitCode.Should().Be(0, run.ToString());
         pi.Users[KioskSteps.User].Should().BeEquivalentTo([KioskSteps.User, .. KioskSteps.Groups]);
@@ -254,7 +254,7 @@ public sealed class InstallerKioskTests
     public async Task ARenew_UnderThePrivateCa_LeavesTheKioskAsItIs()
     {
         using var pi = KioskPi();
-        (await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController))).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController))).ExitCode.Should().Be(0);
         var settings = pi.Read(KioskSteps.SettingsFile);
         pi.Replies = _ => true;
 
@@ -270,11 +270,11 @@ public sealed class InstallerKioskTests
     public async Task AnUpdate_KeepsTheKioskItReplaces_ForARollback_AndStartsTheNewOne()
     {
         using var pi = KioskPi();
-        (await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController))).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController))).ExitCode.Should().Be(0);
         var older = FakeMachine.KioskProgram("3.9.0");
         pi.Machine.WriteAtomically(KioskSteps.Program, Encoding.UTF8.GetString(older), Modes.Program);
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController));
 
         run.ExitCode.Should().Be(0, run.ToString());
         File.ReadAllBytes(pi.OnDisk(KioskSteps.Program)).Should().Equal(FakeMachine.KioskProgram("4.0.0"));
@@ -293,7 +293,7 @@ public sealed class InstallerKioskTests
         tarball[tarball.Length / 2] ^= 0xff;
         pi.FileDownloads[TarballUri] = tarball;
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController));
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
         run.Error.Should().Contain($"is not the release's {FakeMachine.KioskAssetName("4.0.0")}: its size or SHA-256 differs from release.json's.");
@@ -306,7 +306,7 @@ public sealed class InstallerKioskTests
     public async Task AKioskProgramThatIsNotTheOneReleaseJsonNames_IsNeverPutInPlace()
     {
         using var pi = KioskPi();
-        (await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController))).ExitCode.Should().Be(0);
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController))).ExitCode.Should().Be(0);
         var older = FakeMachine.KioskProgram("3.9.0");
         pi.Machine.WriteAtomically(KioskSteps.Program, Encoding.UTF8.GetString(older), Modes.Program);
 
@@ -318,7 +318,7 @@ public sealed class InstallerKioskTests
         pi.Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = release.ToJsonString();
         pi.FileDownloads[TarballUri] = tarball;
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController));
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
         run.Error.Should().Contain($"The kiosk's program in {FakeMachine.KioskAssetName("4.0.0")} is not the one release.json names: its SHA-256 differs.");
@@ -334,10 +334,10 @@ public sealed class InstallerKioskTests
         using var pi = KioskPi();
         pi.Packages = null;
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController));
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-        run.Output.Should().Contain("the kiosk needs Raspberry Pi OS, which installs packages with apt: dpkg-query is not here");
+        run.Error.Should().Contain("the kiosk needs Raspberry Pi OS, which installs packages with apt: dpkg-query is not here");
         pi.Deploys.Should().BeEmpty();
         pi.Exists(KioskSteps.ProgramFolder).Should().BeFalse();
     }
@@ -348,7 +348,7 @@ public sealed class InstallerKioskTests
         using var pi = KioskPi();
         var answers = WithTheController with { Kiosk = new KioskSettings { HideCursor = false } };
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(answers));
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(answers));
 
         run.ExitCode.Should().Be(0, run.ToString());
         pi.Read(CommandLine).Should().Be($"{Booted}\n");
@@ -363,7 +363,7 @@ public sealed class InstallerKioskTests
         pi.Machine.WriteAtomically("/root/olga-pin", Pin + "\n", Modes.PrivateFile);
         var answers = pi.WriteAnswers(WithTheController with { Kiosk = new KioskSettings { Pins = ["olga", "ben"] } });
 
-        var run = await pi.RunAsync("--answers", answers, "--pin-file", "olga=/root/olga-pin");
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", answers, "--pin-file", "olga=/root/olga-pin");
 
         run.ExitCode.Should().Be(0, run.ToString());
         pi.PinRequests.Should().ContainSingle().Which.Should().Be(new FakePinRequest("olga", RoofControllerApiContract.OperatorRole, Pin, AdminKey(pi)));
@@ -373,7 +373,7 @@ public sealed class InstallerKioskTests
         InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).Kiosk!.Pins.Should().BeEmpty("PINs are given once, and not recorded");
         ShowsNoSecret(pi, run, Pin);
 
-        var second = await pi.RunAsync("--answers", answers);
+        var second = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         second.ExitCode.Should().Be(0, second.ToString());
         second.Output.Should().Contain("Nothing to change");
@@ -388,7 +388,7 @@ public sealed class InstallerKioskTests
         pi.Types = _ => Pin;
         var answers = pi.WriteAnswers(WithTheController with { Kiosk = new KioskSettings { Pins = ["Olga"] } });
 
-        var run = await pi.RunAsync("--answers", answers);
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         run.ExitCode.Should().Be(0, run.ToString());
         pi.Asked.Should().Equal("Olga's PIN", "Olga's PIN again");
@@ -406,7 +406,7 @@ public sealed class InstallerKioskTests
         pi.Types = _ => Pin;
         var answers = pi.WriteAnswers(WithTheController with { Kiosk = new KioskSettings { Pins = [name] } });
 
-        var run = await pi.RunAsync("--answers", answers);
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Output.Should().Contain(said);
@@ -422,7 +422,7 @@ public sealed class InstallerKioskTests
         using var pi = KioskPi();
         var files = pi.Snapshot();
 
-        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController), "--plan");
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController), "--plan");
 
         run.ExitCode.Should().Be(0, run.ToString());
         run.Output.Should().Contain(KioskSteps.Program).And.Contain(KioskSteps.DeviceKeyFile).And.Contain(MachineSurveyor.KioskUnit)
@@ -434,6 +434,112 @@ public sealed class InstallerKioskTests
     }
 
     // The controller's Pi with its touchscreen, booted from Raspberry Pi OS's firmware partition.
+    [TestMethod]
+    public async Task MissingKioskLibraries_RequireExplicitConsent_BeforeApplicationChanges()
+    {
+        using var pi = KioskPi();
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(WithTheController));
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused);
+        run.Error.Should().Contain("--setup-prerequisites");
+        pi.AptInstalls.Should().BeEmpty();
+        pi.Deploys.Should().BeEmpty();
+        pi.Exists(KioskSteps.ProgramFolder).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task ARequiredReboot_StopsBeforePackagesOrApplicationChanges()
+    {
+        using var pi = KioskPi();
+        pi.Write("/var/run/reboot-required", "reboot required");
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController));
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused);
+        run.Error.Should().Contain("required reboot");
+        pi.AptInstalls.Should().BeEmpty();
+        pi.Deploys.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task VideoMode_IsWrittenPreservedAndExplicitlyReset_WithoutChangingScale()
+    {
+        using var pi = new FakeMachine().WithPi(i2c: false).WithDisplay();
+        var answers = new InstallAnswers
+        {
+            Roles = [InstallRole.Rig, InstallRole.Kiosk],
+            Kiosk = new KioskSettings { VideoMode = "1920x1080", HideCursor = false }
+        };
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(answers))).ExitCode.Should().Be(0);
+        Options(pi).VideoMode.Should().Be("1920x1080");
+        var density = Options(pi).PixelsPerMillimetre;
+        (await pi.RunAsync("--answers", pi.WriteAnswers(answers with { Kiosk = new KioskSettings { HideCursor = false } }, "preserve-mode.json"))).ExitCode.Should().Be(0);
+        Options(pi).VideoMode.Should().Be("1920x1080");
+        (await pi.RunAsync("--answers", pi.WriteAnswers(answers with { Kiosk = new KioskSettings { VideoMode = "", HideCursor = false } }, "reset-mode.json"))).ExitCode.Should().Be(0);
+        Options(pi).VideoMode.Should().BeEmpty();
+        Options(pi).PixelsPerMillimetre.Should().Be(density);
+    }
+
+    [TestMethod]
+    [DataRow(null, 0)]
+    [DataRow(180, 180)]
+    public async Task FreshRig_DefaultsToZeroRotation_ExplicitPiChoiceWins(int? angle, int expected)
+    {
+        using var pi = new FakeMachine().WithPi(i2c: false).WithDisplay();
+        var answers = new InstallAnswers
+        {
+            Roles = [InstallRole.Rig, InstallRole.Kiosk],
+            Kiosk = new KioskSettings { Rotation = angle, HideCursor = false }
+        };
+        var file = pi.WriteAnswers(answers);
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", file);
+        run.ExitCode.Should().Be(0, run.ToString());
+        Options(pi).Rotation.Should().Be(expected);
+        var settings = JsonNode.Parse(pi.Read(KioskSteps.SettingsFile))!;
+        settings["Kiosk"]!["Rotation"] = 270;
+        pi.Write(KioskSteps.SettingsFile, settings.ToJsonString());
+        var preserve = pi.WriteAnswers(answers with { Kiosk = new KioskSettings { HideCursor = false } }, "preserve.json");
+        (await pi.RunAsync("--answers", preserve)).ExitCode.Should().Be(0);
+        Options(pi).Rotation.Should().Be(270);
+    }
+
+    [TestMethod]
+    public async Task PiWithEmulatedHat_UsesExplicitLandscape_AndReportsActualDisplayState()
+    {
+        using var pi = KioskPi();
+        var answers = new InstallAnswers
+        {
+            Roles = [InstallRole.Rig, InstallRole.Kiosk],
+            Kiosk = new KioskSettings { Card = "", Rotation = 90, HideCursor = false }
+        };
+        string Save(InstallAnswers choices, string name)
+        {
+            var path = pi.WriteAnswers(choices, name);
+            var json = JsonNode.Parse(pi.Read(path))!;
+            json["rigConfirmation"] = pi.HostName;
+            pi.Write(path, json.ToJsonString());
+            return path;
+        }
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", Save(answers, "pi-rig.json"));
+        run.ExitCode.Should().Be(0, run.ToString());
+        Options(pi).Rotation.Should().Be(90);
+        run.Output.Should().Contain("Kiosk rotation: 90 degrees clockwise")
+            .And.Contain("No managed boot/shutdown splash is configured")
+            .And.Contain("Service health does not confirm physical touchscreen");
+        pi.Containers[MachineSurveyor.ControllerContainer].Emulated.Should().BeTrue();
+
+        // A later run must describe installed choices, not infer them from omitted answers.
+        var settings = JsonNode.Parse(pi.Read(KioskSteps.SettingsFile))!;
+        settings["Kiosk"]!["Rotation"] = 270;
+        pi.Write(KioskSteps.SettingsFile, settings.ToJsonString());
+        pi.Write("/etc/hvo-roof-kiosk/splash/state.json", "{}");
+        var rerun = await pi.RunAsync("--answers", Save(answers with
+            { Kiosk = new KioskSettings { HideCursor = false } }, "preserve-pi-display.json"));
+        rerun.ExitCode.Should().Be(0, rerun.ToString());
+        Options(pi).Rotation.Should().Be(270);
+        rerun.Output.Should().Contain("Kiosk rotation: 270 degrees clockwise")
+            .And.Contain("Managed boot/shutdown splash is configured")
+            .And.NotContain("No managed boot/shutdown splash is configured");
+        pi.Unexpected.Should().BeEmpty();
+    }
+
     private static FakeMachine KioskPi() => new FakeMachine().WithPi().WithDisplay().Write(CommandLine, Booted + "\n");
 
     // The controller installed as the installer leaves it, with the touchscreen.

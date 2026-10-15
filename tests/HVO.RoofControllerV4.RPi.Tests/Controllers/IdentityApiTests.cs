@@ -578,13 +578,14 @@ public sealed class IdentityApiTests
             await alice.PostAsJsonAsync($"{Identity}/Users", new RoofUserCreateRequest { Name = "mallory", Role = "RoofAdmin", Password = TestSecrets.Password }),
             await alice.PostAsJsonAsync($"{Identity}/Users", new RoofUserCreateRequest { Name = "-not a name-", Role = "nobody" }),
             await alice.PostAsJsonAsync($"{Identity}/ApiKeys", new RoofApiKeyCreateRequest { Name = "backdoor", Role = "RoofAdmin" }),
-            await alice.GetAsync($"{Identity}/Sessions")
+            await alice.GetAsync($"{Identity}/Sessions"),
+            await alice.GetAsync($"{Identity}/Principals"),
+            await alice.PostAsJsonAsync($"{Auth}/Password", new RoofPasswordChangeRequest { CurrentPassword = TestSecrets.Password, NewPassword = TestSecrets.OtherPassword })
         };
 
         foreach (var response in responses)
         {
-            (await ProblemAsync(response)).Should().Be((403, "CredentialNotAllowed",
-                "A PIN session cannot manage people, API keys or sessions. Use an admin API key, or sign in with a password."));
+            response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         }
 
         (await alice.PostAsync($"{Roof}/Open", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);

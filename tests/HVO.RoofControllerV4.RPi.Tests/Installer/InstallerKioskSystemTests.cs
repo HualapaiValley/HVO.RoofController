@@ -83,7 +83,9 @@ public sealed class InstallerKioskSystemTests
                 Survey = await MachineSurveyor.SurveyAsync(machine),
                 Answers = new InstallAnswers { Roles = [InstallRole.Controller, InstallRole.Kiosk], Controller = controller, Kiosk = kiosk },
                 Version = Version,
-                Release = ReleaseSource.Folder(release)
+                Release = ReleaseSource.Folder(release),
+                // This opt-in system test explicitly installs missing kiosk libraries.
+                SetupPrerequisites = true
             };
 
             var context = await Fresh();

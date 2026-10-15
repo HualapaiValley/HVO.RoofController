@@ -286,6 +286,21 @@ jobs:
           # Zipped here, as the Finder would, so the programs keep their execute bits and the bundle its signature.
           (cd mac-artifact && zip -qry "hvo-roof-mac-${GITHUB_RUN_ID}.zip" "HVO Roof.app")
 
+      - name: Publish optional native authentication worker
+        run: |
+          for rid in linux-arm64 linux-x64; do
+            dotnet publish HVO.RoofControllerV4.LinuxAuth -c Release -r "$rid" --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:ContinuousIntegrationBuild=true -o "hvo-roof-linux-auth/$rid"
+            test -x "hvo-roof-linux-auth/$rid/HVO.RoofControllerV4.LinuxAuth"
+          done
+
+      - name: Upload optional native authentication worker
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hvo-roof-linux-auth-${{ github.run_id }}
+          path: src/hvo-roof-linux-auth/*/HVO.RoofControllerV4.LinuxAuth
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload hvo-roof
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -632,7 +647,7 @@ jobs:
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/compose-smoke-test.sh tests/emulator/deploy-scenarios.sh tests/installer/rig-scenario.sh tests/cli/terminal-smoke.sh \
             tests/cli/dotnet-run-smoke.sh src/HVO.RoofControllerV4.RPi/container/*.sh tests/container/*.sh tests/container/fake-* \
-            build/*.sh tests/versioning/*.sh tests/releasing/*.sh
+            build/*.sh tests/versioning/*.sh tests/releasing/*.sh src/HVO.RoofControllerV4.Kiosk/deploy/splash/handoff.sh
           shellcheck -x src/HVO.RoofControllerV4.Installer/install.sh tests/install/install-sh-tests.sh \
             tests/install/fakes/fake-command tests/install/fakes/hvo-roof-install
 
@@ -676,6 +691,9 @@ jobs:
 
       # install.sh (src/HVO.RoofControllerV4.Installer) as a release publishes it, against stand-ins for the commands
       # it runs and a release's assets (see tests/install). The install-sh-mac job runs the same tests with a Mac's bash.
+      - name: Kiosk splash planning and recovery tests
+        run: python3 -m unittest discover -s tests/install -p 'test_kiosk_splash.py' -v
+
       - name: install.sh tests
         run: tests/install/install-sh-tests.sh
 

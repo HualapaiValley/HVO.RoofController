@@ -350,7 +350,8 @@ public sealed class CliConnectionStep(string path, ClientSettings client) : Plan
         }
 
         var address = client.Address!;
-        if (saved is not null && saved.Controller == address && ClientTrust.Trusts(saved, client))
+        if (saved is not null && saved.Controller == address && ClientTrust.Trusts(saved, client)
+            && (!WantsLocal(context) || saved.AuthMode == "local"))
         {
             return StepCheck.Unchanged(ClientTrust.Describe(client));
         }
@@ -395,7 +396,8 @@ public sealed class CliConnectionStep(string path, ClientSettings client) : Plan
             {
                 Controller = address,
                 CertificateSha256 = client.CertificateSha256,
-                CaCertificate = authority
+                CaCertificate = authority,
+                AuthMode = WantsLocal(context) ? "local" : kept.AuthMode
             });
         }
         catch (Exception error) when (error is RoofCredentialFileException or IOException or UnauthorizedAccessException)
@@ -405,6 +407,11 @@ public sealed class CliConnectionStep(string path, ClientSettings client) : Plan
 
         context.Log.Write($"Saved hvo-roof's connection in {Target}: {check.Detail}.");
     }
+
+    // Native credentials are bound to this host. A remote profile is never silently changed to local mode.
+    private bool WantsLocal(InstallContext context)
+        => client.Address is { IsLoopback: true }
+            && (context.Answers.Controller?.LinuxAuth ?? context.Survey.SystemRecord?.Controller?.LinuxAuth) is { Enabled: true };
 
     private (RoofStoredCredentials? Saved, string? Problem) Load(InstallerMachine machine)
     {
