@@ -140,7 +140,9 @@ public sealed class RoofCliProviderTests
     }
 
     [TestMethod]
-    public async Task LocalRequest_ExchangesAssertionAnonymously_AndNeverPersistsReturnedSession()
+    [DataRow("whoami")]
+    [DataRow("health")]
+    public async Task LocalRequest_ExchangesAssertionAnonymously_AndNeverPersistsReturnedSession(string command)
     {
         using var files = new CliRig();
         files.UseApiKey("test-existing-key");
@@ -164,11 +166,13 @@ public sealed class RoofCliProviderTests
                 }
 
                 request.Headers.Authorization!.Parameter.Should().Be("test-local-session");
-                return Caller();
+                return command == "health"
+                    ? new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(new HealthReportPayload { Status = "Healthy" }) }
+                    : Caller();
             })
         };
-        (await RoofCli.RunAsync(["whoami", "--local", "--credentials-file", files.CredentialsPath], host)).Should().Be(0);
-        paths.Should().Equal("/api/v4.0/Auth/LocalSession", "/api/v4.0/Auth/Me");
+        (await RoofCli.RunAsync([command, "--local", "--credentials-file", files.CredentialsPath], host)).Should().Be(0);
+        paths.Should().Equal("/api/v4.0/Auth/LocalSession", command == "health" ? "/health" : "/api/v4.0/Auth/Me");
         File.ReadAllBytes(files.CredentialsPath).Should().Equal(before);
     }
 

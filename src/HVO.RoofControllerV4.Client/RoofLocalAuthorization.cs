@@ -49,7 +49,7 @@ internal static class RoofLocalAuthorization
             return method == HttpMethod.Get ? "read" : "configure";
         }
 
-        if (method == HttpMethod.Get && (path is RoofApiRoutes.Status or RoofApiRoutes.SystemInformation or RoofApiRoutes.SystemMetrics
+        if (method == HttpMethod.Get && (path is RoofApiRoutes.Health or RoofApiRoutes.Status or RoofApiRoutes.SystemInformation or RoofApiRoutes.SystemMetrics
             || path.StartsWith("api/v1.0/Camera/", StringComparison.Ordinal)))
         {
             return "read";

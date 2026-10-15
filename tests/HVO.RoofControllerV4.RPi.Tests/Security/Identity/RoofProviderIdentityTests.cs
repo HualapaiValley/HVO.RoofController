@@ -1,4 +1,7 @@
 using System.Net;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net.Http.Headers;
@@ -21,6 +24,54 @@ namespace HVO.RoofControllerV4.RPi.Tests.Security;
 public sealed class RoofProviderIdentityTests
 {
     private static RoofIdentityOptions Enabled() => new() { LinuxAuth = new() { Enabled = true } };
+
+    [TestMethod]
+    [DataRow("read", HttpStatusCode.OK)]
+    [DataRow("operate", HttpStatusCode.Forbidden)]
+    [DataRow("configure", HttpStatusCode.Forbidden)]
+    [DataRow("identity", HttpStatusCode.Forbidden)]
+    public async Task DetailedHealth_RequiresReadScope_ForNativeSessions(string scope, HttpStatusCode expected)
+    {
+        if (!Socket.OSSupportsUnixDomainSockets) Assert.Inconclusive("Native sessions require Unix sockets.");
+        using var directory = new TemporaryDirectory();
+        var socketPath = directory.File("worker.sock");
+        var enrollment = Enrollment();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(options => options.ListenUnixSocket(socketPath));
+        await using var worker = builder.Build();
+        worker.MapPost("/v1/revalidate", async (HttpContext context) =>
+        {
+            using var body = await JsonDocument.ParseAsync(context.Request.Body);
+            Assert.AreEqual(enrollment.Subject, body.RootElement.GetProperty("subject").GetString());
+            Assert.AreEqual(enrollment.EnrollmentStamp, body.RootElement.GetProperty("enrollmentStamp").GetString());
+            Assert.AreEqual("local-admin", body.RootElement.GetProperty("purpose").GetString());
+            return Results.Json(new { valid = true, userName = enrollment.Name });
+        });
+        await worker.StartAsync();
+        await using var host = new RoofApiTestHost(settings: new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true",
+            ["RoofControllerSecurity:Identity:LinuxAuth:SocketPath"] = socketPath
+        });
+        using var client = host.CreateApiClient();
+        var store = host.Services.GetRequiredService<RoofIdentityStore>();
+        var principal = store.EnrollLinux(enrollment).Value!;
+        var linux = store.FindLinux(enrollment.Subject)!;
+        var issued = store.CreateProviderSession(principal.Id, linux.Stamp, scope,
+            new StoredAssertionNonce(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), DateTimeOffset.UtcNow.AddSeconds(30))).Value!;
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", issued.Token);
+
+        var response = await client.GetAsync("/health");
+
+        Assert.AreEqual(expected, response.StatusCode);
+        if (expected == HttpStatusCode.OK)
+        {
+            var report = await response.Content.ReadFromJsonAsync<HealthReportPayload>();
+            Assert.IsTrue(report!.Checks.Count > 0);
+        }
+    }
 
     [TestMethod]
     public async Task MigrationIsOptInPreservesExactBackupAndLegacyPin()

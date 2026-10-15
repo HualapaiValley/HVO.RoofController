@@ -572,6 +572,8 @@ See [Authentication and interface rights](authentication-interfaces.md) for veri
 
 ![Enrolled Linux users in the terminal People page](images/terminal/09-linux-users.svg)
 
+Detailed health and the interactive System page use the native read operation with --local; they do not fall back to saved remote credentials. Readiness and liveness probes remain anonymous.
+
 ### Finding the interactive version
 
 Open **System (F4)** for the running CLI build and commit. The local version remains visible if the health read fails or no controller is configured. Controller information is separately labelled as last read and is hidden when status becomes stale; Refresh clears previous results before rereading.
