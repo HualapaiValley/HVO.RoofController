@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-10-15
+
 Installer readiness, optional native authentication and kiosk display updates (#111).
 
 ### Added
