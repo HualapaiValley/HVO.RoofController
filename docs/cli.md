@@ -571,3 +571,5 @@ credentials cannot create these reusable personal keys.
 See [Authentication and interface rights](authentication-interfaces.md) for verified local Linux identity, enrolled Linux users, virtual passwords, kiosk PIN restrictions and first-install setup-user selection.
 
 ![Enrolled Linux users in the terminal People page](images/terminal/09-linux-users.svg)
+
+Detailed health and the interactive System page use the native read operation with --local; they do not fall back to saved remote credentials. Readiness and liveness probes remain anonymous.

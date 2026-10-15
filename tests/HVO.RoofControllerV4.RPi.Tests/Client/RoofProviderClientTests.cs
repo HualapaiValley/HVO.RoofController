@@ -11,6 +11,66 @@ namespace HVO.RoofControllerV4.RPi.Tests.Client;
 public sealed class RoofProviderClientTests
 {
     [TestMethod]
+    [DataRow(HttpStatusCode.OK, "Degraded")]
+    [DataRow(HttpStatusCode.ServiceUnavailable, "Unhealthy")]
+    public async Task LocalHealth_AuthorizesReadForEveryReport_WithoutStoredCredentials(HttpStatusCode status, string health)
+    {
+        var operations = new List<string>();
+        var requests = 0;
+        using var client = new RoofControllerClient(new RoofConnectionOptions
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            Credential = new RoofApiKeyCredential("test-ignored-key"),
+            LocalAuthorization = (operation, _) =>
+            {
+                operations.Add(operation);
+                return Task.FromResult<RoofCredential>(new RoofSessionCredential("test-health-" + operations.Count));
+            },
+            CreateHandler = () => new RoofCliProviderTests.Handler((request, _) =>
+            {
+                requests++;
+                request.Method.Should().Be(HttpMethod.Get);
+                request.RequestUri!.AbsolutePath.Should().Be("/health");
+                request.Headers.Contains("X-Api-Key").Should().BeFalse();
+                request.Headers.Authorization!.Parameter.Should().Be("test-health-" + requests);
+                return Task.FromResult(new HttpResponseMessage(status)
+                {
+                    Content = JsonContent.Create(new HealthReportPayload { Status = health })
+                });
+            })
+        });
+
+        (await client.Health.GetReportAsync()).Status.Should().Be(health);
+        (await client.Health.GetReportAsync()).Status.Should().Be(health);
+        operations.Should().Equal("read", "read");
+        requests.Should().Be(2);
+        client.Credential.Should().BeOfType<RoofApiKeyCredential>();
+    }
+
+    [TestMethod]
+    public async Task LocalHealth_DeniedReadNeverFallsBackToStoredCredentials()
+    {
+        using var client = new RoofControllerClient(new RoofConnectionOptions
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            Credential = new RoofSessionCredential("test-ignored-session"),
+            LocalAuthorization = (_, _) => throw new InvalidOperationException("Denied (test)."),
+            CreateHandler = () => new RoofCliProviderTests.Handler((_, _) => throw new AssertFailedException("No network fallback."))
+        });
+        Func<Task> call = () => client.Health.GetReportAsync();
+        await call.Should().ThrowAsync<RoofLocalAuthorizationException>();
+    }
+
+    [TestMethod]
+    [DataRow("POST", "health")]
+    [DataRow("GET", "health/unknown")]
+    public void LocalHealth_UnknownOperationsRemainUnavailable(string method, string path)
+    {
+        Action call = () => RoofLocalAuthorization.Operation(new HttpMethod(method), path);
+        call.Should().Throw<InvalidOperationException>();
+    }
+
+    [TestMethod]
     public async Task EveryProtectedRequest_ReauthorizesForItsOperation_AndIgnoresStoredCredential()
     {
         var operations = new List<string>();
