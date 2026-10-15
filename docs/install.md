@@ -1403,7 +1403,9 @@ The script checks:
     pull request that moves the version to 4.0.1 upgrades from `4.0.0-rig.1` to `4.0.1-rig.2`.
 11. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
     `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so
-    and changes nothing, and `upgrade` goes forward again.
+    and changes nothing, and `upgrade` goes forward again. When the upgrade migrated the identity store beyond the
+    previous release's supported schema, the scenario instead verifies that both rollback planning and execution
+    refuse it, preserving the live identity bytes, installation record and running containers.
 
 Except in step 4, the roof does not move: the relay register stays 0, and the emulator records no direction relay
 closing and no violation.
@@ -1411,7 +1413,11 @@ closing and no violation.
 It needs Docker, `curl`, `jq`, `openssl`, `ss`, `ip`, `setsid`, `python3`, and `sudo` without a password that reaches
 the same Docker daemon. From the checkout it also needs Docker's buildx, the .NET SDK and git. The release before is
 built from `RIG_PREVIOUS_REF` (by default `origin/main`) in a git worktree of its own, so a checkout needs that commit:
-the workflow fetches the whole history. From a release (`RIG_RELEASE_DIR`), sudo's Docker must be able to pull the
+the workflow fetches the whole history. The disposable historical source baseline receives the Microsoft 10.0.13
+security patch when its packages still use 10.0.10, including its ASP.NET and self-contained runtimes. NuGet auditing
+stays enabled. This exercises the old application and installer with patched dependencies; it does not reproduce
+the old published binaries. The candidate checkout is unchanged by this preparation.
+From a release (`RIG_RELEASE_DIR`), sudo's Docker must be able to pull the
 release's images, and `gh` must be signed in (`GH_TOKEN`).
 
 It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`,

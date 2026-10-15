@@ -1123,6 +1123,23 @@ scenario_c12() {
   ensure_deployed
   close_roof
 
+  # A configured identity path is not persisted until the first identity mutation.
+  # Establish it through the API before testing rollback; missing/unreadable stores
+  # must continue to fail closed in the deploy script.
+  current_check="C12 setup: persisted identity for rollback"
+  local identity_response
+  openssl rand -hex 16 > "${work}/rollback-password"
+  chmod 600 "${work}/rollback-password"
+  jq -n --rawfile password "${work}/rollback-password" \
+    '{name: "rollback-fixture", role: "RoofViewer", password: ($password | rtrimstr("\n"))}' > "${work}/rollback-person.json"
+  identity_response=$(admin_call POST Identity/Users "${work}/rollback-person.json")
+  [[ "$(tail -n 1 <<<"${identity_response}")" == 201 ]] \
+    || fail "creating rollback fixture identity answered HTTP $(tail -n 1 <<<"${identity_response}")"
+  [[ -f "${work}/identity/identity.json" ]] || fail "the controller did not persist the rollback fixture identity"
+  unset identity_response
+  rm -f "${work}/rollback-person.json" "${work}/rollback-password"
+  pass "the controller persisted an identity before rollback; missing-store recovery remains fail-closed"
+
   # CommissioningCheck("C12", "1")
   current_check="C12 step 1: deploy with the roof idle"
   local old_id new_id

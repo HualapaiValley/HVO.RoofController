@@ -670,6 +670,37 @@ setup_from_source() {
   git -C "${repo_root}" worktree add --quiet --detach "${previous_root}" "${previous_commit}" >/dev/null 2>&1 \
     || fail "could not make a worktree of ${previous_ref}"
   previous_worktree=1
+  # Keep historical application/installer behavior, but do not rebuild a vulnerable
+  # SignalR baseline. This disposable worktree alone receives the security patch;
+  # candidate dependencies and NuGet auditing remain unchanged. This is a patched
+  # source baseline, not a reproduction of the previously published binary.
+  python3 - "${previous_root}" <<'PY' || fail "could not patch the historical test baseline"
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+packages = root / 'Directory.Packages.props'
+text = packages.read_text()
+text = re.sub(r'(<PackageVersion Include="Microsoft\.[^"]+" Version=")10\.0\.10(")',
+              r'\g<1>10.0.13\2', text)
+packages.write_text(text)
+dockerfile = root / 'src/HVO.RoofControllerV4.RPi/Dockerfile'
+text = dockerfile.read_text()
+text = re.sub(r'(FROM mcr\.microsoft\.com/dotnet/aspnet:)10\.0\.(?:10|11|12)( AS runtime)',
+              r'\g<1>10.0.13\2', text)
+dockerfile.write_text(text)
+targets = root / 'Directory.Build.targets'
+text = targets.read_text()
+if '<RuntimeFrameworkVersion>' not in text:
+    text = text.replace('<Project>', '''<Project>
+  <!-- Security-patched runtime for this disposable historical test baseline only. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0' and '$(SelfContained)' == 'true'">
+    <RuntimeFrameworkVersion>10.0.13</RuntimeFrameworkVersion>
+  </PropertyGroup>''', 1)
+targets.write_text(text)
+PY
+  say "Historical source baseline uses patched Microsoft 10.0.13 dependencies; NuGet audit remains enabled"
   # Each release is a prerelease of its own checkout's VersionPrefix, so each build passes Directory.Build.targets's
   # check: with this source at 4.0.1 and the release before still at 4.0.0, 4.0.1-rig.2 and 4.0.0-rig.1.
   prefix=$("${repo_root}/build/version.sh") || fail "could not read this source's VersionPrefix"
@@ -744,7 +775,7 @@ PY
 # as a release before it at an older version.
 publish() {
   (cd "$1/src" && Version="$3" dotnet publish "$2" -c Release -r "${rid}" -v quiet -nologo ${5:+"-p:VersionPrefix=$5"} \
-    -o "$4" >/dev/null) \
+    -o "$4") \
     || fail "could not publish $2 ${3} from $1"
 }
 
@@ -759,11 +790,12 @@ says_version() {
 # checkout and pushed, and its release.json, with the assets (files in the folder, for this platform) and the notes, as
 # its final release's (4.0.1 for 4.0.1-rig.2), as build/release-assets.py gives a release candidate its release's.
 release() {
-  local folder=$1 checkout=$2 release_version=$3 notes=$4 commit controller_digest emulator_digest assets="[]"
+  local folder=$1 checkout=$2 release_version=$3 notes=$4 commit controller_digest emulator_digest identity_schema assets="[]"
   shift 4
   commit=$(git -C "${checkout}" rev-parse HEAD)
   push_release_image roof-controller "${checkout}" src/HVO.RoofControllerV4.RPi/Dockerfile "${release_version}"
   controller_digest=${PUSHED_INDEX}
+  identity_schema=${PUSHED_IDENTITY_SCHEMA}
   push_release_image roof-hat-emulator "${checkout}" src/HVO.RoofControllerV4.Emulator/Dockerfile "${release_version}"
   emulator_digest=${PUSHED_INDEX}
   while (( $# >= 2 )); do
@@ -775,10 +807,10 @@ release() {
   done
   jq -n --arg version "${release_version}" --arg commit "${commit}" --arg registry "${registry}" \
     --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" --arg notes "${notes}" \
-    --argjson assets "${assets}" '
+    --argjson identitySchema "${identity_schema}" --argjson assets "${assets}" '
     def image($name; $digest): { repository: "\($registry)/\($name)", tag: $version, digest: $digest,
       reference: "\($registry)/\($name):\($version)@\($digest)", platforms: ["linux/amd64", "linux/arm64"] };
-    { schemaVersion: 1, product: "HVO Roof Controller", version: $version, tag: "v\($version)",
+    { schemaVersion: 1, identityStoreSchema: $identitySchema, product: "HVO Roof Controller", version: $version, tag: "v\($version)",
       prerelease: ($version | contains("-")), commit: $commit,
       images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) },
       assets: $assets }
@@ -790,11 +822,20 @@ release() {
 # platforms: this platform's image built from the checkout's Dockerfile with the version, and an empty image for the
 # other one, which builds without emulation. The index's digest is in PUSHED_INDEX.
 PUSHED_INDEX=""
+PUSHED_IDENTITY_SCHEMA=""
 push_release_image() {
   local repository="${registry}/$1" checkout=$2 image_version=$4 single other output
   output=$(docker buildx build --quiet --provenance=false --platform "${platform}" -f "${checkout}/$3" \
     --build-arg "ROOF_VERSION=${image_version}" --build-arg "ROOF_REVISION=$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" \
     -t "${repository}:${image_version}-${platform#linux/}" --load "${checkout}" 2>&1) || fail "could not build $1 ${image_version} for ${platform}: $(tail -n 20 <<<"${output}")"
+  if [[ "$1" == roof-controller ]]; then
+    PUSHED_IDENTITY_SCHEMA=$(docker image inspect --format '{{index .Config.Labels "io.hvo.roof.identity-schema"}}' "${repository}:${image_version}-${platform#linux/}")
+    case "${PUSHED_IDENTITY_SCHEMA}" in
+      ""|"<no value>") PUSHED_IDENTITY_SCHEMA=1 ;;
+      1|2) ;;
+      *) fail "the test controller image has an unsupported identity schema" ;;
+    esac
+  fi
   single=$(push_digest "${repository}:${image_version}-${platform#linux/}")
   mkdir -p "${work}/other-$1-${image_version}"
   printf 'FROM scratch\nLABEL org.opencontainers.image.version=%s\n' "${image_version}" > "${work}/other-$1-${image_version}/Dockerfile"
@@ -1295,8 +1336,37 @@ scenario_upgrade() {
 
 scenario_rollback() {
   current_check="rollback: the plan"
-  local controller_id emulator_id
+  local controller_id emulator_id live_schema previous_schema identity_before record_before mode
   controller_id=$(container_id "${controller}")
+  emulator_id=$(container_id "${emulator}")
+  live_schema=$(sudo -n jq -er '.schemaVersion // 1' /var/lib/hvo-roof/identity/identity.json)
+  previous_schema=$(jq -er '.identityStoreSchema // 1' "${previous_dir}/release.json")
+  if (( live_schema > previous_schema )); then
+    current_check="rollback: incompatible identity schema refused"
+    identity_before=$(sudo -n sha256sum /var/lib/hvo-roof/identity/identity.json)
+    record_before=$(sudo -n sha256sum /etc/hvo-roof/install.json)
+    start_relay_monitor
+    for mode in plan apply; do
+      if [[ "${mode}" == plan ]]; then
+        install_with "${installed}" rollback-refused rollback --plan --release "${previous_dir}"
+      else
+        install_with "${installed}" rollback-refused rollback --release "${previous_dir}"
+      fi
+      (( INSTALL_STATUS == 3 )) || fail "incompatible rollback (${mode}) exited ${INSTALL_STATUS}, not refusal 3"
+      expect_output rollback-refused "Rollback is refused before replacing the controller"
+      [[ "$(container_id "${controller}")" == "${controller_id}" && "$(container_id "${emulator}")" == "${emulator_id}" ]] \
+        || fail "incompatible rollback replaced a running container"
+      [[ "$(sudo -n sha256sum /var/lib/hvo-roof/identity/identity.json)" == "${identity_before}" ]] \
+        || fail "incompatible rollback changed the live identity store"
+      [[ "$(sudo -n sha256sum /etc/hvo-roof/install.json)" == "${record_before}" ]] \
+        || fail "incompatible rollback changed the installation record"
+      no_secret_in "${work}/rollback-refused.txt"
+    done
+    wait_for "the compatible controller remains ready" 60 ready
+    roof_still
+    pass "schema ${live_schema} cannot roll back to ${previous_schema}: plan and apply refused, identity bytes/record/containers preserved, relays stayed off"
+    return
+  fi
   install_with "${installed}" rollback-plan rollback --plan --release "${previous_dir}"
   expect_installed "rollback --plan"
   expect_output rollback-plan "${version} is installed here; going back to ${previous_version}, the release before."

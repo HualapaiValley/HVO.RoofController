@@ -215,7 +215,9 @@ jobs:
           # The artifact: the Pi's program and its deploy files side by side, the directory docs/kiosk.md installs from.
           # Every file the page installs must be in it.
           mkdir kiosk-artifact
-          cp hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk HVO.RoofControllerV4.Kiosk/deploy/* kiosk-artifact/
+          cp hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk kiosk-artifact/
+          # Splash resources are embedded in the installer, not standalone kiosk assets.
+          cp HVO.RoofControllerV4.Kiosk/deploy/{hvo-roof-kiosk.service,99-hvo-roof-kiosk-backlight.rules,appsettings.Local.example.json} kiosk-artifact/
           installs=$(grep -oP '^\s*sudo install -m [0-7]+ \K[^ ]+(?= )' ../docs/kiosk.md)
           test -n "$installs"
           for file in $installs; do
