@@ -168,7 +168,7 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
     /// upgrade or an older installer would take as the release to go back to. This step clears the mark at the end.
     /// The record's folder is synced before any change, even when the mark was written by a run before this one: a power
     /// loss must not take the record back to the older release once a newer controller may be deployed. When that cannot
-    /// be made sure of, nothing else changes.
+    /// be made sure of, nothing else changes. Another release's unfinished upgrade is refused here too.
     /// </summary>
     public void MarkUpgradeStarted(InstallContext context)
     {
@@ -177,6 +177,13 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
         if (existing is null)
         {
             return;
+        }
+
+        // Its baseline stays: rollback goes back to the release whose controller the deploy script kept, which a newer
+        // release's upgrade over this one would no longer say (InstallerSession.VersionProblems refuses it before here).
+        if (existing is { UpgradingFrom: not null, UninstalledAt: null } && existing.Version != context.Version)
+        {
+            throw new InstallerRefusedException(InstallerSession.UnfinishedUpgradeProblem(scope, existing, $"installing {context.Version}") + ".");
         }
 
         try
@@ -189,7 +196,7 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
             }
             else
             {
-                // A run that stopped before its sync (below) may have left the mark, or a restore the record, unsynced.
+                // The record may not be synced yet: a mark an earlier run wrote before its sync failed, or a restore's.
                 context.Machine.SyncDirectory(Path.GetDirectoryName(path)!);
             }
         }

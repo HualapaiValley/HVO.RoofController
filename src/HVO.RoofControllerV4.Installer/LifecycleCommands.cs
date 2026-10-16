@@ -123,7 +123,8 @@ internal static class LifecycleCommands
     /// <summary>
     /// <c>upgrade</c>. Run by an installer of another release, it puts the new release's installer in place and hands over
     /// to it; run by the new release's (or with that release already the latest), it installs what is recorded, as
-    /// <c>--answers</c> installs an answers file. Going back is <c>rollback</c>'s: an older release is refused.
+    /// <c>--answers</c> installs an answers file. Going back is <c>rollback</c>'s: an older release is refused. While an
+    /// upgrade has not finished, only its own release is taken, to finish it.
     /// </summary>
     private static async Task<int> UpgradeAsync(InstallerHost host, string? version, string? releaseFolder, bool planOnly, CancellationToken cancellationToken)
     {
@@ -148,6 +149,29 @@ internal static class LifecycleCommands
                 ? $"The upgrade from {started} to {record.Version} did not finish here, and parts of {record.Version} may be in place, newer than {target}: an upgrade never goes back. "
                     + $"Finish it with {Sudo(scope)}{Installer.CommandName} upgrade --version {record.Version}, or go back to {started} with {Sudo(scope)}{Installer.CommandName} rollback."
                 : $"{record.Version} is installed here, newer than {target}: an upgrade never goes back. To go back to the release before, {Sudo(scope)}{Installer.CommandName} rollback.");
+        }
+
+        if (record.UpgradingFrom is { } unfinished)
+        {
+            // Only its own release finishes it, or rollback goes back: another release would leave rollback aiming at the
+            // unfinished one, whose controller the deploy script may never have kept.
+            if (target != record.Version)
+            {
+                throw new InstallerRefusedException(InstallerSession.UnfinishedUpgradeProblem(scope, record, $"upgrading to {target}") + ".");
+            }
+
+            // Finishing it needs its release, which may be gone; going back needs only the release before's.
+            try
+            {
+                await release.GetAsync(machine, session.Log, target, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InstallerException error)
+            {
+                throw new InstallerException(
+                    $"{error.Message}{Environment.NewLine}The upgrade from {unfinished} to {target} did not finish here, and finishing it needs release {target}. "
+                    + $"Without it, go back to {unfinished} with {Sudo(scope)}{Installer.CommandName} rollback, which needs only {unfinished}'s release.",
+                    error.ExitCode);
+            }
         }
 
         // What the upgrade notes start after: the release an unfinished upgrade started from, else the one installed.
@@ -197,7 +221,6 @@ internal static class LifecycleCommands
         host.Out.WriteLine(
             from == target ? $"{target} is installed here: its installer checks it."
             : record.Version == target ? $"The upgrade from {from} to {target} did not finish here: its installer finishes it."
-            : record.UpgradingFrom is not null ? $"The upgrade from {from} to {record.Version} did not finish here; {target} replaces it."
             : $"{record.Version} is installed here; {target} replaces it.");
         session.Version = target;
         if (from != target)

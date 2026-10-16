@@ -160,19 +160,38 @@ public sealed class InstallerSession
 
     /// <summary>
     /// Why this installer will not install over what the records of this run's roles say: a newer release is installed, or
-    /// was being installed. Going back is <c>rollback</c>'s, which knows what the release before left; an older installer
-    /// does not.
+    /// was being installed, or another release's upgrade has not finished. Going back is <c>rollback</c>'s, which knows
+    /// what the release before left; an older installer does not. A newer one waits for the unfinished upgrade to be
+    /// finished or rolled back (<see cref="UnfinishedUpgradeProblem"/>).
     /// </summary>
     public IReadOnlyList<string> VersionProblems()
         => [.. Records()
-            .Where(entry => RoofSemVer.IsValid(entry.Record.Version) && RoofSemVer.IsValid(Version) && RoofSemVer.IsOlder(Version, entry.Record.Version))
+            .Where(entry => RoofSemVer.IsValid(entry.Record.Version) && RoofSemVer.IsValid(Version)
+                && (RoofSemVer.IsOlder(Version, entry.Record.Version) || entry.Record is { UpgradingFrom: not null, UninstalledAt: null } && entry.Record.Version != Version))
             .Select(entry => VersionProblem(entry.Scope, entry.Record))];
+
+    /// <summary>
+    /// Why <paramref name="doing"/> (upgrading to 4.0.2, installing 4.0.2) waits while the record has an upgrade that did not
+    /// finish. Another release over it would make the unfinished release the one <c>rollback</c> goes back to, though the
+    /// deploy script may have kept the controller from before it (when the upgrade stopped before replacing it), and the
+    /// rollback would be refused. Going back needs only the release before's files, so it works when the unfinished
+    /// release's are gone.
+    /// </summary>
+    internal static string UnfinishedUpgradeProblem(InstallScope scope, InstallRecord record, string doing)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var sudo = scope == InstallScope.System ? "sudo " : string.Empty;
+        return $"The upgrade from {record.UpgradingFrom} to {record.Version} did not finish here: finish it, or go back, before {doing}, so that rollback still goes back to the controller the deploy script kept. "
+            + $"Finish it with {sudo}hvo-roof-install upgrade --version {record.Version}, or go back to {record.UpgradingFrom} with {sudo}hvo-roof-install rollback (it needs only {record.UpgradingFrom}'s release), then run this again";
+    }
 
     private string VersionProblem(InstallScope scope, InstallRecord record)
     {
         var sudo = scope == InstallScope.System ? "sudo " : string.Empty;
         return record switch
         {
+            { UpgradingFrom: not null, UninstalledAt: null } when RoofSemVer.IsOlder(record.Version, Version) =>
+                UnfinishedUpgradeProblem(scope, record, $"installing {Version}"),
             { UpgradingFrom: { } from, UninstalledAt: null } =>
                 $"The upgrade from {from} to {record.Version} did not finish here, and parts of {record.Version} may be in place, newer than this installer ({Version}). "
                 + $"Finish it ({sudo}hvo-roof-install upgrade --version {record.Version}), or go back to {from} ({sudo}hvo-roof-install rollback)",

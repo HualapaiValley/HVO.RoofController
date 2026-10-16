@@ -93,7 +93,9 @@ public sealed record InstallRecord
 
     /// <summary>
     /// The record as an upgrade to <paramref name="version"/> leaves it before its first change: it says that release, with
-    /// this one before it for a rollback (none after an uninstall), and that the upgrade has not finished.
+    /// this one before it for a rollback (none after an uninstall), and that the upgrade has not finished. Never for an
+    /// installed record with another upgrade unfinished, whose baseline this would replace: that upgrade is finished or
+    /// rolled back first (<c>RecordStep.MarkUpgradeStarted</c> refuses it).
     /// </summary>
     public InstallRecord UpgradeStarted(string version)
     {

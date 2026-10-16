@@ -293,8 +293,9 @@ their digests, and no others: the deploy script deploys the controller's image o
 For a machine that cannot reach GitHub, download `release.json` from the release's page on a machine that can, and give
 its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 
-An installer never installs over a newer release, or over one that an unfinished upgrade was installing
-([Routine upgrades](#routine-upgrades)): the install, the wizard and `--plan` are refused (exit 3). It checks the
+An installer never installs over a newer release, or over one that an unfinished upgrade was installing, and while an
+upgrade has not finished it installs no other release over it ([Routine upgrades](#routine-upgrades)): the install,
+the wizard and `--plan` are refused (exit 3). It checks the
 record of the roles it installs, whoever runs it: the machine's record for the controller, a rig on Linux and the kiosk,
 including in a `--plan` you run without `sudo`, and your own for the rest ([The record and the log](#the-record-and-the-log)).
 
@@ -307,7 +308,7 @@ including in a `--plan` you run without `sudo`, and your own for the rest ([The 
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer, or an unfinished upgrade to another release; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release, or to another release while an upgrade has not finished; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone, that a newer release made, or that was made during an unfinished upgrade to a release other than the installer's, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -1110,6 +1111,13 @@ the new installer already in place, finishes it: "The upgrade from 4.0.0 to 4.0.
 the wizard and `--plan` of an installer older than 4.0.1. That includes the installers of releases from before
 `upgradingFrom`, which compare their own release with the record's.
 
+While an upgrade is unfinished, no other release goes over it: `upgrade` to another release, and the install, the
+wizard and `--plan` of a newer installer, are refused (exit 3) until it is finished or rolled back. Otherwise the
+unfinished release would become the one `rollback` goes back to, though the controller the deploy script kept may be
+the one from before it, when the upgrade stopped before the controller was replaced. When the unfinished release's
+files are gone, finishing it fails and says so; `rollback` needs only the release before's, and `upgrade` then goes on
+to the latest.
+
 ## Rolling back
 
 `sudo hvo-roof-install rollback` goes back to the release installed before the last upgrade, the record's
@@ -1126,7 +1134,8 @@ the wizard and `--plan` of an installer older than 4.0.1. That includes the inst
   asset has no installer, and the one here stays.
 - The record says the release before, and the release it went back from (`rolledBackFrom`).
 
-After an upgrade that stopped part way, it goes back to the release that upgrade started from. Each piece is checked
+After an upgrade that stopped part way, it goes back to the release that upgrade started from, with only that
+release's files: the unfinished release's are not needed. Each piece is checked
 against that release's own: the controller by its image's digest, the programs by their SHA-256. One the upgrade never
 reached is left as it is.
 
@@ -1177,7 +1186,8 @@ changes nothing; `--release DIR` reads the release from a folder.
 
 - The archive must be root's and `0600` or `0400`. The restore checks the file it opened, as well as the path, so a
   file put in its place in between is refused too. A backup a newer installer made, or of a newer release, is refused:
-  restore it with that release's installer.
+  restore it with that release's installer. So is one made while an upgrade had not finished, unless the installer is
+  that upgrade's release, whose install finishes it.
 - A restore is for a machine with nothing installed. Uninstall first; a plain uninstall keeps the data, which the
   restore then replaces only with `--replace`, so the data is never overwritten by mistake.
 - The files go back with their modes and owners, and the install that follows checks them as any run does. The first
@@ -1246,7 +1256,7 @@ choices, it says:
 | `installerVersion` | The installer that last wrote it. |
 | `previousVersion` | The release installed before the last upgrade: what `rollback` goes back to. A rollback clears it. |
 | `rolledBackFrom` | The release `rollback` went back from. An upgrade clears it. |
-| `upgradingFrom` | The release an upgrade started from, while the upgrade has not finished. From the upgrade's first change, `version` says the new release. The upgrade's last step clears it, as do `rollback` and `uninstall`. |
+| `upgradingFrom` | The release an upgrade started from, while the upgrade has not finished. From the upgrade's first change, `version` says the new release. The upgrade's last step clears it, as do `rollback` and `uninstall`. While it is there, only `version`'s release is installed, to finish the upgrade. |
 | `uninstalledAt` | When `uninstall` removed the roles, keeping the data and the choices. An install clears it. |
 | `installedAt`, `updatedAt` | When it was first written, and last. |
 

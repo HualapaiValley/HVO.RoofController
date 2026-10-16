@@ -537,6 +537,96 @@ public sealed class InstallerLifecycleTests
         }
     }
 
+    // 4.0.0 to 4.0.1 stopped before its controller, and 4.0.2 the latest (#131). While that upgrade is unfinished no other
+    // release goes over it, by upgrade, the install, the wizard or --plan: rollback must still go back to 4.0.0, whose
+    // controller the deploy script left running and would keep.
+    [TestMethod]
+    [DataRow(NewVersion, "upgrade")]
+    [DataRow(NewVersion, "upgrade", "--version", "4.0.2")]
+    [DataRow(NewVersion, "upgrade", "--plan")]
+    [DataRow("4.0.2", "upgrade")]
+    [DataRow("4.0.2", "--setup-prerequisites", "--answers", AnswersFile)]
+    [DataRow("4.0.2", "--plan", "--answers", AnswersFile)]
+    [DataRow("4.0.2", "--plan")]
+    public async Task AnUpgradeThatStoppedBeforeItsController_IsNotReplacedByAnotherRelease(string installer, params string[] arguments)
+    {
+        using var pi = await StoppedBeforeControllerPiAsync();
+        var answers = pi.WriteAnswers(ControllerAndKiosk);
+        pi.InstallerVersion = installer;
+        var files = pi.Snapshot(InstallPaths.SystemLog);
+        var (deploys, launches) = (pi.Deploys.Count, pi.Launches.Count);
+
+        var run = await pi.RunAsync([.. arguments.Select(argument => argument == AnswersFile ? answers : argument)]);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"The upgrade from 4.0.0 to {NewVersion} did not finish here: finish it, or go back, before ")
+            .And.Contain($"Finish it with sudo hvo-roof-install upgrade --version {NewVersion}")
+            .And.Contain("go back to 4.0.0 with sudo hvo-roof-install rollback (it needs only 4.0.0's release)");
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
+        pi.Deploys.Should().HaveCount(deploys);
+        pi.Launches.Should().HaveCount(launches);
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.0");
+    }
+
+    // The same, with 4.0.1's release gone since (#131): finishing the upgrade cannot be done, and says to roll back, which
+    // needs only 4.0.0's release. After the rollback 4.0.2 goes ahead, keeping 4.0.0 for its own rollback, which works.
+    [TestMethod]
+    public async Task AnUpgradeThatStoppedBeforeItsController_IsRolledBack_WhenItsReleaseIsGone_ThenAnotherGoesAhead()
+    {
+        using var pi = await StoppedBeforeControllerPiAsync();
+        pi.Downloads.Remove(ReleaseManifest.DownloadUri(NewVersion).ToString());
+        var deploys = pi.Deploys.Count;
+
+        var newer = await pi.RunAsync("upgrade");
+        var finish = await pi.RunAsync("upgrade", "--version", NewVersion);
+
+        newer.ExitCode.Should().Be((int)InstallerExitCode.Refused, newer.ToString());
+        finish.ExitCode.Should().Be((int)InstallerExitCode.Failed, finish.ToString());
+        finish.Error.Should().Contain($"The installer could not get release.json for {NewVersion}")
+            .And.Contain($"The upgrade from 4.0.0 to {NewVersion} did not finish here, and finishing it needs release {NewVersion}. "
+                + "Without it, go back to 4.0.0 with sudo hvo-roof-install rollback, which needs only 4.0.0's release.");
+        pi.Deploys.Should().HaveCount(deploys);
+
+        var rollback = await pi.RunAsync("rollback");
+
+        rollback.ExitCode.Should().Be(0, rollback.ToString());
+        rollback.Output.Should().Contain($"The upgrade from 4.0.0 to {NewVersion} did not finish here; going back to 4.0.0, the release before.");
+        pi.DeployOptions.Should().NotContain("--rollback", "4.0.0's controller runs still");
+        pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.Version == "4.0.0" && running.State == "running");
+        Record(pi).Should().Match<InstallRecord>(back => back.Version == "4.0.0" && back.RolledBackFrom == NewVersion && back.UpgradingFrom == null && back.PreviousVersion == null);
+        pi.Read(InstallPaths.SystemInstaller).Should().Be(Encoding.UTF8.GetString(FakeMachine.InstallerProgram("4.0.0", "linux-arm64")));
+
+        pi.InstallerVersion = "4.0.0";
+        var upgrade = await pi.RunAsync("upgrade");
+
+        upgrade.ExitCode.Should().Be(0, upgrade.ToString());
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.2");
+        pi.Containers[ControllerRollbackStep.PreviousContainer].Should().Match<FakeContainer>(kept => kept.Version == "4.0.0" && kept.State == "exited");
+        Record(pi).Should().Match<InstallRecord>(record => record.Version == "4.0.2" && record.PreviousVersion == "4.0.0" && record.UpgradingFrom == null);
+
+        pi.InstallerVersion = "4.0.2";
+        var back = await pi.RunAsync("rollback");
+
+        back.ExitCode.Should().Be(0, back.ToString());
+        pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.Version == "4.0.0" && running.State == "running");
+        Record(pi).Should().Match<InstallRecord>(record => record.Version == "4.0.0" && record.RolledBackFrom == "4.0.2");
+        pi.Unexpected.Should().BeEmpty();
+    }
+
+    // The mark itself never replaces another release's unfinished upgrade (#131), whichever way a run reached it.
+    [TestMethod]
+    public async Task TheMark_NeverReplacesAnotherReleasesUnfinishedUpgrade()
+    {
+        using var pi = await StoppedBeforeControllerPiAsync();
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var session = await InstallerSession.StartAsync(pi.Machine, InstallLog.None, "4.0.2", FakeMachine.Clock);
+        var step = new RecordStep(InstallScope.System, InstallPaths.SystemRecord, (_, existing) => existing!);
+
+        FluentActions.Invoking(() => step.MarkUpgradeStarted(session.Context)).Should().Throw<InstallerRefusedException>()
+            .WithMessage($"The upgrade from 4.0.0 to {NewVersion} did not finish here: finish it, or go back, before installing 4.0.2*");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+    }
+
     [TestMethod]
     [DataRow("4.1")]
     [DataRow("v4.0.1")]
@@ -1051,6 +1141,23 @@ public sealed class InstallerLifecycleTests
         var run = await pi.RunAsync("upgrade");
         run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
         pi.InstallerVersion = NewVersion;
+        return pi;
+    }
+
+    // 4.0.0 upgraded to NewVersion, stopped before its controller: the deploy script failed (its pull, say), so 4.0.0's
+    // controller runs still. The installer in place is NewVersion's, and 4.0.2 is the latest release.
+    private static async Task<FakeMachine> StoppedBeforeControllerPiAsync()
+    {
+        var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true);
+        pi.DeployFailure = "[deploy] ERROR: docker pull failed: manifest unknown";
+        var run = await pi.RunAsync("upgrade");
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        pi.DeployFailure = null;
+        pi.InstallerVersion = NewVersion;
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.0");
+        Record(pi).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0" && record.PreviousVersion == "4.0.0");
+        pi.WithRelease("4.0.2", latest: true);
         return pi;
     }
 
