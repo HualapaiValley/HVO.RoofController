@@ -78,7 +78,8 @@ public sealed record ControllerSettings
 
     /// <summary>
     /// The controller container's resource limits (docs/deployment.md, "The container's privileges and limits"): the
-    /// defaults unless given. Kept in the install record, so an upgrade and a rollback give the container the same.
+    /// process limit, and a CPU and a memory limit only when given (none by default, until #138). Kept in the install
+    /// record, so an upgrade and a rollback give the container the same.
     /// </summary>
     public ContainerResources Resources { get; init; } = new();
 
@@ -188,45 +189,36 @@ public sealed record ControllerSettings
 }
 
 /// <summary>
-/// The controller container's resource limits, as the deploy script gives them (CONTAINER_CPUS, CONTAINER_MEMORY,
-/// CONTAINER_PIDS_LIMIT and ALLOW_LIMITS_BELOW_MINIMUM; docs/deployment.md, "The container's privileges and limits"). The
-/// HVO install contract's minimum is 2 CPUs and 4 GiB: less needs <see cref="AllowBelowMinimum"/>, and less than 1 CPU or
-/// 1 GiB is refused. The container gets no swap beyond its memory.
+/// The controller container's resource limits, as the deploy script gives them (CONTAINER_CPUS, CONTAINER_MEMORY and
+/// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"). The process limit is always given.
+/// The CPU and memory limits are given only when set: none is by default until the supervisor de-energises the relays
+/// whenever the controller exits (#138), as a limit is one more way for the kernel to end the controller mid-motion. One
+/// that is set is at least the HVO install contract's minimum of 2 CPUs and 4 GiB; less is refused, with no exception.
+/// The container gets no swap beyond its memory.
 /// </summary>
 public sealed partial record ContainerResources
 {
-    public const decimal DefaultCpus = 2;
-    public const string DefaultMemory = "4g";
     public const int DefaultPidsLimit = 512;
 
-    /// <summary>The contract's minimum CPUs.</summary>
+    /// <summary>The contract's minimum CPUs, for a CPU limit that is set.</summary>
     public const decimal MinimumCpus = 2;
 
-    /// <summary>The contract's minimum memory: 4 GiB.</summary>
+    /// <summary>The contract's minimum memory, for a memory limit that is set: 4 GiB.</summary>
     public const long MinimumMemoryBytes = 4L * 1024 * 1024 * 1024;
-
-    /// <summary>The fewest CPUs the controller is given, even with <see cref="AllowBelowMinimum"/>.</summary>
-    public const decimal FloorCpus = 1;
-
-    /// <summary>The least memory the controller is given, even with <see cref="AllowBelowMinimum"/>: 1 GiB.</summary>
-    public const long FloorMemoryBytes = 1024L * 1024 * 1024;
 
     public const int MinimumPidsLimit = 256;
     public const int MaximumPidsLimit = 32768;
 
-    /// <summary>CPUs, as <c>docker run --cpus</c> takes them (2, 1.5), with at most two decimals.</summary>
-    public decimal Cpus { get; init; } = DefaultCpus;
+    /// <summary>CPUs, as <c>docker run --cpus</c> takes them (2, 2.5), with at most two decimals; none (the default) for no CPU limit.</summary>
+    public decimal? Cpus { get; init; }
 
-    /// <summary>Memory, as a whole number of MiB or GiB (4096m, 4g).</summary>
-    public string Memory { get; init; } = DefaultMemory;
+    /// <summary>Memory, as a whole number of MiB or GiB (4096m, 4g); none (the default) for no memory limit.</summary>
+    public string? Memory { get; init; }
 
     /// <summary>The most processes and threads the container runs at once (<c>docker run --pids-limit</c>).</summary>
     public int PidsLimit { get; init; } = DefaultPidsLimit;
 
-    /// <summary>True to give the controller fewer than 2 CPUs or less than 4 GiB, below the contract's minimum.</summary>
-    public bool AllowBelowMinimum { get; init; }
-
-    /// <summary>The memory in bytes; null when <see cref="Memory"/> is not a whole number of MiB or GiB.</summary>
+    /// <summary>The memory in bytes; null when there is no memory limit, or <see cref="Memory"/> is not a whole number of MiB or GiB.</summary>
     [JsonIgnore]
     public long? MemoryBytes
         => MemoryPattern().Match(Memory ?? string.Empty) is { Success: true } match
@@ -234,62 +226,72 @@ public sealed partial record ContainerResources
                 ? number * (char.ToLowerInvariant(match.Groups[2].Value[0]) == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024)
                 : null;
 
-    /// <summary>The CPUs as Docker counts them (HostConfig.NanoCpus).</summary>
+    /// <summary>The CPUs as Docker counts them (HostConfig.NanoCpus); 0 for no CPU limit.</summary>
     [JsonIgnore]
-    public long NanoCpus => (long)(Cpus * 1_000_000_000m);
+    public long NanoCpus => Cpus is { } cpus ? (long)(cpus * 1_000_000_000m) : 0;
 
-    /// <summary>The CPUs as the deploy script and Docker write them: 2, 1.5.</summary>
+    /// <summary>The CPUs as the deploy script and Docker write them (2, 2.5); null for no CPU limit.</summary>
     [JsonIgnore]
-    public string CpusText => Cpus.ToString("0.##", CultureInfo.InvariantCulture);
-
-    /// <summary>True when the limits are below the contract's minimum.</summary>
-    [JsonIgnore]
-    public bool BelowMinimum => Cpus < MinimumCpus || MemoryBytes < MinimumMemoryBytes;
+    public string? CpusText => Cpus?.ToString("0.##", CultureInfo.InvariantCulture);
 
     /// <summary>The limits, as the plan and the deploy script say them.</summary>
     public string Describe()
-        => string.Create(CultureInfo.InvariantCulture, $"{CpusText} CPUs, {Memory} of memory and no swap, at most {PidsLimit} processes and threads");
+    {
+        var limits = (Cpus, Memory) switch
+        {
+            (not null, not null) => $"{CpusText} CPUs, {Memory} of memory and no swap",
+            (not null, null) => $"{CpusText} CPUs and no memory limit",
+            (null, not null) => $"no CPU limit, {Memory} of memory and no swap",
+            _ => "no CPU or memory limit"
+        };
+        return string.Create(CultureInfo.InvariantCulture, $"{limits}, at most {PidsLimit} processes and threads");
+    }
 
     public IEnumerable<string> Problems()
     {
-        if (Cpus <= 0 || Cpus > 999 || decimal.Round(Cpus, 2) != Cpus)
+        if (Cpus is { } cpus)
         {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's CPUs (controller.resources.cpus) must be a number such as 2 or 1.5, with at most two decimals, not {Cpus}.");
-        }
-        else if (Cpus < FloorCpus)
-        {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller is never given less than 1 CPU (controller.resources.cpus is {CpusText}; the minimum is 2).");
+            if (cpus <= 0 || cpus > 999 || decimal.Round(cpus, 2) != cpus)
+            {
+                yield return string.Create(CultureInfo.InvariantCulture, $"The controller's CPUs (controller.resources.cpus) must be a number such as 2 or 2.5, with at most two decimals, not {cpus}.");
+            }
+            else if (cpus < MinimumCpus)
+            {
+                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is fewer than 2 CPUs, the minimum (the HVO install contract's): give at least 2, or leave it out for no CPU limit.";
+            }
         }
 
-        if (MemoryBytes is not { } memory)
+        if (Memory is not null)
         {
-            yield return $"The controller's memory (controller.resources.memory) must be a whole number of MiB or GiB, such as 4096m or 4g, not '{Memory}'.";
-        }
-        else if (memory < FloorMemoryBytes)
-        {
-            yield return $"The controller is never given less than 1g of memory (controller.resources.memory is {Memory}; the minimum is 4g).";
+            if (MemoryBytes is not { } memory)
+            {
+                yield return $"The controller's memory (controller.resources.memory) must be a whole number of MiB or GiB, such as 4096m or 4g, not '{Memory}'.";
+            }
+            else if (memory < MinimumMemoryBytes)
+            {
+                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 4g, the minimum (the HVO install contract's): give at least 4g, or leave it out for no memory limit.";
+            }
         }
 
         if (PidsLimit is < MinimumPidsLimit or > MaximumPidsLimit)
         {
             yield return string.Create(CultureInfo.InvariantCulture, $"The controller's process limit (controller.resources.pidsLimit) must be from {MinimumPidsLimit} to {MaximumPidsLimit}, not {PidsLimit}.");
         }
-
-        if (!AllowBelowMinimum && Cpus >= FloorCpus && MemoryBytes >= FloorMemoryBytes && BelowMinimum)
-        {
-            yield return $"The controller's limits ({CpusText} CPUs, {Memory}) are below the minimum of 2 CPUs and 4g (the HVO install contract's). "
-                + "To give it less anyway, set controller.resources.allowBelowMinimum to true (or give --allow-limits-below-minimum).";
-        }
     }
 
-    /// <summary>These limits with the memory written plainly (4G as 4g, 04096m as 4096m) and the CPUs without trailing zeros.</summary>
+    /// <summary>
+    /// These limits with the memory written plainly (4G as 4g, 04096m as 4096m), the CPUs without trailing zeros, and an
+    /// empty memory as none.
+    /// </summary>
     public ContainerResources Normalised() => this with
     {
-        Cpus = decimal.Round(Cpus, 2) == Cpus ? decimal.Parse(CpusText, NumberStyles.Number, CultureInfo.InvariantCulture) : Cpus,
-        Memory = MemoryPattern().Match(Memory ?? string.Empty) is { Success: true } match
-            && long.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
-                ? string.Create(CultureInfo.InvariantCulture, $"{number}{char.ToLowerInvariant(match.Groups[2].Value[0])}")
-                : (Memory ?? string.Empty).Trim()
+        Cpus = Cpus is { } cpus && decimal.Round(cpus, 2) == cpus ? decimal.Parse(CpusText!, NumberStyles.Number, CultureInfo.InvariantCulture) : Cpus,
+        Memory = string.IsNullOrWhiteSpace(Memory)
+            ? null
+            : MemoryPattern().Match(Memory) is { Success: true } match
+                && long.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+                    ? string.Create(CultureInfo.InvariantCulture, $"{number}{char.ToLowerInvariant(match.Groups[2].Value[0])}")
+                    : Memory.Trim()
     };
 
     // As the deploy script reads CONTAINER_MEMORY.
@@ -298,13 +300,13 @@ public sealed partial record ContainerResources
 }
 
 /// <summary>
-/// The limits given on the command line (<c>--cpus</c>, <c>--memory</c>, <c>--pids-limit</c> and
-/// <c>--allow-limits-below-minimum</c>): each one given replaces the answers', the record's or the default.
+/// The limits given on the command line (<c>--cpus</c>, <c>--memory</c> and <c>--pids-limit</c>): each one given replaces
+/// the answers', the record's or the default.
 /// </summary>
-public sealed record ContainerResourcesOverride(decimal? Cpus, string? Memory, int? PidsLimit, bool AllowBelowMinimum)
+public sealed record ContainerResourcesOverride(decimal? Cpus, string? Memory, int? PidsLimit)
 {
     /// <summary>True when nothing is given.</summary>
-    public bool IsEmpty => Cpus is null && Memory is null && PidsLimit is null && !AllowBelowMinimum;
+    public bool IsEmpty => Cpus is null && Memory is null && PidsLimit is null;
 
     public ContainerResources Apply(ContainerResources? resources)
     {
@@ -313,8 +315,7 @@ public sealed record ContainerResourcesOverride(decimal? Cpus, string? Memory, i
         {
             Cpus = Cpus ?? current.Cpus,
             Memory = Memory ?? current.Memory,
-            PidsLimit = PidsLimit ?? current.PidsLimit,
-            AllowBelowMinimum = AllowBelowMinimum || current.AllowBelowMinimum
+            PidsLimit = PidsLimit ?? current.PidsLimit
         }).Normalised();
     }
 }

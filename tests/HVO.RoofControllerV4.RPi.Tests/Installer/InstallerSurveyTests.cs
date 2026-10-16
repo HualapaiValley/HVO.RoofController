@@ -57,7 +57,7 @@ public sealed class InstallerSurveyTests
     public async Task AContainerTheDeployScriptMade_IsAdoptable_AndSaysWhichHatItDrives()
     {
         using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench")
-            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = true })
+            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = true, NanoCpus = 2_000_000_000, Memory = 4L * 1024 * 1024 * 1024 })
             .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer { State = "exited", Version = null });
 
         var survey = await MachineSurveyor.SurveyAsync(bench.Machine);

@@ -426,7 +426,7 @@ public sealed class ControllerStep(
 
         // Its limits and privileges are the deploy script's (docs/deployment.md, "The container's privileges and limits").
         var resources = settings.Resources;
-        if (container.NanoCpus != resources.NanoCpus || container.MemoryBytes != resources.MemoryBytes || container.PidsLimit != resources.PidsLimit)
+        if (container.NanoCpus != resources.NanoCpus || container.MemoryBytes != (resources.MemoryBytes ?? 0) || container.PidsLimit != resources.PidsLimit)
         {
             return $"redeployed with its limits: {resources.Describe()}";
         }
@@ -682,10 +682,10 @@ public sealed class ControllerStep(
             ["REQUIRE_IDLE_ROOF"] = "true",
 
             // The container's limits, from the answers or the record: --rollback gives them to the version it brings back.
-            ["CONTAINER_CPUS"] = settings.Resources.CpusText,
-            ["CONTAINER_MEMORY"] = settings.Resources.Memory,
+            // Empty is no CPU or memory limit (the default, until #138).
+            ["CONTAINER_CPUS"] = settings.Resources.CpusText ?? string.Empty,
+            ["CONTAINER_MEMORY"] = settings.Resources.Memory ?? string.Empty,
             ["CONTAINER_PIDS_LIMIT"] = settings.Resources.PidsLimit.ToString(CultureInfo.InvariantCulture),
-            ["ALLOW_LIMITS_BELOW_MINIMUM"] = settings.Resources.AllowBelowMinimum ? "true" : "false",
 
             // The key for the Stop and Status checks, as a file only root reads; never the key itself.
             ["OPERATOR_KEY_FILE"] = keyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),

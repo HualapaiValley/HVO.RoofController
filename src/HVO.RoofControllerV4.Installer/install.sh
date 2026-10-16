@@ -549,7 +549,7 @@ EOF
   fi
 
   # What the run needs: Docker for the controller, a rig and the kiosk (which the controller's container serves), and
-  # Docker's resource limits for the controller and a rig; I2C for the controller; the ports, for a first install's
+  # Docker's process limit for the controller and a rig; I2C for the controller; the ports, for a first install's
   # controller or rig (one whose scope has a record with neither, or no record). Uninstall and backup check what they need
   # themselves, and a plan says what is missing.
   local needs_docker=false needs_limits=false needs_i2c=false needs_ports=false record record_roles
@@ -719,29 +719,33 @@ EOF
     fi
   }
 
-  # The controller's container runs with memory, CPU and process limits (docs/deployment.md, "The container's privileges
-  # and limits"), and Docker drops a limit it cannot enforce with only a warning: Raspberry Pi OS boots with
-  # cgroup_disable=memory, for one. The installer checks the limits it is given against what Docker reports; here, that
-  # Docker enforces them at all, and whether this machine has the default limits' 2 CPUs and 4 GiB. False when it fails.
+  # The controller's container runs with a process limit, and with a CPU and a memory limit only when the installer is
+  # given them (none by default, until the supervisor de-energises the relays whenever the controller exits; docs/
+  # deployment.md, "The container's privileges and limits"). Docker drops a limit it cannot enforce with only a warning:
+  # Raspberry Pi OS boots with cgroup_disable=memory, for one. Here Docker must enforce the process limit; that it cannot
+  # enforce a CPU or memory limit is a note, as the installer refuses one it is given then. False when it fails.
   check_docker_limits() {
-    local info memory cpu pids swap cpus total missing=""
+    local info memory cpu pids swap cpus missing=""
     if ! info=$(as_root docker info --format '{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}' 2>/dev/null </dev/null); then
-      failed "Docker did not say which limits it enforces (docker info), and the controller's container runs with memory, CPU and process limits: check that docker info works, then run this again."
+      failed "Docker did not say which limits it enforces (docker info), and the controller's container runs with a process limit: check that docker info works, then run this again."
       return 1
     fi
-    IFS=, read -r memory cpu pids swap cpus total <<<"${info}"
+    IFS=, read -r memory cpu pids swap cpus _ <<<"${info}"
+    if [ "${pids}" != true ]; then
+      failed "Docker does not enforce process limits (docker info: PidsLimit ${pids:-?}), and the controller's container runs with one: give the Docker daemon the pids cgroup controller, then run this again."
+      return 1
+    fi
+    ok "Docker enforces process limits"
     [ "${memory}" = true ] || missing="memory"
-    [ "${cpu}" = true ] || missing="${missing:+${missing}, }CPU"
-    [ "${pids}" = true ] || missing="${missing:+${missing}, }process"
+    [ "${cpu}" = true ] || missing="${missing:+${missing} and }CPU"
     if [ -n "${missing}" ]; then
-      failed "Docker does not enforce ${missing} limits (docker info: MemoryLimit ${memory:-?}, CPUCfsQuota ${cpu:-?}, PidsLimit ${pids:-?}), and the controller's container runs with them: $([ -n "${pi_model}" ] && printf 'add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot' || printf 'give the Docker daemon the memory, cpu and pids cgroup controllers'), then run this again."
-      return 1
+      note "Docker does not enforce ${missing} limits (docker info: MemoryLimit ${memory:-?}, CPUCfsQuota ${cpu:-?}): the controller runs without CPU and memory limits by default, and the installer refuses one it is given here (--cpus, --memory). To give one, $([ -n "${pi_model}" ] && [ "${memory}" != true ] && printf 'add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot' || printf 'give the Docker daemon the memory and cpu cgroup controllers') first"
     fi
-    ok "Docker enforces memory, CPU and process limits"
-    [ "${swap}" = true ] \
-      || note "Docker cannot keep the controller's container from swapping (docker info: SwapLimit ${swap:-?}): its memory limit still holds"
-    if [[ ${cpus} =~ ^[0-9]+$ && ${total} =~ ^[0-9]+$ ]] && ((cpus < 2 || total < 4 * 1024 * 1024 * 1024)); then
-      note "This machine has ${cpus} CPUs and $((total / 1048576)) MiB of memory, less than the controller's default limits (2 CPUs, 4g): give the installer smaller ones (--cpus, --memory and --allow-limits-below-minimum)"
+    if [ "${memory}" = true ] && [ "${swap}" != true ]; then
+      note "Docker cannot keep the controller's container from swapping (docker info: SwapLimit ${swap:-?}): a memory limit, if given, still holds"
+    fi
+    if [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus < 2)); then
+      note "This machine has ${cpus} CPU: a CPU limit for the controller is at least 2, so the installer refuses one here (--cpus)"
     fi
   }
 

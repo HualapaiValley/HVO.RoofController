@@ -58,22 +58,18 @@ public static class Installer
         var release = ReleaseOption("Read the release");
         var cpus = new Option<decimal?>("--cpus")
         {
-            Description = "The controller container's CPU limit (2 by default; fewer needs --allow-limits-below-minimum). Kept in the install record for upgrades and rollbacks.",
+            Description = "A CPU limit for the controller container, at least 2 (none by default, until the supervisor de-energises the relays whenever the controller exits). Kept in the install record for upgrades and rollbacks.",
             HelpName = "CPUS"
         };
         var memory = new Option<string?>("--memory")
         {
-            Description = "The controller container's memory limit in MiB or GiB, as 4096m or 4g (4g by default; less needs --allow-limits-below-minimum). The container gets no swap beyond it.",
+            Description = "A memory limit for the controller container in MiB or GiB, at least 4096m or 4g (none by default, as for --cpus). The container gets no swap beyond it.",
             HelpName = "SIZE"
         };
         var pidsLimit = new Option<int?>("--pids-limit")
         {
             Description = "The most processes and threads the controller container runs at once (512 by default; 256 to 32768).",
             HelpName = "N"
-        };
-        var allowBelowMinimum = new Option<bool>("--allow-limits-below-minimum")
-        {
-            Description = "Allow fewer than 2 CPUs or less than 4g of memory for the controller container, below the HVO install contract's minimum (never less than 1 CPU and 1g)."
         };
         var version = new Option<bool>("--version")
         {
@@ -110,7 +106,6 @@ public static class Installer
         root.Options.Add(cpus);
         root.Options.Add(memory);
         root.Options.Add(pidsLimit);
-        root.Options.Add(allowBelowMinimum);
         root.Options.Add(version);
         foreach (var option in secretFiles.Values)
         {
@@ -143,8 +138,7 @@ public static class Installer
                 Resources = new ContainerResourcesOverride(
                     parseResult.GetValue(cpus),
                     parseResult.GetValue(memory),
-                    parseResult.GetValue(pidsLimit),
-                    parseResult.GetValue(allowBelowMinimum)) is { IsEmpty: false } resources ? resources : null
+                    parseResult.GetValue(pidsLimit)) is { IsEmpty: false } resources ? resources : null
             };
             return RunAsync(host, options, token);
         });
@@ -186,7 +180,7 @@ public static class Installer
 
         public bool SetupPrerequisites { get; init; }
 
-        /// <summary><c>--cpus</c>, <c>--memory</c>, <c>--pids-limit</c> and <c>--allow-limits-below-minimum</c>; null when none is given.</summary>
+        /// <summary><c>--cpus</c>, <c>--memory</c> and <c>--pids-limit</c>; null when none is given.</summary>
         public ContainerResourcesOverride? Resources { get; init; }
 
         /// <summary>Every file that holds a secret, <see cref="PinFiles"/> included. Throws <see cref="InstallerUsageException"/> for a <c>--pin-file</c> that is not NAME=FILE.</summary>
@@ -316,6 +310,7 @@ public static class Installer
             return (int)InstallerExitCode.Refused;
         }
 
+        WriteAnswerWarnings(host, session);
         GiveSecretFiles(host, session, options);
         var checkedPlan = await session.CheckAsync(cancellationToken).ConfigureAwait(false);
         host.Out.WriteLine($"The plan for {InstallRoles.Describe(session.Answers.Roles)} on {session.Survey.HostName}, {session.Version}:");
@@ -389,6 +384,7 @@ public static class Installer
             return (int)InstallerExitCode.Refused;
         }
 
+        WriteAnswerWarnings(host, session);
         foreach (var line in Prerequisites.Guidance(session)) host.Out.WriteLine(line);
         await Prerequisites.PrepareAsync(session, cancellationToken).ConfigureAwait(false);
 
@@ -509,7 +505,7 @@ public static class Installer
 
         if (!InstallRoles.RunsController(answers.Roles))
         {
-            throw new InstallerUsageException("--cpus, --memory, --pids-limit and --allow-limits-below-minimum set the controller container's limits: they need the controller or a test rig among the roles.");
+            throw new InstallerUsageException("--cpus, --memory and --pids-limit set the controller container's limits: they need the controller or a test rig among the roles.");
         }
 
         var controller = answers.Controller ?? new ControllerSettings();
@@ -621,6 +617,16 @@ public static class Installer
         foreach (var warning in InstallerSession.CertificateWarnings(session.Survey, host.Time.GetUtcNow()))
         {
             host.Error.WriteLine($"Warning: {warning}");
+        }
+    }
+
+    /// <summary>The session's warnings about the answers (<see cref="InstallerSession.Warnings"/>), to the person and the log.</summary>
+    internal static void WriteAnswerWarnings(InstallerHost host, InstallerSession session)
+    {
+        foreach (var warning in session.Warnings())
+        {
+            host.Error.WriteLine($"Warning: {warning}");
+            session.Log.Write($"Warning: {warning}");
         }
     }
 

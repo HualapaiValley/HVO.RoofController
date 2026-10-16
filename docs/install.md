@@ -543,7 +543,7 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
     "firstAdmin": { "name": "observer", "pin": true },
     "camera": { "baseUrl": "http://192.168.0.4:81", "userName": "roof-viewer" },
     "telemetryEndpoint": "http://collector:4318",
-    "resources": { "cpus": 2, "memory": "4g", "pidsLimit": 512 }
+    "resources": { "pidsLimit": 512 }
   }
 }
 ```
@@ -600,10 +600,9 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
-| `controller.resources.cpus` | The controller container's CPU limit, such as `2` or `2.5` ([The controller's limits](#the-controllers-limits)) | `2` |
-| `controller.resources.memory` | Its memory limit, a whole number of MiB or GiB, such as `4096m` or `4g`; the container gets no swap beyond it | `4g` |
+| `controller.resources.cpus` | A CPU limit for the controller container, at least `2`, such as `2` or `2.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) |
+| `controller.resources.memory` | A memory limit for it, at least `4g`: a whole number of MiB or GiB, such as `4096m` or `4g`; the container gets no swap beyond it | None: no memory limit, until #138 |
 | `controller.resources.pidsLimit` | The most processes and threads it runs at once, from 256 to 32768 | `512` |
-| `controller.resources.allowBelowMinimum` | `true` to allow fewer than 2 CPUs or less than `4g`, below the HVO install contract's minimum (never less than 1 CPU and `1g`) | `false` |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
@@ -630,12 +629,16 @@ saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on i
 
 ### The controller's limits
 
-The controller's container (a rig's too) runs with resource limits: by default 2 CPUs, 4 GiB of memory with no swap,
-and at most 512 processes and threads, the HVO install contract's minimum. Give others in the answers'
-`controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
+The controller's container (a rig's too) runs with at most 512 processes and threads, and, for now, with no CPU or
+memory limit. A limit is one more way for the kernel to end the controller, and a controller ended while the roof
+moves leaves the drive running until the restarted controller turns the relays off; the HVO install contract's default
+of 2 CPUs and 4 GiB is turned on by a follow-up once the supervisor de-energises the relays whenever the controller
+exits ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138); [deployment.md](deployment.md#the-containers-privileges-and-limits)).
+Until then, give a CPU or memory limit in the answers' `controller.resources`, or on the command line, where each one
+given replaces the answers' (or the record's):
 
 ```bash
-sudo hvo-roof-install --answers controller.json --cpus 3 --memory 6g --pids-limit 1024
+sudo hvo-roof-install --answers controller.json --cpus 2 --memory 4g --pids-limit 1024
 ```
 
 | Option | What it sets |
@@ -643,19 +646,21 @@ sudo hvo-roof-install --answers controller.json --cpus 3 --memory 6g --pids-limi
 | `--cpus CPUS` | `controller.resources.cpus` |
 | `--memory SIZE` | `controller.resources.memory` |
 | `--pids-limit N` | `controller.resources.pidsLimit` |
-| `--allow-limits-below-minimum` | `controller.resources.allowBelowMinimum`: `true` |
 
-Fewer than 2 CPUs or less than `4g` is refused (exit code 2) unless allowed; less than 1 CPU or `1g` always is. The
-install record keeps the limits, the acknowledgment included, so `upgrade` and `rollback` give the container the same,
-and a run with other limits redeploys the controller with them (the plan says `redeployed with its limits: ...`). The
-wizard asks nothing about them: it keeps what the record says, or what the command line gives.
+A CPU limit below 2, or a memory limit below `4g`, the contract's minimum, is refused, with no exception: exit code 2
+when the command line or an answers file gives it, 3 when the install record holds it (an `upgrade`). Leave it out for
+no limit. The install record keeps the limits, so `upgrade` and `rollback` give the container the same, and a run with
+other limits redeploys the controller with them (the plan says `redeployed with its limits: ...`); answers that leave a
+limit out redeploy it without one. The wizard asks nothing about them: it keeps what the record says, or what the
+command line gives.
 
-Before it changes anything, the installer checks that this machine's Docker can enforce them, and refuses (exit code
-3) when `docker info` says it does not enforce memory, CPU or process limits, or reports fewer CPUs or less memory
-than they give. Raspberry Pi OS boots with the memory controller off: add `cgroup_enable=memory` to the single line in
-`/boot/firmware/cmdline.txt` and reboot. On a Pi with 4 GB, a little less than 4 GiB is left for programs: give
-`--memory 3g --allow-limits-below-minimum`. On a Mac, Docker Desktop's resources (Settings, Resources) must have the
-CPUs and memory. What the limits do, and what a controller ended at its memory limit leaves the relays in, is in
+Before it changes anything, the installer checks that this machine's Docker can enforce the limits it gives, and
+refuses (exit code 3) when `docker info` says it does not enforce process limits, or memory or CPU limits when one is
+given, or reports fewer CPUs than a CPU limit. Raspberry Pi OS boots with the memory controller off: that matters only
+for a memory limit, and then add `cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt` and reboot.
+A memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs) is kept, with a
+warning: a limit is a cap, not a reservation. On a Mac, Docker Desktop's resources (Settings, Resources) must have the
+CPUs. What the limits do, and what a controller ended at its memory limit leaves the relays in, is in
 [deployment.md](deployment.md#the-containers-privileges-and-limits).
 
 ### Passwords and PINs
@@ -737,7 +742,7 @@ Packages
   info       bash, curl, setsid or perl, jq or python3     what the deploy script runs (found bash, curl, setsid, jq)
 Containers
   create     hat-emulator                                  the HAT emulator: the roof, drive and limit switches the rig drives (release 4.0.0's image by digest, on the hvo-emulator network, its control API on 127.0.0.1:5290)
-  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script, with 2 CPUs, 4g of memory and no swap, at most 512 processes and threads)
+  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script, with no CPU or memory limit, at most 512 processes and threads)
 Ports
   info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)
   info       8088                                          the web UI (free; roof-controller will listen on it)

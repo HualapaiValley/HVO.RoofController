@@ -148,6 +148,12 @@ public sealed class InstallerSession
     public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true)
         => [.. VersionProblems(), .. RoleGuards.Check(Survey, Answers, planOnly, clientChosen)];
 
+    /// <summary>What the installer warns of in the answers here without refusing them: a memory limit above this machine's memory.</summary>
+    public IReadOnlyList<string> Warnings()
+        => InstallRoles.RunsController(Answers.Roles)
+            ? [.. RoleGuards.ContainerLimitWarnings(Survey.Docker.Limits, (Answers.Controller ?? new ControllerSettings()).Normalised().Resources)]
+            : [];
+
     /// <summary>The record of this run's roles (the machine's as root, else the person's): what an upgrade starts from.</summary>
     public InstallRecord? Record => Survey.IsRoot ? Survey.SystemRecord : Survey.UserRecord;
 

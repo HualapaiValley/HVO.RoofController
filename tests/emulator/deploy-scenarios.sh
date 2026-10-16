@@ -28,7 +28,8 @@
 #              IMAGE_REF it ignores.
 #
 # The controller runs as the deploy script runs it (docs/deployment.md, "The container's privileges and limits"): a
-# read-only root filesystem, only the supervisor's capabilities and the default limits. Without CAP_DAC_OVERRIDE, root in
+# read-only root filesystem, only the supervisor's capabilities and the default limits (512 processes, and no CPU or
+# memory limit until #138; c12 gives one to a rollback). Without CAP_DAC_OVERRIDE, root in
 # the container reaches its mounts only where root owns them, as the installer and the deployment docs make them, so the
 # fixtures (secrets, certificate, identity and settings directories) are given to root with sudo -n.
 #
@@ -490,6 +491,15 @@ relays_stayed_off() {
 
 container_id() {
   docker inspect --format '{{.Id}}' "$1" 2>/dev/null || true
+}
+
+# container_cgroup <container>: its cgroup's cpu.max, memory.max, memory.swap.max and pids.max (cgroup v2), on one line;
+# empty where the host has cgroup v1.
+container_cgroup() {
+  if docker exec "$1" test -e /sys/fs/cgroup/cgroup.controllers; then
+    docker exec "$1" cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max \
+      | paste -sd ' ' || fail "could not read the cgroup of $1"
+  fi
 }
 
 container_running() {
@@ -969,7 +979,7 @@ scenario_supervisor() {
   jq -e '.ReadonlyRootfs == true and .CapDrop == ["ALL"]
     and ([.CapAdd[] | ltrimstr("CAP_")] == ["CHOWN", "KILL", "SETGID", "SETUID"])
     and (.SecurityOpt | index("no-new-privileges") != null)
-    and .NanoCpus == 2000000000 and .Memory == 4294967296 and .MemorySwap == 4294967296 and .PidsLimit == 512
+    and .NanoCpus == 0 and .Memory == 0 and .MemorySwap == 0 and .PidsLimit == 512
     and .Tmpfs == {"/tmp": "size=64m", "/run/hvo-roof": "size=4m,mode=0755", "/root/.aspnet": "size=4m,mode=0700"}' <<<"${config}" >/dev/null \
     || fail "${controller} does not have the deploy script's privileges and limits: $(jq -c '{ReadonlyRootfs, CapDrop, CapAdd, SecurityOpt, NanoCpus, Memory, MemorySwap, PidsLimit, Tmpfs}' <<<"${config}")"
   docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/hvo-roof-web"}}{{.Type}}{{end}}{{end}}' "${controller}" \
@@ -992,14 +1002,11 @@ scenario_supervisor() {
   [[ "${copies}" == "app:app 400 app:app 400" ]] || fail "the web UI's certificate copies are ${copies}, not app:app 400"
   control=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/control) || fail "no /run/hvo-roof/control"
   [[ "${control}" == "root:app 770" ]] || fail "/run/hvo-roof/control is ${control}, not root:app 770"
-  # The kernel enforces the limits: the container's own cgroup (cgroup v2).
-  cgroup=""
-  if docker exec "${controller}" test -e /sys/fs/cgroup/cgroup.controllers; then
-    cgroup=$(docker exec "${controller}" cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max | paste -sd ' ') \
-      || fail "could not read the container's cgroup"
-    [[ "${cgroup}" == "200000 100000 4294967296 0 512" ]] || fail "the container's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
-  fi
-  pass "read-only root filesystem (tmpfs /tmp, /run/hvo-roof, /root/.aspnet; a volume for the web UI's keys); the controller has only CHOWN, KILL, SETGID and SETUID, the web UI none, both no-new-privileges; the web UI's copies are app:app 400 and the control directory root:app 770; limits 2 CPUs, 4g and no swap, 512 processes${cgroup:+ (cgroup: ${cgroup})}"
+  # The kernel enforces the process limit, and no CPU or memory limit by default: the container's own cgroup (cgroup v2).
+  cgroup=$(container_cgroup "${controller}")
+  [[ -z "${cgroup}" || "${cgroup}" == "max 100000 max max 512" ]] \
+    || fail "the container's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
+  pass "read-only root filesystem (tmpfs /tmp, /run/hvo-roof, /root/.aspnet; a volume for the web UI's keys); the controller has only CHOWN, KILL, SETGID and SETUID, the web UI none, both no-new-privileges; the web UI's copies are app:app 400 and the control directory root:app 770; by default 512 processes and no CPU or memory limit${cgroup:+ (cgroup: ${cgroup})}"
 
   container=$(container_id "${controller}")
   restarts=$(docker inspect --format '{{.RestartCount}}' "${controller}")
@@ -1286,20 +1293,23 @@ scenario_c12() {
 
   # The limits a rollback is given go to the version it brings back (docker update), and the next ones to the other.
   current_check="C12 step 6: a rollback gives the version it brings back the limits"
-  local limits
-  deploy CONTAINER_CPUS=1.5 CONTAINER_MEMORY=3g ALLOW_LIMITS_BELOW_MINIMUM=true -- --rollback
-  (( DEPLOY_STATUS == 0 )) || fail "the rollback with other limits failed (exit ${DEPLOY_STATUS})"
-  expect_deploy_log "[rollback] Giving ${previous} the limits: 1.5 CPUs, 3g of memory and no swap, at most 512 processes and threads"
+  local limits cgroup
+  deploy CONTAINER_CPUS=2.5 CONTAINER_MEMORY=4g -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback with CPU and memory limits failed (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[rollback] Giving ${previous} the limits: 2.5 CPUs, 4g of memory and no swap, at most 512 processes and threads"
   limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}} {{.HostConfig.ReadonlyRootfs}}' "${controller}")
-  [[ "$(container_id "${controller}")" == "${previous_id}" && "${limits}" == "1500000000 3221225472 3221225472 512 true" ]] \
-    || fail "the rolled-back controller runs with ${limits}, not 1.5 CPUs and 3g"
+  [[ "$(container_id "${controller}")" == "${previous_id}" && "${limits}" == "2500000000 4294967296 4294967296 512 true" ]] \
+    || fail "the rolled-back controller runs with ${limits}, not 2.5 CPUs and 4g"
+  cgroup=$(container_cgroup "${controller}")
+  [[ -z "${cgroup}" || "${cgroup}" == "250000 100000 4294967296 0 512" ]] \
+    || fail "the rolled-back controller's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
   deploy -- --rollback
   (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits failed (exit ${DEPLOY_STATUS})"
   limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${controller}")
-  [[ "$(container_id "${controller}")" == "${current_id}" && "${limits}" == "2000000000 4294967296 4294967296 512" ]] \
+  [[ "$(container_id "${controller}")" == "${current_id}" && "${limits}" == "0 0 0 512" ]] \
     || fail "the controller swapped back runs with ${limits}, not the default limits"
   assert_relays_off
-  pass "a rollback with 1.5 CPUs and 3g brought back ${previous} with them, and the next, with the defaults, swapped back with 2 CPUs and 4g; relays off"
+  pass "a rollback with 2.5 CPUs and 4g brought back ${previous} with them${cgroup:+ (cgroup: ${cgroup})}, and the next, with the defaults, swapped back with no CPU or memory limit; relays off"
 
   # CommissioningCheck("C12", "3")
   current_check="C12 step 3: an operator key that is not configured"

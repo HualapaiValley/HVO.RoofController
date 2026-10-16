@@ -16,9 +16,11 @@
 # Each controller container runs two processes under a supervisor (docs/deployment.md, "The container's two
 # processes"): the controller and the web UI. docker stop stops the controller first, so its shutdown stops the roof.
 # Every controller container, and each deployment check, has the deploy script's privileges and limits (x-hardening;
-# docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_CPUS (default 2), HVO_ROOF_MEMORY (default 4g)
-# and HVO_ROOF_PIDS_LIMIT (default 512). Compose checks neither their minimum nor that Docker enforces them; the deploy
-# script and the installer do.
+# docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_PIDS_LIMIT (default 512) always, and a CPU and
+# a memory limit only when HVO_ROOF_CPUS and HVO_ROOF_MEMORY are set (none by default, until the supervisor de-energises
+# the relays whenever the controller exits, #138). One that is set must be at least 2 CPUs and 4g, the HVO install
+# contract's minimum. Compose checks neither that minimum nor that Docker enforces the limits; the deploy script and the
+# installer refuse both.
 #
 # A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
 # container and image names and its own network, so it does not collide with either profile above:
@@ -159,7 +161,8 @@ x-logging: &logging
 # The container's privileges and limits, as the deploy script gives them: a read-only root filesystem, with tmpfs for
 # what the container writes outside its mounts (the supervisor's run directory, /tmp and the controller's ASP.NET Core
 # key ring); only the supervisor's capabilities (CHOWN, KILL, SETGID and SETUID, to run the web UI as its own user);
-# no-new-privileges; and the limits, with the memory limit for memswap_limit too, so the container never swaps.
+# no-new-privileges; and the limits, with the memory limit for memswap_limit too, so the container never swaps. 0, the
+# default for the CPUs and the memory, is no limit.
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -175,9 +178,9 @@ x-hardening: &hardening
     - SETUID
   security_opt:
     - no-new-privileges
-  cpus: ${HVO_ROOF_CPUS:-2}
-  mem_limit: ${HVO_ROOF_MEMORY:-4g}
-  memswap_limit: ${HVO_ROOF_MEMORY:-4g}
+  cpus: ${HVO_ROOF_CPUS:-0}
+  mem_limit: ${HVO_ROOF_MEMORY:-0}
+  memswap_limit: ${HVO_ROOF_MEMORY:-0}
   pids_limit: ${HVO_ROOF_PIDS_LIMIT:-512}
 
 # The web UI's sign-in keys (/var/lib/hvo-roof-web): a volume of the container's own beside the read-only root

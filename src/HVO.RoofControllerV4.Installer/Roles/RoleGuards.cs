@@ -205,39 +205,54 @@ public static class RoleGuards
 
     /// <summary>
     /// Why Docker here cannot give the controller its limits (docs/deployment.md, "The container's privileges and
-    /// limits"): it does not say it enforces memory, CPU and process limits (it would drop them with only a warning), or the
-    /// machine has fewer CPUs or less memory than the limits give. The deploy script checks the same before it changes
-    /// anything.
+    /// limits"): it does not say it enforces the ones the controller is given (the process limit always, a CPU or memory
+    /// limit when one is set; it would drop one with only a warning), or the machine has fewer CPUs than a CPU limit. A
+    /// memory limit above the machine's memory is only a warning (<see cref="ContainerLimitWarnings"/>). The deploy script
+    /// checks the same before it changes anything.
     /// </summary>
     public static IEnumerable<string> ContainerLimitProblems(DockerLimits? docker, ContainerResources resources)
     {
         ArgumentNullException.ThrowIfNull(resources);
         if (docker is null)
         {
-            yield return "Docker did not say which limits it enforces (docker info), and the controller runs with memory, CPU and process limits: check that docker info works, then run the installer again.";
+            yield return "Docker did not say which limits it enforces (docker info), and the controller runs with a process limit: check that docker info works, then run the installer again.";
             yield break;
         }
 
-        var missing = new[] { ("memory", docker.Memory), ("CPU", docker.Cpu), ("process", docker.Pids) }
-            .Where(limit => limit.Item2 != true)
+        var missing = new[] { ("memory", docker.Memory, resources.Memory is not null), ("CPU", docker.Cpu, resources.Cpus is not null), ("process", docker.Pids, true) }
+            .Where(limit => limit.Item3 && limit.Item2 != true)
             .Select(limit => limit.Item1)
             .ToArray();
         if (missing.Length > 0)
         {
             static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
+            var guidance = missing.Contains("memory")
+                ? "On Raspberry Pi OS, add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot, or leave out controller.resources.memory (--memory) for no memory limit; "
+                    + "elsewhere, give the Docker daemon the memory, cpu and pids cgroup controllers."
+                : "Give the Docker daemon the memory, cpu and pids cgroup controllers.";
             yield return $"Docker here does not enforce {string.Join(", ", missing)} limits (docker info: MemoryLimit {Flag(docker.Memory)}, CPUCfsQuota {Flag(docker.Cpu)}, PidsLimit {Flag(docker.Pids)}), "
-                + "so the controller would run without them. On Raspberry Pi OS, add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot; "
-                + "elsewhere, give the Docker daemon the memory, cpu and pids cgroup controllers. Then run the installer again (docs/deployment.md, \"The container's privileges and limits\").";
+                + $"so the controller would run without them. {guidance} Then run the installer again (docs/deployment.md, \"The container's privileges and limits\").";
         }
 
-        if (docker.Cpus is { } cpus && resources.Cpus > cpus)
+        if (resources.Cpus is { } limit && docker.Cpus is { } cpus && limit > cpus)
         {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's limit of {resources.CpusText} CPUs is more than the {cpus} Docker reports here: give controller.resources.cpus (or --cpus) at most {cpus} (fewer than 2 needs controller.resources.allowBelowMinimum).");
+            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's limit of {resources.CpusText} CPUs is more than the {cpus} Docker reports here: ")
+                + (cpus >= ContainerResources.MinimumCpus
+                    ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from 2 to {cpus}, or leave it out for no CPU limit.")
+                    : "leave out controller.resources.cpus (--cpus) for no CPU limit (one is at least 2).");
         }
+    }
 
-        if (docker.MemoryBytes is { } memory && resources.MemoryBytes > memory)
+    /// <summary>
+    /// What the installer warns of in the controller's limits: a memory limit above the memory Docker reports here. It is
+    /// kept, as a limit is a cap, not a reservation; the deploy script warns the same.
+    /// </summary>
+    public static IEnumerable<string> ContainerLimitWarnings(DockerLimits? docker, ContainerResources resources)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        if (resources.MemoryBytes is { } limit && docker?.MemoryBytes is { } memory && limit > memory)
         {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's memory limit of {resources.Memory} is more than the {memory / (1024 * 1024)}m Docker reports here: give controller.resources.memory (or --memory) at most that (less than 4g needs controller.resources.allowBelowMinimum).");
+            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's memory limit of {resources.Memory} is more than the {memory / (1024 * 1024)}m Docker reports here. It is kept: a memory limit is a cap, not a reservation, so the machine runs out of memory before the container reaches it.");
         }
     }
 

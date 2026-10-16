@@ -65,11 +65,11 @@ internal sealed record FakeContainer
     /// <summary>When it last started; null for one that says it never has.</summary>
     public DateTimeOffset? StartedAt { get; init; }
 
-    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus): by default the installer's default, 2 CPUs.</summary>
-    public long NanoCpus { get; init; } = 2_000_000_000;
+    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus): by default none (0), the installer's default.</summary>
+    public long NanoCpus { get; init; }
 
-    /// <summary>Its memory limit, and as much with swap (HostConfig.Memory, MemorySwap): by default 4 GiB.</summary>
-    public long Memory { get; init; } = 4L * 1024 * 1024 * 1024;
+    /// <summary>Its memory limit, and as much with swap (HostConfig.Memory, MemorySwap): by default none (0).</summary>
+    public long Memory { get; init; }
 
     /// <summary>Its process limit (HostConfig.PidsLimit): by default 512; null for none.</summary>
     public long? PidsLimit { get; init; } = 512;
@@ -1168,14 +1168,18 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
     }
 
-    // A container with the limits the deploy script was given: CONTAINER_CPUS, CONTAINER_MEMORY and CONTAINER_PIDS_LIMIT.
+    // A container with the limits the deploy script was given: CONTAINER_CPUS, CONTAINER_MEMORY and CONTAINER_PIDS_LIMIT. An
+    // empty CPU or memory limit leaves the container's own, as docker update does (a new container has none).
     private static FakeContainer WithLimits(FakeContainer container, IReadOnlyDictionary<string, string> environment)
     {
+        var cpus = environment["CONTAINER_CPUS"];
         var memory = environment["CONTAINER_MEMORY"];
         return container with
         {
-            NanoCpus = (long)(decimal.Parse(environment["CONTAINER_CPUS"], System.Globalization.CultureInfo.InvariantCulture) * 1_000_000_000m),
-            Memory = long.Parse(memory[..^1], System.Globalization.CultureInfo.InvariantCulture) * (memory[^1] == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024),
+            NanoCpus = cpus.Length == 0 ? container.NanoCpus : (long)(decimal.Parse(cpus, System.Globalization.CultureInfo.InvariantCulture) * 1_000_000_000m),
+            Memory = memory.Length == 0
+                ? container.Memory
+                : long.Parse(memory[..^1], System.Globalization.CultureInfo.InvariantCulture) * (memory[^1] == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024),
             PidsLimit = long.Parse(environment["CONTAINER_PIDS_LIMIT"], System.Globalization.CultureInfo.InvariantCulture)
         };
     }

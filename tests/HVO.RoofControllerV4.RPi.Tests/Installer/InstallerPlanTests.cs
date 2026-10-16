@@ -50,7 +50,7 @@ public sealed class InstallerPlanTests
         plan.Steps.Where(step => step.Step.Kind == StepKind.Folder).Select(step => step.Check.Detail).Should().Equal(
             "0755", "0700", "0700", "0700", "0755", "0755", "0700", "0700");
         Steps(plan, StepKind.Container).Should().Equal(MachineSurveyor.ControllerContainer);
-        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Create, "release 4.0.0 by digest, through the deploy script, with 2 CPUs, 4g of memory and no swap, at most 512 processes and threads"));
+        Change(plan, MachineSurveyor.ControllerContainer).Should().Be(new StepCheck(StepChange.Create, "release 4.0.0 by digest, through the deploy script, with no CPU or memory limit, at most 512 processes and threads"));
         Change(plan, "bash, curl, setsid or perl, jq or python3").Should().Be(new StepCheck(StepChange.Info, "found bash, curl, setsid, jq"));
         Steps(plan, StepKind.Port).Should().Equal("8443", "8088");
         Change(plan, "8443").Detail.Should().Be("free; roof-controller will listen on it");
@@ -74,7 +74,7 @@ public sealed class InstallerPlanTests
             "Folders", "Files", "Packages", "Containers", "Ports", "17 to create, 0 to change, 0 unchanged.");
         lines.Should().Contain(line => line.StartsWith("  create     /etc/hvo-roof/secrets ", StringComparison.Ordinal) && line.EndsWith("secrets the controller reads, one file per setting (0700)", StringComparison.Ordinal));
         lines.Should().Contain(line => line.StartsWith("  info       8443 ", StringComparison.Ordinal) && line.Contains("the controller's API (HTTPS)", StringComparison.Ordinal));
-        lines.Should().Contain(line => line.StartsWith("  create     roof-controller ", StringComparison.Ordinal) && line.Contains("the controller, driving the real HAT (release 4.0.0 by digest, through the deploy script, with 2 CPUs, 4g of memory and no swap, at most 512 processes and threads)", StringComparison.Ordinal));
+        lines.Should().Contain(line => line.StartsWith("  create     roof-controller ", StringComparison.Ordinal) && line.Contains("the controller, driving the real HAT (release 4.0.0 by digest, through the deploy script, with no CPU or memory limit, at most 512 processes and threads)", StringComparison.Ordinal));
     }
 
     [TestMethod]
