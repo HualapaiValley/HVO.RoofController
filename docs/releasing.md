@@ -276,7 +276,10 @@ the same images make the same archives.
 Docker gives a loaded image one of three IDs, each a digest the release names: the index's (the containerd store), the
 platform's manifest's (the same store, asked for the platform), or the config's (the classic store). The installer and
 the deploy script accept only an image with one of them, for the machine's platform, and run it by that ID, never
-pulling it, with the label `io.hvo.roof.release-image` naming the release's image. To check an archive by hand:
+pulling it, with the label `io.hvo.roof.release-image` naming the release's image; the installer believes that label
+only on a container whose image has one of them. The deploy script, which is given an archive without `release.json`,
+first checks that it holds what this section lists and nothing else, as Docker's two image stores each read it
+([Without ghcr.io](deployment.md#without-ghcrio)). To check an archive by hand:
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS

@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   amd64 and arm64 (`<image>-<version>-linux-<arch>.oci.tar`), listed in `release.json`
   (`images.<name>.offlineArchives`, schema 1 unchanged), `SHA256SUMS` and the attestation. `install.sh --from DIR` and
   `hvo-roof-install --release DIR` load them, accept an image only with an ID `release.json` names, and pull nothing;
-  the deploy script takes one as `IMAGE_ARCHIVE`. See [The release it installs](docs/install.md#the-release-it-installs)
-  (#127).
+  the deploy script takes one as `IMAGE_ARCHIVE`, and refuses before loading it an archive that holds anything but
+  that image (another image, name or file). The installer trusts a container's release label only for an image with
+  one of those IDs. See [The release it installs](docs/install.md#the-release-it-installs) (#127).
 
 ### Changed
 

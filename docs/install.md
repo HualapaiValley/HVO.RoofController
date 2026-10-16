@@ -304,8 +304,12 @@ release's offline archive for this machine, `<image>-<version>-linux-<arch>.oci.
   store, which names a loaded image by its config).
 - The container runs that image by its ID, never pulling it (`docker run --pull never`), with the label
   `io.hvo.roof.release-image` naming the release's image by its digest: that is how the installer knows later which
-  release a container runs. The deploy script loads the controller's image itself (`IMAGE_ARCHIVE`,
-  [Without ghcr.io](deployment.md#without-ghcrio)), with the same checks.
+  release a container runs. The label only claims it, so the installer also checks Docker's ID for the image the
+  container runs: it must be one `release.json` gives that release's archive for this machine. A container of another
+  image that carries the label is replaced, never adopted, and a rollback refuses to start one (exit 3).
+- The deploy script loads the controller's image itself (`IMAGE_ARCHIVE`,
+  [Without ghcr.io](deployment.md#without-ghcrio)), with the same checks. Before Docker reads the archive, it also
+  refuses one that holds anything but that image: another image, name or file in it.
 
 A release from before offline archives (4.1.1 and older) has none, and from its folder Docker still pulls its images
 from ghcr.io. A release read from GitHub is always pulled by its digests.
