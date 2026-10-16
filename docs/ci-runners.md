@@ -9,10 +9,10 @@ commissioning scenarios, the Pi image build and the HAT emulator image. The form
 |---|---|---|---|
 | `ci.yml` | GitHub-hosted `ubuntu-latest`, `ubuntu-24.04-arm` and `macos-latest` | push to `main`, pull requests, nightly, called by `release.yml` | Build and test the server graph (Debug with coverage, then Release with warnings as errors); the installer, the kiosk, the Mac app, `hvo-roof` on macOS, the deploy script, `install.sh` and the build scripts; and `build/secret-scan.py` over the files and every commit since the Blue Iris credential's (#22). The scenario, browser and soak categories run in `scenarios.yml` |
 | `scenarios.yml` | GitHub-hosted `ubuntu-latest` and `ubuntu-24.04-arm` | push to `main`, pull requests, nightly, manual, called by `release.yml` | The commissioning checks as emulated scenarios: the `Scenario` tests (a 90 s C14 soak included), the web UI in Chromium with phone, tablet and desktop emulation, and the container lifecycle, C12 deploy and rollback, a deploy of a pulled image, and Compose migration (`tests/emulator/deploy-scenarios.sh`), and a test rig set up, upgraded and rolled back by `hvo-roof-install` on x64 and arm64 (`tests/installer/rig-scenario.sh`). Nightly and on demand, the C14 soak runs for two hours and publishes its invariant results to the run summary and an artifact |
-| `pi-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the Pi image inputs, weekly, manual | Build the controller's image for `linux/arm64` (the Pi) and `linux/amd64` from a clean builder, and check each platform's version labels; nothing is pushed or deployed |
+| `pi-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the Pi image inputs, weekly, manual | Check the [base image pins](#base-images), build the controller's image for `linux/arm64` (the Pi) and `linux/amd64` from a clean builder, and check each platform's version labels; nothing is pushed or deployed |
 | `release.yml` | GitHub-hosted `ubuntu-latest` and `ubuntu-24.04-arm` | a `v*` tag, manual | A draft release: checks the tag against the version, runs `ci.yml` and `scenarios.yml`, pushes the images to GHCR and makes the assets in the `release` environment, then installs a rig from the draft end to end. A person checks and publishes it ([releasing.md](releasing.md)) |
 | `release-latest.yml` | GitHub-hosted `ubuntu-latest` | a release published, manual | Gives the newest final release's images the `latest` tag |
-| `emulator-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the emulator or controller image inputs, weekly, manual | Build the HAT emulator image for `linux/amd64` and `linux/arm64`, and open and close the emulated roof through the containerized controller (`tests/emulator/compose-smoke-test.sh`); no hardware, nothing pushed or deployed |
+| `emulator-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the emulator or controller image inputs, weekly, manual | Check the [base image pins](#base-images), build the HAT emulator image for `linux/amd64` and `linux/arm64`, and open and close the emulated roof through the containerized controller (`tests/emulator/compose-smoke-test.sh`); no hardware, nothing pushed or deployed |
 
 All workflows:
 
@@ -20,6 +20,28 @@ All workflows:
 - pin every action to a full commit SHA with a `# vX.Y.Z` comment (Dependabot updates the SHA
   and the comment together);
 - run `dotnet` from `src/` so `src/global.json` selects the SDK.
+
+## Base images
+
+The controller's and the HAT emulator's Dockerfiles pin each base image
+(`mcr.microsoft.com/dotnet/sdk` and `mcr.microsoft.com/dotnet/aspnet`) by tag and by the digest
+of its multi-platform index, as in `sdk:10.0.401@sha256:...`, so a rebuild of the same commit
+uses the same bases. A tag can be republished; a digest cannot.
+[`build/check-base-images.sh`](../build/check-base-images.sh), which `pi-image.yml` and
+`emulator-image.yml` run with `--registry`, requires:
+
+- a tag and a digest on every `FROM`;
+- the SDK's tag to be the SDK `src/global.json` pins;
+- the same SDK image and the same runtime image, tag and digest, in both Dockerfiles;
+- with `--registry`, each digest to be an index holding `linux/amd64` and `linux/arm64`, not one
+  platform's image.
+
+Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml)) updates a tag and its digest
+together, in both Dockerfiles in one pull request, and proposes a new digest alone when Microsoft
+republishes a tag (for base OS fixes). A pull request that moves the SDK's tag must move
+`src/global.json` with it. To pin by hand, use the `Digest` that
+`docker buildx imagetools inspect mcr.microsoft.com/dotnet/aspnet:<tag>` prints: the index's,
+not a platform's.
 
 ## Retired M5 runner
 

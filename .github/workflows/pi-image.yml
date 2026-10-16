@@ -37,7 +37,8 @@ on:
       - '.dockerignore'
       - '.github/workflows/pi-image.yml'
   schedule:
-    # Weekly, to catch base-image and apt repository drift between code changes.
+    # Weekly, to catch apt repository drift between code changes. The base images are pinned by digest, so they move
+    # only through a pull request (Dependabot's, .github/dependabot.yml).
     - cron: '0 3 * * 1'
   workflow_dispatch:
 
@@ -58,15 +59,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Check Dockerfile SDK tag matches src/global.json
-        run: |
-          pin=$(jq -r '.sdk.version' src/global.json)
-          tag=$(sed -n 's#^FROM .*mcr\.microsoft\.com/dotnet/sdk:\([^ @]*\).*#\1#p' src/HVO.RoofControllerV4.RPi/Dockerfile | head -n 1)
-          echo "src/global.json SDK: ${pin}; Dockerfile build image: sdk:${tag}"
-          if [ "$tag" != "$pin" ]; then
-            echo "::error file=src/HVO.RoofControllerV4.RPi/Dockerfile::Build image sdk:${tag} does not match src/global.json (${pin}); update both in the same change"
-            exit 1
-          fi
+      # Both Dockerfiles' base images: each pinned by tag and by the digest of an index holding linux/amd64 and
+      # linux/arm64, the SDK tag src/global.json's, and the same SDK and runtime in both (build/check-base-images.sh).
+      - name: Check the base image pins
+        run: build/check-base-images.sh --registry
 
       # The version, commit and time the image carries (docs/releasing.md): a CI build, 4.0.0-ci.<run>.
       - name: Product version

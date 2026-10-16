@@ -17,14 +17,16 @@
 # Settings (environment variables): Emulator__TimeScale, Emulator__TravelMeters, Emulator__InitialPosition,
 # Emulator__RegisterPort, Emulator__CameraFramesPerSecond (see EmulatorHostOptions).
 #
-# Image pins: the same as src/HVO.RoofControllerV4.RPi/Dockerfile. The SDK tag must match src/global.json and the
-# runtime tag should stay on the latest ASP.NET Core patch; the "Emulator image" workflow checks the SDK tag.
+# Image pins: the same images, tags and digests as src/HVO.RoofControllerV4.RPi/Dockerfile, whose comment explains them.
+# Each is pinned by tag and by the digest of its multi-platform index; the SDK tag must match src/global.json, and the
+# runtime tag should stay on the latest ASP.NET Core patch. build/check-base-images.sh checks them ("Emulator image" and
+# "Pi image" workflows), and Dependabot updates both Dockerfiles in one pull request.
 
 # -------------------------
 # Build the emulator
 # -------------------------
 # The build stage runs on the builder's native platform and cross-compiles for the target.
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317 AS build
 ARG TARGETARCH
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
@@ -72,7 +74,7 @@ RUN dotnet publish "HVO.RoofControllerV4.Emulator/HVO.RoofControllerV4.Emulator.
 # -------------------------
 # Runtime image
 # -------------------------
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.13 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13@sha256:d5633778c754e89a386882eddf8dbee6942447a8a4b8267c19cf1e1158d0b0ac AS runtime
 WORKDIR /app
 
 # curl for the health check only.
