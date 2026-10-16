@@ -859,46 +859,11 @@ release() {
 }
 
 # offline_archives <name> <index digest> <version> <folder>: the image this run pushed to ${build_registry}, fetched
-# from the registry into an OCI archive as docker buildx build --output type=oci writes one (each blob as the registry
-# holds it, so the index keeps its digest), then split into the release's offline archives in the folder by
-# build/release-assets.py, the release workflow's own; prints their entries for release.json.
+# from the registry into the release's offline archives in the folder, split by build/release-assets.py, the release
+# workflow's own (tests/releasing/offline-archives-from-registry.py); prints their entries for release.json.
 offline_archives() {
-  python3 - "${repo_root}" "127.0.0.1:${registry_port}" "${build_registry#*/}/$1" "$2" "$1" "${registry}/$1" "$3" "$4" \
-    "${work}/$1-$3-source.oci.tar" <<'PY' || fail "could not make the offline archives of $1 $3"
-import importlib.util, io, json, pathlib, sys, tarfile, urllib.request
-root, host, build, digest, image, repository, version, folder, source = sys.argv[1:]
-spec = importlib.util.spec_from_file_location("release_assets", pathlib.Path(root) / "build" / "release-assets.py")
-assets = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(assets)
-accept = ", ".join(sorted(assets.INDEX_TYPES | assets.MANIFEST_TYPES))
-
-def get(kind, reference):
-    request = urllib.request.Request(f"http://{host}/v2/{build}/{kind}/{reference}", headers={"Accept": accept})
-    with urllib.request.urlopen(request, timeout=300) as response:
-        return response.read(), response.headers.get("Content-Type", "").split(";")[0].strip()
-
-index, index_type = get("manifests", digest)
-blobs = {digest: index}
-for entry in json.loads(index)["manifests"]:
-    manifest, _ = get("manifests", entry["digest"])
-    blobs[entry["digest"]] = manifest
-    # The other platform's empty image has no layers: null.
-    for descriptor in [json.loads(manifest)["config"], *(json.loads(manifest).get("layers") or [])]:
-        blobs[descriptor["digest"]] = get("blobs", descriptor["digest"])[0]
-with tarfile.open(source, "w") as tar:
-    def add(name, data):
-        info = tarfile.TarInfo(name)
-        info.size = len(data)
-        tar.addfile(info, io.BytesIO(data))
-    add("oci-layout", b'{"imageLayoutVersion":"1.0.0"}')
-    add("index.json", json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
-                                  "manifests": [{"mediaType": index_type, "digest": digest, "size": len(index)}]}).encode())
-    for blob, data in blobs.items():
-        add(f"blobs/sha256/{blob[7:]}", data)
-archives = assets.offline_archives(pathlib.Path(source), image, repository, version, digest, pathlib.Path(folder), 0)
-pathlib.Path(source).unlink()
-print(json.dumps(archives))
-PY
+  "${repo_root}/tests/releasing/offline-archives-from-registry.py" "127.0.0.1:${registry_port}" "${build_registry#*/}/$1" "$2" \
+    "$1" "${registry}/$1" "$3" "$4" || fail "could not make the offline archives of $1 $3"
 }
 
 # push_release_image <name> <checkout> <Dockerfile> <version> <registry>/<owner>: the image as a release publishes it,
