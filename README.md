@@ -210,7 +210,9 @@ a consistent development environment. Open in VS Code and use
 Pi's real I2C bus and GPIO and keeps the physical limit switches in force; use it only
 with the roof mechanism isolated.
 
-The standard container uses its own Docker-in-Docker engine. Its feature manages local Docker access;
+The standard container uses its own Docker-in-Docker engine. The pinned feature selects the iptables
+backend at container startup to match the host kernel, without changing the host's firewall settings.
+Both configurations share this feature version and lockfile. The feature manages local Docker access;
 post-create setup does not change Docker groups or socket permissions. Check the engine with
 `docker info`. If access fails, inspect the feature startup logs and rebuild the container; do not
 make the socket world-writable or mount a host Docker socket as a workaround.
