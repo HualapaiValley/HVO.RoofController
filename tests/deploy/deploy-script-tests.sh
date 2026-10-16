@@ -1918,6 +1918,292 @@ test_rollback_and_verify_remote_ignore_a_malformed_image_ref() {
   assert_no_docker_calls "--verify-remote"
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Offline: a release's archive of the image (IMAGE_ARCHIVE), loaded in place of the pull (#127)
+
+# offline_archive [<platform>]: a made-up controller image's offline archives, for linux/amd64 and linux/arm64, as
+# build/release-assets.py writes a release's (into ${WORK}/archives). Sets ARCHIVE (the one for the platform, by default
+# linux/arm64), ARCHIVE_DIGEST (the image's index), ARCHIVE_REF (IMAGE_REF for it) and ARCHIVE_MANIFEST and
+# ARCHIVE_CONFIG (the platform's manifest and config digests).
+offline_archive() {
+  local values
+  values=$(python3 - "${TESTS_DIR}/../../build/release-assets.py" "${WORK}/archives" "${1:-linux/arm64}" <<'PY'
+import gzip, hashlib, importlib.util, io, json, pathlib, sys, tarfile
+script, folder, wanted = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("release_assets", script)
+assets = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(assets)
+folder = pathlib.Path(folder)
+folder.mkdir()
+blobs = {}
+def add(data, media_type):
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    blobs[digest] = data
+    return {"mediaType": media_type, "digest": digest, "size": len(data)}
+entries = []
+for platform in ("linux/amd64", "linux/arm64"):
+    os_, arch = platform.split("/")
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        info = tarfile.TarInfo("app/controller")
+        data = f"controller for {platform}\n".encode()
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    layer = add(gzip.compress(raw.getvalue(), mtime=0), "application/vnd.oci.image.layer.v1.tar+gzip")
+    labels = {"org.opencontainers.image.version": "4.0.0",
+              "org.opencontainers.image.revision": "0123456789abcdef0123456789abcdef01234567"}
+    config = add(json.dumps({"architecture": arch, "os": os_, "config": {"Labels": labels},
+                             "rootfs": {"type": "layers", "diff_ids": ["sha256:" + hashlib.sha256(raw.getvalue()).hexdigest()]}}).encode(),
+                 "application/vnd.oci.image.config.v1+json")
+    manifest = add(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "config": config, "layers": [layer]}).encode(), "application/vnd.oci.image.manifest.v1+json")
+    entries.append({**manifest, "platform": {"architecture": arch, "os": os_}})
+index = add(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": entries}).encode(),
+            "application/vnd.oci.image.index.v1+json")
+source = folder / "source.tar"
+with tarfile.open(source, "w") as tar:
+    for name, data in [("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'),
+                       ("index.json", json.dumps({"schemaVersion": 2, "manifests": [index]}).encode()),
+                       *((f"blobs/sha256/{digest[7:]}", data) for digest, data in blobs.items())]:
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+archives = assets.offline_archives(source, "roof-controller", "registry.test:5000/hvo/roof-controller", "4.0.0",
+                                   index["digest"], folder, 0)
+archive = next(archive for archive in archives if archive["platform"] == wanted)
+print(folder / archive["name"], index["digest"], archive["manifestDigest"], archive["configDigest"])
+PY
+  ) || { fail_test "could not make the offline archives"; return 1; }
+  read -r ARCHIVE ARCHIVE_DIGEST ARCHIVE_MANIFEST ARCHIVE_CONFIG <<<"${values}"
+  ARCHIVE_REF="registry.test:5000/hvo/roof-controller:4.0.0@${ARCHIVE_DIGEST}"
+}
+
+# assert_runs_loaded_image <image ID>: the pre-flight and the controller run the image by that ID for linux/arm64,
+# never pulling, and the controller carries the label naming the released image.
+assert_runs_loaded_image() {
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e --arg id "$1" --arg label "io.hvo.roof.release-image=${ARCHIVE_REF}" \
+      'index($id) and .[index("--platform") + 1] == "linux/arm64" and .[index("--pull") + 1] == "never"
+       and .[index("--label") + 1] == $label' <<<"${args}" >/dev/null \
+      || fail_test "expected $1 run for linux/arm64 with --pull never and the release-image label: ${args}"
+  done
+  jq -e --arg id "$1" '.[-2] == $id and .[-1] == "--validate-deployment"' <<<"$(preflight_args)" >/dev/null \
+    || fail_test "the pre-flight does not run $1 --validate-deployment: $(preflight_args)"
+  jq -e --arg id "$1" '.[-1] == $id' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "the controller does not run $1: $(controller_run_args)"
+}
+
+test_archive_mode_loads_checks_and_deploys_the_released_image_by_its_id_without_pulling() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64 (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG})"
+  assert_output_contains "[load] Loading ${ARCHIVE} into Docker context 'test-context' (nothing is pulled)..."
+  # The classic image store gives the image its config's digest as its ID.
+  assert_output_contains "[load] ${ARCHIVE_DIGEST} for linux/arm64, image ${ARCHIVE_CONFIG}: version 4.0.0, commit 0123456789ab"
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false no
+  [[ -z "$(docker_calls pull)$(docker_calls buildx)$(docker_calls save)" ]] || fail_test "archive mode pulled, built or saved an image"
+  docker_calls load | jq -e -s --arg archive "${ARCHIVE}" 'length == 1 and .[0] == ["load", "-i", $archive]' >/dev/null \
+    || fail_test "expected one load of ${ARCHIVE}: $(docker_calls load)"
+  grep -F '"--context", "test-context", "load"' "${FAKE_STATE_DIR}/calls.log" >/dev/null \
+    || fail_test "the load did not use the Pi's Docker context"
+  (( $(call_index '"load"') < $(call_index '"--validate-deployment"') )) || fail_test "the pre-flight ran before the load"
+  assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+  assert_key_never_in_argv
+}
+
+test_archive_mode_in_the_containerd_image_store_deploys_the_index_by_its_digest() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" FAKE_IMAGE_STORE=containerd
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE_DIGEST} for linux/arm64, image ${ARCHIVE_DIGEST}: version 4.0.0"
+  assert_container roof-controller new true unless-stopped
+  assert_runs_loaded_image "${ARCHIVE_DIGEST}"
+}
+
+test_archive_mode_with_a_cli_without_inspect_platform_checks_the_image_it_holds() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" FAKE_INSPECT_PLATFORM=false
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+}
+
+test_archive_mode_for_the_emulator_on_amd64_loads_the_amd64_archive() {
+  offline_archive linux/amd64 || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" BUILD_PLATFORM=linux/amd64 \
+    HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE_DIGEST} for linux/amd64, image ${ARCHIVE_CONFIG}: version 4.0.0"
+  jq -e --arg id "${ARCHIVE_CONFIG}" '.[-1] == $id and .[index("--platform") + 1] == "linux/amd64"' <<<"$(controller_run_args)" \
+    >/dev/null || fail_test "expected ${ARCHIVE_CONFIG} run for linux/amd64: $(controller_run_args)"
+}
+
+test_an_archive_without_the_image_image_ref_names_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE} does not hold the image ${DIGEST} that IMAGE_REF names: give the release's archive of that image. Nothing was changed."
+  assert_no_docker_calls "an archive of another image"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_an_archive_naming_another_image_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # The index's blob is there, and index.json names another image.
+  python3 - "${ARCHIVE}" "${OTHER_DIGEST}" <<'PY' || fail_test "could not rewrite the archive"
+import io, json, sys, tarfile
+path, other = sys.argv[1:]
+with tarfile.open(path) as tar:
+    files = [(member, tar.extractfile(member).read() if member.isfile() else None) for member in tar.getmembers()]
+with tarfile.open(path, "w") as tar:
+    for member, data in files:
+        if member.name == "index.json":
+            index = json.loads(data)
+            index["manifests"].append({**index["manifests"][0], "digest": other})
+            data = json.dumps(index).encode()
+            member.size = len(data)
+        tar.addfile(member, io.BytesIO(data) if data is not None else None)
+PY
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE} names the image 'none, or more than one', and IMAGE_REF names ${ARCHIVE_DIGEST}"
+  assert_no_docker_calls "an archive naming two images"
+}
+
+test_an_archive_for_another_platform_changes_nothing() {
+  offline_archive linux/amd64 || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE} does not hold the image ${ARCHIVE_DIGEST} has for linux/arm64: give the release's archive for linux/arm64 (<image>-<version>-linux-arm64.oci.tar). Nothing was changed."
+  assert_no_docker_calls "the amd64 archive on the Pi"
+}
+
+test_an_archive_with_a_damaged_manifest_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  python3 - "${ARCHIVE}" "${ARCHIVE_MANIFEST}" <<'PY' || fail_test "could not damage the archive"
+import io, sys, tarfile
+path, manifest = sys.argv[1:]
+with tarfile.open(path) as tar:
+    files = [(member, tar.extractfile(member).read() if member.isfile() else None) for member in tar.getmembers()]
+with tarfile.open(path, "w") as tar:
+    for member, data in files:
+        if member.name == f"blobs/sha256/{manifest[7:]}":
+            data = data.replace(b"layers", b"Layers")
+        tar.addfile(member, io.BytesIO(data) if data is not None else None)
+PY
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "does not hold the image ${ARCHIVE_DIGEST} has for linux/arm64"
+  assert_no_docker_calls "a damaged manifest"
+}
+
+test_a_loaded_image_with_another_id_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "FAKE_LOADED_ID=${OTHER_DIGEST}"
+
+  assert_status 1
+  assert_output_contains "Docker loaded ${ARCHIVE}, and holds no image with its IDs: ${ARCHIVE_DIGEST} (the index), ${ARCHIVE_MANIFEST} (the linux/arm64 manifest) or ${ARCHIVE_CONFIG} (its config). The running controller was not touched."
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls exec)" ]] \
+    || fail_test "the controller was stopped, renamed, removed, run or called"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_a_failed_load_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" FAKE_LOAD_FAIL=true
+
+  assert_status 1
+  assert_output_contains "Could not load ${ARCHIVE} into Docker context 'test-context' (see above). The running controller was not touched."
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls pull)" ]] \
+    || fail_test "the controller was stopped, renamed, removed or run, or an image pulled"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_image_archive_needs_image_ref_and_a_file_before_any_docker_call() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE is a release's offline archive of an image, and needs IMAGE_REF"
+  assert_no_docker_calls "no IMAGE_REF"
+
+  local value
+  for value in "${WORK}/missing.oci.tar" "${WORK}" "-i"; do
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${value}"
+    assert_status 1
+    assert_output_contains "IMAGE_ARCHIVE '${value}' is not a file this script can read. Nothing was changed."
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_archive_mode_dry_run_checks_the_archive_and_loads_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" -- --dry-run
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64"
+  assert_output_contains "[dry-run] Would load ${ARCHIVE} (${ARCHIVE_DIGEST} for linux/arm64) into Docker context 'test-context', pulling nothing, and check the image's ID and platform, run the pre-flight check"
+  [[ -z "$(docker_calls load)$(docker_calls pull)$(docker_calls image)" ]] || fail_test "the dry run loaded, pulled or inspected an image"
+  assert_nothing_changed "dry run"
+}
+
+test_rollback_from_a_loaded_image_ignores_image_archive() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_status 0
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${WORK}/missing.oci.tar" -- --rollback
+  assert_status 0
+  assert_output_contains "Rolled back."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous new false no
+  [[ -z "$(docker_calls load)$(docker_calls pull)$(docker_calls run)" ]] || fail_test "--rollback loaded, pulled or ran an image"
+}
+
+test_extra_docker_args_cannot_pull_or_name_the_release_image() {
+  seed_container roof-controller old true 8443:8443
+  printf 'io.hvo.roof.release-image=registry.test/x@%s\n' "${DIGEST}" > "${WORK}/labels"
+  local value
+  for value in "--pull always" "--pull=always" "--label io.hvo.roof.release-image=${IMAGE_REF}" \
+      "--label=io.hvo.roof.release-image=${IMAGE_REF}" "--label-file ${WORK}/labels" "--label-file=${WORK}/labels"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "EXTRA_DOCKER_ARGS=${value}"
+    assert_status 1
+    case "${value}" in
+      --pull*) assert_output_contains "EXTRA_DOCKER_ARGS must not contain '${value%% *}': the script pulls a released image itself" ;;
+      *) assert_output_contains "EXTRA_DOCKER_ARGS must not set the label io.hvo.roof.release-image" ;;
+    esac
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
 test_compose_managed_controller_is_refused_before_anything_changes() {
   local name args
   for name in roof-controller roof-controller-previous; do

@@ -36,7 +36,12 @@ set -euo pipefail
 #   Docker pulls that image instead; it is deployed only if Docker reports that digest and BUILD_PLATFORM for it, and
 #   nothing is built, so the script runs without a checkout. Everything from the pre-flight on is the same. On the Pi
 #   itself, set DOCKER_CONTEXT=default: the remote check then runs from the Pi, so check from another machine afterwards
-#   too (--verify-remote). --rollback, --stop and --verify-remote ignore IMAGE_REF, and do not check it.
+#   too (--verify-remote). With IMAGE_ARCHIVE=<file> as well (the release's offline archive of that image for
+#   BUILD_PLATFORM, <image>-<version>-linux-<arch>.oci.tar), nothing is pulled: the archive must hold IMAGE_REF's
+#   digest, and the image for BUILD_PLATFORM checked against it, before Docker loads it; the image Docker then holds is
+#   deployed by its ID (docker run --pull never), only if that ID is the digest's or that image's, and the container
+#   carries the label io.hvo.roof.release-image=<IMAGE_REF>. --rollback, --stop and --verify-remote ignore IMAGE_REF
+#   and IMAGE_ARCHIVE, and do not check them.
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
@@ -98,6 +103,10 @@ DOCKER_CONTEXT=${DOCKER_CONTEXT:-rpi-remote}
 IMAGE_TAG=${IMAGE_TAG:-hvov9/roof-controller:v4}
 # A released image to pull on the Pi in place of building IMAGE_TAG here: <registry>/<name>[:<tag>]@sha256:<digest>.
 IMAGE_REF=${IMAGE_REF:-}
+# The release's offline archive of IMAGE_REF's image, on this machine, loaded in place of the pull: nothing is pulled.
+IMAGE_ARCHIVE=${IMAGE_ARCHIVE:-}
+# The label that names the released image a container loaded from IMAGE_ARCHIVE runs (it runs by its ID).
+RELEASE_IMAGE_LABEL=io.hvo.roof.release-image
 # Platform the image is built (or pulled) for: the Pi's. linux/amd64 is for a test rig on a PC, in HAT emulator mode
 # only.
 BUILD_PLATFORM=${BUILD_PLATFORM:-linux/arm64}
@@ -205,7 +214,8 @@ VERIFIED_HAT_MODE=""
 # Why wait_ready found the controller exited, when the container's supervisor said so.
 EXIT_DETAIL=""
 WORK_DIR=""
-# `docker run --platform` for a pulled image (check_pulled_image), and `image inspect --platform` where the CLI has it.
+# `docker run --platform` for a pulled image (check_pulled_image), with --pull never and the release-image label for a
+# loaded one (check_loaded_image), and `image inspect --platform` where the CLI has it.
 image_platform_args=()
 inspect_platform_args=()
 
@@ -315,6 +325,16 @@ if [[ -n "${IMAGE_REF}" && "${ROLLBACK}" != "true" && "${STOP}" != "true" && "${
 else
   DEPLOY_IMAGE=${IMAGE_TAG}
 fi
+# Offline: the release's archive of IMAGE_REF's image, loaded in place of the pull. What it holds is checked before any
+# Docker call (check_image_archive); --rollback, --stop and --verify-remote load nothing, and ignore it.
+if [[ -n "${IMAGE_ARCHIVE}" && "${ROLLBACK}" != "true" && "${STOP}" != "true" && "${VERIFY_REMOTE}" != "true" ]]; then
+  [[ -n "${IMAGE_DIGEST}" ]] \
+    || fail "IMAGE_ARCHIVE is a release's offline archive of an image, and needs IMAGE_REF, that image by its digest (from release.json), to check it against. Nothing was changed."
+  [[ "${IMAGE_ARCHIVE}" != -* && -f "${IMAGE_ARCHIVE}" && -r "${IMAGE_ARCHIVE}" ]] \
+    || fail "IMAGE_ARCHIVE '${IMAGE_ARCHIVE}' is not a file this script can read. Nothing was changed."
+else
+  IMAGE_ARCHIVE=""
+fi
 
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
@@ -325,6 +345,7 @@ fi
 # emulator mode the HAT's bus stays unmapped: no I2C device, no --privileged (which maps every device) and no mount of
 # the host's /dev.
 EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it."
+RELEASE_IMAGE_SETTING="the script sets it on a controller it loads from IMAGE_ARCHIVE, once it has checked the image, and the installer reads the release the controller runs from it."
 
 refuse_emulator_setting() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -345,6 +366,12 @@ check_extra_option() {
         [[ "${line}" =~ ^[[:space:]]*(#|$) ]] && continue
         refuse_emulator_setting "${line%%=*}" "--env-file ${value}: ${line%%=*}"
       done < "${value}"
+      ;;
+    --label-file)
+      [[ -f "${value}" && -r "${value}" ]] \
+        || fail "EXTRA_DOCKER_ARGS names --label-file '${value}', which cannot be read on this machine. Nothing was changed."
+      ! grep -qF -- "${RELEASE_IMAGE_LABEL}" "${value}" \
+        || fail "EXTRA_DOCKER_ARGS must not set the label ${RELEASE_IMAGE_LABEL} (--label-file ${value}): ${RELEASE_IMAGE_SETTING}"
       ;;
     --device)
       if [[ -n "${HAT_EMULATOR_ENDPOINT}" && "$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')" == *i2c* ]]; then
@@ -378,8 +405,8 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
     pending_option=""
   else
     case "${arg}" in
-      --env-file|--device|--volume|--mount) pending_option=${arg} ;;
-      --env-file=*|--device=*|--volume=*|--mount=*) check_extra_option "${arg%%=*}" "${arg#*=}" ;;
+      --env-file|--label-file|--device|--volume|--mount) pending_option=${arg} ;;
+      --env-file=*|--label-file=*|--device=*|--volume=*|--mount=*) check_extra_option "${arg%%=*}" "${arg#*=}" ;;
       --privileged|--privileged=*)
         # Docker reads the value as Go's strconv.ParseBool does, so 1, t and True turn it on as well as true.
         if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
@@ -414,6 +441,13 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
   if [[ "${reserved}" == "true" ]]; then
     fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout, --stop-signal and --platform itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and BUILD_PLATFORM)."
   fi
+  # A loaded image runs with --pull never, and its label names the release's image only once the script has checked it.
+  case "${arg}" in
+    --pull|--pull=*)
+      fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script pulls a released image itself (IMAGE_REF), and never pulls one it loads (IMAGE_ARCHIVE)." ;;
+    *"${RELEASE_IMAGE_LABEL}"*)
+      fail "EXTRA_DOCKER_ARGS must not set the label ${RELEASE_IMAGE_LABEL} ('${arg}'): ${RELEASE_IMAGE_SETTING}" ;;
+  esac
   refuse_emulator_setting "${arg}"
 done
 
@@ -990,6 +1024,108 @@ check_pulled_image() {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Offline: a release's archive (IMAGE_ARCHIVE), loaded in place of the pull
+
+# archive_json <query> <file> [<platform>]: from a JSON file of an OCI archive, with jq or python3. "image": the digest
+# of the one image index.json names; "platform": the digest of the one manifest an index lists for the platform; and
+# "config": a manifest's config's digest. Empty when there is none, or more than one.
+archive_json() {
+  local query=$1 file=$2 platform=${3:-}
+  if command -v jq >/dev/null 2>&1; then
+    case "${query}" in
+      image) jq -r 'if (.manifests | length) == 1 then (.manifests[0].digest // "") else "" end' "${file}" ;;
+      platform) jq -r --arg os "${platform%%/*}" --arg arch "${platform#*/}" \
+        '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch)]
+         | if length == 1 then (.[0].digest // "") else "" end' "${file}" ;;
+      config) jq -r '.config.digest // ""' "${file}" ;;
+    esac
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+query, path, platform = sys.argv[1:]
+with open(path) as f:
+    d = json.load(f)
+found = [d.get("config")] if query == "config" else d.get("manifests") or []
+found = [m for m in found if isinstance(m, dict)]
+if query == "platform":
+    found = [m for m in found if isinstance(m.get("platform"), dict)
+             and "{}/{}".format(m["platform"].get("os"), m["platform"].get("architecture")) == platform]
+digest = found[0].get("digest") if len(found) == 1 else ""
+print(digest if isinstance(digest, str) else "")' "${query}" "${file}" "${platform}"
+  else
+    return 1
+  fi
+}
+
+# check_image_archive: IMAGE_ARCHIVE must hold the image IMAGE_REF's digest names, with its image for BUILD_PLATFORM:
+# its index.json names that index alone, and the index and the platform's manifest are each the blob their digest names.
+# Docker checks the config and the layers against them as it loads them. ARCHIVE_MANIFEST and ARCHIVE_CONFIG are then
+# the platform's manifest and config: with the index, the IDs Docker gives the image it loads (the containerd image
+# store's is the index's, or the manifest's for the platform; the classic store's is the config's). Run before any Docker
+# call, and in a dry run too: it only reads the archive.
+ARCHIVE_MANIFEST=""
+ARCHIVE_CONFIG=""
+check_image_archive() {
+  local folder named manifest config digest_pattern='^sha256:[0-9a-f]{64}$'
+  folder=$(mktemp -d) || fail "Could not make a folder to check IMAGE_ARCHIVE in. Nothing was changed."
+  # Named members only, into a folder of their own: nothing else the archive holds is written anywhere.
+  if ! tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" index.json "blobs/sha256/${IMAGE_DIGEST#sha256:}" 2>/dev/null; then
+    rm -rf "${folder}"
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} that IMAGE_REF names: give the release's archive of that image. Nothing was changed."
+  fi
+  named=$(archive_json image "${folder}/index.json" 2>/dev/null) || named=""
+  if [[ "${named}" != "${IMAGE_DIGEST}" \
+      || "$(sha256_hex < "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}")" != "${IMAGE_DIGEST#sha256:}" ]]; then
+    rm -rf "${folder}"
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} names the image '${named:-none, or more than one}', and IMAGE_REF names ${IMAGE_DIGEST}: give the release's archive of that image. Nothing was changed."
+  fi
+  manifest=$(archive_json platform "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}" "${BUILD_PLATFORM}" 2>/dev/null) || manifest=""
+  if ! [[ "${manifest}" =~ ${digest_pattern} ]] \
+      || ! tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" "blobs/sha256/${manifest#sha256:}" 2>/dev/null \
+      || [[ "$(sha256_hex < "${folder}/blobs/sha256/${manifest#sha256:}")" != "${manifest#sha256:}" ]]; then
+    rm -rf "${folder}"
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} has for ${BUILD_PLATFORM}: give the release's archive for ${BUILD_PLATFORM} (<image>-<version>-linux-${BUILD_PLATFORM#linux/}.oci.tar). Nothing was changed."
+  fi
+  config=$(archive_json config "${folder}/blobs/sha256/${manifest#sha256:}" 2>/dev/null) || config=""
+  rm -rf "${folder}"
+  [[ "${config}" =~ ${digest_pattern} ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: the ${BUILD_PLATFORM} manifest ${manifest} names no config. Nothing was changed."
+  ARCHIVE_MANIFEST=${manifest}
+  ARCHIVE_CONFIG=${config}
+  echo "[load] ${IMAGE_ARCHIVE} holds ${IMAGE_DIGEST}, with its image for ${BUILD_PLATFORM} (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG})"
+}
+
+# check_loaded_image: once IMAGE_ARCHIVE is loaded, Docker must hold an image whose ID is the index's, the platform's
+# manifest's or its config's (check_image_archive), for BUILD_PLATFORM. The pre-flight and the controller then run that
+# image by its ID, never pulling, and the controller carries the release-image label naming IMAGE_REF.
+check_loaded_image() {
+  local id loaded="" platform labels version revision
+  for id in "${IMAGE_DIGEST}" "${ARCHIVE_MANIFEST}" "${ARCHIVE_CONFIG}"; do
+    if [[ "$(dockerc image inspect --format '{{.Id}}' "${id}" 2>/dev/null)" == "${id}" ]]; then
+      loaded=${id}
+      break
+    fi
+  done
+  [[ -n "${loaded}" ]] \
+    || fail "Docker loaded ${IMAGE_ARCHIVE}, and holds no image with its IDs: ${IMAGE_DIGEST} (the index), ${ARCHIVE_MANIFEST} (the ${BUILD_PLATFORM} manifest) or ${ARCHIVE_CONFIG} (its config). The running controller was not touched."
+  inspect_platform_args=()
+  if dockerc image inspect --help 2>/dev/null | grep -q -- '--platform'; then
+    inspect_platform_args=(--platform "${BUILD_PLATFORM}")
+  fi
+  platform=$(dockerc image inspect ${inspect_platform_args[@]+"${inspect_platform_args[@]}"} --format '{{.Os}}/{{.Architecture}}' "${loaded}") \
+    || platform=""
+  [[ "${platform}" != "/" ]] || platform=""
+  [[ "${platform}" == "${BUILD_PLATFORM}" ]] \
+    || fail "The image ${loaded} from ${IMAGE_ARCHIVE} is not for ${BUILD_PLATFORM} (Docker reports '${platform:-no image for that platform}'). The running controller was not touched."
+  labels=$(dockerc image inspect ${inspect_platform_args[@]+"${inspect_platform_args[@]}"} \
+      --format '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} {{index .Labels "org.opencontainers.image.revision"}}{{end}}' \
+      "${loaded}" 2>/dev/null) || labels=""
+  read -r version revision <<<"${labels}" || true
+  echo "[load] ${IMAGE_DIGEST} for ${platform}, image ${loaded}: version ${version:-unknown}${revision:+, commit ${revision:0:12}}"
+  DEPLOY_IMAGE=${loaded}
+  image_platform_args=(--platform "${BUILD_PLATFORM}" --pull never --label "${RELEASE_IMAGE_LABEL}=${IMAGE_REF}")
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Restore. Everything here runs without errexit, and every step checks its own result.
 
 # The ID of the container this deploy created: from `docker run -d`, or from the cidfile docker writes on creation
@@ -1348,6 +1484,9 @@ if [[ "${VERIFY_REMOTE}" == "true" ]]; then
   exit 0
 fi
 
+# The offline archive, before any Docker call: one that does not hold the release's image changes nothing.
+[[ -z "${IMAGE_ARCHIVE}" ]] || check_image_archive
+
 # Checked as the switch runs docker: in its own session, with no terminal to prompt on. A context that asks for a
 # password or a host key confirmation would otherwise pass here and fail at the old controller's stop.
 if ! context_errors=$("${OWN_SESSION[@]}" docker --context "${DOCKER_CONTEXT}" info </dev/null 2>&1 >/dev/null); then
@@ -1383,7 +1522,9 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   if [[ "${ROLLBACK}" == "true" ]]; then
     echo "[dry-run] Would request a verified Stop, swap ${CONTAINER_NAME} with ${PREVIOUS_CONTAINER_NAME} and verify it at ${REMOTE_BASE_URL}."
   else
-    if [[ -n "${IMAGE_REF}" ]]; then
+    if [[ -n "${IMAGE_ARCHIVE}" ]]; then
+      image_step="load ${IMAGE_ARCHIVE} (${IMAGE_DIGEST} for ${BUILD_PLATFORM}) into Docker context '${DOCKER_CONTEXT}', pulling nothing, and check the image's ID and platform"
+    elif [[ -n "${IMAGE_REF}" ]]; then
       image_step="pull ${IMAGE_REF} for ${BUILD_PLATFORM} into Docker context '${DOCKER_CONTEXT}' and check its digest and platform"
     else
       image_step="build ${IMAGE_TAG} for ${BUILD_PLATFORM}"
@@ -1506,7 +1647,14 @@ fi
 
 WORK_DIR=$(mktemp -d)
 
-if [[ -n "${IMAGE_REF}" ]]; then
+if [[ -n "${IMAGE_ARCHIVE}" ]]; then
+  # Offline: the release's archive, checked above, is loaded into the Pi's Docker, and the image is used only if Docker
+  # gives it one of the IDs the archive's digests name, for the platform this run deploys. Nothing is pulled or built.
+  echo "[load] Loading ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (nothing is pulled)..."
+  dockerc load -i "${IMAGE_ARCHIVE}" \
+    || fail "Could not load ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (see above). The running controller was not touched."
+  check_loaded_image
+elif [[ -n "${IMAGE_REF}" ]]; then
   # Pull mode: the Pi's Docker pulls the released image, and it is used only if it is the image the digest names, for
   # the platform this run deploys. Nothing is built here, so the script also runs outside a checkout.
   echo "[pull] Pulling ${IMAGE_REF} for ${BUILD_PLATFORM} into Docker context '${DOCKER_CONTEXT}'..."
