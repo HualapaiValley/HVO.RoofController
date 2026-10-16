@@ -219,7 +219,12 @@ public sealed record RoofCallerResponse(
     bool IsKiosk);
 
 /// <summary>A person who may sign in with a PIN at a kiosk, from <c>GET Auth/Pin/Users</c>.</summary>
-public sealed record RoofPinUserResponse(string Name, string Role);
+public sealed record RoofPinUserResponse(string Name, string Role)
+{
+    public string? PrincipalId { get; init; }
+    public string? Provider { get; init; }
+    public bool SetupPending { get; init; }
+}
 
 /// <summary>A person, as the admin endpoints show them. Secrets are never returned: only whether each is set.</summary>
 public sealed record RoofUserResponse(

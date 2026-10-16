@@ -115,7 +115,7 @@ class LinuxAuthAssets(unittest.TestCase):
             status, _, error = run(release.arguments(**{"--linux-auth": str(native)}))
             self.assertEqual(0, status, error)
             manifest = json.loads((release.out / "release.json").read_text())
-            self.assertEqual(2, manifest["identityStoreSchema"])
+            self.assertEqual(3, manifest["identityStoreSchema"])
             workers = [item for item in manifest["assets"] if item["kind"] == "linux-auth"]
             self.assertEqual(["linux-arm64", "linux-x64"], [item["platform"] for item in workers])
             for item in workers:

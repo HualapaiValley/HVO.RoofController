@@ -182,8 +182,8 @@ jobs:
   # hvo-roof-install's rig role end to end (#69): the installer as published, a release as the release workflow
   # publishes one (in a registry on loopback), installed as root, run again, changed, and its certificate renewed;
   # hvo-roof (#71) installed for the person, trusting the rig's CA, and signed in to it before and after the renewal;
-  # and (#72) backed up, purged and restored, then the release before (a build of main) upgraded, rolled back and
-  # upgraded again. The whole history is fetched: the release before is built from origin/main.
+  # and (#72) backed up, purged and restored, then the pinned 4.1.1 source baseline bootstrapped with the new release script, rolled back and
+  # bootstrapped again. The whole history is fetched for that fixed transition regression.
   installer-rig:
     strategy:
       fail-fast: false

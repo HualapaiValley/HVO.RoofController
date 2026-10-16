@@ -549,7 +549,7 @@ controller and runs the checks from step 7 against it. Nothing is built. A later
 Schema compatibility verification requires Python 3 on the machine running the script and refuses recovery when it
 is absent. The check reads the live persisted store's `schemaVersion` and the `io.hvo.roof.identity-schema` capability
 label from the preserved container's exact immutable image before restarting it. A missing schema field or image label means schema 1;
-this release declares support through schema 2 and reads both 1 and 2. Malformed or unsupported schema values, an
+this release declares support through schema 3 and reads 1, 2 and 3. Malformed or unsupported schema values, an
 unreadable expected store, conflicting store paths, a store-path secret override, or unavailable image metadata refuse
 recovery. An explicitly empty store path represents an in-memory store. Neither a mutable image tag nor a product
 version string proves compatibility.

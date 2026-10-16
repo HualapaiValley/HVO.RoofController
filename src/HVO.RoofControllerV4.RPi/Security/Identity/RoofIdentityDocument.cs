@@ -29,8 +29,11 @@ internal sealed class RoofIdentityDocument
     public List<StoredOwnedKey> OwnedKeys { get; set; } = new();
     public List<StoredAssertionNonce> AssertionNonces { get; set; } = new();
 
+    public StoredKioskCredential? KioskCredential { get; set; }
+
     public RoofIdentityDocument Clone() => new()
     {
+        KioskCredential = KioskCredential is null ? null : KioskCredential with { },
         SchemaVersion = SchemaVersion,
         Revision = Revision,
         Users = Users.ConvertAll(user => user with { }),

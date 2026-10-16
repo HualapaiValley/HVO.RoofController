@@ -153,6 +153,29 @@ internal sealed class RoofIdentityFile
         }
     }
 
+    internal bool KioskRetired => File.Exists(Path + ".kiosk-retired");
+
+    // Created before saving completion/retirement: an interrupted replacement fails closed.
+    internal void RetireKioskDefault()
+    {
+        if (!OperatingSystem.IsLinux()) throw new RoofIdentityStoreException("Durable kiosk commissioning requires Linux.");
+        var marker = Path + ".kiosk-retired";
+        try
+        {
+            if (!File.Exists(marker))
+            {
+                using var file = new FileStream(marker, new FileStreamOptions
+                { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, UnixCreateMode = OwnerOnly });
+                file.WriteByte(1);
+                file.Flush(true);
+            }
+            if (!RoofDirectorySync.TryFlush(Directory))
+                throw new RoofIdentityStoreException("Kiosk retirement could not be durably recorded.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { throw new RoofIdentityStoreException("Kiosk retirement could not be recorded.", error); }
+    }
+
     /// <summary>True when the file exists and other users can read or write it.</summary>
     public bool IsReadableByOthers()
     {
@@ -208,7 +231,7 @@ internal sealed class RoofIdentityFile
     private static List<string> Check(RoofIdentityDocument document)
     {
         var problems = new List<string>();
-        if (document.SchemaVersion is not (1 or 2))
+        if (document.SchemaVersion is not (1 or 2 or 3))
         {
             problems.Add($"schemaVersion {document.SchemaVersion} is not supported (expected {RoofIdentityDocument.CurrentSchemaVersion}).");
             return problems;
@@ -273,7 +296,7 @@ internal sealed class RoofIdentityFile
             problems.Add("two sessions have the same token.");
         }
 
-        if (document.SchemaVersion == 2)
+        if (document.SchemaVersion >= 2)
         {
             var principals = document.LinuxPrincipals;
             var owned = document.OwnedKeys;
@@ -297,6 +320,12 @@ internal sealed class RoofIdentityFile
                 problems.Add("Provider session metadata is invalid.");
         }
 
+        if (document.KioskCredential is { } kiosk && (document.SchemaVersion != 3
+            || string.IsNullOrEmpty(kiosk.PrincipalId) || string.IsNullOrEmpty(kiosk.Stamp)
+            || kiosk.State is not ("pending" or "complete" or "retired")
+            || (kiosk.State == "complete") != (kiosk.PinHash is not null)
+            || kiosk.Failures < 0 || kiosk.ExpiresUtc <= kiosk.CreatedUtc))
+            problems.Add("Kiosk commissioning credential is invalid.");
         return problems;
     }
 

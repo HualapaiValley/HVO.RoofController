@@ -38,6 +38,7 @@ public static class RoofSecurityServiceCollectionExtensions
         services.AddSingleton<RoofSecretHasher>();
         services.AddSingleton<RoofSignInLockout>();
         services.AddSingleton<RoofSignInService>();
+        services.AddSingleton<RoofKioskSignInService>();
         services.AddSingleton<RoofNativeAuthClient>();
         services.AddSingleton<RoofProviderAuthService>();
         services.AddRoofSignInRateLimiting();

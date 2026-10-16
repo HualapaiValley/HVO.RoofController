@@ -1012,6 +1012,38 @@ The installer never renews your certificate. Before it expires, import the new o
 
 ## Upgrading
 
+### From 4.1.1 to a release with identity schema 3
+
+The installed 4.1.1 installer rejects a schema-3 release manifest with
+`identityStoreSchema must be 1 or 2` before it can replace itself or show that release's upgrade notes.
+Use the **new release's bootstrap script (which verifies the installer it downloads)**, rather than the installed `hvo-roof-install upgrade`,
+for this transition. Keep a full private backup or VM snapshot first; preserve the existing identity data.
+
+Set `version` to the actual published release you intend to install (not a local test candidate), then run:
+
+```bash
+version='X.Y.Z' # replace with the published release version
+curl -fsSL --proto '=https' --tlsv1.2 -o install.sh \
+  "https://github.com/HualapaiValley/HVO.RoofController/releases/download/v${version}/install.sh"
+bash install.sh upgrade --version "$version"
+```
+
+The script determines the recorded roles, uses sudo for a system installation, verifies the downloaded installer's
+SHA-256 (and its attestation when authenticated `gh` is available), and starts the newer installer directly.
+It retains the recorded choices, users, native enrollments, keys and configuration; an existing installation gains
+no temporary default PIN. For an offline release folder, use
+`bash install.sh --from /path/to/release upgrade --version "$version"` with that release's script and files.
+A platform installer downloaded and verified against that release's `SHA256SUMS` can equivalently run its own
+`upgrade --version "$version"` (with sudo for system roles).
+
+Do not uninstall, delete identity files, re-enroll users or change `identityStoreSchema` to work around the rejection.
+Existing schema-2 stores remain eligible for compatible rollback; a schema-3 store cannot roll back to 4.1.1.
+Rollback keeps current identity data and never replays an old credential backup. The bootstrap does not change
+certificate trust or bypass browser warnings. Local candidate validation does not establish published-download,
+attestation-service or interactive kiosk/browser verification.
+
+### Routine upgrades
+
 `sudo hvo-roof-install upgrade` upgrades what is installed here to the latest release, with the choices the record
 holds. Run it as yourself, without `sudo`, for `hvo-roof`, the Mac app or a rig on a Mac. `--version 4.0.1` names the
 release instead of the latest, and `--release DIR` reads it from a folder ([The release it installs](#the-release-it-installs)).

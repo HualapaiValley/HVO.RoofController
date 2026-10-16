@@ -18,6 +18,8 @@ internal static class Pam
     [DllImport("libc", CallingConvention = CallingConvention.Cdecl)] private static extern void free(IntPtr value);
 
     internal static bool Check(string service, string user, string? password, bool authenticate)
+        => CheckResult(service, user, password, authenticate) == true;
+    internal static bool? CheckResult(string service, string user, string? password, bool authenticate)
     {
         IntPtr ConversationResponses(int count, IntPtr messages)
         {
@@ -55,12 +57,13 @@ internal static class Pam
         };
         var conversation = new ConversationData { Callback = callback };
         var status = pam_start(service, user, ref conversation, out var handle);
-        if (status != 0) return false;
+        if (status != 0) return null;
         try
         {
             if (authenticate) status = pam_authenticate(handle, 0x8000); // PAM_DISALLOW_NULL_AUTHTOK
             if (status == 0) status = pam_acct_mgmt(handle, 0);
-            return status == 0;
+            // Explicit authentication/account denials; all other PAM results are unavailable.
+            return status == 0 ? true : status is 6 or 7 or 10 or 12 or 13 ? false : null;
         }
         finally
         {

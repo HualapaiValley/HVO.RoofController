@@ -63,6 +63,8 @@ public sealed class RoofClientCoverageTests
             })),
         ("Auth.RevokeOwnedKey", client => client.Auth.RevokeOwnedKeyAsync("fixture-key")),
         ("Auth.SignInWithPin", client => client.Auth.SignInWithPinAsync("alice", "0000")),
+        ("Auth.SignInWithPrincipalPin", client => client.Auth.SignInWithPrincipalPinAsync("fixture-principal", "0000")),
+        ("Auth.CompleteKioskSetup", client => client.Auth.CompleteKioskSetupAsync("fixture-token", "2468", "2468")),
         ("Auth.GetPinUsers", client => client.Auth.GetPinUsersAsync()),
         ("Auth.GetCaller", client => client.Auth.GetCallerAsync()),
         ("Auth.SignOut", client => client.Auth.SignOutAsync()),

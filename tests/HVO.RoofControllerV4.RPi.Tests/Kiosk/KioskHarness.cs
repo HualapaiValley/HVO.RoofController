@@ -169,11 +169,14 @@ internal sealed class KioskHarness : IAsyncDisposable
         bool localKey = false,
         IDictionary<string, string?>? settings = null,
         KioskConsoleOptions? options = null,
-        TimeSpan? requestTimeout = null)
+        TimeSpan? requestTimeout = null, bool populateUsers = true)
     {
         var harness = new KioskHarness(localKey, settings, options, requestTimeout);
-        await RoofClientApiTests.AddUserAsync(harness.Host, Operator, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
-        await RoofClientApiTests.AddUserAsync(harness.Host, Admin, RoofControllerApiContract.AdminRole, TestSecrets.Pin);
+        if (populateUsers)
+        {
+            await RoofClientApiTests.AddUserAsync(harness.Host, Operator, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
+            await RoofClientApiTests.AddUserAsync(harness.Host, Admin, RoofControllerApiContract.AdminRole, TestSecrets.Pin);
+        }
         return harness;
     }
 

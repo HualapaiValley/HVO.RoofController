@@ -144,8 +144,8 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
     private static int ReadIdentitySchema(JsonElement root)
     {
         if (!root.TryGetProperty("identityStoreSchema", out var value)) return 1;
-        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var schema) || schema is < 1 or > 2)
-            throw Invalid("identityStoreSchema must be 1 or 2");
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var schema) || schema is < 1 or > 3)
+            throw Invalid("identityStoreSchema must be 1, 2 or 3");
         return schema;
     }
 

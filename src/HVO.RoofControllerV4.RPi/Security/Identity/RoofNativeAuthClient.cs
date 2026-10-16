@@ -56,16 +56,23 @@ public sealed class RoofNativeAuthClient : IDisposable
     }
 
     public bool IsCurrent(StoredLinuxPrincipal principal, string purpose = "linux-password")
+        => CheckCurrent(principal, purpose) == true;
+
+    /// <summary>Null means unavailability; false means the native worker positively rejected this identity.</summary>
+    public bool? CheckCurrent(StoredLinuxPrincipal principal, string purpose = "linux-password")
     {
-        if (!_options.CurrentValue.LinuxAuth.Enabled) return false;
+        if (!_options.CurrentValue.LinuxAuth.Enabled) return null;
         try
         {
             using var result = _client.PostAsJsonAsync("/v1/revalidate", new { subject = principal.Subject, enrollmentStamp = principal.EnrollmentStamp, purpose }).GetAwaiter().GetResult();
-            if (!result.IsSuccessStatusCode) return false;
+            if (!result.IsSuccessStatusCode) return null;
             var body = result.Content.ReadFromJsonAsync<RevalidationResponse>().GetAwaiter().GetResult();
-            return body?.Valid == true && body.UserName == principal.Name;
+            if (body?.Valid is null) return null;
+            if (body.Valid == false) return false;
+            if (!HVO.RoofControllerV4.Common.Models.RoofIdentityContract.IsValidName(body.UserName)) return null;
+            return body.UserName == principal.Name;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException) { return false; }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException) { return null; }
     }
 
     public RoofNativeAssertion? Verify(string? assertion, string purpose)
@@ -110,5 +117,5 @@ public sealed class RoofNativeAuthClient : IDisposable
     }
     public void Dispose() => _client.Dispose();
     private sealed record AssertionResponse(string Assertion);
-    private sealed record RevalidationResponse(bool Valid, string UserName);
+    private sealed record RevalidationResponse(bool? Valid, string? UserName);
 }

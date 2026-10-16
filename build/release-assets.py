@@ -274,7 +274,7 @@ def manifest(out, assets, version, commit, created, registry, digests, contents,
         }
     return {
         "schemaVersion": 1,
-        "identityStoreSchema": 2,
+        "identityStoreSchema": 3,
         "product": "HVO Roof Controller",
         "version": version,
         "tag": f"v{version}",

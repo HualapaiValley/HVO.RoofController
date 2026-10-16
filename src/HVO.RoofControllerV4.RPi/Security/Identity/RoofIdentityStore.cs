@@ -109,7 +109,7 @@ public sealed partial class RoofIdentityStore
                 {
                     _logger.LogWarning(
                         "The identity store {Path} can be read or written by other users; the next change saves it readable by the controller only.",
-                        _file.Path);
+                        _file!.Path);
                 }
             }
             catch (RoofIdentityStoreException ex)
@@ -302,8 +302,8 @@ public sealed partial class RoofIdentityStore
             var user = new StoredUser(name, role, passwordHash, pinHash, stamp, now, now)
             {
                 TemporaryPin = temporaryPin,
-                PrincipalId = document.SchemaVersion == 2 ? Guid.NewGuid().ToString("N") : null,
-                AuthenticationEpoch = document.SchemaVersion == 2 ? stamp : null
+                PrincipalId = document.SchemaVersion >= 2 ? Guid.NewGuid().ToString("N") : null,
+                AuthenticationEpoch = document.SchemaVersion >= 2 ? stamp : null
             };
             document.Users.Add(user);
             return RoofIdentityResult<StoredUser>.Success(user);
@@ -347,7 +347,7 @@ public sealed partial class RoofIdentityStore
                 PinHash = pinHash,
                 TemporaryPin = pinChanged ? false : before.TemporaryPin,
                 Stamp = roleChanged || passwordChanged || pinChanged ? NewStamp() : before.Stamp,
-                AuthenticationEpoch = document.SchemaVersion == 2 && (roleChanged || passwordChanged) ? NewStamp() : before.AuthenticationEpoch,
+                AuthenticationEpoch = document.SchemaVersion >= 2 && (roleChanged || passwordChanged) ? NewStamp() : before.AuthenticationEpoch,
                 UpdatedUtc = now
             };
             document.Users[index] = after;
@@ -373,7 +373,7 @@ public sealed partial class RoofIdentityStore
                 return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.SignInFailed, "The current password is not correct.");
             }
 
-            var after = document.Users[index] with { PasswordHash = newPasswordHash, Stamp = NewStamp(), AuthenticationEpoch = document.SchemaVersion == 2 ? NewStamp() : null, UpdatedUtc = now };
+            var after = document.Users[index] with { PasswordHash = newPasswordHash, Stamp = NewStamp(), AuthenticationEpoch = document.SchemaVersion >= 2 ? NewStamp() : null, UpdatedUtc = now };
             document.Users[index] = after;
             var retainedIndex = document.Sessions.FindIndex(session => session.Id == keepSessionId && session.Provider == "virtual" && session.PrincipalId == after.PrincipalId);
             if (retainedIndex >= 0) document.Sessions[retainedIndex] = document.Sessions[retainedIndex] with { PrincipalStamp = after.AuthenticationEpoch ?? after.Stamp };
@@ -567,21 +567,27 @@ public sealed partial class RoofIdentityStore
                     "This would leave no admin credential (an admin API key, or an admin with a password). Add another admin first.");
             }
 
+            ReconcileKioskCredential(working, now);
             PruneSessions(working, now);
             working.Revision++;
+            if (_document.KioskCredential is { State: "pending" } && working.KioskCredential is { State: not "pending" })
+                _file?.RetireKioskDefault();
             var persisted = working.Clone();
             persisted.Sessions.RemoveAll(session => session.TemporaryPin);
-            if (_file?.Save(persisted) == false && OperatingSystem.IsLinux() && !_reportedUnflushedSave)
+            var durable = _file?.Save(persisted) != false;
+            if (!durable && OperatingSystem.IsLinux() && !_reportedUnflushedSave)
             {
                 _reportedUnflushedSave = true;
                 _logger.LogWarning(
                     "The identity store {Path} was saved, but its directory could not be flushed to disk, so a power cut in " +
                     "the next few seconds could bring back the previous version. Reported once.",
-                    _file.Path);
+                    _file!.Path);
             }
 
             _document = working;
             _snapshot = Build(working);
+            if (!durable && working.KioskCredential is not null)
+                throw new RoofIdentityStoreException("Kiosk credential change was not durably confirmed; access must be checked again.");
             foreach (var id in _lastActivity.Keys)
             {
                 if (!_snapshot.SessionsById.ContainsKey(id))

@@ -110,6 +110,16 @@ public static class PlanBuilder
         {
             var rig = controllerRoles.Contains(InstallRole.Rig);
             var settings = controller;
+            KioskCommissioningClaimStep? commissioning = null;
+            if (roles.Contains(InstallRole.Kiosk) && machine.Os == InstallerOs.Linux
+                && settings.LinuxAuth is { Enabled: true } && settings.FirstAdmin is null
+                && survey.SystemRecord is null && survey.RecordProblems.Count == 0 && survey.Controller is null
+                && !survey.HasSystemConfiguration && !machine.DirectoryExists(layout.Configuration)
+                && !machine.DirectoryExists(layout.Data) && !machine.FileExists(KioskCommissioningClaimStep.ClaimFile))
+            {
+                commissioning = new KioskCommissioningClaimStep(layout);
+                steps.Add(commissioning);
+            }
             var names = CertificateNames.For(machine, settings);
             AddFolder(steps, layout.Configuration, Modes.Folder, "the controller's configuration");
             AddFolder(steps, layout.Secrets, Modes.PrivateFolder, "secrets the controller reads, one file per setting");
@@ -143,6 +153,8 @@ public static class PlanBuilder
 
             if (settings.LinuxAuth is { Enabled: true } linuxAuth)
                 steps.Add(new LinuxAuthStep(linuxAuth));
+            if (commissioning is not null)
+                steps.Add(new KioskCommissioningSeedStep(layout, settings.LinuxAuth!, commissioning));
             steps.Add(new ControllerStep(layout, settings, names, rig, certificate, keys, emulator, camera, import));
             if (settings.LinuxAuth is { Enabled: true })
                 steps.Add(new LinuxAuthEnrollmentStep(layout, settings.LinuxAuth, keys.First(key => key.Use == ApiKeyUse.Admin)));

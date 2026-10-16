@@ -132,7 +132,7 @@ EXPOSE 8080 8088
 ARG ROOF_VERSION=""
 ARG ROOF_REVISION=""
 ARG ROOF_CREATED=""
-LABEL io.hvo.roof.identity-schema="2" \
+LABEL io.hvo.roof.identity-schema="3" \
       org.opencontainers.image.title="HVO Roof Controller" \
       org.opencontainers.image.description="The roll-off roof controller and its web UI: on a Raspberry Pi 5 with its HAT, or anywhere with the HAT emulator." \
       org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \

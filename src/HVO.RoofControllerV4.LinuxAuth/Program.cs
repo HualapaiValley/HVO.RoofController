@@ -35,9 +35,13 @@ public static class Program
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 var request = JsonSerializer.Deserialize<PamRequest>(await ReadBounded(Console.OpenStandardInput(), 16 * 1024, timeout.Token), Json);
-                return request is not null && Native.MatchesAccount(request.UserName, request.Uid)
-                    && (!request.RequireUnlockedPassword || Native.PasswordIsUnlocked(request.UserName))
-                    && Pam.Check(configuration.PamService, request.UserName, request.Password, request.Authenticate) ? 0 : 1;
+                if (request is null) return 1;
+                var account = Native.AccountMatches(request.UserName, request.Uid);
+                var unlocked = request.RequireUnlockedPassword ? Native.PasswordUnlocked(request.UserName) : true;
+                if (account == false || unlocked == false) return 2;
+                if (account is null || unlocked is null) return 1;
+                return Pam.CheckResult(configuration.PamService, request.UserName, request.Password, request.Authenticate)
+                    switch { true => 0, false => 2, null => 1 };
             }
             if (args[0] != "serve") return Fail();
             await RunWorker(configuration);
@@ -154,8 +158,7 @@ public static class Program
         app.MapPost("/v1/revalidate", async (HttpContext context) =>
         {
             var request = await ReadRequest<RevalidateRequest>(context);
-            return request is not null && worker.Revalidate(request) is { } userName
-                ? Results.Json(new { valid = true, userName }) : Denied();
+            return request is null ? Denied() : RevalidationResult(worker.Revalidate(request));
         });
         app.MapPost("/v1/local", async (HttpContext context) =>
         {
@@ -179,6 +182,10 @@ public static class Program
             CryptographicOperations.ZeroMemory(key);
         }
     }
+
+    internal static IResult RevalidationResult(Revalidation response)
+        => response.Valid is null ? Results.StatusCode(503)
+            : Results.Json(new { valid = response.Valid.Value, userName = response.UserName });
 
     private static IResult Denied() => Results.Json(new { code = "authentication_failed" }, statusCode: 401);
     private static async Task<T?> ReadRequest<T>(HttpContext context) =>
@@ -264,13 +271,15 @@ internal sealed class Worker(WorkerConfiguration configuration, byte[] key)
             return Sign(entry, "linux-password", "login");
         }
     }
-    public string? Revalidate(RevalidateRequest request)
+    public Revalidation Revalidate(RevalidateRequest request)
     {
         lock (gate)
         {
-            if (request.Purpose is not ("linux-password" or "local-admin")) return null;
+            if (request.Purpose is not ("linux-password" or "local-admin")) return new(null, null);
             var entry = Enrollments().SingleOrDefault(e => e.Subject == request.Subject && e.EnrollmentStamp == request.EnrollmentStamp);
-            return entry is not null && Current(entry, request.Purpose == "linux-password") ? entry.UserName : null;
+            if (entry is null || !entry.Enabled) return new(false, null);
+            var valid = PamProcess.CheckResult(entry.UserName, null, false, entry.Uid, request.Purpose == "linux-password");
+            return new(valid, valid == true ? entry.UserName : null);
         }
     }
     public string? Local(LocalRequest request)
@@ -294,3 +303,5 @@ internal sealed class Worker(WorkerConfiguration configuration, byte[] key)
     }
     private static string Encode(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 }
+
+internal sealed record Revalidation(bool? Valid, string? UserName);

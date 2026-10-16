@@ -68,7 +68,7 @@ public sealed class KioskPinPage : UserControl
         _unlock = KioskTheme.TouchButton("Unlock", "pin-unlock", metrics, () => _ = pad.UnlockAsync());
         KioskTheme.Colour(_unlock, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
         _unlock.MinWidth = metrics.Touch * 2.4;
-        var back = KioskTheme.TouchButton("Cancel", "pin-cancel", metrics, cancel);
+        var back = KioskTheme.TouchButton("Cancel", "pin-cancel", metrics, () => { pad.Select(null); cancel(); });
         back.MinWidth = metrics.Touch * 1.6;
         var entry = new StackPanel
         {
@@ -103,8 +103,10 @@ public sealed class KioskPinPage : UserControl
             _people.Children.Clear();
             foreach (var user in _pad.Users)
             {
-                var name = user.Name;
-                var button = KioskTheme.TouchButton(name, $"pin-user-{name}", _metrics, () => _pad.Select(name));
+                var name = KioskPinPad.SelectionKey(user);
+                var label = user.Provider is null ? user.Name : $"{user.Name} ({user.Provider})";
+                var button = KioskTheme.TouchButton(label, $"pin-user-{name}", _metrics, () => _pad.Select(name));
+                button.IsEnabled = !_pad.ChoosingPin;
                 button.HorizontalAlignment = HorizontalAlignment.Stretch;
                 button.HorizontalContentAlignment = HorizontalAlignment.Left;
                 if (name == _pad.Selected)
@@ -121,7 +123,9 @@ public sealed class KioskPinPage : UserControl
         _error.Text = _pad.Error ?? (_pad.Unlocking ? "Unlocking…" : string.Empty);
         _error.Foreground = _pad.Error is null ? KioskTheme.Muted : KioskTheme.Colours(KioskNoticeLevel.Danger).Foreground;
         _error.IsVisible = _error.Text.Length > 0;
+        _unlock.Content = _pad.ActionLabel;
         _unlock.IsEnabled = _pad.CanUnlock;
+        _people.IsEnabled = !_pad.ChoosingPin;
         foreach (var key in _keys)
         {
             key.IsEnabled = _pad.Selected is not null && !_pad.Unlocking;

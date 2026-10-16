@@ -21,6 +21,8 @@ internal static class RoofApiRoutes
     public const string LocalSession = V4 + "Auth/LocalSession";
     public const string OwnKeys = V4 + "Auth/Keys";
     public const string Pin = V4 + "Auth/Pin";
+    public const string KioskPin = V4 + "Auth/KioskPin";
+    public const string CompleteKioskPin = V4 + "Auth/KioskPin/Complete";
     public const string PinUsers = V4 + "Auth/Pin/Users";
     public const string Me = V4 + "Auth/Me";
     public const string Password = V4 + "Auth/Password";

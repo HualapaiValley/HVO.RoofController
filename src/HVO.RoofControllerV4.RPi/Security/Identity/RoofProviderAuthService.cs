@@ -56,6 +56,17 @@ public sealed class RoofProviderAuthService(RoofIdentityStore identity, RoofSign
         return linux is null ? identity.ProviderPrincipals.Any(principal => principal.Id == id && principal.Provider == "virtual") : native.IsCurrent(linux, local ? "local-admin" : "linux-password");
     }
 
+    /// <summary>Confirmed native revocation permanently retires kiosk access; transport failure only refuses it.</summary>
+    public bool KioskPrincipalIsCurrent(string id)
+    {
+        if (!Enabled) return false;
+        var linux = identity.LinuxForPrincipal(id);
+        if (linux is null) return PrincipalIsCurrent(id);
+        var current = native.CheckCurrent(linux);
+        if (current == false) identity.RetireKioskCredential(id);
+        return current == true;
+    }
+
     private static RoofIdentityResult<RoofIssuedSession> Failed()
         => RoofIdentityResult<RoofIssuedSession>.Failure(RoofControllerErrorCode.SignInFailed, "Provider authentication failed.");
 }

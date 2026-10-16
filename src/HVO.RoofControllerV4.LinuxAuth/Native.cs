@@ -45,17 +45,19 @@ internal static class Native
         using var socket = new Socket(AddressFamily.Unix, SocketType.Dgram, ProtocolType.Unspecified);
         socket.SendTo(Encoding.UTF8.GetBytes("READY=1"), new UnixDomainSocketEndPoint(destination));
     }
-    internal static bool MatchesAccount(string userName, uint uid)
+    internal static bool MatchesAccount(string userName, uint uid) => AccountMatches(userName, uid) == true;
+    internal static bool? AccountMatches(string userName, uint uid)
     {
         var buffer = Marshal.AllocHGlobal(65536);
         try
         {
-            return getpwnam_r(userName, out var record, buffer, 65536, out var result) == 0 && result != IntPtr.Zero
-                && record.Uid == uid && string.Equals(Marshal.PtrToStringUTF8(record.Name), userName, StringComparison.Ordinal);
+            if (getpwnam_r(userName, out var record, buffer, 65536, out var result) != 0) return null;
+            return result != IntPtr.Zero && record.Uid == uid && string.Equals(Marshal.PtrToStringUTF8(record.Name), userName, StringComparison.Ordinal);
         }
         finally { Marshal.FreeHGlobal(buffer); }
     }
-    internal static bool PasswordIsUnlocked(string userName)
+    internal static bool PasswordIsUnlocked(string userName) => PasswordUnlocked(userName) == true;
+    internal static bool? PasswordUnlocked(string userName)
     {
         // pam_unix account management does not reject a password locked with passwd -l.
         // Inspect only the first byte of the host-native shadow result; never marshal/log the hash.
@@ -63,8 +65,8 @@ internal static class Native
         var buffer = Marshal.AllocHGlobal(65536);
         try
         {
-            if (getspnam_r(userName, out var record, buffer, 65536, out var result) != 0
-                || result == IntPtr.Zero || record.Password == IntPtr.Zero) return false;
+            if (getspnam_r(userName, out var record, buffer, 65536, out var result) != 0) return null;
+            if (result == IntPtr.Zero || record.Password == IntPtr.Zero) return false;
             return Marshal.ReadByte(record.Password) is not (0 or (byte)'!' or (byte)'*');
         }
         finally

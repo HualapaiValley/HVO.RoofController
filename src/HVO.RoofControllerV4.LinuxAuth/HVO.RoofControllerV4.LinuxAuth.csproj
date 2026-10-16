@@ -4,4 +4,5 @@
     <OutputType>Exe</OutputType>
     <EnableDefaultContentItems>false</EnableDefaultContentItems>
   </PropertyGroup>
+  <ItemGroup><InternalsVisibleTo Include="HVO.RoofControllerV4.RPi.Tests" /></ItemGroup>
 </Project>

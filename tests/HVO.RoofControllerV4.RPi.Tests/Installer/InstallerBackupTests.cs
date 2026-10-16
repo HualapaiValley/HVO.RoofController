@@ -38,6 +38,21 @@ public sealed class InstallerBackupTests
     private static readonly InstallAnswers ControllerAndKiosk = new() { Roles = [InstallRole.Controller, InstallRole.Kiosk] };
 
     [TestMethod]
+    public async Task PendingCommissioningBackupIsNeverRestoredAndPurgeKeepsClaim()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.Write(ControllerLayout.System.IdentityFile, "{\"schemaVersion\":3,\"kioskCredential\":{\"state\":\"pending\"}}");
+        pi.Write(KioskCommissioningClaimStep.ClaimFile, "fixture-claimed");
+        await BackUpAndPurgeAsync(pi);
+        pi.Exists(KioskCommissioningClaimStep.ClaimFile).Should().BeTrue();
+        var before = pi.Snapshot(InstallPaths.SystemLog);
+        var result = await RestoreAsync(pi, Kept);
+        result.ExitCode.Should().Be((int)InstallerExitCode.Refused);
+        result.Error.Should().Contain("pending kiosk commissioning");
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before);
+    }
+
+    [TestMethod]
     public async Task ABackup_HoldsTheControllersAndTheKiosksFiles_InAnArchiveOnlyRootReads_AndPrintsNoSecret()
     {
         using var pi = await InstalledPiAsync();
