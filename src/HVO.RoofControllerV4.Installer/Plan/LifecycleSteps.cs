@@ -147,7 +147,7 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
         ArgumentNullException.ThrowIfNull(context);
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         using var work = new DeployScript.WorkFolder(context.Machine);
-        var environment = await controller.EnvironmentAsync(context, work, release.Controller.Reference, _deployKeyFile, cancellationToken).ConfigureAwait(false);
+        var environment = await controller.EnvironmentAsync(context, work, release.Controller.Reference, null, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--rollback").ConfigureAwait(false);
         var now = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
         if (now is not { IsRunning: true } || now.ImageDigest != release.Controller.Digest)
@@ -228,7 +228,7 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
         using var work = new DeployScript.WorkFolder(context.Machine);
 
         // --stop deploys no image, and ignores IMAGE_REF.
-        var environment = await controller.EnvironmentAsync(context, work, string.Empty, _deployKeyFile, cancellationToken).ConfigureAwait(false);
+        var environment = await controller.EnvironmentAsync(context, work, string.Empty, null, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--stop").ConfigureAwait(false);
         var now = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
         if (now is { IsStopped: false })

@@ -167,8 +167,15 @@ public sealed record ContainerSurvey
 {
     public required string Name { get; init; }
 
-    /// <summary>The image it runs, as it was given (with its digest when deployed by one).</summary>
+    /// <summary>The image it runs, as it was given (with its digest when deployed by one, its ID when loaded from an archive).</summary>
     public required string Image { get; init; }
+
+    /// <summary>
+    /// The release's image it runs, by its reference, when it runs one loaded from the release's offline archive by its
+    /// ID: the label (<see cref="MachineSurveyor.ReleaseImageLabel"/>) the deploy script and the installer give it once
+    /// they have checked the image. Null otherwise.
+    /// </summary>
+    public string? ReleaseImage { get; init; }
 
     /// <summary>running, exited, created…</summary>
     public required string State { get; init; }
@@ -225,8 +232,14 @@ public sealed record ContainerSurvey
     /// </summary>
     public bool IsStopped => State is "created" or "exited" or "dead";
 
-    /// <summary>The digest of the image it runs (sha256:…), when it was deployed by one; null for a tag alone.</summary>
-    public string? ImageDigest => Image.LastIndexOf('@') is > 0 and var at && Image[(at + 1)..].StartsWith("sha256:", StringComparison.Ordinal) ? Image[(at + 1)..] : null;
+    /// <summary>
+    /// The digest of the release's image it runs (sha256:…): the one it was deployed by, or the one its release-image
+    /// label names (an image loaded from an offline archive, run by its ID); null for a tag alone.
+    /// </summary>
+    public string? ImageDigest => DigestOf(Image) ?? (ReleaseImage is { } released ? DigestOf(released) : null);
+
+    private static string? DigestOf(string image)
+        => image.LastIndexOf('@') is > 0 and var at && image[(at + 1)..].StartsWith("sha256:", StringComparison.Ordinal) ? image[(at + 1)..] : null;
 }
 
 /// <summary>A systemd service.</summary>

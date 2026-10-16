@@ -74,6 +74,11 @@ setup() {
   for name in linux-arm64 linux-x64 osx-arm64; do
     cp "${TESTS_DIR}/fakes/hvo-roof-install" "${WORK}/release/hvo-roof-install-${name}"
   done
+  # The release's offline image archives: install.sh checks only that the ones this machine needs are there.
+  for name in roof-controller roof-hat-emulator; do
+    : >"${WORK}/release/${name}-${VERSION}-linux-amd64.oci.tar"
+    : >"${WORK}/release/${name}-${VERSION}-linux-arm64.oci.tar"
+  done
   write_sums
 }
 
@@ -819,6 +824,64 @@ test_the_release_from_a_folder_needs_no_github() {
   assert_installer "args=[--release][${WORK}/release]"
 }
 
+# From a folder, the images are the release's offline archives, and ghcr.io is never asked (#127).
+test_the_release_from_a_folder_takes_its_images_from_the_folder_and_never_asks_ghcr() {
+  install_sh FAKE_GHCR_EXIT=7 -- --from "${WORK}/release" --roles rig
+
+  assert_status 0
+  assert_output_contains "ok    roof-controller-${VERSION}-linux-arm64.oci.tar is in ${WORK}/release: the installer loads the controller's image from it, and pulls nothing from ghcr.io"
+  assert_output_contains "ok    roof-hat-emulator-${VERSION}-linux-arm64.oci.tar is in ${WORK}/release: the installer loads the HAT emulator's image from it, and pulls nothing from ghcr.io"
+  assert_output_not_contains "ghcr.io answers"
+  assert_not_called "ghcr.io"
+  assert_installer "args=[--release][${WORK}/release]"
+}
+
+test_a_folder_without_an_image_archive_fails_the_checks() {
+  rm "${WORK}/release/roof-hat-emulator-${VERSION}-linux-arm64.oci.tar"
+  install_sh -- --from "${WORK}/release" --roles rig
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  ${WORK}/release has no roof-hat-emulator-${VERSION}-linux-arm64.oci.tar, the HAT emulator's image for this machine: download it from https://github.com/HualapaiValley/HVO.RoofController/releases/tag/v${VERSION} into ${WORK}/release, then run this again."
+  assert_not_called "ghcr.io"
+}
+
+test_the_controller_from_a_folder_needs_its_own_image_alone() {
+  rm "${WORK}/release/roof-hat-emulator-${VERSION}-linux-arm64.oci.tar" "${WORK}/release/roof-controller-${VERSION}-linux-amd64.oci.tar"
+  install_sh -- --from "${WORK}/release" --roles controller,kiosk
+
+  assert_status 0
+  assert_output_contains "ok    roof-controller-${VERSION}-linux-arm64.oci.tar is in ${WORK}/release"
+  assert_output_not_contains "roof-hat-emulator"
+  assert_not_called "ghcr.io"
+
+  rm "${WORK}/release/roof-controller-${VERSION}-linux-arm64.oci.tar" "${FAKE_STATE_DIR}/installer.log"
+  : >"${FAKE_STATE_DIR}/calls.log"
+  install_sh -- --from "${WORK}/release" --roles controller,kiosk
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  ${WORK}/release has no roof-controller-${VERSION}-linux-arm64.oci.tar, the controller's image for this machine"
+}
+
+test_a_rig_on_x64_from_a_folder_needs_the_amd64_images() {
+  not_a_pi
+  rm "${WORK}/release/roof-controller-${VERSION}-linux-arm64.oci.tar" "${WORK}/release/roof-hat-emulator-${VERSION}-linux-arm64.oci.tar"
+  install_sh FAKE_MACHINE=x86_64 -- --from "${WORK}/release" --roles rig
+
+  assert_status 0
+  assert_output_contains "ok    roof-controller-${VERSION}-linux-amd64.oci.tar is in ${WORK}/release"
+  assert_output_contains "ok    roof-hat-emulator-${VERSION}-linux-amd64.oci.tar is in ${WORK}/release"
+}
+
+test_a_rollback_from_a_folder_needs_no_image_and_never_asks_ghcr() {
+  record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
+  rm "${WORK}"/release/*.oci.tar
+  install_sh FAKE_GHCR_EXIT=7 -- --from "${WORK}/release" rollback
+
+  assert_status 0
+  assert_output_not_contains ".oci.tar"
+  assert_not_called "ghcr.io"
+  assert_installer "args=[rollback]"
+}
+
 # The machine's time is given in UTC (the tests run in MST7): the hour it says is the UTC hour before or after the run.
 test_a_clock_an_hour_out_fails() {
   local before after
@@ -1325,7 +1388,9 @@ test_sha256sums_that_cannot_be_downloaded_says_why() {
 }
 
 test_a_folder_without_the_installer_is_refused() {
+  # The images are there, and the installer is not.
   mkdir "${WORK}/empty"
+  cp "${WORK}"/release/*.oci.tar "${WORK}/empty/"
   install_sh -- --from "${WORK}/empty" --roles rig
 
   assert_status 1

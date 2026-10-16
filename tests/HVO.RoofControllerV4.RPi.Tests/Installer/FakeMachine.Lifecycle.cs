@@ -225,8 +225,11 @@ internal sealed partial class FakeMachine
             : new CommandResult(1, string.Empty, $"stat: cannot statx '{opened}': No such file or directory\n");
     }
 
-    // The image a container runs, as Inspect reports it.
-    private static string ImageOf(string name, FakeContainer container)
+    // The image a container runs, as Inspect reports it: its ID, for one loaded from an offline archive.
+    private static string ImageOf(string name, FakeContainer container) => container.ImageId ?? ReferenceOf(name, container);
+
+    // The release's image a container runs, by its reference.
+    private static string ReferenceOf(string name, FakeContainer container)
     {
         var controller = IsController(name);
         var digest = container.Digest ?? (controller ? ControllerDigest : EmulatorDigest);

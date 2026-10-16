@@ -75,9 +75,10 @@ Options, before the installer's arguments:
   --roles LIST      What this machine is for, so the right things are checked: controller, rig, kiosk, cli or mac-app,
                     separated by commas. Without it: an answers file's roles, what is installed (for a command such as
                     upgrade), or a question.
-  --from DIR        Take hvo-roof-install and SHA256SUMS from DIR, a folder holding the release's files, not from
-                    GitHub. The installer reads the release from DIR too (its --release DIR), except for rollback,
-                    whose --release is the release before.
+  --from DIR        Take hvo-roof-install, SHA256SUMS and the images (the release's offline image archives for this
+                    machine) from DIR, a folder holding the release's files, not from GitHub and ghcr.io. The
+                    installer reads the release from DIR too (its --release DIR), except for rollback, whose --release
+                    is the release before.
   --check           Check this machine, then stop: download nothing and change nothing.
   --install-docker  When Docker is needed and missing, install it from Docker's apt repository without asking
                     (Debian, Raspberry Pi OS and Ubuntu).
@@ -647,7 +648,25 @@ EOF
       no) note "the clock is not synchronised: turn synchronisation on (sudo timedatectl set-ntp true), so that it stays right" ;;
     esac
   fi
-  if ${needs_docker}; then
+  # The images. From a folder (--from), the release's offline archives for this machine, which the installer loads:
+  # nothing is pulled, and ghcr.io is not asked. A rollback puts back the controller kept here, and loads nothing from
+  # this release. Otherwise Docker pulls them from ghcr.io.
+  if ${needs_docker} && [ -n "${from}" ]; then
+    local arch=arm64 image archive images=""
+    [ "${rid}" != linux-x64 ] || arch=amd64
+    if [ "${command}" != rollback ]; then
+      images=roof-controller
+      ! contains "${roles}" rig || images="${images} roof-hat-emulator"
+    fi
+    for image in ${images}; do
+      archive="${image}-${release_version}-linux-${arch}.oci.tar"
+      if [ -f "${from}/${archive}" ]; then
+        ok "${archive} is in ${from}: the installer loads the $([ "${image}" = roof-controller ] && printf "controller's" || printf "HAT emulator's") image from it, and pulls nothing from ghcr.io"
+      else
+        failed "${from} has no ${archive}, the $([ "${image}" = roof-controller ] && printf "controller's" || printf "HAT emulator's") image for this machine: download it from https://github.com/${repository}/releases/tag/v${release_version} into ${from}, then run this again."
+      fi
+    done
+  elif ${needs_docker}; then
     local code
     status=0
     code=$(probe https://ghcr.io/v2/ -o /dev/null -w '%{http_code}' 2>/dev/null) || status=$?

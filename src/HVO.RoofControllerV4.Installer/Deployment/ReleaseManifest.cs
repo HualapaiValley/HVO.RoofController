@@ -9,7 +9,48 @@ namespace HVO.RoofControllerV4.Installer.Deployment;
 /// <param name="Repository">The image's repository: ghcr.io/hualapaivalley/roof-controller.</param>
 /// <param name="Digest">sha256:&lt;64 hex digits&gt;: the image index both platforms share.</param>
 /// <param name="Reference">The repository, the release's tag and the digest: what Docker pulls.</param>
-public sealed record ReleaseImage(string Repository, string Digest, string Reference);
+public sealed record ReleaseImage(string Repository, string Digest, string Reference)
+{
+    /// <summary>
+    /// The release's offline archives of the image, one for each platform (<c>images.&lt;name&gt;.offlineArchives</c>):
+    /// loaded in place of a pull when the release is read from a folder. Empty for a release from before they were
+    /// released.
+    /// </summary>
+    public IReadOnlyList<OfflineArchive> OfflineArchives { get; init; } = [];
+
+    /// <summary>The offline archive for <paramref name="platform"/> (linux/arm64), or null when the release has none.</summary>
+    public OfflineArchive? ArchiveFor(string platform) => OfflineArchives.FirstOrDefault(archive => archive.Platform == platform);
+
+    /// <summary>
+    /// The IDs Docker may give this image once it has loaded <paramref name="archive"/>: the index's digest (Docker's
+    /// containerd image store), the platform's manifest's (the same store, asked for the platform) and its config's (the
+    /// classic store).
+    /// </summary>
+    public IReadOnlyList<string> LoadedIds(OfflineArchive archive)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        return [Digest, archive.ManifestDigest, archive.ConfigDigest];
+    }
+}
+
+/// <summary>
+/// A release's offline archive of an image for one platform (docs/releasing.md#offline-image-archives): what
+/// <c>docker load</c> reads in place of a pull, so that a machine installs the release with no registry.
+/// </summary>
+/// <param name="Name">Its file name among the release's files: &lt;image&gt;-&lt;version&gt;-linux-&lt;arch&gt;.oci.tar.</param>
+/// <param name="Platform">The platform of the image it holds: linux/amd64 or linux/arm64.</param>
+/// <param name="Size">Its size in bytes.</param>
+/// <param name="Sha256">Its SHA-256, 64 lower-case hex digits.</param>
+/// <param name="ManifestDigest">The platform's manifest in the image's index, sha256:&lt;64 hex digits&gt;.</param>
+/// <param name="ConfigDigest">The platform's config, sha256:&lt;64 hex digits&gt;: the image's ID in Docker's classic image store.</param>
+public sealed record OfflineArchive(string Name, string Platform, long Size, string Sha256, string ManifestDigest, string ConfigDigest)
+{
+    /// <summary>The kind release.json's assets give an offline archive.</summary>
+    public const string AssetKind = "image-archive";
+
+    /// <summary>The archive as one of the release's files, which <c>ReleaseFiles</c> takes from the folder and checks.</summary>
+    public ReleaseAsset Asset => new(Name, AssetKind, null, Size, Sha256, new Dictionary<string, string>());
+}
 
 /// <summary>A file a release has besides its images, such as the kiosk's tarball.</summary>
 /// <param name="Name">Its name among the release's files: letters, digits, dots, dashes and underscores.</param>
@@ -175,7 +216,69 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
             throw Invalid($"the {key} image's reference is not its repository, a tag and its digest");
         }
 
-        return new ReleaseImage(repository, digest, reference);
+        return new ReleaseImage(repository, digest, reference) { OfflineArchives = ReadOfflineArchives(image, key) };
+    }
+
+    // The platforms an image has an offline archive for: the ones the release's images are built for.
+    private static readonly string[] ArchivePlatforms = ["linux/amd64", "linux/arm64"];
+
+    // images.<key>.offlineArchives, which a release from before they were released leaves out.
+    private static OfflineArchive[] ReadOfflineArchives(JsonElement image, string key)
+    {
+        if (!image.TryGetProperty("offlineArchives", out var archives) || archives.ValueKind == JsonValueKind.Null)
+        {
+            return [];
+        }
+
+        if (archives.ValueKind != JsonValueKind.Array)
+        {
+            throw Invalid($"the {key} image's offline archives are not a list");
+        }
+
+        OfflineArchive[] read = [.. archives.EnumerateArray().Select((archive, index) => ReadOfflineArchive(archive, key, index))];
+        if (read.DistinctBy(archive => archive.Platform, StringComparer.Ordinal).Count() != read.Length)
+        {
+            throw Invalid($"the {key} image has more than one offline archive for a platform");
+        }
+
+        return read;
+    }
+
+    private static OfflineArchive ReadOfflineArchive(JsonElement archive, string key, int index)
+    {
+        if (archive.ValueKind != JsonValueKind.Object)
+        {
+            throw Invalid($"the {key} image's offline archive {index + 1} is not a JSON object");
+        }
+
+        var name = Text(archive, "name");
+        if (name is null || !FileNamePattern().IsMatch(name) || !name.EndsWith(".oci.tar", StringComparison.Ordinal))
+        {
+            throw Invalid($"the {key} image's offline archive {index + 1} has no name of an OCI archive (<image>-<version>-linux-<arch>.oci.tar)");
+        }
+
+        if (Text(archive, "platform") is not { } platform || !ArchivePlatforms.Contains(platform, StringComparer.Ordinal))
+        {
+            throw Invalid($"{name}'s platform is not linux/amd64 or linux/arm64");
+        }
+
+        if (!archive.TryGetProperty("size", out var sizeValue) || sizeValue.ValueKind != JsonValueKind.Number || !sizeValue.TryGetInt64(out var size) || size <= 0)
+        {
+            throw Invalid($"{name}'s size is not a number of bytes");
+        }
+
+        if (Text(archive, "sha256") is not { } sha256 || !Sha256Pattern().IsMatch(sha256))
+        {
+            throw Invalid($"{name}'s sha256 is not 64 lower-case hex digits");
+        }
+
+        if (Text(archive, "manifestDigest") is not { } manifest || !DigestPattern().IsMatch(manifest)
+            || Text(archive, "configDigest") is not { } config || !DigestPattern().IsMatch(config))
+        {
+            throw Invalid($"{name}'s manifestDigest and configDigest are not each sha256:<64 hex digits>");
+        }
+
+        return new OfflineArchive(name, platform, size, sha256, manifest, config);
     }
 
     private static UpgradeNote[] ReadUpgradeNotes(JsonElement root)
@@ -290,7 +393,9 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
 
 /// <summary>
 /// Where the installer gets the release it installs: release.json from a folder (<c>--release DIR</c>, for a machine
-/// that cannot reach GitHub, or a release not published yet), or from the release on GitHub. Read once a run.
+/// that cannot reach GitHub or ghcr.io, or a release not published yet), or from the release on GitHub. Read once a
+/// run. From a folder, the images are loaded from the release's offline archives in it when it lists them
+/// (<c>OfflineImages</c>), and nothing is pulled.
 /// </summary>
 public sealed class ReleaseSource
 {
