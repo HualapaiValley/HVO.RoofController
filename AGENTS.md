@@ -204,13 +204,14 @@ observatory's Pi.
   `hvo-roof`, the Mac app); `install.sh` downloads and starts it ([docs/install.md](docs/install.md)). It is a
   separate program, not a subcommand of `hvo-roof`. It installs the controller through the deploy script, so the
   deployment check, the verified Stop, the previous version and rollback are the deploy script's.
-- `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` deploys the controller, built from source or pulled from
-  GHCR: it runs the image's `--validate-deployment` check first, requires a verified Stop before replacing the
-  container, verifies the new one, and restores a preserved controller after a failure only when its image supports
-  the current identity-store schema. An incompatible or unreadable store leaves that controller stopped with restart
-  policy `no`; preserve the identity data and repair forward with a compatible release
-  ([docs/deployment.md](docs/deployment.md)). Keep the script, its tests (`tests/deploy/deploy-script-tests.sh`) and
-  the compose file (`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`) in step.
+- `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` deploys the controller, built from source, pulled from
+  GHCR or loaded from a release's offline image archive (`IMAGE_ARCHIVE`): it runs the image's `--validate-deployment`
+  check first, requires a verified Stop before replacing the container, verifies the new one, and restores a preserved
+  controller after a failure only when its image supports the current identity-store schema. An incompatible or
+  unreadable store leaves that controller stopped with restart policy `no`; preserve the identity data and repair
+  forward with a compatible release ([docs/deployment.md](docs/deployment.md)). Keep the script, its tests
+  (`tests/deploy/deploy-script-tests.sh`) and the compose file (`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`) in
+  step.
 - With HTTPS only port 8443 is published; plain HTTP on the LAN is an explicit opt-out (`ALLOW_INSECURE_HTTP=true`,
   compose profile `pi-lan-http`). HAT emulator mode is set only through `HAT_EMULATOR_ENDPOINT` with
   `ALLOW_EMULATED_HAT=true` ([docs/emulator.md](docs/emulator.md)).

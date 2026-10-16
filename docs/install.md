@@ -202,7 +202,9 @@ nothing until every check has passed: then it installs Docker, or turns I2C on, 
   clock further out breaks TLS, the attestation and the certificates the installer makes. On Linux it notes a clock
   that is not synchronised.
 - **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. It notes a
-  missing Compose v2, which the installer does not need.
+  missing Compose v2, which the installer does not need. With `--from DIR`, ghcr.io is never asked: the release's
+  offline image archives for this machine must be in `DIR` instead (the controller's, and for a rig the HAT
+  emulator's too; [The release it installs](#the-release-it-installs)). A rollback needs none.
 - **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
 - **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
   install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
@@ -233,7 +235,7 @@ the installer: `| bash -s -- upgrade`, `| bash -s -- --answers rig.json`, `| bas
 | Option | What it does |
 |--------|--------------|
 | `--roles LIST` | What the machine is for, so that the right things are checked: `controller`, `rig`, `kiosk`, `cli` or `mac-app`, separated by commas. |
-| `--from DIR` | Takes the installer and `SHA256SUMS` from `DIR`, a folder holding the release's files, not from GitHub. The installer reads the release from it too (its `--release DIR`), except for `rollback`, whose `--release` is the release before. |
+| `--from DIR` | Takes the installer, `SHA256SUMS` and the images (the release's offline image archives for this machine) from `DIR`, a folder holding the release's files, not from GitHub and ghcr.io. The installer reads the release from it too (its `--release DIR`), except for `rollback`, whose `--release` is the release before. |
 | `--check` | Checks the machine, then stops: downloads nothing, installs nothing and changes nothing. |
 | `--install-docker` | When Docker is needed and missing, installs it from Docker's apt repository without asking. |
 | `--enable-i2c` | When the controller needs I2C and it is off, turns it on with raspi-config without asking. |
@@ -287,8 +289,26 @@ Each installer installs its own release: `--version` names it. It reads that rel
 which names the controller's and the HAT emulator's images on GHCR, each by its digest. Docker pulls those images by
 their digests, and no others: the deploy script deploys the controller's image only when Docker reports that digest.
 
-For a machine that cannot reach GitHub, download `release.json` from the release's page on a machine that can, and give
-its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
+For a machine that cannot reach GitHub or ghcr.io, download the release's files from its page on a machine that can,
+into one folder, and give the folder: `--release DIR`, or `install.sh --from DIR`. `gh release download v4.0.0 --repo
+HualapaiValley/HVO.RoofController --dir DIR` downloads them all; for the Pi alone, `release.json`, `SHA256SUMS`,
+`install.sh`, `hvo-roof-install-linux-arm64` and `roof-controller-4.0.0-linux-arm64.oci.tar` are enough (and the
+kiosk's tarball for the kiosk). The installer then reads `release.json` from the folder, and takes each image from the
+release's offline archive for this machine, `<image>-<version>-linux-<arch>.oci.tar`: `roof-controller`, and for a rig
+`roof-hat-emulator` too, for `arm64` on the Pi and `amd64` on a PC. Nothing is pulled:
+
+- The archive must have the size and the SHA-256 that `release.json` gives it. One that is missing or of another size
+  stops the plan before anything changes (exit 3); one with another SHA-256 is never loaded.
+- Docker loads it (`docker load`), and the image is used only when Docker gives it one of the IDs `release.json` names
+  for it: the image's digest (Docker's containerd image store), or its platform's manifest's or config's (the classic
+  store, which names a loaded image by its config).
+- The container runs that image by its ID, never pulling it (`docker run --pull never`), with the label
+  `io.hvo.roof.release-image` naming the release's image by its digest: that is how the installer knows later which
+  release a container runs. The deploy script loads the controller's image itself (`IMAGE_ARCHIVE`,
+  [Deploying a released image](deployment.md#deploying-a-released-image)), with the same checks.
+
+A release from before offline archives (4.1.1 and older) has none, and from its folder Docker still pulls its images
+from ghcr.io. A release read from GitHub is always pulled by its digests.
 
 ### Exit codes
 
@@ -1099,7 +1119,8 @@ be: "4.0.1 is installed here: checking that everything is as it should be." So a
   ([Rolling back](deployment.md#rolling-back)). Nothing is pulled. The controller from before keeps the settings and
   data as they are now.
 - A rig's HAT emulator is replaced by the one of the release before, from that release's `release.json`: on GitHub,
-  or in `--release DIR`, which is then the release before's folder.
+  or in `--release DIR`, which is then the release before's folder, and from its offline archive there when that
+  release has one.
 - The kiosk, `hvo-roof`, the Mac app and the installer go back to the release before's, swapped with the copies the
   upgrade kept beside them when those are the release before's. A release from before the installer was a release
   asset has no installer, and the one here stays.
@@ -1259,7 +1280,8 @@ Start with what was said: each check that fails, each refusal and each failed st
 |---------|------------|
 | `This machine runs 32-bit ARM …`, or `… a 64-bit kernel and a 32-bit system …` | Write Raspberry Pi OS Lite (64-bit) to the Pi ([Before you start](#the-pi)). |
 | `FAIL  This machine's clock is … out …` | Turn synchronisation on (`sudo timedatectl set-ntp true`), wait until `timedatectl` says `System clock synchronized: yes`, then run it again. On a Mac: System Settings → General → Date & Time, and turn on "Set time and date automatically". |
-| `FAIL  github.com did not answer …`, or `FAIL  ghcr.io did not answer …` | Check the machine's network and DNS: it needs both. If it says TLS failed, check the clock (`timedatectl`) and any proxy that intercepts HTTPS. On a machine that cannot reach GitHub, give the release's files with `--from DIR`; Docker still pulls the images from ghcr.io. |
+| `FAIL  github.com did not answer …`, or `FAIL  ghcr.io did not answer …` | Check the machine's network and DNS: it needs both. If it says TLS failed, check the clock (`timedatectl`) and any proxy that intercepts HTTPS. On a machine that cannot reach GitHub or ghcr.io, download the release's files into a folder and give it with `--from DIR`: the images are then loaded from their offline archives in it ([The release it installs](#the-release-it-installs)). |
+| `FAIL  DIR has no roof-controller-<version>-linux-arm64.oci.tar …` | With `--from DIR`, the images come from the release's offline archives in `DIR`. Download the file it names from the release's page into `DIR`, then run it again. |
 | `FAIL  I2C is off …` | Run it again with `--enable-i2c`, or turn I2C on with `sudo raspi-config nonint do_i2c 0`. |
 | `FAIL  raspi-config turned I2C on from the next start …` | Restart the Pi (`sudo reboot`), then run it again. |
 | `FAIL  Docker is not installed …` | Run it again with `--install-docker` (Raspberry Pi OS, Debian or Ubuntu), or install Docker Engine 20.10 or later yourself. On a Mac, install Docker Desktop and start it. |
@@ -1365,6 +1387,8 @@ types the answers. The tests check:
 - the download refused for a wrong `SHA256SUMS` entry, a SHA-256 that differs, an attestation that fails, and a
   wrong version, with its folder removed;
 - the hand-over: the installer's arguments, its exit code, its questions on the terminal, and `--from`;
+- with `--from`, the offline image archives this machine needs in the folder (the controller's, and the HAT emulator's
+  for a rig, for its architecture; none for a rollback), a missing one failing the checks, and ghcr.io never asked;
 - a download cut short at every point: nothing runs;
 - that nothing reads the download after the script.
 
@@ -1378,13 +1402,17 @@ and the HAT emulator. It runs in two places:
 - **The Scenarios workflow's `installer-rig` job**, nightly and on every pull request, on x64 and on arm64. The release
   is built from the checkout as the release workflow builds one: `install.sh` with the release's version written in,
   `hvo-roof-install` and `hvo-roof` for this machine, the controller's and the emulator's images (each an index of this
-  machine's platform, built from its Dockerfile, and an empty image for the other platform) in a registry of the run's
-  own on loopback, `release.json` naming them by digest, and `SHA256SUMS`. `install.sh` does not see `gh` there, so it
-  notes that the attestation was not checked, as it would on a machine without `gh`.
+  machine's platform, built from its Dockerfile, and an empty image for the other platform) in their offline archives,
+  `release.json` naming them by digest, and `SHA256SUMS`. `build/release-assets.py` splits each image into its
+  archives, from a registry of the run's own on loopback where it was pushed under another repository: the release
+  names its images in one that never holds them, so nothing could pull them. The release before, from before offline
+  archives, has its images in that registry. `install.sh` does not see `gh` there, so it notes that the attestation
+  was not checked, as it would on a machine without `gh`.
 - **The release workflow's `e2e` job**, on x64 and on arm64, after the release is drafted. `RIG_RELEASE_DIR` gives it
-  the draft's assets, and the images are the release's, from GHCR. `install.sh` checks `hvo-roof-install`'s
-  attestation with `gh`, signed in with the run's token. Steps 10 and 11 need the release before, built from the
-  checkout, so this job leaves them out; the `installer-rig` job runs them.
+  the draft's assets, and the images are loaded from the release's offline archives among them, with ghcr.io out of
+  the runner's reach. `install.sh` checks `hvo-roof-install`'s attestation with `gh`, signed in with the run's token.
+  Steps 10 and 11 need the release before, built from the checkout, so this job leaves them out; the `installer-rig`
+  job runs them.
 
 The script checks:
 
@@ -1392,9 +1420,10 @@ The script checks:
    runs it (bash reading the script on its standard input), with no terminal, as cron or CI would run it, with
    `--from` (the release's files in a folder), `--answers` and `--admin-password-file`. It names the version and the
    role from the answers file, takes `hvo-roof-install` for this machine from the folder, checks its SHA-256 against
-   `SHA256SUMS` (and its attestation, in the `e2e` job), and starts it as root. The install runs the release's images
-   by digest, published on loopback only. The folders and files have their modes, and the installed installer is the
-   release's. The controller answers over HTTPS with the installer's CA and reports the emulated HAT, the web UI
+   `SHA256SUMS` (and its attestation, in the `e2e` job), and starts it as root. `install.sh` finds the release's
+   offline archives for this machine in the folder, and the install loads both images from them and runs each by the
+   ID Docker gave it, labelled with the release's image, published on loopback only. The folders and files have their
+   modes, and the installed installer is the release's. The controller answers over HTTPS with the installer's CA and reports the emulated HAT, the web UI
    answers, and the first admin signs in with the password from the file. No key or password is in the output, the
    log, the record or the containers' configuration.
 2. **Again.** The same answers change nothing and replace nothing.
@@ -1428,8 +1457,9 @@ The script checks:
    record: the same keys, CA and certificate, the first admin signing in with the same password, and the time scale
    of step 5. `upgrade` to the same release then changes nothing.
 10. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs
-    that release. Its `upgrade` shows the new release's upgrade notes and hands over to the new installer, which it
-    puts in `/usr/local/sbin`. The controller and the emulator are then the new release's, the old controller is kept
+    that release, pulling its images from the run's registry. Its `upgrade` shows the new release's upgrade notes and
+    hands over to the new installer, which it puts in `/usr/local/sbin` and which loads the new images from their
+    archives. The controller and the emulator are then the new release's, the old controller is kept
     as `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing. Each release
     is a prerelease of its own checkout's `VersionPrefix`, the new one `-rig.2` and the release before `-rig.1`, so a
     pull request that moves the version to 4.0.1 upgrades from `4.0.0-rig.1` to `4.0.1-rig.2`.
@@ -1449,8 +1479,8 @@ the workflow fetches the whole history. The disposable historical source baselin
 security patch when its packages still use 10.0.10, including its ASP.NET and self-contained runtimes. NuGet auditing
 stays enabled. This exercises the old application and installer with patched dependencies; it does not reproduce
 the old published binaries. The candidate checkout is unchanged by this preparation.
-From a release (`RIG_RELEASE_DIR`), sudo's Docker must be able to pull the
-release's images, and `gh` must be signed in (`GH_TOKEN`).
+From a release (`RIG_RELEASE_DIR`), the folder must hold the release's offline archives for this machine, from which the
+images are loaded (no registry is needed), and `gh` must be signed in (`GH_TOKEN`).
 
 It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`,
 `/var/lib/hvo-roof`, the installer's log, `/usr/local/sbin/hvo-roof-install`, its containers or network, or a network

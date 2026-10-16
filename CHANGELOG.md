@@ -11,8 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
   mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
+- Offline installs and restores: each release carries the controller and HAT emulator images as offline archives for
+  amd64 and arm64 (`<image>-<version>-linux-<arch>.oci.tar`), listed in `release.json`
+  (`images.<name>.offlineArchives`, schema 1 unchanged), `SHA256SUMS` and the attestation. `install.sh --from DIR` and
+  `hvo-roof-install --release DIR` load them, accept an image only with an ID `release.json` names, and pull nothing;
+  the deploy script takes one as `IMAGE_ARCHIVE`. See [The release it installs](docs/install.md#the-release-it-installs)
+  (#127).
 
 ### Changed
+
+- `install.sh --from DIR` no longer checks that ghcr.io answers: it checks that `DIR` holds the release's offline
+  image archives for this machine instead (#127).
 
 - Upgrading from installed 4.1.1 to this schema-3 release requires the new release's
   `install.sh upgrade --version <VERSION>` bootstrap, which verifies the downloaded installer. The old installed installer rejects schema 3 before replacing

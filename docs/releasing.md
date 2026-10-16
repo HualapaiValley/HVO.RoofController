@@ -90,13 +90,16 @@ build/release-compose.py --version 4.0.0 --controller-digest sha256:<hex> --emul
 [`build/release-assets.py`](../build/release-assets.py) gathers a release's assets ([The assets](#the-assets)) into
 one new folder, from what CI built: `hvo-roof` and `hvo-roof-install` for each platform, the kiosk's folder and the Mac
 app's zip. It checks that each is exactly what it expects, built for the right processor, and makes the kiosk's
-tarball, the compose file (with `release-compose.py`), `release.json` and `SHA256SUMS`. `--upgrade-notes DIR` puts
-every release's upgrade notes in the folder, up to this one's, in `release.json`. `--registry` names another registry
-than GHCR, for a test:
+tarball, the compose file (with `release-compose.py`), the offline image archives, `release.json` and `SHA256SUMS`.
+`--controller-archive` and `--emulator-archive` are the OCI archives the images were pushed from: each must hold the
+digest given with it, and is split into one offline archive per platform
+([Offline image archives](#offline-image-archives)). `--upgrade-notes DIR` puts every release's upgrade notes in the
+folder, up to this one's, in `release.json`. `--registry` names another registry than GHCR, for a test:
 
 ```bash
 build/release-assets.py --version 4.0.0 --commit "$(git rev-parse HEAD)" --created 2026-10-01T12:00:00Z \
   --controller-digest sha256:<hex> --emulator-digest sha256:<hex> \
+  --controller-archive roof-controller.tar --emulator-archive roof-hat-emulator.tar \
   --cli ci/cli --installer ci/installer --kiosk ci/kiosk --mac-zip ci/mac/hvo-roof-mac-<run id>.zip \
   --upgrade-notes docs/upgrade-notes -o dist
 ```
@@ -183,7 +186,8 @@ version, and check its labels and its platforms with `check-image-labels.sh`.
    `ghcr.io/hualapaivalley/roof-hat-emulator:4.0.0`. Each image gets a build provenance attestation, which GHCR keeps
    beside it.
 4. **The assets.** `release-assets.py` gathers what CI built and tested in this run into the release's assets
-   ([The assets](#the-assets)), with the images' digests and the upgrade notes. Before logging in to GHCR, the run
+   ([The assets](#the-assets)), with the images' digests, each image's offline archives (split from the OCI archive
+   it was pushed from, so they hold the digest pushed) and the upgrade notes. Before logging in to GHCR, the run
    checks that CI's `hvo-roof` and `hvo-roof-install` for linux-x64 print the version and commit, running each with no
    token and an empty environment; here it checks that `hvo-roof-linux-x64` and `hvo-roof-install-linux-x64` are those
    files, and `SHA256SUMS` against the files. One build provenance attestation
@@ -192,19 +196,17 @@ version, and check its labels and its platforms with `check-image-labels.sh`.
    release candidate. Its notes are the upgrade notes, the images, how to check the files, and then what GitHub writes
    from the pull requests merged since the last release. The same assets go to the run as an artifact.
 6. **The end to end.** The `e2e` job, on x64 and on arm64, installs a test rig from that artifact as a person would
-   from the release: the release's `install.sh` checks `hvo-roof-install` against `SHA256SUMS` and its attestation
-   and starts it, and the installer runs the release's images from GHCR against the HAT emulator. The rig scenario
-   then installs `hvo-roof` by `install.sh`, opens, stops part way and closes the emulated roof through it, renews the
-   certificate, changes the rig's address and name, and backs the rig up and restores it
-   ([The rig end to end](install.md#the-rig-end-to-end)). It writes nothing, and signs in to GHCR only to read the
-   images while they are private.
+   from the release on a machine that cannot reach ghcr.io: the job first puts ghcr.io out of the runner's reach. The
+   release's `install.sh --from` checks `hvo-roof-install` against `SHA256SUMS` and its attestation and starts it, and
+   the installer loads the release's images from their offline archives and runs them against the HAT emulator. The
+   rig scenario then installs `hvo-roof` by `install.sh`, opens, stops part way and closes the emulated roof through
+   it, renews the certificate, changes the rig's address and name, and backs the rig up and restores it
+   ([The rig end to end](install.md#the-rig-end-to-end)). It writes nothing, and needs no access to the packages.
 
 Only the release job can write: the draft (`contents: write`), the images (`packages: write`) and the attestations
 (`id-token: write` for the signing certificate, and `attestations: write`). Only the steps that need it have the token
-in their environment: those that call `gh`, and the e2e job's sign-in to GHCR, which pipes its read-only token to
-`docker login --password-stdin` and signs out when the job ends. Every other job, CI's and the scenarios' included,
-can only read. Every action is pinned to a commit. A second run for the same tag waits for the first rather than
-cancelling it.
+in their environment: those that call `gh`. Every other job, CI's and the scenarios' included, can only read. Every
+action is pinned to a commit. A second run for the same tag waits for the first rather than cancelling it.
 
 The release job runs in the `release` environment. The check that a tag is on main runs from the tagged commit's own
 workflow, so a commit could leave it out; the environment's protection rules are the repository's, and no commit can
@@ -224,10 +226,12 @@ names the images until someone publishes the draft.
 | `docker-compose.yaml` | The release compose file, each image pinned to its digest ([Deploying with Compose](deployment.md#deploying-with-compose)) |
 | `deploy-roofcontroller-rpi.sh` | The deploy script, for a released image ([Deploying a released image](deployment.md#deploying-a-released-image)) |
 | `install.sh` | The script that checks a machine, then downloads the release's installer for it, checks it and starts it ([install.sh](install.md#installsh)) |
+| `roof-controller-<version>-linux-amd64.oci.tar`, `roof-controller-<version>-linux-arm64.oci.tar`, `roof-hat-emulator-<version>-linux-amd64.oci.tar`, `roof-hat-emulator-<version>-linux-arm64.oci.tar` | Each image for each platform, as an offline archive that `docker load` reads, for a machine that cannot reach ghcr.io ([Offline image archives](#offline-image-archives)) |
 | `release.json` | The release, its images and its files, for programs to read ([release.json](#releasejson)) |
 | `SHA256SUMS` | The SHA-256 of every other file, as `sha256sum` writes it |
 
-The images are not assets: they are on GHCR, and `release.json` and the release's notes name them.
+The images are on GHCR, where `release.json` and the release's notes name them by their digests; the offline archives
+hold the same images, with the same digests.
 
 Anyone can check a downloaded file, and where it was built, with the [GitHub CLI](https://cli.github.com/):
 
@@ -241,6 +245,47 @@ gh attestation verify oci://ghcr.io/hualapaivalley/roof-controller:4.0.0 --repo 
 
 `--repo` alone accepts an attestation from any of the repository's workflows, on any branch, such as a dry run's of a
 file with the same name. `--signer-workflow` and `--source-ref` accept only the release workflow's, for that tag.
+
+## Offline image archives
+
+A release can be installed, or a machine restored, with no access to ghcr.io (#127): each image is also an asset for
+each platform, `<image>-<version>-linux-<arch>.oci.tar`, and `install.sh --from DIR` (or the installer's
+`--release DIR`) loads the ones the machine needs from the folder, and pulls nothing
+([The release it installs](install.md#the-release-it-installs)). The deploy script loads one the same way, given
+`IMAGE_ARCHIVE` ([Deploying a released image](deployment.md#deploying-a-released-image)).
+
+Both images are shipped for both platforms. The Pi needs only the controller's for arm64, about 165 MB. A test rig on a
+PC needs both images for amd64, about 165 MB and 100 MB: a rig is how a release is tried without hardware, the
+release's end to end included, so it is offline too. All four come to about 525 MB a release, as compressed as the
+images on GHCR.
+
+`release-assets.py` splits each image's OCI archive, the one the release workflow checked and pushed, into one archive
+per platform. Each holds, unchanged:
+
+- `index.json` naming the image's index, the digest pushed and named in `release.json`, as
+  `ghcr.io/hualapaivalley/<image>:<version>`, with `oci-layout`: what Docker's containerd image store reads;
+- `manifest.json` naming the platform's config and layers, with the same name: what Docker's classic image store reads
+  (Docker 20.10 and later);
+- the index, the platform's manifest, its config and its layers, each as `blobs/sha256/<hex>`. The other platform's
+  blobs are left out.
+
+It checks every blob against its digest as it copies it, and that the index lists exactly one image for each of
+`linux/amd64` and `linux/arm64`. The archive's file times are the release's, and its files root's with fixed modes, so
+the same images make the same archives.
+
+Docker gives a loaded image one of three IDs, each a digest the release names: the index's (the containerd store), the
+platform's manifest's (the same store, asked for the platform), or the config's (the classic store). The installer and
+the deploy script accept only an image with one of them, for the machine's platform, and run it by that ID, never
+pulling it, with the label `io.hvo.roof.release-image` naming the release's image. To check an archive by hand:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify roof-controller-4.0.0-linux-arm64.oci.tar --repo HualapaiValley/HVO.RoofController \
+  --signer-workflow HualapaiValley/HVO.RoofController/.github/workflows/release.yml --source-ref refs/tags/v4.0.0
+docker load -i roof-controller-4.0.0-linux-arm64.oci.tar
+docker image inspect --format '{{.Id}}' ghcr.io/hualapaivalley/roof-controller:4.0.0
+jq -r '.images.controller | .digest, (.offlineArchives[] | select(.platform == "linux/arm64") | .manifestDigest, .configDigest)' release.json
+```
 
 ## release.json
 
@@ -262,7 +307,12 @@ What a program needs to know about a release, such as the installer and `install
       "tag": "4.0.0",
       "digest": "sha256:<hex>",
       "reference": "ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:<hex>",
-      "platforms": ["linux/amd64", "linux/arm64"]
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "offlineArchives": [
+        { "name": "roof-controller-4.0.0-linux-amd64.oci.tar", "platform": "linux/amd64", "size": 175123456,
+          "sha256": "<hex>", "manifestDigest": "sha256:<hex>", "configDigest": "sha256:<hex>" },
+        { "name": "roof-controller-4.0.0-linux-arm64.oci.tar", "platform": "linux/arm64", "...": "..." }
+      ]
     },
     "hatEmulator": { "...": "the same, for ghcr.io/hualapaivalley/roof-hat-emulator" }
   },
@@ -281,6 +331,11 @@ What a program needs to know about a release, such as the installer and `install
 - `created` is when the release was built: the time in both images' labels, and the kiosk tarball's file times.
 - `images.<image>.reference` is what to pull or deploy (`IMAGE_REF`): the tag, for people, and the digest, which is
   what is pulled.
+- `images.<image>.offlineArchives` lists the image's offline archives, one for each platform
+  ([Offline image archives](#offline-image-archives)): each one's `name`, `platform`, `size` and `sha256`, and the
+  digests of the platform's manifest and config, which with `digest` are the IDs Docker may give the image it loads. A
+  release from before them (4.1.1 and older) has none, and a reader then pulls the image. Adding it left
+  `schemaVersion` at 1: a reader that does not know it, an older installer's, ignores it.
 - `upgradeNotes` is every release's upgrade notes up to this one, oldest first: each `docs/upgrade-notes/X.Y.Z.md`
   whose version is not newer than this release's (a release candidate's is its final release's), as its `version` and
   its `text`, at most 16 KiB each and 128 KiB together. Before an upgrade, the installer prints those of each release
@@ -288,7 +343,8 @@ What a program needs to know about a release, such as the installer and `install
   The folder holds `X.Y.Z.md` files alone. It is left out when there are none, which only a release candidate before
   any final release's notes may have.
 - `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `installer`, `kiosk`, `mac-app`,
-  `compose`, `deploy-script` or `install-script`. `platform` is the .NET runtime the file is for, or `null` for a file for any.
+  `compose`, `deploy-script`, `install-script` or `image-archive` (an offline archive, which `images` lists too).
+  `platform` is the .NET runtime the file is for (`linux-x64` for an amd64 archive), or `null` for a file for any.
 
 ## Before publishing
 
@@ -310,7 +366,9 @@ Check the draft, on its page and with its files:
   ```
 
 - **`release.json`.** The version, the tag, `prerelease` (true only for a candidate), the tagged commit, and both
-  images at the version, each with a digest.
+  images at the version, each with a digest and its two offline archives.
+- **The offline archives.** All four, `sha256sum --check` above covering them; the `e2e` job installed the rig from
+  them with ghcr.io out of reach.
 - **The images.** Both platforms, the digest `release.json` names, and the attestation:
 
   ```bash
@@ -455,9 +513,12 @@ Once a release is published, its tag never moves.
   of it, and CI's "Compose profiles" step checks, profile by profile with Compose, that the file it makes differs from
   the source only in its images.
 - `tests/releasing/test_release_assets.py` checks `release-assets.py` with made-up CI artifacts: the assets, their
-  names and modes, the kiosk tarball's contents, `install.sh` with the release's version written in, `release.json`,
-  `SHA256SUMS`, and every artifact it must refuse. `tests/install/install-sh-tests.sh` runs that `install.sh`
-  ([install.sh's tests](install.md#installshs-tests)).
+  names and modes, the kiosk tarball's contents, `install.sh` with the release's version written in, the offline image
+  archives (split from made-up two-platform OCI archives: each one's blobs, `index.json` and `manifest.json`, the same
+  each time), `release.json`, `SHA256SUMS`, and every artifact it must refuse, an OCI archive of another image, with
+  a platform missing or a blob that is not its digest included. `tests/install/install-sh-tests.sh` runs that
+  `install.sh` ([install.sh's tests](install.md#installshs-tests)), and `tests/deploy/deploy-script-tests.sh` loads
+  archives it makes with the deploy script ([Deploying a released image](deployment.md#deploying-a-released-image)).
 - `tests/releasing/push-image-tests.sh` pushes two-platform OCI archives with `push-image.sh` to a registry of its own
   in Docker, checks every digest the registry then holds, and tags them `latest`, refusing a version tag pushed again.
 - `tests/releasing/release-latest-tests.sh` runs `release-latest.sh` against a stand-in for `gh` that serves made-up
@@ -465,8 +526,9 @@ Once a release is published, its tag never moves.
   orders, drafts and other tags, and each release and `release.json` it refuses. CI runs these with the
   `push-image.sh` tests.
 - The release workflow runs CI and the scenarios for every release, then installs a rig from its draft on x64 and
-  arm64 (`tests/installer/rig-scenario.sh` with `RIG_RELEASE_DIR`, [The rig end to end](install.md#the-rig-end-to-end)),
-  and a [dry run](#a-dry-run) runs the whole workflow without releasing.
+  arm64, from its offline archives with ghcr.io out of reach (`tests/installer/rig-scenario.sh` with
+  `RIG_RELEASE_DIR`, [The rig end to end](install.md#the-rig-end-to-end)), and a [dry run](#a-dry-run) runs the whole
+  workflow without releasing.
 
 ### Historical schema-transition regression coverage
 

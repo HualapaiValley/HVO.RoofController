@@ -463,6 +463,35 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   needs one, an anonymous pull fails with `unauthorized` or `denied`: run `docker login ghcr.io` in the Pi's Docker
   first, with a token that can read packages.
 
+**Without ghcr.io.** A release also carries each image as an offline archive for each platform
+([Offline image archives](releasing.md#offline-image-archives)). With `IMAGE_ARCHIVE` set to the archive for
+`BUILD_PLATFORM`, beside `IMAGE_REF`, the script loads the image from it into the Pi's Docker and pulls nothing:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
+  IMAGE_REF=ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:<the digest in release.json> \
+  IMAGE_ARCHIVE=roof-controller-4.0.0-linux-arm64.oci.tar \
+  ./deploy-roofcontroller-rpi.sh
+```
+
+- Before any Docker call, the script checks that the archive holds the image `IMAGE_REF`'s digest names: its
+  `index.json` names that index alone, and the index and its manifest for `BUILD_PLATFORM` are each the blob their
+  digest names (`[load] <archive> holds sha256:..., with its image for linux/arm64 (manifest sha256:...,
+  config sha256:...)`). An archive of another image or another platform changes nothing, and is refused even by `--dry-run`.
+- Docker loads it (`[load] Loading <archive> into Docker context 'rpi-remote' (nothing is pulled)...`), checking the
+  config and layers against those digests. The image is used only when Docker then holds it by one of the IDs those
+  digests give it, the index's (the containerd image store) or the platform's manifest's or config's (the classic
+  store), for `BUILD_PLATFORM`: `[load] sha256:... for linux/arm64, image sha256:...: version 4.0.0, commit ...`.
+- The pre-flight and the new controller run that image by its ID, with `docker run --pull never`, and the controller
+  carries the label `io.hvo.roof.release-image=<IMAGE_REF>`, which the installer reads to know the release it runs.
+  `EXTRA_DOCKER_ARGS` may not set `--pull` or that label. From the pre-flight on, the deploy is the same.
+- `--rollback`, `--stop` and `--verify-remote` ignore `IMAGE_ARCHIVE` as they ignore `IMAGE_REF`: a rollback puts back
+  `<name>-previous` as it is, however its image came.
+
+The installer sets `IMAGE_ARCHIVE` itself when it installs from a release's folder
+([The release it installs](install.md#the-release-it-installs)).
+
 **On the Pi itself.** The script can also run on the Pi, with `DOCKER_CONTEXT=default` for the Pi's own Docker:
 
 ```bash
