@@ -1353,6 +1353,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             new
             {
                 Name = "/" + name,
+                Image = ImageIdOf(name, container),
                 Config = new { Image = image, Labels = labels, Env = environment },
                 HostConfig = new { PortBindings = ports, NetworkMode = container.Network ?? "bridge" },
                 State = new

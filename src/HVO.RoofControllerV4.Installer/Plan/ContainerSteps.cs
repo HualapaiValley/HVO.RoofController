@@ -110,7 +110,10 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
                 $"Docker Compose made it (project {container.ComposeProject}), and the installer does not replace it. Remove it with that project (docker compose down), then run the installer again.");
         }
 
-        var reason = container.ImageDigest != release.HatEmulator.Digest ? $"replaced with release {release.Version}'s image"
+        // One run by its image's ID is the release's only when Docker's ID for that image is one the release gives it.
+        var platform = ControllerStep.Platform(context.Machine);
+        var claim = container.FalseClaim(release.HatEmulator, platform) is { } falseClaim ? $": {falseClaim}" : string.Empty;
+        var reason = !container.Runs(release.HatEmulator, platform) ? $"replaced with release {release.Version}'s image{claim}"
             : container.Network != Network ? $"replaced on the {Network} network"
             : !container.PublishedPorts.SequenceEqual([ControlPort]) || container.PublishAddress != ControlAddress ? $"replaced with its control API on {ControlAddress}:{ControlPort} only"
             : !Same(container.EmulatorTimeScale, RigSettings.DefaultTimeScale, rig.TimeScale) ? $"replaced to run {Number(rig.TimeScale)} times as fast as real time"
@@ -460,9 +463,14 @@ public sealed class ControllerStep(
             return "redeployed to answer only to its names (it answers to any)";
         }
 
-        if (container.ImageDigest != release.Controller.Digest)
+        // One run by its image's ID is the release's only when Docker's ID for that image is one the release gives it: its
+        // label alone is a claim. One that only claims it is replaced as any other image is, after the verified Stop.
+        var platform = Platform(context.Machine);
+        if (!container.Runs(release.Controller, platform))
         {
-            return $"redeployed as release {release.Version} (it runs {(container.Version is { } version ? $"version {version}" : "another image")})";
+            return container.FalseClaim(release.Controller, platform) is { } claim
+                ? $"redeployed as release {release.Version}: {claim}"
+                : $"redeployed as release {release.Version} (it runs {(container.Version is { } version ? $"version {version}" : "another image")})";
         }
 
         if (keys.FirstOrDefault(key => key.Use == ApiKeyUse.WebStop) is { IsKnown: true } webStop && container.WebStopKeyFile != ApiKeyFiles.ContainerKeyFile(webStop.Index))
@@ -652,9 +660,11 @@ public sealed class ControllerStep(
         var environment = await EnvironmentAsync(context, work, release.Controller.Reference, archive, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await RunScriptAsync(context, work, environment, cancellationToken).ConfigureAwait(false);
         var deployed = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
-        if (deployed is not { IsRunning: true } || deployed.ImageDigest != release.Controller.Digest)
+        var platform = Platform(context.Machine);
+        if (deployed is not { IsRunning: true } || !deployed.Runs(release.Controller, platform))
         {
-            throw new InstallerException($"The deploy script finished, but {Target} does not run release {release.Version}'s image: see docker ps and the install log.");
+            var claim = deployed?.FalseClaim(release.Controller, platform) is { } falseClaim ? $" ({falseClaim})" : string.Empty;
+            throw new InstallerException($"The deploy script finished, but {Target} does not run release {release.Version}'s image{claim}: see docker ps and the install log.");
         }
 
         context.Log.Write($"Deployed {Target}: release {release.Version}, verified by the deploy script.");

@@ -17,7 +17,9 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 /// A release installed from its folder with no registry (#127): each image loaded from the release's offline archive
 /// for this machine, checked against release.json and by the ID Docker gives it, run by that ID and never pulled; the
 /// archives in release.json; and a release from GitHub, or from the folder of a release from before offline archives,
-/// pulled by its digest as before. A controller loaded from an archive is put back by a rollback as any other is.
+/// pulled by its digest as before. A controller loaded from an archive is put back by a rollback as any other is. The
+/// release-image label only claims the release: a container of an image with another ID that carries it is replaced,
+/// never adopted, and never started by a rollback.
 /// </summary>
 [TestClass]
 [UnsupportedOSPlatform("windows")]
@@ -92,23 +94,52 @@ public sealed class InstallerOfflineImageTests
     }
 
     [TestMethod]
-    public void AContainerRunByItsImagesId_RunsTheReleasesImageItsLabelNames()
+    public void AContainerRunByItsImagesId_RunsTheReleasesImage_OnlyWithAnIdTheReleaseGivesItsArchive()
     {
-        var digest = "sha256:" + new string('d', 64);
+        var release = ReleaseManifest.Parse(FakeMachine.ReleaseJson(offlineArchives: true), "4.0.0");
+        var arm64 = release.Controller.ArchiveFor("linux/arm64")!;
+        var amd64Config = FakeMachine.ArchiveConfigDigest(FakeMachine.OfflineArchiveName("roof-controller", "amd64"));
+        var unrelated = "sha256:" + new string('a', 64);
         var other = "sha256:" + new string('b', 64);
-        ContainerSurvey Survey(string image, string? released) => new()
+        ContainerSurvey Survey(string image, string? imageId, string? released) => new()
         {
             Name = MachineSurveyor.ControllerContainer,
             Image = image,
+            ImageId = imageId,
             State = "running",
             Origin = ContainerOrigin.DeployScript,
             ReleaseImage = released
         };
 
-        Survey("sha256:" + new string('a', 64), $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{digest}").ImageDigest.Should().Be(digest);
-        Survey($"ghcr.io/hualapaivalley/roof-controller:4.0.0@{other}", $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{digest}").ImageDigest
-            .Should().Be(other, "the image it was run by comes first");
-        Survey("sha256:" + new string('a', 64), null).ImageDigest.Should().BeNull();
+        foreach (var id in release.Controller.LoadedIds(arm64))
+        {
+            var loaded = Survey(id, id, ControllerReference);
+            loaded.Runs(release.Controller, "linux/arm64").Should().BeTrue($"{id} is an ID the release gives its arm64 archive");
+            loaded.FalseClaim(release.Controller, "linux/arm64").Should().BeNull();
+        }
+
+        // The label only claims the release's image: an image with another ID carrying it does not run it.
+        var mislabelled = Survey(unrelated, unrelated, ControllerReference);
+        mislabelled.Runs(release.Controller, "linux/arm64").Should().BeFalse("Docker's ID for the image it runs is not one the release gives it");
+        mislabelled.ImageDigest.Should().BeNull("the label is not a digest it was deployed by");
+        mislabelled.FalseClaim(release.Controller, "linux/arm64").Should().Be(
+            $"its label names {ControllerReference}, but it runs the image {unrelated}, not one with an ID release.json gives that image for linux/arm64");
+        Survey(amd64Config, amd64Config, ControllerReference).Runs(release.Controller, "linux/arm64").Should().BeFalse("the amd64 image is not the Pi's");
+        Survey(unrelated, null, ControllerReference).Runs(release.Controller, "linux/arm64").Should().BeFalse("Docker gave no ID to check");
+        Survey(arm64.ConfigDigest, arm64.ConfigDigest, ControllerReference).Runs(ReleaseManifest.Parse(FakeMachine.ReleaseJson(), "4.0.0").Controller, "linux/arm64")
+            .Should().BeFalse("a release without offline archives gives no ID to check the label against");
+
+        // With no label, or one naming another image, nothing claims the release.
+        Survey(arm64.ConfigDigest, arm64.ConfigDigest, null).Runs(release.Controller, "linux/arm64").Should().BeFalse();
+        var another = Survey(arm64.ConfigDigest, arm64.ConfigDigest, $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{other}");
+        another.Runs(release.Controller, "linux/arm64").Should().BeFalse();
+        another.FalseClaim(release.Controller, "linux/arm64").Should().BeNull("its label does not name the release's image");
+
+        // Deployed by its digest, the digest decides, whatever the label says.
+        Survey(ControllerReference, unrelated, null).Runs(release.Controller, "linux/arm64").Should().BeTrue();
+        var byOther = Survey($"ghcr.io/hualapaivalley/roof-controller:4.0.0@{other}", arm64.ConfigDigest, ControllerReference);
+        byOther.ImageDigest.Should().Be(other);
+        byOther.Runs(release.Controller, "linux/arm64").Should().BeFalse("the image it was run by comes first");
     }
 
     [TestMethod]
@@ -291,6 +322,9 @@ public sealed class InstallerOfflineImageTests
     public async Task ARollback_PutsBackAControllerLoadedFromAnArchive()
     {
         using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+
+        // The release on GitHub, which a rollback reads, is the one in the folder: its offline archives are listed.
+        bench.Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = FakeMachine.ReleaseJson(offlineArchives: true);
         var folder = bench.ReleaseFolder();
         (await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder)).ExitCode.Should().Be(0);
         bench.WithRelease("4.0.1", latest: true);
@@ -306,5 +340,113 @@ public sealed class InstallerOfflineImageTests
         bench.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(
             controller => controller.Version == "4.0.0" && controller.ImageId == FakeMachine.ArchiveConfigDigest(FakeMachine.OfflineArchiveName("roof-controller", "amd64")) && controller.State == "running");
         bench.Unexpected.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task ContainersOfAnotherImage_CarryingTheReleasesLabel_AreReplaced_NotAdopted()
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var folder = bench.ReleaseFolder();
+        var answers = bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] });
+        (await bench.RunAsync("--answers", answers, "--release", folder)).ExitCode.Should().Be(0);
+
+        // Each now runs an image with another ID, under the release's label (copied, say, from the ones the installer made).
+        var unrelated = "sha256:" + new string('7', 64);
+        bench.Containers[MachineSurveyor.ControllerContainer] = bench.Containers[MachineSurveyor.ControllerContainer] with { ImageId = unrelated };
+        bench.Containers[MachineSurveyor.HatEmulatorContainer] = bench.Containers[MachineSurveyor.HatEmulatorContainer] with { ImageId = unrelated };
+
+        var plan = await bench.RunAsync("--plan", "--answers", answers, "--release", folder);
+
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Output.Should().Contain($"replaced with release 4.0.0's image: its label names {EmulatorReference}, but it runs the image {unrelated}")
+            .And.Contain($"redeployed as release 4.0.0: its label names {ControllerReference}, but it runs the image {unrelated}")
+            .And.NotContain("Nothing to change");
+
+        var run = await bench.RunAsync("--answers", answers, "--release", folder);
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        bench.Deploys.Should().HaveCount(2, "the controller is deployed again, through the deploy script");
+        bench.LoadedArchives.Should().HaveCount(4);
+        bench.Containers[MachineSurveyor.ControllerContainer].ImageId.Should().Be(FakeMachine.ArchiveConfigDigest(FakeMachine.OfflineArchiveName("roof-controller", "amd64")));
+        bench.Containers[MachineSurveyor.HatEmulatorContainer].ImageId.Should().Be(FakeMachine.ArchiveConfigDigest(FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64")));
+    }
+
+    [TestMethod]
+    public async Task AControllerTheDeployScriptLeaves_WithAnotherImageUnderTheReleasesLabel_FailsTheInstall()
+    {
+        // The deploy script checks the ID itself; the installer checks the controller it leaves again.
+        using var pi = new FakeMachine().WithPi();
+        pi.ImageStore = "unknown";
+        var folder = pi.ReleaseFolder();
+
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }), "--release", folder);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.ToString().Should().Contain(
+            $"The deploy script finished, but {MachineSurveyor.ControllerContainer} does not run release 4.0.0's image (its label names {ControllerReference}, but it runs the image sha256:{new string('0', 64)}, not one with an ID release.json gives that image for linux/arm64)");
+    }
+
+    [TestMethod]
+    public async Task ARollback_ToAControllerOfAnotherImage_CarryingTheReleasesLabel_IsRefused_AndNothingChanges()
+    {
+        using var bench = await UpgradedFromAnArchiveAsync();
+        var unrelated = "sha256:" + new string('7', 64);
+        bench.Containers[ControllerRollbackStep.PreviousContainer] = bench.Containers[ControllerRollbackStep.PreviousContainer] with { ImageId = unrelated };
+        var current = bench.Containers[MachineSurveyor.ControllerContainer];
+        var previous = bench.Containers[ControllerRollbackStep.PreviousContainer];
+        var emulator = bench.Containers[MachineSurveyor.HatEmulatorContainer];
+        var deploys = bench.DeployOptions.Count;
+
+        var rollback = await bench.RunAsync("rollback");
+
+        rollback.ExitCode.Should().Be((int)InstallerExitCode.Refused, rollback.ToString());
+        rollback.ToString().Should().Contain(
+            $"{ControllerRollbackStep.PreviousContainer} is not release 4.0.0's controller: its label names {ControllerReference}, but it runs the image {unrelated}, not one with an ID release.json gives that image for linux/amd64. The installer does not start an image it cannot check");
+        bench.DeployOptions.Should().HaveCount(deploys, "the deploy script never ran");
+        bench.Containers[MachineSurveyor.ControllerContainer].Should().Be(current);
+        bench.Containers[ControllerRollbackStep.PreviousContainer].Should().Be(previous);
+        bench.Containers[MachineSurveyor.HatEmulatorContainer].Should().Be(emulator);
+    }
+
+    [TestMethod]
+    public async Task ARollback_FromAControllerThatOnlyClaimsTheReleaseBefore_PutsTheRealOneBack()
+    {
+        using var bench = await UpgradedFromAnArchiveAsync();
+
+        // The controller runs 4.0.1's image by an ID the release before does not give, under 4.0.0's label.
+        bench.Containers[MachineSurveyor.ControllerContainer] = bench.Containers[MachineSurveyor.ControllerContainer] with
+        {
+            Version = "4.0.0",
+            Digest = FakeMachine.ControllerDigest,
+            ImageId = "sha256:" + new string('7', 64)
+        };
+
+        var rollback = await bench.RunAsync("rollback");
+
+        rollback.ExitCode.Should().Be(0, rollback.ToString());
+        bench.DeployOptions[^1].Should().Be("--rollback", "it does not run release 4.0.0, so it is rolled back");
+        bench.Containers[MachineSurveyor.ControllerContainer].ImageId.Should().Be(FakeMachine.ArchiveConfigDigest(FakeMachine.OfflineArchiveName("roof-controller", "amd64")));
+    }
+
+    // A rig installed from 4.0.0's folder, its images loaded from their archives, then upgraded to 4.0.1 from GitHub: the
+    // controller loaded from the archive is kept as roof-controller-previous. The installer is now 4.0.1's.
+    private static async Task<FakeMachine> UpgradedFromAnArchiveAsync()
+    {
+        var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        try
+        {
+            bench.Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = FakeMachine.ReleaseJson(offlineArchives: true);
+            var folder = bench.ReleaseFolder();
+            (await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder)).ExitCode.Should().Be(0);
+            bench.WithRelease("4.0.1", latest: true);
+            (await bench.RunAsync("upgrade")).ExitCode.Should().Be(0);
+            bench.InstallerVersion = "4.0.1";
+            return bench;
+        }
+        catch
+        {
+            bench.Dispose();
+            throw;
+        }
     }
 }

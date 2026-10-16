@@ -228,6 +228,15 @@ internal sealed partial class FakeMachine
     // The image a container runs, as Inspect reports it: its ID, for one loaded from an offline archive.
     private static string ImageOf(string name, FakeContainer container) => container.ImageId ?? ReferenceOf(name, container);
 
+    // The ID Docker gives the image a container runs (Inspect's own Image): the loaded image's, or the pulled one's.
+    private static string ImageIdOf(string name, FakeContainer container) => container.ImageId ?? PulledImageId(ReferenceOf(name, container));
+
+    /// <summary>
+    /// The ID Docker gives the image pulled by <paramref name="reference"/>: a made-up one, as the classic image store names
+    /// an image by its config's digest, never the reference's own digest.
+    /// </summary>
+    public static string PulledImageId(string reference) => "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("config " + reference)));
+
     // The release's image a container runs, by its reference.
     private static string ReferenceOf(string name, FakeContainer container)
     {

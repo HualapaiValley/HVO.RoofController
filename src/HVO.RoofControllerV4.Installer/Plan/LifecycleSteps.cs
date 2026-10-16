@@ -64,7 +64,7 @@ public sealed class InstallerProgramStep(InstallScope scope, InstallerMachine ma
 /// The controller put back to the release before (<c>hvo-roof-install rollback</c>): the deploy script's
 /// <c>--rollback</c> swaps it with the one it kept as <c>roof-controller-previous</c>, after the same verified Stop of the
 /// roof a deploy makes, and checks the one put back as it checks a new one. Nothing is pulled: the one kept is the
-/// release before's, by digest, or there is nothing to go back to.
+/// release before's (by its digest, or by an ID its release.json gives the image), or there is nothing to go back to.
 /// </summary>
 public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
 {
@@ -90,8 +90,11 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         if (IdentitySchemaGuard.Problem(machine, ControllerLayout.For(machine).IdentityFile, release) is { } schemaProblem)
             return new StepCheck(StepChange.Blocked, schemaProblem);
+        // A container run by its image's ID runs the release only when Docker's ID for that image is one the release gives
+        // it (ContainerSurvey.Runs): its label alone is a claim.
+        var platform = ControllerStep.Platform(machine);
         var current = await MachineSurveyor.SurveyContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
-        if (current is { IsRunning: true } && current.ImageDigest == release.Controller.Digest)
+        if (current is { IsRunning: true } && current.Runs(release.Controller, platform))
         {
             return StepCheck.Unchanged($"runs release {release.Version}");
         }
@@ -107,7 +110,15 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
             return new StepCheck(StepChange.Blocked, $"there is no {PreviousContainer} to go back to: the deploy script keeps the controller it replaces, and has not kept one here");
         }
 
-        if (previous.ImageDigest != release.Controller.Digest)
+        if (previous.FalseClaim(release.Controller, platform) is { } claim)
+        {
+            // Never started: the deploy script's --rollback would start it as it is.
+            return new StepCheck(
+                StepChange.Blocked,
+                $"{PreviousContainer} is not release {release.Version}'s controller: {claim}. The installer does not start an image it cannot check, so there is no going back to {release.Version} this way");
+        }
+
+        if (!previous.Runs(release.Controller, platform))
         {
             return new StepCheck(
                 StepChange.Blocked,
@@ -150,9 +161,11 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
         var environment = await controller.EnvironmentAsync(context, work, release.Controller.Reference, null, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--rollback").ConfigureAwait(false);
         var now = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
-        if (now is not { IsRunning: true } || now.ImageDigest != release.Controller.Digest)
+        var platform = ControllerStep.Platform(context.Machine);
+        if (now is not { IsRunning: true } || !now.Runs(release.Controller, platform))
         {
-            throw new InstallerException($"The deploy script's --rollback finished, but {Target} does not run release {release.Version}'s image: see docker ps -a and the install log.");
+            var claim = now?.FalseClaim(release.Controller, platform) is { } falseClaim ? $" ({falseClaim})" : string.Empty;
+            throw new InstallerException($"The deploy script's --rollback finished, but {Target} does not run release {release.Version}'s image{claim}: see docker ps -a and the install log.");
         }
 
         context.Log.Write($"Rolled {Target} back to release {release.Version}, verified by the deploy script; the one it replaced is kept as {PreviousContainer}.");
