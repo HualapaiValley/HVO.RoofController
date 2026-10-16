@@ -1205,8 +1205,12 @@ With `--restore-backup`:
 3. The deploy script's `--stop` stops the controller after a verified Stop of the idle roof. Docker must say the
    controller is stopped, or not there: when it cannot say (it is not running, say), that is never taken for no
    controller. The rollback stops there, with nothing put back, and the same command carries on once Docker answers.
-4. Each file of a store the release before cannot read goes back as the backup has it, with its mode and owner, once
-   Docker says again that the controller is stopped. The file it replaces is kept beside it, root's and `0600`, as
+4. Each file of a store the release before cannot read goes back as the backup has it, with its mode and owner. Just
+   before each file is written, Docker must say again that the controller and `roof-controller-previous` (which
+   `--stop` leaves alone) are each stopped or not there, and that there is no `roof-controller-swap` (a rollback
+   stopped halfway). One running, paused or restarting, or one Docker cannot answer for, stops the rollback there
+   (exit 1), with nothing put back: stop it once the roof is idle, then run the same command again. The file it
+   replaces is kept beside it, root's and `0600`, as
    `<file>.rolled-back-from-<version>-<UTC time>`; a file the backup's manifest says was not there (`absent`) is
    moved there. A file the backup neither holds nor names as not there (a link `backup` left out, or a backup from an
    installer before it named them) is never removed: the rollback is refused, with nothing changed. Nothing else in

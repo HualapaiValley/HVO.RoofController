@@ -478,6 +478,100 @@ public sealed class InstallerStateContractTests
         (await stop.CheckAsync(session.Context, CancellationToken.None)).Should().Be(StepCheck.Unchanged("not there"));
     }
 
+    // #136 F5: a store is put back only once Docker says both controller containers are stopped or not there (the one
+    // kept for a rollback too, which --stop leaves alone), and that no swap was left halfway, whatever the plan found.
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_WhenTheKeptControllerStartsOnceItIsPlanned_PutsNothingBack()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        pi.Write(IdentityFile, IdentityMoved);
+
+        // Both controllers are stopped when the plan is checked, so it stops neither; then someone starts the one kept.
+        pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { State = "exited" };
+        pi.Containers[ControllerRollbackStep.PreviousContainer].State.Should().Be("exited");
+        var deploys = pi.DeployOptions.Count;
+        var before = pi.Snapshot(InstallPaths.SystemLog);
+        var planned = false;
+        pi.OnOutputLine = line =>
+        {
+            if (Regex.IsMatch(line, @"^\d+ to create, \d+ to change, "))
+            {
+                planned = true;
+                pi.Containers[ControllerRollbackStep.PreviousContainer] = pi.Containers[ControllerRollbackStep.PreviousContainer] with { State = "running" };
+            }
+        };
+
+        var run = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        planned.Should().BeTrue("the plan was checked and shown first");
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain(
+            $"{ControllerRollbackStep.PreviousContainer} is running: {IdentityFile} is put back only with the controller stopped, and the one kept for a rollback too. Nothing was put back");
+        pi.DeployOptions.Skip(deploys).Should().BeEmpty("the controller was stopped already, so neither --stop nor --rollback ran");
+        pi.Read(IdentityFile).Should().Be(IdentityMoved);
+        Directory.EnumerateFiles(pi.OnDisk(ControllerLayout.System.Identity), "*.rolled-back-from-*").Should().BeEmpty();
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before, "no store, no file kept beside one, and not the record");
+        pi.Containers[MachineSurveyor.ControllerContainer].State.Should().Be("exited");
+    }
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_WhenTheKeptControllerStartsAfterTheStop_PutsNothingBack()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        pi.Write(IdentityFile, IdentityMoved);
+        var deploys = pi.DeployOptions.Count;
+        var before = pi.Snapshot(InstallPaths.SystemLog);
+        var started = false;
+        pi.OnOutputLine = line =>
+        {
+            // The deploy script's --stop has stopped the controller: then someone starts the one kept for a rollback.
+            if (!started && line.EndsWith($" {MachineSurveyor.ControllerContainer}: done.", StringComparison.Ordinal) && pi.DeployOptions.Skip(deploys).SequenceEqual(["--stop"]))
+            {
+                started = true;
+                pi.Containers[ControllerRollbackStep.PreviousContainer] = pi.Containers[ControllerRollbackStep.PreviousContainer] with { State = "running" };
+            }
+        };
+
+        var run = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        started.Should().BeTrue("the controller was stopped first");
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain($"{ControllerRollbackStep.PreviousContainer} is running: {IdentityFile} is put back only with the controller stopped");
+        pi.DeployOptions.Skip(deploys).Should().Equal(["--stop"], "the rollback stops before --rollback");
+        pi.Containers[MachineSurveyor.ControllerContainer].State.Should().Be("exited", "the controller stays stopped");
+        pi.Read(IdentityFile).Should().Be(IdentityMoved);
+        Directory.EnumerateFiles(pi.OnDisk(ControllerLayout.System.Identity), "*.rolled-back-from-*").Should().BeEmpty();
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before, "no store, no file kept beside one, and not the record");
+    }
+
+    [TestMethod]
+    [DataRow(MachineSurveyor.ControllerContainer, "paused")]
+    [DataRow(MachineSurveyor.ControllerContainer, "restarting")]
+    [DataRow(ControllerRollbackStep.PreviousContainer, "running")]
+    [DataRow(ControllerRollbackStep.PreviousContainer, "paused")]
+    [DataRow(ControllerRollbackStep.PreviousContainer, "restarting")]
+    [DataRow(ControllerRollbackStep.PreviousContainer, "removing")]
+    [DataRow(ControllerRollbackStep.PreviousContainer, "unknown")]
+    [DataRow(ControllerRollbackStep.SwapContainer, "exited")]
+    public async Task AStore_IsNotPutBack_WhileEitherControllerMayRun_OrASwapWasLeftHalfway(string name, string state)
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        pi.Write(IdentityFile, IdentityMoved);
+        pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { State = "exited" };
+        var context = (await InstallerSession.StartAsync(pi.Machine, InstallLog.None, NewVersion, pi.RunsAt)).Context;
+        var step = new StateRestoreStep(IdentityFile, "the identity store", Encoding.UTF8.GetBytes(IdentityBefore), Modes.PrivateFile, null, NewVersion);
+        var check = await step.CheckAsync(context, CancellationToken.None);
+        pi.Containers[name] = (pi.Containers.GetValueOrDefault(name) ?? pi.Containers[ControllerRollbackStep.PreviousContainer]) with { State = state };
+
+        var apply = () => step.ApplyAsync(context, check, CancellationToken.None);
+
+        (await apply.Should().ThrowAsync<StepBlockedException>()).Which.Message.Should().Contain(
+            name == ControllerRollbackStep.SwapContainer ? $"{ControllerRollbackStep.SwapContainer} is there" : $"{name} is {state}: {IdentityFile} is put back only with the controller stopped");
+        pi.Read(IdentityFile).Should().Be(IdentityMoved);
+        Directory.EnumerateFiles(pi.OnDisk(ControllerLayout.System.Identity), "*.rolled-back-from-*").Should().BeEmpty();
+    }
+
     // #136 F2: a store the backup cannot hold refuses the upgrade; a rollback removes a store only when the backup says
     // it was not there.
 
