@@ -391,33 +391,43 @@ The lease applies only when `OperatorLeaseTimeout` is set (2-120 s); production 
 ### C11. Container stop with an active camera stream, and the container's supervisor
 
 The container runs two processes under a supervisor: the controller and the web UI
-([deployment](deployment.md#the-containers-two-processes)). Steps 5-9 check how the supervisor handles each of them.
+([deployment](deployment.md#the-containers-two-processes)). Steps 5-13 check how the supervisor handles each of them,
+and how it turns the relays off whenever the controller is not running.
 
 | Step | Checked | Scenario |
 |---|---|---|
 | 1 | A camera stream is open through the proxy while a move is commanded | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
 | 2 | The host is stopped as `docker stop -t 30` stops it: in process, and as a real container | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
 | 3 | The roof stops with `HostShutdown` and verified relays, and the stream ends within 5 s. The supervisor stops the controller first and waits for it to exit (code 0), then stops the web UI. The container exits within the grace period, and is not killed at its end (status 137). | `LifecycleScenarios.AHostShutdown_DuringTravel_WithACameraStreamOpen_StopsTheRoof_EndsTheStream_AndTheNextHostStartsIdle`, `deploy-scenarios.sh lifecycle` |
-| 4 | Relay writes fail when the host stops the moving roof, so the shutdown cannot verify the relays off. If the writes work again while the host waits, a retry verifies the relays off and the shutdown completes. If they never do, the host logs the stop `FAILED` and the container still exits within the grace period, with the relays held; the restarted controller turns them off. | `deploy-scenarios.sh lifecycle` |
+| 4 | Relay writes fail when the host stops the moving roof, so the shutdown cannot verify the relays off. If the writes work again while the host waits, a retry verifies the relays off and the shutdown completes, and the supervisor verifies them off too. If they never do, the host logs the stop `FAILED`, the supervisor's own try fails the same way and says so, and the container still exits within the grace period, with the relays held; once the writes work, the next start's supervisor turns them off before the controller starts. | `deploy-scenarios.sh lifecycle` |
 | 5 | A restart through the API (`POST System/Restart`) exits the controller with code 75. The supervisor starts it again at once in the same container: Docker does not restart the container, and the web UI keeps running. The controller is ready again with the relays off. | `deploy-scenarios.sh lifecycle` |
-| 6 | The controller is killed during travel inside the container, as a crash ends it. The relays stay held. The supervisor starts it again after its backoff, and the restarted controller turns them off. The web UI keeps running, and Docker does not restart the container. | `deploy-scenarios.sh supervisor` |
-| 7 | The controller crashes five times within 120 s. The supervisor leaves it stopped instead of starting it again, the container's health check fails (Docker marks the container unhealthy after three failed checks), and the web UI stays live and, on its sign-in page (nobody can sign in while the controller is stopped), says the controller is stopped after repeated crashes. The relays are off. | `deploy-scenarios.sh supervisor` |
-| 8 | A forced restart, requested as the web UI requests it, starts the controller left stopped by step 7. A second request within 10 s of that start is ignored. A later one kills the running controller and starts it again at once. Each time it is ready again with the relays off, and the web UI keeps running. | `deploy-scenarios.sh supervisor` |
+| 6 | The controller is killed during travel inside the container, as a crash ends it. The supervisor turns every relay off and verifies the register within 1 s of the kill, and the roof is still within 2 s of it (the run records both), before it starts the controller again after its backoff. The web UI keeps running, and Docker does not restart the container. | `deploy-scenarios.sh supervisor` |
+| 7 | The controller crashes five times within 120 s. The supervisor leaves it stopped instead of starting it again, the container's health check fails (Docker marks the container unhealthy after three failed checks), and the web UI stays live and, on its sign-in page (nobody can sign in while the controller is stopped), says the controller is stopped after repeated crashes. The relays are off: the supervisor verified them off after each crash, the last one included, and says it left the controller stopped with them off. | `deploy-scenarios.sh supervisor` |
+| 8 | A forced restart, requested as the web UI requests it, starts the controller left stopped by step 7. A second request within 10 s of that start is ignored. A later one kills the running controller, and the supervisor turns the relays off before it starts it again at once. Each time it is ready again with the relays off, and the web UI keeps running. | `deploy-scenarios.sh supervisor` |
 | 9 | The web UI is killed while the roof moves. The supervisor starts only the web UI again, and it is live again. The controller keeps running and the move goes on. | `deploy-scenarios.sh supervisor` |
-| — | A crash during travel leaves the relays held. The restarted controller turns them off; if the crash outlasts the travel, the open limit's contact stops the drive first. A killed container stays down until it is started again. | `LifecycleScenarios.ACrash_DuringTravel_LeavesTheRelaysHeld_AndTheRestartedControllerTurnsThemOff`, `LifecycleScenarios.ACrash_ThatOutlastsTheTravel_LeavesTheOpenLimitToStopTheDrive_AndTheRestartedControllerReportsOpen`, `deploy-scenarios.sh lifecycle` |
+| 10 | With a settings file the controller refuses at its start, the controller is killed during travel. The supervisor turns the relays off and verifies them within the bound of step 6, the next start fails on the settings before it touches the HAT, and the supervisor turns them off again. | `deploy-scenarios.sh supervisor` |
+| 11 | The starts keep failing until the supervisor leaves the controller stopped (as in step 7). It verified the relays off after each failed start, the last one included, and they stay off. Once the file is fixed, a forced restart starts the controller again. | `deploy-scenarios.sh supervisor` |
+| 12 | The container is stopped (`docker stop -t 30`) while the controller is hung during travel (SIGSTOP), so it can neither stop the roof nor exit. The supervisor waits its 22 s for the controller, kills it, turns the relays off and verifies them, and the container exits 0 within the grace period. | `deploy-scenarios.sh supervisor` |
+| 13 | When memory runs out, the kernel ends the web UI first, then the controller, and the supervisor last: the web UI's `oom_score_adj` is the supervisor's plus 500 and the controller's the supervisor's plus 100, and the kernel's OOM scores (`/proc/<pid>/oom_score`) are in that order. | `deploy-scenarios.sh supervisor` |
+| — | In process, without the container's supervisor, a crash during travel leaves the relays held. The restarted controller turns them off; if the crash outlasts the travel, the open limit's contact stops the drive first. A whole container killed (`docker kill`) leaves them held as well, nothing in it running, and stays down until it is started again, when its supervisor turns them off before the controller starts. | `LifecycleScenarios.ACrash_DuringTravel_LeavesTheRelaysHeld_AndTheRestartedControllerTurnsThemOff`, `LifecycleScenarios.ACrash_ThatOutlastsTheTravel_LeavesTheOpenLimitToStopTheDrive_AndTheRestartedControllerReportsOpen`, `deploy-scenarios.sh lifecycle` |
+| — | The supervisor itself is killed during travel (SIGKILL, as the kernel would end it): the container ends with it, Docker starts it again, and its new supervisor turns the relays off before it starts the controller. | `deploy-scenarios.sh supervisor` |
 | — | The web UI runs as the image's unprivileged `app` user with only its own `RoofWeb__*` settings: none of the controller's settings are in its environment, and it cannot read the controller's secrets directory. For HTTPS it holds a copy of the certificate it serves and of that certificate's password, by default the controller's ([deployment.md](deployment.md#the-web-uis-user-and-settings)). | `deploy-scenarios.sh supervisor` |
 
 **Installation assumptions**
 
 - **The HAT holds its relays when the controller process dies**, until something writes the register. The emulated HAT
-  holds them, as the #29 plant assumes. The settings that depend on it are the deploy script's `docker stop -t 30` and
-  the host's shutdown timeout. The fail-safe result is that the roof keeps moving until the limit's run-circuit contact
-  stops it (C1 step 4), and the restarted controller turns the relays off.
-- **Docker gives the container at least 30 s to stop.** The supervisor waits up to 25 s for the controller's shutdown,
-  then 2 s for the web UI. The settings that depend on it are the deploy script's `STOP_TIMEOUT_SECONDS`, Compose's
-  `stop_grace_period` and the supervisor's `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`. The fail-safe result of a shorter
-  grace period is that Docker kills the controller during its shutdown: the relays stay held, as after a crash, until
-  the restarted controller turns them off.
+  holds them, as the #29 plant assumes. The settings that depend on it are the deploy script's `docker stop -t 30`, the
+  host's shutdown timeout and the supervisor's relay-off (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`,
+  [deployment.md](deployment.md#the-relays-when-the-controller-exits)). In the container the supervisor turns the relays
+  off and verifies them as soon as the controller has died (steps 6 and 10-12). The fail-safe result where it cannot (the
+  whole container killed, or a HAT that does not answer) is that the roof keeps moving until the limit's run-circuit
+  contact stops it (C1 step 4), or the independent stop (C1 step 1) is used.
+- **Docker gives the container at least 30 s to stop.** The supervisor waits up to 22 s for the controller's shutdown,
+  then up to 5 s to turn the relays off while the web UI gets 2 s. The settings that depend on it are the deploy script's
+  `STOP_TIMEOUT_SECONDS`, Compose's `stop_grace_period` and the supervisor's `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS` and
+  `HVO_SUPERVISOR_RELAYS_OFF_SECONDS`. The fail-safe result of a shorter grace period is that Docker kills the container
+  during the controller's shutdown or the supervisor's relay-off: the relays stay held until the container starts again
+  and its supervisor turns them off.
 
 If a shutdown log shows `Shutdown could not verify the relay register all-off state`, the controller re-runs the all-off
 sequence every 500 ms. It stops when the register verifies, when the controller is disposed, or after 15 s. Disposal
