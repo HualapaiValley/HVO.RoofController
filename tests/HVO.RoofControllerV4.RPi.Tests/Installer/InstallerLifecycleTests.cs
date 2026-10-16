@@ -188,25 +188,88 @@ public sealed class InstallerLifecycleTests
         Record(pi).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.PreviousVersion == "4.0.1-rc.1");
     }
 
+    // As root, and as a person planning the machine's roles without sudo (#131): the machine's record says what is
+    // installed, whatever the person's own says, or when they have none.
     [TestMethod]
-    public async Task AnOlderInstaller_DoesNotInstallOverANewerRelease()
+    [DataRow(false, null)]
+    [DataRow(true, null)]
+    [DataRow(true, "3.9.0")]
+    [DataRow(true, "4.1.1")]
+    public async Task AnOlderInstaller_DoesNotInstallOverANewerRelease(bool asPerson, string? personsRelease)
     {
         using var pi = await UpgradedPiAsync();
+        if (asPerson)
+        {
+            pi.AsPerson();
+            PersonsRecord(pi, personsRelease);
+        }
+
         pi.InstallerVersion = "4.0.0";
         var answers = pi.WriteAnswers(ControllerAndKiosk);
         var files = pi.Snapshot(InstallPaths.SystemLog);
 
-        var install = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
-        var plan = await pi.RunAsync("--plan", "--answers", answers);
+        // Without sudo only a plan of the machine's roles is open to the person.
+        var runs = new List<InstallerRun>();
+        if (!asPerson)
+        {
+            runs.Add(await pi.RunAsync("--setup-prerequisites", "--answers", answers));
+        }
 
-        foreach (var run in new[] { install, plan })
+        runs.Add(await pi.RunAsync("--plan", "--answers", answers));
+        foreach (var run in runs)
         {
             run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-            run.Error.Should().Contain($"{NewVersion} is installed here, newer than this installer (4.0.0). To go back to the release before it: sudo hvo-roof-install rollback");
+            run.Error.Should().Contain($"{NewVersion} is installed here, newer than this installer (4.0.0). To go back to the release before it: sudo hvo-roof-install rollback")
+                .And.NotContain("4.1.1 is installed here", "the person's hvo-roof is not what this run installs");
         }
 
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
         pi.Deploys.Should().HaveCount(2, "the install and the upgrade deployed the controller, and nothing since");
+    }
+
+    // The machine's 4.0.0 and the person's hvo-roof 4.1.1 (#131): 4.0.1's installer plans the machine's upgrade, without
+    // sudo, by the machine's record.
+    [TestMethod]
+    public async Task APersonsPlanForTheMachinesRoles_IsAnUpgrade_WhenTheirOwnReleaseIsNewer()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true);
+        pi.AsPerson();
+        PersonsRecord(pi, "4.1.1");
+        pi.InstallerVersion = NewVersion;
+        var answers = pi.WriteAnswers(ControllerAndKiosk);
+        var files = pi.Snapshot();
+
+        var plan = await pi.RunAsync("--plan", "--answers", answers);
+
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Output.Should().Contain($"Upgrading from 4.0.0 to {NewVersion}.");
+        plan.Error.Should().NotContain("newer than this installer");
+        pi.Snapshot().Should().Equal(files);
+    }
+
+    // A run of both scopes is refused for that alone, but each record is checked against its own roles (#131).
+    [TestMethod]
+    public async Task EachScopesRecord_IsCheckedForItsOwnRoles()
+    {
+        using var pi = await UpgradedPiAsync();
+        pi.AsPerson();
+        PersonsRecord(pi, "4.1.1");
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(string installer, params InstallRole[] roles)
+        {
+            var session = await InstallerSession.StartAsync(pi.Machine, InstallLog.None, installer, FakeMachine.Clock);
+            session.Answers = new InstallAnswers { Roles = roles };
+            return session.VersionProblems();
+        }
+
+        (await ProblemsAsync(NewVersion, InstallRole.Controller, InstallRole.Kiosk)).Should().BeEmpty();
+        (await ProblemsAsync(NewVersion, InstallRole.Cli)).Should().ContainSingle()
+            .Which.Should().Be($"4.1.1 is installed here, newer than this installer ({NewVersion}). To go back to the release before it: hvo-roof-install rollback");
+        (await ProblemsAsync(NewVersion, InstallRole.Controller, InstallRole.Cli)).Should().ContainSingle().Which.Should().StartWith("4.1.1 is installed here");
+        (await ProblemsAsync("4.0.0", InstallRole.Controller, InstallRole.Cli)).Should().Equal(
+            $"{NewVersion} is installed here, newer than this installer (4.0.0). To go back to the release before it: sudo hvo-roof-install rollback",
+            "4.1.1 is installed here, newer than this installer (4.0.0). To go back to the release before it: hvo-roof-install rollback");
     }
 
     [TestMethod]
@@ -711,6 +774,15 @@ public sealed class InstallerLifecycleTests
         run.ExitCode.Should().Be(0, run.ToString());
         pi.InstallerVersion = NewVersion;
         return pi;
+    }
+
+    // The person's own record: hvo-roof of release version, or none.
+    private static void PersonsRecord(FakeMachine pi, string? version)
+    {
+        if (version is not null)
+        {
+            pi.Write(InstallPaths.UserRecord(pi.Machine), new InstallRecord { Scope = InstallScope.User, Roles = [InstallRole.Cli], Version = version, InstallerVersion = version }.ToJson());
+        }
     }
 
     private static FakeMachine KioskPi() => new FakeMachine().WithPi().WithDisplay().Write(CommandLine, Booted + "\n");

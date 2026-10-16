@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   itself or showing upgrade notes. See [Upgrading](docs/install.md#upgrading); existing identities and configuration
   are retained, with no default access added. Schema-incompatible rollback remains refused.
 
+### Fixed
+
+- A `--plan` without `sudo` for the machine's roles checked your own record's release instead of the machine's: it
+  refused a valid upgrade when your `hvo-roof` was newer, and skipped the check when you had no record. Each role's
+  record is now checked (#131).
+
 ### Security
 
 - Persist commissioning retirement and guess limits; reject pending-state restore and schema-incompatible rollback.

@@ -141,29 +141,43 @@ public sealed class InstallerSession
     public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true)
         => [.. VersionProblems(), .. RoleGuards.Check(Survey, Answers, planOnly, clientChosen)];
 
-    /// <summary>The record of this run's roles (the machine's as root, else the person's): what an upgrade starts from.</summary>
-    public InstallRecord? Record => Survey.IsRoot ? Survey.SystemRecord : Survey.UserRecord;
-
     /// <summary>
-    /// Why this installer will not install over what the record says: a newer release is installed. Going back is
-    /// <c>rollback</c>'s, which knows what the release before left; an older installer does not.
+    /// The records of this run's roles, what an upgrade starts from: the machine's for the machine's roles (the controller,
+    /// a rig on Linux, the kiosk) and the person's for theirs, whoever plans them. With no roles chosen yet, this run's: the
+    /// machine's as root, else the person's.
     /// </summary>
-    public IReadOnlyList<string> VersionProblems()
+    public IEnumerable<(InstallScope Scope, InstallRecord Record)> Records()
     {
-        if (Record is not { } record || !RoofSemVer.IsValid(record.Version) || !RoofSemVer.IsValid(Version) || !RoofSemVer.IsOlder(Version, record.Version))
+        var scopes = Answers.Roles.Select(role => InstallRoles.ScopeOf(role, Survey.Os)).Distinct().Order().ToArray();
+        foreach (var scope in scopes.Length > 0 ? scopes : [Survey.IsRoot ? InstallScope.System : InstallScope.User])
         {
-            return [];
+            if ((scope == InstallScope.System ? Survey.SystemRecord : Survey.UserRecord) is { } record)
+            {
+                yield return (scope, record);
+            }
         }
-
-        var sudo = Survey.IsRoot ? "sudo " : string.Empty;
-        return [record.UninstalledAt is null
-            ? $"{record.Version} is installed here, newer than this installer ({Version}). To go back to the release before it: {sudo}hvo-roof-install rollback"
-            : $"{record.Version} was uninstalled here, keeping its data, which is newer than this installer ({Version}). Install {record.Version} or newer, or remove the data first: {sudo}hvo-roof-install uninstall --purge"];
     }
 
-    /// <summary>"Upgrading from 4.0.0 to 4.0.1." when the record has an older release installed; null otherwise.</summary>
+    /// <summary>
+    /// Why this installer will not install over what the records of this run's roles say: a newer release is installed.
+    /// Going back is <c>rollback</c>'s, which knows what the release before left; an older installer does not.
+    /// </summary>
+    public IReadOnlyList<string> VersionProblems()
+        => [.. Records()
+            .Where(entry => RoofSemVer.IsValid(entry.Record.Version) && RoofSemVer.IsValid(Version) && RoofSemVer.IsOlder(Version, entry.Record.Version))
+            .Select(entry => VersionProblem(entry.Scope, entry.Record))];
+
+    private string VersionProblem(InstallScope scope, InstallRecord record)
+    {
+        var sudo = scope == InstallScope.System ? "sudo " : string.Empty;
+        return record.UninstalledAt is null
+            ? $"{record.Version} is installed here, newer than this installer ({Version}). To go back to the release before it: {sudo}hvo-roof-install rollback"
+            : $"{record.Version} was uninstalled here, keeping its data, which is newer than this installer ({Version}). Install {record.Version} or newer, or remove the data first: {sudo}hvo-roof-install uninstall --purge";
+    }
+
+    /// <summary>"Upgrading from 4.0.0 to 4.0.1." when a record of this run's roles has an older release installed; null otherwise.</summary>
     public string? UpgradeLine()
-        => Record is { UninstalledAt: null } record && RoofSemVer.IsValid(record.Version) && RoofSemVer.IsValid(Version) && RoofSemVer.IsOlder(record.Version, Version)
+        => Records().Select(entry => entry.Record).FirstOrDefault(record => record.UninstalledAt is null && RoofSemVer.IsValid(record.Version) && RoofSemVer.IsValid(Version) && RoofSemVer.IsOlder(record.Version, Version)) is { } record
             ? $"Upgrading from {record.Version} to {Version}."
             : null;
 

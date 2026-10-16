@@ -293,6 +293,11 @@ their digests, and no others: the deploy script deploys the controller's image o
 For a machine that cannot reach GitHub, download `release.json` from the release's page on a machine that can, and give
 its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 
+An installer never installs over a newer release: the install, the wizard and `--plan` are refused (exit 3). It
+checks the record of the roles it installs, whoever runs it: the machine's record for the controller, a rig on Linux
+and the kiosk, including in a `--plan` you run without `sudo`, and your own for the rest
+([The record and the log](#the-record-and-the-log)).
+
 ### Exit codes
 
 `install.sh` and scripts rely on these.
