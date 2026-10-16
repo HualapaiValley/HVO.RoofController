@@ -26,6 +26,7 @@ public sealed class InstallerLifecycleTests
     private const string CommandLine = "/boot/firmware/cmdline.txt";
     private const string Booted = "console=serial0,115200 console=tty1 root=PARTUUID=0a1b2c3d-02 rootfstype=ext4 fsck.repair=yes rootwait";
     private const string NewVersion = "4.0.1";
+    private const string OlderRelease = "/root/release-3.9.0";
 
     // The release installed has notes too: an upgrade from it shows only the ones after it.
     private static readonly UpgradeNote[] Notes = [new("4.0.0", "The first release."), new(NewVersion, "The kiosk's settings gain a brightness.\nNothing to do by hand.")];
@@ -147,16 +148,65 @@ public sealed class InstallerLifecycleTests
     }
 
     [TestMethod]
-    public async Task AnUpgrade_NeverGoesBack()
+    [DataRow("3.9.0", "upgrade", "--version", "3.9.0")]
+    [DataRow("3.9.0", "upgrade")]
+    [DataRow("3.9.0", "upgrade", "--release", OlderRelease)]
+    [DataRow("4.0.0-rc.1", "upgrade", "--version", "4.0.0-rc.1")]
+    [DataRow("3.9.0", "upgrade", "--plan")]
+    [DataRow("3.9.0", "upgrade", "--plan", "--release", OlderRelease)]
+    public async Task AnUpgrade_NeverGoesBack(string older, params string[] arguments)
     {
+        // 3.9.0 is GitHub's latest release, and the release in a folder (--release, which install.sh --from gives).
         using var pi = await InstalledPiAsync();
+        pi.WithRelease("3.9.0", latest: true);
+        pi.Write($"{OlderRelease}/release.json", FakeMachine.ReleaseJson("3.9.0", FakeMachine.ControllerDigestFor("3.9.0"), FakeMachine.EmulatorDigestFor("3.9.0")));
         var files = pi.Snapshot(InstallPaths.SystemLog);
 
-        var run = await pi.RunAsync("upgrade", "--version", "3.9.0");
+        var run = await pi.RunAsync(arguments);
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
-        run.Error.Should().Contain("4.0.0 is installed here, newer than 3.9.0: an upgrade never goes back.").And.Contain("hvo-roof-install rollback");
+        run.Error.Should().Contain($"4.0.0 is installed here, newer than {older}: an upgrade never goes back.").And.Contain("sudo hvo-roof-install rollback");
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
+        pi.Launches.Should().BeEmpty();
+        pi.Deploys.Should().ContainSingle("only the install deployed the controller");
+    }
+
+    [TestMethod]
+    public async Task AReleaseCandidate_UpgradesToItsRelease()
+    {
+        using var pi = KioskPi().WithRelease("4.0.1-rc.1");
+        pi.InstallerVersion = "4.0.1-rc.1";
+        var install = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(ControllerAndKiosk));
+        install.ExitCode.Should().Be(0, install.ToString());
+        pi.WithRelease(NewVersion, latest: true);
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain($"4.0.1-rc.1 is installed here; {NewVersion} replaces it.");
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion);
+        Record(pi).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.PreviousVersion == "4.0.1-rc.1");
+    }
+
+    [TestMethod]
+    public async Task AnOlderInstaller_DoesNotInstallOverANewerRelease()
+    {
+        using var pi = await UpgradedPiAsync();
+        pi.InstallerVersion = "4.0.0";
+        var answers = pi.WriteAnswers(ControllerAndKiosk);
+        var files = pi.Snapshot(InstallPaths.SystemLog);
+
+        var install = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
+        var plan = await pi.RunAsync("--plan", "--answers", answers);
+
+        foreach (var run in new[] { install, plan })
+        {
+            run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+            run.Error.Should().Contain($"{NewVersion} is installed here, newer than this installer (4.0.0). To go back to the release before it: sudo hvo-roof-install rollback");
+        }
+
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
+        pi.Deploys.Should().HaveCount(2, "the install and the upgrade deployed the controller, and nothing since");
     }
 
     [TestMethod]
