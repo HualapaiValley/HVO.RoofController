@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Deployment;
@@ -39,6 +41,8 @@ public sealed class InstallerStateContractTests
     private const string IdentityBefore = """{"users":[{"name":"before-the-upgrade","role":"RoofAdmin"}],"apiKeys":[]}""";
 
     private const string IdentityMoved = """{"schemaVersion":2,"users":[{"name":"after-the-upgrade","role":"RoofAdmin"}],"apiKeys":[],"linuxPrincipals":[]}""";
+
+    private const string DockerDown = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
 
     [TestMethod]
     public void AReleaseJson_WithStateContracts_GivesTheControllersContract()
@@ -388,6 +392,84 @@ public sealed class InstallerStateContractTests
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Usage, run.ToString());
         run.Error.Should().Contain("--yes goes with --restore-backup.");
+    }
+
+    // #136 F1: the stores are put back only once Docker says the controller is stopped or not there.
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_WhenDockerStopsAnsweringOnceItIsPlanned_StopsNothing_AndPutsNothingBack()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        pi.Write(IdentityFile, IdentityMoved);
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var deploys = pi.DeployOptions.Count;
+        var planned = false;
+
+        // The plan is checked and shown with the controller running; then Docker stops answering, and the controller may
+        // well run on.
+        pi.OnOutputLine = line =>
+        {
+            if (Regex.IsMatch(line, @"^\d+ to create, \d+ to change, "))
+            {
+                planned = true;
+                pi.DockerError = DockerDown;
+            }
+        };
+
+        var run = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        planned.Should().BeTrue("the plan was checked and shown first");
+        pi.Read(IdentityFile).Should().Be(IdentityMoved, "nothing is put back while the controller may be running");
+        Directory.EnumerateFiles(pi.OnDisk(ControllerLayout.System.Identity), "*.rolled-back-from-*").Should().BeEmpty();
+        pi.DeployOptions.Skip(deploys).Should().BeEmpty("neither --stop nor --rollback ran");
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain($"Docker could not say whether {ControllerRollbackStep.SwapContainer} is there or running");
+        pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.Version == NewVersion && running.State == "running");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+    }
+
+    [TestMethod]
+    public async Task AStore_IsPutBack_OnlyWhenDockerSaysTheControllerIsStopped()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        pi.Write(IdentityFile, IdentityMoved);
+        var context = (await InstallerSession.StartAsync(pi.Machine, InstallLog.None, NewVersion, pi.RunsAt)).Context;
+        var step = new StateRestoreStep(IdentityFile, "the identity store", Encoding.UTF8.GetBytes(IdentityBefore), Modes.PrivateFile, null, NewVersion);
+        var check = await step.CheckAsync(context, CancellationToken.None);
+        var apply = () => step.ApplyAsync(context, check, CancellationToken.None);
+
+        check.Change.Should().Be(StepChange.Change);
+        await apply.Should().ThrowAsync<InstallerException>().WithMessage($"{MachineSurveyor.ControllerContainer} is running: * put back only with the controller stopped*");
+        pi.DockerError = DockerDown;
+        await apply.Should().ThrowAsync<InstallerException>()
+            .WithMessage($"{IdentityFile} is put back only with the controller stopped, and Docker could not say whether {MachineSurveyor.ControllerContainer} is there or running*Nothing was put back.");
+        pi.Read(IdentityFile).Should().Be(IdentityMoved);
+        Directory.EnumerateFiles(pi.OnDisk(ControllerLayout.System.Identity), "*.rolled-back-from-*").Should().BeEmpty();
+
+        // Docker says it is stopped: it is put back.
+        pi.DockerError = null;
+        pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with { State = "exited" };
+        await apply();
+        pi.Read(IdentityFile).Should().Be(IdentityBefore);
+    }
+
+    [TestMethod]
+    public async Task TheControllersStop_IsBlocked_WhenDockerCannotSayWhetherItRuns()
+    {
+        using var pi = await UpgradedPiAsync(SchemaOne);
+        var session = await InstallerSession.StartAsync(pi.Machine, InstallLog.None, NewVersion, pi.RunsAt);
+        var stop = PlanBuilder.BuildUninstall(pi.Machine, session.Survey, session.Record!, purge: false).Steps.OfType<ControllerStopStep>().Single();
+
+        pi.DockerError = DockerDown;
+        var check = await stop.CheckAsync(session.Context, CancellationToken.None);
+
+        check.Change.Should().Be(StepChange.Blocked, "a controller Docker cannot answer for may be running: it is not taken for none");
+        check.Detail.Should().StartWith("Docker could not say whether").And.Contain(DockerDown.TrimEnd('?'));
+
+        // Docker saying there is none is: nothing to stop.
+        pi.DockerError = null;
+        pi.Containers.Remove(MachineSurveyor.ControllerContainer);
+        (await stop.CheckAsync(session.Context, CancellationToken.None)).Should().Be(StepCheck.Unchanged("not there"));
     }
 
     // The controller and the kiosk installed from release 4.0.0, with a person in the identity store (schema 1).

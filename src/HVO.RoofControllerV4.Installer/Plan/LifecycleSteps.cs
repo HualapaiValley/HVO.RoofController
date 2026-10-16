@@ -169,9 +169,10 @@ public sealed class ControllerRollbackStep(ControllerStep controller, IReadOnlyL
 }
 
 /// <summary>
-/// The controller stopped before it is removed (<c>hvo-roof-install uninstall</c>): the deploy script's <c>--stop</c>
-/// makes the same verified Stop of the roof a deploy makes, then stops the container gracefully. The roof is never left
-/// moving with no controller.
+/// The controller stopped before it is removed (<c>hvo-roof-install uninstall</c>) or its stores are put back
+/// (<c>rollback --restore-backup</c>): the deploy script's <c>--stop</c> makes the same verified Stop of the roof a deploy
+/// makes, then stops the container gracefully. The roof is never left moving with no controller. Docker must say the
+/// controller is not there or stopped: one Docker cannot answer for is never taken for none.
 /// </summary>
 public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
 {
@@ -188,12 +189,21 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
         ArgumentNullException.ThrowIfNull(context);
         _deployKeyFile = null;
         var machine = context.Machine;
-        if (await MachineSurveyor.SurveyContainerAsync(machine, ControllerRollbackStep.SwapContainer, cancellationToken).ConfigureAwait(false) is not null)
+        ContainerSurvey? current;
+        try
         {
-            return new StepCheck(StepChange.Blocked, ControllerRollbackStep.SwapProblem);
+            if (await MachineSurveyor.ConfirmContainerAsync(machine, ControllerRollbackStep.SwapContainer, cancellationToken).ConfigureAwait(false) is not null)
+            {
+                return new StepCheck(StepChange.Blocked, ControllerRollbackStep.SwapProblem);
+            }
+
+            current = await MachineSurveyor.ConfirmContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InstallerException error)
+        {
+            return new StepCheck(StepChange.Blocked, error.Message.TrimEnd('.'));
         }
 
-        var current = await MachineSurveyor.SurveyContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
         if (current is null)
         {
             return StepCheck.Unchanged("not there");
@@ -234,7 +244,7 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
         // --stop deploys no image, and ignores IMAGE_REF.
         var environment = await controller.EnvironmentAsync(context, work, string.Empty, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--stop").ConfigureAwait(false);
-        var now = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
+        var now = await MachineSurveyor.ConfirmContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
         if (now is { IsStopped: false })
         {
             throw new InstallerException($"The deploy script's --stop finished, but {Target} is {now.State}: see docker ps and the install log.");

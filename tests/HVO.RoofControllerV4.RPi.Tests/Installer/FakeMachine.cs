@@ -650,7 +650,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>Runs hvo-roof-install with <paramref name="args"/> on this machine, stopped as a Ctrl-C stops it when <paramref name="interrupt"/> is cancelled.</summary>
     public async Task<InstallerRun> RunAsync(CancellationToken interrupt, params string[] args)
     {
-        using var output = new StringWriter();
+        using var output = new LineWriter(line => OnOutputLine?.Invoke(line));
         using var error = new StringWriter();
         _output = output;
         _error = error;

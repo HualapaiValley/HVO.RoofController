@@ -52,6 +52,22 @@ internal sealed partial class FakeMachine
     /// </summary>
     public Action? BeforeStat { get; set; }
 
+    /// <summary>
+    /// What happens as the installer prints a line to its output (<see cref="RunAsync(string[])"/>): someone else on the
+    /// machine acting at that moment, as when a plan has been shown and is about to be carried out.
+    /// </summary>
+    public Action<string>? OnOutputLine { get; set; }
+
+    /// <summary>The installer's output, as a terminal shows it, telling <see cref="OnOutputLine"/> of each line written whole.</summary>
+    private sealed class LineWriter(Action<string> written) : StringWriter
+    {
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            written(value ?? string.Empty);
+        }
+    }
+
     /// <summary>The same machine, with <paramref name="userName"/> running the installer without sudo.</summary>
     public FakeMachine AsPerson(string userName = "pi")
     {

@@ -9,7 +9,8 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// --restore-backup</c>): the release before cannot read the store as it is now. The file it replaces is kept beside it,
 /// only root's, as <c>&lt;file&gt;.rolled-back-from-&lt;version&gt;-&lt;UTC time&gt;</c>; a file the backup does not have
 /// is moved there. Nothing else in its folder changes (a kiosk's retired commissioning stays retired). It runs only with
-/// the controller stopped: the deploy script's verified Stop and <c>--stop</c> come first.
+/// the controller stopped: the deploy script's verified Stop and <c>--stop</c> come first, and Docker must say the
+/// controller is stopped or not there before anything is written.
 /// </summary>
 /// <param name="path">The store's file.</param>
 /// <param name="purpose">What the store is, for the plan.</param>
@@ -48,8 +49,18 @@ public sealed class StateRestoreStep(string path, string purpose, byte[]? conten
         ArgumentNullException.ThrowIfNull(context);
         var machine = context.Machine;
 
-        // Never under a running controller: it would save its own over the file, or run on a store it cannot read.
-        var controller = await MachineSurveyor.SurveyContainerAsync(machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
+        // Never under a running controller: it would save its own over the file, or run on a store it cannot read. Docker
+        // must say it is stopped or not there; when it cannot say, nothing is written.
+        ContainerSurvey? controller;
+        try
+        {
+            controller = await MachineSurveyor.ConfirmContainerAsync(machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InstallerException error)
+        {
+            throw new InstallerException($"{path} is put back only with the controller stopped, and {error.Message} Nothing was put back.", error);
+        }
+
         if (controller is { IsStopped: false })
         {
             throw new InstallerException($"{MachineSurveyor.ControllerContainer} is {controller.State}: {path} is put back only with the controller stopped. Nothing was put back; run the rollback again.");

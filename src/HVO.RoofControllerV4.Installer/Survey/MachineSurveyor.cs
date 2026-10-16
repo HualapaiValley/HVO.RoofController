@@ -244,17 +244,35 @@ public static partial class MachineSurveyor
     }
 
     /// <summary>
-    /// The container named <paramref name="name"/>, or null when there is none. Its description holds the container's
-    /// environment, which may hold a secret, so the command is secret: the log shows neither.
+    /// The container named <paramref name="name"/>, or null when there is none, or Docker cannot say (for what must
+    /// know which, <see cref="ConfirmContainerAsync"/>). Its description holds the container's environment, which may hold
+    /// a secret, so the command is secret: the log shows neither.
     /// </summary>
-    public static async Task<ContainerSurvey?> SurveyContainerAsync(InstallerMachine machine, string name, CancellationToken cancellationToken = default)
+    public static Task<ContainerSurvey?> SurveyContainerAsync(InstallerMachine machine, string name, CancellationToken cancellationToken = default)
+        => SurveyContainerAsync(machine, name, confirmed: false, cancellationToken);
+
+    /// <summary>
+    /// The container named <paramref name="name"/>, or null only when Docker answers that there is no such container. When
+    /// Docker cannot say (it is not running, not allowed, or gives no answer), it throws <see cref="InstallerException"/>:
+    /// what may be a running controller is never taken for none. For what must not happen under a running controller.
+    /// </summary>
+    public static Task<ContainerSurvey?> ConfirmContainerAsync(InstallerMachine machine, string name, CancellationToken cancellationToken = default)
+        => SurveyContainerAsync(machine, name, confirmed: true, cancellationToken);
+
+    private static async Task<ContainerSurvey?> SurveyContainerAsync(InstallerMachine machine, string name, bool confirmed, CancellationToken cancellationToken)
     {
         var inspect = await machine.Commands.RunAsync(
             new CommandLine("docker", "container", "inspect", name) { Secret = true },
             cancellationToken).ConfigureAwait(false);
         if (!inspect.Succeeded)
         {
-            return null;
+            // Only what Docker says on its error output is quoted: never the output, which holds the container's environment.
+            return !confirmed || inspect.Error.Contains("No such container", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : throw new InstallerException(
+                    $"Docker could not say whether {name} is there or running (docker container inspect {name}: "
+                    + $"{(string.IsNullOrWhiteSpace(inspect.Error) ? $"exit code {inspect.ExitCode}" : FirstLine(inspect.Error))}), "
+                    + "so nothing that needs it stopped goes ahead. Once Docker answers (sudo systemctl status docker), run it again.");
         }
 
         try
@@ -262,7 +280,9 @@ public static partial class MachineSurveyor
             using var document = JsonDocument.Parse(inspect.Output);
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
             {
-                return null;
+                return confirmed
+                    ? throw new InstallerException($"docker container inspect {name} gave an answer the installer cannot read.")
+                    : null;
             }
 
             var container = document.RootElement[0];
