@@ -4,6 +4,7 @@ and SHA256SUMS.
 
   build/release-assets.py --version <version> --commit <sha> --created <time>
                           --controller-digest sha256:<hex> --emulator-digest sha256:<hex>
+                          --controller-archive <file> --emulator-archive <file>
                           --cli <folder> --installer <folder> --kiosk <folder> --mac-zip <file>
                           [--upgrade-notes <folder>] [--registry <registry>/<owner>] -o <folder>
 
@@ -11,6 +12,9 @@ and SHA256SUMS.
 <runtime>/hvo-roof-install for the same runtimes (CI's hvo-roof-install artifact), --kiosk the kiosk's files (CI's
 hvo-roof-kiosk artifact) and --mac-zip is CI's HVO Roof.app zip. Each must be exactly what this script expects, for the
 right processor, and the output folder must be new or empty, so a release holds nothing stale and nothing missing.
+--controller-archive and --emulator-archive are the OCI archives the release workflow built each image into and pushed
+(docker buildx build --output type=oci): each must hold the image the digest names, an index of one image for each of
+IMAGE_PLATFORMS, which this script splits into one offline archive per platform.
 --upgrade-notes is docs/upgrade-notes, a folder of X.Y.Z.md files: release.json carries the text of every release's notes up to
 this one's (its version without a pre-release's suffix), oldest first, and the installer shows each one newer than what it
 upgrades from, so an upgrade across several releases shows them all. The images are <registry>/roof-controller and <registry>/roof-hat-emulator, on GHCR
@@ -24,10 +28,13 @@ unless --registry names another (a test's local registry). The assets:
   deploy-roofcontroller-rpi.sh                the deploy script
   install.sh                                  the script that checks a machine and starts its installer
                                               (docs/install.md#installsh), with the release's version written in
-  release.json                                the version, the commit, each image's digest, each asset's SHA-256, the
-                                              SHA-256 of each file in the kiosk's tarball (the installer checks an
-                                              installed kiosk against them without downloading it) and each
-                                              release's upgrade notes
+  <image>-<version>-linux-<arch>.oci.tar      an offline image archive: roof-controller and roof-hat-emulator, for
+                                              amd64 and arm64, each loaded by docker load in place of a pull
+                                              (docs/releasing.md#offline-image-archives)
+  release.json                                the version, the commit, each image's digest and offline archives, each
+                                              asset's SHA-256, the SHA-256 of each file in the kiosk's tarball (the
+                                              installer checks an installed kiosk against them without downloading it)
+                                              and each release's upgrade notes
   SHA256SUMS                                  every asset's SHA-256, release.json's included, as sha256sum writes it
 """
 
@@ -52,6 +59,16 @@ DEPLOY_SCRIPT = REPOSITORY_ROOT / "src" / "HVO.RoofControllerV4.RPi" / "deploy-r
 INSTALL_SCRIPT = REPOSITORY_ROOT / "src" / "HVO.RoofControllerV4.Installer" / "install.sh"
 REPOSITORY_URL = "https://github.com/HualapaiValley/HVO.RoofController"
 IMAGE_PLATFORMS = ["linux/amd64", "linux/arm64"]
+
+# release.json's key for each image, and its name: <registry>/<name>, and <name>-<version>-linux-<arch>.oci.tar.
+IMAGES = (("controller", "roof-controller"), ("hatEmulator", "roof-hat-emulator"))
+
+# The .NET runtime of a platform, for an offline archive's entry in assets.
+PLATFORM_RUNTIMES = {"linux/amd64": "linux-x64", "linux/arm64": "linux-arm64"}
+
+# The media types of an image index and of an image manifest, OCI's and Docker's.
+INDEX_TYPES = {"application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"}
+MANIFEST_TYPES = {"application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"}
 
 _spec = importlib.util.spec_from_file_location("release_compose", REPOSITORY_ROOT / "build" / "release-compose.py")
 release_compose = importlib.util.module_from_spec(_spec)
@@ -259,11 +276,145 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def manifest(out, assets, version, commit, created, registry, digests, contents, notes=None):
+class _Checked:
+    """A blob read as it is copied, and its SHA-256 and size checked against its descriptor once it has been read."""
+
+    def __init__(self, file, descriptor, what):
+        self.file, self.descriptor, self.what = file, descriptor, what
+        self.hash, self.size = hashlib.sha256(), 0
+
+    def read(self, size=-1):
+        data = self.file.read(size)
+        self.hash.update(data)
+        self.size += len(data)
+        return data
+
+    def check(self):
+        if self.size != self.descriptor["size"] or f"sha256:{self.hash.hexdigest()}" != self.descriptor["digest"]:
+            raise AssetError(f"{self.what} is not the blob {self.descriptor['digest']} its manifest names.")
+
+
+def offline_archives(source, image, repository, version, digest, out, mtime):
+    """The image in the OCI archive source (docker buildx build --output type=oci), split into one offline archive per
+    platform of IMAGE_PLATFORMS, <image>-<version>-linux-<arch>.oci.tar, which docker load reads with either of Docker's
+    image stores (docs/releasing.md#offline-image-archives). The archive's index must be the image digest names (the
+    one pushed) and list one image for each platform, and each blob must be the one its digest names: they are checked
+    as they are copied. Each archive holds the index, with that platform's manifest, config and layers alone:
+
+      oci-layout, index.json   the OCI image layout, naming the index, as <repository>:<version>, for the containerd store
+      manifest.json            the platform's config and layers, named <repository>:<version>, for the classic store
+      blobs/sha256/<hex>       the index, the platform's manifest, its config and its layers, as they were pushed
+
+    Returns each archive's entry in release.json: its name, platform, size and SHA-256, and the digests of the
+    platform's manifest and config, the image IDs Docker may give it besides the index's digest."""
+    name = f"{repository}:{version}"
+    archives = []
+    try:
+        with tarfile.open(source) as tar:
+            members = {member.name: member for member in tar.getmembers() if member.isfile()}
+
+            def member(descriptor, what):
+                digest_ = descriptor.get("digest") if isinstance(descriptor, dict) else None
+                size = descriptor.get("size") if isinstance(descriptor, dict) else None
+                if not isinstance(digest_, str) or not release_compose.DIGEST.match(digest_) \
+                        or not isinstance(size, int) or isinstance(size, bool) or size < 0:
+                    raise AssetError(f"{source}: {what} has no sha256 digest and size.")
+                found = members.get(f"blobs/sha256/{digest_[7:]}")
+                if found is None or found.size != size:
+                    raise AssetError(f"{source} does not hold {what}, the blob {digest_}.")
+                return found
+
+            def document(descriptor, what):
+                checked = _Checked(tar.extractfile(member(descriptor, what)), descriptor, f"{source}: {what}")
+                data = checked.read()
+                checked.check()
+                return data, json.loads(data)
+
+            if "index.json" not in members:
+                raise AssetError(f"{source} is not an OCI archive: it has no index.json.")
+            top = json.loads(tar.extractfile(members["index.json"]).read())
+            entries = top.get("manifests") if isinstance(top, dict) else None
+            if not isinstance(entries, list) or len(entries) != 1 or not isinstance(entries[0], dict):
+                raise AssetError(f"{source} holds {len(entries) if isinstance(entries, list) else 'no'} images, not one.")
+            if entries[0].get("digest") != digest:
+                raise AssetError(f"{source} holds the image {entries[0].get('digest')}, not {digest}, the one pushed.")
+            if entries[0].get("mediaType") not in INDEX_TYPES:
+                raise AssetError(f"{source}'s image {digest} is not an index of platforms ({entries[0].get('mediaType')}).")
+            index_bytes, index = document(entries[0], f"the index {digest}")
+
+            platforms = {}
+            for entry in index.get("manifests", []) if isinstance(index, dict) else []:
+                platform = entry.get("platform") if isinstance(entry, dict) else None
+                key = f"{platform.get('os')}/{platform.get('architecture')}" if isinstance(platform, dict) else "?"
+                if entry.get("mediaType") not in MANIFEST_TYPES or key not in IMAGE_PLATFORMS or key in platforms:
+                    platforms = None
+                    break
+                platforms[key] = entry
+            if platforms is None or sorted(platforms) != IMAGE_PLATFORMS:
+                raise AssetError(f"{source}'s index {digest} must list one image for each of {', '.join(IMAGE_PLATFORMS)},"
+                                 " and nothing else.")
+
+            for platform in IMAGE_PLATFORMS:
+                operating_system, architecture = platform.split("/")
+                entry = platforms[platform]
+                manifest_bytes, manifest_ = document(entry, f"the {platform} manifest")
+                config = manifest_.get("config") if isinstance(manifest_, dict) else None
+                layers = manifest_.get("layers") if isinstance(manifest_, dict) else None
+                if not isinstance(layers, list):
+                    raise AssetError(f"{source}: the {platform} manifest {entry['digest']} lists no layers.")
+                config_bytes, config_ = document(config, f"the {platform} config")
+                if not isinstance(config_, dict) or (config_.get("os"), config_.get("architecture")) != (operating_system, architecture):
+                    raise AssetError(f"{source}: the {platform} image's config is for "
+                                     f"{config_.get('os') if isinstance(config_, dict) else '?'}/"
+                                     f"{config_.get('architecture') if isinstance(config_, dict) else '?'}.")
+                archive = f"{image}-{version}-linux-{architecture}.oci.tar"
+                index_json = {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+                              "manifests": [{"mediaType": entries[0]["mediaType"], "digest": digest, "size": entries[0]["size"],
+                                             "annotations": {"io.containerd.image.name": name,
+                                                             "org.opencontainers.image.ref.name": version}}]}
+                docker_json = [{"Config": f"blobs/sha256/{config['digest'][7:]}", "RepoTags": [name],
+                                "Layers": [f"blobs/sha256/{layer.get('digest', '')[7:]}" for layer in layers]}]
+                with tarfile.open(out / archive, "w", format=tarfile.PAX_FORMAT) as output:
+                    def add(path, size, data=None, directory=False):
+                        info = tarfile.TarInfo(path)
+                        info.type, info.mode = (tarfile.DIRTYPE, 0o755) if directory else (tarfile.REGTYPE, 0o644)
+                        info.size, info.mtime = size, mtime
+                        info.uid = info.gid = 0
+                        info.uname = info.gname = "root"
+                        output.addfile(info, data)
+
+                    for path, data in (("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'),
+                                       ("index.json", json.dumps(index_json, separators=(",", ":")).encode()),
+                                       ("manifest.json", json.dumps(docker_json, separators=(",", ":")).encode())):
+                        add(path, len(data), io.BytesIO(data))
+                    add("blobs", 0, directory=True)
+                    add("blobs/sha256", 0, directory=True)
+                    for descriptor, data in ((entries[0], index_bytes), (entry, manifest_bytes), (config, config_bytes)):
+                        add(f"blobs/sha256/{descriptor['digest'][7:]}", len(data), io.BytesIO(data))
+                    copied = set()
+                    for number, layer in enumerate(layers, 1):
+                        what = f"layer {number} of the {platform} image"
+                        found = member(layer, what)
+                        if layer["digest"] in copied:
+                            continue
+                        copied.add(layer["digest"])
+                        checked = _Checked(tar.extractfile(found), layer, f"{source}: {what}")
+                        add(found.name, found.size, checked)
+                        checked.check()
+                archives.append({"name": archive, "platform": platform, "size": (out / archive).stat().st_size,
+                                 "sha256": sha256(out / archive), "manifestDigest": entry["digest"],
+                                 "configDigest": config["digest"]})
+    except (tarfile.TarError, json.JSONDecodeError, UnicodeDecodeError, AttributeError, TypeError) as error:
+        raise AssetError(f"{source} is not an OCI archive of an image release-assets.py can split: {error}") from error
+    return archives
+
+
+def manifest(out, assets, version, commit, created, registry, digests, contents, notes=None, offline=None):
     """release.json: what the installer and install.sh read to know the release, its images and its files; an archive
-    in contents lists its files' SHA-256 too, and notes are every release's upgrade notes up to this one's."""
+    in contents lists its files' SHA-256 too, notes are every release's upgrade notes up to this one's, and offline each
+    image's offline archives, by its key."""
     images = {}
-    for key, image in (("controller", "roof-controller"), ("hatEmulator", "roof-hat-emulator")):
+    for key, image in IMAGES:
         repository = f"{registry}/{image}"
         images[key] = {
             "repository": repository,
@@ -271,6 +422,7 @@ def manifest(out, assets, version, commit, created, registry, digests, contents,
             "digest": digests[key],
             "reference": f"{repository}:{version}@{digests[key]}",
             "platforms": IMAGE_PLATFORMS,
+            **({"offlineArchives": offline[key]} if offline and key in offline else {}),
         }
     return {
         "schemaVersion": 1,
@@ -348,8 +500,15 @@ def build(arguments):
     assets[INSTALL_SCRIPT.name] = ("install-script", None)
 
     digests = {"controller": arguments.controller_digest, "hatEmulator": arguments.emulator_digest}
+    offline = {}
+    for (key, image), source in zip(IMAGES, (arguments.controller_archive, arguments.emulator_archive)):
+        if not source.is_file():
+            raise AssetError(f"{source} is not a file: give the OCI archive the {image} image was pushed from.")
+        offline[key] = offline_archives(source, image, f"{arguments.registry}/{image}", version, digests[key], out, mtime)
+        for archive in offline[key]:
+            assets[archive["name"]] = ("image-archive", PLATFORM_RUNTIMES[archive["platform"]])
     release = manifest(out, assets, version, arguments.commit, arguments.created, arguments.registry, digests, contents,
-                       notes)
+                       notes, offline)
     (out / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
 
     sums = "".join(f"{sha256(out / name)}  {name}\n" for name in sorted([*assets, "release.json"]))
@@ -364,6 +523,10 @@ def main(argv=None):
     parser.add_argument("--created", required=True, help="when the release was built, such as 2026-10-01T12:00:00Z")
     parser.add_argument("--controller-digest", required=True, help="the controller image's digest (sha256:<hex>)")
     parser.add_argument("--emulator-digest", required=True, help="the HAT emulator image's digest (sha256:<hex>)")
+    parser.add_argument("--controller-archive", required=True, type=Path,
+                        help="the OCI archive the controller image was pushed from, split into its offline archives")
+    parser.add_argument("--emulator-archive", required=True, type=Path,
+                        help="the OCI archive the HAT emulator image was pushed from, split into its offline archives")
     parser.add_argument("--cli", required=True, type=Path, help="CI's hvo-roof artifact: <runtime>/hvo-roof")
     parser.add_argument("--installer", required=True, type=Path,
                         help="CI's hvo-roof-install artifact: <runtime>/hvo-roof-install")
