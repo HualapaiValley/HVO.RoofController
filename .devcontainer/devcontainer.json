@@ -26,11 +26,12 @@
       "userGid": "automatic",
       "upgradePackages": false
     },
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {
       "version": "latest",
       "moby": true,
       "dockerDashComposeVersion": "v2",
-      "installDockerComposeSwitch": false
+      "installDockerComposeSwitch": false,
+      "iptablesSwitchAtRuntime": true
     }
   },
   "customizations": {
@@ -69,7 +70,8 @@
   },
   "containerEnv": {
     "ASPNETCORE_ENVIRONMENT": "Development",
-    "DOTNET_ENVIRONMENT": "Development"
+    "DOTNET_ENVIRONMENT": "Development",
+    "ASPNETCORE_HTTP_PORTS": ""
   },
   "forwardPorts": [
     5200,

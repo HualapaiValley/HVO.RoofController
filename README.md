@@ -210,6 +210,37 @@ a consistent development environment. Open in VS Code and use
 Pi's real I2C bus and GPIO and keeps the physical limit switches in force; use it only
 with the roof mechanism isolated.
 
+The standard container uses its own Docker-in-Docker engine. The pinned feature selects the iptables
+backend at container startup to match the host kernel, without changing the host's firewall settings.
+Both configurations share this feature version and lockfile. The feature manages local Docker access;
+post-create setup does not change Docker groups or socket permissions. Check the engine with
+`docker info`. If access fails, inspect the feature startup logs and rebuild the container; do not
+make the socket world-writable or mount a host Docker socket as a workaround.
+
+Post-create setup installs development dependencies and restores the solution. It does not start an
+SSH agent, load private keys, create remote Docker contexts, or generate or replace HTTPS developer
+certificates. The SDK's automatic first-use certificate generation is disabled during setup.
+The ordinary build and tests do not require access to another machine. The standard container clears
+the base image's `ASPNETCORE_HTTP_PORTS` default so application and test URL settings control listeners.
+
+### Optional access setup
+
+Configure access only when a specific development task needs it:
+
+- **SSH:** explicitly select an existing identity and configure your editor's SSH-agent forwarding
+  for the intended host. An agent made available to the container can be used by code running there.
+  Do not copy private keys into the repository or image; post-create does not load keys for you.
+- **Remote Docker:** after independently configuring and verifying SSH access to the intended
+  development host, create a named context yourself:
+  `docker context create development --docker "host=ssh://USER@DEVELOPMENT-HOST"`.
+  Use `docker --context development info` to verify the target before issuing commands.
+  Keep local emulated development on the default Docker-in-Docker context; no observatory target
+  is configured automatically.
+- **Development HTTPS:** only if you want to run a local HTTPS endpoint, explicitly run
+  `dotnet dev-certs https` inside the container and follow the SDK's platform-specific trust guidance.
+  This creates a development credential. Existing certificates in the persistent certificate
+  volume are retained; setup does not run `dotnet dev-certs https --clean`.
+
 ## Documentation
 
 | Document | Description |
