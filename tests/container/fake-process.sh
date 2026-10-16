@@ -11,6 +11,7 @@
 #   <role>.pid             its pid
 #   <role>.env             its environment (NUL-separated)
 #   <role>.args            its arguments, one per line
+#   <role>.oom             its oom_score_adj
 set -uo pipefail
 
 role=$(basename "$0")
@@ -23,6 +24,7 @@ event() {
 printf '%s\n' "$$" >"${dir}/${role}.pid"
 env -0 >"${dir}/${role}.env"
 printf '%s\n' "$@" >"${dir}/${role}.args"
+cat /proc/self/oom_score_adj >"${dir}/${role}.oom" 2>/dev/null
 event "start $$"
 
 if [[ -f "${dir}/${role}.exit-at-start" ]]; then

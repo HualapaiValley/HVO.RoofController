@@ -163,8 +163,9 @@ x-roof-controller: &roof-controller
   container_name: roof-controller
   restart: unless-stopped
   # SIGTERM first: the supervisor passes it to the controller, which stops the roof (verified all-off) and ends camera
-  # streams before exiting, then stops the web UI. Must stay above the supervisor's waits (25 s for the controller,
-  # itself above the app's HostOptions.ShutdownTimeout of 20 s, then 2 s for the web UI).
+  # streams before exiting, then turns the relays off itself while it stops the web UI. Must stay above the supervisor's
+  # waits (22 s for the controller, itself above the app's HostOptions.ShutdownTimeout of 20 s, then 5 s for the relays
+  # with 2 s for the web UI at the same time).
   stop_grace_period: 30s
   devices:
     - "/dev/gpiomem:/dev/gpiomem"

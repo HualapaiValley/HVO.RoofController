@@ -3,10 +3,17 @@
 # (docs/deployment.md, "The container's two processes").
 #
 # tini is PID 1. It reaps orphans and passes SIGTERM and SIGINT to this script, which:
-# - on docker stop (SIGTERM): stops the controller first and waits for it, because its shutdown stops the roof and
-#   verifies the relays off. It waits up to HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS, then stops the web UI, waiting up to
-#   HVO_SUPERVISOR_UI_STOP_SECONDS, and exits. The two waits together stay below the container's stop timeout, so
-#   Docker never kills the controller first. Once a wait runs out, that process is killed (SIGKILL).
+# - whenever the controller is not running: turns every relay on the HAT off and verifies the register by reading it
+#   back (de_energize_relays), because the HAT holds its relays as last written until it loses power, so a controller
+#   that died during a move would leave the drive running. It does this as soon as the controller exits (a crash, a
+#   kill, a failed start, a requested restart), before each start, again and again while the controller is not running
+#   until it succeeds, and when it stops itself. It never turns a relay on.
+# - on docker stop (SIGTERM, also SIGINT, SIGHUP and SIGQUIT): stops the controller first and waits for it, because its
+#   shutdown stops the roof and verifies the relays off. It waits up to HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS, then turns
+#   the relays off (the controller may have been killed, or have failed to verify them) while the web UI stops, waiting
+#   up to HVO_SUPERVISOR_UI_STOP_SECONDS for it, and exits. The controller's wait and the longer of the other two stay
+#   below the container's stop timeout, so Docker never kills the controller first. Once a wait runs out, that process is
+#   killed (SIGKILL). Any other way this script ends (another signal, an error) stops the same way first (on_exit).
 # - when the controller exits with 75 (a restart requested through POST System/Restart): starts it again at once.
 # - when the controller exits otherwise (a crash): starts it again after a backoff that doubles from 1 s (1, 2, 4, 8 s,
 #   ...), at most HVO_SUPERVISOR_BACKOFF_MAX_SECONDS. The HVO_SUPERVISOR_CRASH_LIMIT-th crash within
@@ -21,7 +28,16 @@
 #   left stopped after a crash loop. A request that arrives within HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS of the
 #   controller's start is ignored, so a repeated request cannot kill a controller that is still starting.
 #   supervisor.json records what was done with the last request.
-# - with arguments (the deployment check, --validate-deployment): runs only the controller with them, in its place.
+# - with arguments (the deployment check, --validate-deployment): runs only the controller with them, in its place. It
+#   never turns the relays off then: another controller may be driving the HAT.
+#
+# The relays are turned off by the controller's own program, with --relays-off (HVO_SUPERVISOR_RELAYS_OFF_EXEC replaces
+# it for the tests): the HAT access the controller uses, without the controller's settings checks, so it works when the
+# controller cannot start. It must finish within HVO_SUPERVISOR_RELAYS_OFF_SECONDS or is killed.
+#
+# The kernel ends the process with the highest OOM score when the container (or the Pi) runs out of memory. The
+# supervisor must outlive the controller to turn the relays off, so it raises the web UI's oom_score_adj by 500 and the
+# controller's by 100 above its own (raising needs no capability): the kernel ends the web UI first, then the controller.
 #
 # The controller runs with the container's environment. The web UI runs as HVO_SUPERVISOR_UI_USER (the image's
 # unprivileged app user), with only the RoofWeb__* settings and a few general variables (PATH, TZ, the locale,
@@ -41,14 +57,18 @@ set -uo pipefail
 readonly RESTART_EXIT_CODE=75
 # The web UI's data directory when none is set, in directories only root can change (see prepare_ui_data_protection).
 readonly DEFAULT_UI_DATA_DIR=/var/lib/hvo-roof-web
+# How far the controller's and the web UI's oom_score_adj are raised above the supervisor's (see raise_oom_score_adj).
+readonly CONTROLLER_OOM_SCORE_RAISE=100
+readonly UI_OOM_SCORE_RAISE=500
 
 APP_DIR=${HVO_SUPERVISOR_APP_DIR:-/app}
 RUN_DIR=${HVO_SUPERVISOR_RUN_DIR:-/run/hvo-roof}
 SECRETS_DIR=${HVO_SUPERVISOR_SECRETS_DIR:-/run/secrets}
 UI_USER=${HVO_SUPERVISOR_UI_USER-app}
 UI_DATA_DIR=${HVO_SUPERVISOR_UI_DATA_DIR:-${DEFAULT_UI_DATA_DIR}}
-CONTROLLER_STOP_SECONDS=${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-25}
+CONTROLLER_STOP_SECONDS=${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-22}
 UI_STOP_SECONDS=${HVO_SUPERVISOR_UI_STOP_SECONDS:-2}
+RELAYS_OFF_SECONDS=${HVO_SUPERVISOR_RELAYS_OFF_SECONDS:-5}
 CRASH_LIMIT=${HVO_SUPERVISOR_CRASH_LIMIT:-5}
 CRASH_WINDOW_SECONDS=${HVO_SUPERVISOR_CRASH_WINDOW_SECONDS:-120}
 BACKOFF_MAX_SECONDS=${HVO_SUPERVISOR_BACKOFF_MAX_SECONDS:-30}
@@ -64,6 +84,11 @@ if [[ -n "${HVO_SUPERVISOR_UI_EXEC:-}" ]]; then
   UI_EXEC=("${HVO_SUPERVISOR_UI_EXEC}")
 else
   UI_EXEC=(dotnet "${APP_DIR}/web/HVO.RoofControllerV4.Web.dll")
+fi
+if [[ -n "${HVO_SUPERVISOR_RELAYS_OFF_EXEC:-}" ]]; then
+  RELAYS_OFF_EXEC=("${HVO_SUPERVISOR_RELAYS_OFF_EXEC}")
+else
+  RELAYS_OFF_EXEC=("${CONTROLLER_EXEC[@]}" --relays-off)
 fi
 
 STATE_FILE="${RUN_DIR}/supervisor.json"
@@ -100,6 +125,7 @@ fi
 
 require_whole_number HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS "${CONTROLLER_STOP_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_UI_STOP_SECONDS "${UI_STOP_SECONDS}" 1
+require_whole_number HVO_SUPERVISOR_RELAYS_OFF_SECONDS "${RELAYS_OFF_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_CRASH_LIMIT "${CRASH_LIMIT}" 1
 require_whole_number HVO_SUPERVISOR_CRASH_WINDOW_SECONDS "${CRASH_WINDOW_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_BACKOFF_MAX_SECONDS "${BACKOFF_MAX_SECONDS}" 1
@@ -134,6 +160,17 @@ STOP_REQUESTED=0
 FORCED_RESTART_AT=""
 FORCED_RESTART_OUTCOME=""
 SLEEP_PID=""
+# The relays, as the supervisor knows them: unknown (not tried yet), controller (the controller runs and drives them),
+# off (turned off and verified since the controller last ran) or unverified (the last try failed; retry_relays_off tries
+# again). When and why they were last turned off, failed tries in a row, and when the next is due (microseconds).
+RELAYS_STATE=unknown
+RELAYS_AT=""
+RELAYS_REASON=""
+RELAYS_FAILURES=0
+RELAYS_RETRY_DUE=0
+# When each process's wait for its stop ends (microseconds), from begin_stop.
+declare -A STOP_DEADLINE=([controller]=0 [ui]=0)
+SHUTDOWN_DONE=0
 
 json_string_or_null() {
   if [[ -z "$1" ]]; then printf 'null'; else printf '"%s"' "$1"; fi
@@ -160,13 +197,18 @@ forced_restart_json() {
   fi
 }
 
+relays_json() {
+  printf '{"state":"%s","at":%s,"reason":%s}' "${RELAYS_STATE}" "$(json_string_or_null "${RELAYS_AT}")" \
+    "$(json_string_or_null "${RELAYS_REASON}")"
+}
+
 write_state() {
   local temp="${STATE_FILE}.tmp"
   {
     printf '{"supervisor":"%s","updatedAt":"%s","crashLimit":%s,"crashWindowSeconds":%s,"forceRestartMinSeconds":%s,' \
       "${SUPERVISOR_STATE}" "$(now_iso)" "${CRASH_LIMIT}" "${CRASH_WINDOW_SECONDS}" "${FORCE_RESTART_MIN_SECONDS}"
-    printf '"lastForcedRestart":%s,"controller":%s,"ui":%s}\n' "$(forced_restart_json)" "$(process_json controller)" \
-      "$(process_json ui)"
+    printf '"lastForcedRestart":%s,"relays":%s,"controller":%s,"ui":%s}\n' "$(forced_restart_json)" "$(relays_json)" \
+      "$(process_json controller)" "$(process_json ui)"
   } >"${temp}" || { log "WARNING: could not write ${STATE_FILE}"; return; }
   chmod 0644 "${temp}"
   mv -f "${temp}" "${STATE_FILE}" || log "WARNING: could not write ${STATE_FILE}"
@@ -217,12 +259,85 @@ is_running() {
   [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
 }
 
+# 1, 2, 4, 8, ... seconds after the first, second, third ... failed try in a row to turn the relays off, at most the
+# backoff maximum.
+relays_retry_seconds() {
+  local count=${RELAYS_FAILURES} delay=1
+  while (( count > 1 && delay < BACKOFF_MAX_SECONDS )); do
+    delay=$((delay * 2))
+    count=$((count - 1))
+  done
+  (( delay > BACKOFF_MAX_SECONDS )) && delay=${BACKOFF_MAX_SECONDS}
+  printf '%s' "${delay}"
+}
+
+# Turns every relay on the HAT off and verifies the register by reading it back, with the controller's own program
+# (--relays-off: the HAT access the controller uses), within HVO_SUPERVISOR_RELAYS_OFF_SECONDS. Only while the controller
+# is not running: it would stop that controller's move. It never turns a relay on. $1 says why, for the log and the
+# state. Returns 1 when the relays could not be verified off; retry_relays_off then tries again.
+de_energize_relays() {
+  local reason=$1 code=0 started elapsed_ms why delay
+  started=$(now_us)
+  (cd "${APP_DIR}" && exec timeout -s KILL "${RELAYS_OFF_SECONDS}" "${RELAYS_OFF_EXEC[@]}") || code=$?
+  elapsed_ms=$(( ($(now_us) - started) / 1000 ))
+  RELAYS_AT=$(now_iso)
+  RELAYS_REASON=${reason}
+  if (( code == 0 )); then
+    RELAYS_STATE=off
+    RELAYS_FAILURES=0
+    log "The relays are off: every relay turned off and the HAT's register verified by read-back, ${elapsed_ms} ms" \
+      "(${reason})"
+    write_state
+    return 0
+  fi
+  RELAYS_STATE=unverified
+  RELAYS_FAILURES=$((RELAYS_FAILURES + 1))
+  delay=$(relays_retry_seconds)
+  RELAYS_RETRY_DUE=$(( $(now_us) + delay * 1000000 ))
+  case ${code} in
+    124|137) why="did not finish within ${RELAYS_OFF_SECONDS}s and was killed" ;;
+    *) why="ended with $(describe_exit "${code}")" ;;
+  esac
+  log "WARNING: the relays could not be verified off (${reason}): turning them off ${why}, after ${elapsed_ms} ms." \
+    "The supervisor tries again in ${delay}s while the controller is not running, and before it starts it. Until then" \
+    "the drive may still be running: if the roof moves, use the independent stop (commissioning.md C1)."
+  write_state
+  return 1
+}
+
+# While the controller is not running (waiting to start again, or left stopped after a crash loop) and the relays are
+# not verified off: tries again, after a delay that doubles from 1 s (at most the backoff maximum).
+retry_relays_off() {
+  [[ "${RELAYS_STATE}" == unverified ]] || return 0
+  [[ "${STATE[controller]}" == restarting || "${STATE[controller]}" == crash-loop ]] || return 0
+  (( $(now_us) >= RELAYS_RETRY_DUE )) || return 0
+  de_energize_relays "trying again while the controller is not running"
+}
+
+# Raises this process's oom_score_adj by $1 (at most to 1000), in the subshell that then becomes the controller or the
+# web UI (exec keeps it), so that the kernel ends that process before the supervisor when the container or the Pi runs
+# out of memory: the supervisor must outlive the controller to turn the relays off. Raising needs no capability. A value
+# that cannot be written is logged, and the process starts anyway.
+raise_oom_score_adj() {
+  local raise=$1 label=$2 current
+  if read -r current 2>/dev/null </proc/self/oom_score_adj && [[ "${current}" =~ ^-?[0-9]+$ ]] \
+    && printf '%s\n' "$(( current + raise > 1000 ? 1000 : current + raise ))" 2>/dev/null >/proc/self/oom_score_adj; then
+    return 0
+  fi
+  log "WARNING: could not raise the oom_score_adj of ${label}; when memory runs out, the kernel may end the supervisor first"
+  return 0
+}
+
 start_controller() {
-  (cd "${APP_DIR}" && exec "${CONTROLLER_EXEC[@]}") &
+  # Never with the relays as something else left them: at the supervisor's start (a container killed during a move),
+  # or after a try that failed.
+  [[ "${RELAYS_STATE}" == off ]] || de_energize_relays "before the controller starts"
+  (cd "${APP_DIR}" && raise_oom_score_adj "${CONTROLLER_OOM_SCORE_RAISE}" "the controller" && exec "${CONTROLLER_EXEC[@]}") &
   PID[controller]=$!
   STARTED_AT[controller]=$(now_us)
   STARTS[controller]=$((STARTS[controller] + 1))
   STATE[controller]=running
+  RELAYS_STATE=controller
   log "Started the controller (pid ${PID[controller]}, start ${STARTS[controller]})"
   write_state
 }
@@ -351,11 +466,13 @@ start_ui() {
   if [[ -n "${UI_USER}" ]]; then
     home=$(getent passwd "${UI_USER}" | cut -d: -f6)
     ui_env+=("HOME=${home:-/tmp}" "USER=${UI_USER}")
-    (cd "${APP_DIR}/web" && exec setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs \
+    (cd "${APP_DIR}/web" && raise_oom_score_adj "${UI_OOM_SCORE_RAISE}" "the web UI" \
+      && exec setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs \
       env -i "${ui_env[@]}" "${UI_EXEC[@]}") &
   else
     ui_env+=("HOME=${HOME:-/tmp}")
-    (cd "${APP_DIR}/web" 2>/dev/null || cd "${APP_DIR}" || exit 1; exec env -i "${ui_env[@]}" "${UI_EXEC[@]}") &
+    (cd "${APP_DIR}/web" 2>/dev/null || cd "${APP_DIR}" || exit 1; raise_oom_score_adj "${UI_OOM_SCORE_RAISE}" "the web UI"
+      exec env -i "${ui_env[@]}" "${UI_EXEC[@]}") &
   fi
   PID[ui]=$!
   STARTED_AT[ui]=$(now_us)
@@ -410,6 +527,11 @@ handle_exit() {
   label="the controller"
   [[ "${name}" == ui ]] && label="the web UI"
 
+  # Whatever ended it, the relays first: the HAT holds them as the controller left them, possibly during a move.
+  if [[ "${name}" == controller ]]; then
+    de_energize_relays "the controller exited ($(describe_exit "${code}"))"
+  fi
+
   if [[ "${name}" == controller && ${code} -eq ${RESTART_EXIT_CODE} ]]; then
     LAST_EXIT_REASON[${name}]="restart requested"
     log "The controller asked to be restarted (exit code ${RESTART_EXIT_CODE}); starting it again"
@@ -428,6 +550,11 @@ handle_exit() {
       "It is left stopped, and the container's health check fails (Docker marks it unhealthy after three failed" \
       "checks). Find the cause in the log above; a forced restart (${FORCE_RESTART_REQUEST}), or a restart of the" \
       "container, starts it again."
+    if [[ "${RELAYS_STATE}" == off ]]; then
+      log "The controller is left stopped with the relays off (verified by read-back)."
+    else
+      log "WARNING: the controller is left stopped with the relays NOT verified off; the supervisor keeps trying."
+    fi
     write_state
     return
   fi
@@ -460,6 +587,7 @@ handle_force_restart_request() {
     LAST_EXIT_CODE[controller]=137
     LAST_EXIT_AT[controller]=$(now_iso)
     PID[controller]=""
+    de_energize_relays "the controller was killed for a forced restart"
   fi
   LAST_EXIT_REASON[controller]="forced restart"
   # A deliberate restart: earlier crashes no longer count towards the crash loop.
@@ -478,31 +606,29 @@ tick() {
         (( $(now_us) >= START_DUE[${name}] )) && start "${name}" ;;
     esac
   done
+  retry_relays_off
 }
 
-# Sleeps for a tick; a signal ends the sleep at once (the trap runs, then wait returns).
+# Sleeps for a tick. A signal ends the sleep at once (the trap runs, then wait returns), and so does the exit of a running
+# process, so that the next tick turns the relays off as soon as the controller has exited.
 sleep_tick() {
+  local name
+  local -a running=()
+  for name in controller ui; do
+    [[ "${STATE[${name}]}" != running || -z "${PID[${name}]}" ]] || running+=("${PID[${name}]}")
+  done
   sleep "${TICK_SECONDS}" &
   SLEEP_PID=$!
-  wait "${SLEEP_PID}" 2>/dev/null
+  wait -n "${SLEEP_PID}" "${running[@]}" 2>/dev/null
   kill "${SLEEP_PID}" 2>/dev/null
   wait "${SLEEP_PID}" 2>/dev/null
   SLEEP_PID=""
 }
 
-# Waits up to $2 seconds for $1 to exit. Returns 1 if it is still running.
-wait_for_exit() {
-  local name=$1 deadline
-  deadline=$(( $(now_us) + $2 * 1000000 ))
-  while is_running "${name}"; do
-    (( $(now_us) < deadline )) || return 1
-    sleep 0.1
-  done
-  return 0
-}
-
-stop_process() {
-  local name=$1 seconds=$2 label=$3 code
+# Sends $1 SIGTERM, if it runs, and notes when its wait of $2 seconds ends (finish_stop). $3 names it in the log.
+begin_stop() {
+  local name=$1 seconds=$2 label=$3
+  STOP_DEADLINE[${name}]=$(( $(now_us) + seconds * 1000000 ))
   if ! is_running "${name}"; then
     STATE[${name}]=stopped
     return
@@ -511,7 +637,16 @@ stop_process() {
   write_state
   log "Stopping ${label} (SIGTERM, up to ${seconds}s)"
   kill -TERM "${PID[${name}]}" 2>/dev/null
-  if ! wait_for_exit "${name}" "${seconds}"; then
+}
+
+# Waits for $1 until its wait from begin_stop ends, kills it (SIGKILL) if it still runs, and records how it ended.
+finish_stop() {
+  local name=$1 seconds=$2 label=$3 code
+  [[ "${STATE[${name}]}" == stopping ]] || return 0
+  while is_running "${name}" && (( $(now_us) < STOP_DEADLINE[${name}] )); do
+    sleep 0.1
+  done
+  if is_running "${name}"; then
     log "${label^} did not stop within ${seconds}s; killing it (SIGKILL)"
     kill -KILL "${PID[${name}]}" 2>/dev/null
   fi
@@ -525,16 +660,25 @@ stop_process() {
   STATE[${name}]=stopped
 }
 
-# docker stop: the controller first (its shutdown stops the roof), then the web UI.
+stop_process() {
+  begin_stop "$@"
+  finish_stop "$@"
+}
+
+# docker stop: the controller first (its shutdown stops the roof), then every relay off and verified while the web UI
+# stops, so the relays wait no longer than the controller and the web UI's own wait overlaps them. Also run by on_exit,
+# so it may run twice: what is already stopped is left as it is, and the relays are turned off again.
 shutdown() {
   SUPERVISOR_STATE=stopping
-  log "Stopping: the controller first, then the web UI"
+  log "Stopping: the controller first, then the relays off while the web UI stops"
   stop_process controller "${CONTROLLER_STOP_SECONDS}" "the controller"
-  stop_process ui "${UI_STOP_SECONDS}" "the web UI"
+  begin_stop ui "${UI_STOP_SECONDS}" "the web UI"
+  de_energize_relays "the supervisor is stopping"
+  finish_stop ui "${UI_STOP_SECONDS}" "the web UI"
   SUPERVISOR_STATE=stopped
   write_state
+  SHUTDOWN_DONE=1
   log "Stopped"
-  exit 0
 }
 
 # shellcheck disable=SC2317 # called by the trap
@@ -543,12 +687,29 @@ on_signal() {
   [[ -z "${SLEEP_PID}" ]] || kill "${SLEEP_PID}" 2>/dev/null
 }
 
-trap on_signal TERM INT
+# The supervisor ends some other way: another signal, or an error in this script. Its processes would end with the
+# container, the controller without its shutdown and the relays as they were, so it stops as on docker stop first. A
+# signal can end it in the middle of a command whose output is redirected (wait ... 2>/dev/null), and the trap runs with
+# that redirection in place, so the container's log is put back first.
+# shellcheck disable=SC2317 # called by the trap
+on_exit() {
+  (( SHUTDOWN_DONE )) && return
+  exec 1>&"${LOG_OUT}" 2>&"${LOG_ERR}"
+  log "The supervisor is ending unexpectedly; stopping as on docker stop first"
+  shutdown
+}
+
+# The supervisor's own output and error, the container's log, for on_exit.
+exec {LOG_OUT}>&1 {LOG_ERR}>&2
+trap on_signal TERM INT HUP QUIT
+trap on_exit EXIT
 prepare_run_dir
 check_secrets_are_private
 log "Starting the controller and the web UI (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
   "backoff at most ${BACKOFF_MAX_SECONDS}s; forced restarts ignored within ${FORCE_RESTART_MIN_SECONDS}s of a start;" \
-  "stop waits ${CONTROLLER_STOP_SECONDS}s for the controller, then ${UI_STOP_SECONDS}s for the web UI)"
+  "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running;" \
+  "stop waits ${CONTROLLER_STOP_SECONDS}s for the controller, then up to ${RELAYS_OFF_SECONDS}s for the relays off, with" \
+  "${UI_STOP_SECONDS}s for the web UI at the same time)"
 start_controller
 start_ui
 while (( ! STOP_REQUESTED )); do
@@ -556,3 +717,4 @@ while (( ! STOP_REQUESTED )); do
   (( STOP_REQUESTED )) || sleep_tick
 done
 shutdown
+exit 0

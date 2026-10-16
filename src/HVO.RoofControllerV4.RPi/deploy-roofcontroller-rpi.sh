@@ -158,9 +158,9 @@ ALLOW_INSECURE_HTTP=${ALLOW_INSECURE_HTTP:-false}
 # Semicolon-separated host names/IPs clients use (AllowedHosts); include localhost (the health check and this script's
 # in-container calls use it). Empty keeps the image default.
 ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
-# docker stop's grace period. The supervisor waits up to 25 s for the controller's shutdown (itself up to 20 s), then
-# 2 s for the web UI, so it must be 30 or more: a shorter one would let Docker kill the controller before its shutdown
-# ends.
+# docker stop's grace period. The supervisor waits up to 22 s for the controller's shutdown (itself up to 20 s), then up
+# to 5 s to turn the relays off while the web UI gets 2 s, so it must be 30 or more: a shorter one would let Docker kill
+# the controller before its shutdown ends.
 STOP_TIMEOUT_SECONDS=${STOP_TIMEOUT_SECONDS:-30}
 # true: a running controller is replaced only while its roof is idle. Before the verified Stop, an authenticated Status
 # inside the container must report isMoving false and commandedMotion None, or nothing is changed. The installer sets
@@ -249,7 +249,8 @@ require_number() {
 }
 
 require_number READY_TIMEOUT_SECONDS 1 86400
-# At least the supervisor's 25 s for the controller and 2 s for the web UI, with a margin.
+# At least the supervisor's 22 s for the controller and 5 s for the relays (the web UI's 2 s at the same time), with a
+# margin.
 require_number STOP_TIMEOUT_SECONDS 30 86400
 require_number HOST_PORT 1 65535
 require_number HTTPS_HOST_PORT 1 65535

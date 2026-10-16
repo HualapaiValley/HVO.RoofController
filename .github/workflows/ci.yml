@@ -758,22 +758,24 @@ jobs:
             }
           done
           # The supervisor's default stop waits, from the script: the controller's must exceed the controller's own
-          # ShutdownTimeout (Program.cs), and both, with a second for the supervisor's tick and a 2 s margin, must fit in
-          # the containers' stop grace period and the deploy script's smallest stop timeout, or Docker kills the
-          # container before the web UI has stopped.
+          # ShutdownTimeout (Program.cs), and it, with the longer of the relay-off's and the web UI's (which run at the
+          # same time, after it), a second for the supervisor's tick and a 2 s margin, must fit in the containers' stop
+          # grace period and the deploy script's smallest stop timeout, or Docker kills the container before the
+          # supervisor has turned the relays off and stopped the web UI.
           controller_stop=$(sed -n 's/^CONTROLLER_STOP_SECONDS=\${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
           ui_stop=$(sed -n 's/^UI_STOP_SECONDS=\${HVO_SUPERVISOR_UI_STOP_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
+          relays_off=$(sed -n 's/^RELAYS_OFF_SECONDS=\${HVO_SUPERVISOR_RELAYS_OFF_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
           shutdown=$(sed -n 's/.*options\.ShutdownTimeout = TimeSpan\.FromSeconds(\([0-9]*\)).*/\1/p' Program.cs)
           deploy_stop=$(sed -n 's/^ *require_number STOP_TIMEOUT_SECONDS \([0-9]*\) .*/\1/p' deploy-roofcontroller-rpi.sh)
-          if [[ -z "${controller_stop}" || -z "${ui_stop}" || -z "${shutdown}" || -z "${deploy_stop}" ]]; then
-            echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::cannot read the stop times (controller ${controller_stop:-?} s, web UI ${ui_stop:-?} s, ShutdownTimeout ${shutdown:-?} s, deploy minimum ${deploy_stop:-?} s)"
+          if [[ -z "${controller_stop}" || -z "${ui_stop}" || -z "${relays_off}" || -z "${shutdown}" || -z "${deploy_stop}" ]]; then
+            echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::cannot read the stop times (controller ${controller_stop:-?} s, web UI ${ui_stop:-?} s, relays off ${relays_off:-?} s, ShutdownTimeout ${shutdown:-?} s, deploy minimum ${deploy_stop:-?} s)"
             exit 1
           fi
           if (( controller_stop <= shutdown )); then
             echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::the supervisor waits ${controller_stop} s for the controller, not more than its ShutdownTimeout (${shutdown} s)"
             exit 1
           fi
-          grace=$(( controller_stop + ui_stop + 1 + 2 ))
+          grace=$(( controller_stop + (relays_off > ui_stop ? relays_off : ui_stop) + 1 + 2 ))
           if (( deploy_stop < grace )); then
             echo "::error file=src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh::STOP_TIMEOUT_SECONDS may be ${deploy_stop} s, less than the supervisor's waits need (${grace} s)"
             exit 1
