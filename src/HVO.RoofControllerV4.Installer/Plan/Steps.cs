@@ -108,7 +108,8 @@ public static class Ownership
 
 /// <summary>
 /// The install record: written last, once everything before it is in place, and only when it would say something new
-/// (the times it holds do not count).
+/// (the times it holds do not count), with its folder synced so that it says so after a power loss
+/// (<see cref="InstallerMachine.WriteDurably"/>). An upgrade marks it first (<see cref="MarkUpgradeStarted"/>).
 /// </summary>
 public sealed class RecordStep(InstallScope scope, string path, Func<InstallContext, InstallRecord?, InstallRecord> build) : PlanStep
 {
@@ -155,9 +156,57 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
             context.Machine.CreateDirectory(folder, scope == InstallScope.System ? Modes.Folder : Modes.PrivateFolder);
         }
 
-        context.Machine.WriteAtomically(path, record.ToJson(), ModeFor(scope));
+        context.Machine.WriteDurably(path, record.ToJson(), ModeFor(scope));
         context.Log.Write($"Wrote {path}: {InstallRoles.Describe(record.Roles)}, version {record.Version}.");
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Before the run's first change, when the record here has an older release than the run's: the record says the run's
+    /// release from then on (<see cref="InstallRecord.UpgradeStarted"/>). A run that stops part way, with the new controller
+    /// deployed and the kiosk not, say, then never leaves the newer release under a record of the older one, which an
+    /// upgrade or an older installer would take as the release to go back to. This step clears the mark at the end.
+    /// The record's folder is synced before any change, even when the mark was written by a run before this one: a power
+    /// loss must not take the record back to the older release once a newer controller may be deployed. When that cannot
+    /// be made sure of, nothing else changes. Another release's unfinished upgrade is refused here too.
+    /// </summary>
+    public void MarkUpgradeStarted(InstallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var (existing, _) = InstallRecord.Load(context.Machine, path);
+        if (existing is null)
+        {
+            return;
+        }
+
+        // Its baseline stays: rollback goes back to the release whose controller the deploy script kept, which a newer
+        // release's upgrade over this one would no longer say (InstallerSession.VersionProblems refuses it before here).
+        if (existing is { UpgradingFrom: not null, UninstalledAt: null } && existing.Version != context.Version)
+        {
+            throw new InstallerRefusedException(InstallerSession.UnfinishedUpgradeProblem(scope, existing, $"installing {context.Version}") + ".");
+        }
+
+        try
+        {
+            if (RoofSemVer.IsValid(context.Version) && RoofSemVer.IsOlder(existing.Version, context.Version))
+            {
+                var record = existing.UpgradeStarted(context.Version) with { UpdatedAt = context.Time.GetUtcNow() };
+                context.Machine.WriteDurably(path, record.ToJson(), ModeFor(scope));
+                context.Log.Write($"Wrote {path}: version {record.Version}, its upgrade from {existing.Version} not finished yet.");
+            }
+            else
+            {
+                // The record may not be synced yet: a mark an earlier run wrote before its sync failed, or a restore's.
+                context.Machine.SyncDirectory(Path.GetDirectoryName(path)!);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            var message = $"Before its first change, the installer could not make sure that {path} says {context.Version} after a power loss: {error.Message} "
+                + "Nothing else was changed.";
+            context.Log.Write($"Failed: {message}");
+            throw new InstallerException(message, error);
+        }
     }
 
     private static UnixFileMode ModeFor(InstallScope scope) => scope == InstallScope.System ? Modes.File : Modes.PrivateFile;
@@ -169,7 +218,9 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
             return $"roles: {Names(before.Roles)} → {Names(after.Roles)}";
         }
 
-        return before.Version != after.Version ? $"version {before.Version} → {after.Version}" : "the choices changed";
+        return before.Version != after.Version ? $"version {before.Version} → {after.Version}"
+            : before.UpgradingFrom is { } from && after.UpgradingFrom is null ? $"the upgrade from {from} to {after.Version} finishes"
+            : "the choices changed";
     }
 
     private static string Names(IReadOnlyList<InstallRole> roles) => roles.Count == 0 ? "none" : string.Join(", ", roles.Select(InstallRoles.Name));
