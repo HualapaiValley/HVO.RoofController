@@ -467,3 +467,19 @@ Once a release is published, its tag never moves.
 - The release workflow runs CI and the scenarios for every release, then installs a rig from its draft on x64 and
   arm64 (`tests/installer/rig-scenario.sh` with `RIG_RELEASE_DIR`, [The rig end to end](install.md#the-rig-end-to-end)),
   and a [dry run](#a-dry-run) runs the whole workflow without releasing.
+
+### Historical schema-transition regression coverage
+
+The source installer-rig tests use the pinned 4.1.1 historical source's installer, not current source relabeled as
+old. They check pre-mutation schema rejection, then `install.sh --from … upgrade --version …` with verification of
+the downloaded installer's checksum, retained identity/configuration, no default commissioning access, and
+compatible rollback. This is historical-source coverage with patched dependencies, not a byte-for-byte
+published-binary replay. Full-command installer tests separately require schema-3 rollback refusal without file
+or deployment changes.
+
+These retained regressions do not implement an existing-install commissioning migration. This feature's acceptance
+path is a clean application installation and first-run Choose/Confirm followed by a fresh personal-PIN login.
+Record operator acceptance separately from API, rendered-unit-test and bootstrap results. Local `--from` candidate
+tests do not verify public downloads or the attestation service. If a future release supports a published schema
+transition, its release notes must describe and validate that transition independently; it is not an additional
+migration requirement for this first-install commissioning feature.

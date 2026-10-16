@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
   mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
 
+### Changed
+
+- Upgrading from installed 4.1.1 to this schema-3 release requires the new release's
+  `install.sh upgrade --version <VERSION>` bootstrap, which verifies the downloaded installer. The old installed installer rejects schema 3 before replacing
+  itself or showing upgrade notes. See [Upgrading](docs/install.md#upgrading); existing identities and configuration
+  are retained, with no default access added. Schema-incompatible rollback remains refused.
+
 ### Security
 
 - Persist commissioning retirement and guess limits; reject pending-state restore and schema-incompatible rollback.

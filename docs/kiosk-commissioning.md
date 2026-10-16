@@ -7,7 +7,8 @@ person's stable principal ID and native enrollment. It does not change the Linux
 kiosk runtime account as owner. The hvo-kiosk service account is explicitly ineligible.
 
 Existing installations, upgrades, reinstalls over retained configuration/data, and virtual-only installations receive
-no temporary access. Existing-Pi migration requires a separately approved procedure; this feature performs none.
+no temporary access. This release provides no existing-install commissioning migration. UI polish and CLI recovery for forgotten
+PINs/passwords are separate future work; this flow does not reset Linux passwords.
 
 ## At the touchscreen
 

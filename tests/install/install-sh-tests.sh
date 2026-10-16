@@ -589,6 +589,30 @@ test_a_command_takes_the_roles_from_the_machine_s_record() {
   assert_installer "args=[upgrade]"
 }
 
+# Wrapper routing only: real historical schema rejection/preservation is the installer-rig gate.
+test_upgrade_bootstrap_verifies_new_installer_and_never_runs_the_installed_one() {
+  not_a_pi
+  record "${WORK}/root/etc/hvo-roof/install.json" rig
+  local record_before
+  record_before=$(cat "${WORK}/root/etc/hvo-roof/install.json")
+  mkdir -p "${WORK}/root/usr/local/sbin"
+  # shellcheck disable=SC2016 # Expanded by the fake installed script when it runs.
+  printf '#!/bin/sh\necho old-installer-ran > "$FAKE_STATE_DIR/old-installer-ran"\nexit 99\n' \
+    > "${WORK}/root/usr/local/sbin/hvo-roof-install"
+  chmod 755 "${WORK}/root/usr/local/sbin/hvo-roof-install"
+  ln -s "${WORK}/root/usr/local/sbin/hvo-roof-install" "${WORK}/fakebin/hvo-roof-install"
+  printf '{"schemaVersion":1,"identityStoreSchema":3}\n' > "${WORK}/release/release.json"
+  install_sh -- --from "${WORK}/release" upgrade --version "${VERSION}"
+
+  assert_status 0
+  assert_output_contains "hvo-roof-install-linux-arm64's SHA-256 is the one SHA256SUMS lists"
+  assert_output_contains "Starting hvo-roof-install ${VERSION}"
+  assert_installer "args=[upgrade][--version][${VERSION}][--release][${WORK}/release]"
+  assert_installer "root=yes"
+  [[ ! -e "${FAKE_STATE_DIR}/old-installer-ran" ]] || fail_test "the obsolete installed installer ran"
+  [[ "$(cat "${WORK}/root/etc/hvo-roof/install.json")" == "${record_before}" ]] || fail_test "wrapper changed recorded choices"
+}
+
 test_a_command_takes_the_roles_from_the_person_s_record() {
   record "${WORK}/home/.config/hvo-roof/install.json" cli
   install_sh -- upgrade

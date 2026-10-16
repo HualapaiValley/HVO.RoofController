@@ -33,12 +33,9 @@
 #            the containers, the network, the release's images, the data and the installer go, after a verified Stop.
 #            Then restore puts the backup back and installs what its record says: the same CA, certificate and keys,
 #            the admin signs in with the same password, and upgrade with the installed hvo-roof-install changes nothing.
-#   upgrade  The release before (RIG_PREVIOUS_REF, main's commit by default, built here with its own images as its
-#            VersionPrefix's -rig.1, 4.0.0-rig.1 say) installed by its own installer, after another purge. Then upgrade,
-#            run by this source's installer labelled the same, as the one installed with the release before would be:
-#            it shows the upgrade notes, puts the release's installer (this source's VersionPrefix's -rig.2) in place
-#            and hands over to it, which redeploys the controller, keeping the old one as roof-controller-previous,
-#            with the data kept. Again: nothing to change.
+#   upgrade  The pinned 4.1.1 historical source installed with its own installer and images. Its real schema-2 parser
+#            must refuse the schema-3 candidate before mutation; then install.sh verifies the new installer and bootstraps
+#            the newer installer, preserving identity/configuration with no commissioning/default access.
 #   rollback rollback to the release before (the kept controller put back), rollback again (nothing changes), then
 #            upgrade forward again.
 # Except in motion, the roof does not move: the relay register stays 0, and the emulator records no direction relay
@@ -69,7 +66,7 @@
 #
 # Settings (environment): RIG_HTTPS_PORT and RIG_WEB_PORT (the controller's API and web UI, default 8443 and 8088, as
 # the installer's), RIG_REGISTRY_PORT (the run's registry on loopback, default 15001), RIG_PREVIOUS_REF (the commit
-# the release before is built from, default origin/main; a CI checkout needs fetch-depth 0), RIG_RELEASE_DIR (a
+# the release before is built from, default pinned 4.1.1 commit; a CI checkout needs fetch-depth 0), RIG_RELEASE_DIR (a
 # release's assets: see above) and RIG_RESULTS_DIR (writes rig-scenario.md there: each check with its result and
 # timing). The backup is never written there.
 # The installer runs as root; what it prints, and the files read with sudo, go to this run's own files.
@@ -92,7 +89,7 @@ fi
 https_port=${RIG_HTTPS_PORT:-8443}
 web_port=${RIG_WEB_PORT:-8088}
 registry_port=${RIG_REGISTRY_PORT:-15001}
-previous_ref=${RIG_PREVIOUS_REF:-origin/main}
+previous_ref=${RIG_PREVIOUS_REF:-400622ccc00d8306636e3876b3fd328e9a784de8}
 release_source=${RIG_RELEASE_DIR:-}
 # This source is the release, unless RIG_RELEASE_DIR gives one; the release before is a build of previous_ref, labelled
 # as the one before it. setup_from_source and setup_from_release set them.
@@ -714,10 +711,6 @@ PY
   publish "${repo_root}" HVO.RoofControllerV4.Cli "${version}" "${work}/cli"
   installer="${work}/installer/hvo-roof-install"
   says_version "${installer}" "${version}"
-  # This source's installer labelled as the release before: what upgrade runs as on a machine that has that release.
-  publish "${repo_root}" HVO.RoofControllerV4.Installer "${previous_version}" "${work}/installer-old" "${previous_prefix}"
-  old_installer="${work}/installer-old/hvo-roof-install"
-  says_version "${old_installer}" "${previous_version}"
   say "Publishing the release before's hvo-roof-install (${previous_ref}, ${previous_commit:0:12}) as ${previous_version}"
   publish "${previous_root}" HVO.RoofControllerV4.Installer "${previous_version}" "${work}/installer-previous"
   previous_installer="${work}/installer-previous/hvo-roof-install"
@@ -744,10 +737,11 @@ PY
     install.sh install-script "${cli_asset}" cli "hvo-roof-install-${rid}" installer
   (cd "${release_dir}" && sha256sum -- *) > "${work}/SHA256SUMS" || fail "could not list the release's SHA-256s"
   mv "${work}/SHA256SUMS" "${release_dir}/SHA256SUMS"
-  # The release before: its images alone, as a release before the installer was released had them.
+  # The historical installer must be the one actually installed; relabeling today's source hides schema failures.
   previous_dir="${work}/release-previous"
   mkdir -p "${previous_dir}"
-  release "${previous_dir}" "${previous_root}" "${previous_version}" ""
+  cp "${previous_installer}" "${previous_dir}/hvo-roof-install-${rid}"
+  release "${previous_dir}" "${previous_root}" "${previous_version}" "" "hvo-roof-install-${rid}" installer
   # install.sh does not see gh here, signed in or not: it notes that it checked no attestation, as without gh.
   hide_gh=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN "GH_CONFIG_DIR=${work}/no-gh")
   attestation="  note  its attestation was not checked: gh "
@@ -1269,6 +1263,52 @@ scenario_restore() {
   pass "upgrade with the installed ${installed} finds nothing to change, and nothing is replaced; relay register 0 in ${ROOF_SAMPLES} samples"
 }
 
+# Persist an explicit non-default UI setting through the old controller before hashing it.
+# A default install intentionally has no appsettings.Local.json; an absent file proves no preservation.
+bootstrap_settings_fixture() {
+  local response
+  response=$(roof_call GET Settings)
+  [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || fail "could not read baseline settings"
+  sed '$d' <<<"${response}" | jq -e '
+    select(.fileBacked == true) |
+    {expectedVersion: .version, values: ([.settings[] | select(.group == "ui") | {key, value}] | from_entries)} |
+    .values["RoofControllerUi:DefaultCamera"] = "bootstrap-preservation-fixture"
+  ' > "${work}/bootstrap-settings.json" || fail "baseline settings are not file-backed"
+  response=$(roof_call POST Settings/ui "${work}/bootstrap-settings.json")
+  [[ "$(tail -n 1 <<<"${response}")" == 200 ]] || fail "could not save non-default baseline settings"
+  sed '$d' <<<"${response}" | jq -e '
+    .fileBacked == true and any(.settings[];
+      .key == "RoofControllerUi:DefaultCamera" and .value == "bootstrap-preservation-fixture")
+  ' >/dev/null || fail "baseline did not apply the non-default setting"
+}
+
+bootstrap_state() {
+  sudo -n python3 - "$1" <<'STATE' || fail "bootstrap preservation/default-access check failed"
+import hashlib, json, sys
+from pathlib import Path
+identity = json.loads(Path('/var/lib/hvo-roof/identity/identity.json').read_text())
+assert identity.get('kioskCredential') is None, 'existing installation gained commissioning access'
+assert not Path('/var/lib/hvo-roof-commissioning/first-install-claimed').exists(), 'existing installation gained a fresh claim'
+hash_value = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+settings = json.loads(Path('/etc/hvo-roof/config/appsettings.Local.json').read_text())
+assert settings['RoofControllerUi']['DefaultCamera'] == 'bootstrap-preservation-fixture', 'non-default settings fixture lost'
+files = {}
+for folder in ['/etc/hvo-roof/secrets', '/etc/hvo-roof/ca', '/etc/hvo-roof/config', '/etc/hvo-roof/https', '/var/lib/hvo-roof/settings-secrets']:
+    assert Path(folder).is_dir(), f'missing preservation fixture directory: {folder}'
+    for path in Path(folder).rglob('*'):
+        if path.is_file():
+            files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+for required in ['/etc/hvo-roof/ca.crt', '/etc/hvo-roof/ca/ca.key', '/etc/hvo-roof/config/appsettings.Local.json', '/etc/hvo-roof/https/roof-controller.pfx']:
+    path = Path(required)
+    assert path.is_file(), f'missing preservation fixture file: {required}'
+    files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+record = json.loads(Path('/etc/hvo-roof/install.json').read_text())
+value = {'users': hash_value(identity.get('users')), 'nativePrincipals': hash_value(identity.get('linuxPrincipals')),
+         'files': files, 'choices': hash_value({key: record.get(key) for key in ['roles', 'hat', 'controller', 'kiosk']})}
+Path(sys.argv[1]).write_text(json.dumps(value, sort_keys=True))
+STATE
+}
+
 scenario_upgrade() {
   current_check="upgrade: the release before installed"
   local release_images
@@ -1291,17 +1331,46 @@ scenario_upgrade() {
   roof_still
   pass "${previous_ref}'s installer installed ${previous_version} after another purge: its controller and emulator run, and ${admin} signs in; relay register 0 in ${ROOF_SAMPLES} samples"
 
-  current_check="upgrade: to ${version}, the installer handing over"
+  current_check="upgrade: non-default configuration fixture"
+  bootstrap_settings_fixture
+  bootstrap_state "${work}/bootstrap-fixture.json"
+  pass "historical controller saved a non-default UI setting to its configuration file"
+
+  current_check="upgrade: historical installer refuses schema 3 before mutation"
+  local previous_schema target_schema old_hash controller_before emulator_before record_before
+  previous_schema=$(jq -er '.identityStoreSchema' "${previous_dir}/release.json")
+  target_schema=$(jq -er '.identityStoreSchema' "${release_dir}/release.json")
+  (( previous_schema == 2 && target_schema >= 3 )) || fail "bootstrap gate needs the pinned schema-2 baseline and a schema-3-or-newer candidate"
+  old_hash=$(sudo -n sha256sum "${installed}")
+  [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "$(sha256sum "${previous_installer}" | cut -d' ' -f1)" ]] \
+    || fail "the installed baseline is not the historical source's installer"
+  controller_before=$(container_id "${controller}")
+  emulator_before=$(container_id "${emulator}")
+  record_before=$(sudo -n sha256sum /etc/hvo-roof/install.json)
+  bootstrap_state "${work}/bootstrap-before.json"
+  install_with "${installed}" old-upgrade upgrade --version "${version}" --release "${release_dir}"
+  (( INSTALL_STATUS == 1 )) || fail "historical upgrade exited ${INSTALL_STATUS}, expected schema rejection 1"
+  expect_output old-upgrade "identityStoreSchema must be 1 or 2"
+  [[ "$(sudo -n sha256sum "${installed}")" == "${old_hash}" && "$(sudo -n sha256sum /etc/hvo-roof/install.json)" == "${record_before}" ]] \
+    || fail "historical refusal changed installer or record"
+  [[ "$(container_id "${controller}")" == "${controller_before}" && "$(container_id "${emulator}")" == "${emulator_before}" ]] \
+    || fail "historical refusal replaced a container"
+  bootstrap_state "${work}/bootstrap-refused.json"
+  cmp -s "${work}/bootstrap-before.json" "${work}/bootstrap-refused.json" || fail "historical refusal changed preserved state"
+  no_secret_in "${work}/old-upgrade.txt"
+  pass "historical installer rejected schema 3 before changing installer, record, identity, configuration or containers"
+
+  current_check="upgrade: verified release bootstrap to ${version}"
   local started
   started=$(date +%s.%N)
   collect_secrets
   start_relay_monitor
-  install_with "${old_installer}" upgrade upgrade --release "${release_dir}"
-  expect_installed "upgrade"
-  expect_output upgrade "${previous_version} is installed here; ${version} replaces it."
+  install_sh upgrade upgrade --version "${version}"
+  expect_installed "install.sh upgrade"
+  expect_output upgrade "hvo-roof-install-${rid}'s SHA-256 is the one SHA256SUMS lists"
+  expect_output upgrade "Starting hvo-roof-install ${version}"
   expect_output upgrade "Upgrade notes for ${version%%-*}:"
   expect_output upgrade "  Nothing to do by hand: the rig scenario's upgrade notes."
-  expect_output upgrade "Handing over to release ${version}'s installer."
   local seconds
   seconds=$(seconds_since "${started}")
   [[ "$(sudo -n stat -c '%a %U' "${installed}")" == "755 root" ]] || fail "${installed} is $(sudo -n stat -c '%a %U' "${installed}"), not 755 root"
@@ -1318,7 +1387,9 @@ scenario_upgrade() {
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
   sudo -n cat /etc/hvo-roof/install.json > "${work}/record.txt"
   no_secret_in "${work}/previous.txt" "${work}/upgrade.txt" "${work}/install-log.txt" "${work}/record.txt"
-  pass "in ${seconds} s: the upgrade notes shown, release ${version}'s installer put in ${installed} and handed over to, the controller redeployed with ${previous_version}'s kept as ${controller}-previous, ${admin} signs in with the same password; relay register 0 in ${ROOF_SAMPLES} samples"
+  bootstrap_state "${work}/bootstrap-after.json"
+  cmp -s "${work}/bootstrap-before.json" "${work}/bootstrap-after.json" || fail "bootstrap changed preserved identity/configuration or introduced default access"
+  pass "in ${seconds} s: checksum-verified release bootstrap installed ${version}, preserved identity/configuration with no default access, kept ${previous_version}'s controller; same-password sign-in and relay register 0 in ${ROOF_SAMPLES} samples"
 
   current_check="upgrade: again"
   local controller_id emulator_id
@@ -1384,8 +1455,8 @@ scenario_rollback() {
   sign_in
   emulated_status
   record_says ".version == \"${previous_version}\" and .rolledBackFrom == \"${version}\" and .previousVersion == null"
-  [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "${installer_sha256}" ]] \
-    || fail "${installed} was replaced, though release ${previous_version} has no installer"
+  [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "$(sha256sum "${previous_installer}" | cut -d' ' -f1)" ]] \
+    || fail "rollback did not restore the historical installer"
   roof_still
   no_secret_in "${work}/rollback-plan.txt" "${work}/rollback.txt"
   pass "the kept controller put back by the deploy script's --rollback, ${version}'s kept in its turn; ${admin} signs in; the record says ${previous_version}, rolled back from ${version}; relay register 0 in ${ROOF_SAMPLES} samples"
@@ -1402,7 +1473,7 @@ scenario_rollback() {
 
   current_check="rollback: upgrade forward again"
   start_relay_monitor
-  install_with "${installed}" forward upgrade --release "${release_dir}"
+  install_sh forward upgrade --version "${version}"
   expect_installed "upgrade (forward again)"
   runs "${controller}" "${release_dir}" controller
   runs "${emulator}" "${release_dir}" hatEmulator
