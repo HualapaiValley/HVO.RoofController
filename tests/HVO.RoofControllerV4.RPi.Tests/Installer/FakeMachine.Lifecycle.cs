@@ -53,6 +53,12 @@ internal sealed partial class FakeMachine
     public Action? BeforeStat { get; set; }
 
     /// <summary>
+    /// What happens just after stat answers for a file the installer has open (by its descriptor, through /proc): someone
+    /// else on the machine acting once it is open, before it is read.
+    /// </summary>
+    public Action? AfterStatOpened { get; set; }
+
+    /// <summary>
     /// What happens as the installer prints a line to its output (<see cref="RunAsync(string[])"/>): someone else on the
     /// machine acting at that moment, as when a plan has been shown and is about to be carried out.
     /// </summary>
@@ -255,7 +261,7 @@ internal sealed partial class FakeMachine
         var target = opened.StartsWith("/proc/", StringComparison.Ordinal) ? new FileInfo(opened).LinkTarget : null;
         var root = Root.TrimEnd('/');
         return target is not null && target.StartsWith(root + "/", StringComparison.Ordinal)
-            ? Stat(target[root.Length..])
+            ? Stat(target[root.Length..], AfterStatOpened)
             : new CommandResult(1, string.Empty, $"stat: cannot statx '{opened}': No such file or directory\n");
     }
 

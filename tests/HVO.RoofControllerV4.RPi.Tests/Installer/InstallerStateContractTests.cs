@@ -40,7 +40,9 @@ public sealed class InstallerStateContractTests
 
     private const string IdentityBefore = """{"users":[{"name":"before-the-upgrade","role":"RoofAdmin"}],"apiKeys":[]}""";
 
-    private const string IdentityMoved = """{"schemaVersion":2,"users":[{"name":"after-the-upgrade","role":"RoofAdmin"}],"apiKeys":[],"linuxPrincipals":[]}""";
+    private const string IdentityOlder = """{"users":[{"name":"in-an-older-backup","role":"RoofAdmin"}],"apiKeys":[]}""";
+
+    private const string IdentityMoved ="""{"schemaVersion":2,"users":[{"name":"after-the-upgrade","role":"RoofAdmin"}],"apiKeys":[],"linuxPrincipals":[]}""";
 
     private const string DockerDown = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
 
@@ -759,6 +761,156 @@ public sealed class InstallerStateContractTests
         (run.Output + run.Error).Should().Contain($"{Backup}, the backup the installer before this one took before it handed over, is not the file it took (its SHA-256 differs)");
         pi.Deploys.Should().HaveCount(deploys, "the controller is not replaced");
         pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+    }
+
+    // #136 F6: the backup handed over is hashed and checked from one read of the file, and kept only in folders no one but
+    // root can change.
+
+    [TestMethod]
+    public async Task AnotherBackupSwappedIn_AfterTheHandOversHash_IsRefused_AndChangesNothing()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+
+        // Another backup of this machine and release, root's and 0600, whole: one of root's own, made with other people in it.
+        pi.Write(IdentityFile, IdentityOlder);
+        (await pi.RunAsync("backup", "--output", "/root/older.tar.gz")).ExitCode.Should().Be(0);
+        pi.Write(IdentityFile, IdentityBefore);
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var deploys = pi.Deploys.Count;
+        var swapped = false;
+        pi.Launch = (path, arguments, environment) =>
+        {
+            // Once the installer before took the backup and handed over its SHA-256: the older archive takes its place,
+            // just after the release's installer has looked at the path.
+            pi.AfterStat[Backup] = () =>
+            {
+                if (!swapped)
+                {
+                    swapped = true;
+                    File.Move(pi.OnDisk("/root/older.tar.gz"), pi.OnDisk(Backup), overwrite: true);
+                }
+            };
+            return pi.RunInstallerAsync(path, arguments, environment);
+        };
+
+        var run = await pi.RunAsync("upgrade");
+
+        swapped.Should().BeTrue();
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        (run.Output + run.Error).Should().Contain($"{Backup}, the backup the installer before this one took before it handed over, is not the file it took (its SHA-256 differs)");
+        pi.Deploys.Should().HaveCount(deploys, "the controller is not replaced");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+    }
+
+    [TestMethod]
+    public async Task ABackup_IsHashedAndCheckedFromOneRead_WhateverTakesItsPlaceOnceItIsOpen()
+    {
+        using var pi = await InstalledPiAsync();
+        (await pi.RunAsync("backup", "--output", "/root/taken.tar.gz")).ExitCode.Should().Be(0);
+        pi.Write(IdentityFile, IdentityOlder);
+        (await pi.RunAsync("backup", "--output", "/root/older.tar.gz")).ExitCode.Should().Be(0);
+        var taken = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(pi.OnDisk("/root/taken.tar.gz"))));
+        pi.AfterStatOpened = () =>
+        {
+            pi.AfterStatOpened = null;
+            File.Move(pi.OnDisk("/root/older.tar.gz"), pi.OnDisk("/root/taken.tar.gz"), overwrite: true);
+        };
+
+        var backup = await BackupCommands.ReadAsync(pi.Machine, "/root/taken.tar.gz", CancellationToken.None);
+
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(pi.OnDisk("/root/taken.tar.gz")))).Should().NotBe(taken, "the older archive is in its place now");
+        backup.Sha256.Should().Be(taken, "the bytes hashed are the ones read from the file opened");
+        Encoding.UTF8.GetString(backup.Entries.Single(entry => entry.Path == IdentityFile).Content!).Should().Be(IdentityBefore, "and the ones checked are those too");
+    }
+
+    [TestMethod]
+    [DataRow("a link")]
+    [DataRow("group-writable")]
+    [DataRow("not root's")]
+    [DataRow("its parent world-writable")]
+    public async Task AnUpgrade_WhoseBackupsFolderSomeoneElseCouldChange_IsRefused_AndChangesNothing(string how)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        var folder = BackupCommands.DefaultFolder;
+        var problem = how switch
+        {
+            "a link" => $"{folder} is a symbolic link, not a folder: a backup is kept, and read, only in folders no one but root can change",
+            "group-writable" => $"{folder} is root:root's, 0770: someone other than root can change what is in it",
+            "not root's" => $"{folder} is pi:pi's, 0700: someone other than root can change what is in it",
+            _ => "/var/backups is root:root's, 0777: someone other than root can change what is in it"
+        };
+        pi.Folder("/var/backups");
+        File.SetUnixFileMode(pi.OnDisk("/var/backups"), how == "its parent world-writable" ? (UnixFileMode)0b111_111_111 : Modes.Folder);
+        if (how == "a link")
+        {
+            pi.Folder("/var/backups/elsewhere");
+            File.SetUnixFileMode(pi.OnDisk("/var/backups/elsewhere"), Modes.PrivateFolder);
+            File.CreateSymbolicLink(pi.OnDisk(folder), "elsewhere");
+        }
+        else
+        {
+            pi.Folder(folder);
+            File.SetUnixFileMode(pi.OnDisk(folder), how == "group-writable" ? Modes.PrivateFolder | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute : Modes.PrivateFolder);
+            if (how == "not root's")
+            {
+                pi.Owners[folder] = "pi:pi";
+            }
+        }
+
+        var before = State(pi);
+        foreach (var installer in new[] { "4.0.0", NewVersion })
+        {
+            pi.InstallerVersion = installer;
+            var run = await pi.RunAsync("upgrade");
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Refused, $"{installer}: {run}");
+            (run.Output + run.Error).Should().Contain(problem);
+            Unchanged(pi, before);
+        }
+
+        var backup = await pi.RunAsync("backup");
+        backup.ExitCode.Should().Be((int)InstallerExitCode.Refused, backup.ToString());
+        backup.Error.Should().Contain(problem).And.Contain("Nothing was written.");
+        Unchanged(pi, before);
+        pi.Launches.Should().BeEmpty("the installer is not replaced");
+    }
+
+    [TestMethod]
+    public async Task TheBackupHandedOver_InAFolderSomeoneElseCouldChange_IsRefused()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var deploys = pi.Deploys.Count;
+        pi.Launch = (path, arguments, environment) =>
+        {
+            File.SetUnixFileMode(pi.OnDisk(BackupCommands.DefaultFolder), Modes.PrivateFolder | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            return pi.RunInstallerAsync(path, arguments, environment);
+        };
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        (run.Output + run.Error).Should().Contain($"{BackupCommands.DefaultFolder} is root:root's, 0703: someone other than root can change what is in it");
+        pi.Deploys.Should().HaveCount(deploys, "the controller is not replaced");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+    }
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_FromABackupsFolderSomeoneElseCouldChange_IsRefused_AndChangesNothing()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        pi.Write(IdentityFile, IdentityMoved);
+        File.SetUnixFileMode(pi.OnDisk(BackupCommands.DefaultFolder), Modes.PrivateFolder | UnixFileMode.GroupWrite);
+        var before = State(pi);
+
+        var run = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"{BackupCommands.DefaultFolder} is root:root's, 0720: someone other than root can change what is in it").And.Contain("Nothing was changed.");
+        Unchanged(pi, before);
     }
 
     // What a run that refuses must leave as it was: every file (the installer, the record, the stores and the backups),

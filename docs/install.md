@@ -299,7 +299,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; a backup written to or read from `/var/backups/hvo-roof` when it, or a folder above it, is a link or a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -1065,17 +1065,19 @@ Each installer installs its own release, so the installer hands over to the new 
    ([State contracts](#state-contracts)). One that does not is refused (exit 3) before anything changes. It also says
    when the new release makes a breaking state change, after which the release installed cannot read a store.
 3. As root on Linux, it backs up the controller's stores, as `backup` backs them up, to
-   `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`). A backup that cannot
-   be taken refuses the upgrade (exit 3) with nothing changed: the installer has not replaced itself yet.
+   `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`), in a folder only root
+   can change ([Backing up and restoring](#backing-up-and-restoring)). A backup that cannot be taken refuses the
+   upgrade (exit 3) with nothing changed: the installer has not replaced itself yet.
 4. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
    and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
    of your own) is refused: download that release's installer and run its `upgrade`.
 5. The new installer installs its release, as `--answers` installs the record's choices
    ([Running it again](#running-it-again)):
-   - first, the backup it was handed: its file and SHA-256 come with the hand-over, and it checks that the file is
-     that backup, whole, root's, and this machine's of the release installed; one that is not stops the upgrade before
-     the controller is replaced. An installer from before state contracts hands over none, and the new one takes the
-     backup itself, first;
+   - first, the backup it was handed: its file and SHA-256 come with the hand-over. It opens the file once, and checks
+     that what it read there is that backup (its SHA-256), whole, root's, and this machine's of the release installed:
+     the bytes it hashes are the ones it checks, whatever takes the file's place meanwhile. One that is not stops the
+     upgrade before the controller is replaced. An installer from before state contracts hands over none, and the new
+     one takes the backup itself, first;
    - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
      controller, checked before the old one is let go and kept as `roof-controller-previous`;
    - a rig's HAT emulator, from the new release;
@@ -1144,10 +1146,11 @@ only root reads").
   the controller's and the kiosk's small files, with their secrets, and no log, program or image. There is no bulk data
   to copy. The record names it (`upgradeBackup`). The backup stays until you remove it; keep it as you keep any backup
   ([Where to keep it](#backing-up-and-restoring)). The installer handing over takes it before it replaces itself. If it
-  cannot be written (a folder that someone other than root can change, say), the upgrade is refused (exit 3) before
-  anything else changes. So is one with a store's file there that a backup cannot hold (a link, which a backup never
-  follows): put the file itself in its place, then upgrade. The backup's manifest names the stores' files that were not
-  there (`absent`), so a rollback can tell a store never saved from one the backup left out.
+  cannot be written (a folder it backs up, or `/var/backups/hvo-roof`, that someone other than root can change, say),
+  the upgrade is refused (exit 3) before anything else changes. So is one with a store's file there that a backup
+  cannot hold (a link, which a backup never follows): put the file itself in its place, then upgrade. The backup's
+  manifest names the stores' files that were not there (`absent`), so a rollback can tell a store never saved from one
+  the backup left out.
 - **`rollback`** refuses (exit 3, nothing changed) to go back to a release that cannot read a store as it is here, and
   says how to go on: [Rolling back](#rolling-back).
 
@@ -1244,6 +1247,12 @@ would: one a restore could not read is not kept, and the backup fails.
 - Every folder it reads must be root's, with only root writing to it: whoever else could change one could put a file of
   theirs in place of another as it is read. Such a folder is refused, with the `chown` and `chmod` that fix it, and
   nothing is written.
+- `/var/backups/hvo-roof`, and each folder above it up to `/`, must be a folder (not a link), root's, with only root
+  writing to it. The installer makes it so (`0700`, the folders above it `0755`) when it is not there. One that is
+  there but is not so is refused (exit 3), with the `chown` and `chmod` that fix it, whenever a backup is written to
+  it (by `backup` or by an upgrade) or read from it (an upgrade's hand-over, `rollback --restore-backup`, `restore`):
+  whoever else could change it could put another archive, of theirs or an older one of root's, in place of the one
+  taken. The installer never repairs such a folder, even one it made: what is in it may not be its own.
 
 ```text
 $ sudo hvo-roof-install backup --output /root/roofpi.tar.gz

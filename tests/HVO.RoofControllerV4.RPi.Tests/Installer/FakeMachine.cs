@@ -97,6 +97,12 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     {
         Root = Path.Combine(Path.GetTempPath(), "hvo-roof-installer-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Root);
+
+        // As on a Pi, / and /var are root's and only root writes to them, whatever the tests' umask: the backups' folder is
+        // trusted only under such folders.
+        File.SetUnixFileMode(Root, Modes.Folder);
+        Directory.CreateDirectory(OnDisk("/var"));
+        File.SetUnixFileMode(OnDisk("/var"), Modes.Folder);
         Os = os;
         Architecture = architecture;
         IsRoot = root;

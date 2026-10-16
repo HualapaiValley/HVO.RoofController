@@ -20,8 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `upgrade` now backs up the controller's stores before it changes anything, as `backup` does, to
   `/var/backups/hvo-roof`; the record names the backup (`upgradeBackup`). No log, program or image is copied. The
   installer takes it before it replaces itself and hands its file and SHA-256 to the new release's installer, which
-  checks it. A backup that cannot be taken, or a store's file a backup cannot hold (a link), refuses the upgrade
-  (exit 3) with nothing changed. A backup's manifest names the stores' files that were not there (`absent`) (#130).
+  reads the file once and checks that what it read has that SHA-256 and is this machine's backup of the release
+  installed. A backup that cannot be taken, or a store's file a backup cannot hold (a link), refuses the upgrade
+  (exit 3) with nothing changed. A backup's manifest names the stores' files that were not there (`absent`). Backups
+  are written to and read from `/var/backups/hvo-roof` only while it, and each folder above it, is root's alone and
+  not a link: one that is not is refused (exit 3), never repaired (#130).
 - `rollback --restore-backup [FILE] [--yes]`: across a breaking state change, puts back from that backup the stores the
   release before cannot read, after the controller's verified Stop, saying plainly that the changes made to them since
   the upgrade are lost; the files it replaces are kept beside them. Without it, such a rollback is refused. Nothing is

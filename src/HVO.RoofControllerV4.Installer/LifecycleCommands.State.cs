@@ -98,8 +98,9 @@ internal static partial class LifecycleCommands
 
         if (step.Kept is { } kept)
         {
+            // Read as the release's installer reads it, once: the SHA-256 handed over is of the archive checked here.
             environment[UpgradeBackupVariable] = kept;
-            environment[UpgradeBackupSha256Variable] = UpgradeBackupStep.Sha256(session.Machine, kept);
+            environment[UpgradeBackupSha256Variable] = (await BackupCommands.ReadAsync(session.Machine, kept, cancellationToken).ConfigureAwait(false)).Sha256;
         }
     }
 

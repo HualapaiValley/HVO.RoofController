@@ -125,7 +125,7 @@ internal static class BackupCommands
             InstallerSession.RoofVersion(host.Version),
             session.Survey.SystemRecord?.Version,
             now,
-            () => OutputPath(session.Machine, session.Survey.HostName, now, output),
+            () => OutputPathAsync(session.Machine, session.Survey.HostName, now, output, cancellationToken),
             cancellationToken).ConfigureAwait(false);
         var entries = written.Entries;
         var files = entries.Count(entry => entry.Type == BackupEntry.File);
@@ -163,7 +163,7 @@ internal static class BackupCommands
         string installerVersion,
         string? recordVersion,
         DateTimeOffset now,
-        Func<string> output,
+        Func<Task<string>> output,
         CancellationToken cancellationToken,
         bool storesRequired = false)
     {
@@ -191,7 +191,7 @@ internal static class BackupCommands
             }
         }
 
-        var path = output();
+        var path = await output().ConfigureAwait(false);
         var manifest = new BackupManifest(
             CurrentSchema,
             hostName,
@@ -449,21 +449,69 @@ internal static class BackupCommands
         return Path.Join(DefaultFolder, name);
     }
 
-    /// <summary>Makes <see cref="DefaultFolder"/>, only root's, when it is not there.</summary>
-    internal static void MakeDefaultFolder(InstallerMachine machine)
+    /// <summary>
+    /// Makes <see cref="DefaultFolder"/>, only root's, when it is not there (its parents 0755, root's); refuses one that is
+    /// there but not trusted (<see cref="FolderProblemAsync"/>), and never repairs it: a folder someone else could change
+    /// may hold their archive already.
+    /// </summary>
+    internal static async Task MakeDefaultFolderAsync(InstallerMachine machine, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(machine);
+        if (await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
+        {
+            throw new InstallerRefusedException($"{problem}. Nothing was written.");
+        }
+
         if (!machine.DirectoryExists(DefaultFolder))
         {
             machine.CreateDirectory(DefaultFolder, Modes.PrivateFolder);
+            if (await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } made)
+            {
+                throw new InstallerRefusedException($"{made}. Nothing was written.");
+            }
         }
     }
 
-    private static string OutputPath(InstallerMachine machine, string hostName, DateTimeOffset now, string? output)
+    /// <summary>
+    /// Why a backup cannot be trusted in <see cref="DefaultFolder"/>; null when it can, or when the folder is not there yet
+    /// (the installer makes it). It and each folder above it, up to <c>/</c>, must be a folder, not a link, root's, and
+    /// written to by root alone: whoever else could change one could put another archive (one of theirs, or an older one
+    /// of root's) in place of the one an upgrade took, between the moment it is named and the moment it is read. The
+    /// installer refuses such a folder, and does not repair it, even one it made: what is in it may not be its own.
+    /// </summary>
+    internal static async Task<string?> FolderProblemAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        const UnixFileMode othersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
+        const string why = "a backup is kept, and read, only in folders no one but root can change, so that no other archive can take its place";
+        for (var folder = DefaultFolder; folder is not null; folder = Path.GetDirectoryName(folder))
+        {
+            if (await StatAsync(machine, folder, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
+            {
+                continue;
+            }
+
+            if (kind != "directory")
+            {
+                return $"{folder} is a {kind}, not a folder: {why}. Put a folder of root's that only root writes to in its place, then run it again";
+            }
+
+            if (owner?.StartsWith("root:", StringComparison.Ordinal) != true || machine.GetMode(folder) is not { } mode || (mode & othersWrite) != 0)
+            {
+                var found = machine.GetMode(folder) is { } known ? Modes.Octal(known) : "unknown";
+                return $"{folder} is {owner ?? "an unknown owner"}'s, {found}: someone other than root can change what is in it, and {why}. "
+                    + $"Give it to root, with only root writing (sudo chown root:root {folder}; sudo chmod go-w {folder}), then run it again";
+            }
+        }
+
+        return null;
+    }
+
+    private static async Task<string> OutputPathAsync(InstallerMachine machine, string hostName, DateTimeOffset now, string? output, CancellationToken cancellationToken)
     {
         if (output is null)
         {
-            MakeDefaultFolder(machine);
+            await MakeDefaultFolderAsync(machine, cancellationToken).ConfigureAwait(false);
             return DefaultPath(hostName, now);
         }
 
@@ -482,6 +530,12 @@ internal static class BackupCommands
         if (parent is null || !machine.DirectoryExists(parent))
         {
             throw new InstallerRefusedException($"{parent} is not there: make it first, or give a file in a folder that is.");
+        }
+
+        // The backups' own folder is held to its rule, whoever names a file in it.
+        if (parent == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
+        {
+            throw new InstallerRefusedException($"{problem}. Nothing was written.");
         }
 
         return path;
@@ -727,18 +781,39 @@ internal static class BackupCommands
         return failed;
     }
 
-    /// <summary>A backup read whole and checked: its manifest, its folders and files (with their content), and its record.</summary>
-    internal sealed record ReadBackup(BackupManifest Manifest, IReadOnlyList<BackupEntry> Entries, InstallRecord? Record);
+    /// <summary>
+    /// A backup read whole and checked: its manifest, its folders and files (with their content), and its record; and the
+    /// SHA-256 of the archive those were read from (lower-case hex).
+    /// </summary>
+    internal sealed record ReadBackup(BackupManifest Manifest, IReadOnlyList<BackupEntry> Entries, InstallRecord? Record)
+    {
+        public string Sha256 { get; init; } = string.Empty;
+    }
 
     /// <summary>A backup written: where, and the folders and files it holds, and what it left out.</summary>
     internal sealed record WrittenBackup(string Path, IReadOnlyList<BackupEntry> Entries, IReadOnlyList<string> Skipped);
 
     // The backup, read whole and checked before anything is written: only root may read it; its manifest comes first; it
-    // holds only folders and files, each where a backup puts them, each as the manifest says (size and SHA-256). The path
-    // is checked without following a link, then the file opened is checked again (through /proc, by its descriptor):
-    // whoever can write the folder holding it could swap the path for their own archive between a check and the open.
+    // holds only folders and files, each where a backup puts them, each as the manifest says (size and SHA-256).
     internal static async Task<ReadBackup> ReadAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+        => await ParseAsync(await ReadPrivateAsync(machine, path, cancellationToken).ConfigureAwait(false), path, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// The archive at <paramref name="path"/>, read whole from one open file once that file is checked to be root's alone:
+    /// the path is checked without following a link, then the file opened is checked again (through /proc, by its
+    /// descriptor). Whoever can write the folder holding it could swap the path for another archive between a check and
+    /// the open, or between two opens: so it is opened once, and what is hashed or read as a backup is what was read here
+    /// (<see cref="ParseAsync"/>), never the path opened again. A file in <see cref="DefaultFolder"/> is read only while
+    /// that folder is trusted (<see cref="FolderProblemAsync"/>).
+    /// </summary>
+    internal static async Task<byte[]> ReadPrivateAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(machine);
+        if (Path.GetDirectoryName(path) == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
+        {
+            throw new InstallerRefusedException($"{problem}. Nothing was changed.");
+        }
+
         if (await StatAsync(machine, path, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
         {
             throw new InstallerRefusedException($"{path} is not there.");
@@ -760,8 +835,38 @@ internal static class BackupCommands
                 throw NotPrivate(path, opened.Kind, opened.Owner, openedMode);
             }
 
-            return await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+            if (stream.Length > MaxBytes)
+            {
+                throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
+            }
+
+            using var copy = new MemoryStream();
+            var buffer = new byte[81920];
+            int read;
+            while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                if (copy.Length + read > MaxBytes)
+                {
+                    throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
+                }
+
+                copy.Write(buffer, 0, read);
+            }
+
+            return copy.ToArray();
         }
+    }
+
+    /// <summary>
+    /// The backup in <paramref name="archive"/>, the bytes <see cref="ReadPrivateAsync"/> read from <paramref name="path"/>,
+    /// read whole and checked, with their SHA-256: the archive checked and the one hashed are the same bytes.
+    /// </summary>
+    internal static async Task<ReadBackup> ParseAsync(byte[] archive, string path, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        using var stream = new MemoryStream(archive, writable: false);
+        var backup = await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+        return backup with { Sha256 = Convert.ToHexStringLower(SHA256.HashData(archive)) };
     }
 
     private static bool IsPrivate(string kind, string? owner, UnixFileMode? mode)

@@ -11,7 +11,9 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// record names it (<c>upgradeBackup</c>): a rollback across a breaking state change puts back from it the stores the
 /// release before cannot read (<c>rollback --restore-backup</c>). Nothing is copied but these small files. A store that is
 /// there but that a backup cannot hold (a link) refuses the upgrade before anything changes. An older installer takes it
-/// before it replaces itself and hands over (<paramref name="taken"/>): this one then checks it is that backup.
+/// before it replaces itself and hands over (<paramref name="taken"/>): this one then checks it is that backup, from one
+/// read of the file. A backups' folder someone other than root could change refuses the upgrade too
+/// (<see cref="BackupCommands.FolderProblemAsync"/>): another archive could take the place of the one taken.
 /// </summary>
 /// <param name="from">The release installed: what the backup is of.</param>
 /// <param name="to">The release the upgrade installs.</param>
@@ -39,6 +41,11 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
         if (!machine.IsRoot)
         {
             return new StepCheck(StepChange.Info, "only root reads the stores: run with sudo, and the upgrade backs them up first");
+        }
+
+        if (await BackupCommands.FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } folder)
+        {
+            return new StepCheck(StepChange.Blocked, folder);
         }
 
         if (taken is { } handed)
@@ -93,9 +100,9 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
             context.Version,
             from,
             context.Time.GetUtcNow(),
-            () =>
+            async () =>
             {
-                BackupCommands.MakeDefaultFolder(machine);
+                await BackupCommands.MakeDefaultFolderAsync(machine, cancellationToken).ConfigureAwait(false);
                 return path;
             },
             cancellationToken,
@@ -104,15 +111,9 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
         context.Log.Write($"Backed up the stores of {from} to {written.Path} before the upgrade to {to}.");
     }
 
-    /// <summary>The SHA-256 of the backup at <paramref name="backup"/>, as an upgrade hands it over with it (lower-case hex).</summary>
-    public static string Sha256(InstallerMachine machine, string backup)
-    {
-        ArgumentNullException.ThrowIfNull(machine);
-        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(machine.ReadBytes(backup) ?? throw new InstallerException($"{backup} went once it was written.")));
-    }
-
     // Why the backup handed over is not the one the installer before this one took, of the release installed here: null
-    // when it is (in the backups' folder, its SHA-256 as handed over, root's and whole, this host's, of that release).
+    // when it is (in the backups' folder, its SHA-256 as handed over, root's and whole, this host's, of that release). The
+    // file is opened and read once: the bytes hashed are the bytes checked, whatever takes the path's place meanwhile.
     private async Task<string?> HandedOverProblemAsync(InstallContext context, (string Path, string Sha256) handed, CancellationToken cancellationToken)
     {
         var machine = context.Machine;
@@ -126,14 +127,15 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
             return "is not there";
         }
 
-        if (!string.Equals(Sha256(machine, handed.Path), handed.Sha256, StringComparison.OrdinalIgnoreCase))
-        {
-            return "is not the file it took (its SHA-256 differs)";
-        }
-
         try
         {
-            var backup = await BackupCommands.ReadAsync(machine, handed.Path, cancellationToken).ConfigureAwait(false);
+            var archive = await BackupCommands.ReadPrivateAsync(machine, handed.Path, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(archive)), handed.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                return "is not the file it took (its SHA-256 differs)";
+            }
+
+            var backup = await BackupCommands.ParseAsync(archive, handed.Path, cancellationToken).ConfigureAwait(false);
             return backup.Manifest.RecordVersion != from || !string.Equals(backup.Manifest.Host, context.Survey.HostName, StringComparison.OrdinalIgnoreCase)
                 ? $"is not this machine's backup of {from}"
                 : null;
