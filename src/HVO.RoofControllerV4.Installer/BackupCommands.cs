@@ -152,6 +152,9 @@ internal static class BackupCommands
     /// <summary>
     /// Writes a backup to <paramref name="output"/>, which must not be there, as <see cref="WriteAsync"/> does, saying
     /// nothing but in the log: what <c>upgrade</c> takes before it changes anything (<see cref="UpgradeBackupStep"/>).
+    /// Its manifest names each of the stores' files (<see cref="StoreFiles"/>) that was not there (<c>absent</c>). With
+    /// <paramref name="storesRequired"/> (an upgrade's), one that is there but that a backup cannot hold (a link, say)
+    /// refuses it before anything is written: a rollback could not put that store back.
     /// </summary>
     internal static async Task<WrittenBackup> WriteArchiveAsync(
         InstallerMachine machine,
@@ -161,7 +164,8 @@ internal static class BackupCommands
         string? recordVersion,
         DateTimeOffset now,
         Func<string> output,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool storesRequired = false)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(log);
@@ -174,6 +178,19 @@ internal static class BackupCommands
             throw new InstallerRefusedException($"There is nothing here to back up: {string.Join(", ", Folders)} and {string.Join(", ", Files)} hold no files.");
         }
 
+        var absent = new List<string>();
+        foreach (var store in StoreFiles)
+        {
+            if (await IsAbsentAsync(machine, store, cancellationToken).ConfigureAwait(false))
+            {
+                absent.Add(store);
+            }
+            else if (storesRequired && !entries.Any(entry => entry.Path == store && entry.Type == BackupEntry.File))
+            {
+                throw new InstallerRefusedException($"{NotHeld(store, await NotAFileAsync(machine, store, cancellationToken).ConfigureAwait(false) ?? "the backup left it out")}. Nothing was changed.");
+            }
+        }
+
         var path = output();
         var manifest = new BackupManifest(
             CurrentSchema,
@@ -181,7 +198,8 @@ internal static class BackupCommands
             now,
             installerVersion,
             recordVersion,
-            entries);
+            entries,
+            absent);
         var partial = path + ".partial";
         try
         {
@@ -339,6 +357,66 @@ internal static class BackupCommands
                 + $"so a backup cannot trust what it reads there. Give it to root, with only root writing (sudo chown root {folder}; sudo chmod go-w {folder}), then back up. Nothing was written.");
         }
     }
+
+    /// <summary>
+    /// The files the controller's stores are kept in (the state contracts'): a backup holds each that is there, and its
+    /// manifest names each that was not (<c>absent</c>), so a rollback that puts a store back never takes a file the
+    /// backup left out for one that was never saved.
+    /// </summary>
+    internal static IReadOnlyList<string> StoreFiles { get; } = [.. StateContractGuard.Files(ControllerLayout.System).SelectMany(store => store.Files)];
+
+    /// <summary>
+    /// Why an upgrade cannot back up <paramref name="store"/>, one of <see cref="StoreFiles"/>: it is there, but a backup
+    /// cannot hold it (it holds files and folders only, and follows no link). Null when it can: a file, or nothing there.
+    /// What the upgrade's backup checks before anything changes.
+    /// </summary>
+    internal static async Task<string?> CannotHoldAsync(InstallerMachine machine, string store, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        return await IsAbsentAsync(machine, store, cancellationToken).ConfigureAwait(false) || await NotAFileAsync(machine, store, cancellationToken).ConfigureAwait(false) is not { } what
+            ? null
+            : NotHeld(store, what);
+    }
+
+    // Verified not there: stat finds nothing at the path, not even a link, and says so (it fails no other way).
+    private static async Task<bool> IsAbsentAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+    {
+        var result = await machine.Commands.RunAsync(new CommandLine("stat", "-c", "%F|%U:%G", "--", path), cancellationToken).ConfigureAwait(false);
+        return !result.Succeeded && !machine.FileExists(path) && !machine.DirectoryExists(path)
+            && (result.Error.Contains("No such file or directory", StringComparison.Ordinal) || result.Error.Contains("Not a directory", StringComparison.Ordinal));
+    }
+
+    // What keeps a backup from holding a store's file, as CollectAsync walks to it from the folder it backs up: a folder on
+    // the way that is not one (a link), or the file not a file. Null when nothing does.
+    private static async Task<string?> NotAFileAsync(InstallerMachine machine, string store, CancellationToken cancellationToken)
+    {
+        var root = Folders.First(folder => Within(store, folder));
+        var folders = new List<string>();
+        for (var folder = Path.GetDirectoryName(store)!; ; folder = Path.GetDirectoryName(folder)!)
+        {
+            folders.Insert(0, folder);
+            if (folder == root)
+            {
+                break;
+            }
+        }
+
+        foreach (var folder in folders)
+        {
+            if (await StatAsync(machine, folder, cancellationToken).ConfigureAwait(false) is var (kind, _) && kind != "directory")
+            {
+                return $"{folder} is a {kind}";
+            }
+        }
+
+        return await StatAsync(machine, store, cancellationToken).ConfigureAwait(false) is var (storeKind, _) && storeKind is not ("regular file" or "regular empty file")
+            ? $"it is a {storeKind}"
+            : null;
+    }
+
+    private static string NotHeld(string store, string what)
+        => $"{store} is there, but {what}, and a backup holds only files and folders (it follows no link): the upgrade backs up the stores before it changes anything, "
+            + "and a rollback could not put this one back. Put the file itself in its place, then upgrade";
 
     // What the path is (as stat names it: "regular file", "directory", "symbolic link", …) and who owns it, without
     // following a link (or, with follow, of what a link names); null when it is not there.
@@ -747,6 +825,15 @@ internal static class BackupCommands
             }
         }
 
+        var absent = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var store in manifest.Absent ?? [])
+        {
+            if (!StoreFiles.Contains(store, StringComparer.Ordinal) || listed.ContainsKey(store) || !absent.Add(store))
+            {
+                throw Unreadable(path, $"{ManifestName} names {store} as not there, which a backup does not say");
+            }
+        }
+
         // A file or folder's folder is in the backup too (so it goes back with its own mode), unless it is one the backup holds whole.
         foreach (var entry in listed.Values)
         {
@@ -844,7 +931,11 @@ internal static class BackupCommands
 }
 
 /// <summary>What a backup holds: <see cref="BackupCommands.ManifestName"/>, the archive's first entry.</summary>
-internal sealed record BackupManifest(int Schema, string Host, DateTimeOffset CreatedAt, string InstallerVersion, string? RecordVersion, IReadOnlyList<BackupEntry>? Entries);
+/// <param name="Absent">
+/// The stores' files (<see cref="BackupCommands.StoreFiles"/>) that were not there when it was made: null in a backup from
+/// before it was kept. A file neither held nor named here is one the backup left out, not one never saved.
+/// </param>
+internal sealed record BackupManifest(int Schema, string Host, DateTimeOffset CreatedAt, string InstallerVersion, string? RecordVersion, IReadOnlyList<BackupEntry>? Entries, IReadOnlyList<string>? Absent = null);
 
 /// <summary>A folder or file in a backup: its path on the machine, its mode and owner, and a file's size and SHA-256.</summary>
 internal sealed record BackupEntry(string Path, string Type, string Mode, string? Owner, long? Size = null, string? Sha256 = null)

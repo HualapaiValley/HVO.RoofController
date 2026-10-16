@@ -478,6 +478,82 @@ public sealed class InstallerStateContractTests
         (await stop.CheckAsync(session.Context, CancellationToken.None)).Should().Be(StepCheck.Unchanged("not there"));
     }
 
+    // #136 F2: a store the backup cannot hold refuses the upgrade; a rollback removes a store only when the backup says
+    // it was not there.
+
+    [TestMethod]
+    public async Task AnUpgrade_WithAStoreTheBackupCannotHold_IsRefused_BeforeAnythingChanges()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        File.Delete(pi.OnDisk(IdentityFile));
+        pi.Write(IdentityFile + ".real", IdentityBefore);
+        File.CreateSymbolicLink(pi.OnDisk(IdentityFile), "identity.json.real");
+        var before = State(pi);
+
+        foreach (var installer in new[] { "4.0.0", NewVersion })
+        {
+            pi.InstallerVersion = installer;
+            var run = await pi.RunAsync("upgrade");
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Refused, $"{installer}: {run}");
+            (run.Output + run.Error).Should().Contain($"{IdentityFile} is there, but it is a symbolic link, and a backup holds only files and folders");
+            Unchanged(pi, before);
+        }
+
+        pi.Launches.Should().BeEmpty("the installer is not replaced");
+        pi.Exists(BackupCommands.DefaultFolder).Should().BeFalse("no backup is written");
+    }
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_NeverRemovesAStoreTheBackupLeftOut()
+    {
+        // A backup made while the identity store was a link: it leaves the link out, and does not say the store was not there.
+        using var pi = await InstalledPiAsync();
+        File.Delete(pi.OnDisk(IdentityFile));
+        pi.Write(IdentityFile + ".real", IdentityBefore);
+        File.CreateSymbolicLink(pi.OnDisk(IdentityFile), "identity.json.real");
+        pi.Folder("/root");
+        (await pi.RunAsync("backup", "--output", "/root/before.tar.gz")).ExitCode.Should().Be(0);
+        var leftOut = await BackupCommands.ReadAsync(pi.Machine, "/root/before.tar.gz", CancellationToken.None);
+        leftOut.Entries.Should().NotContain(entry => entry.Path == IdentityFile);
+        leftOut.Manifest.Absent.Should().NotContain(IdentityFile);
+        File.Delete(pi.OnDisk(IdentityFile));
+        pi.Write(IdentityFile, IdentityBefore);
+        pi.WithRelease(NewVersion, latest: true, stateContract: MovesToTwo);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+        pi.Write(IdentityFile, IdentityMoved);
+        var before = State(pi);
+
+        var run = await pi.RunAsync("rollback", "--restore-backup", "/root/before.tar.gz", "--yes");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"/root/before.tar.gz does not hold {IdentityFile}, and does not say it was not there when the backup was made: it cannot put back the identity store. Nothing was changed.");
+        Unchanged(pi, before);
+        pi.Read(IdentityFile).Should().Be(IdentityMoved);
+    }
+
+    [TestMethod]
+    public async Task AnUpgradesBackup_SaysWhichStoresWereNotThere_AndARollbackMovesOneSavedSinceAside()
+    {
+        using var pi = await InstalledPiAsync();
+        File.Delete(pi.OnDisk(IdentityFile));
+        pi.WithRelease(NewVersion, latest: true, stateContract: MovesToTwo);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+        (await BackupCommands.ReadAsync(pi.Machine, Backup, CancellationToken.None)).Manifest.Absent.Should().Contain(IdentityFile);
+
+        // The new release saved its identity store, at a schema 4.0.0 does not read.
+        pi.Write(IdentityFile, IdentityMoved);
+        var run = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Exists(IdentityFile).Should().BeFalse("4.0.0 never saved it");
+        pi.Read($"{IdentityFile}.rolled-back-from-{NewVersion}-20261001T090000Z").Should().Be(IdentityMoved);
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.0");
+    }
+
     // #136 F3: a store that is a folder, or that root cannot read, refuses an upgrade and a rollback; only a plan without
     // sudo leaves a file it may not read to the run as root.
 

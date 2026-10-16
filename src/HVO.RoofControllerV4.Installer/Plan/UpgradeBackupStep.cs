@@ -9,9 +9,9 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// kiosk's device key and the record; no log, and no program or image, which come from the release), in
 /// <see cref="BackupCommands.DefaultFolder"/> as <c>hvo-roof-&lt;host&gt;-&lt;UTC time&gt;-before-&lt;version&gt;.tar.gz</c>. The
 /// record names it (<c>upgradeBackup</c>): a rollback across a breaking state change puts back from it the stores the
-/// release before cannot read (<c>rollback --restore-backup</c>). Nothing is copied but these small files. An older
-/// installer takes it before it replaces itself and hands over (<paramref name="taken"/>): this one then checks it is
-/// that backup.
+/// release before cannot read (<c>rollback --restore-backup</c>). Nothing is copied but these small files. A store that is
+/// there but that a backup cannot hold (a link) refuses the upgrade before anything changes. An older installer takes it
+/// before it replaces itself and hands over (<paramref name="taken"/>): this one then checks it is that backup.
 /// </summary>
 /// <param name="from">The release installed: what the backup is of.</param>
 /// <param name="to">The release the upgrade installs.</param>
@@ -70,6 +70,14 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
                 : StepCheck.Unchanged($"taken before an earlier run of this upgrade: {Kept}");
         }
 
+        foreach (var store in BackupCommands.StoreFiles)
+        {
+            if (await BackupCommands.CannotHoldAsync(machine, store, cancellationToken).ConfigureAwait(false) is { } problem)
+            {
+                return new StepCheck(StepChange.Blocked, problem);
+            }
+        }
+
         Kept = path;
         return new StepCheck(StepChange.Create, $"{Modes.Octal(Modes.PrivateFile)}, root's");
     }
@@ -90,7 +98,8 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
                 BackupCommands.MakeDefaultFolder(machine);
                 return path;
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            storesRequired: true).ConfigureAwait(false);
         Kept = written.Path;
         context.Log.Write($"Backed up the stores of {from} to {written.Path} before the upgrade to {to}.");
     }

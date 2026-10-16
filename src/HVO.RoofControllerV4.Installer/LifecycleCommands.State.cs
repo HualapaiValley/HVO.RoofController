@@ -242,6 +242,15 @@ internal static partial class LifecycleCommands
         foreach (var (store, files) in StateContractGuard.Files(layout).Where(store => incompatible.Contains(store.Store)))
         {
             var entries = files.Select(path => (Path: path, Entry: backup.Entries.FirstOrDefault(entry => entry.Path == path && entry.Type == BackupEntry.File))).ToList();
+
+            // A file the backup does not hold goes only when its manifest says it was not there: one it left out (a link,
+            // or a backup from before it said) may be the store itself, and is never taken for one never saved.
+            if (entries.Where(item => item.Entry is null && !(backup.Manifest.Absent ?? []).Contains(item.Path, StringComparer.Ordinal)).Select(item => item.Path).FirstOrDefault() is { } unknown)
+            {
+                throw new InstallerRefusedException(
+                    $"{file} does not hold {unknown}, and does not say it was not there when the backup was made: it cannot put back {StateContract.Describe(store)}. Nothing was changed.");
+            }
+
             var state = StateContractGuard.Read(store, entries.Select(item => (item.Path, item.Entry?.Content is { } bytes ? System.Text.Encoding.UTF8.GetString(bytes) : null, false)));
             if (StateContractGuard.Incompatible([state], target) is [var problem, ..])
             {

@@ -7,14 +7,16 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// <summary>
 /// One of a store's files put back as the backup the upgrade took has it (<c>hvo-roof-install rollback
 /// --restore-backup</c>): the release before cannot read the store as it is now. The file it replaces is kept beside it,
-/// only root's, as <c>&lt;file&gt;.rolled-back-from-&lt;version&gt;-&lt;UTC time&gt;</c>; a file the backup does not have
-/// is moved there. Nothing else in its folder changes (a kiosk's retired commissioning stays retired). It runs only with
-/// the controller stopped: the deploy script's verified Stop and <c>--stop</c> come first, and Docker must say the
-/// controller is stopped or not there before anything is written.
+/// only root's, as <c>&lt;file&gt;.rolled-back-from-&lt;version&gt;-&lt;UTC time&gt;</c>; a file the backup's manifest says
+/// was not there is moved there. Nothing else in its folder changes (a kiosk's retired commissioning stays retired). It
+/// runs only with the controller stopped: the deploy script's verified Stop and <c>--stop</c> come first, and Docker must
+/// say the controller is stopped or not there before anything is written.
 /// </summary>
 /// <param name="path">The store's file.</param>
 /// <param name="purpose">What the store is, for the plan.</param>
-/// <param name="content">The file as the backup has it; null when the backup has none (the store was never saved then).</param>
+/// <param name="content">
+/// The file as the backup has it; null when the backup's manifest says it was not there (the store was never saved then).
+/// </param>
 /// <param name="mode">Its mode in the backup.</param>
 /// <param name="owner">Its owner in the backup (user:group), which the controller must still be to read it; null when unknown.</param>
 /// <param name="rolledBackFrom">The release the rollback goes back from, for the name of the file kept.</param>
