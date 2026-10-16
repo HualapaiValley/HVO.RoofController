@@ -757,6 +757,36 @@ jobs:
               exit 1
             }
           done
+          # Every controller and deployment check has the deploy script's privileges and limits (x-hardening;
+          # docs/deployment.md, "The container's privileges and limits"): a read-only root filesystem and its tmpfs
+          # mounts, only the supervisor's capabilities, no-new-privileges, the default limits with no swap, and for a
+          # controller the volume for the web UI's keys.
+          for profile in pi pi-lan-http emulator; do
+            docker compose --profile "${profile}" config --format json | jq -e '
+              [.services[] | select(.image | test("roof-controller"))] as $controllers
+              | ($controllers | length) > 0 and all($controllers[];
+                  .read_only == true
+                  and .tmpfs == ["/tmp:size=64m", "/run/hvo-roof:size=4m,mode=0755", "/root/.aspnet:size=4m,mode=0700"]
+                  and .cap_drop == ["ALL"] and .cap_add == ["CHOWN", "KILL", "SETGID", "SETUID"]
+                  and .security_opt == ["no-new-privileges"]
+                  and .cpus == 2 and .mem_limit == "4294967296" and .memswap_limit == .mem_limit and .pids_limit == 512
+                  and ((.command // [] | index("--validate-deployment")) != null
+                    or ([.volumes[] | select(.type == "volume" and .target == "/var/lib/hvo-roof-web")] | length) == 1))' >/dev/null || {
+              echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::a ${profile} controller or deployment check lacks the deploy script's privileges and limits (x-hardening)"
+              exit 1
+            }
+          done
+          # And the deploy script gives the same (its hardening_args and its default limits).
+          for expected in "--read-only" "--tmpfs /tmp:size=64m" "--tmpfs /run/hvo-roof:size=4m,mode=0755" \
+              "--tmpfs /root/.aspnet:size=4m,mode=0700" "--mount type=volume,dst=/var/lib/hvo-roof-web" \
+              "--cap-drop ALL --cap-add CHOWN --cap-add KILL --cap-add SETGID --cap-add SETUID" \
+              "--security-opt no-new-privileges" 'CONTAINER_CPUS=${CONTAINER_CPUS:-2}' \
+              'CONTAINER_MEMORY=${CONTAINER_MEMORY:-4g}' 'CONTAINER_PIDS_LIMIT=${CONTAINER_PIDS_LIMIT:-512}'; do
+            grep -qF -- "${expected}" deploy-roofcontroller-rpi.sh || {
+              echo "::error file=src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh::the deploy script does not give ${expected}, as docker-compose.yaml does"
+              exit 1
+            }
+          done
           # The supervisor's default stop waits, from the script: the controller's must exceed the controller's own
           # ShutdownTimeout (Program.cs), and both, with a second for the supervisor's tick and a 2 s margin, must fit in
           # the containers' stop grace period and the deploy script's smallest stop timeout, or Docker kills the

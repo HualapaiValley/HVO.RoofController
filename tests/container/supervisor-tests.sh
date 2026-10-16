@@ -715,7 +715,8 @@ test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
   grep -F -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | env -i " "${FAKE_DIR}/setpriv.log" \
     | grep -q " ${WORK}/bin/ui\$" || fail_test "the web UI was not started with setpriv: $(cat "${FAKE_DIR}/setpriv.log")"
   grep -qxF "USER=${UI_USER}" <(ui_env) || fail_test "the web UI's environment does not name its user"
-  expect_equal "control directory" "$(stat -c '%a %U %G' "${WORK}/run/control")" "700 ${UI_USER} ${UI_GROUP}"
+  # The supervisor's (root's in the container), so it reaches the web UI's requests without CAP_DAC_OVERRIDE.
+  expect_equal "control directory" "$(stat -c '%a %U %G' "${WORK}/run/control")" "770 $(id -un) ${UI_GROUP}"
   expect_equal "private directory" "$(stat -c '%a %G' "${WORK}/run/web")" "750 ${UI_GROUP}"
   expect_equal "keys directory" "$(stat -c '%a %U %G' "${WORK}/data/keys")" "700 ${UI_USER} ${UI_GROUP}"
   ! grep -q "can read" "${WORK}/supervisor.log" || fail_test "a warning without secrets: $(grep "can read" "${WORK}/supervisor.log")"
