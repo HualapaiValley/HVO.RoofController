@@ -619,12 +619,13 @@ test_schema_missing_python_refuses_before_stopping_current() {
 }
 test_schema_non_json_constant_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":1,"ignored":NaN}'; }
 test_schema_malformed_json_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{'; }
-test_schema_future_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":3}'; }
+test_schema_future_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":4}'; }
 test_schema_string_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":"2"}'; }
 test_schema_null_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":null}'; }
 test_schema_boolean_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":true}'; }
 test_schema_zero_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":0}'; }
-test_schema_invalid_capability_blocks_recovery() { schema_unknown_auto_recovery FAKE_OLD_IDENTITY_CAPABILITY=3; }
+test_schema_invalid_capability_blocks_recovery() { schema_unknown_auto_recovery FAKE_OLD_IDENTITY_CAPABILITY=4; }
+test_schema_three_blocks_old_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_DOCUMENT='{"schemaVersion":3}' FAKE_OLD_IDENTITY_CAPABILITY=2; }
 test_schema_malformed_capability_blocks_recovery() { schema_unknown_auto_recovery FAKE_OLD_IDENTITY_CAPABILITY=garbage; }
 test_schema_copy_failure_blocks_recovery() { schema_unknown_auto_recovery FAKE_IDENTITY_COPY_FAIL=true; }
 test_schema_inspect_failure_blocks_recovery() { schema_unknown_auto_recovery FAKE_FAIL='image inspect --format'; }

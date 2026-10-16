@@ -40,7 +40,7 @@ internal static class BackupCommands
     /// The folders a backup holds, whole: the controller's configuration (settings, secrets, certificate, CA and the install
     /// record), its data (people, managed API keys, managed secrets) and the kiosk's device key.
     /// </summary>
-    public static IReadOnlyList<string> Folders { get; } = [ControllerLayout.System.Configuration, ControllerLayout.System.Data, KioskSteps.ConfigurationFolder];
+    public static IReadOnlyList<string> Folders { get; } = [ControllerLayout.System.Configuration, ControllerLayout.System.Data, KioskSteps.ConfigurationFolder, KioskCommissioningClaimStep.ClaimDirectory];
 
     /// <summary>The files a backup holds on their own: the kiosk's settings (its program comes from the release).</summary>
     public static IReadOnlyList<string> Files { get; } = [KioskSteps.SettingsFile];
@@ -385,6 +385,16 @@ internal static class BackupCommands
         var release = Installer.Release(host, releaseFolder);
         var path = Path.GetFullPath(file, machine.CurrentDirectory);
         var backup = await ReadAsync(machine, path, cancellationToken).ConfigureAwait(false);
+        // Never restore temporary access, even onto an empty replacement machine.
+        var identityEntry = backup.Entries.FirstOrDefault(entry => entry.Path == ControllerLayout.System.IdentityFile);
+        if (identityEntry?.Content is { } identityBytes)
+        {
+            using var identity = JsonDocument.Parse(identityBytes);
+            if (identity.RootElement.TryGetProperty("kioskCredential", out var credential)
+                && credential.ValueKind == JsonValueKind.Object && credential.TryGetProperty("state", out var state)
+                && state.GetString() == "pending")
+                throw new InstallerRefusedException("This backup contains pending kiosk commissioning. Temporary access cannot be restored; preserve it and use explicit administrator recovery.");
+        }
         var record = backup.Record;
         var version = InstallerSession.RoofVersion(host.Version);
         if (record is not null && RoofSemVer.IsOlder(version, record.Version))

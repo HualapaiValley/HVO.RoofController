@@ -9,12 +9,12 @@ namespace HVO.RoofControllerV4.RPi.Security.Identity;
 
 public sealed partial class RoofIdentityStore
 {
-    public bool ProviderEnabled => _options.CurrentValue.LinuxAuth.Enabled && IsAvailable && _document.SchemaVersion == 2;
+    public bool ProviderEnabled => _options.CurrentValue.LinuxAuth.Enabled && IsAvailable && _document.SchemaVersion >= 2;
 
     // Startup only, before snapshots become visible. No migration is performed while disabled.
     private void MigrateProviderIdentity()
     {
-        if (_document.SchemaVersion == 2) return;
+        if (_document.SchemaVersion >= 2) return;
         if (_file is not null && File.Exists(_file.Path))
         {
             var backup = _file.Path + ".schema1.bak";

@@ -1055,7 +1055,7 @@ if not isinstance(d,ObjectPairs): sys.exit(1)
 values=[value for key,value in d if key == "schemaVersion"]
 if len(values)>1: sys.exit(1)
 v=values[0] if values else 1
-if type(v) is not int or v not in (1,2): sys.exit(1)
+if type(v) is not int or v not in (1,2,3): sys.exit(1)
 print(v)'
 }
 
@@ -1072,7 +1072,7 @@ identity_schema_compatible() {
   capability=$(dockerc image inspect --format '{{index .Config.Labels "io.hvo.roof.identity-schema"}}' "${image}" 2>/dev/null) || return 1
   case "${capability}" in
     ""|"<no value>") capability=1 ;;
-    1|2) ;;
+    1|2|3) ;;
     *) SCHEMA_FAILURE="the target image declares an unsupported identity schema"; return 1 ;;
   esac
   env=$(dockerc inspect --format '{{json .Config.Env}}' "${target}" 2>/dev/null) || return 1

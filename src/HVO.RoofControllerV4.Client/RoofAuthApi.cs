@@ -110,6 +110,21 @@ public sealed class RoofAuthApi
         return _http.GetAsync<RoofPinUserResponse[]>(RoofApiRoutes.PinUsers, cancellationToken, RoofCredentialUse.Device);
     }
 
+    /// <summary>Sign in by stable human principal. A setup grant never becomes the client's credential.</summary>
+    public async Task<RoofKioskPinResponse> SignInWithPrincipalPinAsync(string id, string pin, CancellationToken cancellationToken = default)
+    {
+        var kiosk = RequireKiosk();
+        var result = await _http.SendAsync<RoofKioskPinResponse>(HttpMethod.Post, RoofApiRoutes.KioskPin,
+            new RoofKioskPinRequest(id, pin), cancellationToken, RoofCredentialUse.Device).ConfigureAwait(false);
+        if (result.Session is { } session) kiosk.UsePinSession(session);
+        return result;
+    }
+
+    /// <summary>Choose and confirm a personal PIN; this does not sign in.</summary>
+    public Task CompleteKioskSetupAsync(string token, string pin, string confirmation, CancellationToken cancellationToken = default)
+        => _http.SendAsync(HttpMethod.Post, RoofApiRoutes.CompleteKioskPin,
+            new RoofKioskSetupRequest(token, pin, confirmation), cancellationToken, RoofCredentialUse.Device);
+
     /// <summary>Who the controller takes the caller to be.</summary>
     public Task<RoofCallerResponse> GetCallerAsync(CancellationToken cancellationToken = default)
         => _http.GetAsync<RoofCallerResponse>(RoofApiRoutes.Me, cancellationToken);

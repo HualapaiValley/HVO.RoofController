@@ -131,11 +131,15 @@ public sealed class AuthController : ControllerBase
             return StoreUnavailable();
         }
 
+        var credential = _identity.GetKioskCredential();
+        var owner = credential is null ? null : _identity.ProviderPrincipals.FirstOrDefault(p => p.Id == credential.PrincipalId && p.Enabled);
+        var commissioned = owner is null ? Array.Empty<RoofPinUserResponse>() : new[] { new RoofPinUserResponse(owner.Name, RoofControllerApiContract.OperatorRole)
+            { PrincipalId = owner.Id, Provider = owner.Provider, SetupPending = credential!.State == "pending" } };
         return _identity.Users
             .Where(user => (user.PinHash is not null || _identity.CanUseTemporaryPin(user)) && user.Role != RoofControllerApiContract.ViewerRole)
             .OrderBy(user => user.Name, StringComparer.OrdinalIgnoreCase)
             .Select(user => new RoofPinUserResponse(user.Name, user.Role))
-            .ToArray();
+            .Concat(commissioned).ToArray();
     }
 
     /// <summary>Who the caller is: the person or API key, its role and how it signed in (any credential).</summary>

@@ -725,3 +725,8 @@ Keys, session tokens, passwords, PINs, cookies and Blue Iris credentials are nev
 headers are redacted in HTTP client logs. Each command logs the caller's key or person name and remote address.
 Configuration and settings changes, restarts, sign-ins, sign-outs and identity changes log an `AUDIT` entry. Failed and locked-out sign-ins
 log a `SECURITY` warning. A refused session token is logged at Warning with the remote address.
+
+## First-install owner PIN
+
+See [First-install kiosk PIN commissioning](kiosk-commissioning.md) for eligibility, mandatory replacement,
+retirement, persistence and rollback. Existing installations receive no temporary access automatically.

@@ -155,3 +155,9 @@ stand in for native PAM/sudo or a real installation; the disposable installation
 separate checks.
 
 PIN sessions are limited to roof operation; settings writes and identity administration are refused. See [Authentication and interface rights](../../docs/authentication-interfaces.md) for enrollment and credential policies.
+
+## Kiosk owner commissioning API
+
+Eligible installations expose POST api/v4.0/Auth/KioskPin and POST api/v4.0/Auth/KioskPin/Complete.
+Both require a current kiosk device key. Setup tokens are not ordinary bearer sessions. See
+[first-install commissioning](../../docs/kiosk-commissioning.md) for the state machine and schema-3 recovery rules.

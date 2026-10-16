@@ -16,6 +16,14 @@ public sealed class KioskPinPad
 
     private readonly KioskConsole _console;
     private string _pin = string.Empty;
+    private string? _setupToken;
+    private string? _chosenPin;
+    /// <summary>Setup never unlocks the console or installs a session credential.</summary>
+    public bool ChoosingPin => _setupToken is not null;
+    public string ActionLabel => !ChoosingPin ? "Unlock" : _chosenPin is null ? "Choose PIN" : "Confirm PIN";
+    public static string SelectionKey(RoofPinUserResponse user) => user.PrincipalId ?? user.Name;
+    private RoofPinUserResponse? SelectedUser => Users.FirstOrDefault(user => SelectionKey(user) == Selected);
+
 
     public KioskPinPad(KioskConsole console)
     {
@@ -45,8 +53,11 @@ public sealed class KioskPinPad
     public string? Error { get; private set; }
 
     /// <summary>What to do next, for the line above the pad.</summary>
-    public string Prompt => Selected is null ? "Choose your name, then enter your PIN."
-        : $"PIN for {Selected}: four digits.";
+    public string Prompt => ChoosingPin
+        ? _chosenPin is null ? "Choose your personal four-digit PIN." : "Enter your new PIN again to confirm."
+        : Selected is null ? "Choose your name, then enter your PIN."
+        : SelectedUser?.SetupPending == true ? $"First-time setup for {SelectedUser.Name}: enter the temporary PIN."
+        : $"PIN for {SelectedUser?.Name ?? Selected}: four digits.";
 
     /// <summary>True when the PIN can be sent: a person is chosen and the PIN has an allowed length.</summary>
     public bool CanUnlock => Selected is not null && !Unlocking && RoofIdentityContract.IsAcceptedPin(_pin);
@@ -68,7 +79,7 @@ public sealed class KioskPinPad
         {
             var users = await _console.Client.Auth.GetPinUsersAsync(cancellationToken);
             Users = users;
-            if (Selected is not null && !users.Any(user => user.Name == Selected))
+            if (Selected is not null && !users.Any(user => SelectionKey(user) == Selected))
             {
                 Select(null);
             }
@@ -76,7 +87,7 @@ public sealed class KioskPinPad
             Error = users.Length == 0 ? NoPinUsers : null;
             if (users.Length == 1 && Selected is null)
             {
-                Selected = users[0].Name;
+                Selected = SelectionKey(users[0]);
             }
         }
         catch (Exception error) when (!cancellationToken.IsCancellationRequested)
@@ -93,6 +104,8 @@ public sealed class KioskPinPad
     /// <summary>Chooses the person the PIN is for; the PIN typed so far is cleared.</summary>
     public void Select(string? name)
     {
+        _setupToken = null;
+        _chosenPin = null;
         Selected = name;
         _pin = string.Empty;
         if (Users.Count > 0)
@@ -155,7 +168,46 @@ public sealed class KioskPinPad
         Raise();
         try
         {
-            Error = await _console.UnlockAsync(Selected!, pin);
+            if (_setupToken is not null)
+            {
+                if (!RoofIdentityContract.IsValidPin(pin) || pin == "0000")
+                {
+                    Error = "Choose a personal four-digit PIN different from the temporary PIN.";
+                }
+                else if (_chosenPin is null)
+                {
+                    _chosenPin = pin;
+                }
+                else if (_chosenPin != pin)
+                {
+                    _chosenPin = null;
+                    Error = "The PINs did not match. Choose your PIN again.";
+                }
+                else
+                {
+                    await _console.Client.Auth.CompleteKioskSetupAsync(_setupToken, _chosenPin, pin);
+                    _setupToken = null;
+                    _chosenPin = null;
+                    await LoadUsersAsync();
+                    Error = "PIN saved. Sign in with your new PIN to unlock.";
+                }
+            }
+            else if (SelectedUser?.PrincipalId is { } principalId)
+            {
+                var result = await _console.Client.Auth.SignInWithPrincipalPinAsync(principalId, pin);
+                _setupToken = result.SetupToken;
+                _chosenPin = null;
+            }
+            else
+            {
+                Error = await _console.UnlockAsync(Selected!, pin);
+            }
+        }
+        catch (Exception error)
+        {
+            Error = RoofText.DescribeFailure(error);
+            _setupToken = null;
+            _chosenPin = null;
         }
         finally
         {

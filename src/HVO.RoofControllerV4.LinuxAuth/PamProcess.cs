@@ -7,6 +7,8 @@ namespace HVO.RoofControllerV4.LinuxAuth;
 internal static class PamProcess
 {
     internal static bool Check(string userName, string? password, bool authenticate, uint uid, bool requireUnlockedPassword)
+        => CheckResult(userName, password, authenticate, uid, requireUnlockedPassword) == true;
+    internal static bool? CheckResult(string userName, string? password, bool authenticate, uint uid, bool requireUnlockedPassword)
     {
         using var process = new Process
         {
@@ -22,21 +24,21 @@ internal static class PamProcess
         process.StartInfo.Environment["PATH"] = "/usr/sbin:/usr/bin:/sbin:/bin";
         try
         {
-            if (!process.Start()) return false;
+            if (!process.Start()) return null;
             process.StandardInput.Write(JsonSerializer.Serialize(new PamRequest(userName, password, authenticate, uid, requireUnlockedPassword), Program.Json));
             process.StandardInput.Close();
             if (!process.WaitForExit(5000))
             {
                 process.Kill(entireProcessTree: true);
                 process.WaitForExit(2000);
-                return false;
+                return null;
             }
-            return process.ExitCode == 0;
+            return process.ExitCode switch { 0 => true, 2 => false, _ => null };
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            return false;
+            return null;
         }
     }
 }

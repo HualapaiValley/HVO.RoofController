@@ -455,7 +455,7 @@ public sealed class RoofIdentityStoreTests
     }
 
     [TestMethod]
-    [DataRow("{ \"schemaVersion\": 3 }", "schemaVersion 3 is not supported")]
+    [DataRow("{ \"schemaVersion\": 4 }", "schemaVersion 4 is not supported")]
     [DataRow("null", "is empty")]
     [DataRow("{ \"schemaVersion\": 1, \"users\": [ { \"name\": \"-bad\", \"role\": \"RoofViewer\", \"passwordHash\": null, \"pinHash\": null, \"stamp\": \"s\", \"createdUtc\": \"2026-01-01T00:00:00Z\", \"updatedUtc\": \"2026-01-01T00:00:00Z\" } ] }", "users[0]")]
     [DataRow("{ \"schemaVersion\": 1, \"apiKeys\": [ { \"name\": \"k\", \"role\": \"RoofOperator\", \"kiosk\": true, \"keySha256\": \"" + "0000000000000000000000000000000000000000000000000000000000000000" + "\", \"createdUtc\": \"2026-01-01T00:00:00Z\", \"updatedUtc\": \"2026-01-01T00:00:00Z\" } ] }", "apiKeys[0]")]

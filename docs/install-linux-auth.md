@@ -88,7 +88,7 @@ credentials. Handle them as credential-bearing backups. Runtime code comes from 
 Modified or unowned files are refused. If the native installation step fails, its original files and
 original service active/enabled states are restored.
 
-An enabled identity store uses schema 2. Release manifests declare identityStoreSchema; older
+An enabled identity store uses schema 2, or schema 3 when first-install kiosk commissioning was provisioned. Release manifests declare identityStoreSchema; older
 manifests default to schema 1. A rollback to incompatible software is refused before replacing the
 controller. The schema-1 migration backup is never replayed automatically because it could revive
 revoked credentials. Compatible release rollback keeps current identity data and revocations.
@@ -106,3 +106,8 @@ Disposable guest verification exercises the real installer and services with an 
 creating accounts or applying policy on the development VM host.
 
 For interface rights, credential policy and implemented-versus-planned boundaries, see [Authentication and interface rights](authentication-interfaces.md).
+
+## First-install owner PIN
+
+See [First-install kiosk PIN commissioning](kiosk-commissioning.md) for eligibility, mandatory replacement,
+retirement, persistence and rollback. Existing installations receive no temporary access automatically.

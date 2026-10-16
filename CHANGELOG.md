@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
+  mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
+
+### Security
+
+- Persist commissioning retirement and guess limits; reject pending-state restore and schema-incompatible rollback.
+  Native revalidation distinguishes confirmed account revocation from unavailable checks.
+
 ## [4.1.1] - 2026-10-15
 
 ### Fixed

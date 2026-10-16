@@ -39,8 +39,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/HVO.RoofControllerV4.LinuxAuth/HVO.RoofControllerV4.LinuxAuth.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Cli\HVO.RoofControllerV4.Cli.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Installer\HVO.RoofControllerV4.Installer.csproj" />
+    <ProjectReference Include="../../src/HVO.RoofControllerV4.LinuxAuth/HVO.RoofControllerV4.LinuxAuth.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Client\HVO.RoofControllerV4.Client.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Kiosk\HVO.RoofControllerV4.Kiosk.csproj" />
     <ProjectReference Include="..\..\src\HVO.RoofControllerV4.Mac\HVO.RoofControllerV4.Mac.csproj" />

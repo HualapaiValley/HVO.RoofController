@@ -493,3 +493,8 @@ See [Authentication and interface rights](authentication-interfaces.md) for pers
 Choose **About**, even while locked or offline, to read this kiosk's installed build and commit. Controller version is shown separately when an administrator session can read it; the PIN kiosk reports that it is unavailable rather than substituting the local build. Stop remains available in its own column.
 
 ![Locked kiosk About view](images/kiosk/about-locked-800x480.png)
+
+## First-install owner PIN
+
+See [First-install kiosk PIN commissioning](kiosk-commissioning.md) for eligibility, mandatory replacement,
+retirement, persistence and rollback. Existing installations receive no temporary access automatically.

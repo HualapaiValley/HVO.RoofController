@@ -96,3 +96,12 @@ in memory, and exercises the actual compiled executable, PAM, sudo and kernel so
 [`test runner`](../../tests/linux-auth/run_native_worker.py) compiles in the selected Linux development environment,
 builds a constrained no-network runtime container, captures account-file hashes, and removes its exact container/image.
 This verifies the native component; it does not claim a production controller, installer, kiosk or full-system test.
+
+## Revalidation response
+
+The private /v1/revalidate endpoint returns HTTP 200 with valid true and the enrolled user name for a current
+identity, HTTP 200 with valid false for confirmed revocation, and HTTP 503 for an indeterminate PAM/helper result.
+Transport, malformed-request and peer-authorization failures never count as proof of account revocation.
+The controller refuses all non-current results. Commissioned kiosk credentials are permanently retired only after
+confirmed revocation. The helper child uses exit 0 for success, 2 for confirmed denial, and 1 for unavailability;
+password authentication still accepts only success. No Linux password, account or PAM policy is changed by this flow.

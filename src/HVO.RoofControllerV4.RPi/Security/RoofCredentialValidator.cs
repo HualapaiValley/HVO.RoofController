@@ -55,7 +55,7 @@ public sealed class RoofCredentialValidator
                     && string.Equals(session.Kind == RoofCredentialKind.Pin && session.Role == RoofControllerApiContract.AdminRole
                         ? RoofControllerApiContract.OperatorRole : session.Role, role, StringComparison.Ordinal)
                     && IsDeviceStillKiosk(session)
-                    && (session.PrincipalId is null || _providers?.PrincipalIsCurrent(session.PrincipalId, session.Scope is not null) == true);
+                    && (session.PrincipalId is null || (session.Kind == RoofCredentialKind.Pin ? _providers?.KioskPrincipalIsCurrent(session.PrincipalId) : _providers?.PrincipalIsCurrent(session.PrincipalId, session.Scope is not null)) == true);
 
             default:
                 return false;
@@ -96,7 +96,7 @@ public sealed class RoofCredentialValidator
             return false;
         }
 
-        if (found.PrincipalId is not null && _providers?.PrincipalIsCurrent(found.PrincipalId, found.Scope is not null) != true)
+        if (found.PrincipalId is not null && (found.Kind == RoofCredentialKind.Pin ? _providers?.KioskPrincipalIsCurrent(found.PrincipalId) : _providers?.PrincipalIsCurrent(found.PrincipalId, found.Scope is not null)) != true)
         {
             failure = "the provider identity is unavailable or changed";
             return false;

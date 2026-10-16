@@ -21,7 +21,7 @@ internal static class IdentitySchemaGuard
             var schema = 1;
             if (root.TryGetProperty("schemaVersion", out var value))
             {
-                if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out schema) || schema is not (1 or 2))
+                if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out schema) || schema is not (1 or 2 or 3))
                     return "The identity schema is malformed or unsupported; refusing a controller replacement.";
             }
             return schema > release.IdentityStoreSchema
