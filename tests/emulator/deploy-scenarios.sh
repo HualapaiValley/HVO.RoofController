@@ -1291,9 +1291,27 @@ scenario_c12() {
   assert_relays_off
   pass "swapped in ${first_seconds} s and back in ${DEPLOY_SECONDS} s, each verified from this machine; relays 0 in ${RELAY_SAMPLES} samples"
 
+  # A rollback the roof's idle check refuses changes nothing of the version it would bring back, its limits included:
+  # the limits are given only after every check that can refuse it.
+  current_check="C12 step 6: a refused rollback leaves the version it would bring back as it was"
+  local limits limits_before cgroup
+  limits_before=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${previous}")
+  start_travel Open
+  deploy REQUIRE_IDLE_ROOF=true CONTAINER_CPUS=2.5 CONTAINER_MEMORY=4g -- --rollback
+  (( DEPLOY_STATUS != 0 )) || fail "the rollback went ahead while the roof moved"
+  expect_deploy_log "The roof is moving"
+  ! deploy_log_has "Giving ${previous} the limits" || fail "the refused rollback gave ${previous} the limits"
+  limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${previous}")
+  [[ "${limits}" == "${limits_before}" ]] || fail "the refused rollback changed ${previous}'s limits from ${limits_before} to ${limits}"
+  [[ "$(container_id "${controller}")" == "${current_id}" && "$(container_id "${previous}")" == "${previous_id}" ]] \
+    || fail "the refused rollback swapped the versions"
+  container_running "${controller}" || fail "the refused rollback stopped ${controller}"
+  roof_post Stop >/dev/null
+  assert_relays_off
+  pass "refused while the roof moved; ${previous} kept its limits (${limits})"
+
   # The limits a rollback is given go to the version it brings back (docker update), and the next ones to the other.
   current_check="C12 step 6: a rollback gives the version it brings back the limits"
-  local limits cgroup
   deploy CONTAINER_CPUS=2.5 CONTAINER_MEMORY=4g -- --rollback
   (( DEPLOY_STATUS == 0 )) || fail "the rollback with CPU and memory limits failed (exit ${DEPLOY_STATUS})"
   expect_deploy_log "[rollback] Giving ${previous} the limits: 2.5 CPUs, 4g of memory and no swap, at most 512 processes and threads"

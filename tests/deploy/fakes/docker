@@ -11,8 +11,9 @@ container was run with (its "options"), and '{{.State.Status}} {{.RestartCount}}
 "restart_count". Starting a stopped container resets the count to 0, as docker start does; starting a running or
 restarting one changes nothing, and starting a paused one fails. The deploy script's HostConfig template reports the
 privileges and limits the container was run with (--read-only, --cap-drop, --cap-add, --security-opt, --cpus,
---memory, --memory-swap, --pids-limit in its "options"), as `update` changed them (its "limits"); a seeded container has
-none, as one deployed before them.
+--memory, --memory-swap, --pids-limit in its "options"), as `update` changed them (its "limits", which a test may seed);
+a seeded container has none, as one deployed before them. `update` changes them as Docker does: 0 leaves a limit as it
+is (so a CPU or memory limit cannot be taken off), and a process limit of -1 takes that one off (reported as 0).
 Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
   FAKE_<KIND>_READY=false          /health/ready fails
   FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
@@ -773,7 +774,16 @@ def main():
         _, c = container(state, ref)
         if "--restart" in args:
             c["restart"] = args[args.index("--restart") + 1]
-        c["limits"] = dict(c.get("limits", {}), **limits_of(args[:-1]))
+        # As Docker (29) updates them: 0 leaves a limit as it is, so a CPU or memory limit cannot be taken off; a
+        # process limit of -1 takes it off (inspect then reports 0); a negative memory limit is refused.
+        given = limits_of(args[:-1])
+        if given.get("memory", 0) < 0:
+            die(f'invalid argument "{option_values(args, "--memory")[-1]}" for "-m, --memory" flag: invalid size')
+        limits = dict(limits_of(c.get("options", [])), **c.get("limits", {}))
+        for key, value in given.items():
+            if value != 0:
+                limits[key] = 0 if key == "pids" and value < 0 else value
+        c["limits"] = limits
         save(state)
         out(ref)
         return

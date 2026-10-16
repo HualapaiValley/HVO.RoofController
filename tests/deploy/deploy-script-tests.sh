@@ -2493,7 +2493,7 @@ test_extra_docker_args_cannot_change_the_containers_privileges_or_limits() {
   assert_container roof-controller old true unless-stopped
 }
 
-test_rollback_gives_the_previous_version_the_limits_before_the_stop() {
+test_rollback_gives_the_previous_version_the_limits_after_the_verified_stop() {
   seed_container roof-controller current true 8443:8443
   seed_container roof-controller-previous old false 8443:8443
   local previous_id current_id
@@ -2511,10 +2511,14 @@ test_rollback_gives_the_previous_version_the_limits_before_the_stop() {
   docker_calls update | jq -e -s --arg id "${previous_id}" \
     'any(.[]; . == ["update", "--cpus", "3", "--memory", "6g", "--memory-swap", "6g", "--pids-limit", "1024", $id])' >/dev/null \
     || fail_test "the previous version was not given the limits: $(docker_calls update)"
-  local i_update i_stop_request
+  # Every check that can refuse the rollback (the idle check and the verified Stop) comes before the change; the old
+  # controller is stopped only after it.
+  local i_update i_stop_request i_stop
   i_update=$(call_index '"update", "--cpus"')
   i_stop_request=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')
-  (( i_update > 0 && i_update < i_stop_request )) || fail_test "the limits came after the Stop: update=${i_update} stop=${i_stop_request}"
+  i_stop=$(call_index '"stop", "-t"')
+  (( i_stop_request > 0 && i_stop_request < i_update && i_update < i_stop )) \
+    || fail_test "unexpected order: Stop=${i_stop_request} update=${i_update} docker stop=${i_stop}"
   [[ "$(container_limits "${previous_id}")" == "3000000000 6442450944 6442450944 1024" ]] \
     || fail_test "the rolled-back version does not have the limits: $(container_limits "${previous_id}")"
 
@@ -2558,6 +2562,19 @@ test_rollback_without_cpu_or_memory_limits_keeps_the_ones_the_previous_version_h
     || fail_test "the rolled-back version's limits: $(container_limits "${previous_id}")"
 }
 
+test_rollback_to_a_version_with_the_limits_changes_nothing_of_them() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_limits roof-controller-previous 2000000000 4294967296 4294967296 512
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_output_contains "[rollback] roof-controller-previous already has the limits: 2 CPUs, 4g of memory and no swap, at most 512 processes and threads"
+  [[ -z "$(docker_calls update | jq -c 'select(.[1] != "--restart")')" ]] \
+    || fail_test "the limits were updated: $(docker_calls update)"
+}
+
 test_rollback_to_a_version_this_script_deployed_keeps_its_privileges_without_a_warning() {
   seed_container roof-controller old true 8443:8443
   deploy "${HTTPS_ENV[@]}"
@@ -2573,7 +2590,41 @@ test_rollback_to_a_version_this_script_deployed_keeps_its_privileges_without_a_w
   assert_output_not_contains "does not have the container's privileges"
 }
 
-test_rollback_that_cannot_give_the_limits_changes_nothing() {
+# assert_previous_limits_untouched <id> <limits>: a rollback that was refused changed none of the version it would have
+# brought back: no docker update of its limits, and the limits it had.
+assert_previous_limits_untouched() {
+  [[ -z "$(docker_calls update | jq -c --arg id "$1" 'select(.[-1] == $id and .[1] != "--restart")')" ]] \
+    || fail_test "the refused rollback updated the previous version's limits: $(docker_calls update)"
+  [[ "$(container_limits "$1")" == "$2" ]] || fail_test "the previous version's limits changed: $(container_limits "$1")"
+}
+
+test_a_refused_rollback_leaves_the_previous_versions_limits_as_they_were() {
+  local case settings expected previous_id
+  for case in \
+      "REQUIRE_IDLE_ROOF=true FAKE_CURRENT_MOTION=Closing|The roof is moving (commandedMotion=Closing, isMoving=true)" \
+      "REQUIRE_IDLE_ROOF=true FAKE_CURRENT_STATUS_CODE=503|Status returned HTTP 503, so the roof is not known to be idle" \
+      "FAKE_CURRENT_STOP=unverified|The roof stop could not be verified"; do
+    IFS='|' read -r settings expected <<<"${case}"
+    setup
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    previous_id=$(container_field roof-controller-previous id)
+    seed_limits roof-controller-previous 3000000000 6442450944 6442450944 1024
+    # shellcheck disable=SC2086 # two settings
+    deploy "${HTTPS_ENV[@]}" ${settings} CONTAINER_CPUS=2 CONTAINER_MEMORY=4g -- --rollback
+    assert_status 1
+    assert_output_contains "${expected}"
+    assert_output_not_contains "Giving roof-controller-previous the limits"
+    assert_previous_limits_untouched "${previous_id}" "3000000000 6442450944 6442450944 1024"
+    assert_container roof-controller current true unless-stopped
+    assert_container roof-controller-previous old false
+    [[ -z "$(docker_calls stop)$(docker_calls rename)" ]] || fail_test "the rollback stopped or renamed a container (${settings})"
+    teardown
+  done
+  setup
+}
+
+test_rollback_that_cannot_give_the_limits_changes_no_container() {
   seed_container roof-controller current true 8443:8443
   seed_container roof-controller-previous old false 8443:8443
   local previous_id
@@ -2587,8 +2638,47 @@ test_rollback_that_cannot_give_the_limits_changes_nothing() {
   assert_container roof-controller-previous old false
   [[ "$(container_limits "${previous_id}")" == "3000000000 6442450944 6442450944 1024" ]] \
     || fail_test "the previous version's limits changed: $(container_limits "${previous_id}")"
-  [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "a Stop was requested"
   [[ -z "$(docker_calls stop)$(docker_calls rename)" ]] || fail_test "the rollback stopped or renamed a container"
+}
+
+test_a_rollback_that_fails_after_the_limits_puts_them_back() {
+  local case settings expected previous_id
+  # The start of the version brought back fails (the swap is undone), or a TERM arrives while Docker changes its limits.
+  for case in "FAKE_FAIL=start roof-controller@1|Could not start the rolled-back controller roof-controller" \
+      "FAKE_SIGNAL_ON=update --cpus|the script stopped unexpectedly"; do
+    IFS='|' read -r settings expected <<<"${case}"
+    setup
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    previous_id=$(container_field roof-controller-previous id)
+    seed_limits roof-controller-previous 3000000000 6442450944 6442450944 1024
+    deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g "${settings}" -- --rollback
+    assert_status_is "$([[ "${settings}" == FAKE_SIGNAL_ON=* ]] && echo 143 || echo 1)"
+    [[ "${settings}" == FAKE_SIGNAL_ON=* ]] || assert_output_contains "${expected}"
+    assert_output_contains "Put back the limits container ${previous_id:0:12} had before this rollback."
+    [[ "$(container_limits "${previous_id}")" == "3000000000 6442450944 6442450944 1024" ]] \
+      || fail_test "the previous version's limits were not put back (${settings}): $(container_limits "${previous_id}")"
+    assert_container roof-controller current true unless-stopped
+    assert_container roof-controller-previous old false
+    teardown
+  done
+  setup
+}
+
+test_a_failed_rollback_reports_the_limits_docker_cannot_take_off() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local previous_id
+  previous_id=$(container_field roof-controller-previous id)
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g "FAKE_FAIL=start roof-controller@1" -- --rollback
+
+  assert_status 1
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+  assert_output_contains "WARNING: container ${previous_id:0:12} keeps a CPU limit and a memory limit this rollback gave it, which it had none of before: Docker cannot take a CPU or memory limit off a container."
+  # Its process limit, which Docker can take off, is off again.
+  [[ "$(container_limits "${previous_id}")" == "2000000000 4294967296 4294967296 0" ]] \
+    || fail_test "the previous version's limits: $(container_limits "${previous_id}")"
 }
 
 test_dry_run_reports_the_containers_privileges_and_limits() {

@@ -37,7 +37,7 @@ set -euo pipefail
 #   enforces the limits this run gives, and at least as many CPUs as a CPU limit (a memory limit above its memory is a
 #   cap, not a reservation: a warning says so); the new controller's container must then carry exactly them. The
 #   pre-flight container runs with the same. --rollback gives the version it brings back the same limits (docker
-#   update); its privileges stay as it was deployed with.
+#   update), only after the roof's verified stop; its privileges stay as it was deployed with.
 #
 # Usage: PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh [--dry-run] [--force-unverified-stop] [--rollback]
 #        PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh --stop [--force-unverified-stop]
@@ -1144,6 +1144,75 @@ check_privileges() {
   fi
 }
 
+# --rollback gives the version it brings back this run's limits (docker update), and puts back the ones it had if the
+# rollback does not get as far as starting it: LIMITS_RESTORE holds them as docker update options, for container
+# LIMITS_RESTORE_ID, from the change until the start (the EXIT trap runs restore_rollback_limits). Docker cannot take a
+# CPU or memory limit off a container (0 leaves one as it is), so one the version had none of stays: LIMITS_KEPT names it.
+LIMITS_RESTORE=()
+LIMITS_RESTORE_ID=""
+LIMITS_KEPT=""
+
+# give_rollback_limits <container> <name>: called only once the roof's verified stop has passed, so that no check that
+# refuses the rollback comes after the change. Fails, with the limits put back, when Docker cannot give them.
+give_rollback_limits() {
+  local id=$1 name=$2 restore=() kept=""
+  read_confinement "${id}" \
+    || fail "Could not read the limits of ${name} from Docker. The current controller was not stopped."
+  if [[ -n "${CONTAINER_CPUS}" && "${CONF_NANO}" != "${WANT_NANO}" ]]; then
+    if (( CONF_NANO > 0 )); then
+      restore+=(--cpus "$(( CONF_NANO / 1000000000 )).$(printf '%09d' $(( CONF_NANO % 1000000000 )))")
+    else
+      kept="a CPU limit"
+    fi
+  fi
+  if [[ -n "${CONTAINER_MEMORY}" && ( "${CONF_MEMORY}" != "${WANT_MEMORY}" || "${CONF_SWAP}" != "${WANT_SWAP}" ) ]]; then
+    if (( CONF_MEMORY > 0 )); then
+      restore+=(--memory "${CONF_MEMORY}")
+      (( CONF_SWAP == 0 )) || restore+=(--memory-swap "${CONF_SWAP}")
+    else
+      kept+="${kept:+ and }a memory limit"
+    fi
+  fi
+  if [[ "${CONF_PIDS}" != "${CONTAINER_PIDS_LIMIT}" ]]; then
+    # Docker takes -1 for no process limit.
+    if (( CONF_PIDS > 0 )); then restore+=(--pids-limit "${CONF_PIDS}"); else restore+=(--pids-limit -1); fi
+  fi
+  if [[ ${#restore[@]} -eq 0 && -z "${kept}" ]]; then
+    echo "[rollback] ${name} already has the limits: ${LIMITS_SUMMARY}"
+    return 0
+  fi
+
+  echo "[rollback] Giving ${name} the limits: ${LIMITS_SUMMARY}"
+  LIMITS_RESTORE=(${restore[@]+"${restore[@]}"})
+  LIMITS_RESTORE_ID=${id}
+  LIMITS_KEPT=${kept}
+  if ! dockerc update "${limit_args[@]}" "${id}" >/dev/null; then
+    restore_rollback_limits
+    fail "Could not give ${name} the limits (see above). The current controller was not stopped."
+  fi
+  if ! check_limits "${id}" "${name}" given; then
+    restore_rollback_limits
+    fail "${FAILURE}. The current controller was not stopped."
+  fi
+}
+
+# Puts back the limits give_rollback_limits changed (by container ID, wherever the rollback got to) and disarms it.
+restore_rollback_limits() {
+  local id=${LIMITS_RESTORE_ID}
+  [[ -n "${id}" ]] || return 0
+  LIMITS_RESTORE_ID=""
+  if [[ ${#LIMITS_RESTORE[@]} -gt 0 ]]; then
+    if dockerc update "${LIMITS_RESTORE[@]}" "${id}" >/dev/null 2>&1; then
+      log_err "[rollback] Put back the limits container ${id:0:12} had before this rollback."
+    else
+      log_err "[rollback] WARNING: could not put back the limits container ${id:0:12} had before this rollback (docker update ${LIMITS_RESTORE[*]}); check them with docker inspect."
+    fi
+  fi
+  if [[ -n "${LIMITS_KEPT}" ]]; then
+    log_err "[rollback] WARNING: container ${id:0:12} keeps ${LIMITS_KEPT} this rollback gave it, which it had none of before: Docker cannot take a CPU or memory limit off a container. Deploy again to run without it."
+  fi
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Pull mode
 
@@ -1508,6 +1577,11 @@ on_exit() {
     fi
     [[ "${status}" != "0" ]] || status=1
   fi
+  # A rollback that changed the limits of the version it was bringing back and did not start it puts them back.
+  if [[ -n "${LIMITS_RESTORE_ID}" ]]; then
+    restore_rollback_limits
+    [[ "${status}" != "0" ]] || status=1
+  fi
   if [[ -n "${WORK_DIR}" ]]; then
     rm -rf "${WORK_DIR}"
   fi
@@ -1665,16 +1739,14 @@ if [[ "${ROLLBACK}" == "true" ]]; then
     log_err "[rollback] WARNING: ${PREVIOUS_CONTAINER_NAME} keeps ${previous_kept} it was deployed with (Docker reports NanoCpus ${CONF_NANO}, Memory ${CONF_MEMORY}), which this run does not give: Docker cannot take a CPU or memory limit off a container. Deploy again to run without it."
   fi
 
-  # The version brought back runs with this run's limits, so a rollback keeps the limits the operator chose.
-  echo "[rollback] Giving ${PREVIOUS_CONTAINER_NAME} the limits: ${LIMITS_SUMMARY}"
-  dockerc update "${limit_args[@]}" "${PREVIOUS_ID}" >/dev/null \
-    || fail "Could not give ${PREVIOUS_CONTAINER_NAME} the limits (see above). The current controller was not stopped."
-  check_limits "${PREVIOUS_ID}" "${PREVIOUS_CONTAINER_NAME}" given \
-    || fail "${FAILURE}. The current controller was not stopped."
-
+  # Every check that can refuse the rollback comes before anything changes: the roof's idle check and its verified stop
+  # (on a refusal, both containers are as they were, the limits included). Only then does the version brought back get
+  # this run's limits, so that a rollback keeps the limits the operator chose; from the change until it has started, a
+  # failure or an interrupt puts its own back (give_rollback_limits).
   if [[ "${STATE}" == "running" ]]; then
     stop_roof_before_replacing
   fi
+  give_rollback_limits "${PREVIOUS_ID}" "${PREVIOUS_CONTAINER_NAME}"
 
   # From here until the restored version has started, a failure or an interrupt undoes the swap (restore_original).
   ORIGINAL_ID=${CURRENT_ID}
@@ -1709,8 +1781,9 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   echo "[rollback] Starting ${CONTAINER_NAME}"
   dockerc start "${CONTAINER_NAME}" >/dev/null \
     || abort_switch "Could not start the rolled-back controller ${CONTAINER_NAME}"
-  # Started: whatever the checks say, it is left running (run --rollback again to swap back).
+  # Started: whatever the checks say, it is left running (run --rollback again to swap back), with this run's limits.
   RESTORE_MODE=""
+  LIMITS_RESTORE_ID=""
 
   if ! verify_controller "${CONTAINER_NAME}"; then
     show_containers
