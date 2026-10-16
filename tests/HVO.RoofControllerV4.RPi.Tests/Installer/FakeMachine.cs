@@ -734,6 +734,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 ? Answer(name, after: () => Containers[name] = container with { State = "exited" })
                 : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
             "docker" when arguments is ["rm", var name] => Docker(() => Containers.Remove(name) ? Answer(name) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
+            "docker" when arguments is ["rm", "-v", var withVolumes] => Docker(() => Containers.Remove(withVolumes) ? Answer(withVolumes) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {withVolumes}\n")),
             "docker" when arguments is ["run", "-d", "--name", MachineSurveyor.HatEmulatorContainer, ..] => Docker(() => RunEmulator(arguments)),
             "bash" when arguments is [var script, ..] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, arguments.Skip(1).ToArray(), command, cancellationToken),
             "systemctl" when arguments is ["is-enabled", MachineSurveyor.KioskUnit] => !Exists(MachineSurveyor.KioskUnitFile)

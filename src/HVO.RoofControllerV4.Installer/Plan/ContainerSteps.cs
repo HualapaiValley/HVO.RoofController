@@ -328,7 +328,7 @@ public sealed class ControllerStep(
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)
         {
-            return new StepCheck(StepChange.Create, $"release {release.Version} by digest, through the deploy script");
+            return new StepCheck(StepChange.Create, $"release {release.Version} by digest, through the deploy script, with {settings.Resources.Describe()}");
         }
 
         if (container.Origin == ContainerOrigin.Compose)

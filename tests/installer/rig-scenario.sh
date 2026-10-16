@@ -190,7 +190,8 @@ cleanup() {
         | grep -v -e 'OtlpMetricExporter' -e 'OtlpTraceExporter' -e 'OtlpLogExporter' -e '^ *at ' -e 'Connection refused' \
         | tail -n 40 >&2
     fi
-    docker rm -f "${controller}" "${controller}-previous" "${emulator}" "${registry_name}" >/dev/null 2>&1
+    # With their volumes: each controller keeps the web UI's sign-in keys on one of its own.
+    docker rm -f -v "${controller}" "${controller}-previous" "${emulator}" "${registry_name}" >/dev/null 2>&1
     docker network rm "${network}" >/dev/null 2>&1
     # Each release's images, by digest: the ones the installer pulled.
     local folder
@@ -349,6 +350,19 @@ runs() {
   expected=$(jq -r ".images.$3.reference" "$2/release.json")
   [[ "$(docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null)" == "${expected}" ]] \
     || fail "$1 does not run ${expected}: $(docker inspect --format '{{.Config.Image}}' "$1" 2>&1)"
+}
+
+# confined <container> <all|limits>: the container has the installer's default limits (2 CPUs, 4g with no swap, 512
+# processes), and with all, the deploy script's privileges (a read-only root filesystem, only the supervisor's
+# capabilities, no-new-privileges; docs/deployment.md, "The container's privileges and limits").
+confined() {
+  local config
+  config=$(docker inspect --format '{{json .HostConfig}}' "$1") || fail "could not inspect $1"
+  jq -e --arg what "$2" '.NanoCpus == 2000000000 and .Memory == 4294967296 and .MemorySwap == 4294967296 and .PidsLimit == 512
+    and ($what == "limits" or (.ReadonlyRootfs == true and .CapDrop == ["ALL"]
+      and ([.CapAdd[] | ltrimstr("CAP_")] == ["CHOWN", "KILL", "SETGID", "SETUID"])
+      and (.SecurityOpt | index("no-new-privileges") != null)))' <<<"${config}" >/dev/null \
+    || fail "$1 does not have the $([[ "$2" == all ]] && printf 'privileges and ')limits the deploy script gives: $(jq -c '{ReadonlyRootfs, CapDrop, CapAdd, SecurityOpt, NanoCpus, Memory, MemorySwap, PidsLimit}' <<<"${config}")"
 }
 
 # keys_sha256: the SHA-256 of each key, the CA's files and the certificate (the values are never read here).
@@ -906,7 +920,10 @@ scenario_install() {
   [[ "$(curl -sS --max-time 10 --cacert "${ca}" -o /dev/null -w '%{http_code}' "${web}/")" =~ ^(200|302)$ ]] || fail "the web UI does not answer at ${web}"
   openssl verify -CAfile "${ca}" <(openssl s_client -connect "127.0.0.1:${https_port}" -servername localhost </dev/null 2>/dev/null | openssl x509) >/dev/null \
     || fail "the controller's certificate does not verify with the installer's CA"
-  pass "ready over HTTPS with the installer's CA, the web UI answers, ${admin} signs in as an admin with the password in the file, and Status says hatMode Emulated"
+  confined "${controller}" all
+  sudo -n jq -e '.controller.resources == {cpus: 2, memory: "4g", pidsLimit: 512, allowBelowMinimum: false}' /etc/hvo-roof/install.json >/dev/null \
+    || fail "the install record does not keep the controller's limits: $(sudo -n jq -c '.controller.resources' /etc/hvo-roof/install.json)"
+  pass "ready over HTTPS with the installer's CA, the web UI answers, ${admin} signs in as an admin with the password in the file, and Status says hatMode Emulated; read-only, with only the supervisor's capabilities and the default limits, which the record keeps"
 
   current_check="install: no secret shown"
   collect_secrets
@@ -1217,16 +1234,24 @@ scenario_backup() {
 
 scenario_restore() {
   current_check="restore: uninstall --purge"
-  local release_images
+  local release_images volumes volume containers=("${controller}")
   release_images=$(jq -r '.images[].reference' "${release_dir}/release.json")
+  # The controllers' own volumes (the web UI's sign-in keys), which go with them.
+  [[ -z "$(docker ps -aq --filter "name=^/${controller}-previous$")" ]] || containers+=("${controller}-previous")
+  volumes=$(docker inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}' \
+    "${containers[@]}" 2>/dev/null | sed '/^$/d')
+  [[ -n "${volumes}" ]] || fail "${controller} has no volume of its own for the web UI's keys"
   start_relay_monitor
   install_with "${installed}" purge uninstall --purge --no-backup --confirm "$(hostname)" --yes
   expect_installed "uninstall --purge"
   expect_output purge "and removing its data:"
   # shellcheck disable=SC2086 # one argument per image
   purged ${release_images}
+  for volume in ${volumes}; do
+    ! docker volume inspect "${volume}" >/dev/null 2>&1 || fail "the volume ${volume} of a removed controller is left"
+  done
   relays_still
-  pass "the containers, the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
+  pass "the containers (with their volumes), the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
 
   current_check="restore: from the backup"
   start_relay_monitor
@@ -1379,6 +1404,7 @@ scenario_upgrade() {
   runs "${controller}-previous" "${previous_dir}" controller
   runs "${emulator}" "${release_dir}" hatEmulator
   [[ "$(docker inspect --format '{{.State.Running}}' "${controller}-previous")" == false ]] || fail "${controller}-previous is running"
+  confined "${controller}" all
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
@@ -1451,6 +1477,10 @@ scenario_rollback() {
   expect_installed "rollback"
   runs "${controller}" "${previous_dir}" controller
   runs "${controller}-previous" "${release_dir}" controller
+  # The release before runs with the recorded limits (the deploy script's docker update), and the privileges its own
+  # deploy script gave it.
+  confined "${controller}" limits
+  expect_output rollback "[rollback] Giving ${controller}-previous the limits: 2 CPUs, 4g of memory and no swap, at most 512 processes and threads"
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
@@ -1477,6 +1507,7 @@ scenario_rollback() {
   expect_installed "upgrade (forward again)"
   runs "${controller}" "${release_dir}" controller
   runs "${emulator}" "${release_dir}" hatEmulator
+  confined "${controller}" all
   wait_for "the controller" 60 ready
   sign_in
   emulated_status

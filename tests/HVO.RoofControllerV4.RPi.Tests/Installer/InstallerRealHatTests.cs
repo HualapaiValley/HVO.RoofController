@@ -79,7 +79,7 @@ public sealed partial class InstallerRealHatTests
         "Packages",
         "  info       bash, curl, setsid or perl, jq or python3     what the deploy script runs (found bash, curl, setsid, jq)",
         "Containers",
-        "  create     roof-controller                               the controller, driving the real HAT (release 4.0.0 by digest, through the deploy script)",
+        "  create     roof-controller                               the controller, driving the real HAT (release 4.0.0 by digest, through the deploy script, with 2 CPUs, 4g of memory and no swap, at most 512 processes and threads)",
         "Ports",
         "  info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)",
         "  info       8088                                          the web UI (free; roof-controller will listen on it)",

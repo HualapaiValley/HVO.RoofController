@@ -211,6 +211,11 @@ observatory's Pi.
   policy `no`; preserve the identity data and repair forward with a compatible release
   ([docs/deployment.md](docs/deployment.md)). Keep the script, its tests (`tests/deploy/deploy-script-tests.sh`) and
   the compose file (`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`) in step.
+- The controller's container runs read-only, with only the supervisor's capabilities (`CHOWN`, `KILL`, `SETGID`,
+  `SETUID`), `no-new-privileges` and resource limits (2 CPUs, 4 GiB and 512 processes by default); never
+  `--privileged`. A capability or writable place is added only when a test on the emulator image shows it is needed.
+  A killed controller leaves the relays held until it starts again: keep the
+  [fail-safe record](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in) true.
 - With HTTPS only port 8443 is published; plain HTTP on the LAN is an explicit opt-out (`ALLOW_INSECURE_HTTP=true`,
   compose profile `pi-lan-http`). HAT emulator mode is set only through `HAT_EMULATOR_ENDPOINT` with
   `ALLOW_EMULATED_HAT=true` ([docs/emulator.md](docs/emulator.md)).

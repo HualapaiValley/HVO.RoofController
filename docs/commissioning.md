@@ -411,8 +411,15 @@ The container runs two processes under a supervisor: the controller and the web 
 
 - **The HAT holds its relays when the controller process dies**, until something writes the register. The emulated HAT
   holds them, as the #29 plant assumes. The settings that depend on it are the deploy script's `docker stop -t 30` and
-  the host's shutdown timeout. The fail-safe result is that the roof keeps moving until the limit's run-circuit contact
-  stops it (C1 step 4), and the restarted controller turns the relays off.
+  the host's shutdown timeout, and the container's memory and process limits: the kernel ending the controller at one
+  of them is such a death ([deployment.md](deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in)).
+  The fail-safe result is that the roof keeps moving until the limit's run-circuit contact stops it (C1 step 4), and
+  the restarted controller turns the relays off.
+- **The HAT's devices are root's on the Pi** (`/dev/i2c-1` and `/dev/gpiomem`: Raspberry Pi OS makes them `root:i2c`
+  and `root:gpio`, mode `0660`). The setting that depends on it is the container's capabilities: without
+  `CAP_DAC_OVERRIDE` the controller opens them as their owner ([deployment.md](deployment.md#the-containers-privileges-and-limits)).
+  The fail-safe result of a device that is not root's is a controller that cannot open the HAT, verify its relays off
+  or become ready, which the deploy script removes, restoring the one it replaced (C12 step 8).
 - **Docker gives the container at least 30 s to stop.** The supervisor waits up to 25 s for the controller's shutdown,
   then 2 s for the web UI. The settings that depend on it are the deploy script's `STOP_TIMEOUT_SECONDS`, Compose's
   `stop_grace_period` and the supervisor's `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`. The fail-safe result of a shorter

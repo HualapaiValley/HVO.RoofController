@@ -11,8 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
   mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
+- Resource limits for the controller's container: 2 CPUs, 4 GiB of memory with no swap and 512 processes by default
+  (the HVO install contract's minimum), set with `hvo-roof-install`'s `controller.resources` answers or `--cpus`,
+  `--memory` and `--pids-limit`, or the deploy script's `CONTAINER_CPUS`, `CONTAINER_MEMORY` and
+  `CONTAINER_PIDS_LIMIT`. Less needs `--allow-limits-below-minimum` (`ALLOW_LIMITS_BELOW_MINIMUM=true`). The install
+  record keeps them, and upgrade and rollback give them again (#129).
 
 ### Changed
+
+- **The installer, `install.sh` and the deploy script refuse a host whose Docker does not enforce memory, CPU and
+  process limits, or that has fewer CPUs or less memory than the limits give, with nothing changed.** Raspberry Pi OS
+  boots with the memory controller off: before upgrading the controller, add `cgroup_enable=memory` to the single line in
+  `/boot/firmware/cmdline.txt` and reboot. A Pi with 4 GB needs `--memory 3g --allow-limits-below-minimum` (#129).
+- The mounted secrets, certificate, identity and settings directories must be root's, as the installer and
+  [deployment.md](docs/deployment.md#one-time-preparation-on-the-pi) make them: the controller no longer has
+  `CAP_DAC_OVERRIDE`, and the deployment check refuses a directory it cannot reach (#129).
+- The deploy script's `EXTRA_DOCKER_ARGS` refuses options that would change the container's privileges or limits,
+  `--privileged` included in every mode (#129).
 
 - Upgrading from installed 4.1.1 to this schema-3 release requires the new release's
   `install.sh upgrade --version <VERSION>` bootstrap, which verifies the downloaded installer. The old installed installer rejects schema 3 before replacing
@@ -23,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Persist commissioning retirement and guess limits; reject pending-state restore and schema-incompatible rollback.
   Native revalidation distinguishes confirmed account revocation from unavailable checks.
+- The controller's container runs with a read-only root filesystem, no Linux capabilities but the supervisor's
+  (`CHOWN`, `KILL`, `SETGID`, `SETUID`) and `no-new-privileges`, from the deploy script, the Compose profiles and so the
+  installer. The supervisor's forced-restart directory is now root's, writable by the web UI's group. What a controller
+  killed at its limits, or otherwise, leaves the relays and the drive in is recorded in
+  [deployment.md](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in): the relays stay held
+  until the restarted controller turns them off or the roof reaches its limit (#129).
 
 ## [4.1.1] - 2026-10-15
 
