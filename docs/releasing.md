@@ -252,7 +252,7 @@ A release can be installed, or a machine restored, with no access to ghcr.io (#1
 each platform, `<image>-<version>-linux-<arch>.oci.tar`, and `install.sh --from DIR` (or the installer's
 `--release DIR`) loads the ones the machine needs from the folder, and pulls nothing
 ([The release it installs](install.md#the-release-it-installs)). The deploy script loads one the same way, given
-`IMAGE_ARCHIVE` ([Deploying a released image](deployment.md#deploying-a-released-image)).
+`IMAGE_ARCHIVE` ([Without ghcr.io](deployment.md#without-ghcrio)).
 
 Both images are shipped for both platforms. The Pi needs only the controller's for arm64, about 165 MB. A test rig on a
 PC needs both images for amd64, about 165 MB and 100 MB: a rig is how a release is tried without hardware, the
@@ -518,7 +518,7 @@ Once a release is published, its tag never moves.
   each time), `release.json`, `SHA256SUMS`, and every artifact it must refuse, an OCI archive of another image, with
   a platform missing or a blob that is not its digest included. `tests/install/install-sh-tests.sh` runs that
   `install.sh` ([install.sh's tests](install.md#installshs-tests)), and `tests/deploy/deploy-script-tests.sh` loads
-  archives it makes with the deploy script ([Deploying a released image](deployment.md#deploying-a-released-image)).
+  archives it makes with the deploy script ([Without ghcr.io](deployment.md#without-ghcrio)).
 - `tests/releasing/push-image-tests.sh` pushes two-platform OCI archives with `push-image.sh` to a registry of its own
   in Docker, checks every digest the registry then holds, and tags them `latest`, refusing a version tag pushed again.
 - `tests/releasing/release-latest-tests.sh` runs `release-latest.sh` against a stand-in for `gh` that serves made-up

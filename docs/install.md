@@ -305,7 +305,7 @@ release's offline archive for this machine, `<image>-<version>-linux-<arch>.oci.
 - The container runs that image by its ID, never pulling it (`docker run --pull never`), with the label
   `io.hvo.roof.release-image` naming the release's image by its digest: that is how the installer knows later which
   release a container runs. The deploy script loads the controller's image itself (`IMAGE_ARCHIVE`,
-  [Deploying a released image](deployment.md#deploying-a-released-image)), with the same checks.
+  [Without ghcr.io](deployment.md#without-ghcrio)), with the same checks.
 
 A release from before offline archives (4.1.1 and older) has none, and from its folder Docker still pulls its images
 from ghcr.io. A release read from GitHub is always pulled by its digests.

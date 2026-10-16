@@ -463,7 +463,29 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   needs one, an anonymous pull fails with `unauthorized` or `denied`: run `docker login ghcr.io` in the Pi's Docker
   first, with a token that can read packages.
 
-**Without ghcr.io.** A release also carries each image as an offline archive for each platform
+**On the Pi itself.** The script can also run on the Pi, with `DOCKER_CONTEXT=default` for the Pi's own Docker:
+
+```bash
+DOCKER_CONTEXT=default PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
+  IMAGE_REF=ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:<the digest in release.json> \
+  ./deploy-roofcontroller-rpi.sh
+```
+
+The Pi then needs what the machine that runs the script needs (above) and the operator key, and `PI_HOST` must still be
+a name in the certificate that resolves on the Pi. The remote check of step 7 then runs from the Pi: it proves the
+certificate, `AllowedHosts` and the key at `PI_HOST`, but not that other machines can reach the published ports. Check
+that from another machine afterwards, with `--verify-remote` (its Stop stops the roof) or with
+`hvo-roof status` ([cli.md](cli.md)).
+
+`tests/emulator/deploy-scenarios.sh pull` deploys a pulled image this way on a PC: the scenario pushes its controller
+image to a registry of its own on loopback and deploys it by its digest (C12 step 11 in
+[commissioning.md](commissioning.md#c12-deployment-script-stop-gate-pre-flight-remote-check-and-rollback)). It then
+splits another release of the image into its offline archives, removes the registry, and deploys the archive with
+`IMAGE_ARCHIVE` ([Without ghcr.io](#without-ghcrio)).
+
+#### Without ghcr.io
+
+A release also carries each image as an offline archive for each platform
 ([Offline image archives](releasing.md#offline-image-archives)). With `IMAGE_ARCHIVE` set to the archive for
 `BUILD_PLATFORM`, beside `IMAGE_REF`, the script loads the image from it into the Pi's Docker and pulls nothing:
 
@@ -491,24 +513,6 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
 
 The installer sets `IMAGE_ARCHIVE` itself when it installs from a release's folder
 ([The release it installs](install.md#the-release-it-installs)).
-
-**On the Pi itself.** The script can also run on the Pi, with `DOCKER_CONTEXT=default` for the Pi's own Docker:
-
-```bash
-DOCKER_CONTEXT=default PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
-  IMAGE_REF=ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:<the digest in release.json> \
-  ./deploy-roofcontroller-rpi.sh
-```
-
-The Pi then needs what the machine that runs the script needs (above) and the operator key, and `PI_HOST` must still be
-a name in the certificate that resolves on the Pi. The remote check of step 7 then runs from the Pi: it proves the
-certificate, `AllowedHosts` and the key at `PI_HOST`, but not that other machines can reach the published ports. Check
-that from another machine afterwards, with `--verify-remote` (its Stop stops the roof) or with
-`hvo-roof status` ([cli.md](cli.md)).
-
-`tests/emulator/deploy-scenarios.sh pull` deploys a pulled image this way on a PC: the scenario pushes its controller
-image to a registry of its own on loopback and deploys it by its digest (C12 step 11 in
-[commissioning.md](commissioning.md#c12-deployment-script-stop-gate-pre-flight-remote-check-and-rollback)).
 
 ### HAT emulator mode (test rigs)
 
