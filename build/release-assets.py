@@ -360,6 +360,9 @@ def offline_archives(source, image, repository, version, digest, out, mtime):
                 manifest_bytes, manifest_ = document(entry, f"the {platform} manifest")
                 config = manifest_.get("config") if isinstance(manifest_, dict) else None
                 layers = manifest_.get("layers") if isinstance(manifest_, dict) else None
+                if layers is None and isinstance(manifest_, dict):
+                    # An image with no layers (FROM scratch, with labels alone) has them null.
+                    layers = []
                 if not isinstance(layers, list):
                     raise AssetError(f"{source}: the {platform} manifest {entry['digest']} lists no layers.")
                 config_bytes, config_ = document(config, f"the {platform} config")

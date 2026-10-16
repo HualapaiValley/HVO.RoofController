@@ -51,21 +51,25 @@ def layer(files):
 
 class Image:
     """An image as docker buildx build --output type=oci writes it, for the platforms: an index of one image for each,
-    with a config and a layer of its own. config_platforms gives an image a config for another platform."""
+    with a config and a layer of its own. config_platforms gives an image a config for another platform; the platform's
+    image in empty_platforms has no layers, which BuildKit writes as null (FROM scratch with labels alone)."""
 
-    def __init__(self, name, platforms=("linux/amd64", "linux/arm64"), config_platforms=None):
+    def __init__(self, name, platforms=("linux/amd64", "linux/arm64"), config_platforms=None, empty_platforms=()):
         self.blobs = {}
         self.manifests, self.configs, self.layers = {}, {}, {}
         entries = []
         for platform in platforms:
             operating_system, architecture = (config_platforms or {}).get(platform, platform).split("/")
-            data, diff_id = layer({f"app/{name}": f"{name} for {platform}\n".encode()})
-            self.layers[platform] = self.add(data, "application/vnd.oci.image.layer.v1.tar+gzip")
-            config = {"architecture": architecture, "os": operating_system, "rootfs": {"type": "layers", "diff_ids": [diff_id]},
+            diff_ids = []
+            if platform not in empty_platforms:
+                data, diff_id = layer({f"app/{name}": f"{name} for {platform}\n".encode()})
+                self.layers[platform] = self.add(data, "application/vnd.oci.image.layer.v1.tar+gzip")
+                diff_ids.append(diff_id)
+            config = {"architecture": architecture, "os": operating_system, "rootfs": {"type": "layers", "diff_ids": diff_ids},
                       "config": {"Labels": {"org.opencontainers.image.title": name}}}
             self.configs[platform] = self.add(json.dumps(config).encode(), "application/vnd.oci.image.config.v1+json")
             manifest = {"schemaVersion": 2, "mediaType": OCI_MANIFEST, "config": self.configs[platform],
-                        "layers": [self.layers[platform]]}
+                        "layers": [self.layers[platform]] if platform in self.layers else None}
             self.manifests[platform] = self.add(json.dumps(manifest).encode(), OCI_MANIFEST)
             os_, arch = platform.split("/")
             entries.append({**self.manifests[platform], "platform": {"architecture": arch, "os": os_}})
@@ -416,6 +420,18 @@ class TheOfflineArchives(ReleaseTestCase):
         self.build(out=again)
         for archive in ARCHIVES:
             self.assertEqual((again / archive).read_bytes(), (self.out / archive).read_bytes(), archive)
+
+    def test_an_image_without_layers_is_split_too(self):
+        image = Image("roof-hat-emulator", empty_platforms=("linux/arm64",))
+        image.write(self.release.emulator_archive)
+        out = self.release.root / "empty"
+        self.build(out=out, **{"--emulator-digest": image.digest})
+        with tarfile.open(out / "roof-hat-emulator-4.0.0-linux-arm64.oci.tar") as tar:
+            docker = json.loads(tar.extractfile("manifest.json").read())
+            blobs = {name for name in tar.getnames() if name.startswith("blobs/sha256/")}
+        self.assertEqual(docker[0]["Layers"], [])
+        self.assertEqual(blobs, {f"blobs/sha256/{digest[7:]}" for digest in
+                                 (image.digest, image.manifests["linux/arm64"]["digest"], image.configs["linux/arm64"]["digest"])})
 
     def test_the_archives_are_attested_with_the_other_assets(self):
         listed = {line.split("  ", 1)[1] for line in (self.out / "SHA256SUMS").read_text(encoding="utf-8").splitlines()}

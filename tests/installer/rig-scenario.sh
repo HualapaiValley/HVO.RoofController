@@ -882,7 +882,8 @@ blobs = {digest: index}
 for entry in json.loads(index)["manifests"]:
     manifest, _ = get("manifests", entry["digest"])
     blobs[entry["digest"]] = manifest
-    for descriptor in [json.loads(manifest)["config"], *json.loads(manifest)["layers"]]:
+    # The other platform's empty image has no layers: null.
+    for descriptor in [json.loads(manifest)["config"], *(json.loads(manifest).get("layers") or [])]:
         blobs[descriptor["digest"]] = get("blobs", descriptor["digest"])[0]
 with tarfile.open(source, "w") as tar:
     def add(name, data):
