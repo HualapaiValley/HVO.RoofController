@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   itself or showing upgrade notes. See [Upgrading](docs/install.md#upgrading); existing identities and configuration
   are retained, with no default access added. Schema-incompatible rollback remains refused.
 
+### Fixed
+
+- **A controller that dies no longer leaves the drive running.** The SM-I-010 holds its relays as last written, so a
+  controller crashed, killed or ended by the kernel during a move left the direction relay and the STOP permit
+  energized until it started again, and for good when it could not start (a crash loop, a settings file it refuses).
+  The container's supervisor now turns every relay off and verifies the register whenever the controller is not
+  running: as soon as it exits, before each start, again after a failed try while the controller is not running, and
+  when the supervisor stops or ends otherwise. It uses the controller's own HAT access (`--relays-off`), never turns a relay on,
+  and makes the kernel end the web UI and then the controller before itself when memory runs out. On the x64 emulator
+  rig the relays were off 0.14-0.17 s after a kill during travel (2.0-2.4 s before, when the restarted controller turned
+  them off). A whole container killed (`docker kill`) still leaves them held until it starts again. The supervisor now
+  waits 22 s (was 25 s) for the controller's shutdown, then up to 5 s for the relays, so a stop still fits Docker's
+  30 s ([deployment.md](docs/deployment.md#the-relays-when-the-controller-exits), #138).
+
 ### Security
 
 - Persist commissioning retirement and guess limits; reject pending-state restore and schema-incompatible rollback.
