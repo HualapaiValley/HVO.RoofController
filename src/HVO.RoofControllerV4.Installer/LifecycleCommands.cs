@@ -187,6 +187,7 @@ internal static partial class LifecycleCommands
                 }
 
                 CheckUpgradeState(host, session, record, manifest, tell: shown);
+                session.HandedOverBackup = HandedOverBackup(machine, target);
                 if (shown)
                 {
                     host.Out.WriteLine();
@@ -233,6 +234,9 @@ internal static partial class LifecycleCommands
             throw new InstallerRefusedException($"{installer}: {check.Detail}. Download release {target}'s installer from {ReleaseManifest.PageUri(target)} and run its upgrade.");
         }
 
+        // Before this installer is replaced: a backup that cannot be taken changes nothing.
+        var handOver = new Dictionary<string, string> { [ContinuedVariable] = target };
+        await BackUpBeforeHandingOverAsync(host, session, handOver, cancellationToken).ConfigureAwait(false);
         if (check.MakesChange)
         {
             host.Out.WriteLine($"{installer}: {check.Detail}.");
@@ -248,7 +252,7 @@ internal static partial class LifecycleCommands
         session.Log.Write($"Handing over to release {target}'s installer: {installer} {string.Join(' ', arguments)}.");
         host.Out.WriteLine($"Handing over to release {target}'s installer.");
         host.Out.WriteLine();
-        return await machine.RunProgramAsync(machine.OnDisk(installer), arguments, new Dictionary<string, string> { [ContinuedVariable] = target }).ConfigureAwait(false);
+        return await machine.RunProgramAsync(machine.OnDisk(installer), arguments, handOver).ConfigureAwait(false);
     }
 
     /// <summary>

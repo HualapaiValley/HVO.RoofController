@@ -44,6 +44,10 @@ public sealed class InstallerStateContractTests
 
     private const string DockerDown = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
 
+    // A folder the backup holds whole, which someone other than root could then change: a backup refuses it.
+    private const UnixFileMode GroupWritable = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+        | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+
     [TestMethod]
     public void AReleaseJson_WithStateContracts_GivesTheControllersContract()
     {
@@ -153,6 +157,8 @@ public sealed class InstallerStateContractTests
             .And.NotContain("breaking state change")
             .And.Contain(Backup);
         backupAtDeploy.Should().BeTrue("the stores are backed up before the deploy script replaces the controller");
+        pi.Launches.Should().ContainSingle().Which.Environment.Should().Contain(LifecycleCommands.UpgradeBackupVariable, Backup);
+        Directory.EnumerateFiles(pi.OnDisk(BackupCommands.DefaultFolder)).Should().ContainSingle("the installer handed over to keeps the backup taken before it, and takes none");
         pi.Mode(Backup).Should().Be(Modes.PrivateFile);
         pi.Mode(BackupCommands.DefaultFolder).Should().Be(Modes.PrivateFolder);
         var backup = await BackupCommands.ReadAsync(pi.Machine, Backup, CancellationToken.None);
@@ -542,6 +548,47 @@ public sealed class InstallerStateContractTests
         restore.ExitCode.Should().Be((int)InstallerExitCode.Refused, restore.ToString());
         restore.Output.Should().Contain($"{IdentityFile} is a folder: a backup puts back only the file");
         Unchanged(pi, before);
+    }
+
+    // #136 F4: the backup is taken before the installer replaces itself, and handed over.
+
+    [TestMethod]
+    public async Task ABackupThatCannotBeTaken_RefusesTheUpgrade_BeforeTheInstallerReplacesItself()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        File.SetUnixFileMode(pi.OnDisk(ControllerLayout.System.Configuration), GroupWritable);
+        var before = State(pi);
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"{ControllerLayout.System.Configuration} is root:root's, 0775: someone other than root can change what is in it");
+        Unchanged(pi, before);
+        pi.Read(InstallPaths.SystemInstaller).Should().Be(Encoding.UTF8.GetString(FakeMachine.InstallerProgram("4.0.0", "linux-arm64")));
+        pi.Exists(ProgramFile.Previous(InstallPaths.SystemInstaller)).Should().BeFalse();
+        pi.Launches.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TheBackupHandedOver_IsChecked_AndOneNotAsTakenRefusesTheUpgrade()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var deploys = pi.Deploys.Count;
+        pi.Launch = (path, arguments, environment) =>
+        {
+            File.AppendAllText(pi.OnDisk(environment[LifecycleCommands.UpgradeBackupVariable]), "changed since");
+            return pi.RunInstallerAsync(path, arguments, environment);
+        };
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        (run.Output + run.Error).Should().Contain($"{Backup}, the backup the installer before this one took before it handed over, is not the file it took (its SHA-256 differs)");
+        pi.Deploys.Should().HaveCount(deploys, "the controller is not replaced");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
     }
 
     // What a run that refuses must leave as it was: every file (the installer, the record, the stores and the backups),

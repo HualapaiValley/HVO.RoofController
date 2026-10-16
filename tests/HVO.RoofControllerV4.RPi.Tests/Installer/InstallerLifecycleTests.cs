@@ -50,7 +50,14 @@ public sealed class InstallerLifecycleTests
         pi.Launches.Should().ContainSingle();
         pi.Launches[0].Path.Should().Be(pi.OnDisk(InstallPaths.SystemInstaller));
         pi.Launches[0].Arguments.Should().Equal("upgrade", "--version", NewVersion);
-        pi.Launches[0].Environment.Should().Equal(new Dictionary<string, string> { [LifecycleCommands.ContinuedVariable] = NewVersion });
+        // With the backup this installer took before it was replaced (#130), which the new one keeps in place of another.
+        var backup = Record(pi).UpgradeBackup!;
+        pi.Launches[0].Environment.Should().Equal(new Dictionary<string, string>
+        {
+            [LifecycleCommands.ContinuedVariable] = NewVersion,
+            [LifecycleCommands.UpgradeBackupVariable] = backup,
+            [LifecycleCommands.UpgradeBackupSha256Variable] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(pi.OnDisk(backup))))
+        });
         pi.Environment.Should().NotContainKey(LifecycleCommands.ContinuedVariable, "only the program it hands over to has it");
         pi.Read(InstallPaths.SystemInstaller).Should().Be(Encoding.UTF8.GetString(FakeMachine.InstallerProgram(NewVersion, "linux-arm64")));
 

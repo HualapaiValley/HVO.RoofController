@@ -207,8 +207,14 @@ public sealed class InstallerSession
             return null;
         }
 
-        return new UpgradeBackupStep(record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version));
+        return new UpgradeBackupStep(record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version), HandedOverBackup);
     }
+
+    /// <summary>
+    /// The backup the installer before this one took before it replaced itself and handed over (<c>upgrade</c>): its file
+    /// and SHA-256. <see cref="UpgradeBackup"/> then checks it is that backup, in place of taking another.
+    /// </summary>
+    public (string Path, string Sha256)? HandedOverBackup { get; set; }
 
     /// <summary>Installs <paramref name="plan"/>: each step checked again as it comes, and logged.</summary>
     public async Task ApplyAsync(CheckedPlan plan, Action<string>? progress = null, CancellationToken cancellationToken = default)

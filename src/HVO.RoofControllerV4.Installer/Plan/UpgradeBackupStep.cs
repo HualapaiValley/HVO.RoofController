@@ -9,16 +9,19 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// kiosk's device key and the record; no log, and no program or image, which come from the release), in
 /// <see cref="BackupCommands.DefaultFolder"/> as <c>hvo-roof-&lt;host&gt;-&lt;UTC time&gt;-before-&lt;version&gt;.tar.gz</c>. The
 /// record names it (<c>upgradeBackup</c>): a rollback across a breaking state change puts back from it the stores the
-/// release before cannot read (<c>rollback --restore-backup</c>). Nothing is copied but these small files.
+/// release before cannot read (<c>rollback --restore-backup</c>). Nothing is copied but these small files. An older
+/// installer takes it before it replaces itself and hands over (<paramref name="taken"/>): this one then checks it is
+/// that backup.
 /// </summary>
 /// <param name="from">The release installed: what the backup is of.</param>
 /// <param name="to">The release the upgrade installs.</param>
 /// <param name="path">The backup to write.</param>
-public sealed class UpgradeBackupStep(string from, string to, string path) : PlanStep
+/// <param name="taken">The backup the installer before this one took and handed over: its file and SHA-256.</param>
+public sealed class UpgradeBackupStep(string from, string to, string path, (string Path, string Sha256)? taken = null) : PlanStep
 {
     public override StepKind Kind => StepKind.File;
 
-    public override string Target => path;
+    public override string Target => taken?.Path ?? path;
 
     public override string Purpose => $"the settings, identity store and secrets as {from} has them, backed up before the upgrade (no logs)";
 
@@ -36,6 +39,17 @@ public sealed class UpgradeBackupStep(string from, string to, string path) : Pla
         if (!machine.IsRoot)
         {
             return new StepCheck(StepChange.Info, "only root reads the stores: run with sudo, and the upgrade backs them up first");
+        }
+
+        if (taken is { } handed)
+        {
+            if (await HandedOverProblemAsync(context, handed, cancellationToken).ConfigureAwait(false) is { } problem)
+            {
+                return new StepCheck(StepChange.Blocked, $"{handed.Path}, the backup the installer before this one took before it handed over, {problem}: run the upgrade again");
+            }
+
+            Kept = handed.Path;
+            return StepCheck.Unchanged($"taken before the installer was replaced, {Modes.Octal(Modes.PrivateFile)}, root's");
         }
 
         if (machine.FileExists(path))
@@ -79,6 +93,46 @@ public sealed class UpgradeBackupStep(string from, string to, string path) : Pla
             cancellationToken).ConfigureAwait(false);
         Kept = written.Path;
         context.Log.Write($"Backed up the stores of {from} to {written.Path} before the upgrade to {to}.");
+    }
+
+    /// <summary>The SHA-256 of the backup at <paramref name="backup"/>, as an upgrade hands it over with it (lower-case hex).</summary>
+    public static string Sha256(InstallerMachine machine, string backup)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(machine.ReadBytes(backup) ?? throw new InstallerException($"{backup} went once it was written.")));
+    }
+
+    // Why the backup handed over is not the one the installer before this one took, of the release installed here: null
+    // when it is (in the backups' folder, its SHA-256 as handed over, root's and whole, this host's, of that release).
+    private async Task<string?> HandedOverProblemAsync(InstallContext context, (string Path, string Sha256) handed, CancellationToken cancellationToken)
+    {
+        var machine = context.Machine;
+        if (Path.GetDirectoryName(handed.Path) != BackupCommands.DefaultFolder)
+        {
+            return $"is not in {BackupCommands.DefaultFolder}";
+        }
+
+        if (!machine.FileExists(handed.Path))
+        {
+            return "is not there";
+        }
+
+        if (!string.Equals(Sha256(machine, handed.Path), handed.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return "is not the file it took (its SHA-256 differs)";
+        }
+
+        try
+        {
+            var backup = await BackupCommands.ReadAsync(machine, handed.Path, cancellationToken).ConfigureAwait(false);
+            return backup.Manifest.RecordVersion != from || !string.Equals(backup.Manifest.Host, context.Survey.HostName, StringComparison.OrdinalIgnoreCase)
+                ? $"is not this machine's backup of {from}"
+                : null;
+        }
+        catch (InstallerRefusedException error)
+        {
+            return $"cannot be read as a backup ({error.Message.TrimEnd('.')})";
+        }
     }
 
     // The newest backup an earlier run of this upgrade took: one of this host's before this release, of the release installed.

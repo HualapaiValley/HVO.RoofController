@@ -61,6 +61,55 @@ internal static partial class LifecycleCommands
         session.Log.Write($"Release {target.Version} makes a breaking state change from {record.Version}: {changes}.");
     }
 
+    /// <summary>
+    /// Set by <c>upgrade</c>, for the new release's installer it hands over to, to the backup it took before it replaced
+    /// itself (with <see cref="UpgradeBackupSha256Variable"/>): that installer checks it and keeps it in place of taking
+    /// another.
+    /// </summary>
+    public const string UpgradeBackupVariable = "HVO_ROOF_INSTALL_UPGRADE_BACKUP";
+
+    /// <summary>The SHA-256 of the backup <see cref="UpgradeBackupVariable"/> names.</summary>
+    public const string UpgradeBackupSha256Variable = "HVO_ROOF_INSTALL_UPGRADE_BACKUP_SHA256";
+
+    /// <summary>
+    /// Before this installer is replaced by the release's it hands over to: the backup the upgrade takes first, so one that
+    /// cannot be taken changes nothing (3). The release's installer is told its file and SHA-256 in
+    /// <paramref name="environment"/>.
+    /// </summary>
+    private static async Task BackUpBeforeHandingOverAsync(InstallerHost host, InstallerSession session, IDictionary<string, string> environment, CancellationToken cancellationToken)
+    {
+        if (session.UpgradeBackup() is not { } step)
+        {
+            return;
+        }
+
+        var checkedPlan = await new InstallPlan([step]).CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
+        var check = checkedPlan.Steps[0].Check;
+        if (check.Change == StepChange.Blocked)
+        {
+            session.Log.Write($"Refused: {check.Detail}.");
+            throw new InstallerRefusedException($"{check.Detail}. Nothing was changed.");
+        }
+
+        if (check.MakesChange)
+        {
+            await checkedPlan.ApplyAsync(session.ContextFor(host.Out.WriteLine), host.Out.WriteLine, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (step.Kept is { } kept)
+        {
+            environment[UpgradeBackupVariable] = kept;
+            environment[UpgradeBackupSha256Variable] = UpgradeBackupStep.Sha256(session.Machine, kept);
+        }
+    }
+
+    /// <summary>The backup the installer before this one took and handed over for the upgrade to <paramref name="target"/>; null when it handed over none.</summary>
+    private static (string Path, string Sha256)? HandedOverBackup(InstallerMachine machine, string target)
+        => machine.Environment(ContinuedVariable) == target && machine.Environment(UpgradeBackupVariable) is { Length: > 0 } path
+            && machine.Environment(UpgradeBackupSha256Variable) is { Length: > 0 } sha256
+                ? (path, sha256)
+                : null;
+
     // "the identity store, schema 2; the settings files, none saved".
     private static string DescribeStates(IReadOnlyList<StoreState> states)
         => string.Join("; ", states.Select(state => $"{StateContract.Describe(state.Store)}, " + (state switch
