@@ -24,8 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - An upgrade that stopped part way (the new controller deployed, the kiosk's download failed) left the record saying
   the old release, so `upgrade` to that release, or an older installer's install, wizard or `--plan`, could deploy the
   older controller again without `rollback`. The record now says the new release from before the upgrade's first
-  change, marked `upgradingFrom` until it finishes: `upgrade` again finishes it, `rollback` goes back one release, and
-  anything older is refused (exit 3), by older installers too (#131).
+  change, marked `upgradingFrom` until it finishes, and its folder is synced to disk before that change, so a power
+  loss does not take it back; an upgrade that cannot sync it stops (exit 1) with nothing else changed. `upgrade` again
+  finishes it, `rollback` goes back one release, and anything older is refused (exit 3), by older installers too
+  (#131).
 - A `--plan` without `sudo` for the machine's roles checked your own record's release instead of the machine's: it
   refused a valid upgrade when your `hvo-roof` was newer, and skipped the check when you had no record. Each role's
   record is now checked (#131).

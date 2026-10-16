@@ -52,6 +52,70 @@ internal sealed partial class FakeMachine
     /// </summary>
     public Action? BeforeStat { get; set; }
 
+    /// <summary>Each folder the installer synced to disk (InstallerMachine.SyncDirectory), in order, as a path on the machine.</summary>
+    public List<string> DirectorySyncs { get; } = [];
+
+    /// <summary>Why syncing a folder fails (an IOException's message); null for a sync that succeeds.</summary>
+    public string? DirectorySyncFailure { get; set; }
+
+    /// <summary>What happens as a folder is synced, before the sync: a test looks at the machine then.</summary>
+    public Action<string>? DuringDirectorySync { get; set; }
+
+    // Each file whose durability is tracked (TrackDurability), by path on the machine: its bytes as its folder's last sync
+    // left them, or null when it was not there then.
+    private readonly Dictionary<string, byte[]?> _durable = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// From now on, the file at <paramref name="path"/> survives a power loss (<see cref="PowerLoss"/>) only as its folder's
+    /// last sync left it, as a rename into a folder does: as it is now, until the installer syncs that folder.
+    /// </summary>
+    public FakeMachine TrackDurability(string path)
+    {
+        _durable[path] = Exists(path) ? File.ReadAllBytes(OnDisk(path)) : null;
+        return this;
+    }
+
+    /// <summary>The tracked file's text as it would be after a power loss now; null when it would not be there.</summary>
+    public string? DurableText(string path) => _durable[path] is { } bytes ? Encoding.UTF8.GetString(bytes) : null;
+
+    /// <summary>
+    /// The machine loses power and starts again: each tracked file is as its folder's last sync left it, whatever was
+    /// renamed over it since. Docker's containers and every other file stay as they are, durable already.
+    /// </summary>
+    public void PowerLoss()
+    {
+        foreach (var (path, bytes) in _durable)
+        {
+            if (bytes is null)
+            {
+                File.Delete(OnDisk(path));
+            }
+            else
+            {
+                File.WriteAllBytes(OnDisk(path), bytes);
+            }
+        }
+    }
+
+    // InstallerMachine.SyncFolderOnDisk: kept, then failed as DirectorySyncFailure says, or the folder's tracked files made
+    // durable as they are now.
+    private void SyncFolder(string onDisk)
+    {
+        var folder = onDisk[Root.TrimEnd('/').Length..];
+        DirectorySyncs.Add(folder);
+        DuringDirectorySync?.Invoke(folder);
+        Directory.Exists(onDisk).Should().BeTrue("the installer syncs a folder that is there");
+        if (DirectorySyncFailure is { } failure)
+        {
+            throw new IOException($"Could not sync the folder {onDisk} to disk (fsync: {failure}).");
+        }
+
+        foreach (var path in _durable.Keys.Where(path => Path.GetDirectoryName(path) == folder).ToArray())
+        {
+            _durable[path] = Exists(path) ? File.ReadAllBytes(OnDisk(path)) : null;
+        }
+    }
+
     /// <summary>The same machine, with <paramref name="userName"/> running the installer without sudo.</summary>
     public FakeMachine AsPerson(string userName = "pi")
     {

@@ -42,7 +42,8 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
     /// Makes the changes, step by step in order. Each step is checked again just before it runs, so one that an earlier
     /// step already took care of is skipped. A failure stops the install there; running it again carries on.
     /// <paramref name="beforeChanges"/> runs once, when nothing refused the plan and before its first change: an upgrade
-    /// says its release in the record there (<see cref="RecordStep.MarkUpgradeStarted"/>).
+    /// says its release in the record there, synced to disk (<see cref="RecordStep.MarkUpgradeStarted"/>). When it throws,
+    /// no step runs.
     /// </summary>
     public async Task ApplyAsync(InstallContext context, Action<string>? progress = null, CancellationToken cancellationToken = default, Action<InstallContext>? beforeChanges = null)
     {

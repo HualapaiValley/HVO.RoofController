@@ -258,7 +258,8 @@ public sealed class InstallerSession
     }
 
     // An upgrade, or a reinstall over an older release's data, says its release in each record it writes before its first
-    // change: one that stops part way then leaves a record that no installer goes back from but rollback.
+    // change, synced to disk: one that stops part way, or loses power, then leaves a record that no installer goes back
+    // from but rollback.
     private static void MarkUpgradeStarted(CheckedPlan plan, InstallContext context)
     {
         foreach (var record in plan.Steps.Select(step => step.Step).OfType<RecordStep>())

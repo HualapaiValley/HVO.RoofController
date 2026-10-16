@@ -108,7 +108,8 @@ public static class Ownership
 
 /// <summary>
 /// The install record: written last, once everything before it is in place, and only when it would say something new
-/// (the times it holds do not count). An upgrade marks it first (<see cref="MarkUpgradeStarted"/>).
+/// (the times it holds do not count), with its folder synced so that it says so after a power loss
+/// (<see cref="InstallerMachine.WriteDurably"/>). An upgrade marks it first (<see cref="MarkUpgradeStarted"/>).
 /// </summary>
 public sealed class RecordStep(InstallScope scope, string path, Func<InstallContext, InstallRecord?, InstallRecord> build) : PlanStep
 {
@@ -155,7 +156,7 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
             context.Machine.CreateDirectory(folder, scope == InstallScope.System ? Modes.Folder : Modes.PrivateFolder);
         }
 
-        context.Machine.WriteAtomically(path, record.ToJson(), ModeFor(scope));
+        context.Machine.WriteDurably(path, record.ToJson(), ModeFor(scope));
         context.Log.Write($"Wrote {path}: {InstallRoles.Describe(record.Roles)}, version {record.Version}.");
         return Task.CompletedTask;
     }
@@ -165,19 +166,40 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
     /// release from then on (<see cref="InstallRecord.UpgradeStarted"/>). A run that stops part way, with the new controller
     /// deployed and the kiosk not, say, then never leaves the newer release under a record of the older one, which an
     /// upgrade or an older installer would take as the release to go back to. This step clears the mark at the end.
+    /// The record's folder is synced before any change, even when the mark was written by a run before this one: a power
+    /// loss must not take the record back to the older release once a newer controller may be deployed. When that cannot
+    /// be made sure of, nothing else changes.
     /// </summary>
     public void MarkUpgradeStarted(InstallContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         var (existing, _) = InstallRecord.Load(context.Machine, path);
-        if (existing is null || !RoofSemVer.IsValid(context.Version) || !RoofSemVer.IsOlder(existing.Version, context.Version))
+        if (existing is null)
         {
             return;
         }
 
-        var record = existing.UpgradeStarted(context.Version) with { UpdatedAt = context.Time.GetUtcNow() };
-        context.Machine.WriteAtomically(path, record.ToJson(), ModeFor(scope));
-        context.Log.Write($"Wrote {path}: version {record.Version}, its upgrade from {existing.Version} not finished yet.");
+        try
+        {
+            if (RoofSemVer.IsValid(context.Version) && RoofSemVer.IsOlder(existing.Version, context.Version))
+            {
+                var record = existing.UpgradeStarted(context.Version) with { UpdatedAt = context.Time.GetUtcNow() };
+                context.Machine.WriteDurably(path, record.ToJson(), ModeFor(scope));
+                context.Log.Write($"Wrote {path}: version {record.Version}, its upgrade from {existing.Version} not finished yet.");
+            }
+            else
+            {
+                // A run that stopped before its sync (below) may have left the mark, or a restore the record, unsynced.
+                context.Machine.SyncDirectory(Path.GetDirectoryName(path)!);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            var message = $"Before its first change, the installer could not make sure that {path} says {context.Version} after a power loss: {error.Message} "
+                + "Nothing else was changed.";
+            context.Log.Write($"Failed: {message}");
+            throw new InstallerException(message, error);
+        }
     }
 
     private static UnixFileMode ModeFor(InstallScope scope) => scope == InstallScope.System ? Modes.File : Modes.PrivateFile;

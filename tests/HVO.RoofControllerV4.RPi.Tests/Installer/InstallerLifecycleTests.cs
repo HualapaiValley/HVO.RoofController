@@ -31,6 +31,9 @@ public sealed class InstallerLifecycleTests
     // Stands for the answers file's path in a test's arguments.
     private const string AnswersFile = "ANSWERS";
 
+    // The folder of the machine's record, which an upgrade syncs before its first change.
+    private static readonly string RecordFolder = Path.GetDirectoryName(InstallPaths.SystemRecord)!;
+
     // The release installed has notes too: an upgrade from it shows only the ones after it.
     private static readonly UpgradeNote[] Notes = [new("4.0.0", "The first release."), new(NewVersion, "The kiosk's settings gain a brightness.\nNothing to do by hand.")];
 
@@ -419,6 +422,119 @@ public sealed class InstallerLifecycleTests
         pi.DeployOptions.Count(options => options == "--rollback").Should().Be(1);
         pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion);
         pi.Unexpected.Should().BeEmpty();
+    }
+
+    // The mark is synced to disk before the upgrade's first change (#131). A power loss once the new controller is deployed
+    // loses each rename into the record's folder since that folder's last sync, and still leaves the record saying the new
+    // release: 4.0.0's installer does not take the controller back.
+    [TestMethod]
+    public async Task AnUpgradesMark_IsSyncedBeforeItsFirstChange_SoAPowerLossLeavesItInPlace()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.TrackDurability(InstallPaths.SystemRecord);
+        pi.WithRelease(NewVersion, latest: true);
+        pi.FileDownloads.Remove(KioskTarballUri(NewVersion));
+
+        // The new release's installer, run by the person: the mark is the run's first change.
+        pi.InstallerVersion = NewVersion;
+        pi.DirectorySyncs.Clear();
+        var files = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
+        IReadOnlyDictionary<string, string>? atSync = null;
+        var deploysAtSync = -1;
+        pi.DuringDirectorySync = _ =>
+        {
+            if (atSync is null)
+            {
+                atSync = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
+                deploysAtSync = pi.Deploys.Count;
+            }
+        };
+        string? durableAtDeploy = null;
+        pi.DuringDeploy = () => durableAtDeploy ??= pi.DurableText(InstallPaths.SystemRecord);
+
+        var stopped = await pi.RunAsync("upgrade");
+
+        stopped.ExitCode.Should().Be((int)InstallerExitCode.Failed, stopped.ToString());
+        pi.DirectorySyncs.Should().ContainSingle("the run stopped before its last step").Which.Should().Be(RecordFolder);
+        atSync.Should().Equal(files, "nothing but the record changed before its folder was synced");
+        deploysAtSync.Should().Be(1, "only the install had deployed the controller");
+        durableAtDeploy.Should().NotBeNull();
+        InstallRecord.Parse(durableAtDeploy!).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0");
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion);
+
+        pi.PowerLoss();
+
+        Record(pi).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0");
+        pi.InstallerVersion = "4.0.0";
+        var back = await pi.RunAsync("upgrade", "--version", "4.0.0");
+
+        back.ExitCode.Should().Be((int)InstallerExitCode.Refused, back.ToString());
+        back.Error.Should().Contain($"The upgrade from 4.0.0 to {NewVersion} did not finish here");
+        pi.Deploys.Should().HaveCount(2, "the install and the upgrade deployed the controller, and nothing since");
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion);
+    }
+
+    // When the record's folder cannot be synced (#131), the run stops before its first change: the mark may be on disk or
+    // not, but nothing else changed. A run again does not go on from the unsynced mark it finds either. Once the folder
+    // syncs, the upgrade goes ahead.
+    [TestMethod]
+    public async Task AnUpgrade_WhoseRecordCannotBeSynced_ChangesNothingElse_UntilItCanBe()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.TrackDurability(InstallPaths.SystemRecord);
+        pi.WithRelease(NewVersion, latest: true);
+        pi.InstallerVersion = NewVersion;
+        pi.DirectorySyncFailure = "Input/output error";
+        var files = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
+
+        foreach (var attempt in new[] { "the first run", "a run with the unsynced mark in place" })
+        {
+            var run = await pi.RunAsync("upgrade");
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Failed, $"{attempt}: {run}");
+            run.Error.Should().Contain($"Before its first change, the installer could not make sure that {InstallPaths.SystemRecord} says {NewVersion} after a power loss")
+                .And.Contain("Input/output error")
+                .And.Contain("Nothing else was changed.");
+            Record(pi).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0", attempt);
+            pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord).Should().Equal(files, attempt);
+            pi.Deploys.Should().ContainSingle("only the install deployed the controller");
+            pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.0");
+        }
+
+        pi.Read(InstallPaths.SystemLog).Should().Contain("Failed: Before its first change");
+        pi.PowerLoss();
+        Record(pi).Should().Match<InstallRecord>(record => record.Version == "4.0.0" && record.UpgradingFrom == null, "the mark was never synced");
+
+        pi.DirectorySyncFailure = null;
+        var synced = await pi.RunAsync("upgrade");
+
+        synced.ExitCode.Should().Be(0, synced.ToString());
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion);
+        InstallRecord.Parse(pi.DurableText(InstallPaths.SystemRecord)!).Should().Match<InstallRecord>(
+            record => record.Version == NewVersion && record.PreviousVersion == "4.0.0" && record.UpgradingFrom == null);
+        pi.Unexpected.Should().BeEmpty();
+    }
+
+    // The machine's own sync (#131): the folder opened and synced, with fsync on Linux and F_FULLFSYNC on macOS. A folder
+    // that cannot be opened is an IOException, which stops the run.
+    [TestMethod]
+    public void TheMachinesSync_SyncsAFolder_AndFailsForOneThatIsNotThere()
+    {
+        var machine = InstallerMachine.Current();
+        var folder = Directory.CreateTempSubdirectory("hvo-roof-sync-").FullName;
+        try
+        {
+            machine.WriteDurably(Path.Join(folder, "install.json"), "{}\n", Modes.File);
+
+            File.ReadAllText(Path.Join(folder, "install.json")).Should().Be("{}\n");
+            var missing = Path.Join(folder, "missing");
+            FluentActions.Invoking(() => machine.SyncDirectory(missing)).Should().Throw<IOException>()
+                .WithMessage($"Could not sync the folder {missing} to disk (open: *");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
     }
 
     [TestMethod]

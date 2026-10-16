@@ -1069,7 +1069,8 @@ Each installer installs its own release, so the installer hands over to the new 
 3. The new installer installs its release, as `--answers` installs the record's choices
    ([Running it again](#running-it-again)). Before its first change it writes the record to say the new release
    already, with the one before it (`previousVersion`) for a rollback, and `upgradingFrom`, which says the upgrade
-   has not finished. Then:
+   has not finished. It syncs the record's folder to disk, so that a power loss does not take the record back; when
+   that fails, the upgrade stops there (exit 1), with nothing else changed. Then:
    - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
      controller, checked before the old one is let go and kept as `roof-controller-previous`;
    - a rig's HAT emulator, from the new release;
@@ -1101,7 +1102,7 @@ installer older than the release installed does not install over it either. The 
 checked, and repaired, as a second run of the installer would be: "4.0.1 is installed here: checking that everything is
 as it should be."
 
-An upgrade that stops part way, at a failed step or Ctrl+C, can leave parts of the new release in place: the new
+An upgrade that stops part way, at a failed step, Ctrl+C or a power loss, can leave parts of the new release in place: the new
 controller with the old kiosk, say, when the kiosk's download fails. Its record already says the new release, so
 nothing takes the controller back to the release the upgrade started from, except a rollback. `upgrade` again, with
 the new installer already in place, finishes it: "The upgrade from 4.0.0 to 4.0.1 did not finish here: finishing it."
@@ -1234,7 +1235,10 @@ purposes:
 - to upgrade, roll back or uninstall.
 
 It is written last, once everything before it is in place, and it holds no secret. An upgrade also writes it before
-its first change ([Routine upgrades](#routine-upgrades)). Besides the roles and their choices, it says:
+its first change ([Routine upgrades](#routine-upgrades)). Each time, the record's folder is synced to disk (`fsync`;
+on a Mac `F_FULLFSYNC`, or `fsync` where the file system does not support it), so a power loss leaves the record as
+written. A run that cannot sync it stops (exit 1): an upgrade, before its first change. Besides the roles and their
+choices, it says:
 
 | Field | What it says |
 |-------|--------------|
