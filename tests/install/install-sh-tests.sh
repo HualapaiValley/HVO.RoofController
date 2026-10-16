@@ -1069,6 +1069,57 @@ test_docker_20_10_is_new_enough() {
   assert_output_contains "ok    Docker 20.10.24, with Compose 2.29.7"
 }
 
+# The controller's container runs with memory, CPU and process limits, and Docker drops one it cannot enforce with only a
+# warning (docs/deployment.md, "The container's privileges and limits").
+test_the_controllers_limits_are_checked_with_docker() {
+  install_sh -- --roles controller,kiosk
+
+  assert_status 0
+  assert_called "root docker info --format {{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}"
+  assert_output_contains "ok    Docker enforces memory, CPU and process limits"
+  assert_output_not_contains "note  Docker cannot keep"
+  assert_output_not_contains "less than the controller's default limits"
+}
+
+test_a_pi_whose_docker_cannot_limit_memory_fails_with_the_boot_setting_to_change() {
+  install_sh FAKE_DOCKER_LIMITS=false,true,true,false,4,8589934592 -- --roles controller
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  Docker does not enforce memory limits (docker info: MemoryLimit false, CPUCfsQuota true, PidsLimit true), and the controller's container runs with them: add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot, then run this again."
+}
+
+test_a_rig_whose_docker_cannot_limit_cpu_or_processes_fails() {
+  not_a_pi
+  install_sh FAKE_MACHINE=x86_64 FAKE_DOCKER_LIMITS=true,false,,true,8,17179869184 -- --roles rig
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  Docker does not enforce CPU, process limits (docker info: MemoryLimit true, CPUCfsQuota false, PidsLimit ?), and the controller's container runs with them: give the Docker daemon the memory, cpu and pids cgroup controllers, then run this again."
+}
+
+test_a_small_machine_or_no_swap_limit_is_only_noted() {
+  install_sh FAKE_DOCKER_LIMITS=true,true,true,false,4,4045848576 -- --roles controller
+
+  assert_status 0
+  assert_output_contains "note  Docker cannot keep the controller's container from swapping (docker info: SwapLimit false): its memory limit still holds"
+  assert_output_contains "note  This machine has 4 CPUs and 3858 MiB of memory, less than the controller's default limits (2 CPUs, 4g): give the installer smaller ones (--cpus, --memory and --allow-limits-below-minimum)"
+}
+
+test_the_limits_are_checked_once_docker_is_installed() {
+  without docker
+  install_sh FAKE_DOCKER_LIMITS=false,true,true,true,4,8589934592 -- --roles controller --install-docker
+
+  assert_stopped_after "Docker was installed"
+  assert_output_contains "FAIL  Docker does not enforce memory limits"
+}
+
+test_roles_without_the_controller_do_not_check_the_limits() {
+  record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
+  install_sh FAKE_DOCKER_LIMITS=false,false,false,false,1,1 -- --roles kiosk
+
+  assert_status 0
+  assert_not_called "docker info --format {{.MemoryLimit}}"
+}
+
 test_docker_whose_engine_is_down_fails() {
   install_sh FAKE_DOCKER_ENGINE=down -- --roles rig
 

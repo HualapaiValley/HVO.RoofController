@@ -56,6 +56,25 @@ public static class Installer
             Description = "Explicitly approve installing missing kiosk display libraries with apt. Never enables Docker, I2C, a desktop change or a reboot."
         };
         var release = ReleaseOption("Read the release");
+        var cpus = new Option<decimal?>("--cpus")
+        {
+            Description = "The controller container's CPU limit (2 by default; fewer needs --allow-limits-below-minimum). Kept in the install record for upgrades and rollbacks.",
+            HelpName = "CPUS"
+        };
+        var memory = new Option<string?>("--memory")
+        {
+            Description = "The controller container's memory limit in MiB or GiB, as 4096m or 4g (4g by default; less needs --allow-limits-below-minimum). The container gets no swap beyond it.",
+            HelpName = "SIZE"
+        };
+        var pidsLimit = new Option<int?>("--pids-limit")
+        {
+            Description = "The most processes and threads the controller container runs at once (512 by default; 256 to 32768).",
+            HelpName = "N"
+        };
+        var allowBelowMinimum = new Option<bool>("--allow-limits-below-minimum")
+        {
+            Description = "Allow fewer than 2 CPUs or less than 4g of memory for the controller container, below the HVO install contract's minimum (never less than 1 CPU and 1g)."
+        };
         var version = new Option<bool>("--version")
         {
             Description = "Print the installer's version (the release it installs) and change nothing."
@@ -88,6 +107,10 @@ public static class Installer
         root.Options.Add(plan);
         root.Options.Add(setupPrerequisites);
         root.Options.Add(release);
+        root.Options.Add(cpus);
+        root.Options.Add(memory);
+        root.Options.Add(pidsLimit);
+        root.Options.Add(allowBelowMinimum);
         root.Options.Add(version);
         foreach (var option in secretFiles.Values)
         {
@@ -116,7 +139,12 @@ public static class Installer
                     .Where(option => option.File is not null)
                     .ToDictionary(option => option.Key, option => option.File!),
                 SetupPrerequisites = parseResult.GetValue(setupPrerequisites),
-                PinFiles = parseResult.GetValue(pinFiles) ?? []
+                PinFiles = parseResult.GetValue(pinFiles) ?? [],
+                Resources = new ContainerResourcesOverride(
+                    parseResult.GetValue(cpus),
+                    parseResult.GetValue(memory),
+                    parseResult.GetValue(pidsLimit),
+                    parseResult.GetValue(allowBelowMinimum)) is { IsEmpty: false } resources ? resources : null
             };
             return RunAsync(host, options, token);
         });
@@ -157,6 +185,9 @@ public static class Installer
         public IReadOnlyList<string> PinFiles { get; init; } = [];
 
         public bool SetupPrerequisites { get; init; }
+
+        /// <summary><c>--cpus</c>, <c>--memory</c>, <c>--pids-limit</c> and <c>--allow-limits-below-minimum</c>; null when none is given.</summary>
+        public ContainerResourcesOverride? Resources { get; init; }
 
         /// <summary>Every file that holds a secret, <see cref="PinFiles"/> included. Throws <see cref="InstallerUsageException"/> for a <c>--pin-file</c> that is not NAME=FILE.</summary>
         public IReadOnlyDictionary<InstallSecret, string> AllSecretFiles()
@@ -272,7 +303,7 @@ public static class Installer
     /// </summary>
     internal static async Task<int> PlanAsync(InstallerHost host, InstallerSession session, InstallAnswers answers, RunOptions options, CancellationToken cancellationToken)
     {
-        session.Answers = answers;
+        session.Answers = WithResources(answers, options.Resources);
         session.SetupPrerequisites = options.SetupPrerequisites;
 
         // An answers file gave them all (InstallAnswers.Parse), but a record an earlier release wrote may not.
@@ -336,6 +367,7 @@ public static class Installer
     internal static async Task<int> InstallAsync(InstallerHost host, InstallerSession session, InstallAnswers answers, string doing, RunOptions options, CancellationToken cancellationToken)
     {
         var log = session.Log;
+        answers = WithResources(answers, options.Resources);
         session.Answers = answers;
         session.SetupPrerequisites = options.SetupPrerequisites;
         log.Write($"{doing}: {InstallRoles.Describe(answers.Roles)}.");
@@ -414,6 +446,23 @@ public static class Installer
         var log = InstallLog.Open(host.Machine, InstallPaths.Log(host.Machine), host.Time);
         var session = await InstallerSession.StartAsync(host.Machine, log, host.Version, host.Time, options.Release(host), cancellationToken).ConfigureAwait(false);
         GiveSecretFiles(host, session, options);
+
+        // The limits given on the command line replace the recorded ones, and are the defaults of a controller chosen now.
+        if (options.Resources is { } resources)
+        {
+            var problems = resources.Apply(session.Answers.Controller?.Resources).Problems().ToArray();
+            if (problems.Length > 0)
+            {
+                throw new InstallerUsageException(string.Join(Environment.NewLine, problems));
+            }
+
+            session.ResourcesOverride = resources;
+            if (session.Answers.Controller is { } recorded)
+            {
+                session.Answers = session.Answers with { Controller = recorded with { Resources = resources.Apply(recorded.Resources) } };
+            }
+        }
+
         var app = host.CreateApplication();
         InstallerWizard? wizard = null;
         try
@@ -444,6 +493,34 @@ public static class Installer
         }
 
         return (int)wizard.Result;
+    }
+
+    /// <summary>
+    /// <paramref name="answers"/> with the limits given on the command line in place of theirs. A usage error when the roles
+    /// run no controller, or when the limits are not ones the controller is given.
+    /// </summary>
+    internal static InstallAnswers WithResources(InstallAnswers answers, ContainerResourcesOverride? resources)
+    {
+        ArgumentNullException.ThrowIfNull(answers);
+        if (resources is null || resources.IsEmpty)
+        {
+            return answers;
+        }
+
+        if (!InstallRoles.RunsController(answers.Roles))
+        {
+            throw new InstallerUsageException("--cpus, --memory, --pids-limit and --allow-limits-below-minimum set the controller container's limits: they need the controller or a test rig among the roles.");
+        }
+
+        var controller = answers.Controller ?? new ControllerSettings();
+        var limits = resources.Apply(controller.Resources);
+        var problems = limits.Problems().ToArray();
+        if (problems.Length > 0)
+        {
+            throw new InstallerUsageException(string.Join(Environment.NewLine, problems));
+        }
+
+        return answers with { Controller = controller with { Resources = limits } };
     }
 
     internal static InstallAnswers ReadAnswers(InstallerHost host, string answersFile)

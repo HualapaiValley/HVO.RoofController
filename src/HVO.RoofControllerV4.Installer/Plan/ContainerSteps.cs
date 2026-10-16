@@ -424,6 +424,18 @@ public sealed class ControllerStep(
             return $"redeployed as release {release.Version} (it runs {(container.Version is { } version ? $"version {version}" : "another image")})";
         }
 
+        // Its limits and privileges are the deploy script's (docs/deployment.md, "The container's privileges and limits").
+        var resources = settings.Resources;
+        if (container.NanoCpus != resources.NanoCpus || container.MemoryBytes != resources.MemoryBytes || container.PidsLimit != resources.PidsLimit)
+        {
+            return $"redeployed with its limits: {resources.Describe()}";
+        }
+
+        if (!container.ReadOnlyRootFilesystem)
+        {
+            return "redeployed with the container's privileges narrowed (a read-only root filesystem and only the supervisor's capabilities)";
+        }
+
         if (keys.FirstOrDefault(key => key.Use == ApiKeyUse.WebStop) is { IsKnown: true } webStop && container.WebStopKeyFile != ApiKeyFiles.ContainerKeyFile(webStop.Index))
         {
             return "redeployed so the web UI's Stop has a key of its own";
@@ -668,6 +680,12 @@ public sealed class ControllerStep(
 
             // The script's Stop refuses a roof that moves, or that its Status cannot show idle, before it replaces the controller.
             ["REQUIRE_IDLE_ROOF"] = "true",
+
+            // The container's limits, from the answers or the record: --rollback gives them to the version it brings back.
+            ["CONTAINER_CPUS"] = settings.Resources.CpusText,
+            ["CONTAINER_MEMORY"] = settings.Resources.Memory,
+            ["CONTAINER_PIDS_LIMIT"] = settings.Resources.PidsLimit.ToString(CultureInfo.InvariantCulture),
+            ["ALLOW_LIMITS_BELOW_MINIMUM"] = settings.Resources.AllowBelowMinimum ? "true" : "false",
 
             // The key for the Stop and Status checks, as a file only root reads; never the key itself.
             ["OPERATOR_KEY_FILE"] = keyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),

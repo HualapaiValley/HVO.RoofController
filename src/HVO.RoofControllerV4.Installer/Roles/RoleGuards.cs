@@ -1,3 +1,4 @@
+using System.Globalization;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
@@ -178,6 +179,10 @@ public static class RoleGuards
         {
             problems.Add($"{Capitalise(InstallRoles.Describe(roles.Where(role => role is InstallRole.Controller or InstallRole.Rig)))} {Are(roles.Where(role => role is InstallRole.Controller or InstallRole.Rig).ToArray())} run in Docker. {survey.Docker.Problem}");
         }
+        else if (InstallRoles.RunsController(roles))
+        {
+            problems.AddRange(ContainerLimitProblems(survey.Docker.Limits, (answers.Controller ?? new ControllerSettings()).Normalised().Resources));
+        }
 
         if (!planOnly && NeedsRigConfirmation(survey, roles) && !string.Equals(answers.RigConfirmation?.Trim(), survey.HostName, StringComparison.Ordinal))
         {
@@ -196,6 +201,44 @@ public static class RoleGuards
 
         problems.AddRange(answers.Problems());
         return problems;
+    }
+
+    /// <summary>
+    /// Why Docker here cannot give the controller its limits (docs/deployment.md, "The container's privileges and
+    /// limits"): it does not say it enforces memory, CPU and process limits (it would drop them with only a warning), or the
+    /// machine has fewer CPUs or less memory than the limits give. The deploy script checks the same before it changes
+    /// anything.
+    /// </summary>
+    public static IEnumerable<string> ContainerLimitProblems(DockerLimits? docker, ContainerResources resources)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        if (docker is null)
+        {
+            yield return "Docker did not say which limits it enforces (docker info), and the controller runs with memory, CPU and process limits: check that docker info works, then run the installer again.";
+            yield break;
+        }
+
+        var missing = new[] { ("memory", docker.Memory), ("CPU", docker.Cpu), ("process", docker.Pids) }
+            .Where(limit => limit.Item2 != true)
+            .Select(limit => limit.Item1)
+            .ToArray();
+        if (missing.Length > 0)
+        {
+            static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
+            yield return $"Docker here does not enforce {string.Join(", ", missing)} limits (docker info: MemoryLimit {Flag(docker.Memory)}, CPUCfsQuota {Flag(docker.Cpu)}, PidsLimit {Flag(docker.Pids)}), "
+                + "so the controller would run without them. On Raspberry Pi OS, add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot; "
+                + "elsewhere, give the Docker daemon the memory, cpu and pids cgroup controllers. Then run the installer again (docs/deployment.md, \"The container's privileges and limits\").";
+        }
+
+        if (docker.Cpus is { } cpus && resources.Cpus > cpus)
+        {
+            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's limit of {resources.CpusText} CPUs is more than the {cpus} Docker reports here: give controller.resources.cpus (or --cpus) at most {cpus} (fewer than 2 needs controller.resources.allowBelowMinimum).");
+        }
+
+        if (docker.MemoryBytes is { } memory && resources.MemoryBytes > memory)
+        {
+            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's memory limit of {resources.Memory} is more than the {memory / (1024 * 1024)}m Docker reports here: give controller.resources.memory (or --memory) at most that (less than 4g needs controller.resources.allowBelowMinimum).");
+        }
     }
 
     private static string? ControllerProblem(MachineSurvey survey)

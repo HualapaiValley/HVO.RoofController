@@ -51,7 +51,9 @@ public sealed class InstallerAnswersTests
         root.GetProperty("roles").EnumerateArray().Select(role => role.GetString()).Should().Equal("rig", "mac-app");
         root.GetProperty("controller").GetProperty("connection").GetString().Should().Be("own-certificate");
         root.GetProperty("controller").EnumerateObject().Select(member => member.Name).Should().Equal(
-            ["connection", "httpsPort", "httpPort", "webPort", "hostNames", "domains", "rig"], "only the choices are saved, not what follows from them");
+            ["connection", "httpsPort", "httpPort", "webPort", "hostNames", "domains", "rig", "resources"], "only the choices are saved, not what follows from them");
+        root.GetProperty("controller").GetProperty("resources").EnumerateObject().Select(member => $"{member.Name}={member.Value.GetRawText()}").Should().Equal(
+            ["cpus=2", "memory=\"4g\"", "pidsLimit=512", "allowBelowMinimum=false"], "the container's limits are saved, the defaults included, so the record says what the controller runs with");
         root.GetProperty("controller").GetProperty("httpsPort").GetInt32().Should().Be(8443);
         root.GetProperty("macApp").GetProperty("folder").GetString().Should().Be("/Applications");
         root.GetProperty("client").EnumerateObject().Select(member => member.Name).Should().Equal(

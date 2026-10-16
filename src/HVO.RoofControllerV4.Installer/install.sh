@@ -548,13 +548,17 @@ EOF
     sudo_command=(sudo --)
   fi
 
-  # What the run needs: Docker for the controller, a rig and the kiosk (which the controller's container serves); I2C for
-  # the controller; the ports, for a first install's controller or rig (one whose scope has a record with neither, or no
-  # record). Uninstall and backup check what they need themselves, and a plan says what is missing.
-  local needs_docker=false needs_i2c=false needs_ports=false record record_roles
+  # What the run needs: Docker for the controller, a rig and the kiosk (which the controller's container serves), and
+  # Docker's resource limits for the controller and a rig; I2C for the controller; the ports, for a first install's
+  # controller or rig (one whose scope has a record with neither, or no record). Uninstall and backup check what they need
+  # themselves, and a plan says what is missing.
+  local needs_docker=false needs_limits=false needs_i2c=false needs_ports=false record record_roles
   if ${reads_release} && ! ${plan}; then
     if contains "${roles}" controller || contains "${roles}" rig || contains "${roles}" kiosk || [ "${command}:${os}" = restore:linux ]; then
       needs_docker=true
+    fi
+    if contains "${roles}" controller || contains "${roles}" rig; then
+      needs_limits=true
     fi
     if contains "${roles}" controller && [ -n "${pi_model}" ] && [ "${command}" != cert ]; then
       needs_i2c=true
@@ -715,6 +719,32 @@ EOF
     fi
   }
 
+  # The controller's container runs with memory, CPU and process limits (docs/deployment.md, "The container's privileges
+  # and limits"), and Docker drops a limit it cannot enforce with only a warning: Raspberry Pi OS boots with
+  # cgroup_disable=memory, for one. The installer checks the limits it is given against what Docker reports; here, that
+  # Docker enforces them at all, and whether this machine has the default limits' 2 CPUs and 4 GiB. False when it fails.
+  check_docker_limits() {
+    local info memory cpu pids swap cpus total missing=""
+    if ! info=$(as_root docker info --format '{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}' 2>/dev/null </dev/null); then
+      failed "Docker did not say which limits it enforces (docker info), and the controller's container runs with memory, CPU and process limits: check that docker info works, then run this again."
+      return 1
+    fi
+    IFS=, read -r memory cpu pids swap cpus total <<<"${info}"
+    [ "${memory}" = true ] || missing="memory"
+    [ "${cpu}" = true ] || missing="${missing:+${missing}, }CPU"
+    [ "${pids}" = true ] || missing="${missing:+${missing}, }process"
+    if [ -n "${missing}" ]; then
+      failed "Docker does not enforce ${missing} limits (docker info: MemoryLimit ${memory:-?}, CPUCfsQuota ${cpu:-?}, PidsLimit ${pids:-?}), and the controller's container runs with them: $([ -n "${pi_model}" ] && printf 'add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot' || printf 'give the Docker daemon the memory, cpu and pids cgroup controllers'), then run this again."
+      return 1
+    fi
+    ok "Docker enforces memory, CPU and process limits"
+    [ "${swap}" = true ] \
+      || note "Docker cannot keep the controller's container from swapping (docker info: SwapLimit ${swap:-?}): its memory limit still holds"
+    if [[ ${cpus} =~ ^[0-9]+$ && ${total} =~ ^[0-9]+$ ]] && ((cpus < 2 || total < 4 * 1024 * 1024 * 1024)); then
+      note "This machine has ${cpus} CPUs and $((total / 1048576)) MiB of memory, less than the controller's default limits (2 CPUs, 4g): give the installer smaller ones (--cpus, --memory and --allow-limits-below-minimum)"
+    fi
+  }
+
   # Docker is checked here, and when it is missing and can be installed, its folder's free space too: whether to install
   # it is decided once every other check has passed, and it is installed last.
   local docker_missing=false docker_root needs=""
@@ -728,6 +758,7 @@ EOF
       if check_docker_engine && [ "${os}" = linux ]; then
         docker_root=$(as_root docker info --format '{{.DockerRootDir}}' 2>/dev/null </dev/null || true)
         check_space "${docker_root:-/var/lib/docker}" "${need_docker_kib}" "Docker's images"
+        ! ${needs_limits} || check_docker_limits || true
       fi
     elif [ "${os}" = macos ]; then
       failed "Docker is not installed, and a test rig runs in Docker Desktop: install it (https://docs.docker.com/desktop/setup/install/mac-install/), start it, then run this again."
@@ -819,7 +850,9 @@ EOF
       note "Docker was not installed: it is installed only once every other check passes, and one failed"
     elif install_docker_from_apt; then
       made="Docker was installed"
-      check_docker_engine || true
+      if check_docker_engine && ${needs_limits}; then
+        check_docker_limits || true
+      fi
     else
       made="an attempt to install Docker"
       failed "Docker could not be installed: install it yourself (https://docs.docker.com/engine/install/), then run this again."
