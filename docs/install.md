@@ -631,11 +631,12 @@ saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on i
 
 The controller's container (a rig's too) runs with at most 512 processes and threads, and, for now, with no CPU or
 memory limit. A limit is one more way for the kernel to end the controller, and a controller ended while the roof
-moves leaves the drive running until the restarted controller turns the relays off; the HVO install contract's default
-of 2 CPUs and 4 GiB is turned on by a follow-up once the supervisor de-energises the relays whenever the controller
-exits ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138); [deployment.md](deployment.md#the-containers-privileges-and-limits)).
-Until then, give a CPU or memory limit in the answers' `controller.resources`, or on the command line, where each one
-given replaces the answers' (or the record's):
+moves leaves the drive running until a restarted controller turns the relays off, or, when it cannot start again,
+until the roof reaches its limit. The HVO install contract's default of 2 CPUs and 4 GiB is turned on by a follow-up
+once the supervisor de-energises the relays whenever the controller exits
+([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138);
+[deployment.md](deployment.md#the-containers-privileges-and-limits)). Until then, give a CPU or memory limit in the
+answers' `controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
 
 ```bash
 sudo hvo-roof-install --answers controller.json --cpus 2 --memory 4g --pids-limit 1024

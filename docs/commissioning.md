@@ -401,7 +401,7 @@ The container runs two processes under a supervisor: the controller and the web 
 | 4 | Relay writes fail when the host stops the moving roof, so the shutdown cannot verify the relays off. If the writes work again while the host waits, a retry verifies the relays off and the shutdown completes. If they never do, the host logs the stop `FAILED` and the container still exits within the grace period, with the relays held; the restarted controller turns them off. | `deploy-scenarios.sh lifecycle` |
 | 5 | A restart through the API (`POST System/Restart`) exits the controller with code 75. The supervisor starts it again at once in the same container: Docker does not restart the container, and the web UI keeps running. The controller is ready again with the relays off. | `deploy-scenarios.sh lifecycle` |
 | 6 | The controller is killed during travel inside the container, as a crash ends it. The relays stay held. The supervisor starts it again after its backoff, and the restarted controller turns them off. The web UI keeps running, and Docker does not restart the container. | `deploy-scenarios.sh supervisor` |
-| 7 | The controller crashes five times within 120 s. The supervisor leaves it stopped instead of starting it again, the container's health check fails (Docker marks the container unhealthy after three failed checks), and the web UI stays live and, on its sign-in page (nobody can sign in while the controller is stopped), says the controller is stopped after repeated crashes. The relays are off. | `deploy-scenarios.sh supervisor` |
+| 7 | The controller crashes five times within 120 s. The supervisor leaves it stopped instead of starting it again, the container's health check fails (Docker marks the container unhealthy after three failed checks), and the web UI stays live and, on its sign-in page (nobody can sign in while the controller is stopped), says the controller is stopped after repeated crashes. The relays are off, as they were before the crashes: the supervisor writes nothing to them, so a crash loop after a kill during travel, whose starts fail before the controller's initialization, leaves them held ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)). | `deploy-scenarios.sh supervisor` |
 | 8 | A forced restart, requested as the web UI requests it, starts the controller left stopped by step 7. A second request within 10 s of that start is ignored. A later one kills the running controller and starts it again at once. Each time it is ready again with the relays off, and the web UI keeps running. | `deploy-scenarios.sh supervisor` |
 | 9 | The web UI is killed while the roof moves. The supervisor starts only the web UI again, and it is live again. The controller keeps running and the move goes on. | `deploy-scenarios.sh supervisor` |
 | — | A crash during travel leaves the relays held. The restarted controller turns them off; if the crash outlasts the travel, the open limit's contact stops the drive first. A killed container stays down until it is started again. | `LifecycleScenarios.ACrash_DuringTravel_LeavesTheRelaysHeld_AndTheRestartedControllerTurnsThemOff`, `LifecycleScenarios.ACrash_ThatOutlastsTheTravel_LeavesTheOpenLimitToStopTheDrive_AndTheRestartedControllerReportsOpen`, `deploy-scenarios.sh lifecycle` |
@@ -411,10 +411,14 @@ The container runs two processes under a supervisor: the controller and the web 
 
 - **The HAT holds its relays when the controller process dies**, until something writes the register. The emulated HAT
   holds them, as the #29 plant assumes. The settings that depend on it are the deploy script's `docker stop -t 30` and
-  the host's shutdown timeout, and the container's memory and process limits: the kernel ending the controller at one
-  of them is such a death ([deployment.md](deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in)).
-  The fail-safe result is that the roof keeps moving until the limit's run-circuit contact stops it (C1 step 4), and
-  the restarted controller turns the relays off.
+  the host's shutdown timeout, and the container's limits (its process limit, and a memory limit when one is given):
+  the kernel ending the controller at one of them is such a death
+  ([deployment.md](deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in)). The fail-safe result is
+  that the roof keeps moving until the limit's run-circuit contact stops it (C1 step 4), and a restarted controller
+  that reaches its initialization turns the relays off. A controller that cannot start again (every start failing
+  before its initialization, then the supervisor's crash loop) leaves them held, as the supervisor writes nothing to
+  them: that gap is [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138), and the container's CPU and
+  memory limits are off by default until it is closed.
 - **The HAT's devices are root's on the Pi** (`/dev/i2c-1` and `/dev/gpiomem`: Raspberry Pi OS makes them `root:i2c`
   and `root:gpio`, mode `0660`). The setting that depends on it is the container's capabilities: without
   `CAP_DAC_OVERRIDE` the controller opens them as their owner ([deployment.md](deployment.md#the-containers-privileges-and-limits)).

@@ -314,10 +314,9 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `REMOTE_CONNECT_TO` | (empty) | curl's `--connect-to` for the remote check, `HOST1:PORT1:HOST2:PORT2`. `::127.0.0.1:` checks `PI_HOST`'s name and certificate at this machine's loopback, for a name this machine cannot resolve, such as the Pi's own name when the script runs on the Pi. |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
 | `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them (use `HTTPS_HOST_PORT`, `HOST_PORT` and `WEB_HOST_PORT` for the ports), and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). The [container's privileges and limits](#the-containers-privileges-and-limits) are the script's too: `--privileged`, `--read-only`, `--tmpfs` (and `--mount type=tmpfs`), `--cap-add`, `--cap-drop`, `--security-opt`, `--cpus`, `--cpu-period`, `--cpu-quota`, `--cpu-rt-period`, `--cpu-rt-runtime`, `-m`/`--memory`, `--memory-swap`, `--kernel-memory`, `--oom-kill-disable` and `--pids-limit` are refused (use `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device` and a mount of the host's `/` or `/dev` are refused as well. |
-| `CONTAINER_CPUS` | `2` | The container's CPU limit (`docker run --cpus`), with at most two decimals. Fewer than 2 needs `ALLOW_LIMITS_BELOW_MINIMUM=true`; fewer than 1 is refused. See [The container's privileges and limits](#the-containers-privileges-and-limits). |
-| `CONTAINER_MEMORY` | `4g` | The container's memory limit, a whole number of MiB or GiB (`4096m`, `4g`), with `--memory-swap` the same, so the container never swaps. Less than `4g` needs `ALLOW_LIMITS_BELOW_MINIMUM=true`; less than `1g` is refused. |
+| `CONTAINER_CPUS` | (empty: no CPU limit) | A CPU limit for the container (`docker run --cpus`), at least 2, with at most two decimals. Fewer than 2 is refused, with no exception. Empty until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138): see [The container's privileges and limits](#the-containers-privileges-and-limits). |
+| `CONTAINER_MEMORY` | (empty: no memory limit) | A memory limit for the container, at least `4g`: a whole number of MiB or GiB (`4096m`, `4g`), with `--memory-swap` the same, so the container never swaps. Less than `4g` is refused, with no exception. Empty until #138, as for `CONTAINER_CPUS`. |
 | `CONTAINER_PIDS_LIMIT` | `512` | The most processes and threads the container runs at once (`--pids-limit`), from 256 to 32768 |
-| `ALLOW_LIMITS_BELOW_MINIMUM` | `false` | `true` to deploy with fewer than 2 CPUs or less than `4g`, below the HVO install contract's minimum. A warning says so. |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 25 s for the controller's shutdown, then 2 s for the web UI ([Shutdown timing](#shutdown-timing)). |
 | `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
@@ -354,9 +353,10 @@ anything.
      drive the HAT. Stop it and retry.
    - neither `<name>` nor `<name>-previous` was created by Docker Compose. The script replaces and restores only
      controllers it created; see [Moving between Compose and the deploy script](#moving-between-compose-and-the-deploy-script).
-   - Docker on the Pi enforces memory, CPU and process limits, and reports at least the CPUs and the memory the limits
-     give ([The container's privileges and limits](#the-containers-privileges-and-limits)). Nothing is built, pulled or
-     stopped otherwise. A Docker that cannot keep the container from swapping is only warned about.
+   - Docker on the Pi enforces the limits the run gives (process limits always, memory and CPU limits when one is
+     set), and reports at least the CPUs a CPU limit gives ([The container's privileges and
+     limits](#the-containers-privileges-and-limits)). Nothing is built, pulled or stopped otherwise. A memory limit
+     above the Pi's memory, and a Docker that cannot keep the container from swapping, are only warned about.
 2. **Builds** the image for `BUILD_PLATFORM` (the Pi's, `linux/arm64`) and loads it on the Pi, or with `IMAGE_REF`
    **pulls** a released image instead ([Deploying a released image](#deploying-a-released-image)). The image carries the
    product version as a workstation build (`4.0.0-dev`), the checkout's commit and the time it was built, in its labels
@@ -391,8 +391,8 @@ anything.
    after the pre-flight, and a `<name>-previous` that is running by then still aborts before anything is stopped.
 6. **Starts the new container** with `--restart unless-stopped`, `--stop-timeout 30`, and the
    [privileges and limits](#the-containers-privileges-and-limits); Docker's record of the container must then show
-   them (Docker drops a limit it cannot enforce with only a warning), or the new container is removed and the old one
-   restored as in step 8. Inside it, the supervisor
+   exactly them (Docker drops a limit it cannot enforce with only a warning), or the new container is removed and the
+   old one restored as in step 8. Inside it, the supervisor
    starts the controller and the web UI, and starts the controller again at once after
    `POST /api/v4.0/System/Restart`, which exits with code 75 ([The container's two processes](#the-containers-two-processes)).
    In HTTPS mode only `HTTPS_HOST_PORT` and `WEB_HOST_PORT` are published; plain HTTP listens on loopback inside the
@@ -561,10 +561,15 @@ it checks the target's identity-schema compatibility. It then uses the same chec
 stop gate as a deploy, swaps the names and restart policies through a temporary `<name>-swap`, starts the restored
 controller and runs the checks from step 7 against it. Nothing is built. A later swap back requires the same checks.
 
-Before the verified stop, `--rollback` gives `<name>-previous` this run's limits (`CONTAINER_CPUS`, `CONTAINER_MEMORY`
-and `CONTAINER_PIDS_LIMIT`, with `docker update`), whatever it was deployed with, and checks that Docker kept them; a
-failure stops it with the current controller untouched. So a rollback keeps the limits the operator chose, and the
-installer's rollback gives the recorded ones. A container keeps the privileges it was created with: a version deployed
+After the idle check (`REQUIRE_IDLE_ROOF`) and the verified stop, and before the current controller is stopped,
+`--rollback` gives `<name>-previous` this run's limits (`CONTAINER_PIDS_LIMIT`, and `CONTAINER_CPUS` and
+`CONTAINER_MEMORY` when set, with `docker update`) and checks that Docker kept them; nothing is updated when it already
+has them. A rollback those checks refuse leaves `<name>-previous` exactly as it was, its limits included. A failure of
+the update stops the rollback with the current controller running, and a failure or an interrupt after it, before the
+restored version has started, also puts back the limits `<name>-previous` had: Docker cannot take a CPU or memory limit
+off a container, so one it had none of stays, and the script says so. A CPU or memory limit it was deployed with that
+the run does not give stays too, with a warning. So a rollback keeps the limits the operator chose, and the installer's
+rollback gives the recorded ones. A container keeps the privileges it was created with: a version deployed
 before the script narrowed them runs with Docker's default capabilities and a writable root filesystem, and the script
 warns that it does. Deploy a release again to narrow them.
 
@@ -665,8 +670,10 @@ controller and the web UI, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The
 certificate, identity and settings
 directories must exist, and be root's; compose does not create them. Every controller and deployment check has the
 script's [privileges and limits](#the-containers-privileges-and-limits) (`x-hardening`), with the limits from
-`HVO_ROOF_CPUS` (default `2`), `HVO_ROOF_MEMORY` (default `4g`, also the `memswap_limit`) and `HVO_ROOF_PIDS_LIMIT`
-(default `512`). Compose checks neither the minimum nor that Docker enforces them: check `docker info` first.
+`HVO_ROOF_PIDS_LIMIT` (default `512`), and a CPU and a memory limit only when `HVO_ROOF_CPUS` and `HVO_ROOF_MEMORY` (also
+the `memswap_limit`) are set: by default `0`, no limit, until #138. One that is set must be at least 2 CPUs and `4g`.
+Compose checks neither that minimum nor that Docker enforces them, as the script and the installer do: keep to it, and
+check `docker info` first.
 
 Each Pi profile first runs the [deployment check](#the-deployment-check) as a one-shot service with the same environment
 and mounts (`roof-controller-check` or `roof-controller-lan-http-check`), and the new controller starts only if it
@@ -819,7 +826,9 @@ cause is found in its log.
 
 A forced restart kills the controller as `docker kill` would, so it carries the same guarantees
 ([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)):
-the relays are held as they were until the new controller starts, which turns them all off before anything else. It is
+the relays are held as they were until the new controller reaches its initialization, which turns them all off before
+anything else; a start that fails before that leaves them held ([What a killed controller leaves the relays and the drive
+in](#what-a-killed-controller-leaves-the-relays-and-the-drive-in)). It is
 for a controller that does not answer. It is asked for by creating `/run/hvo-roof/control/force-restart-controller`; the
 control directory is root's, writable only by the web UI's group and root (`root:app`, mode `0770`: root in the
 container has no `CAP_DAC_OVERRIDE`, so it reaches the request as the directory's owner), and the supervisor checks it
@@ -935,7 +944,12 @@ the controller with them, in the supervisor's place, and exits with its exit cod
 ## The container's privileges and limits
 
 The deploy script, the Compose profiles and so the installer run the controller's container (and the deployment check's)
-with the narrowest privileges the supervisor and the HAT allow, and with resource limits:
+with the narrowest privileges the supervisor and the HAT allow, and with a process limit. A CPU and a memory limit are
+given only when they are set: none is by default until the supervisor de-energises the relays whenever the controller
+exits ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)). Each is one more way for the kernel to
+end or starve the controller, and a controller ended while the roof moves leaves the drive running
+([below](#what-a-killed-controller-leaves-the-relays-and-the-drive-in)). The HVO install contract's default of 2 CPUs and
+4 GiB (section 7) is turned on by a follow-up once #138 is merged.
 
 | | What the container gets | Why |
 |---|---|---|
@@ -943,8 +957,8 @@ with the narrowest privileges the supervisor and the HAT allow, and with resourc
 | Writable places | tmpfs: `/tmp` (64 MiB: .NET's diagnostics sockets), `/run/hvo-roof` (4 MiB: the [supervisor's](#the-containers-two-processes) state, control directory and the web UI's private copies) and `/root/.aspnet` (4 MiB: ASP.NET Core's key ring, which the controller uses for nothing that must outlive the container). A volume of the container's own at `/var/lib/hvo-roof-web`: the web UI's sign-in keys, so people stay signed in when the container restarts. And the mounts: the secrets, certificate, identity and settings directories. | These are every place the controller, the web UI, the supervisor and .NET write, found by running the container and listing its changes (`docker diff`). A replaced container's volume goes with it (`docker rm -v`). |
 | Capabilities | None (`--cap-drop ALL`) but `CHOWN`, `KILL`, `SETGID` and `SETUID` | The supervisor's: `CHOWN` to give the web UI its copies and directories, `SETUID` and `SETGID` to start it as the `app` user (`setpriv`), and `KILL` to signal it, a process of another user. Without `KILL` the supervisor cannot tell whether the web UI runs, and blocks waiting for it, so it no longer restarts a crashed controller; it is kept for that reason. The web UI runs with none. The HAT's devices need none: the controller opens them as root, their owner. |
 | Privilege escalation | `--security-opt no-new-privileges` | No process can gain privileges, through a setuid program or otherwise. |
-| CPU | `CONTAINER_CPUS`, default 2 (`--cpus`) | The HVO install contract's minimum (section 7). |
-| Memory | `CONTAINER_MEMORY`, default `4g` (`--memory`), with `--memory-swap` the same | The contract's minimum. No swap: a controller that runs out of memory is ended and started again (see below), rather than slowed down while the roof moves. |
+| CPU | None by default; `CONTAINER_CPUS` (`--cpus`), at least 2, when set | At least the HVO install contract's minimum (section 7), and its default once #138 is merged. |
+| Memory | None by default; `CONTAINER_MEMORY` (`--memory`), at least `4g`, with `--memory-swap` the same, when set | At least the contract's minimum, and its default once #138 is merged. No swap: a controller that runs out of memory is ended and started again (see below), rather than slowed down while the roof moves. |
 | Processes and threads | `CONTAINER_PIDS_LIMIT`, default 512 (`--pids-limit`) | Bounds a runaway that would take the Pi's processes. On the HAT emulator rig the container ran 44 tasks idle and at most 85 under 64 clients at once (API, web UI and camera streams), so 512 is about six times the most measured. |
 
 The privileges are not settings, and the limits have settings of their own: `EXTRA_DOCKER_ARGS` can change neither
@@ -956,43 +970,54 @@ and [security.md](security.md#on-the-pi-docker-secrets-directory) make them. One
 HAT's devices, `/dev/i2c-1` and `/dev/gpiomem`, are root's on Raspberry Pi OS (group `i2c` and `gpio`, mode `0660`),
 which the controller needs ([commissioning.md, C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)).
 
-**The limits.** `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT` set them, from the installer's answers
-(`controller.resources`, [install.md](install.md#the-controllers-limits)) or by hand. Fewer than 2 CPUs or less than
-`4g` is below the contract's minimum: the script refuses it unless `ALLOW_LIMITS_BELOW_MINIMUM=true`, and warns when it
-deploys with it. It never gives the controller less than 1 CPU or `1g`, about five times what the controller and its
-web UI use together (90 MiB idle, 220 MiB under the load above, on the emulator rig).
+**The limits.** `CONTAINER_PIDS_LIMIT` sets the process limit, and `CONTAINER_CPUS` and `CONTAINER_MEMORY` a CPU and a
+memory limit, from the installer's answers (`controller.resources`, [install.md](install.md#the-controllers-limits)) or
+by hand. Empty, the default, gives none. A CPU limit below 2, or a memory limit below `4g`, is below the contract's
+minimum and refused before any Docker call, with no exception; leave it empty for no limit. At `4g` the controller and
+its web UI have about twenty times what they use together (90 MiB idle, 220 MiB under the load above, on the emulator
+rig).
 
 **Docker must enforce them.** Docker drops a limit it cannot enforce with only a warning, and runs the container
-without it. So before it changes anything, the script asks Docker (`docker info`) whether it enforces memory
-(`MemoryLimit`), CPU (`CPUCfsQuota`) and process (`PidsLimit`) limits, and refuses with nothing changed when one is
-`false`. Raspberry Pi OS boots with the memory controller turned off: add `cgroup_enable=memory` to the single line in
-`/boot/firmware/cmdline.txt`, reboot, and check that `docker info` no longer warns
-`No memory limit support`. Docker must also report at least the CPUs (`NCPU`) and the memory (`MemTotal`) the limits
-give. A Pi with 4 GB has a little less than `4g` for programs: give it a smaller memory limit, such as `3g`, with
-`ALLOW_LIMITS_BELOW_MINIMUM=true`. A Docker that cannot limit swap (`SwapLimit` `false`) is only warned about: the
-memory limit holds, and the container may also swap. After the new container starts, the script checks Docker's
-record of it (`docker inspect`): the limits and privileges must be there.
+without it. So before it changes anything, the script asks Docker (`docker info`) whether it enforces the limits the run
+gives: process limits (`PidsLimit`) always, memory limits (`MemoryLimit`) with a memory limit and CPU limits
+(`CPUCfsQuota`) with a CPU limit. It refuses with nothing changed when one of those is `false`. Raspberry Pi OS boots
+with the memory controller turned off, which matters only for a memory limit: then add `cgroup_enable=memory` to the
+single line in `/boot/firmware/cmdline.txt`, reboot, and check that `docker info` no longer warns
+`No memory limit support`. Docker must also report at least the CPUs (`NCPU`) a CPU limit gives. A memory limit above
+the memory Docker reports (`MemTotal`; a Pi with 4 GB has a little less than `4g` for programs) is kept, with a warning:
+a limit is a cap, not a reservation, so the Pi runs out of memory before the container reaches it. A Docker that cannot
+limit swap (`SwapLimit` `false`) is only warned about: the memory limit holds, and the container may also swap. After the
+new container starts, the script checks Docker's record of it (`docker inspect`): the limits and privileges must be
+exactly the ones it gave.
 
 **A rollback keeps them.** `--rollback` gives the version it brings back the run's limits with `docker update`
-([Rolling back](#rolling-back)). The installer records the limits and gives them on every deploy, upgrade and rollback.
+([Rolling back](#rolling-back)), and only after every check that can refuse the rollback: the idle check
+(`REQUIRE_IDLE_ROOF`) and the roof's verified stop. A rollback refused there leaves that version's limits as they were.
+If the rollback fails or is interrupted after the change but before the version it brings back has started, the script
+puts that version's limits back. Docker cannot take a CPU or memory limit off a container, though: one the version had
+none of stays (the script says so), and so does one it was deployed with that the run does not give. Deploy again to
+run without it. The installer records the limits and gives them on every deploy, upgrade and rollback.
 
-**What the CPU limit does.** It never ends a process. When the controller, the web UI and the supervisor together use
-more than 2 CPUs' worth of time in a 100 ms period, the kernel holds them all until the next period begins. On the x64
-emulator rig that happened 7 times while the container started (57 ms in all), and twice more under the load above
-(117 ms in all); on the Pi's slower cores it may happen more. A busy web UI at the same time as a move could delay the
-controller's safety loops by up to the rest of a period.
+**What a CPU limit does.** It never ends a process. When the controller, the web UI and the supervisor together use
+more than the limit's CPU time in a 100 ms period (2 CPUs' worth at the minimum), the kernel holds them all until the
+next period begins. On the x64 emulator rig with 2 CPUs that happened 7 times while the container started (57 ms in
+all), and twice more under the load above (117 ms in all); on the Pi's slower cores it may happen more. A busy web UI at
+the same time as a move could delay the controller's safety loops by up to the rest of a period.
 
 ### What a killed controller leaves the relays and the drive in
 
-This is the fail-safe record the memory and CPU limits needed (#129). It comes from the
+This is the fail-safe record the memory and CPU limits needed (#129); until the supervisor de-energises the relays
+whenever the controller exits ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)), it is why they
+are off by default. It comes from the
 [hardware overview](projects/roof-controller-v4-rpi/hardware-overview.md), the controller's start and stop handling,
 the supervisor and this script, and from the HAT emulator; nothing here was tested on the observatory's hardware.
 
 > **A killed controller does not de-energise the motor drive.** If the controller process is killed while the roof
-> moves (by the kernel at the container's memory limit, by a forced restart, by `docker kill`, or by a crash), the
-> direction relay (RLY1 or RLY2) and the STOP permissive (RLY4) stay energised, and the VFD keeps driving the roof,
-> until the restarted controller turns the relays off, the roof reaches its limit, the drive trips, or someone uses the
-> independent stop.
+> moves (by the kernel at a memory limit, by a forced restart, by `docker kill`, or by a crash), the direction relay
+> (RLY1 or RLY2) and the STOP permissive (RLY4) stay energised, and the VFD keeps driving the roof, until a restarted
+> controller reaches its initialization and turns the relays off, the roof reaches its limit, the drive trips, or
+> someone uses the independent stop. A controller that cannot start again leaves them energised after that too: nothing
+> else turns them off ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)).
 
 Why: the SM-I-010 keeps its relays as the controller last wrote them over I2C. Nothing on the HAT turns them off when
 the process that writes them ends; they drop only when the HAT loses power (hardware overview, section 8.4: "Pi/HAT
@@ -1006,12 +1031,13 @@ While the controller is dead, its own protections are gone with it: the limit in
 watchdog, the operator lease, the drive-fault input (IN3) and the drive-running interlock (IN4). What stops the roof
 then, in the order it usually comes:
 
-1. **The restarted controller.** The [supervisor](#the-containers-two-processes) starts the controller again after its
-   backoff: 1 s after a first crash, then 2, 4 and 8 s after crashes within 120 s. The controller's initialization turns
-   every relay off and verifies the HAT's register before it does anything else (`RoofControllerServiceV4.Initialize`,
-   step 1). On the x64 emulator rig the relays were held for 2.4 s after a SIGKILL during travel, and the emulated roof
-   (0.1 m/s) went on 0.23 m; `deploy-scenarios.sh supervisor` records the time at each run (C11 step 6). On the Pi, .NET
-   starts more slowly: expect several seconds more. That is not measured on the Pi.
+1. **The restarted controller, if it gets as far as its initialization.** The [supervisor](#the-containers-two-processes)
+   starts the controller again after its backoff: 1 s after a first crash, then 2, 4 and 8 s after crashes within 120 s.
+   The controller's initialization turns every relay off and verifies the HAT's register before it does anything else
+   (`RoofControllerServiceV4.Initialize`, step 1); a start that fails before then (below) turns nothing off. On the x64
+   emulator rig the relays were held for 2.4 s after a SIGKILL during travel, and the emulated roof (0.1 m/s) went on
+   0.23 m; `deploy-scenarios.sh supervisor` records the time at each run (C11 step 6). On the Pi, .NET starts more
+   slowly: expect several seconds more. That is not measured on the Pi.
 2. **The limit's run-circuit contact.** At the destination limit, the ME-8108's normally closed contact (terminals 1-2),
    in series with that direction's run input (hardware overview, sections 8.1 and 8.2), removes the run command, and the
    drive stops by its stop method (`P111`). The relay stays energised until the controller starts again, with the run
@@ -1022,19 +1048,30 @@ then, in the order it usually comes:
 
 What else follows:
 
-- A controller killed five times within 120 s (a leak that reaches the memory limit soon after each start would do it)
-  is left stopped by the supervisor (`crash-loop`). Each start that got as far as its initialization turned the relays
-  off first, so they are off then.
+- **A controller that cannot start again leaves the drive energised.** The supervisor itself never writes the relays:
+  only a controller that reaches its initialization turns them off. A start can fail before that, and every start can:
+  the controller loads and validates its settings files and secrets before the host is built or the HAT is touched
+  (`Program.Main`), and a settings file it refuses ends it there with exit code 1; a start killed again before its
+  initialization (a memory limit reached at once, say) is the same. After five such crashes within 120 s the supervisor
+  leaves the controller stopped (`crash-loop`) and writes nothing to the relays either. So a controller killed during
+  travel whose restarts all fail before their initialization leaves RLY1 or RLY2 and RLY4 energised through the crash
+  loop and after it, until the roof reaches its limit, the drive trips, someone uses the independent stop, something
+  else writes the register, or the HAT loses power. The relays are off in `crash-loop` only when a start before it got
+  as far as its initialization, or when they were off before the crashes began. Closing this gap is
+  [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138), not yet done: the supervisor is to de-energise
+  and verify every relay whenever the controller exits, before each restart and in the crash-loop branch. The
+  container's CPU and memory limits stay off by default until it is merged.
 - If the supervisor or `tini` is killed, the container ends and every process in it with it. Docker starts it again
   (`--restart unless-stopped`) and the new controller turns the relays off, unless it was `docker stop`ped or
   `docker kill`ed: a container ended by hand stays down, with the relays held, until it is started again.
-- The memory limit adds one more way for the kernel to kill a process: the container reaching `CONTAINER_MEMORY`. The
-  kernel then ends the process in the container that uses the most memory, the controller or the web UI (each a .NET
-  process); the web UI is started again alone, the controller as above. At `4g` against the 90-220 MiB the two use, only
-  a runaway reaches it.
+- A memory limit, when one is given, adds one more way for the kernel to kill a process: the container reaching
+  `CONTAINER_MEMORY`. The kernel then ends the process in the container that uses the most memory, the controller or the
+  web UI (each a .NET process); the web UI is started again alone, the controller as above. At `4g` against the 90-220
+  MiB the two use, only a runaway reaches it, but a runaway that reaches it again soon after each start is the crash loop
+  above.
 - The process limit makes a new thread fail beyond `CONTAINER_PIDS_LIMIT`, which .NET reports as an
   `OutOfMemoryException` in the thread that asked: a crash, handled as above.
-- The CPU limit only delays (above).
+- A CPU limit only delays (above).
 
 Recommendations, each separate from this change, and none of them a change to the drive or its wiring:
 
@@ -1134,7 +1171,7 @@ read `/health` with a Viewer key and expect Healthy.
 
 Keep each layer above the one inside it: the app's 20 s inside the supervisor's 25 s, and the supervisor's 25 s + 2 s
 inside Docker's 30 s. If Docker or the supervisor kills the controller first, the controller cannot confirm that the
-relays are off; they stay as they were until the next start turns them all off
+relays are off; they stay as they were until a later start reaches its initialization and turns them all off
 ([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)).
 
 ## After deploying: checks on the device
