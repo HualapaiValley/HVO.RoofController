@@ -37,11 +37,12 @@ set -euo pipefail
 #   nothing is built, so the script runs without a checkout. Everything from the pre-flight on is the same. On the Pi
 #   itself, set DOCKER_CONTEXT=default: the remote check then runs from the Pi, so check from another machine afterwards
 #   too (--verify-remote). With IMAGE_ARCHIVE=<file> as well (the release's offline archive of that image for
-#   BUILD_PLATFORM, <image>-<version>-linux-<arch>.oci.tar), nothing is pulled: the archive must hold IMAGE_REF's
-#   digest, and the image for BUILD_PLATFORM checked against it, before Docker loads it; the image Docker then holds is
-#   deployed by its ID (docker run --pull never), only if that ID is the digest's or that image's, and the container
-#   carries the label io.hvo.roof.release-image=<IMAGE_REF>. --rollback, --stop and --verify-remote ignore IMAGE_REF
-#   and IMAGE_ARCHIVE, and do not check them.
+#   BUILD_PLATFORM, <image>-<version>-linux-<arch>.oci.tar), nothing is pulled: before Docker reads it, the archive
+#   must hold IMAGE_REF's digest and its image for BUILD_PLATFORM and nothing else (index.json and manifest.json name
+#   that one image, under IMAGE_REF's name or none, and every blob is the one its digest names); the image Docker then
+#   holds is deployed by its ID (docker run --pull never), only if that ID is the digest's or that image's, and the
+#   container carries the label io.hvo.roof.release-image=<IMAGE_REF>. --rollback, --stop and --verify-remote ignore
+#   IMAGE_REF and IMAGE_ARCHIVE, and do not check them.
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
@@ -1027,8 +1028,14 @@ check_pulled_image() {
 # Offline: a release's archive (IMAGE_ARCHIVE), loaded in place of the pull
 
 # archive_json <query> <file> [<platform>]: from a JSON file of an OCI archive, with jq or python3. "image": the digest
-# of the one image index.json names; "platform": the digest of the one manifest an index lists for the platform; and
-# "config": a manifest's config's digest. Empty when there is none, or more than one.
+# of the one image index.json names; "platform": the digest of the one manifest an index lists for the platform;
+# "config": a manifest's config's digest; and "layers": its layers' digests, one a line. Empty when there is none, or
+# more than one. Docker's own reading of the files it loads matches key names without regard to case, so these read
+# the archive's own files as they are, or not at all: "layout", oci-layout's version; "index", index.json's one image
+# ("image <digest>") and its names ("name <key> <value>", by key), with nothing else in it; and "docker",
+# manifest.json's one image ("config <path>", "layer <path>" for each layer, "tag <name>" for each tag), with nothing
+# else. A value that is not printable ASCII without spaces makes "index" and "docker" empty, so no line can pass for
+# another.
 archive_json() {
   local query=$1 file=$2 platform=${3:-}
   if command -v jq >/dev/null 2>&1; then
@@ -1038,60 +1045,216 @@ archive_json() {
         '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch)]
          | if length == 1 then (.[0].digest // "") else "" end' "${file}" ;;
       config) jq -r '.config.digest // ""' "${file}" ;;
+      layers) jq -r '(.layers // [])[] | (.digest // "")' "${file}" ;;
+      layout) jq -r 'if type == "object" and keys == ["imageLayoutVersion"] and (.imageLayoutVersion | type) == "string"
+                     then .imageLayoutVersion else "" end' "${file}" ;;
+      index) jq -r 'def word: type == "string" and (explode | length > 0 and all(. > 32 and . < 127));
+        if type == "object" and (keys - ["schemaVersion", "mediaType", "manifests"]) == []
+           and (.manifests | type) == "array" and (.manifests | length) == 1 and (.manifests[0] | type) == "object"
+           and ((.manifests[0] | keys) - ["mediaType", "digest", "size", "annotations"]) == []
+           and ((.manifests[0].annotations // {}) | type) == "object"
+        then .manifests[0] | (.annotations // {}) as $names
+          | if (.digest | word) and ([$names | to_entries[] | (.key | word) and (.value | word)] | all)
+            then "image \(.digest)", ($names | to_entries | sort_by(.key) | .[] | "name \(.key) \(.value)")
+            else "" end
+        else "" end' "${file}" ;;
+      docker) jq -r 'def word: type == "string" and (explode | length > 0 and all(. > 32 and . < 127));
+        if type == "array" and length == 1 and (.[0] | type) == "object"
+           and ((.[0] | keys) - ["Config", "RepoTags", "Layers"]) == []
+           and ((.[0].Layers // []) | type) == "array" and ((.[0].RepoTags // []) | type) == "array"
+           and (.[0] | (.Config | word) and ([(.Layers // [])[], (.RepoTags // [])[] | word] | all))
+        then .[0] | "config \(.Config)", ((.Layers // [])[] | "layer \(.)"), ((.RepoTags // [])[] | "tag \(.)")
+        else "" end' "${file}" ;;
     esac
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json,sys
 query, path, platform = sys.argv[1:]
 with open(path) as f:
     d = json.load(f)
-found = [d.get("config")] if query == "config" else d.get("manifests") or []
-found = [m for m in found if isinstance(m, dict)]
-if query == "platform":
-    found = [m for m in found if isinstance(m.get("platform"), dict)
-             and "{}/{}".format(m["platform"].get("os"), m["platform"].get("architecture")) == platform]
-digest = found[0].get("digest") if len(found) == 1 else ""
-print(digest if isinstance(digest, str) else "")' "${query}" "${file}" "${platform}"
+def present(value, default):
+    # As jq'"'"'s // : null and false are absent.
+    return default if value is None or value is False else value
+def word(value):
+    return isinstance(value, str) and len(value) > 0 and all(32 < ord(c) < 127 for c in value)
+if query == "layout":
+    ok = isinstance(d, dict) and list(d) == ["imageLayoutVersion"] and isinstance(d["imageLayoutVersion"], str)
+    print(d["imageLayoutVersion"] if ok else "")
+elif query == "index":
+    lines = []
+    found = d.get("manifests") if isinstance(d, dict) else None
+    if (isinstance(d, dict) and set(d) <= {"schemaVersion", "mediaType", "manifests"}
+            and isinstance(found, list) and len(found) == 1 and isinstance(found[0], dict)
+            and set(found[0]) <= {"mediaType", "digest", "size", "annotations"}
+            and isinstance(present(found[0].get("annotations"), {}), dict)):
+        names = present(found[0].get("annotations"), {})
+        if word(found[0].get("digest")) and all(word(k) and word(v) for k, v in names.items()):
+            lines = ["image " + found[0]["digest"]] + ["name {} {}".format(k, names[k]) for k in sorted(names)]
+    print("\n".join(lines))
+elif query == "docker":
+    lines = []
+    if isinstance(d, list) and len(d) == 1 and isinstance(d[0], dict) and set(d[0]) <= {"Config", "RepoTags", "Layers"}:
+        layers, tags = present(d[0].get("Layers"), []), present(d[0].get("RepoTags"), [])
+        if (isinstance(layers, list) and isinstance(tags, list) and word(d[0].get("Config"))
+                and all(word(value) for value in layers + tags)):
+            lines = ["config " + d[0]["Config"]] + ["layer " + value for value in layers] + ["tag " + value for value in tags]
+    print("\n".join(lines))
+elif query == "layers":
+    for layer in present(d.get("layers"), []):
+        print(layer.get("digest") if isinstance(layer, dict) and isinstance(layer.get("digest"), str) else "")
+else:
+    found = [d.get("config")] if query == "config" else d.get("manifests") or []
+    found = [m for m in found if isinstance(m, dict)]
+    if query == "platform":
+        found = [m for m in found if isinstance(m.get("platform"), dict)
+                 and "{}/{}".format(m["platform"].get("os"), m["platform"].get("architecture")) == platform]
+    digest = found[0].get("digest") if len(found) == 1 else ""
+    print(digest if isinstance(digest, str) else "")' "${query}" "${file}" "${platform}"
   else
     return 1
   fi
 }
 
-# check_image_archive: IMAGE_ARCHIVE must hold the image IMAGE_REF's digest names, with its image for BUILD_PLATFORM:
-# its index.json names that index alone, and the index and the platform's manifest are each the blob their digest names.
-# Docker checks the config and the layers against them as it loads them. ARCHIVE_MANIFEST and ARCHIVE_CONFIG are then
-# the platform's manifest and config: with the index, the IDs Docker gives the image it loads (the containerd image
-# store's is the index's, or the manifest's for the platform; the classic store's is the config's). Run before any Docker
-# call, and in a dry run too: it only reads the archive.
+# check_image_archive: IMAGE_ARCHIVE must be the release's archive of the image IMAGE_REF's digest names, for
+# BUILD_PLATFORM, and hold nothing else, before Docker reads any of it. Each of Docker's image stores loads its own part
+# of an archive and applies all it finds there: the containerd store reads index.json, and the names it gives, when
+# there is an oci-layout (manifest.json when there is none); the classic store reads manifest.json, every image in it
+# and their tags (RepoTags). A load cannot be undone by checking the image afterwards (check_loaded_image), and an image
+# Docker already holds by an allowed ID would pass that check whatever the load did, so the archive is checked whole:
+#  - its members are oci-layout, index.json, manifest.json and blobs/sha256/<hex> for the index, the platform's
+#    manifest, its config and its layers (with the folders blobs and blobs/sha256), each once and each a file;
+#  - oci-layout is an OCI image layout 1.0.0, and index.json names that index alone, with no name but IMAGE_REF's own
+#    (io.containerd.image.name <repository>:<tag>, with or without org.opencontainers.image.ref.name <tag>);
+#  - manifest.json is that one image: the platform's config and its layers, in order, tagged IMAGE_REF's
+#    <repository>:<tag> or not at all;
+#  - every blob is the one its digest names, layers included.
+# ARCHIVE_MANIFEST and ARCHIVE_CONFIG are then the platform's manifest and config: with the index, the IDs Docker gives
+# the image it loads (the containerd image store's is the index's, or the manifest's for the platform; the classic
+# store's is the config's). Run before any Docker call, and in a dry run too: it only reads the archive, and writes only
+# the files it reads into a folder of its own (ARCHIVE_CHECK_DIR, removed on exit).
 ARCHIVE_MANIFEST=""
 ARCHIVE_CONFIG=""
+ARCHIVE_CHECK_DIR=""
 check_image_archive() {
-  local folder named manifest config digest_pattern='^sha256:[0-9a-f]{64}$'
-  folder=$(mktemp -d) || fail "Could not make a folder to check IMAGE_ARCHIVE in. Nothing was changed."
-  # Named members only, into a folder of their own: nothing else the archive holds is written anywhere.
-  if ! tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" index.json "blobs/sha256/${IMAGE_DIGEST#sha256:}" 2>/dev/null; then
-    rm -rf "${folder}"
-    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} that IMAGE_REF names: give the release's archive of that image. Nothing was changed."
+  local folder members member types named names manifest config layer layers blobs expected docker
+  local digest_pattern='^sha256:[0-9a-f]{64}$' blob_pattern='^blobs/sha256/[0-9a-f]{64}$' image_name image_tag=""
+  local release_archive="give the release's archive of that image. Nothing was changed."
+  local release_archive_sentence="Give the release's archive of that image. Nothing was changed."
+
+  # The one name the archive may give the image: IMAGE_REF's own, <repository>:<tag> (none when it has no tag).
+  image_name=${IMAGE_REF%@*}
+  if [[ "${image_name##*/}" == *:* ]]; then
+    image_tag=${image_name##*:}
+  else
+    image_name=""
   fi
+
+  # Its members, by name (folders without their trailing /), each once, and each a file or a folder: no link, device or
+  # other special file, whose meaning the loaders and this check could read differently.
+  members=$(tar -tf "${IMAGE_ARCHIVE}" 2>/dev/null | sed 's:/*$::') \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} is not a tar archive: ${release_archive}"
+  while IFS= read -r member; do
+    case "${member}" in
+      ""|oci-layout|index.json|manifest.json|blobs|blobs/sha256) ;;
+      *)
+        [[ "${member}" =~ ${blob_pattern} ]] \
+          || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds '${member}', which is not part of an image's offline archive (oci-layout, index.json, manifest.json and blobs/sha256/<hex>): ${release_archive}" ;;
+    esac
+  done <<<"${members}"
+  member=$(sort <<<"${members}" | uniq -d | head -n 1)
+  [[ -z "${member}" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds '${member}' more than once, and Docker would read the last: ${release_archive}"
+  for member in oci-layout index.json manifest.json; do
+    grep -qxF "${member}" <<<"${members}" \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} has no ${member}: a release's offline archive has oci-layout and index.json, which Docker's containerd image store reads, and manifest.json, which the classic store reads. ${release_archive_sentence}"
+  done
+  types=$(tar -tvf "${IMAGE_ARCHIVE}" 2>/dev/null | cut -c 1 | sort -u | tr -d '\n') || types="?"
+  [[ "${types}" =~ ^[-d]+$ ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds a link or a special file: a release's offline archive holds files and folders only. ${release_archive_sentence}"
+  grep -qxF "blobs/sha256/${IMAGE_DIGEST#sha256:}" <<<"${members}" \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} that IMAGE_REF names: ${release_archive}"
+
+  # Named members only, into a folder of their own: nothing else the archive holds is written anywhere.
+  folder=$(mktemp -d) || fail "Could not make a folder to check IMAGE_ARCHIVE in. Nothing was changed."
+  ARCHIVE_CHECK_DIR=${folder}
+  tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" oci-layout index.json manifest.json "blobs/sha256/${IMAGE_DIGEST#sha256:}" 2>/dev/null \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} could not be read (tar -x): ${release_archive}"
+  for member in oci-layout index.json manifest.json "blobs/sha256/${IMAGE_DIGEST#sha256:}"; do
+    [[ -f "${folder}/${member}" && ! -L "${folder}/${member}" ]] \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its ${member} is not a file: ${release_archive}"
+  done
+
+  # index.json: the index IMAGE_REF names, alone and under no other name, in an OCI image layout.
   named=$(archive_json image "${folder}/index.json" 2>/dev/null) || named=""
   if [[ "${named}" != "${IMAGE_DIGEST}" \
       || "$(sha256_hex < "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}")" != "${IMAGE_DIGEST#sha256:}" ]]; then
-    rm -rf "${folder}"
-    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} names the image '${named:-none, or more than one}', and IMAGE_REF names ${IMAGE_DIGEST}: give the release's archive of that image. Nothing was changed."
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} names the image '${named:-none, or more than one}', and IMAGE_REF names ${IMAGE_DIGEST}: ${release_archive}"
   fi
+  names=$(archive_json index "${folder}/index.json" 2>/dev/null) || names=""
+  if [[ "$(head -n 1 <<<"${names}")" == "image ${IMAGE_DIGEST}" ]]; then
+    names=$(sed 1d <<<"${names}")
+  else
+    names="?"
+  fi
+  case "${names}" in
+    "") ;;
+    "name io.containerd.image.name ${image_name}"|"name io.containerd.image.name ${image_name}"$'\n'"name org.opencontainers.image.ref.name ${image_tag}")
+      [[ -n "${image_name}" ]] || names="?" ;;
+    *) names="?" ;;
+  esac
+  [[ "${names}" != "?" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its index.json says more than the image, its type, size and digest, or names it other than ${image_name:-not at all} (Docker's containerd image store would load it under that name): ${release_archive}"
+  [[ "$(archive_json layout "${folder}/oci-layout" 2>/dev/null)" == "1.0.0" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its oci-layout is not an OCI image layout 1.0.0: ${release_archive}"
+
+  # The index's manifest for BUILD_PLATFORM, its config and its layers.
   manifest=$(archive_json platform "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}" "${BUILD_PLATFORM}" 2>/dev/null) || manifest=""
   if ! [[ "${manifest}" =~ ${digest_pattern} ]] \
       || ! tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" "blobs/sha256/${manifest#sha256:}" 2>/dev/null \
+      || [[ ! -f "${folder}/blobs/sha256/${manifest#sha256:}" || -L "${folder}/blobs/sha256/${manifest#sha256:}" ]] \
       || [[ "$(sha256_hex < "${folder}/blobs/sha256/${manifest#sha256:}")" != "${manifest#sha256:}" ]]; then
-    rm -rf "${folder}"
     fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} has for ${BUILD_PLATFORM}: give the release's archive for ${BUILD_PLATFORM} (<image>-<version>-linux-${BUILD_PLATFORM#linux/}.oci.tar). Nothing was changed."
   fi
   config=$(archive_json config "${folder}/blobs/sha256/${manifest#sha256:}" 2>/dev/null) || config=""
-  rm -rf "${folder}"
   [[ "${config}" =~ ${digest_pattern} ]] \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: the ${BUILD_PLATFORM} manifest ${manifest} names no config. Nothing was changed."
+  layers=$(archive_json layers "${folder}/blobs/sha256/${manifest#sha256:}" 2>/dev/null) || layers="?"
+  while IFS= read -r layer; do
+    [[ -z "${layer}" || "${layer}" =~ ${digest_pattern} ]] \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: the ${BUILD_PLATFORM} manifest ${manifest} does not list its layers by digest. Nothing was changed."
+  done <<<"${layers}"
+
+  # The blobs are those, and only those.
+  expected=$({ printf '%s\n' "${IMAGE_DIGEST}" "${manifest}" "${config}"; [[ -z "${layers}" ]] || printf '%s\n' "${layers}"; } \
+    | sed 's|^sha256:|blobs/sha256/|' | sort -u)
+  blobs=$(grep -E "${blob_pattern}" <<<"${members}" | sort) || blobs=""
+  [[ "${blobs}" == "${expected}" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds other blobs than the index, the ${BUILD_PLATFORM} manifest, its config and its layers: ${release_archive}"
+
+  # manifest.json: that one image, its config and its layers in order, under IMAGE_REF's own name or none.
+  expected="config blobs/sha256/${config#sha256:}"
+  while IFS= read -r layer; do
+    [[ -z "${layer}" ]] || expected+=$'\n'"layer blobs/sha256/${layer#sha256:}"
+  done <<<"${layers}"
+  docker=$(archive_json docker "${folder}/manifest.json" 2>/dev/null) || docker=""
+  [[ "${docker}" == "${expected}" || ( -n "${image_name}" && "${docker}" == "${expected}"$'\n'"tag ${image_name}" ) ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its manifest.json is not the one image for ${BUILD_PLATFORM}, with its config and layers, tagged ${image_name:-nothing} or not at all (Docker's classic image store would load and tag what it says): ${release_archive}"
+
+  # Every blob is the one its digest names: the config and the layers too, so nothing in the archive is left for the
+  # loaders to check.
+  if ! tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" "blobs/sha256/${config#sha256:}" 2>/dev/null \
+      || [[ ! -f "${folder}/blobs/sha256/${config#sha256:}" || -L "${folder}/blobs/sha256/${config#sha256:}" ]] \
+      || [[ "$(sha256_hex < "${folder}/blobs/sha256/${config#sha256:}")" != "${config#sha256:}" ]]; then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its config ${config} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
+  fi
+  while IFS= read -r layer; do
+    [[ -z "${layer}" || "$(tar -xOf "${IMAGE_ARCHIVE}" "blobs/sha256/${layer#sha256:}" 2>/dev/null | sha256_hex)" == "${layer#sha256:}" ]] \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its layer ${layer} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
+  done <<<"${layers}"
+  rm -rf "${folder}"
+  ARCHIVE_CHECK_DIR=""
   ARCHIVE_MANIFEST=${manifest}
   ARCHIVE_CONFIG=${config}
-  echo "[load] ${IMAGE_ARCHIVE} holds ${IMAGE_DIGEST}, with its image for ${BUILD_PLATFORM} (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG})"
+  echo "[load] ${IMAGE_ARCHIVE} holds ${IMAGE_DIGEST}, with its image for ${BUILD_PLATFORM} (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG}), and nothing else"
 }
 
 # check_loaded_image: once IMAGE_ARCHIVE is loaded, Docker must hold an image whose ID is the index's, the platform's
@@ -1456,6 +1619,9 @@ on_exit() {
   fi
   if [[ -n "${WORK_DIR}" ]]; then
     rm -rf "${WORK_DIR}"
+  fi
+  if [[ -n "${ARCHIVE_CHECK_DIR}" ]]; then
+    rm -rf "${ARCHIVE_CHECK_DIR}"
   fi
   exit "${status}"
 }

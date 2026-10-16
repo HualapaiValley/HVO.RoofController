@@ -253,7 +253,8 @@ def load_archive(state, path):
         "revision": labels.get("org.opencontainers.image.revision", ""),
     }
     save(state)
-    out(f"Loaded image: {docker['RepoTags'][0]}")
+    tags = docker.get("RepoTags") or []
+    out("".join(f"Loaded image: {tag}\n" for tag in tags) if tags else f"Loaded image ID: {image_id}\n", end="")
 
 
 def pull(state, args):
