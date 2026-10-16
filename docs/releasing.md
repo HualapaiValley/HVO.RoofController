@@ -246,7 +246,7 @@ file with the same name. `--signer-workflow` and `--source-ref` accept only the 
 ## Trust
 
 A release is trusted as every HVO product's is, by the shared
-[HVO install and release contract](https://github.com/HualapaiValley/HVO.SkyMonitor/issues/1306):
+[HVO install and release contract](https://github.com/HualapaiValley/HVO.SkyMonitor/blob/development/v1/docs/hvo-install-contract.md):
 
 - **Checksums and provenance.** `SHA256SUMS` gives the SHA-256 of every asset, and build provenance attestations cover
   every file it lists and both images. `gh attestation verify` shows that this repository's release workflow built a
