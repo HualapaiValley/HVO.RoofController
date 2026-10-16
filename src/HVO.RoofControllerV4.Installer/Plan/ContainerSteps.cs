@@ -323,7 +323,7 @@ public sealed class ControllerStep(
         _deployKeyFile = null;
         OnlyCertificateDiffers = false;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
-        if (IdentitySchemaGuard.Problem(context.Machine, layout.IdentityFile, release) is { } schemaProblem)
+        if (StateContractGuard.Problem(context.Machine, layout, release) is { } schemaProblem)
             return new StepCheck(StepChange.Blocked, schemaProblem);
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)

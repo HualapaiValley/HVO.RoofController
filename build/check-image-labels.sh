@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks the OCI labels of every platform image in an OCI archive (docker buildx build --output type=oci,dest=<file>):
-# the version and commit it was built for, the repository it came from, and a title and creation time. Given platforms
-# (linux/amd64,linux/arm64), the archive must hold an image for exactly those.
+# the version and commit it was built for, the repository it came from, a title and creation time, and its state
+# contract (io.hvo.roof.state-contracts: an object of the stores it keeps, each with the schema it writes and those it
+# reads, docs/releasing.md). Given platforms (linux/amd64,linux/arm64), the archive must hold an image for exactly those.
 #
 #   build/check-image-labels.sh <oci-archive> <version> <revision> [<platforms>]
 #
@@ -73,6 +74,12 @@ for digest in ${image_manifests[@]+"${image_manifests[@]}"}; do
   [[ -n "$(label title)" ]] || fail "${platform}: the title label is empty."
   [[ "$(label created)" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] \
     || fail "${platform}: the created label '$(label created)' is not an RFC 3339 time."
+  contracts=$(jq -r '.config.Labels["io.hvo.roof.state-contracts"] // ""' <<<"${config}")
+  jq -e 'def schema: type == "number" and . == floor and . >= 1;
+         type == "object" and all(.[]; type == "object" and (keys == ["reads", "writes"]) and (.writes | schema)
+           and (.reads | type == "object" and keys == ["max", "min"] and (.min | schema) and (.max | schema))
+           and .reads.min <= .writes and .writes <= .reads.max)' <<<"${contracts}" >/dev/null 2>&1 \
+    || fail "${platform}: the state contract label (io.hvo.roof.state-contracts) is '${contracts}', not an object of stores each with writes and reads (min <= writes <= max)."
   echo "${platform}: $(label title) ${version}, commit ${revision}, created $(label created)"
   checked+=("${platform}")
 done

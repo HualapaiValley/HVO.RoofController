@@ -129,12 +129,16 @@ Both Dockerfiles take three build arguments, and set the labels and the programs
 | `ROOF_REVISION` | `org.opencontainers.image.revision` | `-p:SourceRevisionId=`, the commit after the `+` |
 | `ROOF_CREATED` | `org.opencontainers.image.created` | |
 
+Each image also declares its state contract, the stores it keeps and their schemas, in a label of its own,
+`io.hvo.roof.state-contracts` ([State contracts](#state-contracts)); the controller's keeps `io.hvo.roof.identity-schema`
+beside it for the deploy script.
+
 An image built without them carries `4.0.0-dev` with no commit and empty labels. Each Dockerfile declares them just
 before the step that uses them (the publish, and the labels after the last `RUN`): every `RUN` after an `ARG` sees it,
 so a new version or build time would otherwise restore the packages and install the image's own packages again. The deploy script passes all three
 ([Deployment](deployment.md)); Compose passes `HVO_ROOF_VERSION`, `HVO_ROOF_REVISION` and `HVO_ROOF_CREATED` from the
 environment. The `Pi image` and `Emulator image` workflows build each image for `linux/amd64` and `linux/arm64` with its CI
-version, and check its labels and its platforms with `check-image-labels.sh`.
+version, and check its labels (the state contract's included) and its platforms with `check-image-labels.sh`.
 
 ## Cutting a release
 
@@ -249,6 +253,7 @@ What a program needs to know about a release, such as the installer and `install
 ```json
 {
   "schemaVersion": 1,
+  "identityStoreSchema": 3,
   "product": "HVO Roof Controller",
   "version": "4.0.0",
   "tag": "v4.0.0",
@@ -266,6 +271,13 @@ What a program needs to know about a release, such as the installer and `install
     },
     "hatEmulator": { "...": "the same, for ghcr.io/hualapaivalley/roof-hat-emulator" }
   },
+  "stateContracts": {
+    "controller": {
+      "identity": { "writes": 3, "reads": { "min": 1, "max": 3 } },
+      "settings": { "writes": 1, "reads": { "min": 1, "max": 1 } }
+    },
+    "hatEmulator": {}
+  },
   "upgradeNotes": [
     { "version": "4.0.0", "text": "Nothing to do by hand." }
   ],
@@ -281,6 +293,10 @@ What a program needs to know about a release, such as the installer and `install
 - `created` is when the release was built: the time in both images' labels, and the kiosk tarball's file times.
 - `images.<image>.reference` is what to pull or deploy (`IMAGE_REF`): the tag, for people, and the digest, which is
   what is pulled.
+- `stateContracts.<image>` is the image's state contract ([State contracts](#state-contracts)), as its
+  `io.hvo.roof.state-contracts` label declares it. `identityStoreSchema`, which installers from before state contracts
+  read, is the newest identity schema the controller reads (`stateContracts.controller.identity.reads.max`); a reader
+  refuses a release.json where the two differ.
 - `upgradeNotes` is every release's upgrade notes up to this one, oldest first: each `docs/upgrade-notes/X.Y.Z.md`
   whose version is not newer than this release's (a release candidate's is its final release's), as its `version` and
   its `text`, at most 16 KiB each and 128 KiB together. Before an upgrade, the installer prints those of each release
@@ -289,6 +305,44 @@ What a program needs to know about a release, such as the installer and `install
   any final release's notes may have.
 - `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `installer`, `kiosk`, `mac-app`,
   `compose`, `deploy-script` or `install-script`. `platform` is the .NET runtime the file is for, or `null` for a file for any.
+
+## State contracts
+
+Each image declares the stores it keeps and, for each, the schema it may write and the schemas it reads:
+
+| Image | Store | Its files | Writes | Reads |
+|-------|-------|-----------|--------|-------|
+| `roof-controller` | `identity`: people, sessions and managed API keys | `identity.json`, its `schemaVersion` | 3 | 1 to 3 |
+| `roof-controller` | `settings`: the settings file and the managed secrets file | `appsettings.Local.json`, `secrets.json` | 1 | 1 |
+| `roof-hat-emulator` | none: the emulated plant keeps no state | | | |
+
+A store's schema is a whole number from 1. The identity store's is its `schemaVersion`. The settings files have no
+schema field: every settings file so far is schema 1, and a release that changes their format records its schema in
+them, in a way the releases before ignore, and teaches its installer to read it. The secrets folder, the certificate,
+the CA and the kiosk's files have no schema: a release that changes how one is read declares it as a store first.
+
+The installer compares a release's contract with the stores' schemas on the machine before `upgrade` and `rollback`,
+and refuses one that cannot read them ([State contracts](install.md#state-contracts) in the install guide). It tells a
+**breaking state change**, an upgrade after which the release installed cannot read a store, from the two releases'
+contracts: the new one may write a schema the installed one does not read. Every upgrade backs up the stores before it
+changes anything, and `rollback --restore-backup` puts back from that backup the stores a release before a breaking
+change cannot read.
+
+When a release changes a store's format:
+
+- **Add first, remove later.** A new schema is read by one release before another writes it: in the first, `reads.max`
+  goes up and `writes` stays; in the next, `writes` goes up. A rollback across either is still a swap.
+- **A breaking change** is a release whose `writes` is above the `reads.max` of the release before: only when the
+  first step cannot be taken, as when a migration must happen before the new schema can be read. Say so in the
+  release's upgrade notes: which store moves, when (an upgrade, or a setting such as native authentication), and that
+  a rollback after it needs `rollback --restore-backup` and loses what changed in that store since the upgrade.
+- **Dropping a schema** (`reads.min` up) refuses an upgrade from a release whose stores may still have it: say in the
+  upgrade notes which release to upgrade through first.
+- **One contract, in four places, kept in step by tests:** the Dockerfile's `io.hvo.roof.state-contracts` label (and,
+  for the identity store, `io.hvo.roof.identity-schema`), `STATE_CONTRACTS` in `build/release-assets.py`, what the
+  controller reads (`RoofIdentityFile`), and the installer's reader of each store's schema (`StateContractGuard`).
+  `tests/releasing/test_state_contracts.py` checks the labels against `release-assets.py`, and
+  `IdentityStateContractTests` checks the controller reads exactly the identity schemas its label declares.
 
 ## Before publishing
 
@@ -310,7 +364,8 @@ Check the draft, on its page and with its files:
   ```
 
 - **`release.json`.** The version, the tag, `prerelease` (true only for a candidate), the tagged commit, and both
-  images at the version, each with a digest.
+  images at the version, each with a digest. `jq .stateContracts release.json` shows the state contracts; when they
+  make a breaking change from the release before, the upgrade notes say so ([State contracts](#state-contracts)).
 - **The images.** Both platforms, the digest `release.json` names, and the attestation:
 
   ```bash
@@ -446,7 +501,7 @@ Once a release is published, its tag never moves.
 ## Tests
 
 - `tests/versioning/version-tests.sh` runs both scripts against made-up `Directory.Build.props` files and OCI
-  archives. CI runs it with the deploy-script tests.
+  archives, state contract labels well-formed and not. CI runs it with the deploy-script tests.
 - `ProductVersionTests` checks that every program carries the version in `Directory.Build.props`, or a prerelease of
   it, and `RoofControllerApiTests` that the controller's `System/info` reports it. The tests of each System page read
   the versions back.
@@ -458,6 +513,11 @@ Once a release is published, its tag never moves.
   names and modes, the kiosk tarball's contents, `install.sh` with the release's version written in, `release.json`,
   `SHA256SUMS`, and every artifact it must refuse. `tests/install/install-sh-tests.sh` runs that `install.sh`
   ([install.sh's tests](install.md#installshs-tests)).
+- `tests/releasing/test_state_contracts.py` checks that each Dockerfile's state contract label is the one
+  `release-assets.py` writes into `release.json`, and `IdentityStateContractTests` that the controller reads exactly the
+  identity schemas its label declares ([State contracts](#state-contracts)). `InstallerStateContractTests` checks the
+  installer's side: release.json's contracts read and refused, the stores' schemas read from their files, upgrades and
+  rollbacks refused, the backup before an upgrade, and `rollback --restore-backup`.
 - `tests/releasing/push-image-tests.sh` pushes two-platform OCI archives with `push-image.sh` to a registry of its own
   in Docker, checks every digest the registry then holds, and tags them `latest`, refusing a version tag pushed again.
 - `tests/releasing/release-latest-tests.sh` runs `release-latest.sh` against a stand-in for `gh` that serves made-up
@@ -472,10 +532,11 @@ Once a release is published, its tag never moves.
 
 The source installer-rig tests use the pinned 4.1.1 historical source's installer, not current source relabeled as
 old. They check pre-mutation schema rejection, then `install.sh --from … upgrade --version …` with verification of
-the downloaded installer's checksum, retained identity/configuration, no default commissioning access, and
-compatible rollback. This is historical-source coverage with patched dependencies, not a byte-for-byte
-published-binary replay. Full-command installer tests separately require schema-3 rollback refusal without file
-or deployment changes.
+the downloaded installer's checksum, retained identity/configuration, no default commissioning access, the backup
+of the stores before the upgrade, compatible rollback, and, with the identity store moved on to schema 3, rollback
+refused and then `rollback --restore-backup`. This is historical-source coverage with patched dependencies, not a
+byte-for-byte published-binary replay. Full-command installer tests separately require schema-3 rollback refusal
+without file or deployment changes.
 
 These retained regressions do not implement an existing-install commissioning migration. This feature's acceptance
 path is a clean application installation and first-run Choose/Confirm followed by a fresh personal-PIN login.

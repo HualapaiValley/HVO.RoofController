@@ -117,8 +117,55 @@ internal static class BackupCommands
     /// </summary>
     internal static async Task<string> WriteAsync(InstallerHost host, InstallerSession session, string? output, CancellationToken cancellationToken)
     {
-        var machine = session.Machine;
         var now = host.Time.GetUtcNow();
+        var written = await WriteArchiveAsync(
+            session.Machine,
+            session.Log,
+            session.Survey.HostName,
+            InstallerSession.RoofVersion(host.Version),
+            session.Survey.SystemRecord?.Version,
+            now,
+            () => OutputPath(session.Machine, session.Survey.HostName, now, output),
+            cancellationToken).ConfigureAwait(false);
+        var entries = written.Entries;
+        var files = entries.Count(entry => entry.Type == BackupEntry.File);
+        var folders = entries.Count - files;
+        var path = written.Path;
+        host.Out.WriteLine($"Backed up {files} files and {folders} folders to {path} ({Modes.Octal(Modes.PrivateFile)}, root's):");
+        foreach (var root in Folders.Concat(Files))
+        {
+            var held = entries.Count(entry => entry.Type == BackupEntry.File && Within(entry.Path, root));
+            if (held > 0)
+            {
+                host.Out.WriteLine($"  {root}: {held} {(held == 1 ? "file" : "files")}");
+            }
+        }
+
+        foreach (var left in written.Skipped)
+        {
+            host.Out.WriteLine($"  Left out {left}: a backup holds files and folders only.");
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// Writes a backup to <paramref name="output"/>, which must not be there, as <see cref="WriteAsync"/> does, saying
+    /// nothing but in the log: what <c>upgrade</c> takes before it changes anything (<see cref="UpgradeBackupStep"/>).
+    /// </summary>
+    internal static async Task<WrittenBackup> WriteArchiveAsync(
+        InstallerMachine machine,
+        InstallLog log,
+        string hostName,
+        string installerVersion,
+        string? recordVersion,
+        DateTimeOffset now,
+        Func<string> output,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(output);
         var skipped = new List<string>();
         var entries = await CollectAsync(machine, skipped, cancellationToken).ConfigureAwait(false);
         var files = entries.Count(entry => entry.Type == BackupEntry.File);
@@ -127,13 +174,13 @@ internal static class BackupCommands
             throw new InstallerRefusedException($"There is nothing here to back up: {string.Join(", ", Folders)} and {string.Join(", ", Files)} hold no files.");
         }
 
-        var path = OutputPath(machine, session.Survey.HostName, now, output);
+        var path = output();
         var manifest = new BackupManifest(
             CurrentSchema,
-            session.Survey.HostName,
+            hostName,
             now,
-            InstallerSession.RoofVersion(host.Version),
-            session.Survey.SystemRecord?.Version,
+            installerVersion,
+            recordVersion,
             entries);
         var partial = path + ".partial";
         try
@@ -171,25 +218,13 @@ internal static class BackupCommands
             }
         }
 
-        var folders = entries.Count - files;
-        session.Log.Write($"Backed up {files} files and {folders} folders to {path}.");
-        host.Out.WriteLine($"Backed up {files} files and {folders} folders to {path} ({Modes.Octal(Modes.PrivateFile)}, root's):");
-        foreach (var root in Folders.Concat(Files))
-        {
-            var held = entries.Count(entry => entry.Type == BackupEntry.File && Within(entry.Path, root));
-            if (held > 0)
-            {
-                host.Out.WriteLine($"  {root}: {held} {(held == 1 ? "file" : "files")}");
-            }
-        }
-
+        log.Write($"Backed up {files} files and {entries.Count - files} folders to {path}.");
         foreach (var left in skipped)
         {
-            host.Out.WriteLine($"  Left out {left}: a backup holds files and folders only.");
-            session.Log.Write($"Left out of the backup: {left}.");
+            log.Write($"Left out of the backup: {left}.");
         }
 
-        return path;
+        return new WrittenBackup(path, entries, skipped);
     }
 
     // The archive just written, read as restore reads it: a backup restore would refuse fails now, not when it is needed.
@@ -324,18 +359,34 @@ internal static class BackupCommands
         return (parts[0], owner);
     }
 
+    /// <summary>
+    /// A new backup's file in <see cref="DefaultFolder"/>: <c>hvo-roof-&lt;host&gt;-&lt;UTC time&gt;.tar.gz</c>, or, for the one an
+    /// upgrade takes, <c>…-before-&lt;version&gt;.tar.gz</c>.
+    /// </summary>
+    internal static string DefaultPath(string hostName, DateTimeOffset now, string? before = null)
+    {
+        ArgumentNullException.ThrowIfNull(hostName);
+        var shortName = hostName.Split('.')[0];
+        var name = $"hvo-roof-{shortName}-{now.UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}{(before is null ? string.Empty : $"-before-{before}")}.tar.gz";
+        return Path.Join(DefaultFolder, name);
+    }
+
+    /// <summary>Makes <see cref="DefaultFolder"/>, only root's, when it is not there.</summary>
+    internal static void MakeDefaultFolder(InstallerMachine machine)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        if (!machine.DirectoryExists(DefaultFolder))
+        {
+            machine.CreateDirectory(DefaultFolder, Modes.PrivateFolder);
+        }
+    }
+
     private static string OutputPath(InstallerMachine machine, string hostName, DateTimeOffset now, string? output)
     {
         if (output is null)
         {
-            if (!machine.DirectoryExists(DefaultFolder))
-            {
-                machine.CreateDirectory(DefaultFolder, Modes.PrivateFolder);
-            }
-
-            var shortName = hostName.Split('.')[0];
-            var name = $"hvo-roof-{shortName}-{now.UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}.tar.gz";
-            return Path.Join(DefaultFolder, name);
+            MakeDefaultFolder(machine);
+            return DefaultPath(hostName, now);
         }
 
         var path = Path.GetFullPath(output, machine.CurrentDirectory);
@@ -385,16 +436,7 @@ internal static class BackupCommands
         var release = Installer.Release(host, releaseFolder);
         var path = Path.GetFullPath(file, machine.CurrentDirectory);
         var backup = await ReadAsync(machine, path, cancellationToken).ConfigureAwait(false);
-        // Never restore temporary access, even onto an empty replacement machine.
-        var identityEntry = backup.Entries.FirstOrDefault(entry => entry.Path == ControllerLayout.System.IdentityFile);
-        if (identityEntry?.Content is { } identityBytes)
-        {
-            using var identity = JsonDocument.Parse(identityBytes);
-            if (identity.RootElement.TryGetProperty("kioskCredential", out var credential)
-                && credential.ValueKind == JsonValueKind.Object && credential.TryGetProperty("state", out var state)
-                && state.GetString() == "pending")
-                throw new InstallerRefusedException("This backup contains pending kiosk commissioning. Temporary access cannot be restored; preserve it and use explicit administrator recovery.");
-        }
+        RefusePendingCommissioning(backup);
         var record = backup.Record;
         var version = InstallerSession.RoofVersion(host.Version);
         if (record is not null && RoofSemVer.IsOlder(version, record.Version))
@@ -491,6 +533,21 @@ internal static class BackupCommands
         }
 
         return await Installer.InstallAsync(host, restored, answers, $"Restoring from {path}", new Installer.RunOptions(null, false, releaseFolder), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Never restore temporary access, even onto an empty replacement machine: refuses a backup holding pending kiosk commissioning.</summary>
+    internal static void RefusePendingCommissioning(ReadBackup backup)
+    {
+        ArgumentNullException.ThrowIfNull(backup);
+        var identityEntry = backup.Entries.FirstOrDefault(entry => entry.Path == ControllerLayout.System.IdentityFile);
+        if (identityEntry?.Content is { } identityBytes)
+        {
+            using var identity = JsonDocument.Parse(identityBytes);
+            if (identity.RootElement.TryGetProperty("kioskCredential", out var credential)
+                && credential.ValueKind == JsonValueKind.Object && credential.TryGetProperty("state", out var state)
+                && state.GetString() == "pending")
+                throw new InstallerRefusedException("This backup contains pending kiosk commissioning. Temporary access cannot be restored; preserve it and use explicit administrator recovery.");
+        }
     }
 
     private static string Counts(IEnumerable<StepChange> changes)
@@ -592,13 +649,17 @@ internal static class BackupCommands
         return failed;
     }
 
-    private sealed record ReadBackup(BackupManifest Manifest, IReadOnlyList<BackupEntry> Entries, InstallRecord? Record);
+    /// <summary>A backup read whole and checked: its manifest, its folders and files (with their content), and its record.</summary>
+    internal sealed record ReadBackup(BackupManifest Manifest, IReadOnlyList<BackupEntry> Entries, InstallRecord? Record);
+
+    /// <summary>A backup written: where, and the folders and files it holds, and what it left out.</summary>
+    internal sealed record WrittenBackup(string Path, IReadOnlyList<BackupEntry> Entries, IReadOnlyList<string> Skipped);
 
     // The backup, read whole and checked before anything is written: only root may read it; its manifest comes first; it
     // holds only folders and files, each where a backup puts them, each as the manifest says (size and SHA-256). The path
     // is checked without following a link, then the file opened is checked again (through /proc, by its descriptor):
     // whoever can write the folder holding it could swap the path for their own archive between a check and the open.
-    private static async Task<ReadBackup> ReadAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+    internal static async Task<ReadBackup> ReadAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
     {
         if (await StatAsync(machine, path, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
         {

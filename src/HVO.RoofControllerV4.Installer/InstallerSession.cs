@@ -192,7 +192,22 @@ public sealed class InstallerSession
             var resolved = await SetupUserEnrollment.ResolveAsync(Machine, settings, cancellationToken).ConfigureAwait(false);
             Answers = Answers with { Controller = Answers.Controller with { LinuxAuth = resolved } };
         }
-        return await PlanBuilder.Build(Machine, Survey, Answers).CheckAsync(Context, cancellationToken).ConfigureAwait(false);
+        return await PlanBuilder.Build(Machine, Survey, Answers, upgradeBackup: UpgradeBackup()).CheckAsync(Context, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// For an upgrade of the machine's controller on Linux (an older release recorded, and installed), the backup of its
+    /// stores the plan takes first; null otherwise.
+    /// </summary>
+    public UpgradeBackupStep? UpgradeBackup()
+    {
+        if (Machine.Os != InstallerOs.Linux || !Survey.IsRoot || UpgradeLine() is null || Record is not { } record
+            || !InstallRoles.RunsController(record.Roles))
+        {
+            return null;
+        }
+
+        return new UpgradeBackupStep(record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version));
     }
 
     /// <summary>Installs <paramref name="plan"/>: each step checked again as it comes, and logged.</summary>

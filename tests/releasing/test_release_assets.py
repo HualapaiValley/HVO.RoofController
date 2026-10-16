@@ -196,6 +196,11 @@ class TheAssets(ReleaseTestCase):
                 "platforms": ["linux/amd64", "linux/arm64"]},
         })
 
+    def test_release_json_declares_each_image_s_state_contracts(self):
+        self.assertEqual(self.manifest["stateContracts"], release_assets.STATE_CONTRACTS)
+        self.assertEqual(self.manifest["identityStoreSchema"],
+                         release_assets.STATE_CONTRACTS["controller"]["identity"]["reads"]["max"])
+
     def test_release_json_lists_every_other_asset_with_its_size_and_sha256(self):
         assets = self.manifest["assets"]
         self.assertEqual([asset["name"] for asset in assets], sorted(self.EXPECTED))

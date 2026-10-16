@@ -64,9 +64,11 @@ public sealed class InstallerProgramStep(InstallScope scope, InstallerMachine ma
 /// The controller put back to the release before (<c>hvo-roof-install rollback</c>): the deploy script's
 /// <c>--rollback</c> swaps it with the one it kept as <c>roof-controller-previous</c>, after the same verified Stop of the
 /// roof a deploy makes, and checks the one put back as it checks a new one. Nothing is pulled: the one kept is the
-/// release before's, by digest, or there is nothing to go back to.
+/// release before's, by digest, or there is nothing to go back to. The release before must read the stores here, or the
+/// ones <paramref name="restored"/> says the steps before it put back from the backup the upgrade took
+/// (<see cref="StateRestoreStep"/>).
 /// </summary>
-public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
+public sealed class ControllerRollbackStep(ControllerStep controller, IReadOnlyList<StoreState>? restored = null) : PlanStep
 {
     /// <summary>The controller the deploy script kept when it replaced it: what <c>--rollback</c> puts back.</summary>
     public const string PreviousContainer = MachineSurveyor.ControllerContainer + "-previous";
@@ -88,7 +90,9 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
         _deployKeyFile = null;
         var machine = context.Machine;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
-        if (IdentitySchemaGuard.Problem(machine, ControllerLayout.For(machine).IdentityFile, release) is { } schemaProblem)
+        var states = StateContractGuard.Read(machine, ControllerLayout.For(machine))
+            .Select(state => restored?.FirstOrDefault(put => put.Store == state.Store) ?? state).ToArray();
+        if (StateContractGuard.Problem(states, release) is { } schemaProblem)
             return new StepCheck(StepChange.Blocked, schemaProblem);
         var current = await MachineSurveyor.SurveyContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
         if (current is { IsRunning: true } && current.ImageDigest == release.Controller.Digest)

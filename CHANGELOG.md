@@ -11,13 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
   mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
+- State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
+  `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
+  the settings files). `upgrade` and `rollback` refuse (exit 3, nothing changed) a release that cannot read the stores
+  here, and `upgrade` says when a release makes a breaking state change. See
+  [State contracts](docs/install.md#state-contracts).
+- `upgrade` now backs up the controller's stores before it changes anything, as `backup` does, to
+  `/var/backups/hvo-roof`; the record names the backup (`upgradeBackup`). No log, program or image is copied (#130).
+- `rollback --restore-backup [FILE] [--yes]`: across a breaking state change, puts back from that backup the stores the
+  release before cannot read, after the controller's verified Stop, saying plainly that the changes made to them since
+  the upgrade are lost; the files it replaces are kept beside them. Without it, such a rollback is refused (#130).
 
 ### Changed
 
 - Upgrading from installed 4.1.1 to this schema-3 release requires the new release's
   `install.sh upgrade --version <VERSION>` bootstrap, which verifies the downloaded installer. The old installed installer rejects schema 3 before replacing
   itself or showing upgrade notes. See [Upgrading](docs/install.md#upgrading); existing identities and configuration
-  are retained, with no default access added. Schema-incompatible rollback remains refused.
+  are retained, with no default access added. Schema-incompatible rollback remains refused unless
+  `rollback --restore-backup` is asked for.
+- The installer reads any `identityStoreSchema` in a release's `release.json`, and the release's state contracts
+  decide whether it reads the stores, so a later identity schema needs no bootstrap like 4.1.1's. `check-image-labels.sh`
+  requires each image's state contract label (#130).
 
 ### Security
 

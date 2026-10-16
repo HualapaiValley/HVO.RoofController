@@ -1037,10 +1037,16 @@ A platform installer downloaded and verified against that release's `SHA256SUMS`
 `upgrade --version "$version"` (with sudo for system roles).
 
 Do not uninstall, delete identity files, re-enroll users or change `identityStoreSchema` to work around the rejection.
-Existing schema-2 stores remain eligible for compatible rollback; a schema-3 store cannot roll back to 4.1.1.
-Rollback keeps current identity data and never replays an old credential backup. The bootstrap does not change
+Existing schema-2 stores remain eligible for compatible rollback; a schema-3 store goes back to 4.1.1 only with
+`rollback --restore-backup`, which puts back the identity store the upgrade backed up, losing the changes made to it
+since ([Rolling back](#rolling-back)). A plain rollback keeps current identity data, and no rollback replays an old
+credential backup unless asked to. The bootstrap does not change
 certificate trust or bypass browser warnings. Local candidate validation does not establish published-download,
 attestation-service or interactive kiosk/browser verification.
+
+The installers from the release after 4.1.1 on read any `identityStoreSchema`: the release's
+[state contracts](#state-contracts), not a list of schemas the installer knows, say whether it can read the stores, so
+a later identity schema needs no bootstrap.
 
 ### Routine upgrades
 
@@ -1055,17 +1061,23 @@ Each installer installs its own release, so the installer hands over to the new 
    up to the new one, oldest first: what someone upgrading must do, such as a setting to change. An upgrade across
    several releases shows every one's. Read them before the upgrade goes on. The new release's installer, run by
    you, shows them too; handed over to, it does not show them again.
-2. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
+2. It reads the schema of each store the controller keeps here, and checks that the new release reads them
+   ([State contracts](#state-contracts)). One that does not is refused (exit 3) before anything changes. It also says
+   when the new release makes a breaking state change, after which the release installed cannot read a store.
+3. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
    and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
    of your own) is refused: download that release's installer and run its `upgrade`.
-3. The new installer installs its release, as `--answers` installs the record's choices
+4. The new installer installs its release, as `--answers` installs the record's choices
    ([Running it again](#running-it-again)):
+   - first, the controller's stores backed up, as `backup` backs them up, to
+     `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`), as root on Linux;
    - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
      controller, checked before the old one is let go and kept as `roof-controller-previous`;
    - a rig's HAT emulator, from the new release;
    - the kiosk's program, keeping the one it replaces as `hvo-roof-kiosk.previous`; and `hvo-roof` and the Mac app,
      keeping the ones they replace beside them.
-4. The record then says the new release, and the one before it (`previousVersion`) for a rollback.
+5. The record then says the new release, the one before it (`previousVersion`) for a rollback, and the backup
+   (`upgradeBackup`).
 
 ```text
 $ sudo hvo-roof-install upgrade
@@ -1073,6 +1085,8 @@ $ sudo hvo-roof-install upgrade
 
 Upgrade notes for 4.0.1:
   Nothing to do by hand.
+
+The stores here: the identity store, schema 1; the settings files, schema 1. Release 4.0.1 reads them.
 Release 4.0.1: https://github.com/HualapaiValley/HVO.RoofController/releases/tag/v4.0.1
 
 /usr/local/sbin/hvo-roof-install: release 4.0.1's, 0755.
@@ -1087,7 +1101,42 @@ Upgrading from 4.0.0 to 4.0.1.
 An upgrade never goes back: a release older than the one installed is refused, and [Rolling back](#rolling-back) is
 the way back. The release that is installed already is checked, and repaired, as a second run of the installer would
 be: "4.0.1 is installed here: checking that everything is as it should be." So after a failed step or Ctrl+C,
-`upgrade` again carries on, with the new installer already in place.
+`upgrade` again carries on, with the new installer already in place. Once the new controller has replaced the old
+one, a run that carries on takes no new backup (the new controller may have moved its stores on): the record names the
+one taken before it.
+
+### State contracts
+
+The controller keeps two stores here whose format a release can change:
+
+| Store | Its files | Its schema |
+|-------|-----------|------------|
+| The identity store: people, sessions and managed API keys | `/var/lib/hvo-roof/identity/identity.json` | Its `schemaVersion`; 1 without one |
+| The settings files: settings, and secrets set through the API | `/etc/hvo-roof/config/appsettings.Local.json` and `/var/lib/hvo-roof/settings-secrets/secrets.json` | 1, the only one so far |
+
+The secrets folder, the certificate, the CA and the kiosk's files have no schema: every release reads them the same
+way. The HAT emulator keeps no state.
+
+Each release declares, for each store, the schema it may write and the schemas it reads, in `release.json`
+(`stateContracts`) and in its controller image's `io.hvo.roof.state-contracts` label
+([State contracts](releasing.md#state-contracts) in the release guide). A release older than state contracts reads
+identity schemas 1 to its `identityStoreSchema`, and settings schema 1. A store never saved is read by every release.
+
+- **`upgrade`** refuses (exit 3, nothing changed) a release that cannot read a store as it is here, and says which. The
+  installer handing over checks before it replaces itself; the new release's installer checks again before it
+  installs. The controller's step checks once more before the deploy script runs, whatever runs the install.
+- A release **makes a breaking state change** when it may write a schema that the release installed does not read
+  (the installer reads what that one reads from its controller image's labels). The upgrade says so and names the
+  store. The change is made only when the store moves on, as when native authentication is enabled; until then a
+  rollback is still a swap.
+- **Every upgrade** of the machine's controller, as root on Linux, backs up the stores first, whether or not the
+  release makes a breaking change. It is the archive `backup` writes ([Backing up and restoring](#backing-up-and-restoring)):
+  the controller's and the kiosk's small files, with their secrets, and no log, program or image. There is no bulk data
+  to copy. The record names it (`upgradeBackup`). The backup stays until you remove it; keep it as you keep any backup
+  ([Where to keep it](#backing-up-and-restoring)). If it cannot be written (a folder that someone other than root can
+  change, say), the upgrade stops there, before anything else changes.
+- **`rollback`** refuses (exit 3, nothing changed) to go back to a release that cannot read a store as it is here, and
+  says how to go on: [Rolling back](#rolling-back).
 
 ## Rolling back
 
@@ -1105,13 +1154,57 @@ be: "4.0.1 is installed here: checking that everything is as it should be." So a
   asset has no installer, and the one here stays.
 - The record says the release before, and the release it went back from (`rolledBackFrom`).
 
-It goes back one release, once: a rollback leaves no `previousVersion`, and running it again says so, changes nothing
-and exits 0. `upgrade` goes forward again. A machine with only one release ever installed has nothing to go back to,
-and the rollback is refused (exit 3).
+It goes back one release, once: a rollback leaves no `previousVersion` or `upgradeBackup`, and running it again says
+so, changes nothing and exits 0. `upgrade` goes forward again. A machine with only one release ever installed has
+nothing to go back to, and the rollback is refused (exit 3).
+
+### When the release before cannot read the stores
+
+A rollback first checks each store's schema against what the release before reads
+([State contracts](#state-contracts)). While it reads them all, the rollback is the swap above: nothing is copied or
+put back. When the upgrade made a breaking state change and a store has moved on since, a rollback, and its plan, are
+refused with exit 3, and nothing is changed:
+
+```text
+$ sudo hvo-roof-install rollback
+4.2.0 is installed here; going back to 4.1.1, the release before.
+
+Rollback is refused before replacing the controller: release 4.1.1 cannot read the data here: the identity store here is schema 3, and release 4.1.1 reads identity schemas 1 to 2. The upgrade to 4.2.0 backed the stores up first, to /var/backups/hvo-roof/hvo-roof-roofpi-20261020T090000Z-before-4.2.0.tar.gz. To go back to 4.1.1 with the stores it cannot read as that backup has them, losing every change made to them since the upgrade (people, passwords, PINs, API keys, sessions and settings; access removed since comes back): sudo hvo-roof-install rollback --restore-backup. Or stay on 4.2.0, or go forward to a release that reads it. Nothing was changed.
+```
+
+Stay on the release installed, or go forward to one that reads the stores. Or go back, giving up what changed in them
+since the upgrade:
+
+```bash
+sudo hvo-roof-install rollback --restore-backup
+```
+
+With `--restore-backup`:
+
+1. The backup the record names (`upgradeBackup`), or the one `--restore-backup FILE` names (one `backup` made before
+   the upgrade, say), is checked as `restore` checks one: root's, `0600` or `0400`, whole, and as its manifest says. It
+   must be this machine's, of the release the rollback goes back to, with stores that release reads, and with no
+   pending kiosk commissioning. Anything else is refused, with nothing changed.
+2. It says which stores it puts back, and plainly what is lost: every change made to them since the upgrade (people,
+   passwords, PINs, API keys, sessions and settings added or changed), and access removed since comes back. At a
+   terminal it asks first; without one, `--yes` goes ahead without asking. `--plan` shows the steps and changes
+   nothing.
+3. The deploy script's `--stop` stops the controller after a verified Stop of the idle roof.
+4. Each file of a store the release before cannot read goes back as the backup has it, with its mode and owner. The
+   file it replaces is kept beside it, root's and `0600`, as `<file>.rolled-back-from-<version>-<UTC time>`; a file
+   the backup does not have is moved there. Nothing else in the store's folder changes, so a kiosk's retired
+   commissioning stays retired. A store the release before reads as it is stays as it is.
+5. The rollback then goes on as above: the deploy script's `--rollback` puts the kept controller back, and checks it.
+   If a step stops part way, the controller stays stopped and the roof idle: run the same command again to carry on.
+
+A rollback never puts a backup back on its own: only `--restore-backup` does, as root on Linux, where the upgrade
+takes the backup. A rig on a Mac goes forward instead. When the release before reads the stores, `--restore-backup`
+says so, puts nothing back, and the rollback is a swap.
 
 ## Backing up and restoring
 
-`sudo hvo-roof-install backup` writes one archive of the controller's and the kiosk's files:
+`sudo hvo-roof-install backup` writes one archive of the controller's and the kiosk's files (an upgrade writes one too,
+before it changes anything: [State contracts](#state-contracts)):
 
 - `/etc/hvo-roof`: the settings, the secrets, the certificate, the CA with its key, and the install record;
 - `/var/lib/hvo-roof`: the people, the API keys and the settings set through the API;
@@ -1218,6 +1311,7 @@ choices, it says:
 | `installerVersion` | The installer that last wrote it. |
 | `previousVersion` | The release installed before the last upgrade: what `rollback` goes back to. A rollback clears it. |
 | `rolledBackFrom` | The release `rollback` went back from. An upgrade clears it. |
+| `upgradeBackup` | The backup the last upgrade took of the stores before it changed anything: what `rollback --restore-backup` puts back. A rollback or an uninstall clears it. |
 | `uninstalledAt` | When `uninstall` removed the roles, keeping the data and the choices. An install clears it. |
 | `installedAt`, `updatedAt` | When it was first written, and last. |
 
@@ -1430,14 +1524,22 @@ The script checks:
 10. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs
     that release. Its `upgrade` shows the new release's upgrade notes and hands over to the new installer, which it
     puts in `/usr/local/sbin`. The controller and the emulator are then the new release's, the old controller is kept
-    as `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing. Each release
+    as `roof-controller-previous`, and the record says both releases. The new installer says the stores' schemas and
+    the breaking state change (identity schema 3, which the release before does not read), and backs the stores up
+    before it changes anything: an archive in `/var/backups/hvo-roof`, root's and `0600`, of the release before,
+    with no log, that the record names. `upgrade` again changes nothing. Each release
     is a prerelease of its own checkout's `VersionPrefix`, the new one `-rig.2` and the release before `-rig.1`, so a
     pull request that moves the version to 4.0.1 upgrades from `4.0.0-rig.1` to `4.0.1-rig.2`.
 11. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
     `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so
-    and changes nothing, and `upgrade` goes forward again. When the upgrade migrated the identity store beyond the
-    previous release's supported schema, the scenario instead verifies that both rollback planning and execution
-    refuse it, preserving the live identity bytes, installation record and running containers.
+    and changes nothing, and `upgrade` goes forward again, with a new backup. Then the identity store is moved on to
+    schema 3, as a release that migrated it leaves it: `rollback` and its plan are refused (exit 3), naming the
+    upgrade's backup, with the store, the record and the containers unchanged. `rollback --restore-backup --yes` then
+    stops the controller with a verified Stop, puts the identity store back from that backup (keeping the one it
+    replaces beside it), and puts the kept controller back; the first admin signs in with the same password. When an
+    upgrade has already moved the identity store past what the release before reads, the scenario checks only that
+    both rollback planning and execution refuse it, preserving the live identity bytes, installation record and
+    running containers.
 
 Except in step 4, the roof does not move: the relay register stays 0, and the emulator records no direction relay
 closing and no violation.
@@ -1454,8 +1556,8 @@ release's images, and `gh` must be signed in (`GH_TOKEN`).
 
 It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`,
 `/var/lib/hvo-roof`, the installer's log, `/usr/local/sbin/hvo-roof-install`, its containers or network, or a network
-interface named `hvorig0`. It removes all of them when it ends, with the backup, the worktree and the releases'
-images. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and (from the checkout)
+interface named `hvorig0`; and on one with `/var/backups/hvo-roof`, which may hold a controller's backups. It removes
+all of them when it ends, with the backups, the worktree and the releases' images. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and (from the checkout)
 its registry's 15001. `RIG_HTTPS_PORT` and `RIG_WEB_PORT` move the controller off 8443 and 8088, and
 `RIG_REGISTRY_PORT` moves the registry. `RIG_RESULTS_DIR` writes each check's result and timing to `rig-scenario.md`.
 

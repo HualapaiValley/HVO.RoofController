@@ -44,6 +44,12 @@ public static partial class MachineSurveyor
 
     public const string VersionLabel = "org.opencontainers.image.version";
 
+    /// <summary>The controller image's state contract (JSON, as release.json's <c>stateContracts.controller</c>).</summary>
+    public const string StateContractsLabel = "io.hvo.roof.state-contracts";
+
+    /// <summary>The newest identity schema the controller image reads, on images from before state contracts (4.1.0 on).</summary>
+    public const string IdentitySchemaLabel = "io.hvo.roof.identity-schema";
+
     /// <summary>The web UI's setting that names the key file its Stop sends.</summary>
     public const string WebStopKeyFileSetting = "RoofWeb__StopKeyFile";
 
@@ -312,6 +318,8 @@ public static partial class MachineSurveyor
                 ComposeProject = string.IsNullOrEmpty(composeProject) ? null : composeProject,
                 HatEmulator = emulator,
                 Version = labels.GetValueOrDefault(VersionLabel) is { Length: > 0 } version ? version : null,
+                StateContracts = labels.GetValueOrDefault(StateContractsLabel) is { Length: > 0 } contracts ? contracts : null,
+                IdentitySchema = labels.GetValueOrDefault(IdentitySchemaLabel) is { Length: > 0 } identitySchema ? identitySchema : null,
                 PublishAddress = addresses is [{ Length: > 0 } only] ? only : null,
                 Network = network,
                 WebStopKeyFile = environment.GetValueOrDefault(WebStopKeyFileSetting) is { Length: > 0 } stopKey ? stopKey : null,

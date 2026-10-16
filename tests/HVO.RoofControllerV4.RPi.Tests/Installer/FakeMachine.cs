@@ -357,8 +357,17 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return output.ToArray();
     }
 
-    /// <summary>A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests.</summary>
-    public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null, IReadOnlyList<UpgradeNote>? upgradeNotes = null)
+    /// <summary>
+    /// A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests,
+    /// and, when given, its controller's state contract (JSON, as <c>stateContracts.controller</c>) and identityStoreSchema.
+    /// </summary>
+    public static string ReleaseJson(
+        string version = "4.0.0",
+        string? controllerDigest = null,
+        string? emulatorDigest = null,
+        IReadOnlyList<UpgradeNote>? upgradeNotes = null,
+        string? stateContract = null,
+        int? identitySchema = null)
     {
         object Image(string name, string digest) => new
         {
@@ -369,7 +378,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             platforms = new[] { "linux/amd64", "linux/arm64" }
         };
 
-        return JsonSerializer.Serialize(new
+        var json = JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
             product = "HVO Roof Controller",
@@ -399,6 +408,22 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 .. ClientAssetEntries(version)
             ])
         });
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(json)!;
+        if (identitySchema is { } schema)
+        {
+            manifest["identityStoreSchema"] = schema;
+        }
+
+        if (stateContract is not null)
+        {
+            manifest["stateContracts"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["controller"] = System.Text.Json.Nodes.JsonNode.Parse(stateContract),
+                ["hatEmulator"] = new System.Text.Json.Nodes.JsonObject()
+            };
+        }
+
+        return manifest.ToJsonString();
     }
 
     public string OnDisk(string path) => Path.Join(Root, path);
@@ -1144,7 +1169,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
     }
 
-    private static string Inspect(string name, FakeContainer container)
+    private string Inspect(string name, FakeContainer container)
     {
         var labels = new Dictionary<string, string>();
         if (container.Version is { } version)
@@ -1155,6 +1180,12 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         if (container.ComposeProject is { } project)
         {
             labels[MachineSurveyor.ComposeProjectLabel] = project;
+        }
+
+        // The image's own labels, as a release built it: its state contract.
+        foreach (var (label, value) in ImageLabels.GetValueOrDefault(container.Digest ?? (IsController(name) ? ControllerDigest : EmulatorDigest)) ?? new Dictionary<string, string>())
+        {
+            labels[label] = value;
         }
 
         var environment = new List<string> { "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" };

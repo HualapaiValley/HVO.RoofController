@@ -49,6 +49,13 @@ public sealed record InstallRecord
     /// <summary>The release <c>rollback</c> went back from; the next install or upgrade clears it.</summary>
     public string? RolledBackFrom { get; init; }
 
+    /// <summary>
+    /// The backup the last upgrade took of the small stores before it changed anything (<see cref="Plan.UpgradeBackupStep"/>):
+    /// what <c>rollback --restore-backup</c> puts back when the release before cannot read them. Null before an upgrade,
+    /// and after a rollback or an uninstall.
+    /// </summary>
+    public string? UpgradeBackup { get; init; }
+
     /// <summary>When <c>uninstall</c> removed the roles (the record keeps the choices, for a reinstall); null while installed.</summary>
     public DateTimeOffset? UninstalledAt { get; init; }
 

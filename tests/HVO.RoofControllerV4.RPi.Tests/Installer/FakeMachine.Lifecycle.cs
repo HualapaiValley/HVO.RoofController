@@ -76,12 +76,30 @@ internal sealed partial class FakeMachine
         => version == "4.0.0" ? EmulatorDigest : "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("emulator " + version)));
 
     /// <summary>
-    /// Publishes the fake release of <paramref name="version"/> on GitHub, with its own digests and files, and makes it the
-    /// latest release when <paramref name="latest"/>.
+    /// Each image's labels by digest, beyond its version: what a release's Dockerfile declares, such as the controller's
+    /// state contract (<see cref="MachineSurveyor.StateContractsLabel"/>).
     /// </summary>
-    public FakeMachine WithRelease(string version, bool latest = false, IReadOnlyList<UpgradeNote>? upgradeNotes = null)
+    public Dictionary<string, Dictionary<string, string>> ImageLabels { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Publishes the fake release of <paramref name="version"/> on GitHub, with its own digests and files, and makes it the
+    /// latest release when <paramref name="latest"/>. With <paramref name="stateContract"/> (JSON, as release.json's
+    /// <c>stateContracts.controller</c>), its release.json and its controller image declare that contract.
+    /// </summary>
+    public FakeMachine WithRelease(string version, bool latest = false, IReadOnlyList<UpgradeNote>? upgradeNotes = null, string? stateContract = null)
     {
-        var json = ReleaseJson(version, ControllerDigestFor(version), EmulatorDigestFor(version), upgradeNotes);
+        int? identitySchema = null;
+        if (stateContract is not null)
+        {
+            identitySchema = System.Text.Json.Nodes.JsonNode.Parse(stateContract)!["identity"]!["reads"]!["max"]!.GetValue<int>();
+            ImageLabels[ControllerDigestFor(version)] = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [MachineSurveyor.StateContractsLabel] = stateContract,
+                [MachineSurveyor.IdentitySchemaLabel] = identitySchema.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            };
+        }
+
+        var json = ReleaseJson(version, ControllerDigestFor(version), EmulatorDigestFor(version), upgradeNotes, stateContract, identitySchema);
         Downloads[ReleaseManifest.DownloadUri(version).ToString()] = json;
         FileDownloads[ReleaseManifest.DownloadUri(version, KioskAssetName(version)).ToString()] = KioskTarball(version);
         foreach (var (name, content) in ClientAssets(version))

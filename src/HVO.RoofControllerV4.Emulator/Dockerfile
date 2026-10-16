@@ -93,11 +93,13 @@ ENV ASPNETCORE_URLS=http://+:5290 \
 EXPOSE 5290 5291
 
 # The image's version, commit and source (OCI labels; build/check-image-labels.sh checks them). The source links a GHCR
-# package to its repository. After the last RUN, so that a new build time or commit invalidates no layer.
+# package to its repository. After the last RUN, so that a new build time or commit invalidates no layer. Its state
+# contract is empty: the emulated plant keeps no state (docs/releasing.md, "State contracts").
 ARG ROOF_VERSION=""
 ARG ROOF_REVISION=""
 ARG ROOF_CREATED=""
-LABEL org.opencontainers.image.title="HVO Roof Controller HAT emulator" \
+LABEL io.hvo.roof.state-contracts="{}" \
+      org.opencontainers.image.title="HVO Roof Controller HAT emulator" \
       org.opencontainers.image.description="The emulated roof, drive, limit switches and HAT, for testing the roof controller without hardware." \
       org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \
       org.opencontainers.image.vendor="Hualapai Valley Observatory" \
