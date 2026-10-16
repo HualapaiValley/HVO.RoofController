@@ -1066,8 +1066,15 @@ Each installer installs its own release, so the installer hands over to the new 
    when the new release makes a breaking state change, after which the release installed cannot read a store.
 3. As root on Linux, it backs up the controller's stores, as `backup` backs them up, to
    `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`), in a folder only root
-   can change ([Backing up and restoring](#backing-up-and-restoring)). A backup that cannot be taken refuses the
-   upgrade (exit 3) with nothing changed: the installer has not replaced itself yet.
+   can change ([Backing up and restoring](#backing-up-and-restoring)). Handing over from the release after 4.1.1 on, a
+   backup that cannot be taken refuses the upgrade (exit 3) with nothing changed: the installer has not replaced
+   itself yet. An installer from 4.1.1 or earlier takes no backup: it replaces itself first (step 4), and the new
+   installer takes the backup as the first step of its install. On that path a backup that cannot be taken still
+   refuses the upgrade (exit 3) before anything else changes, the record included, but the new release's installer
+   stays in place, with the one before kept as `hvo-roof-install.previous`; once the cause is put right,
+   `sudo hvo-roof-install upgrade` carries on. The bootstrap from 4.1.1
+   ([From 4.1.1 to a release with identity schema 3](#from-411-to-a-release-with-identity-schema-3)) starts the new
+   installer directly, which takes the backup before it puts itself in place.
 4. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
    and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
    of your own) is refused: download that release's installer and run its `upgrade`.
@@ -1149,7 +1156,9 @@ without sudo, which may not read the files, leaves them to the run as root ("whi
   ([Where to keep it](#backing-up-and-restoring)). The installer handing over takes it before it replaces itself. If it
   cannot be written (a folder it backs up, or `/var/backups/hvo-roof`, that someone other than root can change, say),
   the upgrade is refused (exit 3) before anything else changes. So is one with a store's file there that a backup
-  cannot hold (a link, which a backup never follows): put the file itself in its place, then upgrade. The backup's
+  cannot hold (a link, which a backup never follows): put the file itself in its place, then upgrade. An installer
+  from 4.1.1 or earlier takes no backup and replaces itself before the new one takes it: on that path a refused backup
+  leaves the new installer in place, and nothing else changed ([Routine upgrades](#routine-upgrades), step 3). The backup's
   manifest names the stores' files that were not there (`absent`), so a rollback can tell a store never saved from one
   the backup left out.
 - **`rollback`** refuses (exit 3, nothing changed) to go back to a release that cannot read a store as it is here, and
