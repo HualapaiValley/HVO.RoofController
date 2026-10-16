@@ -30,7 +30,21 @@ public sealed class StateRestoreStep(string path, string purpose, byte[]? conten
     {
         ArgumentNullException.ThrowIfNull(context);
         var machine = context.Machine;
-        var current = machine.ReadBytes(path);
+        if (machine.DirectoryExists(path))
+        {
+            return Task.FromResult(new StepCheck(StepChange.Blocked, $"{path} is a folder: a backup puts back only the file. Move it aside, then run the rollback again"));
+        }
+
+        byte[]? current;
+        try
+        {
+            current = machine.ReadBytes(path);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Task.FromResult(new StepCheck(StepChange.Blocked, machine.IsRoot ? $"{path} cannot be read, even as root" : "only root can read it: run with sudo"));
+        }
+
         if (content is null)
         {
             return Task.FromResult(current is null

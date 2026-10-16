@@ -472,6 +472,89 @@ public sealed class InstallerStateContractTests
         (await stop.CheckAsync(session.Context, CancellationToken.None)).Should().Be(StepCheck.Unchanged("not there"));
     }
 
+    // #136 F3: a store that is a folder, or that root cannot read, refuses an upgrade and a rollback; only a plan without
+    // sudo leaves a file it may not read to the run as root.
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task AnUpgrade_WhoseStoreIsAFolder_OrUnreadableAsRoot_IsRefused_AndChangesNothing(bool folder)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        string problem;
+        if (folder)
+        {
+            File.Delete(pi.OnDisk(IdentityFile));
+            Directory.CreateDirectory(pi.OnDisk(IdentityFile));
+            problem = $"{IdentityFile} is a folder, not a file: it is not a store the controller reads";
+        }
+        else
+        {
+            File.SetUnixFileMode(pi.OnDisk(IdentityFile), UnixFileMode.None);
+            problem = $"{IdentityFile} cannot be read, even as root (permission denied)";
+        }
+
+        try
+        {
+            var before = State(pi, folder ? [] : [IdentityFile]);
+            foreach (var installer in new[] { "4.0.0", NewVersion })
+            {
+                pi.InstallerVersion = installer;
+                var run = await pi.RunAsync("upgrade");
+
+                run.ExitCode.Should().Be((int)InstallerExitCode.Refused, $"{installer}: {run}");
+                run.Error.Should().Contain($"Release {NewVersion} cannot read the data here: {problem}.").And.Contain("Nothing was changed.");
+                Unchanged(pi, before, folder ? [] : [IdentityFile]);
+            }
+
+            pi.Launches.Should().BeEmpty("the installer is not replaced");
+            if (!folder)
+            {
+                // A plan without sudo cannot tell, and leaves it to the run as root.
+                pi.AsPerson();
+                var plan = await pi.RunAsync("upgrade", "--plan");
+                plan.Output.Should().Contain("the identity store, which only root reads");
+            }
+        }
+        finally
+        {
+            if (!folder)
+            {
+                File.SetUnixFileMode(pi.OnDisk(IdentityFile), Modes.PrivateFile);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ARollback_WhoseStoreIsAFolder_IsRefused_AndChangesNothing_EvenWithRestoreBackup()
+    {
+        using var pi = await UpgradedPiAsync(SchemaOne);
+        File.Delete(pi.OnDisk(IdentityFile));
+        Directory.CreateDirectory(pi.OnDisk(IdentityFile));
+        var before = State(pi);
+
+        var run = await pi.RunAsync("rollback");
+        var restore = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"Rollback is refused before replacing the controller: release 4.0.0 cannot read the data here: {IdentityFile} is a folder, not a file");
+        restore.ExitCode.Should().Be((int)InstallerExitCode.Refused, restore.ToString());
+        restore.Output.Should().Contain($"{IdentityFile} is a folder: a backup puts back only the file");
+        Unchanged(pi, before);
+    }
+
+    // What a run that refuses must leave as it was: every file (the installer, the record, the stores and the backups),
+    // and the containers.
+    private static (IReadOnlyDictionary<string, string> Files, Dictionary<string, FakeContainer> Containers) State(FakeMachine pi, params string[] except)
+        => (pi.Snapshot([InstallPaths.SystemLog, .. except]), new Dictionary<string, FakeContainer>(pi.Containers));
+
+    private static void Unchanged(FakeMachine pi, (IReadOnlyDictionary<string, string> Files, Dictionary<string, FakeContainer> Containers) before, params string[] except)
+    {
+        pi.Snapshot([InstallPaths.SystemLog, .. except]).Should().Equal(before.Files);
+        pi.Containers.Should().Equal(before.Containers);
+    }
+
     // The controller and the kiosk installed from release 4.0.0, with a person in the identity store (schema 1).
     private static async Task<FakeMachine> InstalledPiAsync()
     {

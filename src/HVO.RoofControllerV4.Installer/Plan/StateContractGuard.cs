@@ -7,7 +7,7 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// <summary>
 /// One store's schema as its files here have it: <see cref="Schema"/> when they could be read, <see cref="Problem"/> when
 /// they are not a store the controller reads, neither when there is no file (a store never saved, which every release
-/// reads), and <see cref="Unreadable"/> when only root can read them.
+/// reads), and <see cref="Unreadable"/> when only root can read them and this is a plan without sudo.
 /// </summary>
 public sealed record StoreState(string Store, int? Schema, string? Problem = null, bool Unreadable = false);
 
@@ -34,11 +34,20 @@ internal static class StateContractGuard
         return [(StateContract.Identity, [layout.IdentityFile]), (StateContract.Settings, [layout.SettingsFile, SecretsFile(layout)])];
     }
 
-    /// <summary>Each store's schema as the files here have it.</summary>
+    /// <summary>
+    /// Each store's schema as the files here have it. One that is not a file (a folder), or that cannot be read as root, is
+    /// a problem: only a plan without sudo leaves a file it may not read to the run as root.
+    /// </summary>
     public static IReadOnlyList<StoreState> Read(InstallerMachine machine, ControllerLayout layout)
     {
         ArgumentNullException.ThrowIfNull(machine);
-        return [.. Files(layout).Select(store => Read(store.Store, store.Files.Select(file => ReadText(machine, file))))];
+        return [.. Files(layout).Select(store =>
+        {
+            var files = store.Files.Select(file => ReadText(machine, file)).ToArray();
+            return files.Select(file => file.Problem).FirstOrDefault(problem => problem is not null) is { } problem
+                ? new StoreState(store.Store, null, problem)
+                : Read(store.Store, files.Select(file => (file.File, file.Text, file.Unreadable)));
+        })];
     }
 
     /// <summary>
@@ -167,16 +176,26 @@ internal static class StateContractGuard
         }
     }
 
-    // A file's text, null when it is not there; unreadable when only root can read it (a plan without sudo).
-    private static (string File, string? Text, bool Unreadable) ReadText(InstallerMachine machine, string file)
+    // A file's text, null when it is not there; unreadable when only root can read it and this is a plan without sudo. A
+    // folder where the file should be, or a file root cannot read, is a problem: the run as root must not take it for none.
+    private static (string File, string? Text, bool Unreadable, string? Problem) ReadText(InstallerMachine machine, string file)
     {
+        if (machine.DirectoryExists(file))
+        {
+            return (file, null, false, $"{file} is a folder, not a file: it is not a store the controller reads");
+        }
+
         try
         {
-            return (file, machine.ReadText(file), false);
+            return (file, machine.ReadText(file), false, null);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException) when (!machine.IsRoot)
         {
-            return (file, null, true);
+            return (file, null, true, null);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+        {
+            return (file, null, false, $"{file} cannot be read, even as root ({(error is UnauthorizedAccessException ? "permission denied" : error.Message)})");
         }
     }
 }
