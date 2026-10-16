@@ -537,6 +537,70 @@ public sealed class InstallerLifecycleTests
         }
     }
 
+    // A rig on a Mac (#131): its record's folder is synced with F_FULLFSYNC, which has the drive write its cache out, and
+    // nothing less. When that fails, an I/O error or a file system without it, the upgrade stops before its first change,
+    // as one whose sync fails on Linux does: fsync, which can leave the mark in the drive's cache, is never tried in its
+    // place, so a power loss cannot bring the older record back under the newer controller.
+    [TestMethod]
+    [DataRow(5, DisplayName = "EIO")]
+    [DataRow(45, DisplayName = "ENOTSUP")]
+    [DataRow(22, DisplayName = "EINVAL")]
+    public async Task ARigOnAMac_WhoseRecordsFolderCannotBeFullySynced_IsNotUpgraded(int errno)
+    {
+        using var mac = await InstalledMacRigAsync();
+        var record = InstallPaths.UserRecord(mac.Machine);
+        mac.TrackDurability(record);
+        mac.WithRelease(NewVersion, latest: true);
+        mac.InstallerVersion = NewVersion;
+        mac.FullFsyncError = errno;
+        mac.SyncCalls.Clear();
+        var deploys = mac.Deploys.Count;
+
+        var run = await mac.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain($"Before its first change, the installer could not make sure that {record} says {NewVersion} after a power loss")
+            .And.Contain("(F_FULLFSYNC: ")
+            .And.Contain("Nothing else was changed.");
+        if (errno == 5)
+        {
+            run.Error.Should().Contain("(F_FULLFSYNC: Input/output error).").And.NotContain("its file system");
+        }
+        else
+        {
+            run.Error.Should().Contain("its file system cannot have the drive write its cache out, which a Mac needs for a change to survive a power loss");
+        }
+
+        mac.Read(InstallPaths.Log(mac.Machine)).Should().Contain("Failed: Before its first change");
+        mac.SyncCalls.Should().Equal(["open", "F_FULLFSYNC", "close"], "fsync is never tried in F_FULLFSYNC's place");
+        mac.Deploys.Should().HaveCount(deploys, "nothing but the record changed");
+        mac.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.0");
+        mac.PowerLoss();
+        InstallRecord.Parse(mac.Read(record)).Should().Match<InstallRecord>(found => found.Version == "4.0.0" && found.UpgradingFrom == null, "the mark never reached the disk");
+    }
+
+    // A rig on a Mac whose record's folder F_FULLFSYNC syncs (#131) is upgraded, and its record says so after a power loss.
+    [TestMethod]
+    public async Task ARigOnAMac_IsUpgraded_WithItsRecordsFolderFullySynced()
+    {
+        using var mac = await InstalledMacRigAsync();
+        var record = InstallPaths.UserRecord(mac.Machine);
+        mac.TrackDurability(record);
+        mac.WithRelease(NewVersion, latest: true);
+        mac.InstallerVersion = NewVersion;
+        mac.SyncCalls.Clear();
+
+        var run = await mac.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        mac.SyncCalls.Should().Contain("F_FULLFSYNC").And.NotContain("fsync");
+        mac.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion);
+        mac.PowerLoss();
+        InstallRecord.Parse(mac.Read(record)).Should().Match<InstallRecord>(
+            found => found.Version == NewVersion && found.PreviousVersion == "4.0.0" && found.UpgradingFrom == null);
+        mac.Unexpected.Should().BeEmpty();
+    }
+
     // 4.0.0 to 4.0.1 stopped before its controller, and 4.0.2 the latest (#131). While that upgrade is unfinished no other
     // release goes over it, by upgrade, the install, the wizard or --plan: rollback must still go back to 4.0.0, whose
     // controller the deploy script left running and would keep.
@@ -1118,6 +1182,15 @@ public sealed class InstallerLifecycleTests
         var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(ControllerAndKiosk));
         run.ExitCode.Should().Be(0, run.ToString());
         return pi;
+    }
+
+    // A rig on a Mac, installed as roy.
+    private static async Task<FakeMachine> InstalledMacRigAsync()
+    {
+        var mac = new FakeMachine(InstallerOs.MacOS, Architecture.Arm64, root: false, hostName: "studio", userName: "roy");
+        var run = await mac.RunAsync("--answers", mac.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }));
+        run.ExitCode.Should().Be(0, run.ToString());
+        return mac;
     }
 
     // The controller and the kiosk, upgraded from 4.0.0 to NewVersion: the installer in place is NewVersion's.

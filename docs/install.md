@@ -274,7 +274,9 @@ The installer runs as root for the machine's roles, and as you for your own ([Ro
 - **The controller, a rig on Linux or the kiosk:** run it with `sudo`.
 - **`hvo-roof` or the Mac app:** run it as yourself, without `sudo`.
 - **A rig on a Mac:** run it as yourself too, and on its own: `hvo-roof` and the Mac app are installed in a later run,
-  once the rig is running ([The guards](#the-guards)).
+  once the rig is running ([The guards](#the-guards)). Its record's folder, `~/.config/hvo-roof`, must be on a file
+  system that supports a full flush (`F_FULLFSYNC`), as APFS on the Mac's own drive does
+  ([The record and the log](#the-record-and-the-log)).
 
 It refuses to mix the two in one run, and refuses the wrong one for a role. `--plan` does not need root, but planning
 the controller or a rig needs Docker access (on Linux, root or the `docker` group).
@@ -1248,10 +1250,12 @@ purposes:
 - to upgrade, roll back or uninstall.
 
 It is written last, once everything before it is in place, and it holds no secret. An upgrade also writes it before
-its first change ([Routine upgrades](#routine-upgrades)). Each time, the record's folder is synced to disk (`fsync`;
-on a Mac `F_FULLFSYNC`, or `fsync` where the file system does not support it), so a power loss leaves the record as
-written. A run that cannot sync it stops (exit 1): an upgrade, before its first change. Besides the roles and their
-choices, it says:
+its first change ([Routine upgrades](#routine-upgrades)). Each time, the record's folder is synced to disk, so a power
+loss leaves the record as written: with `fsync` on Linux, and on a Mac with `F_FULLFSYNC`, which has the drive write
+its cache out too. A Mac's `fsync` can leave the record in that cache, so it is never used in its place: on a Mac,
+the record's folder must be on a file system that supports `F_FULLFSYNC`, as APFS on the Mac's own drive does, and
+not, say, a network share. A run that cannot sync it stops (exit 1): an upgrade, before its first change. Besides the
+roles and their choices, it says:
 
 | Field | What it says |
 |-------|--------------|

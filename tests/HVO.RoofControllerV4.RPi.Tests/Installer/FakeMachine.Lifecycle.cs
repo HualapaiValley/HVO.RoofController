@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -61,6 +62,12 @@ internal sealed partial class FakeMachine
     /// <summary>What happens as a folder is synced, before the sync: a test looks at the machine then.</summary>
     public Action<string>? DuringDirectorySync { get; set; }
 
+    /// <summary>The errno F_FULLFSYNC fails with on a Mac (fcntl(2)) as the installer syncs a folder; null when it succeeds.</summary>
+    public int? FullFsyncError { get; set; }
+
+    /// <summary>Each libc call the installer made to sync a folder, in order: open, F_FULLFSYNC, fsync and close.</summary>
+    public List<string> SyncCalls { get; } = [];
+
     // Each file whose durability is tracked (TrackDurability), by path on the machine: its bytes as its folder's last sync
     // left them, or null when it was not there then.
     private readonly Dictionary<string, byte[]?> _durable = new(StringComparer.Ordinal);
@@ -97,8 +104,8 @@ internal sealed partial class FakeMachine
         }
     }
 
-    // InstallerMachine.SyncFolderOnDisk: kept, then failed as DirectorySyncFailure says, or the folder's tracked files made
-    // durable as they are now.
+    // InstallerMachine.SyncFolderOnDisk: kept, then failed as DirectorySyncFailure says, or the installer's own sync run
+    // over this machine's libc (SyncCalls).
     private void SyncFolder(string onDisk)
     {
         var folder = onDisk[Root.TrimEnd('/').Length..];
@@ -110,10 +117,42 @@ internal sealed partial class FakeMachine
             throw new IOException($"Could not sync the folder {onDisk} to disk (fsync: {failure}).");
         }
 
-        foreach (var path in _durable.Keys.Where(path => Path.GetDirectoryName(path) == folder).ToArray())
+        InstallerMachine.SyncFolder(onDisk, Os == InstallerOs.MacOS, LibcFor(folder));
+    }
+
+    // libc's calls for syncing the folder, each kept in SyncCalls. The one that makes its tracked files durable as they
+    // are now is fsync on Linux, and F_FULLFSYNC on a Mac, which fails as FullFsyncError says: a Mac's fsync leaves them
+    // in the drive's cache, which a power loss loses. Linux has no F_FULLFSYNC (EINVAL).
+    private FolderSyncCalls LibcFor(string folder)
+    {
+        const int descriptor = 3;
+        var mac = Os == InstallerOs.MacOS;
+
+        int Call(string name, int? error, bool durable)
         {
-            _durable[path] = Exists(path) ? File.ReadAllBytes(OnDisk(path)) : null;
+            SyncCalls.Add(name);
+            if (error is { } errno)
+            {
+                Marshal.SetLastPInvokeError(errno);
+                return -1;
+            }
+
+            if (durable)
+            {
+                foreach (var path in _durable.Keys.Where(path => Path.GetDirectoryName(path) == folder).ToArray())
+                {
+                    _durable[path] = Exists(path) ? File.ReadAllBytes(OnDisk(path)) : null;
+                }
+            }
+
+            return 0;
         }
+
+        return new(
+            (_, _) => Call("open", null, durable: false) == 0 ? descriptor : -1,
+            _ => Call("F_FULLFSYNC", mac ? FullFsyncError : 22, durable: mac),
+            _ => Call("fsync", null, durable: !mac),
+            _ => Call("close", null, durable: false));
     }
 
     /// <summary>The same machine, with <paramref name="userName"/> running the installer without sudo.</summary>

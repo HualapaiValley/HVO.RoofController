@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the old release, so `upgrade` to that release, or an older installer's install, wizard or `--plan`, could deploy the
   older controller again without `rollback`. The record now says the new release from before the upgrade's first
   change, marked `upgradingFrom` until it finishes, and its folder is synced to disk before that change, so a power
-  loss does not take it back; an upgrade that cannot sync it stops (exit 1) with nothing else changed. `upgrade` again
+  loss does not take it back (on a Mac with `F_FULLFSYNC`, never `fsync` in its place, so the record's folder must be
+  on a file system that supports it, as APFS on the Mac's own drive does); an upgrade that cannot sync it stops
+  (exit 1) with nothing else changed. `upgrade` again
   finishes it, `rollback` goes back one release (with that release's files only), and anything older is refused
   (exit 3), by older installers too. Until it is finished or rolled back, another release is refused as well (exit 3),
   so that `rollback` still goes back to the controller the deploy script kept (#131).
