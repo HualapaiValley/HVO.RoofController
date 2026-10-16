@@ -108,7 +108,7 @@ public static class Ownership
 
 /// <summary>
 /// The install record: written last, once everything before it is in place, and only when it would say something new
-/// (the times it holds do not count).
+/// (the times it holds do not count). An upgrade marks it first (<see cref="MarkUpgradeStarted"/>).
 /// </summary>
 public sealed class RecordStep(InstallScope scope, string path, Func<InstallContext, InstallRecord?, InstallRecord> build) : PlanStep
 {
@@ -160,6 +160,26 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Before the run's first change, when the record here has an older release than the run's: the record says the run's
+    /// release from then on (<see cref="InstallRecord.UpgradeStarted"/>). A run that stops part way, with the new controller
+    /// deployed and the kiosk not, say, then never leaves the newer release under a record of the older one, which an
+    /// upgrade or an older installer would take as the release to go back to. This step clears the mark at the end.
+    /// </summary>
+    public void MarkUpgradeStarted(InstallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var (existing, _) = InstallRecord.Load(context.Machine, path);
+        if (existing is null || !RoofSemVer.IsValid(context.Version) || !RoofSemVer.IsOlder(existing.Version, context.Version))
+        {
+            return;
+        }
+
+        var record = existing.UpgradeStarted(context.Version) with { UpdatedAt = context.Time.GetUtcNow() };
+        context.Machine.WriteAtomically(path, record.ToJson(), ModeFor(scope));
+        context.Log.Write($"Wrote {path}: version {record.Version}, its upgrade from {existing.Version} not finished yet.");
+    }
+
     private static UnixFileMode ModeFor(InstallScope scope) => scope == InstallScope.System ? Modes.File : Modes.PrivateFile;
 
     private static string DescribeChange(InstallRecord before, InstallRecord after)
@@ -169,7 +189,9 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
             return $"roles: {Names(before.Roles)} → {Names(after.Roles)}";
         }
 
-        return before.Version != after.Version ? $"version {before.Version} → {after.Version}" : "the choices changed";
+        return before.Version != after.Version ? $"version {before.Version} → {after.Version}"
+            : before.UpgradingFrom is { } from && after.UpgradingFrom is null ? $"the upgrade from {from} to {after.Version} finishes"
+            : "the choices changed";
     }
 
     private static string Names(IReadOnlyList<InstallRole> roles) => roles.Count == 0 ? "none" : string.Join(", ", roles.Select(InstallRoles.Name));

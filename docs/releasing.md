@@ -260,8 +260,8 @@ A release is trusted as every HVO product's is, by the shared
   ([Before publishing](#before-publishing)).
 - **`latest`** moves only for the newest final release: never for a release candidate, a dry run or a fix to an older
   version ([Publishing](#publishing)).
-- **No downgrade.** `hvo-roof-install upgrade` refuses a release older than the one installed, and only `rollback`
-  goes back ([Routine upgrades](install.md#routine-upgrades)).
+- **No downgrade.** `hvo-roof-install upgrade` refuses a release older than the one installed, including after an
+  upgrade that stopped part way, and only `rollback` goes back ([Routine upgrades](install.md#routine-upgrades)).
 
 ## release.json
 

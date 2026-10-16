@@ -298,7 +298,9 @@ public static class PlanBuilder
     /// <c>hvo-roof-install rollback</c>: what <paramref name="record"/> installed in its scope, put back to the release
     /// before, which the context's release is. The controller is swapped with the one the deploy script kept (nothing is
     /// pulled for it), the kiosk, hvo-roof and the Mac app with the programs kept beside them (or the release's), the
-    /// installer with its own, and the record says it went back from <paramref name="rolledBackFrom"/>.
+    /// installer with its own, and the record says it went back from <paramref name="rolledBackFrom"/>. Each is checked
+    /// against the release before's own (the controller by its image's digest, the programs by their SHA-256) and left as
+    /// it is when it is that already, as after an upgrade that stopped part way.
     /// </summary>
     public static InstallPlan BuildRollback(InstallerMachine machine, MachineSurvey survey, InstallRecord record, string rolledBackFrom)
     {
@@ -341,7 +343,8 @@ public static class PlanBuilder
             Version = context.Version,
             InstallerVersion = context.Version,
             PreviousVersion = null,
-            RolledBackFrom = rolledBackFrom
+            RolledBackFrom = rolledBackFrom,
+            UpgradingFrom = null
         }));
         return new InstallPlan(steps);
     }
@@ -410,6 +413,7 @@ public static class PlanBuilder
                 Roles = [],
                 PreviousVersion = null,
                 RolledBackFrom = null,
+                UpgradingFrom = null,
                 UninstalledAt = existing?.UninstalledAt ?? context.Time.GetUtcNow()
             }));
         }

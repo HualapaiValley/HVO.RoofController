@@ -139,11 +139,19 @@ internal static class LifecycleCommands
         var session = await StartAsync(host, scope, planOnly, release, cancellationToken).ConfigureAwait(false);
         var record = Installed(host, session.Survey, scope, "upgrade", planOnly);
         var target = version ?? await release.LatestVersionAsync(machine, cancellationToken).ConfigureAwait(false);
+
+        // An upgrade that stopped part way has its new release in the record already (RecordStep.MarkUpgradeStarted): its
+        // controller may run it, so the release it started from is older too.
         if (RoofSemVer.IsOlder(target, record.Version))
         {
-            throw new InstallerRefusedException(
-                $"{record.Version} is installed here, newer than {target}: an upgrade never goes back. To go back to the release before, {Sudo(scope)}{Installer.CommandName} rollback.");
+            throw new InstallerRefusedException(record.UpgradingFrom is { } started
+                ? $"The upgrade from {started} to {record.Version} did not finish here, and parts of {record.Version} may be in place, newer than {target}: an upgrade never goes back. "
+                    + $"Finish it with {Sudo(scope)}{Installer.CommandName} upgrade --version {record.Version}, or go back to {started} with {Sudo(scope)}{Installer.CommandName} rollback."
+                : $"{record.Version} is installed here, newer than {target}: an upgrade never goes back. To go back to the release before, {Sudo(scope)}{Installer.CommandName} rollback.");
         }
+
+        // What the upgrade notes start after: the release an unfinished upgrade started from, else the one installed.
+        var from = record.UpgradingFrom ?? record.Version;
 
         var options = new Installer.RunOptions(null, planOnly, releaseFolder);
         var answers = record.ToAnswers();
@@ -155,15 +163,23 @@ internal static class LifecycleCommands
         if (target == session.Version)
         {
             // This installer is the release's: it installs what is recorded. Handed over to, the installer before it has
-            // shown the upgrade notes; run by the person, it shows them.
-            if (record.Version == target)
+            // shown the upgrade notes; run by the person, it shows them, again when it finishes an upgrade that stopped.
+            if (from == target)
             {
                 host.Out.WriteLine($"{target} is installed here: checking that everything is as it should be.");
             }
-            else if (machine.Environment(ContinuedVariable) != target)
+            else
             {
-                ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), record.Version, target);
-                host.Out.WriteLine();
+                if (record.Version == target)
+                {
+                    host.Out.WriteLine($"The upgrade from {from} to {target} did not finish here: finishing it.");
+                }
+
+                if (machine.Environment(ContinuedVariable) != target)
+                {
+                    ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), from, target);
+                    host.Out.WriteLine();
+                }
             }
 
             return planOnly
@@ -178,11 +194,15 @@ internal static class LifecycleCommands
                 $"{installer} was put in place as release {target}'s installer, but it is {session.Version}: download release {target}'s installer from {ReleaseManifest.PageUri(target)} and run it.");
         }
 
-        host.Out.WriteLine(record.Version == target ? $"{target} is installed here: its installer checks it." : $"{record.Version} is installed here; {target} replaces it.");
+        host.Out.WriteLine(
+            from == target ? $"{target} is installed here: its installer checks it."
+            : record.Version == target ? $"The upgrade from {from} to {target} did not finish here: its installer finishes it."
+            : record.UpgradingFrom is not null ? $"The upgrade from {from} to {record.Version} did not finish here; {target} replaces it."
+            : $"{record.Version} is installed here; {target} replaces it.");
         session.Version = target;
-        if (record.Version != target)
+        if (from != target)
         {
-            ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), record.Version, target);
+            ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), from, target);
         }
 
         host.Out.WriteLine($"Release {target}: {ReleaseManifest.PageUri(target)}");
@@ -243,7 +263,9 @@ internal static class LifecycleCommands
             throw new InstallerRefusedException($"{record.Version} is the first release installed here: there is no release before it to go back to.");
         }
 
-        host.Out.WriteLine($"{record.Version} is installed here; going back to {previous}, the release before.");
+        host.Out.WriteLine(record.UpgradingFrom is { } started
+            ? $"The upgrade from {started} to {record.Version} did not finish here; going back to {previous}, the release before."
+            : $"{record.Version} is installed here; going back to {previous}, the release before.");
         host.Out.WriteLine();
         session.Version = previous;
         var plan = PlanBuilder.BuildRollback(machine, session.Survey, record, record.Version);
