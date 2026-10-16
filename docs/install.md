@@ -222,6 +222,9 @@ afterwards. It refuses the installer unless:
 - its attestation, when `gh` is installed and signed in, says the release workflow built it from the release's tag;
 - its `--version` is the release's.
 
+`SHA256SUMS` and the attestation are the whole of a release's trust, the same for every HVO product: nothing else signs
+it ([Trust](releasing.md#trust)).
+
 It then starts the installer: with sudo for the machine's roles (the controller, a rig on Linux and the kiosk), and as
 you for yours.
 
@@ -299,7 +302,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here that is newer than the installer; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -1084,10 +1087,13 @@ Upgrading from 4.0.0 to 4.0.1.
 …
 ```
 
-An upgrade never goes back: a release older than the one installed is refused, and [Rolling back](#rolling-back) is
-the way back. The release that is installed already is checked, and repaired, as a second run of the installer would
-be: "4.0.1 is installed here: checking that everything is as it should be." So after a failed step or Ctrl+C,
-`upgrade` again carries on, with the new installer already in place.
+An upgrade never goes back: a release older than the one installed is refused (exit 3) and nothing changes, and
+[Rolling back](#rolling-back) is the way back. That holds for the latest release, `--version` and `--release DIR`
+(`install.sh --from`) alike, and a release candidate is older than its release: 4.0.1-rc.1 comes before 4.0.1. An
+installer older than the release installed does not install over it either. The release that is installed already is
+checked, and repaired, as a second run of the installer would be: "4.0.1 is installed here: checking that everything is
+as it should be." So after a failed step or Ctrl+C, `upgrade` again carries on, with the new installer already in
+place.
 
 ## Rolling back
 

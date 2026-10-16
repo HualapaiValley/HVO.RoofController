@@ -219,6 +219,7 @@ names the images until someone publishes the draft.
 |-------|------------|
 | `hvo-roof-linux-arm64`, `hvo-roof-linux-x64`, `hvo-roof-osx-arm64` | `hvo-roof`, for the Pi, a Linux workstation and an Apple silicon Mac (signed ad hoc) ([Install](cli.md#install)) |
 | `hvo-roof-install-linux-arm64`, `hvo-roof-install-linux-x64`, `hvo-roof-install-osx-arm64` | The installer, for the same three (signed ad hoc) ([Installing](install.md#getting-it)) |
+| `hvo-roof-linux-auth-linux-arm64`, `hvo-roof-linux-auth-linux-x64` | The optional Linux PAM and sudo authentication worker, which the installer puts in place only when it is enabled ([Linux authentication](install-linux-auth.md#files-and-boundaries)) |
 | `hvo-roof-kiosk-<version>-linux-arm64.tar.gz` | The kiosk's program, unit, udev rule and example settings, in a folder of that name ([Install](kiosk.md#install)) |
 | `HVO-Roof-<version>.zip` | The Mac app, signed ad hoc ([Install](mac.md#install)) |
 | `docker-compose.yaml` | The release compose file, each image pinned to its digest ([Deploying with Compose](deployment.md#deploying-with-compose)) |
@@ -241,6 +242,26 @@ gh attestation verify oci://ghcr.io/hualapaivalley/roof-controller:4.0.0 --repo 
 
 `--repo` alone accepts an attestation from any of the repository's workflows, on any branch, such as a dry run's of a
 file with the same name. `--signer-workflow` and `--source-ref` accept only the release workflow's, for that tag.
+
+## Trust
+
+A release is trusted as every HVO product's is, by the shared
+[HVO install and release contract](https://github.com/HualapaiValley/HVO.SkyMonitor/issues/1306):
+
+- **Checksums and provenance.** `SHA256SUMS` gives the SHA-256 of every asset, and build provenance attestations cover
+  every file it lists and both images. `gh attestation verify` shows that this repository's release workflow built a
+  file or an image from the release's tag ([The assets](#the-assets)). `install.sh` checks the installer it downloads
+  against `SHA256SUMS`, and against its attestation when `gh` is signed in
+  ([What install.sh checks](install.md#what-installsh-checks)). Nothing else signs a release: there is no signing key
+  and no signed manifest.
+- **The owner approves, and a person publishes.** The workflow makes a draft and publishes nothing. Its release job
+  runs in the `release` environment, whose required reviewer, the owner, approves each run
+  ([The first release](#the-first-release)); a person then checks the draft and publishes it
+  ([Before publishing](#before-publishing)).
+- **`latest`** moves only for the newest final release: never for a release candidate, a dry run or a fix to an older
+  version ([Publishing](#publishing)).
+- **No downgrade.** `hvo-roof-install upgrade` refuses a release older than the one installed, and only `rollback`
+  goes back ([Routine upgrades](install.md#routine-upgrades)).
 
 ## release.json
 
@@ -287,7 +308,7 @@ What a program needs to know about a release, such as the installer and `install
   after the one installed ([Upgrading](install.md#upgrading)), so an upgrade across several releases shows them all.
   The folder holds `X.Y.Z.md` files alone. It is left out when there are none, which only a release candidate before
   any final release's notes may have.
-- `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `installer`, `kiosk`, `mac-app`,
+- `assets` lists every asset but `release.json` and `SHA256SUMS`, sorted by name. `kind` is `cli`, `installer`, `linux-auth`, `kiosk`, `mac-app`,
   `compose`, `deploy-script` or `install-script`. `platform` is the .NET runtime the file is for, or `null` for a file for any.
 
 ## Before publishing
