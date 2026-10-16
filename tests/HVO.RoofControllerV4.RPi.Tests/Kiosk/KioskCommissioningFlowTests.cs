@@ -138,6 +138,42 @@ public sealed class KioskCommissioningFlowTests
     }
 
     [TestMethod]
+    [DataRow("{}")]
+    [DataRow("{\"userName\":\"fixture-owner\"}")]
+    [DataRow("{\"valid\":null}")]
+    [DataRow("{\"valid\":true}")]
+    [DataRow("{\"valid\":true,\"userName\":null}")]
+    [DataRow("{\"valid\":true,\"userName\":\"\"}")]
+    [DataRow("{\"valid\":true,\"userName\":\"-invalid\"}")]
+    [DataRow("{\"valid\":\"false\"}")]
+    [DataRow("{")]
+    public async Task MalformedNativeResponseRefusesAccessWithoutRetiring(string response)
+    {
+        using var directory=new TemporaryDirectory();
+        var path=directory.File("identity.json"); Seed(path);
+        var socket=directory.File("native.sock");
+        var builder=WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(o=>o.ListenUnixSocket(socket));
+        await using var worker=builder.Build();
+        worker.MapPost("/v1/revalidate",()=>Microsoft.AspNetCore.Http.Results.Text(response,"application/json"));
+        await worker.StartAsync();
+        await using var harness=await KioskHarness.CreateAsync(settings:new Dictionary<string,string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"]=path,
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"]="true",
+            ["RoofControllerSecurity:Identity:LinuxAuth:SocketPath"]=socket
+        },populateUsers:false);
+        var providers=harness.Host.Services.GetRequiredService<RoofProviderAuthService>();
+        var store=harness.Host.Services.GetRequiredService<RoofIdentityStore>();
+        providers.KioskPrincipalIsCurrent(Owner).Should().BeFalse();
+        store.GetKioskCredential()!.State.Should().Be("pending");
+        File.Exists(path+".kiosk-retired").Should().BeFalse();
+        response="{\"valid\":true,\"userName\":\"fixture-owner\"}";
+        providers.KioskPrincipalIsCurrent(Owner).Should().BeTrue();
+        store.GetKioskCredential()!.State.Should().Be("pending");
+    }
+
+    [TestMethod]
     public async Task WorkerUnavailableDoesNotRetireButConfirmedRevocationDoesPermanently()
     {
         using var directory = new TemporaryDirectory();

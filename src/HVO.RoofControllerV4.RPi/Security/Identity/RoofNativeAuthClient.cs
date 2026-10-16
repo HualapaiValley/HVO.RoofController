@@ -67,7 +67,10 @@ public sealed class RoofNativeAuthClient : IDisposable
             using var result = _client.PostAsJsonAsync("/v1/revalidate", new { subject = principal.Subject, enrollmentStamp = principal.EnrollmentStamp, purpose }).GetAwaiter().GetResult();
             if (!result.IsSuccessStatusCode) return null;
             var body = result.Content.ReadFromJsonAsync<RevalidationResponse>().GetAwaiter().GetResult();
-            return body is null ? null : body.Valid && body.UserName == principal.Name;
+            if (body?.Valid is null) return null;
+            if (body.Valid == false) return false;
+            if (!HVO.RoofControllerV4.Common.Models.RoofIdentityContract.IsValidName(body.UserName)) return null;
+            return body.UserName == principal.Name;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException) { return null; }
     }
@@ -114,5 +117,5 @@ public sealed class RoofNativeAuthClient : IDisposable
     }
     public void Dispose() => _client.Dispose();
     private sealed record AssertionResponse(string Assertion);
-    private sealed record RevalidationResponse(bool Valid, string UserName);
+    private sealed record RevalidationResponse(bool? Valid, string? UserName);
 }

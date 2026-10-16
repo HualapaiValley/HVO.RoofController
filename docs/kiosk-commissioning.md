@@ -41,6 +41,12 @@ confirmed rejection retires the credential. Changes are detected on revalidation
 entirely between observations cannot be detected. Transport errors, helper timeouts and unknown PAM failures fail
 closed without claiming confirmed revocation.
 
+When permanent kiosk retirement is intended before changing a Linux account, first disable the owner's controller
+principal through the administrator identity UI/API. That existing path durably retires the kiosk credential even
+if the subsequent external disable/re-enable is never observed. Re-enabling the controller principal does not restore
+the retired PIN; use explicitly approved administrator recovery. Polling more often cannot guarantee observing every
+external change.
+
 Five failed or interrupted checks lock the credential for five minutes. Each guess is saved before verification;
 restart does not clear the counter. Successful verification resets it. Verification is serialized. Random setup
 tokens are device-bound, stored only as hashes in server memory, and expire after five minutes. Concurrent completion
