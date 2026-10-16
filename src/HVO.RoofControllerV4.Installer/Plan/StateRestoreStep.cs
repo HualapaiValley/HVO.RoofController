@@ -42,7 +42,11 @@ public sealed class StateRestoreStep(string path, string purpose, byte[]? conten
         byte[]? current;
         try
         {
-            current = machine.ReadBytes(path);
+            current = machine.ReadRegularBytes(path);
+        }
+        catch (NotARegularFileException error)
+        {
+            return Task.FromResult(new StepCheck(StepChange.Blocked, $"{path} is {error.Kind}: a backup puts back only a file. Move it aside, then run the rollback again"));
         }
         catch (UnauthorizedAccessException)
         {
@@ -67,7 +71,7 @@ public sealed class StateRestoreStep(string path, string purpose, byte[]? conten
         ArgumentNullException.ThrowIfNull(context);
         var machine = context.Machine;
         await ConfirmNoControllerRunsAsync(machine, cancellationToken).ConfigureAwait(false);
-        if (machine.ReadBytes(path) is { } current && (content is null || !current.AsSpan().SequenceEqual(content)))
+        if (machine.ReadRegularBytes(path) is { } current && (content is null || !current.AsSpan().SequenceEqual(content)))
         {
             var kept = $"{path}.rolled-back-from-{rolledBackFrom}-{context.Time.GetUtcNow().UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}";
             machine.WriteAtomically(kept, current, Modes.PrivateFile);

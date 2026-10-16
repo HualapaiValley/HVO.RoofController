@@ -177,7 +177,8 @@ internal static class StateContractGuard
     }
 
     // A file's text, null when it is not there; unreadable when only root can read it and this is a plan without sudo. A
-    // folder where the file should be, or a file root cannot read, is a problem: the run as root must not take it for none.
+    // folder where the file should be, anything else that is not a file (a FIFO, a device, a socket: refused before it is
+    // read, and never waited on), or a file root cannot read, is a problem: the run as root must not take it for none.
     private static (string File, string? Text, bool Unreadable, string? Problem) ReadText(InstallerMachine machine, string file)
     {
         if (machine.DirectoryExists(file))
@@ -187,7 +188,11 @@ internal static class StateContractGuard
 
         try
         {
-            return (file, machine.ReadText(file), false, null);
+            return (file, machine.ReadRegularText(file), false, null);
+        }
+        catch (NotARegularFileException error)
+        {
+            return (file, null, false, $"{file} is {error.Kind}, not a file: it is not a store the controller reads");
         }
         catch (UnauthorizedAccessException) when (!machine.IsRoot)
         {

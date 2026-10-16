@@ -1130,9 +1130,10 @@ Each release declares, for each store, the schema it may write and the schemas i
 (`stateContracts`) and in its controller image's `io.hvo.roof.state-contracts` label
 ([State contracts](releasing.md#state-contracts) in the release guide). A release older than state contracts reads
 identity schemas 1 to its `identityStoreSchema`, and settings schema 1. A store never saved is read by every release.
-A store's file that is a folder, or that root cannot read, is not one any release reads, and is refused as one the
-release cannot read. Only a plan without sudo, which may not read the files, leaves them to the run as root ("which
-only root reads").
+A store's file that is a folder, or anything else that is not a file (a FIFO, a device, a socket), or that root cannot
+read, is not one any release reads, and is refused as one the release cannot read. The installer opens a store's file
+without waiting on it and checks what it opened before it reads anything, so a FIFO there never holds it up. Only a plan
+without sudo, which may not read the files, leaves them to the run as root ("which only root reads").
 
 - **`upgrade`** refuses (exit 3, nothing changed) a release that cannot read a store as it is here, and says which. The
   installer handing over checks before it replaces itself; the new release's installer checks again before it

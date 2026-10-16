@@ -1,3 +1,5 @@
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -912,6 +914,105 @@ public sealed class InstallerStateContractTests
         run.Error.Should().Contain($"{BackupCommands.DefaultFolder} is root:root's, 0720: someone other than root can change what is in it").And.Contain("Nothing was changed.");
         Unchanged(pi, before);
     }
+
+    // #136 N2: a store's file that is not a file (a FIFO, a socket, a device) is refused before anything reads it, and is
+    // never waited on: each of these fails, rather than hangs, should it be.
+
+    [TestMethod]
+    [DataRow("a FIFO")]
+    [DataRow("a socket or a device")]
+    [DataRow("a character device")]
+    public async Task AStoresFile_ThatIsNotAFile_IsRefused_BeforeItIsRead(string kind)
+    {
+        using var pi = await InstalledPiAsync();
+        using var made = NotAFile(pi, IdentityFile, kind);
+
+        var states = await WithoutWaitingAsync(pi, IdentityFile, Task.Run(() => StateContractGuard.Read(pi.Machine, ControllerLayout.System)));
+
+        states[0].Problem.Should().Be($"{IdentityFile} is {kind}, not a file: it is not a store the controller reads");
+    }
+
+    [TestMethod]
+    public async Task AnUpgrade_WhoseStoreIsAFifo_IsRefused_AndChangesNothing_WithoutWaitingOnIt()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        MakeFifo(pi, IdentityFile);
+        var before = State(pi, IdentityFile);
+
+        foreach (var installer in new[] { "4.0.0", NewVersion })
+        {
+            pi.InstallerVersion = installer;
+            var run = await WithoutWaitingAsync(pi, IdentityFile, pi.RunAsync("upgrade"));
+
+            run.ExitCode.Should().Be((int)InstallerExitCode.Refused, $"{installer}: {run}");
+            run.Error.Should().Contain($"Release {NewVersion} cannot read the data here: {IdentityFile} is a FIFO, not a file: it is not a store the controller reads.");
+            Unchanged(pi, before, IdentityFile);
+        }
+
+        pi.Launches.Should().BeEmpty("the installer is not replaced");
+    }
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_OverAStoreThatIsAFifo_IsRefused_AndChangesNothing_WithoutWaitingOnIt()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        MakeFifo(pi, IdentityFile);
+        var before = State(pi, IdentityFile);
+
+        var run = await WithoutWaitingAsync(pi, IdentityFile, pi.RunAsync("rollback", "--restore-backup", "--yes"));
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Output.Should().Contain($"{IdentityFile} is a FIFO: a backup puts back only a file. Move it aside, then run the rollback again");
+        Unchanged(pi, before, IdentityFile);
+    }
+
+    // Makes path a FIFO, a socket (bound, so that it is one) or a link to /dev/null (a character device), in place of its file.
+    private static Socket? NotAFile(FakeMachine pi, string path, string kind)
+    {
+        switch (kind)
+        {
+            case "a FIFO":
+                MakeFifo(pi, path);
+                return null;
+            case "a socket or a device":
+                File.Delete(pi.OnDisk(path));
+                var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                socket.Bind(new UnixDomainSocketEndPoint(pi.OnDisk(path)));
+                return socket;
+            default:
+                File.Delete(pi.OnDisk(path));
+                File.CreateSymbolicLink(pi.OnDisk(path), "/dev/null");
+                return null;
+        }
+    }
+
+    private static void MakeFifo(FakeMachine pi, string path)
+    {
+        File.Delete(pi.OnDisk(path));
+        mkfifo(pi.OnDisk(path), 0b110_000_000).Should().Be(0);
+    }
+
+    // What reading gives, without waiting on a FIFO at fifo: should it wait there, a writer opening the FIFO and closing it
+    // again lets it go on, and the test fails rather than hangs.
+    private static async Task<T> WithoutWaitingAsync<T>(FakeMachine pi, string fifo, Task<T> reading)
+    {
+        if (await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(30))) != reading)
+        {
+            var release = Task.Run(() =>
+            {
+                using var writer = new FileStream(pi.OnDisk(fifo), FileMode.Open, FileAccess.Write);
+            });
+            await Task.WhenAny(release, Task.Delay(TimeSpan.FromSeconds(5)));
+            await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.Fail($"Reading {fifo} waited on it.");
+        }
+
+        return await reading;
+    }
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int mkfifo(string path, uint mode);
 
     // What a run that refuses must leave as it was: every file (the installer, the record, the stores and the backups),
     // and the containers.

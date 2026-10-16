@@ -169,6 +169,25 @@ public sealed class InstallerMachine
         }
     }
 
+    /// <summary>
+    /// The file's bytes, or null when there is no such file, read only when it is a regular file: something else there (a
+    /// FIFO, a device, a socket, a folder) throws <see cref="NotARegularFileException"/> before anything is read, and
+    /// opening it never waits (<see cref="RegularFiles"/>).
+    /// </summary>
+    public byte[]? ReadRegularBytes(string path) => RegularFiles.Read(OnDisk(path), path);
+
+    /// <summary>The file's text, as <see cref="ReadRegularBytes"/> reads it (without a byte order mark), or null when there is no such file.</summary>
+    public string? ReadRegularText(string path)
+    {
+        if (ReadRegularBytes(path) is not { } bytes)
+        {
+            return null;
+        }
+
+        using var reader = new StreamReader(new MemoryStream(bytes, writable: false), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
     /// <summary>The file's or folder's permission bits, or null when it does not exist.</summary>
     public UnixFileMode? GetMode(string path)
     {

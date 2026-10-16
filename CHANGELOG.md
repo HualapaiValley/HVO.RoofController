@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
   `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
   the settings files). `upgrade` and `rollback` refuse (exit 3, nothing changed) a release that cannot read the stores
-  here, and `upgrade` says when a release makes a breaking state change. A store's file that is a folder, or that
-  root cannot read, is refused too; only a plan without sudo leaves it to the run as root. See
+  here, and `upgrade` says when a release makes a breaking state change. A store's file that is a folder, or not a
+  file at all (a FIFO, a device, a socket: refused before anything reads it, and never waited on), or that root
+  cannot read, is refused too; only a plan without sudo leaves it to the run as root. See
   [State contracts](docs/install.md#state-contracts).
 - `upgrade` now backs up the controller's stores before it changes anything, as `backup` does, to
   `/var/backups/hvo-roof`; the record names the backup (`upgradeBackup`). No log, program or image is copied. The
