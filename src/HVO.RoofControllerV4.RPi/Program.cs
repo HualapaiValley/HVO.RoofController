@@ -51,6 +51,14 @@ public class Program
             return RunValidation(args, SecretsDirectory, Console.Out);
         }
 
+        if (args.Contains(RelaysOffCommand.CommandLineSwitch, StringComparer.Ordinal))
+        {
+            // The container's supervisor, while the controller is not running (container/roof-supervisor.sh): every relay
+            // off and verified, through the HAT access the controller uses. Its settings are not validated, so a
+            // controller that cannot start because of them does not stop this.
+            return RunRelaysOff(args, SecretsDirectory, Console.Out);
+        }
+
         WebApplicationBuilder builder;
         try
         {
@@ -117,6 +125,56 @@ public class Program
         {
             // Releases the file watchers of the appsettings and secrets providers; the host is never built.
             configuration?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Runs <see cref="RelaysOffCommand"/> with the settings the controller would load from <paramref name="args"/>
+    /// (without <see cref="RelaysOffCommand.CommandLineSwitch"/>) and <paramref name="secretsDirectory"/>, or, when those
+    /// cannot be read, with the environment, the command line and the secrets directory alone. Writes what it did to
+    /// <paramref name="output"/> and returns the exit code: <see cref="RelaysOffCommand.VerifiedExitCode"/> only when the
+    /// relay register read back with every relay off.
+    /// </summary>
+    internal static int RunRelaysOff(string[] args, string secretsDirectory, TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(output);
+
+        // The switch is not a setting (see RunValidation), and a configuration read once needs no file watchers.
+        var settings = args.Where(arg => arg != RelaysOffCommand.CommandLineSwitch)
+            .Append("--hostBuilder:reloadConfigOnChange=false").ToArray();
+        ConfigurationManager? configuration = null;
+        IConfigurationRoot? fallback = null;
+        try
+        {
+            IConfiguration source;
+            IHostEnvironment environment;
+            try
+            {
+                var builder = CreateBuilder(settings, secretsDirectory);
+                configuration = builder.Configuration;
+                (source, environment) = (configuration, builder.Environment);
+            }
+            catch (Exception ex)
+            {
+                // The controller cannot read them either, so it did not start; one before it may still have left the relays on.
+                output.WriteLine($"{RelaysOffCommand.Prefix} The controller's settings could not be read ({ex.GetType().Name}: {ex.Message}); " +
+                    "the HAT's settings are taken from the environment, the command line and the secrets directory.");
+                (fallback, environment) = RelaysOffCommand.EnvironmentSettings(settings, secretsDirectory);
+                source = fallback;
+            }
+
+            ApplyHardwareDetectionOverrides(source);
+            return RelaysOffCommand.Run(source, environment, output);
+        }
+        catch (Exception ex)
+        {
+            return RelaysOffCommand.Fail(output, $"the relays could not be turned off ({ex.GetType().Name}: {ex.Message})");
+        }
+        finally
+        {
+            configuration?.Dispose();
+            (fallback as IDisposable)?.Dispose();
         }
     }
 
@@ -310,7 +368,7 @@ public class Program
                 .AddOtlpExporter());
     }
 
-    private static void ApplyHardwareDetectionOverrides(ConfigurationManager configuration)
+    private static void ApplyHardwareDetectionOverrides(IConfiguration configuration)
     {
         var section = configuration.GetSection("HardwareDetection");
         if (!section.Exists())

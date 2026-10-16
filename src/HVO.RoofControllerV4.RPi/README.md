@@ -44,6 +44,12 @@ Deploy to the Pi with `deploy-roofcontroller-rpi.sh` (or a `docker-compose.yaml`
 `--validate-deployment`, which checks the configuration, keys and HTTPS certificate without
 starting the host or touching the HAT.
 
+In the container, the supervisor runs the image with `--relays-off` whenever the controller is not
+running: it turns every relay off through the controller's HAT access and verifies the register,
+without the controller's settings checks, and exits 0 only when the register reads back all off
+([docs/deployment.md](../../docs/deployment.md#the-relays-when-the-controller-exits)). Never run it
+while a controller drives the HAT: it would stop that controller's move.
+
 ## API testing with REST Client
 - Install the VS Code REST Client extension (`humao.rest-client`).
 - Launch the app locally with `dotnet run` (or the `watch` task when this folder is open in VS Code).

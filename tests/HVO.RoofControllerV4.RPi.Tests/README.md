@@ -113,6 +113,7 @@ models exactly that register.
 
 | File | Covers |
 |------|--------|
+| `Services/RelaysOffCommandTests` | `--relays-off` as `Program.Main` runs it for the container's supervisor, against the HAT emulator's server: every relay off and verified by read-back in one write, never a relay on, settings the controller refuses or cannot read, failed writes and read-backs, a register bit that stays on, an emulator that cannot be reached, emulator mode the controller would refuse, no I2C bus |
 | `Services/RoofControllerRelayBehaviorTests` | Energize order (opposite off → STOP → direction), limit stops, reversal, repeat commands, telemetry |
 | `Services/RoofControllerRelayVerificationTests` | Read-back mismatch, stuck and unreadable register, supervision register checks, retry, precedence |
 | `Services/RoofControllerNegativeTests` | Contradictory limits, fault interlock, relay guard, commands before `Initialize` |
