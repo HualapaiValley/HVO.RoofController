@@ -69,7 +69,8 @@
   },
   "containerEnv": {
     "ASPNETCORE_ENVIRONMENT": "Development",
-    "DOTNET_ENVIRONMENT": "Development"
+    "DOTNET_ENVIRONMENT": "Development",
+    "ASPNETCORE_HTTP_PORTS": ""
   },
   "forwardPorts": [
     5200,
