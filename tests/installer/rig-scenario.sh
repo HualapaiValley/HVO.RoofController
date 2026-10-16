@@ -832,7 +832,7 @@ push_release_image() {
     PUSHED_IDENTITY_SCHEMA=$(docker image inspect --format '{{index .Config.Labels "io.hvo.roof.identity-schema"}}' "${repository}:${image_version}-${platform#linux/}")
     case "${PUSHED_IDENTITY_SCHEMA}" in
       ""|"<no value>") PUSHED_IDENTITY_SCHEMA=1 ;;
-      1|2) ;;
+      1|2|3) ;;
       *) fail "the test controller image has an unsupported identity schema" ;;
     esac
   fi

@@ -28,10 +28,10 @@ def main():
     parser.add_argument("--installer", required=True, type=Path)
     parser.add_argument("--cli", required=True, type=Path)
     parser.add_argument("--native-worker", type=Path,
-                        help="required for schema2; omit for a genuine schema1 legacy bundle")
+                        help="required for schema2/schema3; omit for a genuine schema1 legacy bundle")
     parser.add_argument("--kiosk", type=Path, help="optional complete published kiosk asset directory")
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--identity-schema", type=int, choices=(1, 2), default=2,
+    parser.add_argument("--identity-schema", type=int, choices=(1, 2, 3), default=2,
                         help="1 only for a genuine legacy image used to prove downgrade refusal")
     args = parser.parse_args()
     if args.identity_schema != 1 and args.native_worker is None:
