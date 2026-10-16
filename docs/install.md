@@ -1109,7 +1109,10 @@ nothing takes the controller back to the release the upgrade started from, excep
 the new installer already in place, finishes it: "The upgrade from 4.0.0 to 4.0.1 did not finish here: finishing it."
 `rollback` goes back to 4.0.0. `upgrade --version 4.0.0` is refused (exit 3) and changes nothing, as are the install,
 the wizard and `--plan` of an installer older than 4.0.1. That includes the installers of releases from before
-`upgradingFrom`, which compare their own release with the record's.
+`upgradingFrom` (4.1.1 and earlier), which compare their own release with the record's, with one gap: they pick the
+record by who runs them, so their `--plan` of the machine's roles, run without `sudo`, checks your own record instead
+of the machine's, and checks nothing when you have none. Such a plan changes nothing, and making the changes needs
+`sudo`, which reads the machine's record and refuses.
 
 While an upgrade is unfinished, no other release goes over it: `upgrade` to another release, and the install, the
 wizard and `--plan` of a newer installer, are refused (exit 3) until it is finished or rolled back. Otherwise the
