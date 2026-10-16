@@ -1064,19 +1064,24 @@ Each installer installs its own release, so the installer hands over to the new 
 2. It reads the schema of each store the controller keeps here, and checks that the new release reads them
    ([State contracts](#state-contracts)). One that does not is refused (exit 3) before anything changes. It also says
    when the new release makes a breaking state change, after which the release installed cannot read a store.
-3. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
+3. As root on Linux, it backs up the controller's stores, as `backup` backs them up, to
+   `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`). A backup that cannot
+   be taken refuses the upgrade (exit 3) with nothing changed: the installer has not replaced itself yet.
+4. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
    and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
    of your own) is refused: download that release's installer and run its `upgrade`.
-4. The new installer installs its release, as `--answers` installs the record's choices
+5. The new installer installs its release, as `--answers` installs the record's choices
    ([Running it again](#running-it-again)):
-   - first, the controller's stores backed up, as `backup` backs them up, to
-     `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`), as root on Linux;
+   - first, the backup it was handed: its file and SHA-256 come with the hand-over, and it checks that the file is
+     that backup, whole, root's, and this machine's of the release installed; one that is not stops the upgrade before
+     the controller is replaced. An installer from before state contracts hands over none, and the new one takes the
+     backup itself, first;
    - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
      controller, checked before the old one is let go and kept as `roof-controller-previous`;
    - a rig's HAT emulator, from the new release;
    - the kiosk's program, keeping the one it replaces as `hvo-roof-kiosk.previous`; and `hvo-roof` and the Mac app,
      keeping the ones they replace beside them.
-5. The record then says the new release, the one before it (`previousVersion`) for a rollback, and the backup
+6. The record then says the new release, the one before it (`previousVersion`) for a rollback, and the backup
    (`upgradeBackup`).
 
 ```text
@@ -1089,6 +1094,8 @@ Upgrade notes for 4.0.1:
 The stores here: the identity store, schema 1; the settings files, schema 1. Release 4.0.1 reads them.
 Release 4.0.1: https://github.com/HualapaiValley/HVO.RoofController/releases/tag/v4.0.1
 
+Creating file /var/backups/hvo-roof/hvo-roof-roofpi-20261001T090000Z-before-4.0.1.tar.gz…
+Creating file /var/backups/hvo-roof/hvo-roof-roofpi-20261001T090000Z-before-4.0.1.tar.gz: done.
 /usr/local/sbin/hvo-roof-install: release 4.0.1's, 0755.
 Creating file /usr/local/sbin/hvo-roof-install…
 Creating file /usr/local/sbin/hvo-roof-install: done.
@@ -1121,6 +1128,9 @@ Each release declares, for each store, the schema it may write and the schemas i
 (`stateContracts`) and in its controller image's `io.hvo.roof.state-contracts` label
 ([State contracts](releasing.md#state-contracts) in the release guide). A release older than state contracts reads
 identity schemas 1 to its `identityStoreSchema`, and settings schema 1. A store never saved is read by every release.
+A store's file that is a folder, or that root cannot read, is not one any release reads, and is refused as one the
+release cannot read. Only a plan without sudo, which may not read the files, leaves them to the run as root ("which
+only root reads").
 
 - **`upgrade`** refuses (exit 3, nothing changed) a release that cannot read a store as it is here, and says which. The
   installer handing over checks before it replaces itself; the new release's installer checks again before it
@@ -1133,8 +1143,11 @@ identity schemas 1 to its `identityStoreSchema`, and settings schema 1. A store 
   release makes a breaking change. It is the archive `backup` writes ([Backing up and restoring](#backing-up-and-restoring)):
   the controller's and the kiosk's small files, with their secrets, and no log, program or image. There is no bulk data
   to copy. The record names it (`upgradeBackup`). The backup stays until you remove it; keep it as you keep any backup
-  ([Where to keep it](#backing-up-and-restoring)). If it cannot be written (a folder that someone other than root can
-  change, say), the upgrade stops there, before anything else changes.
+  ([Where to keep it](#backing-up-and-restoring)). The installer handing over takes it before it replaces itself. If it
+  cannot be written (a folder that someone other than root can change, say), the upgrade is refused (exit 3) before
+  anything else changes. So is one with a store's file there that a backup cannot hold (a link, which a backup never
+  follows): put the file itself in its place, then upgrade. The backup's manifest names the stores' files that were not
+  there (`absent`), so a rollback can tell a store never saved from one the backup left out.
 - **`rollback`** refuses (exit 3, nothing changed) to go back to a release that cannot read a store as it is here, and
   says how to go on: [Rolling back](#rolling-back).
 
@@ -1189,11 +1202,16 @@ With `--restore-backup`:
    passwords, PINs, API keys, sessions and settings added or changed), and access removed since comes back. At a
    terminal it asks first; without one, `--yes` goes ahead without asking. `--plan` shows the steps and changes
    nothing.
-3. The deploy script's `--stop` stops the controller after a verified Stop of the idle roof.
-4. Each file of a store the release before cannot read goes back as the backup has it, with its mode and owner. The
-   file it replaces is kept beside it, root's and `0600`, as `<file>.rolled-back-from-<version>-<UTC time>`; a file
-   the backup does not have is moved there. Nothing else in the store's folder changes, so a kiosk's retired
-   commissioning stays retired. A store the release before reads as it is stays as it is.
+3. The deploy script's `--stop` stops the controller after a verified Stop of the idle roof. Docker must say the
+   controller is stopped, or not there: when it cannot say (it is not running, say), that is never taken for no
+   controller. The rollback stops there, with nothing put back, and the same command carries on once Docker answers.
+4. Each file of a store the release before cannot read goes back as the backup has it, with its mode and owner, once
+   Docker says again that the controller is stopped. The file it replaces is kept beside it, root's and `0600`, as
+   `<file>.rolled-back-from-<version>-<UTC time>`; a file the backup's manifest says was not there (`absent`) is
+   moved there. A file the backup neither holds nor names as not there (a link `backup` left out, or a backup from an
+   installer before it named them) is never removed: the rollback is refused, with nothing changed. Nothing else in
+   the store's folder changes, so a kiosk's retired commissioning stays retired. A store the release before reads as
+   it is stays as it is.
 5. The rollback then goes on as above: the deploy script's `--rollback` puts the kept controller back, and checks it.
    If a step stops part way, the controller stays stopped and the roof idle: run the same command again to carry on.
 
@@ -1212,7 +1230,7 @@ before it changes anything: [State contracts](#state-contracts)):
 
 The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,
 written whole or not at all. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
-SHA-256, the host and the release. `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
+SHA-256, the host and the release, and the files of the controller's stores that were not there (`absent`). `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
 only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs
 up or a purge removes, `/opt/hvo-roof-kiosk` included. Before it keeps the archive, it reads it back as a restore
 would: one a restore could not read is not kept, and the backup fails.
@@ -1269,7 +1287,8 @@ changes nothing; `--release DIR` reads the release from a folder.
 
 The controller goes first. When it does not stop, nothing else is removed: the kiosk goes on showing the roof, and
 `uninstall` again carries on once the roof is idle. The deploy script stops only a running controller: one that is
-paused or restarting blocks the uninstall, which changes nothing; start it or let it settle, then uninstall.
+paused or restarting blocks the uninstall, which changes nothing; start it or let it settle, then uninstall. So does a
+controller Docker cannot answer for (Docker is not running, say): it may be running, and is never taken for none.
 
 The data stays: the settings, secrets, certificate and CA, the people and the kiosk's device key. The record says when
 it was uninstalled, and keeps the choices, so an install that follows can offer them again. The `hvo-kiosk` user, the
