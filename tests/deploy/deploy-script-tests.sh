@@ -2037,6 +2037,33 @@ seed_image() {
     "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
 }
 
+# assert_loaded_a_private_copy <SHA-256> [<TMPDIR>]: Docker loaded one archive, and it was not IMAGE_ARCHIVE but the
+# script's own copy, in a folder of its own in TMPDIR (by default ${WORK}) that only its user can open (0700, the copy
+# 0600), holding the bytes with that SHA-256 when Docker read it; and the copy is gone.
+assert_loaded_a_private_copy() {
+  local folder=${2:-${WORK}}
+  jq -e --arg sha256 "$1" --arg folder "$(cd "${folder}" && pwd -P)" \
+    '(.loads // []) | length == 1 and (.[0] | (.path | startswith($folder + "/hvo-roof-archive.") and endswith("/image.oci.tar"))
+       and .sha256 == $sha256 and .mode == "0o600" and .folder_mode == "0o700")' "${FAKE_STATE_DIR}/state.json" >/dev/null \
+    || fail_test "expected one load of a private copy, SHA-256 $1, in ${folder}: $(jq -c '.loads' "${FAKE_STATE_DIR}/state.json")"
+  docker_calls load | jq -e -s --arg path "$(jq -r '.loads[0].path // ""' "${FAKE_STATE_DIR}/state.json")" \
+    'length == 1 and .[0] == ["load", "-i", $path]' >/dev/null || fail_test "expected one load -i of that copy: $(docker_calls load)"
+  assert_no_private_copy "${folder}"
+}
+
+# assert_no_private_copy [<TMPDIR>]: the script left no copy of an archive (nor its folder) in TMPDIR.
+assert_no_private_copy() {
+  [[ -z "$(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-archive.*')" ]] \
+    || fail_test "the script left its copy of the archive in ${1:-${WORK}}: $(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-archive.*')"
+}
+
+# reset_fake_docker: Docker as a test starts with, the old controller running.
+reset_fake_docker() {
+  echo '{"containers": {}}' > "${FAKE_STATE_DIR}/state.json"
+  : > "${FAKE_STATE_DIR}/calls.log"
+  seed_container roof-controller old true 8443:8443
+}
+
 # assert_runs_loaded_image <image ID>: the pre-flight and the controller run the image by that ID for linux/arm64,
 # never pulling, and the controller carries the label naming the released image.
 assert_runs_loaded_image() {
@@ -2060,15 +2087,15 @@ test_archive_mode_loads_checks_and_deploys_the_released_image_by_its_id_without_
 
   assert_status 0
   assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64 (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG})"
-  assert_output_contains "[load] Loading ${ARCHIVE} into Docker context 'test-context' (nothing is pulled)..."
+  assert_output_contains "[load] Checking a copy of ${ARCHIVE} that only this user can change (SHA-256 $(sha256_hex < "${ARCHIVE}")): Docker loads that copy"
+  assert_output_contains "[load] Loading the checked copy of ${ARCHIVE} into Docker context 'test-context' (nothing is pulled)..."
   # The classic image store gives the image its config's digest as its ID.
   assert_output_contains "[load] ${ARCHIVE_DIGEST} for linux/arm64, image ${ARCHIVE_CONFIG}: version 4.0.0, commit 0123456789ab"
   assert_output_contains "Deployment complete and verified at https://pi.test:8443"
   assert_container roof-controller new true unless-stopped
   assert_container roof-controller-previous old false no
   [[ -z "$(docker_calls pull)$(docker_calls buildx)$(docker_calls save)" ]] || fail_test "archive mode pulled, built or saved an image"
-  docker_calls load | jq -e -s --arg archive "${ARCHIVE}" 'length == 1 and .[0] == ["load", "-i", $archive]' >/dev/null \
-    || fail_test "expected one load of ${ARCHIVE}: $(docker_calls load)"
+  assert_loaded_a_private_copy "$(sha256_hex < "${ARCHIVE}")"
   grep -F '"--context", "test-context", "load"' "${FAKE_STATE_DIR}/calls.log" >/dev/null \
     || fail_test "the load did not use the Pi's Docker context"
   (( $(call_index '"load"') < $(call_index '"--validate-deployment"') )) || fail_test "the pre-flight ran before the load"
@@ -2341,6 +2368,83 @@ test_a_failed_load_changes_nothing() {
   [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls pull)" ]] \
     || fail_test "the controller was stopped, renamed, removed or run, or an image pulled"
   assert_container roof-controller old true unless-stopped
+  assert_no_private_copy
+}
+
+# F3: Docker loads the bytes the script checked, and no others. Someone who can write to the folder the archive is in
+# replaces it, or writes over it in place, once the script has checked it and before Docker reads it (FAKE_ON_LOAD):
+# Docker still reads only the script's copy, the bytes it checked.
+test_an_archive_changed_after_its_check_is_never_what_docker_loads() {
+  offline_archive || return
+  local pristine="${WORK}/pristine.oci.tar" other="${WORK}/other.oci.tar" sha256 change
+  cp "${ARCHIVE}" "${pristine}"
+  sha256=$(sha256_hex < "${pristine}")
+  # The other archive: the release's with a second image under another tag, which the check would refuse.
+  edit_archive 'd = read("manifest.json"); d.append({**d[0], "RepoTags": ["docker.io/library/other:latest"]}); write("manifest.json", d)'
+  mv "${ARCHIVE}" "${other}"
+  for change in "cp '${other}' '${ARCHIVE}.new' && mv '${ARCHIVE}.new' '${ARCHIVE}'" "cat '${other}' > '${ARCHIVE}'"; do
+    cp "${pristine}" "${ARCHIVE}"
+    reset_fake_docker
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "IMAGE_ARCHIVE_SHA256=${sha256}" \
+      "FAKE_ON_LOAD=${change}"
+
+    assert_status 0
+    assert_output_contains "[load] Checking a copy of ${ARCHIVE} that only this user can change (SHA-256 ${sha256}, as release.json gives it): Docker loads that copy"
+    [[ "$(sha256_hex < "${ARCHIVE}")" == "$(sha256_hex < "${other}")" ]] || fail_test "the archive was not changed before the load (${change})"
+    assert_loaded_a_private_copy "${sha256}"
+    assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+    assert_container roof-controller new true unless-stopped
+  done
+}
+
+test_an_archive_without_the_sha256_release_json_gives_it_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  local sha256 other_sha256=${OTHER_DIGEST#sha256:}
+  sha256=$(sha256_hex < "${ARCHIVE}")
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "IMAGE_ARCHIVE_SHA256=${other_sha256}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE} is not the release's archive: its SHA-256 is ${sha256}, and IMAGE_ARCHIVE_SHA256 (release.json's) is ${other_sha256}. Nothing was changed." "another SHA-256"
+  assert_no_private_copy
+
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "IMAGE_ARCHIVE_SHA256=$(tr a-f A-F <<<"${sha256}")"
+  assert_archive_refused "IMAGE_ARCHIVE_SHA256 must be the archive's SHA-256 from release.json: 64 lower-case hex digits. Nothing was changed." "an upper-case SHA-256"
+}
+
+test_no_room_for_the_private_copy_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local full='BASH_FUNC_df%%=() { printf "%s\n" "Filesystem 1024-blocks Used Available Capacity Mounted on" "fake 100000 99000 1000 99% /"; }'
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "${full}"
+  assert_archive_refused "There is not room in $(cd "${WORK}" && pwd -P) for a private copy of IMAGE_ARCHIVE ${ARCHIVE}: it needs 17 MiB (the archive and 16 MiB more), and 0 MiB is free. The script loads only a copy of its own, so that Docker reads the bytes it checked. Free some room there, or set TMPDIR to a folder with room. Nothing was changed." "no room"
+  assert_no_private_copy
+}
+
+test_a_temporary_folder_others_can_change_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  mkdir "${WORK}/shared"
+  chmod 0777 "${WORK}/shared"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${WORK}/shared"
+  assert_archive_refused "is not private: someone other than this user and root could change it or a folder above it, and so the archive after it is checked. Set TMPDIR to a folder only you (or root) can change, such as /tmp. Nothing was changed." "a folder anyone can write to"
+  assert_no_private_copy "${WORK}/shared"
+
+  # Sticky, as /tmp is: no one else can rename or remove the script's folder in it.
+  chmod 1777 "${WORK}/shared"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${WORK}/shared"
+  assert_status 0
+  assert_loaded_a_private_copy "$(sha256_hex < "${ARCHIVE}")" "${WORK}/shared"
+}
+
+test_a_dry_run_leaves_no_copy_of_the_archive() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" -- --dry-run
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}"
+  [[ -z "$(docker_calls load)" ]] || fail_test "a dry run loaded the archive"
+  assert_no_private_copy
 }
 
 test_image_archive_needs_image_ref_and_a_file_before_any_docker_call() {

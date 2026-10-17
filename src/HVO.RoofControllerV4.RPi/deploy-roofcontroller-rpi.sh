@@ -37,10 +37,12 @@ set -euo pipefail
 #   nothing is built, so the script runs without a checkout. Everything from the pre-flight on is the same. On the Pi
 #   itself, set DOCKER_CONTEXT=default: the remote check then runs from the Pi, so check from another machine afterwards
 #   too (--verify-remote). With IMAGE_ARCHIVE=<file> as well (the release's offline archive of that image for
-#   BUILD_PLATFORM, <image>-<version>-linux-<arch>.oci.tar), nothing is pulled: before Docker reads it, the archive
-#   must hold IMAGE_REF's digest and its image for BUILD_PLATFORM and nothing else (index.json and manifest.json name
-#   that one image, under IMAGE_REF's name or none, and every blob is the one its digest names); the image Docker then
-#   holds is deployed by its ID (docker run --pull never), only if that ID is the digest's or that image's, and the
+#   BUILD_PLATFORM, <image>-<version>-linux-<arch>.oci.tar), nothing is pulled: the archive is copied once into a folder
+#   only this user (and root) can change, in TMPDIR, and Docker loads that copy, never the file itself. Before Docker
+#   reads it, the copy must hold IMAGE_REF's digest and its image for BUILD_PLATFORM and nothing else (index.json and
+#   manifest.json name that one image, under IMAGE_REF's name or none, and every blob is the one its digest names), and
+#   with IMAGE_ARCHIVE_SHA256=<hex> (the archive's SHA-256 in release.json) it must have that SHA-256; the image Docker
+#   then holds is deployed by its ID (docker run --pull never), only if that ID is the digest's or that image's, and the
 #   container carries the label io.hvo.roof.release-image=<IMAGE_REF>. --rollback, --stop and --verify-remote ignore
 #   IMAGE_REF and IMAGE_ARCHIVE, and do not check them.
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
@@ -106,6 +108,9 @@ IMAGE_TAG=${IMAGE_TAG:-hvov9/roof-controller:v4}
 IMAGE_REF=${IMAGE_REF:-}
 # The release's offline archive of IMAGE_REF's image, on this machine, loaded in place of the pull: nothing is pulled.
 IMAGE_ARCHIVE=${IMAGE_ARCHIVE:-}
+# Its SHA-256 from release.json (the installer gives it), which the copy the script checks and loads must have; empty
+# to check what the archive holds alone.
+IMAGE_ARCHIVE_SHA256=${IMAGE_ARCHIVE_SHA256:-}
 # The label that names the released image a container loaded from IMAGE_ARCHIVE runs (it runs by its ID).
 RELEASE_IMAGE_LABEL=io.hvo.roof.release-image
 # Platform the image is built (or pulled) for: the Pi's. linux/amd64 is for a test rig on a PC, in HAT emulator mode
@@ -333,8 +338,11 @@ if [[ -n "${IMAGE_ARCHIVE}" && "${ROLLBACK}" != "true" && "${STOP}" != "true" &&
     || fail "IMAGE_ARCHIVE is a release's offline archive of an image, and needs IMAGE_REF, that image by its digest (from release.json), to check it against. Nothing was changed."
   [[ "${IMAGE_ARCHIVE}" != -* && -f "${IMAGE_ARCHIVE}" && -r "${IMAGE_ARCHIVE}" ]] \
     || fail "IMAGE_ARCHIVE '${IMAGE_ARCHIVE}' is not a file this script can read. Nothing was changed."
+  [[ -z "${IMAGE_ARCHIVE_SHA256}" || "${IMAGE_ARCHIVE_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "IMAGE_ARCHIVE_SHA256 must be the archive's SHA-256 from release.json: 64 lower-case hex digits. Nothing was changed."
 else
   IMAGE_ARCHIVE=""
+  IMAGE_ARCHIVE_SHA256=""
 fi
 
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
@@ -1127,15 +1135,39 @@ else:
 #  - manifest.json is that one image: the platform's config and its layers, in order, tagged IMAGE_REF's
 #    <repository>:<tag> or not at all;
 #  - every blob is the one its digest names, layers included.
-# ARCHIVE_MANIFEST and ARCHIVE_CONFIG are then the platform's manifest and config: with the index, the IDs Docker gives
-# the image it loads (the containerd image store's is the index's, or the manifest's for the platform; the classic
-# store's is the config's). Run before any Docker call, and in a dry run too: it only reads the archive, and writes only
-# the files it reads into a folder of its own (ARCHIVE_CHECK_DIR, removed on exit).
+# What is checked is what Docker loads: the archive is copied once, first, into a folder of the script's own that no one
+# but this user and root can change (ARCHIVE_DIR, private_folder), and that copy (ARCHIVE_COPY) is checked, has its
+# SHA-256 compared with IMAGE_ARCHIVE_SHA256 when it is given, and is the file docker load reads. Whatever then happens
+# to IMAGE_ARCHIVE (replaced, or written over in place) changes nothing Docker reads. ARCHIVE_MANIFEST and ARCHIVE_CONFIG
+# are then the platform's manifest and config: with the index, the IDs Docker gives the image it loads (the containerd
+# image store's is the index's, or the manifest's for the platform; the classic store's is the config's). Run before any
+# Docker call, and in a dry run too: it only reads the archive, and writes only into ARCHIVE_DIR, which is removed once
+# Docker has loaded the copy, and on exit.
 ARCHIVE_MANIFEST=""
 ARCHIVE_CONFIG=""
-ARCHIVE_CHECK_DIR=""
+ARCHIVE_DIR=""
+ARCHIVE_COPY=""
+# Room the copy must leave on its file system, for the members the check takes out of it beside it: 16 MiB, in KiB.
+ARCHIVE_HEADROOM_KB=16384
+
+# private_folder <folder>: true when no one but root and this script's user can change <folder>, a physical path (no
+# symbolic link in it), or what it holds: it is this user's folder with mode 0700, and every folder above it is root's or
+# this user's, and writable by no one else unless it is sticky (as /tmp is), so no one else can rename it, or a folder
+# above it, away and put another in its place.
+private_folder() {
+  local folder=$1 user
+  user=$(id -u) || return 1
+  [[ -d "${folder}" && ! -L "${folder}" && -n "$(find "${folder}" -maxdepth 0 -type d -user "${user}" -perm 0700 2>/dev/null)" ]] \
+    || return 1
+  while [[ "${folder}" != / ]]; do
+    folder=$(dirname "${folder}")
+    [[ -n "$(find "${folder}" -maxdepth 0 -type d \( -user 0 -o -user "${user}" \) \
+        \( -perm -1000 -o \( ! -perm -0020 ! -perm -0002 \) \) 2>/dev/null)" ]] || return 1
+  done
+}
+
 check_image_archive() {
-  local folder members member types named names manifest config layer layers blobs expected docker
+  local folder members member types named names manifest config layer layers blobs expected docker size free needed digest
   local digest_pattern='^sha256:[0-9a-f]{64}$' blob_pattern='^blobs/sha256/[0-9a-f]{64}$' image_name image_tag=""
   local release_archive="give the release's archive of that image. Nothing was changed."
   local release_archive_sentence="Give the release's archive of that image. Nothing was changed."
@@ -1148,9 +1180,35 @@ check_image_archive() {
     image_name=""
   fi
 
+  # The copy Docker will load, in a folder of the script's own that only this user and root can change. The folder is
+  # used by its physical path, so no link above it can be pointed elsewhere.
+  folder=$(mktemp -d "${TMPDIR:-/tmp}/hvo-roof-archive.XXXXXX") \
+    || fail "Could not make a folder in ${TMPDIR:-/tmp} to copy IMAGE_ARCHIVE into. Nothing was changed."
+  ARCHIVE_DIR=${folder}
+  folder=$(cd "${folder}" && pwd -P) || fail "Could not open the folder ${ARCHIVE_DIR} to copy IMAGE_ARCHIVE into. Nothing was changed."
+  ARCHIVE_DIR=${folder}
+  private_folder "${folder}" \
+    || fail "The folder IMAGE_ARCHIVE would be copied into, ${folder}, is not private: someone other than this user and root could change it or a folder above it, and so the archive after it is checked. Set TMPDIR to a folder only you (or root) can change, such as /tmp. Nothing was changed."
+  size=$(wc -c < "${IMAGE_ARCHIVE}" | tr -d ' ') || size=""
+  free=$(df -Pk "${folder}" 2>/dev/null | awk 'NR == 2 { print $4 }') || free=""
+  [[ "${size}" =~ ^[0-9]+$ && "${free}" =~ ^[0-9]+$ ]] \
+    || fail "Could not tell the size of IMAGE_ARCHIVE ${IMAGE_ARCHIVE}, or how much room ${folder%/*} has for a copy of it. Nothing was changed."
+  needed=$(( (size + 1023) / 1024 + ARCHIVE_HEADROOM_KB ))
+  (( free >= needed )) \
+    || fail "There is not room in ${folder%/*} for a private copy of IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: it needs $(( (needed + 1023) / 1024 )) MiB (the archive and 16 MiB more), and $(( free / 1024 )) MiB is free. The script loads only a copy of its own, so that Docker reads the bytes it checked. Free some room there, or set TMPDIR to a folder with room. Nothing was changed."
+  ARCHIVE_COPY="${folder}/image.oci.tar"
+  # One read of the archive, into a file only this user can read or write, hashed as it is written.
+  if ! digest=$(umask 077 && tee "${ARCHIVE_COPY}" < "${IMAGE_ARCHIVE}" | sha256_hex) || ! chmod 0600 "${ARCHIVE_COPY}"; then
+    fail "Could not copy IMAGE_ARCHIVE ${IMAGE_ARCHIVE} into ${folder} (see above). Nothing was changed."
+  fi
+  if [[ -n "${IMAGE_ARCHIVE_SHA256}" && "${digest}" != "${IMAGE_ARCHIVE_SHA256}" ]]; then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} is not the release's archive: its SHA-256 is ${digest}, and IMAGE_ARCHIVE_SHA256 (release.json's) is ${IMAGE_ARCHIVE_SHA256}. Nothing was changed."
+  fi
+  echo "[load] Checking a copy of ${IMAGE_ARCHIVE} that only this user can change (SHA-256 ${digest}${IMAGE_ARCHIVE_SHA256:+, as release.json gives it}): Docker loads that copy"
+
   # Its members, by name (folders without their trailing /), each once, and each a file or a folder: no link, device or
   # other special file, whose meaning the loaders and this check could read differently.
-  members=$(tar -tf "${IMAGE_ARCHIVE}" 2>/dev/null | sed 's:/*$::') \
+  members=$(tar -tf "${ARCHIVE_COPY}" 2>/dev/null | sed 's:/*$::') \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} is not a tar archive: ${release_archive}"
   while IFS= read -r member; do
     case "${member}" in
@@ -1167,16 +1225,16 @@ check_image_archive() {
     grep -qxF "${member}" <<<"${members}" \
       || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} has no ${member}: a release's offline archive has oci-layout and index.json, which Docker's containerd image store reads, and manifest.json, which the classic store reads. ${release_archive_sentence}"
   done
-  types=$(tar -tvf "${IMAGE_ARCHIVE}" 2>/dev/null | cut -c 1 | sort -u | tr -d '\n') || types="?"
+  types=$(tar -tvf "${ARCHIVE_COPY}" 2>/dev/null | cut -c 1 | sort -u | tr -d '\n') || types="?"
   [[ "${types}" =~ ^[-d]+$ ]] \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds a link or a special file: a release's offline archive holds files and folders only. ${release_archive_sentence}"
   grep -qxF "blobs/sha256/${IMAGE_DIGEST#sha256:}" <<<"${members}" \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} that IMAGE_REF names: ${release_archive}"
 
-  # Named members only, into a folder of their own: nothing else the archive holds is written anywhere.
-  folder=$(mktemp -d) || fail "Could not make a folder to check IMAGE_ARCHIVE in. Nothing was changed."
-  ARCHIVE_CHECK_DIR=${folder}
-  tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" oci-layout index.json manifest.json "blobs/sha256/${IMAGE_DIGEST#sha256:}" 2>/dev/null \
+  # Named members only, into a folder of their own beside the copy: nothing else the archive holds is written anywhere.
+  folder="${ARCHIVE_DIR}/members"
+  (umask 077 && mkdir "${folder}") || fail "Could not make a folder to check IMAGE_ARCHIVE in. Nothing was changed."
+  tar -xf "${ARCHIVE_COPY}" -C "${folder}" oci-layout index.json manifest.json "blobs/sha256/${IMAGE_DIGEST#sha256:}" 2>/dev/null \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} could not be read (tar -x): ${release_archive}"
   for member in oci-layout index.json manifest.json "blobs/sha256/${IMAGE_DIGEST#sha256:}"; do
     [[ -f "${folder}/${member}" && ! -L "${folder}/${member}" ]] \
@@ -1209,7 +1267,7 @@ check_image_archive() {
   # The index's manifest for BUILD_PLATFORM, its config and its layers.
   manifest=$(archive_json platform "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}" "${BUILD_PLATFORM}" 2>/dev/null) || manifest=""
   if ! [[ "${manifest}" =~ ${digest_pattern} ]] \
-      || ! tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" "blobs/sha256/${manifest#sha256:}" 2>/dev/null \
+      || ! tar -xf "${ARCHIVE_COPY}" -C "${folder}" "blobs/sha256/${manifest#sha256:}" 2>/dev/null \
       || [[ ! -f "${folder}/blobs/sha256/${manifest#sha256:}" || -L "${folder}/blobs/sha256/${manifest#sha256:}" ]] \
       || [[ "$(sha256_hex < "${folder}/blobs/sha256/${manifest#sha256:}")" != "${manifest#sha256:}" ]]; then
     fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} has for ${BUILD_PLATFORM}: give the release's archive for ${BUILD_PLATFORM} (<image>-<version>-linux-${BUILD_PLATFORM#linux/}.oci.tar). Nothing was changed."
@@ -1241,17 +1299,16 @@ check_image_archive() {
 
   # Every blob is the one its digest names: the config and the layers too, so nothing in the archive is left for the
   # loaders to check.
-  if ! tar -xf "${IMAGE_ARCHIVE}" -C "${folder}" "blobs/sha256/${config#sha256:}" 2>/dev/null \
+  if ! tar -xf "${ARCHIVE_COPY}" -C "${folder}" "blobs/sha256/${config#sha256:}" 2>/dev/null \
       || [[ ! -f "${folder}/blobs/sha256/${config#sha256:}" || -L "${folder}/blobs/sha256/${config#sha256:}" ]] \
       || [[ "$(sha256_hex < "${folder}/blobs/sha256/${config#sha256:}")" != "${config#sha256:}" ]]; then
     fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its config ${config} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
   fi
   while IFS= read -r layer; do
-    [[ -z "${layer}" || "$(tar -xOf "${IMAGE_ARCHIVE}" "blobs/sha256/${layer#sha256:}" 2>/dev/null | sha256_hex)" == "${layer#sha256:}" ]] \
+    [[ -z "${layer}" || "$(tar -xOf "${ARCHIVE_COPY}" "blobs/sha256/${layer#sha256:}" 2>/dev/null | sha256_hex)" == "${layer#sha256:}" ]] \
       || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its layer ${layer} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
   done <<<"${layers}"
   rm -rf "${folder}"
-  ARCHIVE_CHECK_DIR=""
   ARCHIVE_MANIFEST=${manifest}
   ARCHIVE_CONFIG=${config}
   echo "[load] ${IMAGE_ARCHIVE} holds ${IMAGE_DIGEST}, with its image for ${BUILD_PLATFORM} (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG}), and nothing else"
@@ -1620,8 +1677,8 @@ on_exit() {
   if [[ -n "${WORK_DIR}" ]]; then
     rm -rf "${WORK_DIR}"
   fi
-  if [[ -n "${ARCHIVE_CHECK_DIR}" ]]; then
-    rm -rf "${ARCHIVE_CHECK_DIR}"
+  if [[ -n "${ARCHIVE_DIR}" ]]; then
+    rm -rf "${ARCHIVE_DIR}"
   fi
   exit "${status}"
 }
@@ -1814,11 +1871,13 @@ fi
 WORK_DIR=$(mktemp -d)
 
 if [[ -n "${IMAGE_ARCHIVE}" ]]; then
-  # Offline: the release's archive, checked above, is loaded into the Pi's Docker, and the image is used only if Docker
-  # gives it one of the IDs the archive's digests name, for the platform this run deploys. Nothing is pulled or built.
-  echo "[load] Loading ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (nothing is pulled)..."
-  dockerc load -i "${IMAGE_ARCHIVE}" \
+  # Offline: the copy of the release's archive checked above, never IMAGE_ARCHIVE itself, is loaded into the Pi's Docker,
+  # and the image is used only if Docker gives it one of the IDs the archive's digests name, for the platform this run
+  # deploys. Nothing is pulled or built. The copy goes once Docker has read it (on exit, if the load fails).
+  echo "[load] Loading the checked copy of ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (nothing is pulled)..."
+  dockerc load -i "${ARCHIVE_COPY}" \
     || fail "Could not load ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (see above). The running controller was not touched."
+  rm -rf "${ARCHIVE_DIR}" && ARCHIVE_DIR=""
   check_loaded_image
 elif [[ -n "${IMAGE_REF}" ]]; then
   # Pull mode: the Pi's Docker pulls the released image, and it is used only if it is the image the digest names, for

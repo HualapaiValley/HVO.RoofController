@@ -47,6 +47,8 @@ Other switches:
                                    store does
   FAKE_INSPECT_PLATFORM=false      the CLI has no `image inspect --platform` (Docker before 28)
   FAKE_LOAD_FAIL=true              `load -i <archive>` fails, and loads nothing
+  FAKE_ON_LOAD=<shell command>     runs just before `load -i <archive>` reads the archive (a test changes the release's
+                                   archive there, once the deploy script has checked it)
   FAKE_LOADED_ID=sha256:<hex>      the ID `load -i <archive>` gives the image (default: its config's digest, as Docker's
                                    classic image store does, or its index's with FAKE_IMAGE_STORE=containerd)
   FAKE_STOP_FAIL=true              `stop` fails
@@ -71,17 +73,21 @@ Images pulled with `pull [--platform <p>] <ref>` are kept by reference, with a d
 `image inspect` supports --help, --platform and four --format templates: the RepoDigests, '{{.Os}}/{{.Architecture}}',
 the version and revision labels, and '{{.Id}}'. An offline archive loaded with `load -i <archive>` (a release's, as
 build/release-assets.py writes it) is kept by its ID, with the platforms it holds and its config's labels: the classic
-store reads its manifest.json, the containerd store (FAKE_IMAGE_STORE=containerd) its index.json. `run` finds its image
+store reads its manifest.json, the containerd store (FAKE_IMAGE_STORE=containerd) its index.json. The file is read once,
+and each load is kept in the state's "loads": the path read, the SHA-256 of what was read, and the modes of the file and
+its folder. `run` finds its image
 among its arguments: IMAGE_REF or IMAGE_TAG, or an image it holds.
 Containers created by `run -d` have kind "new". Authenticated calls must send FAKE_EXPECTED_KEY on stdin (-H @-),
 otherwise they get 401. Output errors (closed or broken stdout/stderr) are ignored, as they would not change Docker.
 """
 import json
 import hashlib
+import io
 import os
 import re
 import secrets
 import signal
+import subprocess
 import sys
 import tarfile
 import time
@@ -222,9 +228,19 @@ def load_archive(state, path):
     """`load -i <archive>`: an offline image archive, loaded as Docker's classic image store loads one (its manifest.json:
     the image's ID is its config's digest) or, with FAKE_IMAGE_STORE=containerd, as the containerd store does (its
     index.json: the ID is the index's digest, holding each platform whose manifest the archive has)."""
+    if os.environ.get("FAKE_ON_LOAD"):
+        subprocess.run(["/bin/sh", "-c", os.environ["FAKE_ON_LOAD"]], check=True)
     if os.environ.get("FAKE_LOAD_FAIL") == "true":
         die("unexpected EOF")
-    with tarfile.open(path) as tar:
+    with open(path, "rb") as f:
+        data = f.read()
+    state.setdefault("loads", []).append({
+        "path": path,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "mode": oct(os.stat(path).st_mode & 0o777),
+        "folder_mode": oct(os.stat(os.path.dirname(os.path.abspath(path))).st_mode & 0o777),
+    })
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         names = set(tar.getnames())
 
         def read(name):
