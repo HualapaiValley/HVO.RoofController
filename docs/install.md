@@ -297,19 +297,28 @@ kiosk's tarball for the kiosk). The installer then reads `release.json` from the
 release's offline archive for this machine, `<image>-<version>-linux-<arch>.oci.tar`: `roof-controller`, and for a rig
 `roof-hat-emulator` too, for `arm64` on the Pi and `amd64` on a PC. Nothing is pulled:
 
-- The archive must have the size and the SHA-256 that `release.json` gives it. One that is missing or of another size
-  stops the plan before anything changes (exit 3); one with another SHA-256 is never loaded.
-- Docker loads it (`docker load`), and the image is used only when Docker gives it one of the IDs `release.json` names
+- The archive must have the size and the SHA-256 that `release.json` gives it. One that is missing or of another size,
+  or that the installer's temporary folder (`TMPDIR`, `/tmp` when it is not set) has no room to copy (the archive and
+  16 MiB more, about 180 MB for the controller's), stops the plan before anything changes (exit 3); one with another
+  SHA-256 is never loaded.
+- Docker loads a copy, never the file in the folder: the installer copies the archive into a folder of its own that
+  only root can open, checks the copy against `release.json`'s size and SHA-256 as it writes it, and Docker loads that
+  copy (`docker load`), which is then deleted. So a file in the release's folder that someone changes once it is
+  checked is never what Docker reads. The image is used only when Docker gives it one of the IDs `release.json` names
   for it: the image's digest (Docker's containerd image store), or its platform's manifest's or config's (the classic
-  store, which names a loaded image by its config).
+  store, which names a loaded image by its config). The load can point the image's own name,
+  `ghcr.io/hualapaivalley/<image>:<version>`, at it, and no other.
 - The container runs that image by its ID, never pulling it (`docker run --pull never`), with the label
   `io.hvo.roof.release-image` naming the release's image by its digest: that is how the installer knows later which
   release a container runs. The label only claims it, so the installer also checks Docker's ID for the image the
   container runs: it must be one `release.json` gives that release's archive for this machine. A container of another
   image that carries the label is replaced, never adopted, and a rollback refuses to start one (exit 3).
 - The deploy script loads the controller's image itself (`IMAGE_ARCHIVE`,
-  [Without ghcr.io](deployment.md#without-ghcrio)), with the same checks. Before Docker reads the archive, it also
-  refuses one that holds anything but that image: another image, name or file in it.
+  [Without ghcr.io](deployment.md#without-ghcrio)), with the same checks. The installer gives it the archive's SHA-256
+  from `release.json` (`IMAGE_ARCHIVE_SHA256`) and its own folder as `TMPDIR`: the script copies the archive there, and
+  Docker loads that copy only if it has that SHA-256. Before Docker reads it, the script also refuses an archive that
+  holds anything but that image: another image, name or file in it, a link or other special member, or JSON that gives
+  a name twice.
 
 A release from before offline archives (4.1.1 and older) has none, and from its folder Docker still pulls its images
 from ghcr.io. A release read from GitHub is always pulled by its digests.

@@ -271,7 +271,10 @@ per platform. Each holds, unchanged:
 
 It checks every blob against its digest as it copies it, and that the index lists exactly one image for each of
 `linux/amd64` and `linux/arm64`. The archive's file times are the release's, and its files root's with fixed modes, so
-the same images make the same archives.
+the same images make the same archives. The archives are plain tar, POSIX ustar headers of files and folders alone
+(short names, and the release's time in whole seconds, so Python's `tarfile` writes no pax header), and the deploy
+script accepts nothing else ([Without ghcr.io](deployment.md#without-ghcrio)): a change to how `release-assets.py`
+writes them must keep them so.
 
 Docker gives a loaded image one of three IDs, each a digest the release names: the index's (the containerd store), the
 platform's manifest's (the same store, asked for the platform), or the config's (the classic store). The installer and
@@ -279,7 +282,9 @@ the deploy script accept only an image with one of them, for the machine's platf
 pulling it, with the label `io.hvo.roof.release-image` naming the release's image; the installer believes that label
 only on a container whose image has one of them. The deploy script, which is given an archive without `release.json`,
 first checks that it holds what this section lists and nothing else, as Docker's two image stores each read it
-([Without ghcr.io](deployment.md#without-ghcrio)). To check an archive by hand:
+([Without ghcr.io](deployment.md#without-ghcrio)). Both load a private copy that they have checked, never the file
+itself. To check an archive by hand, in a folder only you (and root) can change, so that the file Docker loads is the
+one checked:
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
