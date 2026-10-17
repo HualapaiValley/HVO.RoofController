@@ -292,10 +292,12 @@ per platform. Each holds, unchanged:
 
 It checks every blob against its digest as it copies it, and that the index lists exactly one image for each of
 `linux/amd64` and `linux/arm64`. The archive's file times are the release's, and its files root's with fixed modes, so
-the same images make the same archives. The archives are plain tar, POSIX ustar headers of files and folders alone
-(short names, and the release's time in whole seconds, so Python's `tarfile` writes no pax header), and the deploy
-script accepts nothing else ([Without ghcr.io](deployment.md#without-ghcrio)): a change to how `release-assets.py`
-writes them must keep them so.
+the same images make the same archives. The archives are plain tar, POSIX ustar headers of files and folders alone,
+and the deploy script accepts nothing else ([Without ghcr.io](deployment.md#without-ghcrio)). `release-assets.py`
+writes them with `tarfile.USTAR_FORMAT`, never with a pax header, so what ustar cannot hold (a time past its 11 octal
+digits, a file of 8 GiB or more) fails the release as it is built rather than as it is loaded; and each member's name
+must be what the deploy script accepts, a-z, 0-9, `.`, `-` and `/`, at most 100 bytes, so ustar's name prefix is never
+used.
 
 Docker gives a loaded image one of three IDs, each a digest the release names: the index's (the containerd store), the
 platform's manifest's (the same store, asked for the platform), or the config's (the classic store). The installer and

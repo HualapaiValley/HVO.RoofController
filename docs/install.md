@@ -309,7 +309,9 @@ release's offline archive for this machine, `<image>-<version>-linux-<arch>.oci.
 - Docker loads a copy, never the file in the folder: the installer copies the archive into a folder of its own that
   only root can open, checks the copy against `release.json`'s size and SHA-256 as it writes it, and Docker loads that
   copy (`docker load`), which is then deleted. So a file in the release's folder that someone changes once it is
-  checked is never what Docker reads. The image is used only when Docker gives it one of the IDs `release.json` names
+  checked is never what Docker reads. The installer makes that folder, as every folder of its own for a run, new and
+  by its physical path, only in a temporary folder that no one but root can change
+  ([Temporary files](#temporary-files)), so no one else can put another folder in its place either. The image is used only when Docker gives it one of the IDs `release.json` names
   for it: the image's digest (Docker's containerd image store), or its platform's manifest's or config's (the classic
   store, which names a loaded image by its config). The load can point the image's own name,
   `ghcr.io/hualapaivalley/<image>:<version>`, at it, and no other.
@@ -766,10 +768,24 @@ was left. An API key entry that a stopped install left with its name but no key 
 
 The deploy script runs with a clean environment. Only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TERM`, `TMPDIR`
 and Docker's own `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` reach it from the
-installer's; the installer gives it the rest. A setting of the deploy script's in your shell never changes what the
+installer's; the installer gives it the rest. The script holds `TMPDIR` to the rule the installer does
+([Temporary files](#temporary-files)). A setting of the deploy script's in your shell never changes what the
 installer deploys. The installer also sets `REQUIRE_IDLE_ROOF`: the script then stops before it replaces the
 controller when it cannot read the roof's status, as well as when the roof moves
 ([Deploying](deployment.md#deploying-with-the-script)).
+
+### Temporary files
+
+The installer keeps what it uses during a run (its copies of a release's image archives, the deploy script, the files
+it gives the script) in folders of its own, `hvo-roof-install-<random>` with mode 0700, each deleted when its step ends.
+It makes them only in a temporary folder (`TMPDIR`, `/tmp` when it is not set) that no one but root can change: that
+folder, followed to its physical path, and every folder above it, up to `/`, must be a real folder (not a link) of
+root's (or, for `hvo-roof` and the Mac app, which you install as yourself, of yours or root's) that no one else can
+write to unless it is sticky, as `/tmp` is. Otherwise the run stops before anything changes (exit 3), and says which
+folder is not, since someone else could put another folder in the place of one the installer made, and so change an
+archive's copy after it is checked, or the script root runs. A `TMPDIR` that is a link to such a folder is fine. Each
+folder is made new (`mkdir`, which fails if anything is there), used by its physical path, and deleted only while it is
+still the folder made. `install.sh` runs the installer with `sudo`, which leaves your `TMPDIR` out, so it uses `/tmp`.
 
 ## The kiosk
 
@@ -1347,6 +1363,7 @@ Start with what was said: each check that fails, each refusal and each failed st
 | `FAIL  Docker is installed, and its engine did not answer …` | Start it: `sudo systemctl enable --now docker`, or open Docker Desktop. |
 | `FAIL  The controller drives the real HAT, on the observatory's Raspberry Pi, and this is not a Pi …` | The controller runs only on the observatory's Pi. To try it on another machine, choose a test rig (`--roles rig`). |
 | `… is yours, and never installed as root …` | Run it as yourself, without `sudo`: `hvo-roof` and the Mac app are installed for you. |
+| `The installer's temporary folder … is not one only root can change: …` | Run it with `TMPDIR` unset, so it uses `/tmp` (`install.sh` does), or set `TMPDIR` to a folder that root owns and no one else can write to, such as one made with `sudo install -d -m 0700 /var/tmp/hvo-roof` ([Temporary files](#temporary-files)). |
 | `Programs cannot run from … (it is mounted noexec) …` | Give it a folder that programs can run from: `mkdir -p ~/.cache/hvo-tmp`, then put `TMPDIR=~/.cache/hvo-tmp` before `bash` in the command. |
 | `… SHA-256 is …, and SHA256SUMS says …` | The download was not the release's: run it again. A proxy that changes downloads does this too. If it happens again, open an issue. |
 | `note  its attestation was not checked: gh …` | Only a note: the SHA-256 and the version were checked. To have the attestation checked too, install [gh](https://cli.github.com) and sign in (`gh auth login`). |
