@@ -699,6 +699,9 @@ jobs:
       - name: install.sh tests
         run: tests/install/install-sh-tests.sh
 
+      - name: Installer bootstrap preservation tests
+        run: python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
+
       # The container's supervisor and health check (src/HVO.RoofControllerV4.RPi/container), with stand-in processes.
       - name: Container supervisor tests
         run: tests/container/supervisor-tests.sh

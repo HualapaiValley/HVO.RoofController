@@ -1308,30 +1308,7 @@ bootstrap_settings_fixture() {
 }
 
 bootstrap_state() {
-  sudo -n python3 - "$1" <<'STATE' || fail "bootstrap preservation/default-access check failed"
-import hashlib, json, sys
-from pathlib import Path
-identity = json.loads(Path('/var/lib/hvo-roof/identity/identity.json').read_text())
-assert identity.get('kioskCredential') is None, 'existing installation gained commissioning access'
-assert not Path('/var/lib/hvo-roof-commissioning/first-install-claimed').exists(), 'existing installation gained a fresh claim'
-hash_value = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-settings = json.loads(Path('/etc/hvo-roof/config/appsettings.Local.json').read_text())
-assert settings['RoofControllerUi']['DefaultCamera'] == 'bootstrap-preservation-fixture', 'non-default settings fixture lost'
-files = {}
-for folder in ['/etc/hvo-roof/secrets', '/etc/hvo-roof/ca', '/etc/hvo-roof/config', '/etc/hvo-roof/https', '/var/lib/hvo-roof/settings-secrets']:
-    assert Path(folder).is_dir(), f'missing preservation fixture directory: {folder}'
-    for path in Path(folder).rglob('*'):
-        if path.is_file():
-            files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-for required in ['/etc/hvo-roof/ca.crt', '/etc/hvo-roof/ca/ca.key', '/etc/hvo-roof/config/appsettings.Local.json', '/etc/hvo-roof/https/roof-controller.pfx']:
-    path = Path(required)
-    assert path.is_file(), f'missing preservation fixture file: {required}'
-    files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-record = json.loads(Path('/etc/hvo-roof/install.json').read_text())
-value = {'users': hash_value(identity.get('users')), 'nativePrincipals': hash_value(identity.get('linuxPrincipals')),
-         'files': files, 'choices': hash_value({key: record.get(key) for key in ['roles', 'hat', 'controller', 'kiosk']})}
-Path(sys.argv[1]).write_text(json.dumps(value, sort_keys=True))
-STATE
+  sudo -n python3 "${repo_root}/tests/installer/bootstrap_state.py" "$1" || fail "bootstrap preservation/default-access check failed"
 }
 
 scenario_upgrade() {
@@ -1408,7 +1385,7 @@ scenario_upgrade() {
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
-  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null"
+  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null and .controller.resources == {pidsLimit: 512}"
   roof_still
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
   sudo -n cat /etc/hvo-roof/install.json > "${work}/record.txt"
@@ -1511,7 +1488,7 @@ scenario_rollback() {
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
-  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null"
+  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null and .controller.resources == {pidsLimit: 512}"
   roof_still
   pass "${version} again, the record saying ${previous_version} is the release before; relay register 0 in ${ROOF_SAMPLES} samples"
 }
