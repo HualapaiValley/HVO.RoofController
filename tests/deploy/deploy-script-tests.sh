@@ -2250,7 +2250,7 @@ refused_for_its_members() {
   assert_status 1
   assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE}"
   [[ "${OUTPUT}" == *"which is not part of an image's offline archive"* || "${OUTPUT}" == *"more than once, and Docker would read the last"* \
-    || "${OUTPUT}" == *"holds a link or a special file"* || "${OUTPUT}" == *"has no oci-layout"* || "${OUTPUT}" == *"has no manifest.json"* \
+    || "${OUTPUT}" == *"is not a tar archive as a release writes one"* || "${OUTPUT}" == *"has no oci-layout"* || "${OUTPUT}" == *"has no manifest.json"* \
     || "${OUTPUT}" == *"holds other blobs than the index, the linux/arm64 manifest, its config and its layers"* ]] \
     || fail_test "not refused for its members (${EDIT})"
   assert_archive_refused "Nothing was changed." "members: ${EDIT}"
@@ -2267,6 +2267,66 @@ test_an_archive_with_other_members_changes_nothing() {
     'add("blobs/sha256/" + "2" * 64, None, tarfile.SYMTYPE, "../../index.json")' \
     'files[:] = [f for f in files if f[0].name != "oci-layout"]' \
     'files[:] = [f for f in files if f[0].name != "manifest.json"]'
+}
+
+# N1: what each member is comes from the archive's own headers, never from a tar program's listing (GNU tar and bsdtar
+# can list a pax hard link that carries data, or a sparse file, as a plain file). Only plain files and the two folders,
+# in POSIX ustar headers alone, are taken.
+refused_by_its_headers() {
+  reset_fake_docker
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE} ${EXPECTED}" "headers: ${EDIT}"
+}
+
+test_an_archive_with_a_link_a_sparse_file_or_a_folder_as_a_file_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  local layer pristine="${WORK}/pristine.oci.tar" index
+  layer=$(tar -xOf "${ARCHIVE}" manifest.json | jq -r '.[0].Layers[0]')
+  local not_ustar="is not a tar archive as a release writes one, of plain files and folders in POSIX ustar headers alone"
+  local edits=(
+    # A pax hard link that carries the layer's data, in the layer's place.
+    "f = entry('${layer}'); info = tarfile.TarInfo(f[0].name); info.type, info.linkname = tarfile.LNKTYPE, 'index.json'; info.pax_headers = {'comment': 'a hard link with data'}; f[0] = info"
+    "${not_ustar}: member 9 is a pax extended header."
+    # The same hard link, in a plain ustar header.
+    "f = entry('${layer}'); info = tarfile.TarInfo(f[0].name); info.type, info.linkname = tarfile.LNKTYPE, 'index.json'; f[0] = info"
+    "${not_ustar}: member 9 (${layer}) is a hard link."
+    # oci-layout as a pax 1.0 sparse file, as GNU tar --sparse writes one: GNU tar lists it, and extracts it, as oci-layout.
+    "f = entry('oci-layout'); real = f[1]; info = tarfile.TarInfo('GNUSparseFile.0/oci-layout'); info.pax_headers = {'GNU.sparse.major': '1', 'GNU.sparse.minor': '0', 'GNU.sparse.name': 'oci-layout', 'GNU.sparse.realsize': str(len(real))}; f[0] = info; f[1] = (b'1\\n0\\n%d\\n' % len(real)).ljust(512, b'\\0') + real"
+    "${not_ustar}: member 1 is a pax extended header."
+    # The folders as files.
+    "entry('blobs')[0].type = tarfile.REGTYPE; entry('blobs')[1] = b''"
+    "holds blobs as a file: in an image's offline archive it is a folder."
+    "entry('blobs/sha256')[0].type = tarfile.REGTYPE; entry('blobs/sha256')[1] = b''"
+    "holds blobs/sha256 as a file: in an image's offline archive it is a folder."
+    # A pax header on a plain file, saying nothing that matters: still not what a release writes.
+    "entry('index.json')[0].pax_headers = {'comment': 'nothing'}"
+    "${not_ustar}: member 2 is a pax extended header."
+  )
+  cp "${ARCHIVE}" "${pristine}"
+  for (( index = 0; index < ${#edits[@]}; index += 2 )); do
+    cp "${pristine}" "${ARCHIVE}"
+    EDIT=${edits[index]}
+    EXPECTED=${edits[index + 1]}
+    edit_archive "${EDIT}"
+    refused_by_its_headers
+  done
+
+  # Something after the end of the archive, which tar programs and Docker ignore; and a header that does not sum to its
+  # checksum.
+  cp "${pristine}" "${ARCHIVE}"
+  printf 'not an empty block' >> "${ARCHIVE}"
+  EDIT="data after the end" EXPECTED="${not_ustar}: its size is not a whole number of 512-byte blocks."
+  refused_by_its_headers
+  cp "${pristine}" "${ARCHIVE}"
+  python3 -c 'import sys; f = open(sys.argv[1], "r+b"); f.seek(-512, 2); f.write(b"x" * 512)' "${ARCHIVE}"
+  EDIT="a last block that is not empty" EXPECTED="${not_ustar}: it does not end with empty blocks alone, two at least, after its last member."
+  refused_by_its_headers
+  cp "${pristine}" "${ARCHIVE}"
+  python3 -c 'import sys; f = open(sys.argv[1], "r+b"); f.seek(0); f.write(b"OCI-layout")' "${ARCHIVE}"
+  EDIT="a header that does not sum to its checksum" EXPECTED="${not_ustar}: its block 0 is not a tar header that sums to its checksum."
+  refused_by_its_headers
+  cp "${pristine}" "${ARCHIVE}"
 }
 
 test_an_archive_with_a_damaged_config_or_layer_changes_nothing() {

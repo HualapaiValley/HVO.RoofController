@@ -1142,6 +1142,165 @@ else:
   fi
 }
 
+# archive_members <archive>: the members of a tar archive as a release writes one (build/release-assets.py), read from
+# the archive's own headers, not from what a tar program lists: one a line, in order, "file <name>" or "folder <name>"
+# (without its trailing /). It prints "problem <what is wrong>" last and fails unless the archive is that and nothing
+# else: each header a POSIX ustar header ("ustar", version "00") that sums to its checksum, for a plain file (type 0)
+# or a folder of no size (type 5), with no link target, nothing in its name prefix or after it, and a name of a-z, 0-9,
+# ".", "-" and "/" alone; at most 256 of them; then the end of the archive, two empty blocks, and only empty blocks after
+# it. So it holds no pax or GNU extension header (which could give a member another name, a link target or a sparse
+# map), no hard or symbolic link (a pax hard link can carry data), no device, FIFO or sparse file, and nothing GNU tar,
+# bsdtar and Docker's Go reader could read differently: they all find these members, with these names and sizes.
+archive_members() {
+  local archive=$1 size blocks block=0 count=0 sum checksum stored i code name shown end length kind
+  local octal_field='^ *([0-7]+) *$'
+  local -a header=() ascii=()
+  local letters=abcdefghijklmnopqrstuvwxyz numerals=0123456789
+  for (( i = 0; i < 26; i++ )); do ascii[97 + i]=${letters:i:1}; done
+  for (( i = 0; i < 10; i++ )); do ascii[48 + i]=${numerals:i:1}; done
+  ascii[45]=-
+  ascii[46]=.
+  ascii[47]=/
+  size=$(wc -c < "${archive}" | tr -d ' ') || size=""
+  if ! [[ "${size}" =~ ^[0-9]+$ ]] || (( size % 512 != 0 )); then
+    echo "problem its size is not a whole number of 512-byte blocks"
+    return 1
+  fi
+  blocks=$(( size / 512 ))
+  while true; do
+    if (( block >= blocks )); then
+      echo "problem it ends without the two empty blocks that end an archive"
+      return 1
+    fi
+    read -r -a header <<<"$(dd if="${archive}" bs=512 skip="${block}" count=1 2>/dev/null | od -An -v -tu1 | tr '\n' ' ')"
+    if (( ${#header[@]} != 512 )); then
+      echo "problem its block ${block} could not be read"
+      return 1
+    fi
+    sum=0
+    checksum=0
+    for (( i = 0; i < 512; i++ )); do sum=$(( sum + header[i] )); done
+    if (( sum == 0 )); then
+      # The end: this block and every one after it empty, two at least.
+      if (( blocks - block < 2 )) \
+          || [[ "$(tail -c +$(( block * 512 + 1 )) "${archive}" | tr -d '\000' | wc -c | tr -d ' ')" != 0 ]]; then
+        echo "problem it does not end with empty blocks alone, two at least, after its last member"
+        return 1
+      fi
+      return 0
+    fi
+    count=$(( count + 1 ))
+    if (( count > 256 )); then
+      echo "problem it holds more than 256 members"
+      return 1
+    fi
+
+    # The checksum: the header's bytes summed, its checksum field counted as spaces.
+    stored=""
+    for (( i = 148; i < 156; i++ )); do
+      code=${header[i]}
+      checksum=$(( checksum + code ))
+      if (( code >= 48 && code <= 55 )); then
+        stored+=${ascii[code]}
+      elif (( code == 0 || code == 32 )); then
+        stored+=" "
+      else
+        stored+="?"
+      fi
+    done
+    if ! [[ "${stored}" =~ ${octal_field} ]] || (( 8#${BASH_REMATCH[1]} != sum - checksum + 256 )); then
+      echo "problem its block ${block} is not a tar header that sums to its checksum"
+      return 1
+    fi
+    if [[ "${header[*]:257:8}" != "117 115 116 97 114 0 48 48" ]]; then
+      echo "problem member ${count}'s header is not a POSIX ustar header"
+      return 1
+    fi
+
+    # The name, up to its first NUL, with nothing after that: shown in what follows only when it is one.
+    name=""
+    shown=""
+    end=100
+    for (( i = 0; i < 100; i++ )); do
+      code=${header[i]}
+      if (( code == 0 )); then
+        end=${i}
+        break
+      fi
+      if [[ -z "${ascii[code]:-}" ]]; then
+        name="?"
+        break
+      fi
+      name+=${ascii[code]}
+    done
+    for (( i = end; i < 100; i++ )); do
+      if (( header[i] != 0 )); then
+        name="?"
+      fi
+    done
+    [[ -z "${name}" || "${name}" == *"?"* ]] || shown=" (${name})"
+
+    # What it is, by its raw type.
+    case "${header[156]}" in
+      48) kind="file" ;;
+      53) kind="folder" ;;
+      49) echo "problem member ${count}${shown} is a hard link"; return 1 ;;
+      50) echo "problem member ${count}${shown} is a symbolic link"; return 1 ;;
+      51|52) echo "problem member ${count}${shown} is a device"; return 1 ;;
+      54) echo "problem member ${count}${shown} is a FIFO"; return 1 ;;
+      83) echo "problem member ${count}${shown} is a GNU sparse file"; return 1 ;;
+      120|103) echo "problem member ${count}${shown} is a pax extended header"; return 1 ;;
+      75|76) echo "problem member ${count}${shown} is a GNU long name or link"; return 1 ;;
+      *) echo "problem member ${count}${shown} is of type ${header[156]}, not a file (48, '0') or a folder (53, '5')"; return 1 ;;
+    esac
+    if [[ -z "${shown}" ]]; then
+      echo "problem member ${count} has no name of a-z, 0-9, '.', '-' and '/' alone"
+      return 1
+    fi
+
+    # Its size: 11 octal digits, then NUL or a space.
+    stored=""
+    for (( i = 124; i < 135; i++ )); do
+      code=${header[i]}
+      if (( code >= 48 && code <= 55 )); then
+        stored+=${ascii[code]}
+      fi
+    done
+    if (( ${#stored} != 11 )) || (( header[135] != 0 && header[135] != 32 )); then
+      echo "problem member ${count}${shown} has a size that is not 11 octal digits"
+      return 1
+    fi
+    length=$(( 8#${stored} ))
+
+    # No link target, and nothing in the name prefix or after it (where GNU and other formats keep more).
+    for (( i = 157; i < 512; i++ )); do
+      if (( i == 257 )); then
+        i=344
+      elif (( header[i] != 0 )); then
+        if (( i < 257 )); then
+          echo "problem member ${count}${shown} has a link target"
+        else
+          echo "problem member ${count}${shown} has a name prefix, or more in its header than a POSIX ustar header holds"
+        fi
+        return 1
+      fi
+    done
+
+    if [[ "${kind}" == folder ]]; then
+      name=${name%/}
+      if (( length != 0 )); then
+        echo "problem member ${count}${shown} is a folder that holds data"
+        return 1
+      fi
+    elif [[ "${name}" == */ ]]; then
+      echo "problem member ${count}${shown} is a file whose name ends with /"
+      return 1
+    fi
+    echo "${kind} ${name}"
+    block=$(( block + 1 + (length + 511) / 512 ))
+  done
+}
+
 # check_json_once <file> <what>: IMAGE_ARCHIVE is refused unless its <what>, a member check_image_archive took out of it,
 # is one JSON value that gives each name once in each object (archive_json unique). Both readers here keep the last of
 # two values for a name, and Docker's Go decoder can keep parts of both (an object decoded into the map the first one
@@ -1157,8 +1316,10 @@ check_json_once() {
 # there is an oci-layout (manifest.json when there is none); the classic store reads manifest.json, every image in it
 # and their tags (RepoTags). A load cannot be undone by checking the image afterwards (check_loaded_image), and an image
 # Docker already holds by an allowed ID would pass that check whatever the load did, so the archive is checked whole:
-#  - its members are oci-layout, index.json, manifest.json and blobs/sha256/<hex> for the index, the platform's
-#    manifest, its config and its layers (with the folders blobs and blobs/sha256), each once and each a file;
+#  - its members, as its own headers give them (archive_members: plain POSIX ustar headers, no link, special file,
+#    sparse file or extension header), are oci-layout, index.json, manifest.json and blobs/sha256/<hex> for the index,
+#    the platform's manifest, its config and its layers, each once and each a file, with the folders blobs and
+#    blobs/sha256, which are folders;
 #  - every JSON file it reads (oci-layout, index.json, manifest.json, the index, the platform's manifest and its config)
 #    is one value, with no name given twice in an object, so this check and Docker read it alike;
 #  - oci-layout is an OCI image layout 1.0.0, and index.json names that index alone, with no name but IMAGE_REF's own
@@ -1198,7 +1359,7 @@ private_folder() {
 }
 
 check_image_archive() {
-  local folder members member types named names manifest config layer layers blobs expected docker size free needed digest
+  local folder listing kind members member named names manifest config layer layers blobs expected docker size free needed digest
   local digest_pattern='^sha256:[0-9a-f]{64}$' blob_pattern='^blobs/sha256/[0-9a-f]{64}$' image_name image_tag=""
   local release_archive="give the release's archive of that image. Nothing was changed."
   local release_archive_sentence="Give the release's archive of that image. Nothing was changed."
@@ -1237,18 +1398,24 @@ check_image_archive() {
   fi
   echo "[load] Checking a copy of ${IMAGE_ARCHIVE} that only this user can change (SHA-256 ${digest}${IMAGE_ARCHIVE_SHA256:+, as release.json gives it}): Docker loads that copy"
 
-  # Its members, by name (folders without their trailing /), each once, and each a file or a folder: no link, device or
-  # other special file, whose meaning the loaders and this check could read differently.
-  members=$(tar -tf "${ARCHIVE_COPY}" 2>/dev/null | sed 's:/*$::') \
-    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} is not a tar archive: ${release_archive}"
-  while IFS= read -r member; do
-    case "${member}" in
-      ""|oci-layout|index.json|manifest.json|blobs|blobs/sha256) ;;
-      *)
+  # Its members, from the archive's own headers (archive_members): each a plain file, or one of the two folders, by name
+  # (folders without their trailing /), each once.
+  if ! listing=$(archive_members "${ARCHIVE_COPY}"); then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} is not a tar archive as a release writes one, of plain files and folders in POSIX ustar headers alone: $(tail -n 1 <<<"${listing}" | sed 's/^problem //'). ${release_archive_sentence}"
+  fi
+  while read -r kind member; do
+    case "${kind} ${member}" in
+      " "|"file oci-layout"|"file index.json"|"file manifest.json"|"folder blobs"|"folder blobs/sha256") ;;
+      "file blobs"|"file blobs/sha256")
+        fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds ${member} as a file: in an image's offline archive it is a folder. ${release_archive_sentence}" ;;
+      "file "*)
         [[ "${member}" =~ ${blob_pattern} ]] \
           || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds '${member}', which is not part of an image's offline archive (oci-layout, index.json, manifest.json and blobs/sha256/<hex>): ${release_archive}" ;;
+      *)
+        fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds the folder '${member}', and the only folders in an image's offline archive are blobs and blobs/sha256: ${release_archive}" ;;
     esac
-  done <<<"${members}"
+  done <<<"${listing}"
+  members=$(cut -d ' ' -f 2- <<<"${listing}")
   member=$(sort <<<"${members}" | uniq -d | head -n 1)
   [[ -z "${member}" ]] \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds '${member}' more than once, and Docker would read the last: ${release_archive}"
@@ -1256,9 +1423,6 @@ check_image_archive() {
     grep -qxF "${member}" <<<"${members}" \
       || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} has no ${member}: a release's offline archive has oci-layout and index.json, which Docker's containerd image store reads, and manifest.json, which the classic store reads. ${release_archive_sentence}"
   done
-  types=$(tar -tvf "${ARCHIVE_COPY}" 2>/dev/null | cut -c 1 | sort -u | tr -d '\n') || types="?"
-  [[ "${types}" =~ ^[-d]+$ ]] \
-    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds a link or a special file: a release's offline archive holds files and folders only. ${release_archive_sentence}"
   grep -qxF "blobs/sha256/${IMAGE_DIGEST#sha256:}" <<<"${members}" \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} that IMAGE_REF names: ${release_archive}"
 
