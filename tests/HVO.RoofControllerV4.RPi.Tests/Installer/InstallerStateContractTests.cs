@@ -647,6 +647,33 @@ public sealed class InstallerStateContractTests
     }
 
     [TestMethod]
+    public async Task ABackupKeptFromAHandOverThatFailed_IsMadeDurable_BeforeTheNextHandOver()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+
+        // The first hand-over fails once the backup is taken: the release's installer does not run.
+        pi.Launch = (_, _, _) => Task.FromResult(1);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(1);
+        pi.Exists(Backup).Should().BeTrue();
+
+        // For all the next run knows, that backup never reached the disk: it keeps it, and makes it durable first.
+        pi.TrackFolderDurability("/var/backups", durableNow: false).TrackFolderDurability(BackupCommands.DefaultFolder, durableNow: false).TrackDurabilityFromNothing(Backup);
+        bool? atHandOver = null;
+        pi.Launch = (path, arguments, environment) =>
+        {
+            atHandOver ??= pi.SurvivesPowerLoss(Backup);
+            return pi.RunInstallerAsync(path, arguments, environment);
+        };
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        atHandOver.Should().BeTrue("the backup the installer hands over is on disk before it does");
+        pi.Launches.Last().Environment.Should().Contain(LifecycleCommands.UpgradeBackupVariable, Backup);
+    }
+
+    [TestMethod]
     public async Task ABackupAnEarlierRunKept_IsMadeDurable_BeforeTheRecordNamesIt()
     {
         using var pi = await UpgradedPiAsync(MovesToTwo);
