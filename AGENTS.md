@@ -223,11 +223,13 @@ observatory's Pi.
 - The controller's container runs read-only, with only the supervisor's capabilities (`CHOWN`, `KILL`, `SETGID`,
   `SETUID`), `no-new-privileges`, and a CPU, a memory and a process limit: by default 1 vCPU, 2 GiB (no swap) and 512,
   at least 1 vCPU and 1 GiB, with no setting for no limit (#149); never `--privileged`. One set persists across upgrades
-  and rollbacks (the install record; the deploy script keeps them as the desired limits in a volume of their own,
-  `<name>-limits`, whether or not the host could enforce them). A host whose Docker cannot enforce them is refused
-  before anything changes, with no override (`docker info`: `MemoryLimit`, `SwapLimit`, `CPUCfsQuota`, `PidsLimit`); a
-  rollback, a recovery path, goes ahead there with the ones it can, and warns loudly in its output and the controller's
-  log. A capability or writable place is added only when a test on the emulator image shows it is needed. Keep the
+  and rollbacks (the install record; the deploy script records them as the desired limits, whether or not the host could
+  enforce them, each record a volume of its own, `<name>-limits-g<generation>`, replaced whole and validated on every
+  read; the script, the installer and `install.sh` resolve a limit not given the same way: the record's, the running
+  controller's, the default). A host whose Docker cannot enforce them is refused before anything changes, with no
+  override (`docker info`: `MemoryLimit`, `SwapLimit`, `CPUCfsQuota`, `PidsLimit`); a rollback, a recovery path, goes
+  ahead there with the ones it can, and warns loudly in its output and the controller's log. A capability or writable
+  place is added only when a test on the emulator image shows it is needed. Keep the
   [fail-safe record](docs/deployment.md#the-relays-when-the-controller-exits) true: the supervisor turns the relays off
   whenever the controller exits and holds it stopped until they are verified off; only a whole-container kill (or the
   Docker daemon dying) leaves them held.

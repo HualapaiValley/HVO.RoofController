@@ -66,12 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   RoofController's default (owner decision on #149), now that the supervisor turns the relays off whenever the
   controller exits, an OOM kill included (#138).** A fresh install and an upgrade both give them, the upgrade to a
   controller that had none. A value set persists, also through a rollback on a host that cannot enforce it: the install
-  record keeps it for upgrade and rollback, and the deploy script keeps the limits it was last given as the desired
-  ones, in a Docker volume of their own (`roof-controller-limits`), and given no `CONTAINER_CPUS` or `CONTAINER_MEMORY`
-  keeps those (the running controller's without the volume, the default for a controller without one); Compose's
-  `HVO_ROOF_CPUS` and `HVO_ROOF_MEMORY` default to `1` and `2g`. A value below the 1 vCPU / 1 GiB floor is refused
-  before anything changes; more is accepted. There is no longer a setting for no limit: an empty `CONTAINER_CPUS` or
-  `CONTAINER_MEMORY` is the default, not none (#149).
+  record keeps it for upgrade and rollback, and the deploy script records the limits each deploy or rollback gives as
+  the desired ones (each record a Docker volume of its own, `roof-controller-limits-g<generation>`, replaced whole, so a
+  failed or interrupted update keeps the last good one, and validated on every read). Given no `CONTAINER_CPUS` or
+  `CONTAINER_MEMORY`, it keeps those (the running controller's without a record, the default for a controller without
+  one), and the installer and `install.sh` resolve a limit not given the same way; the installer's uninstall and purge
+  remove the records whether or not the container is there. Compose's `HVO_ROOF_CPUS` and `HVO_ROOF_MEMORY` default to
+  `1` and `2g`. A value below the 1 vCPU / 1 GiB floor is refused before anything changes; more is accepted. There is no
+  longer a setting for no limit: an empty `CONTAINER_CPUS` or `CONTAINER_MEMORY` is the default, not none (#149).
 - **The installer, `install.sh` and the deploy script refuse a host whose Docker does not enforce the container's
   limits, with nothing changed and no override, as SkyMonitor does (#1285), on every install, upgrade and deploy**
   (SkyMonitor checks only at install). One `docker info` must report `MemoryLimit` and `SwapLimit`, `CPUCfsQuota` and
