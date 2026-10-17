@@ -26,14 +26,17 @@ All workflows:
 The controller's and the HAT emulator's Dockerfiles pin each base image
 (`mcr.microsoft.com/dotnet/sdk` and `mcr.microsoft.com/dotnet/aspnet`) by tag and by the digest
 of its multi-platform index, as in `sdk:10.0.401@sha256:...`, so a rebuild of the same commit
-uses the same bases. A tag can be republished; a digest cannot.
-[`build/check-base-images.sh`](../build/check-base-images.sh), which `pi-image.yml` and
-`emulator-image.yml` run with `--registry`, requires:
+uses the same bases: a tag can be republished, a digest cannot. Section 2 of the
+[HVO install and release contract](https://github.com/HualapaiValley/HVO.SkyMonitor/blob/development/v1/docs/hvo-install-contract.md)
+asks for this.
 
-- a tag and a digest on every `FROM`;
-- the SDK's tag to be the SDK `src/global.json` pins;
-- the same SDK image and the same runtime image, tag and digest, in both Dockerfiles;
-- with `--registry`, each digest to be an index holding `linux/amd64` and `linux/arm64`, not one
+[`build/check-base-images.sh`](../build/check-base-images.sh), which `pi-image.yml` and
+`emulator-image.yml` run with `--registry`, checks that:
+
+- every `FROM` has a tag and a digest;
+- the SDK's tag is the SDK `src/global.json` pins;
+- both Dockerfiles use the same SDK image and the same runtime image, tag and digest;
+- with `--registry`, each digest is an index holding `linux/amd64` and `linux/arm64`, not one
   platform's image.
 
 Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml)) updates a tag and its digest
