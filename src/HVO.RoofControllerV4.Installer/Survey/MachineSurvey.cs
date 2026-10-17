@@ -153,6 +153,9 @@ public sealed record DockerSurvey
     /// <summary>The limits Docker says it can put on a container, and the CPUs and memory it reports; null when it did not answer.</summary>
     public DockerLimits? Limits { get; init; }
 
+    /// <summary>The controller's desired limits the deploy script keeps for its next deploy; null when there are none.</summary>
+    public DesiredLimits? DesiredLimits { get; init; }
+
     public bool IsUsable => Problem is null && Version is not null;
 }
 
@@ -218,6 +221,31 @@ public sealed record DockerLimits(bool? Memory, bool? Cpu, bool? Pids, bool? Swa
             HostName = Text(fields[7]),
             Warnings = [.. lines.Skip(1).Select(line => line.Trim()).Where(line => line.Length > 0)]
         };
+    }
+}
+
+/// <summary>
+/// The controller's desired CPU and memory limits, as the deploy script keeps them for its next deploy (#149, review
+/// ROOF-151-R1 F2): the ones the last deploy or rollback gave, whether or not the host could enforce them, in the labels
+/// of a Docker volume of their own (<c>roof-controller-limits</c>), which nothing mounts. The installer gives the deploy
+/// script the limits its record holds; it reads these to say when someone gave the script others by hand.
+/// </summary>
+public sealed record DesiredLimits(string? Cpus, string? Memory)
+{
+    /// <summary>The <c>docker volume inspect --format</c> template that reads them, comma-separated.</summary>
+    public const string Format = "{{index .Labels \"io.hvo.roof.desired-cpus\"}},{{index .Labels \"io.hvo.roof.desired-memory\"}}";
+
+    /// <summary>The volume that holds the desired limits of the controller container <paramref name="container"/>.</summary>
+    public static string Volume(string container) => $"{container}-limits";
+
+    /// <summary>The answer to <see cref="Format"/>; null when it holds neither.</summary>
+    public static DesiredLimits? Parse(string output)
+    {
+        var fields = (output ?? string.Empty).Trim().Split(',');
+        static string? Text(string value) => value.Trim() is { Length: > 0 } text && text != "<no value>" ? text : null;
+        return fields.Length == 2 && (Text(fields[0]), Text(fields[1])) is var (cpus, memory) && (cpus ?? memory) is not null
+            ? new DesiredLimits(cpus, memory)
+            : null;
     }
 }
 

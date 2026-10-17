@@ -307,6 +307,30 @@ public sealed class InstallerBackupTests
     }
 
     [TestMethod]
+    [DataRow("false,true,true,false,4,8589934592,2,docker-host", "docker-memory-limit-unsupported")]
+    [DataRow("true,true,true,false,4,8589934592,2,docker-host", "docker-swap-limit-unsupported")]
+    [DataRow("true,false,true,true,4,8589934592,2,docker-host", "docker-cpu-quota-unsupported")]
+    public async Task ARestore_OnDockerThatCannotEnforceTheLimits_IsRefusedBeforeItPutsAnythingBack(string info, string finding)
+    {
+        // Review ROOF-151-R1 F4: the install after a restore deploys the controller with the backup's limits, so the
+        // refusal comes before the first file goes back, not after.
+        using var pi = await InstalledPiAsync();
+        await BackUpAndPurgeAsync(pi);
+        var deploys = pi.Deploys.Count;
+        pi.DockerInfo = info;
+
+        var run = await RestoreAsync(pi, Kept);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"  - {finding}: docker info reports").And.Contain("Nothing was restored.");
+        run.Output.Should().NotContain("Put back");
+        pi.Exists("/etc/hvo-roof").Should().BeFalse("nothing was put back");
+        pi.Exists("/var/lib/hvo-roof").Should().BeFalse();
+        pi.Exists(KioskSteps.DeviceKeyFile).Should().BeFalse();
+        pi.Deploys.Should().HaveCount(deploys);
+    }
+
+    [TestMethod]
     public async Task ARestore_ThatCannotMakeWhatItPutBackDurable_StopsBeforeTheInstall()
     {
         using var pi = await InstalledPiAsync();

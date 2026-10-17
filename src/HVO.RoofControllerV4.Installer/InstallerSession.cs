@@ -166,11 +166,20 @@ public sealed class InstallerSession
         }
     }
 
-    /// <summary>What the installer warns of in the answers here without refusing them: a memory limit above this machine's memory.</summary>
+    /// <summary>
+    /// What the installer warns of in the answers here without refusing them: a memory limit above this machine's memory,
+    /// and desired limits the deploy script was given by hand that the record does not have.
+    /// </summary>
     public IReadOnlyList<string> Warnings()
-        => InstallRoles.RunsController(Answers.Roles)
-            ? [.. RoleGuards.ContainerLimitWarnings(Survey.Docker.Limits, (Answers.Controller ?? new ControllerSettings()).Normalised().Resources)]
-            : [];
+    {
+        if (!InstallRoles.RunsController(Answers.Roles))
+        {
+            return [];
+        }
+
+        var resources = (Answers.Controller ?? new ControllerSettings()).Normalised().Resources;
+        return [.. RoleGuards.ContainerLimitWarnings(Survey.Docker.Limits, resources), .. RoleGuards.DesiredLimitWarnings(Survey.Docker.DesiredLimits, resources)];
+    }
 
     /// <summary>
     /// The records of this run's roles, what an upgrade starts from: the machine's for the machine's roles (the controller,

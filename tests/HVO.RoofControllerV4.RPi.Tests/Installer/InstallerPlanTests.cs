@@ -471,7 +471,9 @@ public sealed class InstallerPlanTests
         ran.Where(command => command.Program != "docker").Should().OnlyContain(
             command => command.Program == "bash" && command.Arguments.Count == 1 && command.Arguments[0].EndsWith("/deploy-roofcontroller-rpi.sh", StringComparison.Ordinal));
         ran.Where(command => command.Program == "docker").Select(command => command.Arguments[0]).Distinct().Should()
-            .BeSubsetOf(["version", "compose", "info", "container", "context", "exec"], "it asks Docker, and leaves the controller's container to the deploy script");
+            .BeSubsetOf(["version", "compose", "info", "container", "context", "exec", "volume"], "it asks Docker, and leaves the controller's container to the deploy script");
+        ran.Where(command => command.Program == "docker" && command.Arguments[0] == "volume").Should().OnlyContain(
+            command => command.Arguments[1] == "inspect", "it only reads the deploy script's desired limits");
         ran.Where(command => command.Arguments.FirstOrDefault() == "exec").Should().OnlyContain(
             command => command.Arguments.Last() == $"http://localhost:8080/{ControllerProbe.StatusPath}", "the only request it makes of the controller is its Status");
         ran.SelectMany(command => command.Arguments).Should().NotContain(

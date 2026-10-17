@@ -155,7 +155,7 @@ public sealed class InstallerResourceLimitsTests
 
     [TestMethod]
     [DataRow("false,true,true,true,4,8589934592,2,docker-host", "docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit true, so Docker would run the controller without its memory limit (2g, and no swap beyond it).", "")]
-    [DataRow("true,true,true,false,4,8589934592,2,docker-host", "docker-memory-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false", "")]
+    [DataRow("true,true,true,false,4,8589934592,2,docker-host", "docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false, so Docker would let the controller swap beyond its memory limit (2g).", "")]
     [DataRow(",true,true,true,4,8589934592,2,docker-host", "docker-memory-limit-unsupported: docker info reports MemoryLimit not reported and SwapLimit true", "")]
     [DataRow("true,false,true,true,4,8589934592,2,docker-host", "docker-cpu-quota-unsupported: docker info reports CPUCfsQuota false, so Docker would run the controller without its CPU limit (1).", "")]
     [DataRow("true,<no value>,true,true,4,8589934592,2,docker-host", "docker-cpu-quota-unsupported: docker info reports CPUCfsQuota not reported", "")]
@@ -176,7 +176,7 @@ public sealed class InstallerResourceLimitsTests
             run.Error.Should().Contain("  - " + expected);
         }
 
-        foreach (var code in new[] { "docker-memory-limit-unsupported", "docker-cpu-quota-unsupported", "docker-pids-limit-unsupported" })
+        foreach (var code in new[] { "docker-memory-limit-unsupported", "docker-swap-limit-unsupported", "docker-cpu-quota-unsupported", "docker-pids-limit-unsupported" })
         {
             if (!(finding + more).Contains(code, StringComparison.Ordinal))
             {
@@ -218,6 +218,7 @@ public sealed class InstallerResourceLimitsTests
 
     [TestMethod]
     [DataRow("false,true,true,false,4,8589934592,2,docker-host", "memory")]
+    [DataRow("true,true,true,false,4,8589934592,2,docker-host", "swap")]
     [DataRow("true,false,true,true,4,8589934592,2,docker-host", "cpu")]
     [DataRow("false,false,true,false,4,8589934592,2,docker-host", "memory cpu")]
     [DataRow("true,true,false,true,4,8589934592,2,docker-host", "pids")]
@@ -252,7 +253,7 @@ public sealed class InstallerResourceLimitsTests
         pi.Deploys[^1].Should().Contain(Limits("2", "3g", "512"), "the deploy script is given the recorded limits, and gives the ones Docker can enforce");
         Record(pi).Version.Should().Be("4.0.0", "the rollback went ahead");
         rollback.Error.Should().Contain("Warning: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:");
-        foreach (var (limit, code) in new[] { ("memory", "docker-memory-limit-unsupported"), ("cpu", "docker-cpu-quota-unsupported"), ("pids", "docker-pids-limit-unsupported") })
+        foreach (var (limit, code) in new[] { ("memory", "docker-memory-limit-unsupported"), ("swap", "docker-swap-limit-unsupported"), ("cpu", "docker-cpu-quota-unsupported"), ("pids", "docker-pids-limit-unsupported") })
         {
             if (unenforced.Split(' ').Contains(limit))
             {
@@ -264,10 +265,100 @@ public sealed class InstallerResourceLimitsTests
             }
         }
 
-        rollback.Error.Should().Contain("so the version the rollback brings back runs without its");
+        rollback.Error.Should().Contain("so the version the rollback brings back ");
         rollback.Error.Should().Contain(RoleGuards.ContainerLimitRemedy + " Then upgrade again.");
         rollback.Error.Should().NotContain("is refused. Every finding");
         pi.Read(InstallPaths.SystemLog).Should().Contain("Warning: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS");
+    }
+
+    [TestMethod]
+    [DataRow("false,true,true,false,4,8589934592,2,docker-host", "docker-memory-limit-unsupported")]
+    [DataRow("true,true,true,false,4,8589934592,2,docker-host", "docker-swap-limit-unsupported")]
+    [DataRow("true,false,true,true,4,8589934592,2,docker-host", "docker-cpu-quota-unsupported")]
+    [DataRow("true,true,false,true,4,8589934592,2,docker-host", "docker-pids-limit-unsupported")]
+    public async Task AnUpgradeToAnotherRelease_OnDockerThatCannotEnforceTheLimits_IsRefusedBeforeTheHandOver_AndNothingChanges(string info, string finding)
+    {
+        // Review ROOF-151-R1 F4: refused before the hand-over's first change, its backup and the installer it puts in
+        // place, not by the release's installer once they are done.
+        using var pi = await InstallerLifecycleTests.InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true);
+        var installer = File.ReadAllBytes(pi.OnDisk(InstallPaths.SystemInstaller));
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var backups = Backups(pi);
+        var deploys = pi.Deploys.Count;
+        pi.DockerInfo = info;
+
+        var upgrade = await pi.RunAsync("upgrade");
+
+        upgrade.ExitCode.Should().Be((int)InstallerExitCode.Refused, upgrade.ToString());
+        upgrade.Error.Should().Contain("so the install is refused. Every finding:").And.Contain($"  - {finding}: docker info reports")
+            .And.Contain("Nothing was changed: the installer, the backups and the record are as they were.");
+        upgrade.Output.Should().NotContain("Handing over").And.NotContain("backed up", "no backup was taken");
+        pi.Launches.Should().BeEmpty("the release's installer was not handed over to");
+        File.ReadAllBytes(pi.OnDisk(InstallPaths.SystemInstaller)).Should().Equal(installer, "the installer is the one installed");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+        Backups(pi).Should().Equal(backups, "no backup was taken");
+        pi.Deploys.Should().HaveCount(deploys);
+
+        // Its plan says the same, and changes nothing either.
+        var plan = await pi.RunAsync("upgrade", "--plan");
+        plan.ExitCode.Should().Be((int)InstallerExitCode.Refused, plan.ToString());
+        File.ReadAllBytes(pi.OnDisk(InstallPaths.SystemInstaller)).Should().Equal(installer);
+        Backups(pi).Should().Equal(backups);
+    }
+
+    [TestMethod]
+    public async Task ASetting_PersistsThroughARollbackOnDockerThatCannotEnforceIt_AndTheUpgradeAfterIt()
+    {
+        // Review ROOF-151-R1 F2, as the installer runs it: the record keeps the operator's limits whether or not the host
+        // could enforce them, and every deploy is given them.
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources { Cpus = 1.5m, Memory = "6g" }));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.WithRelease(NewVersion, latest: true);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+
+        pi.DockerInfo = "false,true,true,false,4,8589934592,2,docker-host";
+        var rollback = await pi.RunAsync("rollback");
+        rollback.ExitCode.Should().Be(0, rollback.ToString());
+        rollback.Error.Should().Contain("docker-memory-limit-unsupported");
+        pi.Deploys[^1].Should().Contain(Limits("1.5", "6g", "512"), "the rollback is given the operator's limits, which the deploy script keeps as the desired ones");
+        Record(pi).Controller!.Resources.Should().Be(new ContainerResources { Cpus = 1.5m, Memory = "6g" });
+
+        // The host fixed: the next upgrade gives the operator's limits, not the default.
+        pi.DockerInfo = "true,true,true,true,4,8589934592,2,docker-host";
+        pi.InstallerVersion = "4.0.0";
+        var upgrade = await pi.RunAsync("upgrade");
+        upgrade.ExitCode.Should().Be(0, upgrade.ToString());
+        pi.Deploys[^1].Should().Contain(Limits("1.5", "6g", "512"));
+        upgrade.Error.Should().NotContain("The deploy script here was last given", "the desired limits are the record's");
+    }
+
+    [TestMethod]
+    public async Task DesiredLimits_TheDeployScriptWasGivenByHand_AreNamed_AndTheRecordsAreGiven()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.DesiredLimitsVolume.Should().Be("1,2g", "the deploy script keeps what it was given");
+
+        // Someone ran the deploy script by hand with others.
+        pi.DesiredLimitsVolume = "1.5,6g";
+        var plan = await pi.RunAsync("--plan", "--answers", answers);
+
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Error.Should().Contain("Warning: The deploy script here was last given 1.5 CPUs and 6g of memory (the desired limits in volume roof-controller-limits), not the installer's 1 and 2g: the installer gives its own. To keep those, give --cpus 1.5 --memory 6g.");
+        DesiredLimits.Parse("1.5,6g\n").Should().Be(new DesiredLimits("1.5", "6g"));
+        DesiredLimits.Parse(",\n").Should().BeNull();
+        DesiredLimits.Parse("<no value>,6g").Should().Be(new DesiredLimits(null, "6g"));
+        RoleGuards.DesiredLimitWarnings(new DesiredLimits("1", "2048m"), new ContainerResources()).Should().BeEmpty("2048m is the 2g the installer gives");
+        RoleGuards.DesiredLimitWarnings(null, new ContainerResources()).Should().BeEmpty();
+
+        // An uninstall removes them with the controller: the record keeps the installer's.
+        var uninstall = await pi.RunAsync("uninstall", "--yes");
+        uninstall.ExitCode.Should().Be(0, uninstall.ToString());
+        pi.DesiredLimitsVolume.Should().BeNull("the desired limits go with the controller");
     }
 
     [TestMethod]
@@ -599,6 +690,14 @@ public sealed class InstallerResourceLimitsTests
             .And.Contain("docker-host-cpus-insufficient").And.NotContain("docker-memory-limit-unsupported");
         RoleGuards.ContainerLimitProblems(null, limits, rollback: true).Should().ContainSingle().Which.Should().StartWith("Docker did not say which limits it enforces");
         RoleGuards.ContainerLimitRollbackWarnings(supported, defaults).Should().BeEmpty();
+        // Memory and swap are separate controls (review ROOF-151-R1 F3).
+        var swapOnly = supported with { Swap = false };
+        RoleGuards.ContainerLimitProblems(swapOnly, defaults).Should().ContainSingle().Which.Should()
+            .Contain("  - docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false, so Docker would let the controller swap beyond its memory limit (2g).")
+            .And.NotContain("docker-memory-limit-unsupported");
+        RoleGuards.ContainerLimitProblems(swapOnly, defaults, rollback: true).Should().BeEmpty();
+        RoleGuards.ContainerLimitRollbackWarnings(swapOnly, defaults).Should().ContainSingle().Which.Should()
+            .Contain("  - docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false, so the version the rollback brings back keeps its memory limit (2g) but may swap beyond it.");
         RoleGuards.ContainerLimitRollbackWarnings(null, defaults).Should().BeEmpty();
         RoleGuards.ContainerLimitRollbackWarnings(none, limits).Should().ContainSingle().Which.Should().Be(string.Join(Environment.NewLine,
             "THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:",
@@ -643,6 +742,12 @@ public sealed class InstallerResourceLimitsTests
         run = await pi.RunAsync("--plan", "--answers", answers);
         run.Error.Should().Contain("/sys/fs/cgroup/cgroup.controllers: \"cpuset cpu io pids\"");
     }
+
+    // The upgrade backups' files, sorted (none when the folder is not there).
+    private static string[] Backups(FakeMachine pi)
+        => Directory.Exists(pi.OnDisk(BackupCommands.DefaultFolder))
+            ? [.. Directory.EnumerateFiles(pi.OnDisk(BackupCommands.DefaultFolder), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal)]
+            : [];
 
     private static decimal? Cpus(string? cpus) => cpus is null ? null : decimal.Parse(cpus, System.Globalization.CultureInfo.InvariantCulture);
 

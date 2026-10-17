@@ -256,11 +256,15 @@ public static partial class MachineSurveyor
             parsed = parsed with { CgroupControllers = controllers };
         }
 
+        // The desired limits the deploy script keeps (none when there is no such volume).
+        var desired = await machine.Commands.RunAsync(
+            new CommandLine("docker", "volume", "inspect", "--format", DesiredLimits.Format, DesiredLimits.Volume(ControllerContainer)), cancellationToken).ConfigureAwait(false);
         return new DockerSurvey
         {
             Version = server.Output.Trim(),
             ComposeVersion = compose.Succeeded ? compose.Output.Trim() : null,
-            Limits = parsed
+            Limits = parsed,
+            DesiredLimits = desired.Succeeded ? DesiredLimits.Parse(desired.Output) : null
         };
     }
 

@@ -339,6 +339,14 @@ public sealed class ContainerRemovalStep(string name, string purpose, PlanStep? 
         await DockerAsync(context, $"remove {name}", cancellationToken, "rm", "-v", name).ConfigureAwait(false);
         context.Log.Write($"Removed {name}.");
 
+        // The controller's desired limits, which the deploy script keeps for its next deploy in a volume of their own
+        // (DesiredLimits), go with it: the record keeps the ones the installer gives.
+        if (name == MachineSurveyor.ControllerContainer)
+        {
+            var desired = await machine.Commands.RunAsync(new CommandLine("docker", "volume", "rm", "--force", DesiredLimits.Volume(name)) { Timeout = TimeSpan.FromMinutes(2) }, cancellationToken).ConfigureAwait(false);
+            context.Log.Write(desired.Succeeded ? $"Removed its desired limits ({DesiredLimits.Volume(name)})." : $"Kept its desired limits ({DesiredLimits.Volume(name)}): {desired.Reason}");
+        }
+
         // Another container (the one kept for a rollback) may use the same image: it then stays, and goes with that one.
         var image = await machine.Commands.RunAsync(new CommandLine("docker", "image", "rm", container.Image) { Timeout = TimeSpan.FromMinutes(2) }, cancellationToken).ConfigureAwait(false);
         context.Log.Write(image.Succeeded ? $"Removed its image {container.Image}." : $"Kept its image {container.Image}: {image.Reason}");

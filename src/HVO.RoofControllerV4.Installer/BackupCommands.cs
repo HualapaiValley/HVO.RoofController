@@ -664,6 +664,15 @@ internal static class BackupCommands
         }
 
         var installs = record is { UninstalledAt: null, Roles.Count: > 0 };
+
+        // Before the first file goes back: the install that follows deploys the controller with the backup's limits, so a
+        // Docker here that cannot enforce them, or limits below the floor, refuse it now (review ROOF-151-R1 F4).
+        if (installs && RoleGuards.ControllerLimitProblems(session.Survey, record!.ToAnswers()).ToArray() is { Length: > 0 } limitProblems)
+        {
+            session.Log.Write($"Refused before restoring: {string.Join(" ", limitProblems)}");
+            throw new InstallerRefusedException(string.Join(Environment.NewLine, limitProblems) + Environment.NewLine + "Nothing was restored.");
+        }
+
         if (planOnly)
         {
             host.Out.WriteLine(installs

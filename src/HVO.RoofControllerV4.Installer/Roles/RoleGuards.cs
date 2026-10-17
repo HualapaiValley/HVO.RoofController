@@ -303,14 +303,21 @@ public static class RoleGuards
         yield return warning.ToString();
     }
 
-    // Each limit Docker does not say it enforces, as a finding with its code.
+    // Each limit Docker does not say it enforces, as a finding with its code. Memory and swap are separate controls
+    // (review ROOF-151-R1 F3): without swap control, the memory limit still holds and only the swap beyond it does not.
     private static List<string> UnenforcedLimits(DockerLimits docker, ContainerResources resources, string without)
     {
         static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
         var limits = new List<string>();
-        if (docker.Memory != true || docker.Swap != true)
+        if (docker.Memory != true)
         {
             limits.Add($"docker-memory-limit-unsupported: docker info reports MemoryLimit {Flag(docker.Memory)} and SwapLimit {Flag(docker.Swap)}, {without} its memory limit ({resources.MemoryOrDefault}, and no swap beyond it).");
+        }
+        else if (docker.Swap != true)
+        {
+            limits.Add(without.Contains("rollback", StringComparison.Ordinal)
+                ? $"docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit {Flag(docker.Swap)}, so the version the rollback brings back keeps its memory limit ({resources.MemoryOrDefault}) but may swap beyond it."
+                : $"docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit {Flag(docker.Swap)}, so Docker would let the controller swap beyond its memory limit ({resources.MemoryOrDefault}).");
         }
 
         if (docker.Cpu != true)
@@ -342,6 +349,52 @@ public static class RoleGuards
         }
 
         return host.ToString();
+    }
+
+    /// <summary>
+    /// What refuses deploying the controller with <paramref name="answers"/>' limits here, checked before anything
+    /// changes: limits below the floor, Docker that is not usable, and a Docker that cannot enforce them or has fewer CPUs
+    /// (<see cref="ContainerLimitProblems"/>). Empty when the answers run no controller. For the paths that change
+    /// something before an install's own guards run (review ROOF-151-R1 F4): an upgrade's hand-over to another release's
+    /// installer (its backup, and the installer it puts in place), and a restore (the files it puts back).
+    /// </summary>
+    public static IEnumerable<string> ControllerLimitProblems(MachineSurvey survey, InstallAnswers answers)
+    {
+        ArgumentNullException.ThrowIfNull(survey);
+        ArgumentNullException.ThrowIfNull(answers);
+        if (!InstallRoles.RunsController(answers.Roles))
+        {
+            return [];
+        }
+
+        if (!survey.Docker.IsUsable)
+        {
+            return [$"The controller runs in Docker. {survey.Docker.Problem}"];
+        }
+
+        var resources = (answers.Controller ?? new ControllerSettings()).Normalised().Resources;
+        return [.. resources.Problems(), .. ContainerLimitProblems(survey.Docker.Limits, resources)];
+    }
+
+    /// <summary>
+    /// The deploy script's desired limits here (<see cref="DesiredLimits"/>) when someone gave it others by hand than the
+    /// installer gives (<paramref name="resources"/>, from its record or answers): the installer's replace them.
+    /// </summary>
+    public static IEnumerable<string> DesiredLimitWarnings(DesiredLimits? desired, ContainerResources resources)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        if (desired is null)
+        {
+            yield break;
+        }
+
+        var cpus = desired.Cpus is { } text && decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) ? number : (decimal?)null;
+        var memory = desired.Memory is { } given ? new ContainerResources { Memory = given }.Normalised().MemoryBytes : null;
+        if ((cpus is { } c && c != resources.CpusOrDefault) || (memory is { } m && m != resources.MemoryBytes))
+        {
+            yield return $"The deploy script here was last given {desired.Cpus ?? "?"} CPUs and {desired.Memory ?? "?"} of memory (the desired limits in volume {DesiredLimits.Volume(MachineSurveyor.ControllerContainer)}), "
+                + $"not the installer's {resources.CpusText} and {resources.MemoryOrDefault}: the installer gives its own. To keep those, give --cpus {desired.Cpus ?? resources.CpusText} --memory {desired.Memory ?? resources.MemoryOrDefault}.";
+        }
     }
 
     /// <summary>

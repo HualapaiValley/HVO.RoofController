@@ -185,6 +185,13 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// </summary>
     public string? DockerInfo { get; set; } = "true,true,true,true,4,8589934592,2,docker-host";
 
+    /// <summary>
+    /// The deploy script's desired limits (<see cref="DesiredLimits"/>), as <c>docker volume inspect</c> reads them from its
+    /// volume ("cpus,memory"); null for no such volume. A deploy or a rollback keeps the limits it was given, as the
+    /// script does.
+    /// </summary>
+    public string? DesiredLimitsVolume { get; set; }
+
     /// <summary>What docker says when it cannot answer (not running, not allowed).</summary>
     public string? DockerError { get; set; }
 
@@ -899,6 +906,16 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             "docker" when arguments is ["info", "--format", DockerLimits.Format] => Docker(() => DockerInfo is null
                 ? new CommandResult(1, string.Empty, "Error response from daemon: info failed\n")
                 : Answer(DockerInfo)),
+            "docker" when arguments is ["volume", "rm", "--force", var removed] && removed == DesiredLimits.Volume(MachineSurveyor.ControllerContainer)
+                => Docker(() =>
+                {
+                    DesiredLimitsVolume = null;
+                    return Answer(removed);
+                }),
+            "docker" when arguments is ["volume", "inspect", "--format", DesiredLimits.Format, var volume]
+                && volume == DesiredLimits.Volume(MachineSurveyor.ControllerContainer) => Docker(() => DesiredLimitsVolume is null
+                ? new CommandResult(1, string.Empty, $"Error response from daemon: get {volume}: no such volume\n")
+                : Answer(DesiredLimitsVolume)),
             "docker" when arguments is ["compose", "version", "--short"] => Docker(() => ComposeVersion is null
                 ? new CommandResult(1, string.Empty, "docker: 'compose' is not a docker command.\n")
                 : Answer(ComposeVersion)),
@@ -1299,6 +1316,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             Containers[MachineSurveyor.ControllerContainer] = WithLimits(previous, environment) with { State = "running", StartedAt = DateTimeOffset.UtcNow };
             ControllerKeys.Clear();
             ControllerKeys.UnionWith(ApiKeyValues());
+            DesiredLimitsVolume = $"{environment["CONTAINER_CPUS"]},{environment["CONTAINER_MEMORY"]}";
             return new CommandResult(0, "[deploy] Rolled back\n", string.Empty);
         }
 
@@ -1393,6 +1411,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         {
             ServedCertificates[apiPort] = served;
         }
+        DesiredLimitsVolume = $"{environment["CONTAINER_CPUS"]},{environment["CONTAINER_MEMORY"]}";
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
     }
 

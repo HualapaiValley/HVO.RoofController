@@ -247,6 +247,14 @@ internal static partial class LifecycleCommands
             from == target ? $"{target} is installed here: its installer checks it."
             : record.Version == target ? $"The upgrade from {from} to {target} did not finish here: its installer finishes it."
             : $"{record.Version} is installed here; {target} replaces it.");
+
+        // Before the hand-over's first change (its backup, and the installer it puts in place): the recorded limits, and a
+        // Docker that can enforce them, as the release's installer checks before it deploys (review ROOF-151-R1 F4).
+        if (RoleGuards.ControllerLimitProblems(session.Survey, answers).ToArray() is { Length: > 0 } limitProblems)
+        {
+            session.Log.Write($"Refused before the hand-over: {string.Join(" ", limitProblems)}");
+            throw new InstallerRefusedException(string.Join(Environment.NewLine, limitProblems) + Environment.NewLine + "Nothing was changed: the installer, the backups and the record are as they were.");
+        }
         session.Version = target;
         if (from != target)
         {
