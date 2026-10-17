@@ -494,7 +494,83 @@ that from another machine afterwards, with `--verify-remote` (its Stop stops the
 
 `tests/emulator/deploy-scenarios.sh pull` deploys a pulled image this way on a PC: the scenario pushes its controller
 image to a registry of its own on loopback and deploys it by its digest (C12 step 11 in
-[commissioning.md](commissioning.md#c12-deployment-script-stop-gate-pre-flight-remote-check-and-rollback)).
+[commissioning.md](commissioning.md#c12-deployment-script-stop-gate-pre-flight-remote-check-and-rollback)). It then
+splits another release of the image into its offline archives, removes the registry, and deploys the archive with
+`IMAGE_ARCHIVE` ([Without ghcr.io](#without-ghcrio)).
+
+#### Without ghcr.io
+
+A release also carries each image as an offline archive for each platform
+([Offline image archives](releasing.md#offline-image-archives)). With `IMAGE_ARCHIVE` set to the archive for
+`BUILD_PLATFORM`, beside `IMAGE_REF`, the script loads the image from it into the Pi's Docker and pulls nothing:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
+  IMAGE_REF=ghcr.io/hualapaivalley/roof-controller:4.0.0@sha256:<the digest in release.json> \
+  IMAGE_ARCHIVE=roof-controller-4.0.0-linux-arm64.oci.tar \
+  IMAGE_ARCHIVE_SHA256=<the archive's sha256 in release.json> \
+  ./deploy-roofcontroller-rpi.sh
+```
+
+- Docker loads only bytes the script has checked. First, the script copies the archive once into a new folder of its
+  own, `hvo-roof-archive.<random>` with mode 0700 and the copy 0600, so that only the user running the script and root
+  can change it. That copy is what is checked and what `docker load` reads: whatever happens to `IMAGE_ARCHIVE`
+  afterwards (replaced, or written over in place) changes nothing Docker reads. With `IMAGE_ARCHIVE_SHA256` (optional;
+  the installer always gives it), the copy must also have that SHA-256: `[load] Checking a copy of <archive> that only
+  this user can change (SHA-256 ..., as release.json gives it): Docker loads that copy`. The script refuses, with
+  nothing changed, a file system without room for the archive and 16 MiB more (about 180 MB for the controller's
+  archive): free some room, or set `TMPDIR` to a folder that has it.
+- The script's own folders, the copy's and its work folder (`hvo-roof-deploy.<random>`, which holds the new
+  controller's container ID that a restore removes it by), are made only in a `TMPDIR` that no one but you and root can
+  change, in every run that makes them (all but `--verify-remote`, which makes none):
+  - before anything is made, `TMPDIR` (`/tmp` when it is not set) is followed to its physical path, and that folder and
+    every folder above it, up to `/`, must be a real folder (not a link), yours or root's, that no one else can write
+    to unless it is sticky (as `/tmp` is). Otherwise the script refuses before any Docker call and makes nothing there,
+    since someone else could put a link or another folder in the place of one it made. Set `TMPDIR` to a folder only
+    you can change. A `TMPDIR` that is a link to such a folder is fine: it is followed once;
+  - each folder is made new, with `mktemp`, by that physical path, and must then be a real folder of yours with mode
+    0700. Only that exact path is used, and only it is removed;
+  - it is removed, once Docker has read the copy and whenever the script ends, only while it is still that folder, and
+    only what the script put there (the copy and the files it checks, the container ID, a built image, the identity
+    check's copies) is removed, file by file, then the folder itself with `rmdir`. Anything else found there is left,
+    with the folder, and the script says so (`WARNING: … so it was left as it is`).
+- Before any Docker call, the script checks that the copy holds the image `IMAGE_REF`'s digest names for
+  `BUILD_PLATFORM`, and nothing else. Each of Docker's image stores loads its own part of an archive and applies all
+  it finds there (the containerd store reads `index.json` and the names it gives, the classic store `manifest.json`,
+  every image it lists and their tags), and a load cannot be undone afterwards, so the script checks the archive whole:
+  - its members, as the archive's own tar headers give them (not as a tar program lists them), are `oci-layout`,
+    `index.json`, `manifest.json` and the blobs of the index, the platform's manifest, its config and its layers, each
+    once and each a plain file, with the folders `blobs` and `blobs/sha256`. The headers must be plain POSIX ustar
+    headers of files and folders, as a release writes them: no link (a pax hard link can carry data), device, FIFO or
+    sparse file, no pax or GNU extension header, no other file, no second copy, and nothing after the archive's end;
+  - each JSON file it reads (`oci-layout`, `index.json`, `manifest.json`, the index, the platform's manifest and its
+    config) gives each name once in each object, however it is spelt (`"a"` and `"\u0061"` are one name): the script's
+    readers (jq, or python3 where there is no jq) and Docker's would read a name given twice differently;
+  - `index.json` names that index alone, by `IMAGE_REF`'s own name (`<repository>:<tag>`) or none;
+  - `manifest.json` lists that one image, the platform's config and its layers, tagged `IMAGE_REF`'s
+    `<repository>:<tag>` or not at all;
+  - every blob, the layers included, is the one its digest names.
+
+  It then prints `[load] <archive> holds sha256:..., with its image for linux/arm64 (manifest sha256:..., config
+  sha256:...), and nothing else`. Any other archive (of another image or platform, or with another image, name or file
+  in it) changes nothing, and is refused even by `--dry-run`.
+- Docker loads the copy (`[load] Loading the checked copy of <archive> into Docker context 'rpi-remote' (nothing is
+  pulled)...`). The load can point `IMAGE_REF`'s own `<repository>:<tag>` (`ghcr.io/hualapaivalley/roof-controller:4.0.0`
+  above), the one name the archive may give, at the release's image, even when that tag named another image on the Pi
+  before; it points no other name at anything. The image is used only when Docker then holds it by one of the IDs the
+  archive's digests give it, the index's (the containerd image store) or the platform's manifest's or config's (the
+  classic store), for `BUILD_PLATFORM`: `[load] sha256:... for linux/arm64, image sha256:...: version 4.0.0, commit ...`.
+- The pre-flight and the new controller run that image by its ID, with `docker run --pull never`, and the controller
+  carries the label `io.hvo.roof.release-image=<IMAGE_REF>`, which the installer reads to know the release it runs. The
+  label only claims it: the installer believes it only when Docker's ID for the image the container runs is one
+  `release.json` gives that release's archive for the machine. `EXTRA_DOCKER_ARGS` may not set `--pull` or that label.
+  From the pre-flight on, the deploy is the same.
+- `--rollback`, `--stop` and `--verify-remote` ignore `IMAGE_ARCHIVE` as they ignore `IMAGE_REF`: a rollback puts back
+  `<name>-previous` as it is, however its image came.
+
+The installer sets `IMAGE_ARCHIVE` and `IMAGE_ARCHIVE_SHA256` itself when it installs from a release's folder, with
+`TMPDIR` its own folder, which only root can open ([The release it installs](install.md#the-release-it-installs)).
 
 ### HAT emulator mode (test rigs)
 

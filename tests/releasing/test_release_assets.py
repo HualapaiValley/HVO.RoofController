@@ -7,6 +7,7 @@ with the right file headers, so no .NET build is needed. From the repository roo
 """
 
 import contextlib
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -29,8 +30,81 @@ _spec.loader.exec_module(release_assets)
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 CREATED = "2026-10-01T12:00:00Z"
 CREATED_SECONDS = 1790856000
-CONTROLLER_DIGEST = "sha256:" + "1" * 64
-EMULATOR_DIGEST = "sha256:" + "2" * 64
+
+OCI_INDEX = "application/vnd.oci.image.index.v1+json"
+OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+
+
+def layer(files):
+    """A layer: a gzipped tar of the files, the same each time, and its diff ID (the SHA-256 of the tar)."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    compressed = io.BytesIO()
+    with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as archive:
+        archive.write(raw.getvalue())
+    return compressed.getvalue(), "sha256:" + hashlib.sha256(raw.getvalue()).hexdigest()
+
+
+class Image:
+    """An image as docker buildx build --output type=oci writes it, for the platforms: an index of one image for each,
+    with a config and a layer of its own. config_platforms gives an image a config for another platform; the platform's
+    image in empty_platforms has no layers, which BuildKit writes as null (FROM scratch with labels alone)."""
+
+    def __init__(self, name, platforms=("linux/amd64", "linux/arm64"), config_platforms=None, empty_platforms=()):
+        self.blobs = {}
+        self.manifests, self.configs, self.layers = {}, {}, {}
+        entries = []
+        for platform in platforms:
+            operating_system, architecture = (config_platforms or {}).get(platform, platform).split("/")
+            diff_ids = []
+            if platform not in empty_platforms:
+                data, diff_id = layer({f"app/{name}": f"{name} for {platform}\n".encode()})
+                self.layers[platform] = self.add(data, "application/vnd.oci.image.layer.v1.tar+gzip")
+                diff_ids.append(diff_id)
+            config = {"architecture": architecture, "os": operating_system, "rootfs": {"type": "layers", "diff_ids": diff_ids},
+                      "config": {"Labels": {"org.opencontainers.image.title": name}}}
+            self.configs[platform] = self.add(json.dumps(config).encode(), "application/vnd.oci.image.config.v1+json")
+            manifest = {"schemaVersion": 2, "mediaType": OCI_MANIFEST, "config": self.configs[platform],
+                        "layers": [self.layers[platform]] if platform in self.layers else None}
+            self.manifests[platform] = self.add(json.dumps(manifest).encode(), OCI_MANIFEST)
+            os_, arch = platform.split("/")
+            entries.append({**self.manifests[platform], "platform": {"architecture": arch, "os": os_}})
+        self.index = self.add(json.dumps({"schemaVersion": 2, "mediaType": OCI_INDEX, "manifests": entries}).encode(), OCI_INDEX)
+        self.digest = self.index["digest"]
+
+    def add(self, data, media_type):
+        digest = "sha256:" + hashlib.sha256(data).hexdigest()
+        self.blobs[digest] = data
+        return {"mediaType": media_type, "digest": digest, "size": len(data)}
+
+    def write(self, path, images=None, blobs=None):
+        """The OCI archive: index.json naming the images (the index alone by default), and the blobs (every one)."""
+        with tarfile.open(path, "w") as tar:
+            def add(name, data):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+
+            add("oci-layout", b'{"imageLayoutVersion":"1.0.0"}')
+            add("index.json", json.dumps({"schemaVersion": 2, "mediaType": OCI_INDEX,
+                                          "manifests": [self.index] if images is None else images}).encode())
+            for digest, data in (self.blobs if blobs is None else blobs).items():
+                add(f"blobs/sha256/{digest[7:]}", data)
+
+
+CONTROLLER_IMAGE = Image("roof-controller")
+EMULATOR_IMAGE = Image("roof-hat-emulator")
+CONTROLLER_DIGEST = CONTROLLER_IMAGE.digest
+EMULATOR_DIGEST = EMULATOR_IMAGE.digest
+
+# The offline archives a release holds: <image>-<version>-linux-<arch>.oci.tar, for each image and platform.
+ARCHIVES = {f"{image}-4.0.0-linux-{arch}.oci.tar": ("image-archive", runtime)
+            for image in ("roof-controller", "roof-hat-emulator")
+            for arch, runtime in (("amd64", "linux-x64"), ("arm64", "linux-arm64"))}
 
 
 def elf(machine, body=b"program"):
@@ -66,7 +140,11 @@ class Release:
         self.installer = root / "installer"
         self.kiosk = root / "kiosk"
         self.mac = root / "hvo-roof-mac.zip"
+        self.controller_archive = root / "roof-controller.tar"
+        self.emulator_archive = root / "roof-hat-emulator.tar"
         self.out = root / "out"
+        CONTROLLER_IMAGE.write(self.controller_archive)
+        EMULATOR_IMAGE.write(self.emulator_archive)
         for runtime, program in (("linux-arm64", AARCH64), ("linux-x64", X86_64), ("osx-arm64", mach_o_arm64(b"cli"))):
             (self.cli / runtime).mkdir(parents=True)
             (self.cli / runtime / "hvo-roof").write_bytes(program)
@@ -84,6 +162,7 @@ class Release:
         values = {
             "--version": version, "--commit": COMMIT, "--created": CREATED,
             "--controller-digest": CONTROLLER_DIGEST, "--emulator-digest": EMULATOR_DIGEST,
+            "--controller-archive": str(self.controller_archive), "--emulator-archive": str(self.emulator_archive),
             "--cli": str(self.cli), "--installer": str(self.installer), "--kiosk": str(self.kiosk),
             "--mac-zip": str(self.mac),
             "-o": str(out or self.out),
@@ -164,6 +243,7 @@ class TheAssets(ReleaseTestCase):
         "docker-compose.yaml": ("compose", None),
         "deploy-roofcontroller-rpi.sh": ("deploy-script", None),
         "install.sh": ("install-script", None),
+        **ARCHIVES,
     }
 
     def setUp(self):
@@ -185,7 +265,9 @@ class TheAssets(ReleaseTestCase):
              "created": CREATED, "repository": "https://github.com/HualapaiValley/HVO.RoofController"})
 
     def test_release_json_pins_each_image_to_its_digest(self):
-        self.assertEqual(self.manifest["images"], {
+        images = {key: {name: value for name, value in image.items() if name != "offlineArchives"}
+                  for key, image in self.manifest["images"].items()}
+        self.assertEqual(images, {
             "controller": {
                 "repository": "ghcr.io/hualapaivalley/roof-controller", "tag": "4.0.0", "digest": CONTROLLER_DIGEST,
                 "reference": f"ghcr.io/hualapaivalley/roof-controller:4.0.0@{CONTROLLER_DIGEST}",
@@ -282,6 +364,192 @@ class TheAssets(ReleaseTestCase):
         self.build(out=again)
         name = "hvo-roof-kiosk-4.0.0-linux-arm64.tar.gz"
         self.assertEqual((again / name).read_bytes(), (self.out / name).read_bytes())
+
+
+class TheOfflineArchives(ReleaseTestCase):
+    """Each image's offline archives (#127): one per platform, loadable by docker load in either image store."""
+
+    IMAGES = (("controller", "roof-controller", CONTROLLER_IMAGE), ("hatEmulator", "roof-hat-emulator", EMULATOR_IMAGE))
+
+    def setUp(self):
+        super().setUp()
+        self.build()
+        self.out = self.release.out
+        self.manifest = json.loads((self.out / "release.json").read_text(encoding="utf-8"))
+
+    def test_release_json_lists_each_image_s_archives_with_the_ids_docker_may_give_it(self):
+        for key, name, image in self.IMAGES:
+            archives = self.manifest["images"][key]["offlineArchives"]
+            self.assertEqual([archive["platform"] for archive in archives], ["linux/amd64", "linux/arm64"], key)
+            for archive in archives:
+                path = self.out / archive["name"]
+                platform = archive["platform"]
+                self.assertEqual(archive, {
+                    "name": f"{name}-4.0.0-linux-{platform.split('/')[1]}.oci.tar", "platform": platform,
+                    "size": path.stat().st_size, "sha256": sha256(path),
+                    "manifestDigest": image.manifests[platform]["digest"], "configDigest": image.configs[platform]["digest"]})
+
+    def test_each_archive_names_the_pushed_index_and_holds_its_platform_s_blobs_alone(self):
+        for key, name, image in self.IMAGES:
+            for platform in ("linux/amd64", "linux/arm64"):
+                archive = self.out / f"{name}-4.0.0-linux-{platform.split('/')[1]}.oci.tar"
+                with tarfile.open(archive) as tar:
+                    files = {member.name: tar.extractfile(member).read() for member in tar.getmembers() if member.isfile()}
+                reference = f"ghcr.io/hualapaivalley/{name}:4.0.0"
+                self.assertEqual(json.loads(files["oci-layout"]), {"imageLayoutVersion": "1.0.0"})
+                self.assertEqual(json.loads(files["index.json"]), {
+                    "schemaVersion": 2, "mediaType": OCI_INDEX,
+                    "manifests": [{**image.index, "annotations": {"io.containerd.image.name": reference,
+                                                                  "org.opencontainers.image.ref.name": "4.0.0"}}]})
+                config, layer_ = image.configs[platform]["digest"], image.layers[platform]["digest"]
+                self.assertEqual(json.loads(files["manifest.json"]), [
+                    {"Config": f"blobs/sha256/{config[7:]}", "RepoTags": [reference], "Layers": [f"blobs/sha256/{layer_[7:]}"]}])
+                blobs = {f"sha256:{path[13:]}": data for path, data in files.items() if path.startswith("blobs/sha256/")}
+                self.assertEqual(set(blobs), {image.digest, image.manifests[platform]["digest"], config, layer_}, archive.name)
+                for digest, data in blobs.items():
+                    self.assertEqual(data, image.blobs[digest], digest)
+
+    def test_each_archive_is_root_s_with_fixed_modes_and_the_release_s_time(self):
+        for archive in ARCHIVES:
+            with tarfile.open(self.out / archive) as tar:
+                members = tar.getmembers()
+            self.assertEqual([member.name for member in members][:5],
+                             ["oci-layout", "index.json", "manifest.json", "blobs", "blobs/sha256"], archive)
+            for member in members:
+                self.assertEqual((member.uid, member.gid, member.uname, member.gname, member.mtime, oct(member.mode)),
+                                 (0, 0, "root", "root", CREATED_SECONDS, "0o755" if member.isdir() else "0o644"),
+                                 f"{archive}: {member.name}")
+
+    def test_the_same_inputs_make_the_same_archives(self):
+        again = self.release.root / "again"
+        self.build(out=again)
+        for archive in ARCHIVES:
+            self.assertEqual((again / archive).read_bytes(), (self.out / archive).read_bytes(), archive)
+
+    def test_an_image_without_layers_is_split_too(self):
+        image = Image("roof-hat-emulator", empty_platforms=("linux/arm64",))
+        image.write(self.release.emulator_archive)
+        out = self.release.root / "empty"
+        self.build(out=out, **{"--emulator-digest": image.digest})
+        with tarfile.open(out / "roof-hat-emulator-4.0.0-linux-arm64.oci.tar") as tar:
+            docker = json.loads(tar.extractfile("manifest.json").read())
+            blobs = {name for name in tar.getnames() if name.startswith("blobs/sha256/")}
+        self.assertEqual(docker[0]["Layers"], [])
+        self.assertEqual(blobs, {f"blobs/sha256/{digest[7:]}" for digest in
+                                 (image.digest, image.manifests["linux/arm64"]["digest"], image.configs["linux/arm64"]["digest"])})
+
+    def test_every_header_of_each_archive_is_a_plain_ustar_header(self):
+        # What the deploy script's archive_members accepts, and nothing more: each header "ustar\0" "00", summing to its
+        # checksum, a file (0) or a folder (5) with no link target, nothing past the name field's 100 bytes but the
+        # fields ustar has, then empty blocks to the end. A pax header (x, g) would be refused.
+        for archive in ARCHIVES:
+            self.assert_plain_ustar(self.out / archive)
+
+    def test_each_archive_is_plain_ustar_even_for_a_time_pax_would_keep_in_a_header_of_its_own(self):
+        # PAX_FORMAT keeps a time with a fraction of a second in a pax header; ustar holds whole seconds.
+        out = self.release.root / "fraction"
+        out.mkdir()
+        release_assets.offline_archives(self.release.controller_archive, "roof-controller", "ghcr.io/hualapaivalley/roof-controller",
+                                        "4.0.0", CONTROLLER_DIGEST, out, CREATED_SECONDS + 0.5)
+        for platform in ("amd64", "arm64"):
+            self.assert_plain_ustar(out / f"roof-controller-4.0.0-linux-{platform}.oci.tar")
+
+    def test_what_ustar_cannot_hold_is_refused_as_the_release_is_built(self):
+        # A time past ustar's 11 octal digits: PAX_FORMAT would write it in a pax header, which the deploy script refuses.
+        out = self.release.root / "late"
+        out.mkdir()
+        with self.assertRaisesRegex(release_assets.AssetError,
+                                    r"roof-controller-4\.0\.0-linux-amd64\.oci\.tar cannot be written as a plain ustar archive"):
+            release_assets.offline_archives(self.release.controller_archive, "roof-controller", "ghcr.io/hualapaivalley/roof-controller",
+                                            "4.0.0", CONTROLLER_DIGEST, out, 8 ** 11)
+        self.assertEqual(list(out.iterdir()), [], "no archive is left half written")
+        for name, accepted in (("blobs/sha256/" + "a" * 64, True), ("a" * 100, True), ("a" * 101, False),
+                               ("Blobs/sha256", False), ("blobs/sha256/x y", False), ("ünïcode", False)):
+            self.assertEqual(bool(release_assets.ARCHIVE_MEMBER_NAME.match(name)), accepted, name)
+
+    def assert_plain_ustar(self, path):
+        data = path.read_bytes()
+        self.assertEqual(len(data) % 512, 0, path.name)
+        offset, members = 0, []
+        while offset < len(data):
+            header = data[offset:offset + 512]
+            if header == bytes(512):
+                self.assertEqual(data[offset:], bytes(len(data) - offset), f"{path.name}: only empty blocks after the end")
+                self.assertGreaterEqual(len(data) - offset, 1024, f"{path.name}: two empty blocks end it")
+                break
+            where = f"{path.name} at {offset}"
+            self.assertEqual(header[257:265], b"ustar\x0000", where)
+            self.assertIn(header[156:157], (b"0", b"5"), where)
+            stored = int(header[148:156].replace(b"\x00", b" ").strip() or b"-1", 8)
+            self.assertEqual(stored, sum(header[:148]) + 8 * 32 + sum(header[156:]), where)
+            name = header[:100].rstrip(b"\x00")
+            self.assertNotIn(b"\x00", name, where)
+            self.assertRegex(name.decode("ascii"), release_assets.ARCHIVE_MEMBER_NAME, where)
+            self.assertEqual(header[157:257], bytes(100), f"{where}: no link target")
+            self.assertEqual(header[345:512], bytes(167), f"{where}: no name prefix, nothing past ustar's fields")
+            self.assertRegex(header[124:136], rb"^[0-7]{11}\x00$", where)
+            size = int(header[124:135], 8)
+            members.append((header[156:157], name.decode("ascii")))
+            offset += 512 + (size + 511) // 512 * 512
+        self.assertEqual(members[:5], [(b"0", "oci-layout"), (b"0", "index.json"), (b"0", "manifest.json"),
+                                       (b"5", "blobs/"), (b"5", "blobs/sha256/")], path.name)
+
+    def test_the_archives_are_attested_with_the_other_assets(self):
+        listed = {line.split("  ", 1)[1] for line in (self.out / "SHA256SUMS").read_text(encoding="utf-8").splitlines()}
+        self.assertLessEqual(set(ARCHIVES), listed)
+
+
+class TheOfflineArchiveRefusals(ReleaseTestCase):
+    def test_an_archive_of_another_image_than_the_one_pushed(self):
+        self.refused(f"holds the image {EMULATOR_DIGEST}, not {CONTROLLER_DIGEST}, the one pushed",
+                     **{"--controller-archive": str(self.release.emulator_archive)})
+
+    def test_an_index_without_every_platform(self):
+        image = Image("roof-controller", platforms=("linux/amd64",))
+        image.write(self.release.controller_archive)
+        self.refused("must list one image for each of linux/amd64, linux/arm64, and nothing else",
+                     **{"--controller-digest": image.digest})
+
+    def test_an_index_with_another_platform(self):
+        image = Image("roof-controller", platforms=("linux/amd64", "linux/arm64", "linux/riscv64"))
+        image.write(self.release.controller_archive)
+        self.refused("must list one image for each of linux/amd64, linux/arm64, and nothing else",
+                     **{"--controller-digest": image.digest})
+
+    def test_an_image_whose_config_is_for_another_platform(self):
+        image = Image("roof-controller", config_platforms={"linux/arm64": "linux/amd64"})
+        image.write(self.release.controller_archive)
+        self.refused("the linux/arm64 image's config is for linux/amd64", **{"--controller-digest": image.digest})
+
+    def test_an_archive_without_a_layer(self):
+        blobs = dict(CONTROLLER_IMAGE.blobs)
+        del blobs[CONTROLLER_IMAGE.layers["linux/arm64"]["digest"]]
+        CONTROLLER_IMAGE.write(self.release.controller_archive, blobs=blobs)
+        self.refused(f"does not hold layer 1 of the linux/arm64 image, the blob {CONTROLLER_IMAGE.layers['linux/arm64']['digest']}")
+
+    def test_a_layer_that_is_not_the_blob_its_digest_names(self):
+        blobs = dict(CONTROLLER_IMAGE.blobs)
+        digest = CONTROLLER_IMAGE.layers["linux/amd64"]["digest"]
+        blobs[digest] = bytes(len(blobs[digest]))
+        CONTROLLER_IMAGE.write(self.release.controller_archive, blobs=blobs)
+        self.refused(f"layer 1 of the linux/amd64 image is not the blob {digest} its manifest names")
+
+    def test_an_archive_of_two_images(self):
+        CONTROLLER_IMAGE.write(self.release.controller_archive, images=[CONTROLLER_IMAGE.index, CONTROLLER_IMAGE.index])
+        self.refused("holds 2 images, not one")
+
+    def test_an_image_that_is_not_an_index(self):
+        manifest = CONTROLLER_IMAGE.manifests["linux/amd64"]
+        CONTROLLER_IMAGE.write(self.release.controller_archive, images=[manifest])
+        self.refused("is not an index of platforms", **{"--controller-digest": manifest["digest"]})
+
+    def test_a_file_that_is_not_an_archive(self):
+        self.release.emulator_archive.write_bytes(b"not a tar")
+        self.refused("is not an OCI archive of an image release-assets.py can split")
+
+    def test_no_archive(self):
+        self.release.emulator_archive.unlink()
+        self.refused("is not a file: give the OCI archive the roof-hat-emulator image was pushed from")
 
 
 class APrerelease(ReleaseTestCase):

@@ -4,12 +4,14 @@ name: Release
 # the scenarios for that commit, CI building every program with the tag's version. When both pass, the release job
 # builds the controller and HAT emulator images for linux/amd64 and linux/arm64, checks their labels, pushes them to
 # GHCR with the version as their tag, and attests them; gathers the programs CI built and tested (hvo-roof, the
-# installer, the kiosk and the Mac app), with the compose file, the deploy script and the upgrade notes, into the
-# release's assets, with release.json and SHA256SUMS (build/release-assets.py);
+# installer, the kiosk and the Mac app), with the compose file, the deploy script, the upgrade notes and each image's
+# offline archives (one per platform, split from the archive pushed), into the release's assets, with release.json and
+# SHA256SUMS (build/release-assets.py);
 # attests the assets; and makes a draft release of them. The e2e job then installs a rig from the draft's assets, on
-# x64 and arm64, by their install.sh, with the release's images, and runs the rig scenario against it
-# (tests/installer/rig-scenario.sh). Nothing is published here: a person checks the draft and the e2e job, and
-# publishes it, and publishing a final release moves the images' latest tag (release-latest.yml).
+# x64 and arm64, by their install.sh, with the release's images loaded from its offline archives and ghcr.io out of
+# reach, and runs the rig scenario against it (tests/installer/rig-scenario.sh). Nothing is published here: a person
+# checks the draft and the e2e job, and publishes it, and publishing a final release moves the images' latest tag
+# (release-latest.yml).
 #
 # A manual run is a dry run of all of it, for the commit it runs on: version X.Y.Z-dryrun.<run>, images with that tag,
 # and a draft release to delete afterwards, with those images (docs/releasing.md#a-dry-run).
@@ -272,8 +274,11 @@ jobs:
           if [ -d docs/upgrade-notes ]; then
             notes=(--upgrade-notes docs/upgrade-notes)
           fi
+          # The offline archives are split from the archives just pushed: release-assets.py checks each holds the digest
+          # pushed.
           build/release-assets.py --version "${VERSION}" --commit "${GITHUB_SHA}" --created "${CREATED}" \
             --controller-digest "${CONTROLLER_DIGEST}" --emulator-digest "${EMULATOR_DIGEST}" \
+            --controller-archive "${RUNNER_TEMP}/roof-controller.tar" --emulator-archive "${RUNNER_TEMP}/roof-hat-emulator.tar" \
             --cli "${RUNNER_TEMP}/ci/cli" --installer "${RUNNER_TEMP}/ci/installer" --kiosk "${RUNNER_TEMP}/ci/kiosk" --linux-auth "${RUNNER_TEMP}/ci/linux-auth" \
             --mac-zip "${mac[0]}" "${notes[@]}" -o "${RUNNER_TEMP}/dist"
           cmp "${RUNNER_TEMP}/ci/cli/linux-x64/hvo-roof" "${RUNNER_TEMP}/dist/hvo-roof-linux-x64"
@@ -321,6 +326,10 @@ jobs:
 
           Both for linux/amd64 and linux/arm64. \`release.json\` names each image's digest, and the compose file pins them.
 
+          Each image is also an offline archive for each platform, \`<image>-${VERSION}-linux-<amd64|arm64>.oci.tar\`, for a
+          machine that cannot reach ghcr.io: download the release's files into a folder and install from it with
+          \`install.sh --from <folder>\`, which loads the images from their archives and pulls nothing.
+
           ## Checking the files
 
           \`SHA256SUMS\` lists every file's SHA-256, and each file and image has a build provenance attestation:
@@ -348,9 +357,10 @@ jobs:
           echo "Draft release ${TAG}: ${url}" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The release end to end, on x64 and arm64: the draft's install.sh, from its assets, checks hvo-roof-install against
-  # SHA256SUMS and its attestation and installs a rig against the HAT emulator from the release's images, and the rig
-  # scenario runs against it (tests/installer/rig-scenario.sh, from a release: no upgrade or rollback, which need the
-  # release before). It writes nothing; publish the draft only when it passed (docs/releasing.md).
+  # SHA256SUMS and its attestation and installs a rig against the HAT emulator from the release's offline image
+  # archives, with ghcr.io out of reach, and the rig scenario runs against it (tests/installer/rig-scenario.sh, from a
+  # release: no upgrade or rollback, which need the release before). It writes nothing; publish the draft only when it
+  # passed (docs/releasing.md).
   e2e:
     needs: [ version, release ]
     strategy:
@@ -359,10 +369,9 @@ jobs:
         runner: [ ubuntu-latest, ubuntu-24.04-arm ]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    # The images (packages) until they are public, and the assets' attestations.
+    # The assets' attestations. No packages: the images come from the release's offline archives.
     permissions:
       contents: read
-      packages: read
       attestations: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -376,11 +385,15 @@ jobs:
           name: release-${{ github.run_id }}
           path: ${{ runner.temp }}/release
 
-      # The installer pulls the images as root.
-      - name: Sign in to GHCR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: printf '%s' "${GH_TOKEN}" | sudo -n docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+      # A machine that cannot reach ghcr.io: install.sh --from and the installer load the images from the release's
+      # offline archives, and any pull of them would fail. The runner is the job's own and goes with it.
+      - name: Put ghcr.io out of reach
+        run: |
+          printf '0.0.0.0 ghcr.io pkg-containers.githubusercontent.com\n' | sudo -n tee -a /etc/hosts >/dev/null
+          if curl -sS --connect-timeout 5 --max-time 10 -o /dev/null https://ghcr.io/v2/; then
+            echo "::error::ghcr.io still answers: the end to end would not show that the release installs without it."
+            exit 1
+          fi
 
       # gh checks hvo-roof-install's attestation with the token.
       - name: Install by install.sh, again, hvo-roof, motion, change, renew, names, back up, restore
@@ -389,10 +402,6 @@ jobs:
           RIG_RELEASE_DIR: ${{ runner.temp }}/release
           RIG_RESULTS_DIR: ${{ runner.temp }}/rig-scenario-results
         run: tests/installer/rig-scenario.sh
-
-      - name: Sign out of GHCR
-        if: always()
-        run: sudo -n docker logout ghcr.io
 
       - name: Summary
         if: always()

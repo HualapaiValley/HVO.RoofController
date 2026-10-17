@@ -18,7 +18,7 @@ COMMIT="0123456789abcdef0123456789abcdef01234567"
 RELEASE_URL="https://github.com/HualapaiValley/HVO.RoofController/releases/download/v${VERSION}"
 PI_DESCRIPTION="Linux on aarch64, Debian GNU/Linux 12 (bookworm), Raspberry Pi 5 Model B Rev 1.0 (linux-arm64)"
 # The real commands install.sh and the fakes use; everything else on the PATH is a fake, or missing.
-REAL_TOOLS="cat tr awk sed grep tail head dirname mktemp rm cp chmod mkdir ln wc"
+REAL_TOOLS="cat tr awk sed grep tail head dirname mktemp rm rmdir cp mv chmod mkdir ln wc find"
 # The fakes (tests/install/fakes/fake-command, linked under each name).
 FAKES="uname sysctl sw_vers getconf ldd id sudo curl docker dpkg apt-get raspi-config timedatectl ss lsof df tar sha256sum shasum gh date"
 # A Mac with Apple silicon (also: make_mac).
@@ -59,6 +59,8 @@ setup() {
   mkdir -p "${FAKE_STATE_DIR}" "${WORK}/fakebin" "${WORK}/realbin" "${WORK}/tmp" "${WORK}/home" "${WORK}/docker" \
     "${WORK}/release" "${WORK}/root/etc" "${WORK}/root/proc/device-tree" "${WORK}/root/dev"
   : >"${FAKE_STATE_DIR}/calls.log"
+  # TMPDIR is a folder only this user can change, whatever the umask: install.sh downloads only into such a one.
+  chmod 0700 "${WORK}/tmp"
   local name
   for name in ${FAKES}; do
     ln -s "${TESTS_DIR}/fakes/fake-command" "${WORK}/fakebin/${name}"
@@ -73,6 +75,11 @@ setup() {
   : >"${WORK}/root/dev/i2c-1"
   for name in linux-arm64 linux-x64 osx-arm64; do
     cp "${TESTS_DIR}/fakes/hvo-roof-install" "${WORK}/release/hvo-roof-install-${name}"
+  done
+  # The release's offline image archives: install.sh checks only that the ones this machine needs are there.
+  for name in roof-controller roof-hat-emulator; do
+    : >"${WORK}/release/${name}-${VERSION}-linux-amd64.oci.tar"
+    : >"${WORK}/release/${name}-${VERSION}-linux-arm64.oci.tar"
   done
   write_sums
 }
@@ -480,7 +487,8 @@ test_the_controller_on_a_pi_is_downloaded_checked_and_started_as_root() {
   assert_output_not_contains "FAIL"
   assert_called "root docker version --format {{.Server.Version}}"
   assert_called "df -Pk ${WORK}/docker"
-  assert_called "gh attestation verify ${WORK}/tmp/hvo-roof-install."
+  # By TMPDIR's physical path (on macOS, its /var is a link to /private/var).
+  assert_called "gh attestation verify $(cd -P -- "${WORK}" && pwd)/tmp/hvo-roof-install."
   assert_called "--repo HualapaiValley/HVO.RoofController --signer-workflow HualapaiValley/HVO.RoofController/.github/workflows/release.yml --source-ref refs/tags/v${VERSION}"
   assert_installer "root=yes"
   assert_installer "terminal=no"
@@ -491,7 +499,7 @@ test_the_controller_on_a_pi_is_downloaded_checked_and_started_as_root() {
 
 test_the_download_is_removed_from_a_tmpdir_with_a_quote_in_its_name() {
   local tmpdir="${WORK}/it's here"
-  mkdir "${tmpdir}"
+  mkdir -m 0700 "${tmpdir}"
   install_sh TMPDIR="${tmpdir}" -- --roles rig
 
   assert_status 0
@@ -817,6 +825,64 @@ test_the_release_from_a_folder_needs_no_github() {
   assert_output_contains "Taking hvo-roof-install ${VERSION} for linux-arm64 from ${WORK}/release"
   assert_nothing_downloaded
   assert_installer "args=[--release][${WORK}/release]"
+}
+
+# From a folder, the images are the release's offline archives, and ghcr.io is never asked (#127).
+test_the_release_from_a_folder_takes_its_images_from_the_folder_and_never_asks_ghcr() {
+  install_sh FAKE_GHCR_EXIT=7 -- --from "${WORK}/release" --roles rig
+
+  assert_status 0
+  assert_output_contains "ok    roof-controller-${VERSION}-linux-arm64.oci.tar is in ${WORK}/release: the installer loads the controller's image from it, and pulls nothing from ghcr.io"
+  assert_output_contains "ok    roof-hat-emulator-${VERSION}-linux-arm64.oci.tar is in ${WORK}/release: the installer loads the HAT emulator's image from it, and pulls nothing from ghcr.io"
+  assert_output_not_contains "ghcr.io answers"
+  assert_not_called "ghcr.io"
+  assert_installer "args=[--release][${WORK}/release]"
+}
+
+test_a_folder_without_an_image_archive_fails_the_checks() {
+  rm "${WORK}/release/roof-hat-emulator-${VERSION}-linux-arm64.oci.tar"
+  install_sh -- --from "${WORK}/release" --roles rig
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  ${WORK}/release has no roof-hat-emulator-${VERSION}-linux-arm64.oci.tar, the HAT emulator's image for this machine: download it from https://github.com/HualapaiValley/HVO.RoofController/releases/tag/v${VERSION} into ${WORK}/release, then run this again."
+  assert_not_called "ghcr.io"
+}
+
+test_the_controller_from_a_folder_needs_its_own_image_alone() {
+  rm "${WORK}/release/roof-hat-emulator-${VERSION}-linux-arm64.oci.tar" "${WORK}/release/roof-controller-${VERSION}-linux-amd64.oci.tar"
+  install_sh -- --from "${WORK}/release" --roles controller,kiosk
+
+  assert_status 0
+  assert_output_contains "ok    roof-controller-${VERSION}-linux-arm64.oci.tar is in ${WORK}/release"
+  assert_output_not_contains "roof-hat-emulator"
+  assert_not_called "ghcr.io"
+
+  rm "${WORK}/release/roof-controller-${VERSION}-linux-arm64.oci.tar" "${FAKE_STATE_DIR}/installer.log"
+  : >"${FAKE_STATE_DIR}/calls.log"
+  install_sh -- --from "${WORK}/release" --roles controller,kiosk
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  ${WORK}/release has no roof-controller-${VERSION}-linux-arm64.oci.tar, the controller's image for this machine"
+}
+
+test_a_rig_on_x64_from_a_folder_needs_the_amd64_images() {
+  not_a_pi
+  rm "${WORK}/release/roof-controller-${VERSION}-linux-arm64.oci.tar" "${WORK}/release/roof-hat-emulator-${VERSION}-linux-arm64.oci.tar"
+  install_sh FAKE_MACHINE=x86_64 -- --from "${WORK}/release" --roles rig
+
+  assert_status 0
+  assert_output_contains "ok    roof-controller-${VERSION}-linux-amd64.oci.tar is in ${WORK}/release"
+  assert_output_contains "ok    roof-hat-emulator-${VERSION}-linux-amd64.oci.tar is in ${WORK}/release"
+}
+
+test_a_rollback_from_a_folder_needs_no_image_and_never_asks_ghcr() {
+  record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
+  rm "${WORK}"/release/*.oci.tar
+  install_sh FAKE_GHCR_EXIT=7 -- --from "${WORK}/release" rollback
+
+  assert_status 0
+  assert_output_not_contains ".oci.tar"
+  assert_not_called "ghcr.io"
+  assert_installer "args=[rollback]"
 }
 
 # The machine's time is given in UTC (the tests run in MST7): the hour it says is the UTC hour before or after the run.
@@ -1340,7 +1406,7 @@ test_a_download_that_is_not_the_release_s_is_not_started() {
 }
 
 test_a_tmpdir_with_a_backslash_in_its_name_is_hashed() {
-  mkdir -p "${WORK}/back\\slash"
+  mkdir -m 0700 "${WORK}/back\\slash"
   install_sh TMPDIR="${WORK}/back\\slash" -- --roles rig
 
   assert_status 0
@@ -1391,7 +1457,9 @@ test_sha256sums_that_cannot_be_downloaded_says_why() {
 }
 
 test_a_folder_without_the_installer_is_refused() {
+  # The images are there, and the installer is not.
   mkdir "${WORK}/empty"
+  cp "${WORK}"/release/*.oci.tar "${WORK}/empty/"
   install_sh -- --from "${WORK}/empty" --roles rig
 
   assert_status 1
@@ -1449,6 +1517,63 @@ test_an_installer_that_names_no_commit_is_not_started() {
   assert_status 1
   assert_output_contains "says its version is '${VERSION}+local'"
   assert_installer_did_not_run
+}
+
+# install.sh downloads the installer, checks it and starts it as root from a folder of its own, made only in a TMPDIR
+# that, with every folder above it, is root's or yours and writable by no one else unless sticky: in any other, someone
+# else could change the installer once it is checked and before it runs as root. Nothing is made there at all.
+test_a_tmpdir_others_can_change_is_refused_and_nothing_is_made_in_it() {
+  local tmpdir
+  mkdir -p "${WORK}/shared/inner"
+  chmod 0777 "${WORK}/shared"
+  chmod 0700 "${WORK}/shared/inner"
+  for tmpdir in "${WORK}/shared" "${WORK}/shared/inner" "${WORK}/missing"; do
+    install_sh TMPDIR="${tmpdir}" -- --roles rig
+
+    assert_status 1
+    assert_output_contains "TMPDIR (${tmpdir}) is not a folder only you and root can change: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change the installer after it is checked and before it runs as root. Nothing was made in it."
+    assert_installer_did_not_run
+  done
+  [ -z "$(ls -A "${WORK}/shared/inner")" ] || fail_test "something was made in ${WORK}/shared/inner"
+  [ "$(ls -A "${WORK}/shared")" = inner ] || fail_test "something was made in ${WORK}/shared: $(ls -A "${WORK}/shared")"
+}
+
+test_a_sticky_tmpdir_as_tmp_is_and_a_link_to_a_private_one_are_used() {
+  local physical
+  physical=$(cd -P -- "${WORK}" && pwd)
+  mkdir "${WORK}/sticky"
+  chmod 1777 "${WORK}/sticky"
+  install_sh TMPDIR="${WORK}/sticky" -- --roles rig
+  assert_status 0
+  assert_output_contains "hvo-roof-install ran"
+  assert_called "gh attestation verify ${physical}/sticky/hvo-roof-install."
+  [ -z "$(ls -A "${WORK}/sticky")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${WORK}/sticky")"
+
+  mkdir -m 0700 "${WORK}/real"
+  ln -s "${WORK}/real" "${WORK}/link"
+  install_sh TMPDIR="${WORK}/link" -- --roles rig
+  assert_status 0
+  assert_output_contains "hvo-roof-install ran"
+  assert_called "gh attestation verify ${physical}/real/hvo-roof-install."
+  [ -z "$(ls -A "${WORK}/real")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${WORK}/real")"
+}
+
+# install.sh removes its download folder only while it is still the one it made, and then only the two files it put
+# there: a folder or a link put in its place (here by the installer it runs, FAKE_INSTALLER_REPLACES_FOLDER) is left as
+# it is, with what is in it.
+test_a_folder_put_in_the_place_of_the_download_folder_is_left_as_it_is() {
+  local replacement folder
+  for replacement in 0700 0755 link; do
+    rm -rf "${WORK}/tmp" && mkdir -m 0700 "${WORK}/tmp"
+    install_sh FAKE_INSTALLER_REPLACES_FOLDER="${replacement}" -- --roles rig
+
+    assert_status 0
+    assert_output_contains "hvo-roof-install ran"
+    folder=$(find "${WORK}/tmp" -maxdepth 1 -name 'hvo-roof-install.*' ! -name '*.moved' ! -name '*.target')
+    [ -n "${folder}" ] || fail_test "${replacement}: what was put in the download folder's place was removed"
+    [ "${replacement}" != link ] || folder="${folder}.target"
+    [ "$(cat "${folder}/keep" 2>/dev/null)" = keep ] || fail_test "${replacement}: ${folder}/keep was removed"
+  done
 }
 
 test_a_noexec_tmpdir_is_explained() {

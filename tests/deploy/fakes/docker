@@ -50,6 +50,14 @@ Other switches:
                                    fields ("/"), as Docker's containerd store does; by default it fails, as the classic
                                    store does
   FAKE_INSPECT_PLATFORM=false      the CLI has no `image inspect --platform` (Docker before 28)
+  FAKE_LOAD_FAIL=true              `load -i <archive>` fails, and loads nothing
+  FAKE_ON_LOAD=<shell command>     runs just before `load -i <archive>` reads the archive (a test changes the release's
+                                   archive there, once the deploy script has checked it), with FAKE_LOAD_ARCHIVE the path
+                                   it was given
+  FAKE_AFTER_LOAD=<shell command>  runs once `load -i <archive>` has read the archive, with FAKE_LOAD_ARCHIVE the same
+                                   (a test changes the script's own folders there, before the script removes them)
+  FAKE_LOADED_ID=sha256:<hex>      the ID `load -i <archive>` gives the image (default: its config's digest, as Docker's
+                                   classic image store does, or its index's with FAKE_IMAGE_STORE=containerd)
   FAKE_INFO_<FIELD>=<value>        what `info --format` reports for MemoryLimit, CPUCfsQuota, PidsLimit and SwapLimit
                                    (default true each), NCPU (default 4) and MemTotal (default 8 GiB), as
                                    FAKE_INFO_MEMORYLIMIT=false
@@ -75,18 +83,26 @@ Other switches:
 A container whose stop the daemon is still finishing stays running until then; `start` does nothing to it and `stop`
 waits for it.
 Images pulled with `pull [--platform <p>] <ref>` are kept by reference, with a digest, a platform and version labels;
-`image inspect` supports --help, --platform and three --format templates: the RepoDigests, '{{.Os}}/{{.Architecture}}'
-and the version and revision labels.
+`image inspect` supports --help, --platform and four --format templates: the RepoDigests, '{{.Os}}/{{.Architecture}}',
+the version and revision labels, and '{{.Id}}'. An offline archive loaded with `load -i <archive>` (a release's, as
+build/release-assets.py writes it) is kept by its ID, with the platforms it holds and its config's labels: the classic
+store reads its manifest.json, the containerd store (FAKE_IMAGE_STORE=containerd) its index.json. The file is read once,
+and each load is kept in the state's "loads": the path read, the SHA-256 of what was read, and the modes of the file and
+its folder. `run` finds its image
+among its arguments: IMAGE_REF or IMAGE_TAG, or an image it holds.
 Containers created by `run -d` have kind "new". Authenticated calls must send FAKE_EXPECTED_KEY on stdin (-H @-),
 otherwise they get 401. Output errors (closed or broken stdout/stderr) are ignored, as they would not change Docker.
 """
 import json
 import hashlib
+import io
 import os
 import re
 import secrets
 import signal
+import subprocess
 import sys
+import tarfile
 import time
 
 STATE_DIR = os.environ["FAKE_STATE_DIR"]
@@ -265,7 +281,60 @@ IMAGE_FORMATS = {
     "{{.Os}}/{{.Architecture}}": "platform",
     '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} '
     '{{index .Labels "org.opencontainers.image.revision"}}{{end}}': "labels",
+    "{{.Id}}": "id",
 }
+
+
+def load_archive(state, path):
+    """`load -i <archive>`: an offline image archive, loaded as Docker's classic image store loads one (its manifest.json:
+    the image's ID is its config's digest) or, with FAKE_IMAGE_STORE=containerd, as the containerd store does (its
+    index.json: the ID is the index's digest, holding each platform whose manifest the archive has)."""
+    hook_env = {**os.environ, "FAKE_LOAD_ARCHIVE": path}
+    if os.environ.get("FAKE_ON_LOAD"):
+        subprocess.run(["/bin/sh", "-c", os.environ["FAKE_ON_LOAD"]], check=True, env=hook_env)
+    if os.environ.get("FAKE_LOAD_FAIL") == "true":
+        die("unexpected EOF")
+    with open(path, "rb") as f:
+        data = f.read()
+    state.setdefault("loads", []).append({
+        "path": path,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "mode": oct(os.stat(path).st_mode & 0o777),
+        "folder_mode": oct(os.stat(os.path.dirname(os.path.abspath(path))).st_mode & 0o777),
+    })
+    if os.environ.get("FAKE_AFTER_LOAD"):
+        subprocess.run(["/bin/sh", "-c", os.environ["FAKE_AFTER_LOAD"]], check=True, env=hook_env)
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        names = set(tar.getnames())
+
+        def read(name):
+            return tar.extractfile(name).read()
+
+        index = json.loads(read("index.json"))["manifests"][0]
+        docker = json.loads(read("manifest.json"))[0]
+        config_bytes = read(docker["Config"])
+        config = json.loads(config_bytes)
+        if os.environ.get("FAKE_IMAGE_STORE") == "containerd":
+            image_id = index["digest"]
+            platforms = [f"{m['platform']['os']}/{m['platform']['architecture']}"
+                         for m in json.loads(read("blobs/sha256/" + index["digest"][7:]))["manifests"]
+                         if "blobs/sha256/" + m["digest"][7:] in names]
+        else:
+            image_id = "sha256:" + hashlib.sha256(config_bytes).hexdigest()
+            platforms = [f"{config['os']}/{config['architecture']}"]
+    image_id = os.environ.get("FAKE_LOADED_ID") or image_id
+    labels = (config.get("config") or {}).get("Labels") or {}
+    state.setdefault("images", {})[image_id] = {
+        "id": image_id,
+        "repo_digests": [],
+        "platform": platforms[0],
+        "platforms": platforms,
+        "version": labels.get("org.opencontainers.image.version", ""),
+        "revision": labels.get("org.opencontainers.image.revision", ""),
+    }
+    save(state)
+    tags = docker.get("RepoTags") or []
+    out("".join(f"Loaded image: {tag}\n" for tag in tags) if tags else f"Loaded image ID: {image_id}\n", end="")
 
 
 def pull(state, args):
@@ -324,7 +393,7 @@ def image_inspect(state, args):
         image = state.get("images", {}).get(ref)
         if image is None:
             die(f"No such image: {ref}")
-        if platform is not None and platform != image["platform"]:
+        if platform is not None and platform not in image.get("platforms", [image["platform"]]):
             if os.environ.get("FAKE_IMAGE_STORE") != "containerd":
                 die(f"image with reference {ref} was found but does not match the specified platform: "
                     f"wanted {platform}, actual: {image['platform']}")
@@ -335,7 +404,9 @@ def image_inspect(state, args):
         if field == "digests":
             out("".join(f"{d}\n" for d in image["repo_digests"]))
         elif field == "platform":
-            out(image["platform"])
+            out(platform or image["platform"])
+        elif field == "id":
+            out(image.get("id", ref))
         else:
             out(f"{image['version']} {image['revision']}")
 
@@ -588,6 +659,7 @@ def ps(state, args):
 
 
 def run(state, args, image):
+    image = next((candidate for candidate in [image, *state.get("images", {})] if candidate in args), image)
     position = args.index(image)
     options, trailing = args[:position], args[position + 1:]
     if "--rm" in options:
@@ -697,6 +769,9 @@ def main():
             f.write("image")
         return
     if command == "load":
+        if "-i" in args:
+            load_archive(state, args[args.index("-i") + 1])
+            return
         sys.stdin.read()
         out(f"Loaded image: {image}")
         return

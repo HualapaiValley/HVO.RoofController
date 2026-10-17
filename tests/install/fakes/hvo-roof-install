@@ -3,7 +3,9 @@
 # and logs in ${FAKE_STATE_DIR}/installer.log whether it ran as root, whether its standard input is a terminal, its
 # arguments, and the answer to FAKE_INSTALLER_ASKS (a question it asks on its standard input) or, without a terminal, how
 # many bytes its standard input held. It exits with FAKE_INSTALLER_EXIT; with FAKE_INSTALLER_NOEXEC, it cannot run at
-# all, as from a folder mounted noexec.
+# all, as from a folder mounted noexec. With FAKE_INSTALLER_REPLACES_FOLDER=<mode> (0700 or 0755), or =link, it puts
+# another folder of that mode, holding a file named keep, or a link to such a folder (beside it, .target), in the
+# place of the folder it runs from, as someone else could if TMPDIR let them, before install.sh removes that folder.
 [ -z "${FAKE_INSTALLER_NOEXEC:-}" ] || exit 126
 if [ "$*" = --version ]; then
   printf '%s\n' "${FAKE_INSTALLER_VERSION}"
@@ -22,6 +24,15 @@ if [ -n "${FAKE_INSTALLER_ASKS:-}" ]; then
   printf 'answer=%s\n' "${answer}" >>"${log}"
 elif [ ! -t 0 ]; then
   printf 'stdin=%s\n' "$(wc -c | tr -d ' ')" >>"${log}"
+fi
+if [ -n "${FAKE_INSTALLER_REPLACES_FOLDER:-}" ]; then
+  folder=$(dirname "$0")
+  mv "${folder}" "${folder}.moved" || exit 99
+  if [ "${FAKE_INSTALLER_REPLACES_FOLDER}" = link ]; then
+    mkdir -m 0700 "${folder}.target" && echo keep >"${folder}.target/keep" && ln -s "${folder}.target" "${folder}"
+  else
+    mkdir -m "${FAKE_INSTALLER_REPLACES_FOLDER}" "${folder}" && echo keep >"${folder}/keep"
+  fi || exit 99
 fi
 echo "hvo-roof-install ran"
 exit "${FAKE_INSTALLER_EXIT:-0}"

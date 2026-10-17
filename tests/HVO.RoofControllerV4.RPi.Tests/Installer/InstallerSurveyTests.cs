@@ -66,6 +66,7 @@ public sealed class InstallerSurveyTests
         {
             Name = MachineSurveyor.ControllerContainer,
             Image = $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}",
+            ImageId = FakeMachine.PulledImageId($"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}"),
             State = "running",
             Origin = ContainerOrigin.DeployScript,
             HatEmulator = "hat-emulator:5291",

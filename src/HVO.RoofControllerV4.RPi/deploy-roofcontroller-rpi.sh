@@ -47,7 +47,15 @@ set -euo pipefail
 #   Docker pulls that image instead; it is deployed only if Docker reports that digest and BUILD_PLATFORM for it, and
 #   nothing is built, so the script runs without a checkout. Everything from the pre-flight on is the same. On the Pi
 #   itself, set DOCKER_CONTEXT=default: the remote check then runs from the Pi, so check from another machine afterwards
-#   too (--verify-remote). --rollback, --stop and --verify-remote ignore IMAGE_REF, and do not check it.
+#   too (--verify-remote). With IMAGE_ARCHIVE=<file> as well (the release's offline archive of that image for
+#   BUILD_PLATFORM, <image>-<version>-linux-<arch>.oci.tar), nothing is pulled: the archive is copied once into a folder
+#   only this user (and root) can change, in TMPDIR, and Docker loads that copy, never the file itself. Before Docker
+#   reads it, the copy must hold IMAGE_REF's digest and its image for BUILD_PLATFORM and nothing else (index.json and
+#   manifest.json name that one image, under IMAGE_REF's name or none, and every blob is the one its digest names), and
+#   with IMAGE_ARCHIVE_SHA256=<hex> (the archive's SHA-256 in release.json) it must have that SHA-256; the image Docker
+#   then holds is deployed by its ID (docker run --pull never), only if that ID is the digest's or that image's, and the
+#   container carries the label io.hvo.roof.release-image=<IMAGE_REF>. --rollback, --stop and --verify-remote ignore
+#   IMAGE_REF and IMAGE_ARCHIVE, and do not check them.
 #   --rollback  swaps the running controller with <name>-previous (after the same verified stop) and checks it
 #               as in step 3. Run it again to swap back. If the swap or the start fails or is interrupted, the swap
 #               is undone and the original controller restarted. It refuses to run while <name>-swap (left by a
@@ -109,6 +117,13 @@ DOCKER_CONTEXT=${DOCKER_CONTEXT:-rpi-remote}
 IMAGE_TAG=${IMAGE_TAG:-hvov9/roof-controller:v4}
 # A released image to pull on the Pi in place of building IMAGE_TAG here: <registry>/<name>[:<tag>]@sha256:<digest>.
 IMAGE_REF=${IMAGE_REF:-}
+# The release's offline archive of IMAGE_REF's image, on this machine, loaded in place of the pull: nothing is pulled.
+IMAGE_ARCHIVE=${IMAGE_ARCHIVE:-}
+# Its SHA-256 from release.json (the installer gives it), which the copy the script checks and loads must have; empty
+# to check what the archive holds alone.
+IMAGE_ARCHIVE_SHA256=${IMAGE_ARCHIVE_SHA256:-}
+# The label that names the released image a container loaded from IMAGE_ARCHIVE runs (it runs by its ID).
+RELEASE_IMAGE_LABEL=io.hvo.roof.release-image
 # Platform the image is built (or pulled) for: the Pi's. linux/amd64 is for a test rig on a PC, in HAT emulator mode
 # only.
 BUILD_PLATFORM=${BUILD_PLATFORM:-linux/arm64}
@@ -227,7 +242,8 @@ VERIFIED_HAT_MODE=""
 # Why wait_ready found the controller exited, when the container's supervisor said so.
 EXIT_DETAIL=""
 WORK_DIR=""
-# `docker run --platform` for a pulled image (check_pulled_image), and `image inspect --platform` where the CLI has it.
+# `docker run --platform` for a pulled image (check_pulled_image), with --pull never and the release-image label for a
+# loaded one (check_loaded_image), and `image inspect --platform` where the CLI has it.
 image_platform_args=()
 inspect_platform_args=()
 
@@ -386,6 +402,19 @@ if [[ -n "${IMAGE_REF}" && "${ROLLBACK}" != "true" && "${STOP}" != "true" && "${
 else
   DEPLOY_IMAGE=${IMAGE_TAG}
 fi
+# Offline: the release's archive of IMAGE_REF's image, loaded in place of the pull. What it holds is checked before any
+# Docker call (check_image_archive); --rollback, --stop and --verify-remote load nothing, and ignore it.
+if [[ -n "${IMAGE_ARCHIVE}" && "${ROLLBACK}" != "true" && "${STOP}" != "true" && "${VERIFY_REMOTE}" != "true" ]]; then
+  [[ -n "${IMAGE_DIGEST}" ]] \
+    || fail "IMAGE_ARCHIVE is a release's offline archive of an image, and needs IMAGE_REF, that image by its digest (from release.json), to check it against. Nothing was changed."
+  [[ "${IMAGE_ARCHIVE}" != -* && -f "${IMAGE_ARCHIVE}" && -r "${IMAGE_ARCHIVE}" ]] \
+    || fail "IMAGE_ARCHIVE '${IMAGE_ARCHIVE}' is not a file this script can read. Nothing was changed."
+  [[ -z "${IMAGE_ARCHIVE_SHA256}" || "${IMAGE_ARCHIVE_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "IMAGE_ARCHIVE_SHA256 must be the archive's SHA-256 from release.json: 64 lower-case hex digits. Nothing was changed."
+else
+  IMAGE_ARCHIVE=""
+  IMAGE_ARCHIVE_SHA256=""
+fi
 
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
@@ -397,6 +426,7 @@ fi
 # switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report. In emulator mode the HAT's bus
 # stays unmapped: no I2C device and no mount of the host's /dev.
 EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it."
+RELEASE_IMAGE_SETTING="the script sets it on a controller it loads from IMAGE_ARCHIVE, once it has checked the image, and the installer reads the release the controller runs from it."
 
 refuse_emulator_setting() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -417,6 +447,12 @@ check_extra_option() {
         [[ "${line}" =~ ^[[:space:]]*(#|$) ]] && continue
         refuse_emulator_setting "${line%%=*}" "--env-file ${value}: ${line%%=*}"
       done < "${value}"
+      ;;
+    --label-file)
+      [[ -f "${value}" && -r "${value}" ]] \
+        || fail "EXTRA_DOCKER_ARGS names --label-file '${value}', which cannot be read on this machine. Nothing was changed."
+      ! grep -qF -- "${RELEASE_IMAGE_LABEL}" "${value}" \
+        || fail "EXTRA_DOCKER_ARGS must not set the label ${RELEASE_IMAGE_LABEL} (--label-file ${value}): ${RELEASE_IMAGE_SETTING}"
       ;;
     --device)
       if [[ -n "${HAT_EMULATOR_ENDPOINT}" && "$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')" == *i2c* ]]; then
@@ -453,8 +489,8 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
     pending_option=""
   else
     case "${arg}" in
-      --env-file|--device|--volume|--mount) pending_option=${arg} ;;
-      --env-file=*|--device=*|--volume=*|--mount=*) check_extra_option "${arg%%=*}" "${arg#*=}" ;;
+      --env-file|--label-file|--device|--volume|--mount) pending_option=${arg} ;;
+      --env-file=*|--label-file=*|--device=*|--volume=*|--mount=*) check_extra_option "${arg%%=*}" "${arg#*=}" ;;
       --privileged|--privileged=*)
         # Docker reads the value as Go's strconv.ParseBool does, so 1, t and True turn it on as well as true. It gives the
         # container every capability and every host device: never, and in HAT emulator mode the HAT's bus with them.
@@ -492,6 +528,13 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
   if [[ "${reserved}" == "true" ]]; then
     fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout, --stop-signal and --platform itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and BUILD_PLATFORM)."
   fi
+  # A loaded image runs with --pull never, and its label names the release's image only once the script has checked it.
+  case "${arg}" in
+    --pull|--pull=*)
+      fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script pulls a released image itself (IMAGE_REF), and never pulls one it loads (IMAGE_ARCHIVE)." ;;
+    *"${RELEASE_IMAGE_LABEL}"*)
+      fail "EXTRA_DOCKER_ARGS must not set the label ${RELEASE_IMAGE_LABEL} ('${arg}'): ${RELEASE_IMAGE_SETTING}" ;;
+  esac
   case "${arg}" in
     --read-only|--read-only=*|--tmpfs|--tmpfs=*|--cap-add|--cap-add=*|--cap-drop|--cap-drop=*|--security-opt|--security-opt=*)
       confining=true ;;
@@ -1250,6 +1293,626 @@ check_pulled_image() {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Offline: a release's archive (IMAGE_ARCHIVE), loaded in place of the pull
+
+# archive_json <query> <file> [<platform>]: from a JSON file of an OCI archive, with jq or python3. "image": the digest
+# of the one image index.json names; "platform": the digest of the one manifest an index lists for the platform;
+# "config": a manifest's config's digest; and "layers": its layers' digests, one a line. Empty when there is none, or
+# more than one. Docker's own reading of the files it loads matches key names without regard to case, so these read
+# the archive's own files as they are, or not at all: "layout", oci-layout's version; "index", index.json's one image
+# ("image <digest>") and its names ("name <key> <value>", by key), with nothing else in it; and "docker",
+# manifest.json's one image ("config <path>", "layer <path>" for each layer, "tag <name>" for each tag), with nothing
+# else. A value that is not printable ASCII without spaces makes "index" and "docker" empty, so no line can pass for
+# another. "unique" is "unique" when the file is one JSON value whose every object gives each name once, compared as
+# decoded ("a" and "\u0061" are one name): jq reads its tokens (--stream) before it builds objects, and an object
+# rebuilt from them has fewer tokens when a name is given twice; python3 is given each object's names as they are read
+# (object_pairs_hook). python3 refuses a name given twice in every query, and jq's queries are run only on files that
+# are unique.
+archive_json() {
+  local query=$1 file=$2 platform=${3:-}
+  if command -v jq >/dev/null 2>&1; then
+    case "${query}" in
+      unique) jq -n -r --stream '[inputs] as $tokens | [fromstream($tokens[])] as $values
+        | if ($values | length) == 1 and ([$values[0] | tostream] | length) == ($tokens | length) then "unique" else "" end' \
+        "${file}" ;;
+      image) jq -r 'if (.manifests | length) == 1 then (.manifests[0].digest // "") else "" end' "${file}" ;;
+      platform) jq -r --arg os "${platform%%/*}" --arg arch "${platform#*/}" \
+        '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch)]
+         | if length == 1 then (.[0].digest // "") else "" end' "${file}" ;;
+      config) jq -r '.config.digest // ""' "${file}" ;;
+      layers) jq -r '(.layers // [])[] | (.digest // "")' "${file}" ;;
+      layout) jq -r 'if type == "object" and keys == ["imageLayoutVersion"] and (.imageLayoutVersion | type) == "string"
+                     then .imageLayoutVersion else "" end' "${file}" ;;
+      index) jq -r 'def word: type == "string" and (explode | length > 0 and all(. > 32 and . < 127));
+        if type == "object" and (keys - ["schemaVersion", "mediaType", "manifests"]) == []
+           and (.manifests | type) == "array" and (.manifests | length) == 1 and (.manifests[0] | type) == "object"
+           and ((.manifests[0] | keys) - ["mediaType", "digest", "size", "annotations"]) == []
+           and ((.manifests[0].annotations // {}) | type) == "object"
+        then .manifests[0] | (.annotations // {}) as $names
+          | if (.digest | word) and ([$names | to_entries[] | (.key | word) and (.value | word)] | all)
+            then "image \(.digest)", ($names | to_entries | sort_by(.key) | .[] | "name \(.key) \(.value)")
+            else "" end
+        else "" end' "${file}" ;;
+      docker) jq -r 'def word: type == "string" and (explode | length > 0 and all(. > 32 and . < 127));
+        if type == "array" and length == 1 and (.[0] | type) == "object"
+           and ((.[0] | keys) - ["Config", "RepoTags", "Layers"]) == []
+           and ((.[0].Layers // []) | type) == "array" and ((.[0].RepoTags // []) | type) == "array"
+           and (.[0] | (.Config | word) and ([(.Layers // [])[], (.RepoTags // [])[] | word] | all))
+        then .[0] | "config \(.Config)", ((.Layers // [])[] | "layer \(.)"), ((.RepoTags // [])[] | "tag \(.)")
+        else "" end' "${file}" ;;
+    esac
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+query, path, platform = sys.argv[1:]
+def once(pairs):
+    # Each name once, as decoded: Go reads an unpaired surrogate escape as U+FFFD, so two of them are one name to it.
+    names = set()
+    for name, _ in pairs:
+        name = "".join("\ufffd" if 0xD800 <= ord(c) <= 0xDFFF else c for c in name)
+        if name in names:
+            raise ValueError("a name given twice")
+        names.add(name)
+    return dict(pairs)
+def constant(name):
+    raise ValueError("not JSON: " + name)
+with open(path, "rb") as f:
+    d = json.loads(f.read().decode("utf-8"), object_pairs_hook=once, parse_constant=constant)
+def present(value, default):
+    # As jq'"'"'s // : null and false are absent.
+    return default if value is None or value is False else value
+def word(value):
+    return isinstance(value, str) and len(value) > 0 and all(32 < ord(c) < 127 for c in value)
+if query == "unique":
+    print("unique")
+elif query == "layout":
+    ok = isinstance(d, dict) and list(d) == ["imageLayoutVersion"] and isinstance(d["imageLayoutVersion"], str)
+    print(d["imageLayoutVersion"] if ok else "")
+elif query == "index":
+    lines = []
+    found = d.get("manifests") if isinstance(d, dict) else None
+    if (isinstance(d, dict) and set(d) <= {"schemaVersion", "mediaType", "manifests"}
+            and isinstance(found, list) and len(found) == 1 and isinstance(found[0], dict)
+            and set(found[0]) <= {"mediaType", "digest", "size", "annotations"}
+            and isinstance(present(found[0].get("annotations"), {}), dict)):
+        names = present(found[0].get("annotations"), {})
+        if word(found[0].get("digest")) and all(word(k) and word(v) for k, v in names.items()):
+            lines = ["image " + found[0]["digest"]] + ["name {} {}".format(k, names[k]) for k in sorted(names)]
+    print("\n".join(lines))
+elif query == "docker":
+    lines = []
+    if isinstance(d, list) and len(d) == 1 and isinstance(d[0], dict) and set(d[0]) <= {"Config", "RepoTags", "Layers"}:
+        layers, tags = present(d[0].get("Layers"), []), present(d[0].get("RepoTags"), [])
+        if (isinstance(layers, list) and isinstance(tags, list) and word(d[0].get("Config"))
+                and all(word(value) for value in layers + tags)):
+            lines = ["config " + d[0]["Config"]] + ["layer " + value for value in layers] + ["tag " + value for value in tags]
+    print("\n".join(lines))
+elif query == "layers":
+    for layer in present(d.get("layers"), []):
+        print(layer.get("digest") if isinstance(layer, dict) and isinstance(layer.get("digest"), str) else "")
+else:
+    found = [d.get("config")] if query == "config" else d.get("manifests") or []
+    found = [m for m in found if isinstance(m, dict)]
+    if query == "platform":
+        found = [m for m in found if isinstance(m.get("platform"), dict)
+                 and "{}/{}".format(m["platform"].get("os"), m["platform"].get("architecture")) == platform]
+    digest = found[0].get("digest") if len(found) == 1 else ""
+    print(digest if isinstance(digest, str) else "")' "${query}" "${file}" "${platform}"
+  else
+    return 1
+  fi
+}
+
+# archive_members <archive>: the members of a tar archive as a release writes one (build/release-assets.py), read from
+# the archive's own headers, not from what a tar program lists: one a line, in order, "file <name>" or "folder <name>"
+# (without its trailing /). It prints "problem <what is wrong>" last and fails unless the archive is that and nothing
+# else: each header a POSIX ustar header ("ustar", version "00") that sums to its checksum, for a plain file (type 0)
+# or a folder of no size (type 5), with no link target, nothing in its name prefix or after it, and a name of a-z, 0-9,
+# ".", "-" and "/" alone; at most 256 of them; then the end of the archive, two empty blocks, and only empty blocks after
+# it. So it holds no pax or GNU extension header (which could give a member another name, a link target or a sparse
+# map), no hard or symbolic link (a pax hard link can carry data), no device, FIFO or sparse file, and nothing GNU tar,
+# bsdtar and Docker's Go reader could read differently: they all find these members, with these names and sizes.
+archive_members() {
+  local archive=$1 size blocks block=0 count=0 sum checksum stored i code name shown end length kind
+  local octal_field='^ *([0-7]+) *$'
+  local -a header=() ascii=()
+  local letters=abcdefghijklmnopqrstuvwxyz numerals=0123456789
+  for (( i = 0; i < 26; i++ )); do ascii[97 + i]=${letters:i:1}; done
+  for (( i = 0; i < 10; i++ )); do ascii[48 + i]=${numerals:i:1}; done
+  ascii[45]=-
+  ascii[46]=.
+  ascii[47]=/
+  size=$(wc -c < "${archive}" | tr -d ' ') || size=""
+  if ! [[ "${size}" =~ ^[0-9]+$ ]] || (( size % 512 != 0 )); then
+    echo "problem its size is not a whole number of 512-byte blocks"
+    return 1
+  fi
+  blocks=$(( size / 512 ))
+  while true; do
+    if (( block >= blocks )); then
+      echo "problem it ends without the two empty blocks that end an archive"
+      return 1
+    fi
+    read -r -a header <<<"$(dd if="${archive}" bs=512 skip="${block}" count=1 2>/dev/null | od -An -v -tu1 | tr '\n' ' ')"
+    if (( ${#header[@]} != 512 )); then
+      echo "problem its block ${block} could not be read"
+      return 1
+    fi
+    sum=0
+    checksum=0
+    for (( i = 0; i < 512; i++ )); do sum=$(( sum + header[i] )); done
+    if (( sum == 0 )); then
+      # The end: this block and every one after it empty, two at least.
+      if (( blocks - block < 2 )) \
+          || [[ "$(tail -c +$(( block * 512 + 1 )) "${archive}" | tr -d '\000' | wc -c | tr -d ' ')" != 0 ]]; then
+        echo "problem it does not end with empty blocks alone, two at least, after its last member"
+        return 1
+      fi
+      return 0
+    fi
+    count=$(( count + 1 ))
+    if (( count > 256 )); then
+      echo "problem it holds more than 256 members"
+      return 1
+    fi
+
+    # The checksum: the header's bytes summed, its checksum field counted as spaces.
+    stored=""
+    for (( i = 148; i < 156; i++ )); do
+      code=${header[i]}
+      checksum=$(( checksum + code ))
+      if (( code >= 48 && code <= 55 )); then
+        stored+=${ascii[code]}
+      elif (( code == 0 || code == 32 )); then
+        stored+=" "
+      else
+        stored+="?"
+      fi
+    done
+    if ! [[ "${stored}" =~ ${octal_field} ]] || (( 8#${BASH_REMATCH[1]} != sum - checksum + 256 )); then
+      echo "problem its block ${block} is not a tar header that sums to its checksum"
+      return 1
+    fi
+    if [[ "${header[*]:257:8}" != "117 115 116 97 114 0 48 48" ]]; then
+      echo "problem member ${count}'s header is not a POSIX ustar header"
+      return 1
+    fi
+
+    # The name, up to its first NUL, with nothing after that: shown in what follows only when it is one.
+    name=""
+    shown=""
+    end=100
+    for (( i = 0; i < 100; i++ )); do
+      code=${header[i]}
+      if (( code == 0 )); then
+        end=${i}
+        break
+      fi
+      if [[ -z "${ascii[code]:-}" ]]; then
+        name="?"
+        break
+      fi
+      name+=${ascii[code]}
+    done
+    for (( i = end; i < 100; i++ )); do
+      if (( header[i] != 0 )); then
+        name="?"
+      fi
+    done
+    [[ -z "${name}" || "${name}" == *"?"* ]] || shown=" (${name})"
+
+    # What it is, by its raw type.
+    case "${header[156]}" in
+      48) kind="file" ;;
+      53) kind="folder" ;;
+      49) echo "problem member ${count}${shown} is a hard link"; return 1 ;;
+      50) echo "problem member ${count}${shown} is a symbolic link"; return 1 ;;
+      51|52) echo "problem member ${count}${shown} is a device"; return 1 ;;
+      54) echo "problem member ${count}${shown} is a FIFO"; return 1 ;;
+      83) echo "problem member ${count}${shown} is a GNU sparse file"; return 1 ;;
+      120|103) echo "problem member ${count}${shown} is a pax extended header"; return 1 ;;
+      75|76) echo "problem member ${count}${shown} is a GNU long name or link"; return 1 ;;
+      *) echo "problem member ${count}${shown} is of type ${header[156]}, not a file (48, '0') or a folder (53, '5')"; return 1 ;;
+    esac
+    if [[ -z "${shown}" ]]; then
+      echo "problem member ${count} has no name of a-z, 0-9, '.', '-' and '/' alone"
+      return 1
+    fi
+
+    # Its size: 11 octal digits, then NUL or a space.
+    stored=""
+    for (( i = 124; i < 135; i++ )); do
+      code=${header[i]}
+      if (( code >= 48 && code <= 55 )); then
+        stored+=${ascii[code]}
+      fi
+    done
+    if (( ${#stored} != 11 )) || (( header[135] != 0 && header[135] != 32 )); then
+      echo "problem member ${count}${shown} has a size that is not 11 octal digits"
+      return 1
+    fi
+    length=$(( 8#${stored} ))
+
+    # No link target, and nothing in the name prefix or after it (where GNU and other formats keep more).
+    for (( i = 157; i < 512; i++ )); do
+      if (( i == 257 )); then
+        i=344
+      elif (( header[i] != 0 )); then
+        if (( i < 257 )); then
+          echo "problem member ${count}${shown} has a link target"
+        else
+          echo "problem member ${count}${shown} has a name prefix, or more in its header than a POSIX ustar header holds"
+        fi
+        return 1
+      fi
+    done
+
+    if [[ "${kind}" == folder ]]; then
+      name=${name%/}
+      if (( length != 0 )); then
+        echo "problem member ${count}${shown} is a folder that holds data"
+        return 1
+      fi
+    elif [[ "${name}" == */ ]]; then
+      echo "problem member ${count}${shown} is a file whose name ends with /"
+      return 1
+    fi
+    echo "${kind} ${name}"
+    block=$(( block + 1 + (length + 511) / 512 ))
+  done
+}
+
+# check_json_once <file> <what>: IMAGE_ARCHIVE is refused unless its <what>, a member check_image_archive took out of it,
+# is one JSON value that gives each name once in each object (archive_json unique). Both readers here keep the last of
+# two values for a name, and Docker's Go decoder can keep parts of both (an object decoded into the map the first one
+# made), so such a file would be read one way by this check and another by Docker.
+check_json_once() {
+  [[ "$(archive_json unique "$1" 2>/dev/null)" == "unique" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its $2 is not one JSON value that gives each name once in each object (a name given twice, even spelt with escapes, is read one way by this check and another by Docker): give the release's archive of that image. Nothing was changed."
+}
+
+# check_image_archive: IMAGE_ARCHIVE must be the release's archive of the image IMAGE_REF's digest names, for
+# BUILD_PLATFORM, and hold nothing else, before Docker reads any of it. Each of Docker's image stores loads its own part
+# of an archive and applies all it finds there: the containerd store reads index.json, and the names it gives, when
+# there is an oci-layout (manifest.json when there is none); the classic store reads manifest.json, every image in it
+# and their tags (RepoTags). A load cannot be undone by checking the image afterwards (check_loaded_image), and an image
+# Docker already holds by an allowed ID would pass that check whatever the load did, so the archive is checked whole:
+#  - its members, as its own headers give them (archive_members: plain POSIX ustar headers, no link, special file,
+#    sparse file or extension header), are oci-layout, index.json, manifest.json and blobs/sha256/<hex> for the index,
+#    the platform's manifest, its config and its layers, each once and each a file, with the folders blobs and
+#    blobs/sha256, which are folders;
+#  - every JSON file it reads (oci-layout, index.json, manifest.json, the index, the platform's manifest and its config)
+#    is one value, with no name given twice in an object, so this check and Docker read it alike;
+#  - oci-layout is an OCI image layout 1.0.0, and index.json names that index alone, with no name but IMAGE_REF's own
+#    (io.containerd.image.name <repository>:<tag>, with or without org.opencontainers.image.ref.name <tag>);
+#  - manifest.json is that one image: the platform's config and its layers, in order, tagged IMAGE_REF's
+#    <repository>:<tag> or not at all;
+#  - every blob is the one its digest names, layers included.
+# What is checked is what Docker loads: the archive is copied once, first, into a folder of the script's own that no one
+# but this user and root can change (ARCHIVE_DIR, make_private_folder), and that copy (ARCHIVE_COPY) is checked, has its
+# SHA-256 compared with IMAGE_ARCHIVE_SHA256 when it is given, and is the file docker load reads. Whatever then happens
+# to IMAGE_ARCHIVE (replaced, or written over in place) changes nothing Docker reads. ARCHIVE_MANIFEST and ARCHIVE_CONFIG
+# are then the platform's manifest and config: with the index, the IDs Docker gives the image it loads (the containerd
+# image store's is the index's, or the manifest's for the platform; the classic store's is the config's). Run before any
+# Docker call, and in a dry run too: it only reads the archive, and writes only into ARCHIVE_DIR, which is removed once
+# Docker has loaded the copy, and on exit.
+ARCHIVE_MANIFEST=""
+ARCHIVE_CONFIG=""
+ARCHIVE_DIR=""
+ARCHIVE_COPY=""
+# Room the copy must leave on its file system, for the members the check takes out of it beside it: 16 MiB, in KiB.
+ARCHIVE_HEADROOM_KB=16384
+
+# Private folders. The script's work folder (WORK_DIR) and its copy of IMAGE_ARCHIVE (ARCHIVE_DIR) are each made as a
+# new folder, mode 0700, by its physical path, and only in a TMPDIR that is a trusted_folder (make_private_folder); each
+# is removed only while it is still the folder that was made (private_folder), and only the exact path that was made.
+# No one but root and this user can then change what is in them, rename them, or put another folder or a link in their
+# place, so what the script writes there, checks and reads back (the copy Docker loads, the new controller's cidfile, the
+# identity check's copies) stays what it wrote, and their removal can only remove them.
+
+# trusted_folder <folder>: prints <folder>'s physical path (every symbolic link in it followed) when that folder, and
+# every folder above it up to /, is a real folder (not a link), root's or this user's, that no one else can write to
+# unless it is sticky (as /tmp is: there, no one else can rename or remove what root or this user owns). No one else can
+# then change what that path names, or a path below it that root or this user made. Fails, printing nothing, otherwise.
+trusted_folder() {
+  local physical folder user
+  user=$(id -u) || return 1
+  physical=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+  folder=${physical}
+  while true; do
+    [[ -d "${folder}" && ! -L "${folder}" ]] || return 1
+    [[ -n "$(find "${folder}" -maxdepth 0 -type d \( -user 0 -o -user "${user}" \) \
+        \( -perm -1000 -o \( ! -perm -0020 ! -perm -0002 \) \) 2>/dev/null)" ]] || return 1
+    [[ "${folder}" != / ]] || break
+    folder=$(dirname "${folder}")
+  done
+  printf '%s\n' "${physical}"
+}
+
+# private_folder <folder>: <folder> is still a folder make_private_folder made: a real folder (not a link), this user's,
+# mode 0700.
+private_folder() {
+  [[ -d "$1" && ! -L "$1" && -n "$(find "$1" -maxdepth 0 -type d -user "$(id -u)" -perm 0700 2>/dev/null)" ]]
+}
+
+# make_private_folder <name>: makes a new folder, <name>.<random> with mode 0700, under TMPDIR's physical path (TMPDIR is
+# /tmp when it is not set) once TMPDIR is a trusted_folder, and prints the exact path it made. Returns 2, having made
+# nothing, when TMPDIR is not a trusted_folder; 1 when the folder cannot be made, or is not then a private_folder (it
+# then prints the path, which is never removed).
+make_private_folder() {
+  local parent folder
+  parent=$(trusted_folder "${TMPDIR:-/tmp}") || return 2
+  folder=$(umask 077 && mktemp -d "${parent%/}/$1.XXXXXX") || return 1
+  printf '%s\n' "${folder}"
+  private_folder "${folder}"
+}
+
+# The reason make_private_folder's return code <status> gives for <what>, for a message.
+private_folder_problem() {
+  if (( $1 == 2 )); then
+    printf '%s' "TMPDIR (${TMPDIR:-/tmp}) is not a folder only this user and root can change, for $2: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change what is written there. Nothing was made in it. Set TMPDIR to a folder that is, such as /tmp"
+  elif [[ -n "${3:-}" ]]; then
+    printf '%s' "Could not make a private folder in ${TMPDIR:-/tmp} for $2 ($3 is not a folder of this user's with mode 0700 once made)"
+  else
+    printf '%s' "Could not make a private folder in ${TMPDIR:-/tmp} for $2"
+  fi
+}
+
+# make_work_dir: WORK_DIR, the script's work folder (make_private_folder), unless it is made already. Sets FAILURE and
+# fails when it cannot be.
+make_work_dir() {
+  local folder status=0
+  [[ -z "${WORK_DIR}" ]] || return 0
+  folder=$(make_private_folder hvo-roof-deploy) || status=$?
+  if (( status != 0 )); then
+    FAILURE=$(private_folder_problem "${status}" "its work folder" "${folder}")
+    return 1
+  fi
+  WORK_DIR=${folder}
+}
+
+# remove_work_dir: removes WORK_DIR, only while it is still the private_folder that was made, and only what the script
+# puts there: the new controller's cidfile, a built image, the identity check's store copy and its copy of the secrets
+# (from docker cp, so only that one folder is removed whole, and rm never follows a link in it), then the folder with
+# rmdir. Anything else there is left, with the folder, and said. WORK_DIR is forgotten either way.
+remove_work_dir() {
+  local folder=${WORK_DIR}
+  [[ -n "${folder}" ]] || return 0
+  WORK_DIR=""
+  if ! private_folder "${folder}"; then
+    log_err "[deploy] WARNING: ${folder} is no longer the work folder this script made (a folder of this user's, mode 0700), so it was left as it is."
+    return 1
+  fi
+  rm -f -- "${folder}/new-controller.cid" "${folder}/image.tar" "${folder}/identity-schema-check.json" 2>/dev/null || true
+  rm -rf -- "${folder}/identity-schema-secrets" 2>/dev/null || true
+  if ! rmdir -- "${folder}" 2>/dev/null; then
+    log_err "[deploy] WARNING: ${folder} holds more than this script put there, so it was left as it is."
+    return 1
+  fi
+}
+
+# remove_archive_members <folder>: removes what check_image_archive took out of the archive into <folder> (inside
+# ARCHIVE_DIR), file by known file, then its folders with rmdir; anything else there is left.
+remove_archive_members() {
+  local members=$1
+  [[ -d "${members}" && ! -L "${members}" ]] || return 0
+  if [[ -d "${members}/blobs" && ! -L "${members}/blobs" ]]; then
+    if [[ -d "${members}/blobs/sha256" && ! -L "${members}/blobs/sha256" ]]; then
+      rm -f -- "${members}"/blobs/sha256/* 2>/dev/null || true
+      rmdir -- "${members}/blobs/sha256" 2>/dev/null || true
+    fi
+    rmdir -- "${members}/blobs" 2>/dev/null || true
+  fi
+  rm -f -- "${members}/oci-layout" "${members}/index.json" "${members}/manifest.json" 2>/dev/null || true
+  rmdir -- "${members}" 2>/dev/null || true
+}
+
+# remove_archive_dir: removes ARCHIVE_DIR, only while it is still the private_folder that was made, and only what the
+# script put there: the copy and the members it took out, file by known file, then the folder with rmdir. Anything
+# else there is left, with the folder, and said. ARCHIVE_DIR is forgotten either way.
+remove_archive_dir() {
+  local folder=${ARCHIVE_DIR}
+  [[ -n "${folder}" ]] || return 0
+  ARCHIVE_DIR=""
+  if ! private_folder "${folder}"; then
+    log_err "[load] WARNING: ${folder} is no longer the folder this script made for its copy of IMAGE_ARCHIVE (a folder of this user's, mode 0700), so it was left as it is."
+    return 1
+  fi
+  remove_archive_members "${folder}/members"
+  rm -f -- "${folder}/image.oci.tar" 2>/dev/null || true
+  if ! rmdir -- "${folder}" 2>/dev/null; then
+    log_err "[load] WARNING: ${folder} holds more than this script put there, so it was left as it is."
+    return 1
+  fi
+}
+
+check_image_archive() {
+  local folder listing kind members member named names manifest config layer layers blobs expected docker size free needed digest
+  local status
+  local digest_pattern='^sha256:[0-9a-f]{64}$' blob_pattern='^blobs/sha256/[0-9a-f]{64}$' image_name image_tag=""
+  local release_archive="give the release's archive of that image. Nothing was changed."
+  local release_archive_sentence="Give the release's archive of that image. Nothing was changed."
+
+  # The one name the archive may give the image: IMAGE_REF's own, <repository>:<tag> (none when it has no tag).
+  image_name=${IMAGE_REF%@*}
+  if [[ "${image_name##*/}" == *:* ]]; then
+    image_tag=${image_name##*:}
+  else
+    image_name=""
+  fi
+
+  # The copy Docker will load goes in a new folder of the script's own (make_private_folder): made by its physical path,
+  # only in a TMPDIR that no one but this user and root can change, and removed (remove_archive_dir) only while it is
+  # still that folder. Only the exact folder made is ever removed.
+  status=0
+  folder=$(make_private_folder hvo-roof-archive) || status=$?
+  (( status == 0 )) || fail "$(private_folder_problem "${status}" "the copy of IMAGE_ARCHIVE that Docker loads" "${folder}"). Nothing was changed."
+  ARCHIVE_DIR=${folder}
+  size=$(wc -c < "${IMAGE_ARCHIVE}" | tr -d ' ') || size=""
+  free=$(df -Pk "${folder}" 2>/dev/null | awk 'NR == 2 { print $4 }') || free=""
+  [[ "${size}" =~ ^[0-9]+$ && "${free}" =~ ^[0-9]+$ ]] \
+    || fail "Could not tell the size of IMAGE_ARCHIVE ${IMAGE_ARCHIVE}, or how much room ${folder%/*} has for a copy of it. Nothing was changed."
+  needed=$(( (size + 1023) / 1024 + ARCHIVE_HEADROOM_KB ))
+  (( free >= needed )) \
+    || fail "There is not room in ${folder%/*} for a private copy of IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: it needs $(( (needed + 1023) / 1024 )) MiB (the archive and 16 MiB more), and $(( free / 1024 )) MiB is free. The script loads only a copy of its own, so that Docker reads the bytes it checked. Free some room there, or set TMPDIR to a folder with room. Nothing was changed."
+  ARCHIVE_COPY="${folder}/image.oci.tar"
+  # One read of the archive, into a file only this user can read or write, hashed as it is written.
+  if ! digest=$(umask 077 && tee "${ARCHIVE_COPY}" < "${IMAGE_ARCHIVE}" | sha256_hex) || ! chmod 0600 "${ARCHIVE_COPY}"; then
+    fail "Could not copy IMAGE_ARCHIVE ${IMAGE_ARCHIVE} into ${folder} (see above). Nothing was changed."
+  fi
+  if [[ -n "${IMAGE_ARCHIVE_SHA256}" && "${digest}" != "${IMAGE_ARCHIVE_SHA256}" ]]; then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} is not the release's archive: its SHA-256 is ${digest}, and IMAGE_ARCHIVE_SHA256 (release.json's) is ${IMAGE_ARCHIVE_SHA256}. Nothing was changed."
+  fi
+  echo "[load] Checking a copy of ${IMAGE_ARCHIVE} that only this user can change (SHA-256 ${digest}${IMAGE_ARCHIVE_SHA256:+, as release.json gives it}): Docker loads that copy"
+
+  # Its members, from the archive's own headers (archive_members): each a plain file, or one of the two folders, by name
+  # (folders without their trailing /), each once.
+  if ! listing=$(archive_members "${ARCHIVE_COPY}"); then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} is not a tar archive as a release writes one, of plain files and folders in POSIX ustar headers alone: $(tail -n 1 <<<"${listing}" | sed 's/^problem //'). ${release_archive_sentence}"
+  fi
+  while read -r kind member; do
+    case "${kind} ${member}" in
+      " "|"file oci-layout"|"file index.json"|"file manifest.json"|"folder blobs"|"folder blobs/sha256") ;;
+      "file blobs"|"file blobs/sha256")
+        fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds ${member} as a file: in an image's offline archive it is a folder. ${release_archive_sentence}" ;;
+      "file "*)
+        [[ "${member}" =~ ${blob_pattern} ]] \
+          || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds '${member}', which is not part of an image's offline archive (oci-layout, index.json, manifest.json and blobs/sha256/<hex>): ${release_archive}" ;;
+      *)
+        fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds the folder '${member}', and the only folders in an image's offline archive are blobs and blobs/sha256: ${release_archive}" ;;
+    esac
+  done <<<"${listing}"
+  members=$(cut -d ' ' -f 2- <<<"${listing}")
+  member=$(sort <<<"${members}" | uniq -d | head -n 1)
+  [[ -z "${member}" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds '${member}' more than once, and Docker would read the last: ${release_archive}"
+  for member in oci-layout index.json manifest.json; do
+    grep -qxF "${member}" <<<"${members}" \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} has no ${member}: a release's offline archive has oci-layout and index.json, which Docker's containerd image store reads, and manifest.json, which the classic store reads. ${release_archive_sentence}"
+  done
+  grep -qxF "blobs/sha256/${IMAGE_DIGEST#sha256:}" <<<"${members}" \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} that IMAGE_REF names: ${release_archive}"
+
+  # Named members only, into a folder of their own beside the copy: nothing else the archive holds is written anywhere.
+  folder="${ARCHIVE_DIR}/members"
+  (umask 077 && mkdir "${folder}") || fail "Could not make a folder to check IMAGE_ARCHIVE in. Nothing was changed."
+  tar -xf "${ARCHIVE_COPY}" -C "${folder}" oci-layout index.json manifest.json "blobs/sha256/${IMAGE_DIGEST#sha256:}" 2>/dev/null \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} could not be read (tar -x): ${release_archive}"
+  for member in oci-layout index.json manifest.json "blobs/sha256/${IMAGE_DIGEST#sha256:}"; do
+    [[ -f "${folder}/${member}" && ! -L "${folder}/${member}" ]] \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its ${member} is not a file: ${release_archive}"
+  done
+  check_json_once "${folder}/oci-layout" oci-layout
+  check_json_once "${folder}/index.json" index.json
+  check_json_once "${folder}/manifest.json" manifest.json
+  check_json_once "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}" "index ${IMAGE_DIGEST}"
+
+  # index.json: the index IMAGE_REF names, alone and under no other name, in an OCI image layout.
+  named=$(archive_json image "${folder}/index.json" 2>/dev/null) || named=""
+  if [[ "${named}" != "${IMAGE_DIGEST}" \
+      || "$(sha256_hex < "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}")" != "${IMAGE_DIGEST#sha256:}" ]]; then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} names the image '${named:-none, or more than one}', and IMAGE_REF names ${IMAGE_DIGEST}: ${release_archive}"
+  fi
+  names=$(archive_json index "${folder}/index.json" 2>/dev/null) || names=""
+  if [[ "$(head -n 1 <<<"${names}")" == "image ${IMAGE_DIGEST}" ]]; then
+    names=$(sed 1d <<<"${names}")
+  else
+    names="?"
+  fi
+  case "${names}" in
+    "") ;;
+    "name io.containerd.image.name ${image_name}"|"name io.containerd.image.name ${image_name}"$'\n'"name org.opencontainers.image.ref.name ${image_tag}")
+      [[ -n "${image_name}" ]] || names="?" ;;
+    *) names="?" ;;
+  esac
+  [[ "${names}" != "?" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its index.json says more than the image, its type, size and digest, or names it other than ${image_name:-not at all} (Docker's containerd image store would load it under that name): ${release_archive}"
+  [[ "$(archive_json layout "${folder}/oci-layout" 2>/dev/null)" == "1.0.0" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its oci-layout is not an OCI image layout 1.0.0: ${release_archive}"
+
+  # The index's manifest for BUILD_PLATFORM, its config and its layers.
+  manifest=$(archive_json platform "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}" "${BUILD_PLATFORM}" 2>/dev/null) || manifest=""
+  if ! [[ "${manifest}" =~ ${digest_pattern} ]] \
+      || ! tar -xf "${ARCHIVE_COPY}" -C "${folder}" "blobs/sha256/${manifest#sha256:}" 2>/dev/null \
+      || [[ ! -f "${folder}/blobs/sha256/${manifest#sha256:}" || -L "${folder}/blobs/sha256/${manifest#sha256:}" ]] \
+      || [[ "$(sha256_hex < "${folder}/blobs/sha256/${manifest#sha256:}")" != "${manifest#sha256:}" ]]; then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} has for ${BUILD_PLATFORM}: give the release's archive for ${BUILD_PLATFORM} (<image>-<version>-linux-${BUILD_PLATFORM#linux/}.oci.tar). Nothing was changed."
+  fi
+  check_json_once "${folder}/blobs/sha256/${manifest#sha256:}" "${BUILD_PLATFORM} manifest ${manifest}"
+  config=$(archive_json config "${folder}/blobs/sha256/${manifest#sha256:}" 2>/dev/null) || config=""
+  [[ "${config}" =~ ${digest_pattern} ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: the ${BUILD_PLATFORM} manifest ${manifest} names no config. Nothing was changed."
+  layers=$(archive_json layers "${folder}/blobs/sha256/${manifest#sha256:}" 2>/dev/null) || layers="?"
+  while IFS= read -r layer; do
+    [[ -z "${layer}" || "${layer}" =~ ${digest_pattern} ]] \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: the ${BUILD_PLATFORM} manifest ${manifest} does not list its layers by digest. Nothing was changed."
+  done <<<"${layers}"
+
+  # The blobs are those, and only those.
+  expected=$({ printf '%s\n' "${IMAGE_DIGEST}" "${manifest}" "${config}"; [[ -z "${layers}" ]] || printf '%s\n' "${layers}"; } \
+    | sed 's|^sha256:|blobs/sha256/|' | sort -u)
+  blobs=$(grep -E "${blob_pattern}" <<<"${members}" | sort) || blobs=""
+  [[ "${blobs}" == "${expected}" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} holds other blobs than the index, the ${BUILD_PLATFORM} manifest, its config and its layers: ${release_archive}"
+
+  # manifest.json: that one image, its config and its layers in order, under IMAGE_REF's own name or none.
+  expected="config blobs/sha256/${config#sha256:}"
+  while IFS= read -r layer; do
+    [[ -z "${layer}" ]] || expected+=$'\n'"layer blobs/sha256/${layer#sha256:}"
+  done <<<"${layers}"
+  docker=$(archive_json docker "${folder}/manifest.json" 2>/dev/null) || docker=""
+  [[ "${docker}" == "${expected}" || ( -n "${image_name}" && "${docker}" == "${expected}"$'\n'"tag ${image_name}" ) ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its manifest.json is not the one image for ${BUILD_PLATFORM}, with its config and layers, tagged ${image_name:-nothing} or not at all (Docker's classic image store would load and tag what it says): ${release_archive}"
+
+  # Every blob is the one its digest names: the config and the layers too, so nothing in the archive is left for the
+  # loaders to check.
+  if ! tar -xf "${ARCHIVE_COPY}" -C "${folder}" "blobs/sha256/${config#sha256:}" 2>/dev/null \
+      || [[ ! -f "${folder}/blobs/sha256/${config#sha256:}" || -L "${folder}/blobs/sha256/${config#sha256:}" ]] \
+      || [[ "$(sha256_hex < "${folder}/blobs/sha256/${config#sha256:}")" != "${config#sha256:}" ]]; then
+    fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its config ${config} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
+  fi
+  check_json_once "${folder}/blobs/sha256/${config#sha256:}" "config ${config}"
+  while IFS= read -r layer; do
+    [[ -z "${layer}" || "$(tar -xOf "${ARCHIVE_COPY}" "blobs/sha256/${layer#sha256:}" 2>/dev/null | sha256_hex)" == "${layer#sha256:}" ]] \
+      || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its layer ${layer} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
+  done <<<"${layers}"
+  remove_archive_members "${folder}"
+  ARCHIVE_MANIFEST=${manifest}
+  ARCHIVE_CONFIG=${config}
+  echo "[load] ${IMAGE_ARCHIVE} holds ${IMAGE_DIGEST}, with its image for ${BUILD_PLATFORM} (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG}), and nothing else"
+}
+
+# check_loaded_image: once IMAGE_ARCHIVE is loaded, Docker must hold an image whose ID is the index's, the platform's
+# manifest's or its config's (check_image_archive), for BUILD_PLATFORM. The pre-flight and the controller then run that
+# image by its ID, never pulling, and the controller carries the release-image label naming IMAGE_REF.
+check_loaded_image() {
+  local id loaded="" platform labels version revision
+  for id in "${IMAGE_DIGEST}" "${ARCHIVE_MANIFEST}" "${ARCHIVE_CONFIG}"; do
+    if [[ "$(dockerc image inspect --format '{{.Id}}' "${id}" 2>/dev/null)" == "${id}" ]]; then
+      loaded=${id}
+      break
+    fi
+  done
+  [[ -n "${loaded}" ]] \
+    || fail "Docker loaded ${IMAGE_ARCHIVE}, and holds no image with its IDs: ${IMAGE_DIGEST} (the index), ${ARCHIVE_MANIFEST} (the ${BUILD_PLATFORM} manifest) or ${ARCHIVE_CONFIG} (its config). The running controller was not touched."
+  inspect_platform_args=()
+  if dockerc image inspect --help 2>/dev/null | grep -q -- '--platform'; then
+    inspect_platform_args=(--platform "${BUILD_PLATFORM}")
+  fi
+  platform=$(dockerc image inspect ${inspect_platform_args[@]+"${inspect_platform_args[@]}"} --format '{{.Os}}/{{.Architecture}}' "${loaded}") \
+    || platform=""
+  [[ "${platform}" != "/" ]] || platform=""
+  [[ "${platform}" == "${BUILD_PLATFORM}" ]] \
+    || fail "The image ${loaded} from ${IMAGE_ARCHIVE} is not for ${BUILD_PLATFORM} (Docker reports '${platform:-no image for that platform}'). The running controller was not touched."
+  labels=$(dockerc image inspect ${inspect_platform_args[@]+"${inspect_platform_args[@]}"} \
+      --format '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} {{index .Labels "org.opencontainers.image.revision"}}{{end}}' \
+      "${loaded}" 2>/dev/null) || labels=""
+  read -r version revision <<<"${labels}" || true
+  echo "[load] ${IMAGE_DIGEST} for ${platform}, image ${loaded}: version ${version:-unknown}${revision:+, commit ${revision:0:12}}"
+  DEPLOY_IMAGE=${loaded}
+  image_platform_args=(--platform "${BUILD_PLATFORM}" --pull never --label "${RELEASE_IMAGE_LABEL}=${IMAGE_REF}")
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Restore. Everything here runs without errexit, and every step checks its own result.
 
 # The ID of the container this deploy created: from `docker run -d`, or from the cidfile docker writes on creation
@@ -1353,9 +2016,7 @@ print(paths[0],end="")' 2>/dev/null); then
     SCHEMA_FAILURE="the preserved container has no unambiguous explicit identity store path"
     return 1
   fi
-  if [[ -z "${WORK_DIR}" ]]; then
-    WORK_DIR=$(mktemp -d) || return 1
-  fi
+  make_work_dir || return 1
   # AddKeyPerFile has higher precedence than environment. Refuse an override rather
   # than guess which store is live; the normal deployed secrets directory is required.
   secrets_dir="${WORK_DIR}/identity-schema-secrets"
@@ -1382,9 +2043,7 @@ print(paths[0],end="")' 2>/dev/null); then
     schema=1
   else
     [[ "${store_path}" == /* && "${store_path}" != *$'\n'* && "${store_path}" != *$'\r'* ]] || return 1
-    if [[ -z "${WORK_DIR}" ]]; then
-      WORK_DIR=$(mktemp -d) || return 1
-    fi
+    make_work_dir || return 1
     schema_file="${WORK_DIR}/identity-schema-check.json"
     rm -f "${schema_file}" || return 1
     if ! dockerc cp "${target}:${store_path}" "${schema_file}" >/dev/null 2>&1 \
@@ -1583,9 +2242,8 @@ on_exit() {
     restore_rollback_limits
     [[ "${status}" != "0" ]] || status=1
   fi
-  if [[ -n "${WORK_DIR}" ]]; then
-    rm -rf "${WORK_DIR}"
-  fi
+  remove_work_dir
+  remove_archive_dir
   exit "${status}"
 }
 # The script's stdout and stderr, kept on fds 8 and 9. A signal's trap runs inside the call it interrupted, with that
@@ -1612,6 +2270,13 @@ if [[ "${VERIFY_REMOTE}" == "true" ]]; then
   echo "[done] Verified at ${REMOTE_BASE_URL} from this machine: authenticated Status (hatMode ${VERIFIED_HAT_MODE}) and a verified Stop."
   exit 0
 fi
+
+# The offline archive, before any Docker call: one that does not hold the release's image changes nothing.
+[[ -z "${IMAGE_ARCHIVE}" ]] || check_image_archive
+
+# The work folder, before any Docker call too: the new controller's cidfile (by which a restore removes it), the
+# identity check's copies and a built image go there.
+make_work_dir || fail "${FAILURE}. Nothing was changed."
 
 # Checked as the switch runs docker: in its own session, with no terminal to prompt on. A context that asks for a
 # password or a host key confirmation would otherwise pass here and fail at the old controller's stop.
@@ -1648,7 +2313,9 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   if [[ "${ROLLBACK}" == "true" ]]; then
     echo "[dry-run] Would request a verified Stop, swap ${CONTAINER_NAME} with ${PREVIOUS_CONTAINER_NAME} and verify it at ${REMOTE_BASE_URL}."
   else
-    if [[ -n "${IMAGE_REF}" ]]; then
+    if [[ -n "${IMAGE_ARCHIVE}" ]]; then
+      image_step="load ${IMAGE_ARCHIVE} (${IMAGE_DIGEST} for ${BUILD_PLATFORM}) into Docker context '${DOCKER_CONTEXT}', pulling nothing, and check the image's ID and platform"
+    elif [[ -n "${IMAGE_REF}" ]]; then
       image_step="pull ${IMAGE_REF} for ${BUILD_PLATFORM} into Docker context '${DOCKER_CONTEXT}' and check its digest and platform"
     else
       image_step="build ${IMAGE_TAG} for ${BUILD_PLATFORM}"
@@ -1799,9 +2466,18 @@ fi
 
 [[ "${ROLLBACK}" != "true" ]] || fail "internal error: the --rollback path did not finish; nothing was built or deployed."
 
-WORK_DIR=$(mktemp -d)
+make_work_dir || fail "${FAILURE}. The running controller was not touched."
 
-if [[ -n "${IMAGE_REF}" ]]; then
+if [[ -n "${IMAGE_ARCHIVE}" ]]; then
+  # Offline: the copy of the release's archive checked above, never IMAGE_ARCHIVE itself, is loaded into the Pi's Docker,
+  # and the image is used only if Docker gives it one of the IDs the archive's digests name, for the platform this run
+  # deploys. Nothing is pulled or built. The copy goes once Docker has read it (on exit, if the load fails).
+  echo "[load] Loading the checked copy of ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (nothing is pulled)..."
+  dockerc load -i "${ARCHIVE_COPY}" \
+    || fail "Could not load ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (see above). The running controller was not touched."
+  remove_archive_dir || true
+  check_loaded_image
+elif [[ -n "${IMAGE_REF}" ]]; then
   # Pull mode: the Pi's Docker pulls the released image, and it is used only if it is the image the digest names, for
   # the platform this run deploys. Nothing is built here, so the script also runs outside a checkout.
   echo "[pull] Pulling ${IMAGE_REF} for ${BUILD_PLATFORM} into Docker context '${DOCKER_CONTEXT}'..."

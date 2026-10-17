@@ -50,6 +50,18 @@ internal sealed record FakeContainer
     /// <summary>The digest of the image it runs; null for the one the fake release names.</summary>
     public string? Digest { get; init; }
 
+    /// <summary>
+    /// The ID of the image it runs, when it runs one loaded from an offline archive by its ID (with the release-image
+    /// label naming the release's image); null when it runs the release's image by its reference.
+    /// </summary>
+    public string? ImageId { get; init; }
+
+    /// <summary>
+    /// What its Config.Image shows when docker run was given neither the release's reference nor an image's ID (a tag
+    /// alone); null otherwise.
+    /// </summary>
+    public string? RunAs { get; init; }
+
     /// <summary>The one address its ports are published on; null for every address.</summary>
     public string? PublishAddress { get; init; }
 
@@ -110,8 +122,10 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         Root = Path.Combine(Path.GetTempPath(), "hvo-roof-installer-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Root);
 
-        // As on a Pi, / and /var are root's and only root writes to them, whatever the tests' umask: the backups' folder is
-        // trusted only under such folders.
+        // Writable by no one else whatever the umask, as a machine's own folders are: the installer makes its work folders
+        // only in a temporary folder that no one but root or its user can change (InstallerMachine.TrustedFolder). As on a
+        // Pi, / and /var are root's and only root writes to them: the backups' folder is trusted only under such folders.
+        File.SetUnixFileMode(Path.GetDirectoryName(Root)!, Modes.Folder);
         File.SetUnixFileMode(Root, Modes.Folder);
         Directory.CreateDirectory(OnDisk("/var"));
         File.SetUnixFileMode(OnDisk("/var"), Modes.Folder);
@@ -123,6 +137,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         Home = root ? "/root" : os == InstallerOs.MacOS ? $"/Users/{userName}" : $"/home/{userName}";
         Directory.CreateDirectory(OnDisk(Home));
         Directory.CreateDirectory(OnDisk(TemporaryDirectory));
+        File.SetUnixFileMode(OnDisk(TemporaryDirectory), Modes.Folder);
         CurrentDirectory = Home;
         Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = ReleaseJson();
         FileDownloads[ReleaseManifest.DownloadUri("4.0.0", KioskAssetName("4.0.0")).ToString()] = KioskTarball("4.0.0");
@@ -249,8 +264,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What the installer downloaded, in order.</summary>
     public ConcurrentQueue<Uri> Downloaded { get; } = new();
 
-    /// <summary>The machine's folder for temporary files.</summary>
-    public string TemporaryDirectory { get; } = "/tmp";
+    /// <summary>The machine's folder for temporary files: /tmp, unless a test gives another.</summary>
+    public string TemporaryDirectory { get; set; } = "/tmp";
 
     public ConcurrentQueue<CommandLine> Unexpected { get; } = new();
 
@@ -340,6 +355,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         },
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory,
+        FreeSpaceOnDisk = _ => FreeSpace,
         RunProgramAsync = RunProgramAsync,
         SyncFolderOnDisk = SyncFolder,
         SyncFileOnDisk = SyncFile,
@@ -384,9 +400,22 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return output.ToArray();
     }
 
+    /// <summary>The fake release's offline archive of <paramref name="image"/> (roof-controller) for an architecture (arm64).</summary>
+    public static string OfflineArchiveName(string image, string architecture, string version = "4.0.0") => $"{image}-{version}-linux-{architecture}.oci.tar";
+
+    /// <summary>What the fake release's offline archive of that name holds.</summary>
+    public static byte[] OfflineArchiveContent(string name) => Encoding.UTF8.GetBytes($"an OCI archive of an image: {name}\n");
+
+    /// <summary>The digest of the platform's manifest in the archive of that name.</summary>
+    public static string ArchiveManifestDigest(string name) => "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("manifest " + name)));
+
+    /// <summary>The digest of the platform's config in the archive of that name: the ID Docker's classic image store gives the image it loads.</summary>
+    public static string ArchiveConfigDigest(string name) => "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("config " + name)));
+
     /// <summary>
     /// A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests,
-    /// and, when given, its controller's state contract (JSON, as <c>stateContracts.controller</c>) and identityStoreSchema.
+    /// and, when given, its controller's state contract (JSON, as <c>stateContracts.controller</c>) and identityStoreSchema;
+    /// with <paramref name="offlineArchives"/>, each image's offline archives too.
     /// </summary>
     public static string ReleaseJson(
         string version = "4.0.0",
@@ -394,16 +423,43 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         string? emulatorDigest = null,
         IReadOnlyList<UpgradeNote>? upgradeNotes = null,
         string? stateContract = null,
-        int? identitySchema = null)
+        int? identitySchema = null,
+        bool offlineArchives = false)
     {
-        object Image(string name, string digest) => new
-        {
-            repository = $"ghcr.io/hualapaivalley/{name}",
-            tag = version,
-            digest,
-            reference = $"ghcr.io/hualapaivalley/{name}:{version}@{digest}",
-            platforms = new[] { "linux/amd64", "linux/arm64" }
-        };
+        object[] Archives(string name) => offlineArchives
+            ? [.. new[] { ("amd64", "linux/amd64"), ("arm64", "linux/arm64") }.Select(platform =>
+            {
+                var file = OfflineArchiveName(name, platform.Item1, version);
+                return (object)new
+                {
+                    name = file,
+                    platform = platform.Item2,
+                    size = OfflineArchiveContent(file).LongLength,
+                    sha256 = Convert.ToHexStringLower(SHA256.HashData(OfflineArchiveContent(file))),
+                    manifestDigest = ArchiveManifestDigest(file),
+                    configDigest = ArchiveConfigDigest(file)
+                };
+            })]
+            : [];
+
+        object Image(string name, string digest) => offlineArchives
+            ? (object)new
+            {
+                repository = $"ghcr.io/hualapaivalley/{name}",
+                tag = version,
+                digest,
+                reference = $"ghcr.io/hualapaivalley/{name}:{version}@{digest}",
+                platforms = new[] { "linux/amd64", "linux/arm64" },
+                offlineArchives = Archives(name)
+            }
+            : new
+            {
+                repository = $"ghcr.io/hualapaivalley/{name}",
+                tag = version,
+                digest,
+                reference = $"ghcr.io/hualapaivalley/{name}:{version}@{digest}",
+                platforms = new[] { "linux/amd64", "linux/arm64" }
+            };
 
         var json = JsonSerializer.Serialize(new
         {
@@ -432,7 +488,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                     sha256 = Convert.ToHexStringLower(SHA256.HashData(KioskTarball(version))),
                     files = new Dictionary<string, string> { ["hvo-roof-kiosk"] = Convert.ToHexStringLower(SHA256.HashData(KioskProgram(version))) }
                 },
-                .. ClientAssetEntries(version)
+                .. ClientAssetEntries(version),
+                .. offlineArchives ? ArchiveAssetEntries(version) : []
             ])
         });
         var manifest = System.Text.Json.Nodes.JsonNode.Parse(json)!;
@@ -452,6 +509,99 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
         return manifest.ToJsonString();
     }
+
+    // The entries in assets for the offline archives, as build/release-assets.py writes them.
+    private static IEnumerable<object> ArchiveAssetEntries(string version)
+        => from image in new[] { "roof-controller", "roof-hat-emulator" }
+           from platform in new[] { ("amd64", "linux-x64"), ("arm64", "linux-arm64") }
+           let file = OfflineArchiveName(image, platform.Item1, version)
+           select (object)new
+           {
+               name = file,
+               kind = OfflineArchive.AssetKind,
+               platform = platform.Item2,
+               size = OfflineArchiveContent(file).LongLength,
+               sha256 = Convert.ToHexStringLower(SHA256.HashData(OfflineArchiveContent(file)))
+           };
+
+    /// <summary>
+    /// The fake release's files, as a person downloads them into <paramref name="folder"/> for <c>--release DIR</c>:
+    /// release.json, the kiosk's tarball, the programs and, with <paramref name="offlineArchives"/>, the offline image
+    /// archives, which release.json then lists.
+    /// </summary>
+    public string ReleaseFolder(string folder = "/root/release", bool offlineArchives = true)
+    {
+        Write(Path.Join(folder, ReleaseManifest.FileName), ReleaseJson(offlineArchives: offlineArchives));
+        File.WriteAllBytes(OnDisk(Path.Join(folder, KioskAssetName("4.0.0"))), KioskTarball("4.0.0"));
+        foreach (var (name, content) in ClientAssets("4.0.0"))
+        {
+            File.WriteAllBytes(OnDisk(Path.Join(folder, name)), content);
+        }
+
+        if (offlineArchives)
+        {
+            foreach (var image in new[] { "roof-controller", "roof-hat-emulator" })
+            {
+                foreach (var architecture in new[] { "amd64", "arm64" })
+                {
+                    var name = OfflineArchiveName(image, architecture);
+                    File.WriteAllBytes(OnDisk(Path.Join(folder, name)), OfflineArchiveContent(name));
+                }
+            }
+        }
+
+        return folder;
+    }
+
+    /// <summary>
+    /// Which of Docker's image stores the fake's <c>docker load</c> acts as: "classic" gives the image its config's digest
+    /// as its ID, "containerd" its index's (the release's digest), and anything else an ID the release does not know.
+    /// </summary>
+    public string ImageStore { get; set; } = "classic";
+
+    /// <summary>The archives <c>docker load -i</c> read, by their paths on the machine, in order: the installer's and the deploy script's.</summary>
+    public List<string> LoadedArchives { get; } = [];
+
+    /// <summary>What each of <see cref="LoadedArchives"/> held when Docker read it, in the same order.</summary>
+    public List<byte[]> LoadedContents { get; } = [];
+
+    /// <summary>
+    /// What happens just before Docker reads an archive it loads (given the path it reads), once the installer, or the
+    /// deploy script, has checked it: a test changes the archive in the release's folder here.
+    /// </summary>
+    public Action<string>? BeforeLoad { get; set; }
+
+    /// <summary>The bytes free in the machine's temporary folder; null when the system does not say.</summary>
+    public long? FreeSpace { get; set; }
+
+    /// <summary>The images Docker holds once it has loaded an archive: each one's platform, by its ID.</summary>
+    public Dictionary<string, string> LoadedImages { get; } = new(StringComparer.Ordinal);
+
+    // docker load -i <archive>: the image it holds, by the ID the image store gives it, for the archive's platform. Given
+    // the bytes (the deploy script's copy), it loads those, and reads nothing at the path.
+    private CommandResult LoadArchive(string path, byte[]? copy = null)
+    {
+        BeforeLoad?.Invoke(path);
+        if (copy is null && !File.Exists(OnDisk(path)))
+        {
+            return new CommandResult(1, string.Empty, $"open {path}: no such file or directory\n");
+        }
+
+        LoadedArchives.Add(path);
+        LoadedContents.Add(copy ?? File.ReadAllBytes(OnDisk(path)));
+        var name = Path.GetFileName(path);
+        var id = LoadedImageId(name);
+        LoadedImages[id] = name.Contains("-linux-amd64.", StringComparison.Ordinal) ? "linux/amd64" : "linux/arm64";
+        return Answer($"Loaded image: ghcr.io/hualapaivalley/{name[..name.IndexOf("-4.", StringComparison.Ordinal)]}:4.0.0");
+    }
+
+    // The ID the image store gives the image loaded from the archive of that name.
+    private string LoadedImageId(string name) => ImageStore switch
+    {
+        "classic" => ArchiveConfigDigest(name),
+        "containerd" => name.StartsWith("roof-controller-", StringComparison.Ordinal) ? ControllerDigest : EmulatorDigest,
+        _ => "sha256:" + new string('0', 64)
+    };
 
     public string OnDisk(string path) => Path.Join(Root, path);
 
@@ -760,6 +910,10 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             "docker" when arguments is ["exec", "-i", var name, "curl", ..] => Docker(() => Controller(name, command)),
             "docker" when arguments is ["context", "show"] => Docker(() => Answer("default")),
             "docker" when arguments is ["pull", "--platform", _, _] => Docker(() => Answer("Status: Downloaded newer image")),
+            "docker" when arguments is ["load", "-i", var archive] => Docker(() => LoadArchive(archive)),
+            "docker" when arguments is ["image", "inspect", "--format", "{{.Id}} {{.Os}}/{{.Architecture}}", var id] => Docker(() => LoadedImages.TryGetValue(id, out var platform)
+                ? Answer($"{id} {platform}")
+                : new CommandResult(1, string.Empty, $"Error response from daemon: No such image: {id}\n")),
             "docker" when arguments is ["network", "inspect", var network] => Docker(() => Networks.Contains(network)
                 ? Answer("[]")
                 : new CommandResult(1, "[]\n", $"Error response from daemon: network {network} not found\n")),
@@ -1067,12 +1221,18 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         var settings = arguments.Select((argument, index) => (argument, index)).Where(pair => pair.argument == "--env")
             .Select(pair => arguments[pair.index + 1].Split('=', 2))
             .ToDictionary(pair => pair[0], pair => pair[1]);
+        // An image loaded from an archive runs by its ID, and its label names the release's image.
         var image = arguments[^1];
+        var label = Option("--label") is { } given && given.StartsWith(MachineSurveyor.ReleaseImageLabel + "=", StringComparison.Ordinal)
+            ? given[(MachineSurveyor.ReleaseImageLabel.Length + 1)..]
+            : null;
+        var released = label ?? image;
         Containers[MachineSurveyor.HatEmulatorContainer] = new FakeContainer
         {
             Network = Option("--network"),
             PublishAddress = Option("-p")!.Split(':')[0],
-            Digest = image[(image.IndexOf('@', StringComparison.Ordinal) + 1)..],
+            Digest = released[(released.IndexOf('@', StringComparison.Ordinal) + 1)..],
+            ImageId = label is null ? null : image,
             Settings = settings
         };
         return Answer(new string('f', 64));
@@ -1146,6 +1306,24 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             return new CommandResult(2, string.Empty, $"[deploy] ERROR: unknown option {options[0]}\n");
         }
 
+        // As the script copies an offline archive before anything else, checks that the copy has IMAGE_ARCHIVE_SHA256, and
+        // later loads that copy, not the file.
+        byte[]? copy = null;
+        if (environment.GetValueOrDefault("IMAGE_ARCHIVE") is { Length: > 0 } given)
+        {
+            if (!File.Exists(OnDisk(given)))
+            {
+                return new CommandResult(1, string.Empty, $"[deploy] ERROR: IMAGE_ARCHIVE '{given}' is not a file this script can read. Nothing was changed.\n");
+            }
+
+            copy = File.ReadAllBytes(OnDisk(given));
+            var sha256 = Convert.ToHexStringLower(SHA256.HashData(copy));
+            if (environment.GetValueOrDefault("IMAGE_ARCHIVE_SHA256") is { Length: > 0 } expected && sha256 != expected)
+            {
+                return new CommandResult(1, string.Empty, $"[deploy] ERROR: IMAGE_ARCHIVE {given} is not the release's archive: its SHA-256 is {sha256}, and IMAGE_ARCHIVE_SHA256 (release.json's) is {expected}. Nothing was changed.\n");
+            }
+        }
+
         // The controller it replaces is stopped and kept (an older one kept goes).
         if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var old))
         {
@@ -1153,6 +1331,19 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         }
 
         var image = environment["IMAGE_REF"];
+
+        // As the script loads an offline archive: the controller then runs the image by the ID Docker gave it.
+        string? loaded = null;
+        if (environment.GetValueOrDefault("IMAGE_ARCHIVE") is { Length: > 0 } archive)
+        {
+            if (LoadArchive(archive, copy) is { Succeeded: false } failed)
+            {
+                return new CommandResult(1, string.Empty, $"[deploy] ERROR: Could not load {archive}: {failed.Error}");
+            }
+
+            loaded = LoadedImageId(Path.GetFileName(archive));
+        }
+
         var extra = environment["EXTRA_DOCKER_ARGS"].Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var settings = new Dictionary<string, string>(StringComparer.Ordinal) { [MachineSurveyor.TelemetryEndpointSetting] = environment["OTEL_EXPORTER_OTLP_ENDPOINT"] };
         string? network = null;
@@ -1177,6 +1368,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             HatEmulatorEndpoint = environment["HAT_EMULATOR_ENDPOINT"] is { Length: > 0 } endpoint ? endpoint : HatEmulatorStep.Endpoint,
             Version = image[(image.LastIndexOf(':', image.IndexOf('@', StringComparison.Ordinal)) + 1)..image.IndexOf('@', StringComparison.Ordinal)],
             Digest = image[(image.IndexOf('@', StringComparison.Ordinal) + 1)..],
+            ImageId = loaded,
             Https = https,
             ApiPort = int.Parse(environment[https ? "HTTPS_HOST_PORT" : "HOST_PORT"], System.Globalization.CultureInfo.InvariantCulture),
             WebPort = int.Parse(environment["WEB_HOST_PORT"], System.Globalization.CultureInfo.InvariantCulture),
@@ -1238,6 +1430,13 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             labels[label] = value;
         }
 
+        // As the deploy script runs a container it loads from an offline archive: by its ID, labelled with the image it
+        // claims to run (docker run --label, which wins over the image's own).
+        if (container.ImageId is not null)
+        {
+            labels[MachineSurveyor.ReleaseImageLabel] = ReferenceOf(name, container);
+        }
+
         var environment = new List<string> { "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" };
         var ports = new Dictionary<string, object[]>();
         if (IsController(name))
@@ -1279,6 +1478,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             new
             {
                 Name = "/" + name,
+                Image = ImageIdOf(name, container),
                 Config = new { Image = image, Labels = labels, Env = environment },
                 HostConfig = new
                 {

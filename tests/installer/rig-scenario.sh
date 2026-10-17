@@ -8,8 +8,9 @@
 #            this machine, takes hvo-roof-install from the folder, checks its SHA-256 against SHA256SUMS and, with gh
 #            signed in, its attestation, and starts it as root (sudo). Then the folders and files with their modes, the
 #            controller running the release's image against the emulator and serving HTTPS with the installer's CA on
-#            loopback only, the web UI, the first admin signing in with the password given in a file, and no secret in
-#            the output, the log, the record or the controller's environment.
+#            loopback only, both images loaded from the release's offline archives (#127) and run by their IDs, the web
+#            UI, the first admin signing in with the password given in a file, and no secret in the output, the log, the
+#            record or the controller's environment.
 #   again    The same answers again: nothing to change, and nothing is replaced.
 #   cli      hvo-roof for the person running the scenario (not root, in a home of this run's own) with the rig as its
 #            controller, trusting the rig's CA by its fingerprint (#71): a wrong fingerprint refused with nothing
@@ -51,13 +52,17 @@
 # The release comes from one of two places:
 #   This source (the default). The release is made here as the release workflow makes one: install.sh with the
 #            release's version written in (build/release-assets.py), hvo-roof-install and hvo-roof published for this
-#            machine, the controller and the HAT emulator built and pushed, each an index of two platforms, to a
-#            registry of this run's own on loopback, release.json naming them by digest, and SHA256SUMS. install.sh
-#            does not see gh, so it notes that the attestation was not checked, as on a machine without gh.
-#   A release (RIG_RELEASE_DIR). The release's assets as the release workflow drafts them, its images in its registry
-#            (GHCR): sudo's Docker must be able to pull them. install.sh checks the installer's attestation with gh,
-#            which must be signed in (GH_TOKEN). upgrade and rollback, which need the release before built here, are
-#            left out: the run from this source checks them.
+#            machine, the controller and the HAT emulator built, each an index of two platforms, into the release's
+#            offline archives (build/release-assets.py splits them, fetched from a registry of this run's own on
+#            loopback, where the release names them under another repository, which never holds them), release.json
+#            naming them by digest, and SHA256SUMS. The release before, from before offline archives, has its images in
+#            that registry. install.sh does not see gh, so it notes that the attestation was not checked, as on a
+#            machine without gh.
+#   A release (RIG_RELEASE_DIR). The release's assets as the release workflow drafts them, its offline archives
+#            included, from which the images are loaded: no registry is needed (the release workflow's e2e job puts
+#            ghcr.io out of reach). install.sh checks the installer's attestation with gh, which must be signed in
+#            (GH_TOKEN). upgrade and rollback, which need the release before built here, are left out: the run from
+#            this source checks them.
 #
 # Needs docker, curl, jq, openssl, ss, ip, setsid, python3 and sudo without a password: the installer runs as root, as
 # a rig on Linux needs. From this source, also docker buildx, git (the release before is built from a worktree of
@@ -105,6 +110,11 @@ previous_version=""
 registry_name=hvo-rig-scenario-registry
 registry_image=registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
 registry="127.0.0.1:${registry_port}/hualapaivalley"
+# Where this source's release is pushed to be fetched into its offline archives: the release names its images in
+# ${registry}, which never holds them, so nothing can pull them (the release before's are there).
+build_registry="127.0.0.1:${registry_port}/rig-build"
+# What the registry is asked for a manifest: an index or an image's manifest, OCI's or Docker's.
+MANIFEST_TYPES="application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
 controller="roof-controller"
 emulator="hat-emulator"
 network="hvo-emulator"
@@ -171,8 +181,8 @@ seconds_since() {
 write_results() {
   [[ -n "${RIG_RESULTS_DIR:-}" ]] || return 0
   mkdir -p "${RIG_RESULTS_DIR}"
-  local where="a release in a registry on loopback"
-  [[ -z "${release_source}" ]] || where="the release's assets, its images from GHCR"
+  local where="a release made here, its images from its offline archives (the release before's from a registry on loopback)"
+  [[ -z "${release_source}" ]] || where="the release's assets, its images from its offline archives"
   {
     echo "# The installer's rig role end to end"
     echo
@@ -203,11 +213,13 @@ cleanup() {
     # With their volumes: each controller keeps the web UI's sign-in keys on one of its own.
     docker rm -f -v "${controller}" "${controller}-previous" "${emulator}" "${registry_name}" >/dev/null 2>&1
     docker network rm "${network}" >/dev/null 2>&1
-    # Each release's images, by digest: the ones the installer pulled.
+    # Each release's images: the ones the installer pulled, by digest, and the ones it loaded from their offline
+    # archives, by their tags and IDs.
     local folder
     for folder in "${release_dir}" "${previous_dir}"; do
       [[ -n "${folder}" && -f "${folder}/release.json" ]] || continue
-      jq -r '.images[] | "\(.repository)@\(.digest)"' "${folder}/release.json" | xargs -r docker rmi >/dev/null 2>&1
+      jq -r '.images[] | "\(.repository)@\(.digest)", "\(.repository):\(.tag)", (.offlineArchives // [] | .[].configDigest)' \
+        "${folder}/release.json" | xargs -r docker rmi >/dev/null 2>&1
     done
     (( made_interface == 0 )) || sudo -n ip link delete "${interface}" >/dev/null 2>&1
     sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof "${install_log}" "${installed}" "${installed}.previous" "${upgrade_backups}"
@@ -354,12 +366,28 @@ record_says() {
     || fail "the install record is not $1: $(sudo -n jq -c '{version, previousVersion, rolledBackFrom, roles}' /etc/hvo-roof/install.json 2>&1)"
 }
 
-# runs <container> <release folder> <controller|hatEmulator>: the container runs that release's image, by digest.
+# runs <container> <release folder> <controller|hatEmulator>: the container runs that release's image: by its digest,
+# pulled, or loaded from the release's offline archive for this platform and run by the ID Docker gave it (the index's,
+# the platform's manifest's or its config's), with the release-image label naming the image by its digest.
 runs() {
-  local expected
+  local expected image label archive id
   expected=$(jq -r ".images.$3.reference" "$2/release.json")
-  [[ "$(docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null)" == "${expected}" ]] \
-    || fail "$1 does not run ${expected}: $(docker inspect --format '{{.Config.Image}}' "$1" 2>&1)"
+  image=$(docker inspect --format '{{.Config.Image}}' "$1" 2>&1) || fail "$1 is not there: ${image}"
+  [[ "${image}" != "${expected}" ]] || return 0
+  label=$(docker inspect --format '{{index .Config.Labels "io.hvo.roof.release-image"}}' "$1")
+  archive=$(jq -c --arg platform "${platform}" ".images.$3.offlineArchives // [] | map(select(.platform == \$platform)) | .[0] // empty" "$2/release.json")
+  [[ -n "${archive}" && "${label}" == "${expected}" ]] \
+    || fail "$1 does not run ${expected}: it runs ${image}${label:+, labelled as ${label}}"
+  id=$(docker inspect --format '{{.Image}}' "$1")
+  if [[ "${image}" != "${id}" ]] \
+    || ! jq -e --arg id "${id}" --arg digest "${expected##*@}" '[$digest, .manifestDigest, .configDigest] | index($id) != null' <<<"${archive}" >/dev/null; then
+    fail "$1 runs the image ${id} (given as ${image}), which is not ${expected} loaded from its offline archive"
+  fi
+}
+
+# loaded <container>: the container runs an image loaded from an offline archive, by its ID (runs checks which).
+loaded() {
+  [[ "$(docker inspect --format '{{.Config.Image}}' "$1")" == sha256:* ]] || fail "$1 does not run an image loaded from an offline archive"
 }
 
 # confined <container> <all|limits>: the container has the installer's default limits (512 processes, and no CPU or
@@ -673,6 +701,10 @@ setup_from_release() {
   (cd "${release_dir}" && sha256sum --check --strict --quiet SHA256SUMS) || fail "the files in ${release_dir} are not the ones its SHA256SUMS lists"
   version=$(jq -r .version "${release_dir}/release.json")
   [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail "release.json names no version: '${version}'"
+  # The images come from the release's offline archives for this platform: install.sh --from and the installer load them.
+  for file in "roof-controller-${version}-linux-${platform#linux/}.oci.tar" "roof-hat-emulator-${version}-linux-${platform#linux/}.oci.tar"; do
+    [[ -f "${release_dir}/${file}" ]] || fail "${release_dir} has no ${file}: give it the release's assets, as the release workflow drafts them"
+  done
   # install.sh checks the installer's attestation with gh.
   gh auth status >/dev/null 2>&1 || fail "gh is not signed in: install.sh checks the installer's attestation with it (give GH_TOKEN)"
   # An artifact's files lose their modes: the installer that runs here directly is a copy that runs.
@@ -760,7 +792,8 @@ PY
   chmod 755 "${release_dir}/install.sh" "${release_dir}/${cli_asset}" "${release_dir}/hvo-roof-install-${rid}"
   cli_sha256=$(sha256sum "${release_dir}/${cli_asset}" | cut -d' ' -f1)
   installer_sha256=$(sha256sum "${installer}" | cut -d' ' -f1)
-  release "${release_dir}" "${repo_root}" "${version}" "Nothing to do by hand: the rig scenario's upgrade notes." \
+  # Its images are in its offline archives alone; the release before's, from before them, are in the registry.
+  release "${release_dir}" "${repo_root}" "${version}" "Nothing to do by hand: the rig scenario's upgrade notes." offline \
     install.sh install-script "${cli_asset}" cli "hvo-roof-install-${rid}" installer
   (cd "${release_dir}" && sha256sum -- *) > "${work}/SHA256SUMS" || fail "could not list the release's SHA-256s"
   mv "${work}/SHA256SUMS" "${release_dir}/SHA256SUMS"
@@ -768,11 +801,11 @@ PY
   previous_dir="${work}/release-previous"
   mkdir -p "${previous_dir}"
   cp "${previous_installer}" "${previous_dir}/hvo-roof-install-${rid}"
-  release "${previous_dir}" "${previous_root}" "${previous_version}" "" "hvo-roof-install-${rid}" installer
+  release "${previous_dir}" "${previous_root}" "${previous_version}" "" registry "hvo-roof-install-${rid}" installer
   # install.sh does not see gh here, signed in or not: it notes that it checked no attestation, as without gh.
   hide_gh=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN "GH_CONFIG_DIR=${work}/no-gh")
   attestation="  note  its attestation was not checked: gh "
-  pass "published hvo-roof-install ${version}, and ${previous_version} from this source and from ${previous_ref} (${previous_commit:0:12}), for ${rid}; each release's controller and HAT emulator pushed as indexes of ${platform} and ${other_platform} in $(seconds_since "${started}") s"
+  pass "published hvo-roof-install ${version}, and ${previous_version} from this source and from ${previous_ref} (${previous_commit:0:12}), for ${rid}; each release's controller and HAT emulator built as indexes of ${platform} and ${other_platform}, ${version}'s into its offline archives alone and ${previous_version}'s pushed, in $(seconds_since "${started}") s"
 }
 
 # install_script <file>: install.sh as build/release-assets.py writes a release's, with the release's version.
@@ -807,21 +840,29 @@ says_version() {
   [[ "${actual}" == "$2+"* ]] || fail "$1 --version printed '${actual}', not $2+<commit>"
 }
 
-# release <folder> <checkout> <version> <upgrade notes> [<asset> <kind>]...: the release's images, built from the
-# checkout and pushed, and its release.json, with the assets (files in the folder, for this platform) and the notes, as
-# its final release's (4.0.1 for 4.0.1-rig.2), as build/release-assets.py gives a release candidate its release's.
+# release <folder> <checkout> <version> <upgrade notes> <offline|registry> [<asset> <kind>]...: the release's images,
+# built from the checkout, and its release.json, with the assets (files in the folder, for this platform) and the notes,
+# as its final release's (4.0.1 for 4.0.1-rig.2), as build/release-assets.py gives a release candidate its release's.
+# offline: the images are in the release's offline archives alone (in the folder), which release.json lists, as
+# build/release-assets.py makes them, and no registry holds them; registry: they are pushed to the registry, and the
+# release has no offline archives, as a release from before them.
 release() {
-  local folder=$1 checkout=$2 release_version=$3 notes=$4 commit controller_digest emulator_digest identity_schema assets="[]"
-  local controller_contracts emulator_contracts
-  shift 4
+  local folder=$1 checkout=$2 release_version=$3 notes=$4 images=$5 commit controller_digest emulator_digest identity_schema assets="[]"
+  local controller_archives="[]" emulator_archives="[]" repository=${registry} controller_contracts emulator_contracts
+  shift 5
+  [[ "${images}" != offline ]] || repository=${build_registry}
   commit=$(git -C "${checkout}" rev-parse HEAD)
-  push_release_image roof-controller "${checkout}" src/HVO.RoofControllerV4.RPi/Dockerfile "${release_version}"
+  push_release_image roof-controller "${checkout}" src/HVO.RoofControllerV4.RPi/Dockerfile "${release_version}" "${repository}"
   controller_digest=${PUSHED_INDEX}
   identity_schema=${PUSHED_IDENTITY_SCHEMA}
   controller_contracts=${PUSHED_STATE_CONTRACTS}
-  push_release_image roof-hat-emulator "${checkout}" src/HVO.RoofControllerV4.Emulator/Dockerfile "${release_version}"
+  push_release_image roof-hat-emulator "${checkout}" src/HVO.RoofControllerV4.Emulator/Dockerfile "${release_version}" "${repository}"
   emulator_digest=${PUSHED_INDEX}
   emulator_contracts=${PUSHED_STATE_CONTRACTS:-"{}"}
+  if [[ "${images}" == offline ]]; then
+    controller_archives=$(offline_archives roof-controller "${controller_digest}" "${release_version}" "${folder}")
+    emulator_archives=$(offline_archives roof-hat-emulator "${emulator_digest}" "${release_version}" "${folder}")
+  fi
   while (( $# >= 2 )); do
     assets=$(jq --arg name "$1" --arg kind "$2" --arg rid "${rid}" --argjson size "$(stat -c %s "${folder}/$1")" \
       --arg sha "$(sha256sum "${folder}/$1" | cut -d' ' -f1)" \
@@ -834,27 +875,39 @@ release() {
   jq -n --arg version "${release_version}" --arg commit "${commit}" --arg registry "${registry}" \
     --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" --arg notes "${notes}" \
     --argjson identitySchema "${identity_schema}" --argjson assets "${assets}" \
+    --argjson controllerArchives "${controller_archives}" --argjson emulatorArchives "${emulator_archives}" \
     --arg controllerContracts "${controller_contracts}" --arg emulatorContracts "${emulator_contracts}" '
-    def image($name; $digest): { repository: "\($registry)/\($name)", tag: $version, digest: $digest,
-      reference: "\($registry)/\($name):\($version)@\($digest)", platforms: ["linux/amd64", "linux/arm64"] };
+    def image($name; $digest; $archives): { repository: "\($registry)/\($name)", tag: $version, digest: $digest,
+      reference: "\($registry)/\($name):\($version)@\($digest)", platforms: ["linux/amd64", "linux/arm64"] }
+      + (if ($archives | length) > 0 then { offlineArchives: $archives } else {} end);
     { schemaVersion: 1, identityStoreSchema: $identitySchema, product: "HVO Roof Controller", version: $version, tag: "v\($version)",
       prerelease: ($version | contains("-")), commit: $commit,
-      images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) },
-      assets: $assets }
+      images: { controller: image("roof-controller"; $controller; $controllerArchives),
+                hatEmulator: image("roof-hat-emulator"; $emulator; $emulatorArchives) },
+      assets: ($assets + [($controllerArchives + $emulatorArchives)[] | { name, kind: "image-archive",
+        platform: (if .platform == "linux/amd64" then "linux-x64" else "linux-arm64" end), size, sha256 }]) }
     + (if $controllerContracts == "" then {} else
         { stateContracts: { controller: ($controllerContracts | fromjson), hatEmulator: ($emulatorContracts | fromjson) } } end)
     + (if $notes == "" then {} else { upgradeNotes: [{ version: ($version | split("-")[0]), text: $notes }] } end)' \
     > "${folder}/release.json" || fail "could not write ${folder}/release.json"
 }
 
-# push_release_image <name> <checkout> <Dockerfile> <version>: the image as a release publishes it, an index of two
-# platforms: this platform's image built from the checkout's Dockerfile with the version, and an empty image for the
-# other one, which builds without emulation. The index's digest is in PUSHED_INDEX.
+# offline_archives <name> <index digest> <version> <folder>: the image this run pushed to ${build_registry}, fetched
+# from the registry into the release's offline archives in the folder, split by build/release-assets.py, the release
+# workflow's own (tests/releasing/offline-archives-from-registry.py); prints their entries for release.json.
+offline_archives() {
+  "${repo_root}/tests/releasing/offline-archives-from-registry.py" "127.0.0.1:${registry_port}" "${build_registry#*/}/$1" "$2" \
+    "$1" "${registry}/$1" "$3" "$4" || fail "could not make the offline archives of $1 $3"
+}
+
+# push_release_image <name> <checkout> <Dockerfile> <version> <registry>/<owner>: the image as a release publishes it,
+# an index of two platforms, pushed there: this platform's image built from the checkout's Dockerfile with the version,
+# and an empty image for the other one, which builds without emulation. The index's digest is in PUSHED_INDEX.
 PUSHED_INDEX=""
 PUSHED_IDENTITY_SCHEMA=""
 PUSHED_STATE_CONTRACTS=""
 push_release_image() {
-  local repository="${registry}/$1" checkout=$2 image_version=$4 single other output
+  local repository="$5/$1" checkout=$2 image_version=$4 single other output
   output=$(docker buildx build --quiet --provenance=false --platform "${platform}" -f "${checkout}/$3" \
     --build-arg "ROOF_VERSION=${image_version}" --build-arg "ROOF_REVISION=$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" \
     -t "${repository}:${image_version}-${platform#linux/}" --load "${checkout}" 2>&1) || fail "could not build $1 ${image_version} for ${platform}: $(tail -n 20 <<<"${output}")"
@@ -918,14 +971,31 @@ scenario_install() {
   expect_output install "nothing here moves a roof."
   local seconds
   seconds=$(seconds_since "${started}")
-  [[ "$(docker inspect --format '{{.Config.Image}}' "${controller}")" == "$(jq -r .images.controller.reference "${release_dir}/release.json")" ]] \
-    || fail "${controller} does not run the release's image"
-  [[ "$(docker inspect --format '{{.Config.Image}}' "${emulator}")" == "$(jq -r .images.hatEmulator.reference "${release_dir}/release.json")" ]] \
-    || fail "${emulator} does not run the release's image"
+  runs "${controller}" "${release_dir}" controller
+  runs "${emulator}" "${release_dir}" hatEmulator
   [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${controller}")" == "${network}" ]] || fail "${controller} is not on ${network}"
   loopback_only "${controller}"
   loopback_only "${emulator}"
-  pass "install.sh checked this machine, took hvo-roof-install from ${release_dir} with the SHA-256 SHA256SUMS lists ($(grep -qF '  ok    its attestation' "${work}/install.txt" && echo 'and its attestation' || echo 'no attestation checked, without gh')), and started it as root; installed in ${seconds} s: ${controller} and ${emulator} run the release's images by digest on ${network}, published on loopback only"
+  pass "install.sh checked this machine, took hvo-roof-install from ${release_dir} with the SHA-256 SHA256SUMS lists ($(grep -qF '  ok    its attestation' "${work}/install.txt" && echo 'and its attestation' || echo 'no attestation checked, without gh')), and started it as root; installed in ${seconds} s: ${controller} and ${emulator} run the release's images on ${network}, published on loopback only"
+
+  current_check="install: the images from the release's offline archives"
+  local name key
+  for name in roof-controller roof-hat-emulator; do
+    expect_output install "  ok    ${name}-${version}-linux-${platform#linux/}.oci.tar is in ${release_dir}: the installer loads"
+  done
+  loaded "${controller}"
+  loaded "${emulator}"
+  sudo -n grep -qF "Loaded the HAT emulator's image from ${release_dir}/roof-hat-emulator-${version}-linux-${platform#linux/}.oci.tar" "${install_log}" \
+    || fail "the installer's log does not say it loaded the HAT emulator's image from its archive"
+  if [[ -z "${release_source}" ]]; then
+    # The registry has never held this release's images, so nothing could have pulled them.
+    for key in controller hatEmulator; do
+      [[ "$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -H "Accept: ${MANIFEST_TYPES}" \
+        "http://127.0.0.1:${registry_port}/v2/hualapaivalley/$(jq -r ".images.${key}.repository | split(\"/\") | last" "${release_dir}/release.json")/manifests/$(jq -r ".images.${key}.digest" "${release_dir}/release.json")")" == 404 ]] \
+        || fail "the registry holds the release's ${key} image: this run cannot show that nothing was pulled"
+    done
+  fi
+  pass "both images loaded from ${release_dir}'s offline archives for ${platform} and run by their IDs, labelled with the release's images$([[ -z "${release_source}" ]] && echo ", which no registry holds")"
 
   current_check="install: folders and files"
   mode_is 755 /etc/hvo-roof /etc/hvo-roof/config /var/lib/hvo-roof
@@ -1262,7 +1332,8 @@ scenario_backup() {
 scenario_restore() {
   current_check="restore: uninstall --purge"
   local release_images volumes volume containers=("${controller}")
-  release_images=$(jq -r '.images[].reference' "${release_dir}/release.json")
+  # By digest (pulled) and by tag (loaded from the offline archives).
+  release_images=$(jq -r '.images[] | .reference, "\(.repository):\(.tag)"' "${release_dir}/release.json")
   # The controllers' own volumes (the web UI's sign-in keys), which go with them.
   [[ -z "$(docker ps -aq --filter "name=^/${controller}-previous$")" ]] || containers+=("${controller}-previous")
   volumes=$(docker inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}' \
@@ -1341,7 +1412,8 @@ bootstrap_state() {
 scenario_upgrade() {
   current_check="upgrade: the release before installed"
   local release_images
-  release_images=$(jq -r '.images[].reference' "${release_dir}/release.json")
+  # By digest (pulled) and by tag (loaded from the offline archives).
+  release_images=$(jq -r '.images[] | .reference, "\(.repository):\(.tag)"' "${release_dir}/release.json")
   start_relay_monitor
   install_with "${installed}" purge-again uninstall --purge --no-backup --confirm "$(hostname)" --yes
   expect_installed "uninstall --purge (again)"

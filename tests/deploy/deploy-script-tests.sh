@@ -1933,6 +1933,829 @@ test_rollback_and_verify_remote_ignore_a_malformed_image_ref() {
   assert_no_docker_calls "--verify-remote"
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Offline: a release's archive of the image (IMAGE_ARCHIVE), loaded in place of the pull (#127)
+
+# offline_archive [<platform>]: a made-up controller image's offline archives, for linux/amd64 and linux/arm64, as
+# build/release-assets.py writes a release's (into ${WORK}/archives). Sets ARCHIVE (the one for the platform, by default
+# linux/arm64), ARCHIVE_DIGEST (the image's index), ARCHIVE_REF (IMAGE_REF for it) and ARCHIVE_MANIFEST and
+# ARCHIVE_CONFIG (the platform's manifest and config digests).
+offline_archive() {
+  local values
+  values=$(python3 - "${TESTS_DIR}/../../build/release-assets.py" "${WORK}/archives" "${1:-linux/arm64}" <<'PY'
+import gzip, hashlib, importlib.util, io, json, pathlib, sys, tarfile
+script, folder, wanted = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("release_assets", script)
+assets = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(assets)
+folder = pathlib.Path(folder)
+folder.mkdir()
+blobs = {}
+def add(data, media_type):
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    blobs[digest] = data
+    return {"mediaType": media_type, "digest": digest, "size": len(data)}
+entries = []
+for platform in ("linux/amd64", "linux/arm64"):
+    os_, arch = platform.split("/")
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        info = tarfile.TarInfo("app/controller")
+        data = f"controller for {platform}\n".encode()
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    layer = add(gzip.compress(raw.getvalue(), mtime=0), "application/vnd.oci.image.layer.v1.tar+gzip")
+    labels = {"org.opencontainers.image.version": "4.0.0",
+              "org.opencontainers.image.revision": "0123456789abcdef0123456789abcdef01234567"}
+    config = add(json.dumps({"architecture": arch, "os": os_, "config": {"Labels": labels},
+                             "rootfs": {"type": "layers", "diff_ids": ["sha256:" + hashlib.sha256(raw.getvalue()).hexdigest()]}}).encode(),
+                 "application/vnd.oci.image.config.v1+json")
+    manifest = add(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                               "config": config, "layers": [layer]}).encode(), "application/vnd.oci.image.manifest.v1+json")
+    entries.append({**manifest, "platform": {"architecture": arch, "os": os_}})
+index = add(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": entries}).encode(),
+            "application/vnd.oci.image.index.v1+json")
+source = folder / "source.tar"
+with tarfile.open(source, "w") as tar:
+    for name, data in [("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'),
+                       ("index.json", json.dumps({"schemaVersion": 2, "manifests": [index]}).encode()),
+                       *((f"blobs/sha256/{digest[7:]}", data) for digest, data in blobs.items())]:
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+archives = assets.offline_archives(source, "roof-controller", "registry.test:5000/hvo/roof-controller", "4.0.0",
+                                   index["digest"], folder, 0)
+archive = next(archive for archive in archives if archive["platform"] == wanted)
+print(folder / archive["name"], index["digest"], archive["manifestDigest"], archive["configDigest"])
+PY
+  ) || { fail_test "could not make the offline archives"; return 1; }
+  read -r ARCHIVE ARCHIVE_DIGEST ARCHIVE_MANIFEST ARCHIVE_CONFIG <<<"${values}"
+  ARCHIVE_REF="registry.test:5000/hvo/roof-controller:4.0.0@${ARCHIVE_DIGEST}"
+}
+
+# edit_archive <python>: rewrites ${ARCHIVE}, member by member. The code runs with files, a list of [TarInfo, bytes or
+# None] in the archive's order, which it may change, and entry(name) (a member's [TarInfo, bytes]), read(name) (its
+# JSON), write(name, value) (its JSON), add(name, data[, type, linkname]) and json.
+edit_archive() {
+  python3 - "${ARCHIVE}" "$1" <<'PY' || fail_test "could not rewrite the archive"
+import io, json, sys, tarfile
+path, code = sys.argv[1:]
+with tarfile.open(path) as tar:
+    files = [[member, tar.extractfile(member).read() if member.isfile() else None] for member in tar.getmembers()]
+def entry(name):
+    return next(f for f in files if f[0].name == name)
+def read(name):
+    return json.loads(entry(name)[1])
+def write(name, value):
+    entry(name)[1] = json.dumps(value).encode()
+def add(name, data=None, type=tarfile.REGTYPE, linkname=""):
+    info = tarfile.TarInfo(name)
+    info.type, info.linkname = type, linkname
+    files.append([info, data])
+exec(code, {"files": files, "entry": entry, "read": read, "write": write, "add": add, "json": json, "tarfile": tarfile})
+with tarfile.open(path, "w", format=tarfile.PAX_FORMAT) as tar:
+    for member, data in files:
+        member.size = len(data) if data is not None else 0
+        tar.addfile(member, io.BytesIO(data) if data is not None else None)
+PY
+}
+
+# assert_archive_refused <message> [<what>]: the deploy refused the archive with that message before any Docker call,
+# and the controller runs on.
+assert_archive_refused() {
+  assert_status 1
+  assert_output_contains "$1"
+  assert_output_contains "Nothing was changed."
+  assert_no_docker_calls "${2:-a refused archive}"
+  assert_container roof-controller old true unless-stopped
+}
+
+# each_archive <test> <python>...: runs <test> once for each edit of a fresh copy of ${ARCHIVE}, the docker calls
+# cleared first; <test> sees the edit as EDIT.
+each_archive() {
+  local check=$1 pristine="${WORK}/pristine.oci.tar"
+  shift
+  cp "${ARCHIVE}" "${pristine}"
+  for EDIT in "$@"; do
+    cp "${pristine}" "${ARCHIVE}"
+    edit_archive "${EDIT}"
+    : > "${FAKE_STATE_DIR}/calls.log"
+    "${check}"
+  done
+  cp "${pristine}" "${ARCHIVE}"
+}
+
+# seed_image <ID> <platform>: an image Docker already holds by that ID.
+seed_image() {
+  jq --arg id "$1" --arg platform "$2" \
+    '.images[$id] = {id: $id, repo_digests: [], platform: $platform, platforms: [$platform], version: "4.0.0", revision: "seeded"}' \
+    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+}
+
+# assert_loaded_a_private_copy <SHA-256> [<TMPDIR>]: Docker loaded one archive, and it was not IMAGE_ARCHIVE but the
+# script's own copy, in a folder of its own in TMPDIR (by default ${WORK}) that only its user can open (0700, the copy
+# 0600), holding the bytes with that SHA-256 when Docker read it; and the copy is gone.
+assert_loaded_a_private_copy() {
+  local folder=${2:-${WORK}}
+  jq -e --arg sha256 "$1" --arg folder "$(cd "${folder}" && pwd -P)" \
+    '(.loads // []) | length == 1 and (.[0] | (.path | startswith($folder + "/hvo-roof-archive.") and endswith("/image.oci.tar"))
+       and .sha256 == $sha256 and .mode == "0o600" and .folder_mode == "0o700")' "${FAKE_STATE_DIR}/state.json" >/dev/null \
+    || fail_test "expected one load of a private copy, SHA-256 $1, in ${folder}: $(jq -c '.loads' "${FAKE_STATE_DIR}/state.json")"
+  docker_calls load | jq -e -s --arg path "$(jq -r '.loads[0].path // ""' "${FAKE_STATE_DIR}/state.json")" \
+    'length == 1 and .[0] == ["load", "-i", $path]' >/dev/null || fail_test "expected one load -i of that copy: $(docker_calls load)"
+  assert_no_private_copy "${folder}"
+}
+
+# assert_no_private_copy [<TMPDIR>]: the script left no copy of an archive (nor its folder) in TMPDIR.
+assert_no_private_copy() {
+  [[ -z "$(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-archive.*')" ]] \
+    || fail_test "the script left its copy of the archive in ${1:-${WORK}}: $(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-archive.*')"
+}
+
+# reset_fake_docker: Docker as a test starts with, the old controller running.
+reset_fake_docker() {
+  echo '{"containers": {}}' > "${FAKE_STATE_DIR}/state.json"
+  : > "${FAKE_STATE_DIR}/calls.log"
+  seed_container roof-controller old true 8443:8443
+}
+
+# assert_runs_loaded_image <image ID>: the pre-flight and the controller run the image by that ID for linux/arm64,
+# never pulling, and the controller carries the label naming the released image.
+assert_runs_loaded_image() {
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e --arg id "$1" --arg label "io.hvo.roof.release-image=${ARCHIVE_REF}" \
+      'index($id) and .[index("--platform") + 1] == "linux/arm64" and .[index("--pull") + 1] == "never"
+       and .[index("--label") + 1] == $label' <<<"${args}" >/dev/null \
+      || fail_test "expected $1 run for linux/arm64 with --pull never and the release-image label: ${args}"
+  done
+  jq -e --arg id "$1" '.[-2] == $id and .[-1] == "--validate-deployment"' <<<"$(preflight_args)" >/dev/null \
+    || fail_test "the pre-flight does not run $1 --validate-deployment: $(preflight_args)"
+  jq -e --arg id "$1" '.[-1] == $id' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "the controller does not run $1: $(controller_run_args)"
+}
+
+test_archive_mode_loads_checks_and_deploys_the_released_image_by_its_id_without_pulling() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64 (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG})"
+  assert_output_contains "[load] Checking a copy of ${ARCHIVE} that only this user can change (SHA-256 $(sha256_hex < "${ARCHIVE}")): Docker loads that copy"
+  assert_output_contains "[load] Loading the checked copy of ${ARCHIVE} into Docker context 'test-context' (nothing is pulled)..."
+  # The classic image store gives the image its config's digest as its ID.
+  assert_output_contains "[load] ${ARCHIVE_DIGEST} for linux/arm64, image ${ARCHIVE_CONFIG}: version 4.0.0, commit 0123456789ab"
+  assert_output_contains "Deployment complete and verified at https://pi.test:8443"
+  assert_container roof-controller new true unless-stopped
+  assert_container roof-controller-previous old false no
+  [[ -z "$(docker_calls pull)$(docker_calls buildx)$(docker_calls save)" ]] || fail_test "archive mode pulled, built or saved an image"
+  assert_loaded_a_private_copy "$(sha256_hex < "${ARCHIVE}")"
+  grep -F '"--context", "test-context", "load"' "${FAKE_STATE_DIR}/calls.log" >/dev/null \
+    || fail_test "the load did not use the Pi's Docker context"
+  (( $(call_index '"load"') < $(call_index '"--validate-deployment"') )) || fail_test "the pre-flight ran before the load"
+  assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+  assert_key_never_in_argv
+}
+
+test_archive_mode_in_the_containerd_image_store_deploys_the_index_by_its_digest() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" FAKE_IMAGE_STORE=containerd
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE_DIGEST} for linux/arm64, image ${ARCHIVE_DIGEST}: version 4.0.0"
+  assert_container roof-controller new true unless-stopped
+  assert_runs_loaded_image "${ARCHIVE_DIGEST}"
+}
+
+test_archive_mode_with_a_cli_without_inspect_platform_checks_the_image_it_holds() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" FAKE_INSPECT_PLATFORM=false
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+}
+
+test_archive_mode_for_the_emulator_on_amd64_loads_the_amd64_archive() {
+  offline_archive linux/amd64 || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" BUILD_PLATFORM=linux/amd64 \
+    HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE_DIGEST} for linux/amd64, image ${ARCHIVE_CONFIG}: version 4.0.0"
+  jq -e --arg id "${ARCHIVE_CONFIG}" '.[-1] == $id and .[index("--platform") + 1] == "linux/amd64"' <<<"$(controller_run_args)" \
+    >/dev/null || fail_test "expected ${ARCHIVE_CONFIG} run for linux/amd64: $(controller_run_args)"
+}
+
+test_an_archive_without_the_image_image_ref_names_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE} does not hold the image ${DIGEST} that IMAGE_REF names: give the release's archive of that image. Nothing was changed."
+  assert_no_docker_calls "an archive of another image"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_an_archive_naming_another_image_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # The index's blob is there, and index.json names another image.
+  python3 - "${ARCHIVE}" "${OTHER_DIGEST}" <<'PY' || fail_test "could not rewrite the archive"
+import io, json, sys, tarfile
+path, other = sys.argv[1:]
+with tarfile.open(path) as tar:
+    files = [(member, tar.extractfile(member).read() if member.isfile() else None) for member in tar.getmembers()]
+with tarfile.open(path, "w") as tar:
+    for member, data in files:
+        if member.name == "index.json":
+            index = json.loads(data)
+            index["manifests"].append({**index["manifests"][0], "digest": other})
+            data = json.dumps(index).encode()
+            member.size = len(data)
+        tar.addfile(member, io.BytesIO(data) if data is not None else None)
+PY
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE} names the image 'none, or more than one', and IMAGE_REF names ${ARCHIVE_DIGEST}"
+  assert_no_docker_calls "an archive naming two images"
+}
+
+test_an_archive_for_another_platform_changes_nothing() {
+  offline_archive linux/amd64 || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE} does not hold the image ${ARCHIVE_DIGEST} has for linux/arm64: give the release's archive for linux/arm64 (<image>-<version>-linux-arm64.oci.tar). Nothing was changed."
+  assert_no_docker_calls "the amd64 archive on the Pi"
+}
+
+test_an_archive_with_a_damaged_manifest_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  python3 - "${ARCHIVE}" "${ARCHIVE_MANIFEST}" <<'PY' || fail_test "could not damage the archive"
+import io, sys, tarfile
+path, manifest = sys.argv[1:]
+with tarfile.open(path) as tar:
+    files = [(member, tar.extractfile(member).read() if member.isfile() else None) for member in tar.getmembers()]
+with tarfile.open(path, "w") as tar:
+    for member, data in files:
+        if member.name == f"blobs/sha256/{manifest[7:]}":
+            data = data.replace(b"layers", b"Layers")
+        tar.addfile(member, io.BytesIO(data) if data is not None else None)
+PY
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 1
+  assert_output_contains "does not hold the image ${ARCHIVE_DIGEST} has for linux/arm64"
+  assert_no_docker_calls "a damaged manifest"
+}
+
+# Docker's classic image store reads manifest.json alone, loads every image in it and applies their tags, whatever
+# index.json says: it must be the one image, its config and its layers, tagged IMAGE_REF's name or not at all (#127).
+refused_by_manifest_json() {
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE}: its manifest.json is not the one image for linux/arm64, with its config and layers, tagged registry.test:5000/hvo/roof-controller:4.0.0 or not at all (Docker's classic image store would load and tag what it says): give the release's archive of that image. Nothing was changed." "manifest.json: ${EDIT}"
+}
+
+test_an_archive_whose_manifest_json_holds_another_image_or_tag_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # Only manifest.json changes: index.json, the index, the manifest and every blob are the release's.
+  each_archive refused_by_manifest_json \
+    'd = read("manifest.json"); d.append({**d[0], "RepoTags": ["docker.io/library/other:latest"]}); write("manifest.json", d)' \
+    'd = read("manifest.json"); d.append(d[0]); write("manifest.json", d)' \
+    'd = read("manifest.json"); d[0]["RepoTags"] = ["docker.io/library/other:latest"]; write("manifest.json", d)' \
+    'd = read("manifest.json"); d[0]["RepoTags"].append("registry.test:5000/hvo/roof-controller:latest"); write("manifest.json", d)' \
+    'd = read("manifest.json"); d[0]["repotags"] = ["docker.io/library/other:latest"]; write("manifest.json", d)' \
+    'd = read("manifest.json"); d[0]["Parent"] = "sha256:" + "1" * 64; write("manifest.json", d)' \
+    'd = read("manifest.json"); d[0]["Layers"] = []; write("manifest.json", d)' \
+    'd = read("manifest.json"); d[0]["Config"] = d[0]["Layers"][0]; write("manifest.json", d)' \
+    'write("manifest.json", [])'
+}
+
+# Docker's containerd image store names the image as index.json does: by IMAGE_REF's name, or not at all.
+refused_by_index_json() {
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE}: its index.json says more than the image, its type, size and digest, or names it other than registry.test:5000/hvo/roof-controller:4.0.0 (Docker's containerd image store would load it under that name): give the release's archive of that image. Nothing was changed." "index.json: ${EDIT}"
+}
+
+test_an_archive_whose_index_json_names_the_image_otherwise_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  each_archive refused_by_index_json \
+    'd = read("index.json"); d["manifests"][0]["annotations"]["io.containerd.image.name"] = "docker.io/library/other:latest"; write("index.json", d)' \
+    'd = read("index.json"); d["manifests"][0]["annotations"]["org.opencontainers.image.ref.name"] = "latest"; write("index.json", d)' \
+    'd = read("index.json"); del d["manifests"][0]["annotations"]["io.containerd.image.name"]; write("index.json", d)' \
+    'd = read("index.json"); d["manifests"][0]["annotations"]["io.example.other"] = "x"; write("index.json", d)' \
+    'd = read("index.json"); d["manifests"][0]["Annotations"] = {"io.containerd.image.name": "docker.io/library/other:latest"}; write("index.json", d)' \
+    'd = read("index.json"); d["Manifests"] = d["manifests"]; write("index.json", d)'
+}
+
+# Nothing but the image's own files: no other member, none twice, no link, and both of Docker's layouts.
+refused_for_its_members() {
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE ${ARCHIVE}"
+  [[ "${OUTPUT}" == *"which is not part of an image's offline archive"* || "${OUTPUT}" == *"more than once, and Docker would read the last"* \
+    || "${OUTPUT}" == *"is not a tar archive as a release writes one"* || "${OUTPUT}" == *"has no oci-layout"* || "${OUTPUT}" == *"has no manifest.json"* \
+    || "${OUTPUT}" == *"holds other blobs than the index, the linux/arm64 manifest, its config and its layers"* ]] \
+    || fail_test "not refused for its members (${EDIT})"
+  assert_archive_refused "Nothing was changed." "members: ${EDIT}"
+}
+
+test_an_archive_with_other_members_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  each_archive refused_for_its_members \
+    'add("repositories", b"{}")' \
+    'add("blobs/sha256/" + "1" * 64, b"another image")' \
+    'add("manifest.json", entry("manifest.json")[1])' \
+    'add("./index.json", entry("index.json")[1])' \
+    'add("blobs/sha256/" + "2" * 64, None, tarfile.SYMTYPE, "../../index.json")' \
+    'files[:] = [f for f in files if f[0].name != "oci-layout"]' \
+    'files[:] = [f for f in files if f[0].name != "manifest.json"]'
+}
+
+# N1: what each member is comes from the archive's own headers, never from a tar program's listing (GNU tar and bsdtar
+# can list a pax hard link that carries data, or a sparse file, as a plain file). Only plain files and the two folders,
+# in POSIX ustar headers alone, are taken.
+refused_by_its_headers() {
+  reset_fake_docker
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE} ${EXPECTED}" "headers: ${EDIT}"
+}
+
+test_an_archive_with_a_link_a_sparse_file_or_a_folder_as_a_file_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  local layer pristine="${WORK}/pristine.oci.tar" index
+  layer=$(tar -xOf "${ARCHIVE}" manifest.json | jq -r '.[0].Layers[0]')
+  local not_ustar="is not a tar archive as a release writes one, of plain files and folders in POSIX ustar headers alone"
+  local edits=(
+    # A pax hard link that carries the layer's data, in the layer's place.
+    "f = entry('${layer}'); info = tarfile.TarInfo(f[0].name); info.type, info.linkname = tarfile.LNKTYPE, 'index.json'; info.pax_headers = {'comment': 'a hard link with data'}; f[0] = info"
+    "${not_ustar}: member 9 is a pax extended header."
+    # The same hard link, in a plain ustar header.
+    "f = entry('${layer}'); info = tarfile.TarInfo(f[0].name); info.type, info.linkname = tarfile.LNKTYPE, 'index.json'; f[0] = info"
+    "${not_ustar}: member 9 (${layer}) is a hard link."
+    # oci-layout as a pax 1.0 sparse file, as GNU tar --sparse writes one: GNU tar lists it, and extracts it, as oci-layout.
+    "f = entry('oci-layout'); real = f[1]; info = tarfile.TarInfo('GNUSparseFile.0/oci-layout'); info.pax_headers = {'GNU.sparse.major': '1', 'GNU.sparse.minor': '0', 'GNU.sparse.name': 'oci-layout', 'GNU.sparse.realsize': str(len(real))}; f[0] = info; f[1] = (b'1\\n0\\n%d\\n' % len(real)).ljust(512, b'\\0') + real"
+    "${not_ustar}: member 1 is a pax extended header."
+    # The folders as files.
+    "entry('blobs')[0].type = tarfile.REGTYPE; entry('blobs')[1] = b''"
+    "holds blobs as a file: in an image's offline archive it is a folder."
+    "entry('blobs/sha256')[0].type = tarfile.REGTYPE; entry('blobs/sha256')[1] = b''"
+    "holds blobs/sha256 as a file: in an image's offline archive it is a folder."
+    # A pax header on a plain file, saying nothing that matters: still not what a release writes.
+    "entry('index.json')[0].pax_headers = {'comment': 'nothing'}"
+    "${not_ustar}: member 2 is a pax extended header."
+  )
+  cp "${ARCHIVE}" "${pristine}"
+  for (( index = 0; index < ${#edits[@]}; index += 2 )); do
+    cp "${pristine}" "${ARCHIVE}"
+    EDIT=${edits[index]}
+    EXPECTED=${edits[index + 1]}
+    edit_archive "${EDIT}"
+    refused_by_its_headers
+  done
+
+  # Something after the end of the archive, which tar programs and Docker ignore; and a header that does not sum to its
+  # checksum.
+  cp "${pristine}" "${ARCHIVE}"
+  printf 'not an empty block' >> "${ARCHIVE}"
+  EDIT="data after the end" EXPECTED="${not_ustar}: its size is not a whole number of 512-byte blocks."
+  refused_by_its_headers
+  cp "${pristine}" "${ARCHIVE}"
+  python3 -c 'import sys; f = open(sys.argv[1], "r+b"); f.seek(-512, 2); f.write(b"x" * 512)' "${ARCHIVE}"
+  EDIT="a last block that is not empty" EXPECTED="${not_ustar}: it does not end with empty blocks alone, two at least, after its last member."
+  refused_by_its_headers
+  cp "${pristine}" "${ARCHIVE}"
+  python3 -c 'import sys; f = open(sys.argv[1], "r+b"); f.seek(0); f.write(b"OCI-layout")' "${ARCHIVE}"
+  EDIT="a header that does not sum to its checksum" EXPECTED="${not_ustar}: its block 0 is not a tar header that sums to its checksum."
+  refused_by_its_headers
+  cp "${pristine}" "${ARCHIVE}"
+}
+
+test_an_archive_with_a_damaged_config_or_layer_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  local pristine="${WORK}/pristine.oci.tar" layer
+  cp "${ARCHIVE}" "${pristine}"
+  edit_archive "entry('blobs/sha256/${ARCHIVE_CONFIG#sha256:}')[1] = entry('blobs/sha256/${ARCHIVE_CONFIG#sha256:}')[1].replace(b'4.0.0', b'4.0.1')"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE}: its config ${ARCHIVE_CONFIG} for linux/arm64 is not the blob its digest names" "a damaged config"
+
+  cp "${pristine}" "${ARCHIVE}"
+  layer=$(tar -xOf "${ARCHIVE}" manifest.json | jq -r '.[0].Layers[0]')
+  edit_archive "entry('${layer}')[1] = entry('${layer}')[1][:-1] + b'x'"
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE}: its layer sha256:${layer#blobs/sha256/} for linux/arm64 is not the blob its digest names" "a damaged layer"
+}
+
+test_an_allowed_image_docker_already_holds_does_not_let_a_refused_archive_load() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # Docker already holds the release's image by each ID it may give it, so a check after a load would pass whatever the
+  # archive loaded. The archive is refused before Docker reads it.
+  seed_image "${ARCHIVE_CONFIG}" linux/arm64
+  seed_image "${ARCHIVE_DIGEST}" linux/arm64
+  local images
+  images=$(jq -S .images "${FAKE_STATE_DIR}/state.json")
+
+  # A second image in manifest.json, and a config that is not the release's under the release's config's name: the
+  # classic store would load either, and find the image it holds by the config's ID.
+  edit_archive 'd = read("manifest.json"); d.append({**d[0], "RepoTags": ["docker.io/library/other:latest"]}); write("manifest.json", d)'
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "its manifest.json is not the one image for linux/arm64" "a second image, the allowed one held"
+  [[ -z "$(docker_calls load)" ]] || fail_test "the archive was loaded"
+
+  edit_archive "d = read('manifest.json'); d.pop(); write('manifest.json', d); entry('blobs/sha256/${ARCHIVE_CONFIG#sha256:}')[1] += b' '"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_archive_refused "its config ${ARCHIVE_CONFIG} for linux/arm64 is not the blob its digest names" "another config, the allowed one held"
+  [[ "$(jq -S .images "${FAKE_STATE_DIR}/state.json")" == "${images}" ]] || fail_test "the images Docker holds changed"
+}
+
+test_an_archive_that_names_the_image_not_at_all_deploys_by_its_id() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  edit_archive 'd = read("index.json"); del d["manifests"][0]["annotations"]; write("index.json", d)
+m = read("manifest.json"); del m[0]["RepoTags"]; write("manifest.json", m)'
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64 (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG}), and nothing else"
+  assert_container roof-controller new true unless-stopped
+  assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+}
+
+test_archive_mode_checks_the_archive_with_python_without_jq() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # This test function is interpreted by the child bash, not expanded by this shell.
+  # shellcheck disable=SC2016
+  local no_jq='BASH_FUNC_command%%=() { if [ "$1" = -v ] && [ "$2" = jq ]; then return 1; fi; builtin command "$@"; }'
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "${no_jq}" -- --dry-run
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64 (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG}), and nothing else"
+
+  local pristine="${WORK}/pristine.oci.tar" edit
+  cp "${ARCHIVE}" "${pristine}"
+  for edit in \
+      'd = read("manifest.json"); d[0]["RepoTags"] = ["docker.io/library/other:latest"]; write("manifest.json", d)' \
+      'd = read("index.json"); d["manifests"][0]["annotations"]["io.containerd.image.name"] = "docker.io/library/other:latest"; write("index.json", d)' \
+      'write("oci-layout", {"imageLayoutVersion": "1.0.0", "ImageLayoutVersion": "2.0.0"})'; do
+    cp "${pristine}" "${ARCHIVE}"
+    edit_archive "${edit}"
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "${no_jq}"
+    assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE}: its " "python3: ${edit}"
+  done
+}
+
+# edit_as_text <member> <pattern> <replacement>: rewrites that member of ${ARCHIVE} as text: the first match of the
+# pattern (a Python regular expression) is replaced by the replacement exactly as written, escapes and all. JSON with a
+# name given twice can be written this way; a dictionary would keep only one of them.
+edit_as_text() {
+  local code
+  code=$(python3 -c 'import sys
+member, pattern, replacement = sys.argv[1:]
+print("import re\nf = entry(%r)\nf[1], n = re.subn(%r, lambda m: %r, f[1], count=1)\nassert n == 1, %r"
+      % (member, pattern.encode(), replacement.encode(), pattern))' "$1" "$2" "$3") || { fail_test "could not edit $1"; return 1; }
+  edit_archive "${code}"
+}
+
+# F4: a name given twice in one object of a JSON file the check reads, at any depth and however it is spelt, is refused
+# before any Docker call, by either reader (jq, and python3 without jq). Both keep only the last value for a name, while
+# Docker's Go decoder decodes the second annotations object into the map the first made, keeping the name the first
+# gave: docker.io/library/other:latest would be pointed at the release's image.
+test_an_archive_giving_a_name_twice_changes_nothing_with_either_reader() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  local pristine="${WORK}/pristine.oci.tar" reader index reader_env=()
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local no_jq='BASH_FUNC_command%%=() { if [ "$1" = -v ] && [ "$2" = jq ]; then return 1; fi; builtin command "$@"; }'
+  local other='"io.containerd.image.name":"docker.io/library/other:latest"'
+  local edits=(
+    # The review's attack: the annotations twice, the first naming another image, the second empty.
+    index.json '"annotations":\{[^}]*\}' "\"annotations\":{${other}},\"annotations\":{}"
+    # manifest.json's tags twice.
+    manifest.json '"RepoTags":' '"RepoTags":["docker.io/library/other:latest"],"RepoTags":'
+    # The same names, spelt with escapes: one name once decoded.
+    index.json '"annotations":\{[^}]*\}' "\"annotations\":{${other}},\"\\u0061nnotations\":{}"
+    manifest.json '"RepoTags":' '"RepoTags":["docker.io/library/other:latest"],"Repo\u0054ags":'
+    index.json '"annotations":\{' '"annotations":{"io.containerd.image.n\u0061me":"docker.io/library/other:latest",'
+    # Two unpaired surrogates, which Go decodes alike, as U+FFFD.
+    index.json '"annotations":\{' '"annotations":{"\ud800":"a","\udbff":"b",'
+  )
+  cp "${ARCHIVE}" "${pristine}"
+  for reader in jq python3; do
+    reader_env=()
+    [[ "${reader}" == jq ]] || reader_env=("${no_jq}")
+    for (( index = 0; index < ${#edits[@]}; index += 3 )); do
+      cp "${pristine}" "${ARCHIVE}"
+      edit_as_text "${edits[index]}" "${edits[index + 1]}" "${edits[index + 2]}" || return
+      : > "${FAKE_STATE_DIR}/calls.log"
+      deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" ${reader_env[@]+"${reader_env[@]}"}
+      assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE}: its ${edits[index]} is not one JSON value that gives each name once in each object (a name given twice, even spelt with escapes, is read one way by this check and another by Docker): give the release's archive of that image. Nothing was changed." \
+        "${reader}: ${edits[index]}: ${edits[index + 2]}"
+    done
+  done
+  cp "${pristine}" "${ARCHIVE}"
+
+  # Escapes alone are no duplicate: both readers decode them, as Docker does.
+  edit_as_text index.json '"annotations":' '"\u0061nnotations":' || return
+  for reader in jq python3; do
+    reader_env=()
+    [[ "${reader}" == jq ]] || reader_env=("${no_jq}")
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" ${reader_env[@]+"${reader_env[@]}"} -- --dry-run
+    assert_status 0
+    assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64"
+  done
+}
+
+test_a_loaded_image_with_another_id_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "FAKE_LOADED_ID=${OTHER_DIGEST}"
+
+  assert_status 1
+  assert_output_contains "Docker loaded ${ARCHIVE}, and holds no image with its IDs: ${ARCHIVE_DIGEST} (the index), ${ARCHIVE_MANIFEST} (the linux/arm64 manifest) or ${ARCHIVE_CONFIG} (its config). The running controller was not touched."
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls exec)" ]] \
+    || fail_test "the controller was stopped, renamed, removed, run or called"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_a_failed_load_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" FAKE_LOAD_FAIL=true
+
+  assert_status 1
+  assert_output_contains "Could not load ${ARCHIVE} into Docker context 'test-context' (see above). The running controller was not touched."
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls pull)" ]] \
+    || fail_test "the controller was stopped, renamed, removed or run, or an image pulled"
+  assert_container roof-controller old true unless-stopped
+  assert_no_private_copy
+}
+
+# F3: Docker loads the bytes the script checked, and no others. Someone who can write to the folder the archive is in
+# replaces it, or writes over it in place, once the script has checked it and before Docker reads it (FAKE_ON_LOAD):
+# Docker still reads only the script's copy, the bytes it checked.
+test_an_archive_changed_after_its_check_is_never_what_docker_loads() {
+  offline_archive || return
+  local pristine="${WORK}/pristine.oci.tar" other="${WORK}/other.oci.tar" sha256 change
+  cp "${ARCHIVE}" "${pristine}"
+  sha256=$(sha256_hex < "${pristine}")
+  # The other archive: the release's with a second image under another tag, which the check would refuse.
+  edit_archive 'd = read("manifest.json"); d.append({**d[0], "RepoTags": ["docker.io/library/other:latest"]}); write("manifest.json", d)'
+  mv "${ARCHIVE}" "${other}"
+  for change in "cp '${other}' '${ARCHIVE}.new' && mv '${ARCHIVE}.new' '${ARCHIVE}'" "cat '${other}' > '${ARCHIVE}'"; do
+    cp "${pristine}" "${ARCHIVE}"
+    reset_fake_docker
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "IMAGE_ARCHIVE_SHA256=${sha256}" \
+      "FAKE_ON_LOAD=${change}"
+
+    assert_status 0
+    assert_output_contains "[load] Checking a copy of ${ARCHIVE} that only this user can change (SHA-256 ${sha256}, as release.json gives it): Docker loads that copy"
+    [[ "$(sha256_hex < "${ARCHIVE}")" == "$(sha256_hex < "${other}")" ]] || fail_test "the archive was not changed before the load (${change})"
+    assert_loaded_a_private_copy "${sha256}"
+    assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+    assert_container roof-controller new true unless-stopped
+  done
+}
+
+test_an_archive_without_the_sha256_release_json_gives_it_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  local sha256 other_sha256=${OTHER_DIGEST#sha256:}
+  sha256=$(sha256_hex < "${ARCHIVE}")
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "IMAGE_ARCHIVE_SHA256=${other_sha256}"
+  assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE} is not the release's archive: its SHA-256 is ${sha256}, and IMAGE_ARCHIVE_SHA256 (release.json's) is ${other_sha256}. Nothing was changed." "another SHA-256"
+  assert_no_private_copy
+
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "IMAGE_ARCHIVE_SHA256=$(tr a-f A-F <<<"${sha256}")"
+  assert_archive_refused "IMAGE_ARCHIVE_SHA256 must be the archive's SHA-256 from release.json: 64 lower-case hex digits. Nothing was changed." "an upper-case SHA-256"
+}
+
+test_no_room_for_the_private_copy_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local full='BASH_FUNC_df%%=() { printf "%s\n" "Filesystem 1024-blocks Used Available Capacity Mounted on" "fake 100000 99000 1000 99% /"; }'
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "${full}"
+  assert_archive_refused "There is not room in $(cd "${WORK}" && pwd -P) for a private copy of IMAGE_ARCHIVE ${ARCHIVE}: it needs 17 MiB (the archive and 16 MiB more), and 0 MiB is free. The script loads only a copy of its own, so that Docker reads the bytes it checked. Free some room there, or set TMPDIR to a folder with room. Nothing was changed." "no room"
+  assert_no_private_copy
+}
+
+# assert_no_work_dir [<TMPDIR>]: the script left no work folder in TMPDIR (by default ${WORK}).
+assert_no_work_dir() {
+  [[ -z "$(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-deploy.*')" ]] \
+    || fail_test "the script left its work folder in ${1:-${WORK}}: $(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-deploy.*')"
+}
+
+# F5: the script's folders are made only in a TMPDIR that, with every folder above it, is root's or this user's and
+# writable by no one else unless sticky. In any other, someone else could put a link or another folder in the place of
+# the one made, and so change what Docker loads or what the cleanup removes: nothing is made there at all (the
+# BASH_FUNC_mktemp below records each mktemp the script runs).
+test_a_temporary_folder_others_can_change_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local record='BASH_FUNC_mktemp%%=() { printf "%s\n" "$*" >> "${MKTEMP_LOG}"; command mktemp "$@"; }' tmpdir
+  mkdir -p "${WORK}/shared/inner"
+  chmod 0777 "${WORK}/shared"
+  chmod 0700 "${WORK}/shared/inner"
+  for tmpdir in "${WORK}/shared" "${WORK}/shared/inner" "${WORK}/missing"; do
+    : > "${WORK}/mktemp.log"
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${tmpdir}" \
+      "MKTEMP_LOG=${WORK}/mktemp.log" "${record}"
+    assert_archive_refused "TMPDIR (${tmpdir}) is not a folder only this user and root can change, for the copy of IMAGE_ARCHIVE that Docker loads: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change what is written there. Nothing was made in it. Set TMPDIR to a folder that is, such as /tmp. Nothing was changed." "TMPDIR ${tmpdir}"
+    [[ ! -s "${WORK}/mktemp.log" ]] || fail_test "a folder was made in ${tmpdir} before it was checked: $(cat "${WORK}/mktemp.log")"
+  done
+  [[ -z "$(ls -A "${WORK}/shared/inner")" ]] || fail_test "something was made in ${WORK}/shared/inner"
+
+  # Sticky, as /tmp is: no one else can rename or remove the script's folders in it.
+  chmod 1777 "${WORK}/shared"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${WORK}/shared"
+  assert_status 0
+  assert_loaded_a_private_copy "$(sha256_hex < "${ARCHIVE}")" "${WORK}/shared"
+  assert_no_work_dir "${WORK}/shared"
+}
+
+# F5: the work folder (the new controller's cidfile, the identity check's copies, a built image) is made the same way,
+# before any Docker call, whatever the script deploys or does.
+test_a_work_folder_others_can_change_is_refused_before_any_docker_call() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  mkdir "${WORK}/shared"
+  chmod 0777 "${WORK}/shared"
+  local mode
+  for mode in "" --rollback --stop; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "TMPDIR=${WORK}/shared" -- ${mode:+"${mode}"}
+    assert_status 1
+    assert_output_contains "TMPDIR (${WORK}/shared) is not a folder only this user and root can change, for its work folder: "
+    assert_output_contains "Nothing was changed."
+    assert_no_docker_calls "a work folder others can change (${mode:-deploy})"
+    assert_container roof-controller current true unless-stopped
+  done
+  [[ -z "$(ls -A "${WORK}/shared")" ]] || fail_test "something was made in ${WORK}/shared: $(ls -A "${WORK}/shared")"
+}
+
+# F5: the folder the script makes is the one it uses and removes. Here its name is turned into a link to another folder
+# of this user's between mktemp and the script's own check of it (BASH_FUNC_mktemp): the script refuses, follows
+# nothing and removes nothing, so the other folder is left as it was.
+test_a_folder_turned_into_a_link_once_made_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  mkdir -m 0700 "${WORK}/mine"
+  echo keep > "${WORK}/mine/keep"
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local swap='BASH_FUNC_mktemp%%=() { local made; made=$(command mktemp "$@") || return; case "${made}" in */hvo-roof-archive.*) mv "${made}" "${made}.made" && ln -s "${SWAP_TARGET}" "${made}" ;; esac; printf "%s\n" "${made}"; }'
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "SWAP_TARGET=${WORK}/mine" "${swap}"
+  assert_archive_refused "Could not make a private folder in ${WORK} for the copy of IMAGE_ARCHIVE that Docker loads ($(cd "${WORK}" && pwd -P)/hvo-roof-archive." "a folder turned into a link"
+  [[ "$(ls -A "${WORK}/mine")" == keep && "$(cat "${WORK}/mine/keep")" == keep ]] \
+    || fail_test "the folder the link pointed at was changed: $(ls -lA "${WORK}/mine")"
+  [[ -n "$(find "${WORK}" -maxdepth 1 -name 'hvo-roof-archive.*' -type l)" ]] || fail_test "the link was removed or followed"
+}
+
+# F5: the script removes its folders only while each is still the folder it made, and then only what it put there. A
+# folder or a link put in the place of its copy's folder and of its work folder, once Docker has read the copy
+# (FAKE_AFTER_LOAD), is left as it is, with what is in it, and the script says so.
+test_a_folder_put_in_the_place_of_the_scripts_own_is_left_as_it_is() {
+  offline_archive || return
+  local kind
+  # This function is run by the fake docker's shell, not by this shell.
+  # shellcheck disable=SC2016
+  local replace='for d in "$(dirname "${FAKE_LOAD_ARCHIVE}")" "${TMPDIR}"/hvo-roof-deploy.*; do mv "$d" "$d.moved" || exit 1; if [ "${KIND}" = link ]; then mkdir -m 0700 "$d.target" && echo keep > "$d.target/keep" && ln -s "$d.target" "$d"; else mkdir -m "${KIND}" "$d" && echo keep > "$d/keep"; fi || exit 1; done'
+  for kind in 0700 0755 link; do
+    reset_fake_docker
+    rm -rf "${WORK}"/hvo-roof-*
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "KIND=${kind}" "FAKE_AFTER_LOAD=${replace}"
+
+    assert_status 0
+    assert_container roof-controller new true unless-stopped
+    # The script names its folders by their physical paths (on macOS, the temporary folder's /var is /private/var).
+    local archive_dir work_dir here
+    here=$(cd -P -- "${WORK}" && pwd)
+    archive_dir=$(find "${here}" -maxdepth 1 -name 'hvo-roof-archive.*' ! -name '*.moved' ! -name '*.target')
+    work_dir=$(find "${here}" -maxdepth 1 -name 'hvo-roof-deploy.*' ! -name '*.moved' ! -name '*.target')
+    [[ -n "${archive_dir}" && -n "${work_dir}" ]] || fail_test "${kind}: the folders put in place of the script's were removed"
+    if [[ "${kind}" == 0700 ]]; then
+      assert_output_contains "[load] WARNING: ${archive_dir} holds more than this script put there, so it was left as it is."
+      assert_output_contains "[deploy] WARNING: ${work_dir} holds more than this script put there, so it was left as it is."
+    else
+      assert_output_contains "[load] WARNING: ${archive_dir} is no longer the folder this script made for its copy of IMAGE_ARCHIVE (a folder of this user's, mode 0700), so it was left as it is."
+      assert_output_contains "[deploy] WARNING: ${work_dir} is no longer the work folder this script made (a folder of this user's, mode 0700), so it was left as it is."
+    fi
+    local folder
+    for folder in "${archive_dir}" "${work_dir}"; do
+      [[ "${kind}" != link ]] || folder="${folder}.target"
+      [[ "$(cat "${folder}/keep" 2>/dev/null)" == keep ]] || fail_test "${kind}: ${folder}/keep was removed"
+    done
+  done
+}
+
+# F5: a TMPDIR that is a link to a private folder is followed once, before anything is made: the script's folders go
+# under the folder it names, by that folder's own path, and are removed as usual.
+test_a_stable_link_to_a_private_temporary_folder_is_followed() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  mkdir -m 0700 "${WORK}/real"
+  ln -s "${WORK}/real" "${WORK}/link"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${WORK}/link"
+  assert_status 0
+  assert_loaded_a_private_copy "$(sha256_hex < "${ARCHIVE}")" "${WORK}/real"
+  assert_no_work_dir "${WORK}/real"
+  [[ -L "${WORK}/link" && -z "$(ls -A "${WORK}/real")" ]] || fail_test "the link or the folder it names was changed: $(ls -lA "${WORK}/real")"
+}
+
+test_a_dry_run_leaves_no_copy_of_the_archive() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" -- --dry-run
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}"
+  [[ -z "$(docker_calls load)" ]] || fail_test "a dry run loaded the archive"
+  assert_no_private_copy
+}
+
+test_image_archive_needs_image_ref_and_a_file_before_any_docker_call() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_status 1
+  assert_output_contains "IMAGE_ARCHIVE is a release's offline archive of an image, and needs IMAGE_REF"
+  assert_no_docker_calls "no IMAGE_REF"
+
+  local value
+  for value in "${WORK}/missing.oci.tar" "${WORK}" "-i"; do
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${value}"
+    assert_status 1
+    assert_output_contains "IMAGE_ARCHIVE '${value}' is not a file this script can read. Nothing was changed."
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_archive_mode_dry_run_checks_the_archive_and_loads_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" -- --dry-run
+
+  assert_status 0
+  assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64"
+  assert_output_contains "[dry-run] Would load ${ARCHIVE} (${ARCHIVE_DIGEST} for linux/arm64) into Docker context 'test-context', pulling nothing, and check the image's ID and platform, run the pre-flight check"
+  [[ -z "$(docker_calls load)$(docker_calls pull)$(docker_calls image)" ]] || fail_test "the dry run loaded, pulled or inspected an image"
+  assert_nothing_changed "dry run"
+}
+
+test_rollback_from_a_loaded_image_ignores_image_archive() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+  assert_status 0
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${WORK}/missing.oci.tar" -- --rollback
+  assert_status 0
+  assert_output_contains "Rolled back."
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous new false no
+  [[ -z "$(docker_calls load)$(docker_calls pull)$(docker_calls run)" ]] || fail_test "--rollback loaded, pulled or ran an image"
+}
+
+test_extra_docker_args_cannot_pull_or_name_the_release_image() {
+  seed_container roof-controller old true 8443:8443
+  printf 'io.hvo.roof.release-image=registry.test/x@%s\n' "${DIGEST}" > "${WORK}/labels"
+  local value
+  for value in "--pull always" "--pull=always" "--label io.hvo.roof.release-image=${IMAGE_REF}" \
+      "--label=io.hvo.roof.release-image=${IMAGE_REF}" "--label-file ${WORK}/labels" "--label-file=${WORK}/labels"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "EXTRA_DOCKER_ARGS=${value}"
+    assert_status 1
+    case "${value}" in
+      --pull*) assert_output_contains "EXTRA_DOCKER_ARGS must not contain '${value%% *}': the script pulls a released image itself" ;;
+      *) assert_output_contains "EXTRA_DOCKER_ARGS must not set the label io.hvo.roof.release-image" ;;
+    esac
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
 test_compose_managed_controller_is_refused_before_anything_changes() {
   local name args
   for name in roof-controller roof-controller-previous; do
