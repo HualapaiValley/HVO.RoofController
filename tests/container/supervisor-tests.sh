@@ -1118,8 +1118,8 @@ relay_off_runs_at_least() {
 }
 
 # stop_and_expect_it_within <seconds>: SIGTERM to the supervisor; it must exit 0 within that many seconds of the signal,
-# start no controller after it, and turn the relays off once more after it, beginning and ending in that time. Sets
-# STOP_SECONDS.
+# start neither the controller nor the web UI after it, and turn the relays off once more after it, beginning and ending
+# in that time. Sets STOP_SECONDS.
 stop_and_expect_it_within() {
   local bound=$1 signalled=${EPOCHREALTIME} late_starts final_run final_done
   kill -TERM "${SUPERVISOR_PID}"
@@ -1129,8 +1129,8 @@ stop_and_expect_it_within() {
   expect_equal "exit status" "${EXIT_STATUS}" 0
   awk -v s="${STOP_SECONDS}" -v b="${bound}" 'BEGIN { exit !(s < b) }' \
     || fail_test "the stop took ${STOP_SECONDS}s from SIGTERM, not within ${bound}s"
-  late_starts=$(awk -v t="${signalled}" '$1 > t && $2 == "controller" && $3 == "start"' "${FAKE_DIR}/times.log" | wc -l)
-  expect_equal "controllers started after SIGTERM" "${late_starts}" 0
+  late_starts=$(awk -v t="${signalled}" '$1 > t && ($2 == "controller" || $2 == "ui") && $3 == "start"' "${FAKE_DIR}/times.log" | wc -l)
+  expect_equal "processes started after SIGTERM" "${late_starts}" 0
   final_run=$(awk -v t="${signalled}" '$1 > t && $2 == "relays-off" && $3 == "run" { print $1 }' "${FAKE_DIR}/times.log" | tail -n 1)
   final_done=$(awk -v t="${final_run:-0}" '$1 > t && $2 == "relays-off" && $3 == "done" { print $1 }' "${FAKE_DIR}/times.log" | tail -n 1)
   if [[ -z "${final_run}" ]]; then
