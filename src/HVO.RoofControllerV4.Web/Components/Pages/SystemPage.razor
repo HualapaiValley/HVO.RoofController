@@ -271,8 +271,11 @@
         return snapshot.LastForcedRestart switch
         {
             null => "No forced restart since the container started.",
-            { Outcome: ForcedRestartRecord.Outcomes.Held } held =>
+            // Held then; the controller's own state says whether it still is.
+            { Outcome: ForcedRestartRecord.Outcomes.Held } held when snapshot.Controller.State == SupervisedProcess.States.RelaysUnverified =>
                 $"The last forced restart, at {RoofStatusText.Time(held.At)}, did not start the controller again: the relays could not be verified off, so it is held stopped until they are.",
+            { Outcome: ForcedRestartRecord.Outcomes.Held } held =>
+                $"The last forced restart, at {RoofStatusText.Time(held.At)}, did not start the controller at once: the relays could not be verified off then, so it was held stopped. It is no longer held.",
             { Outcome: ForcedRestartRecord.Outcomes.Ignored } ignored => string.Create(
                 CultureInfo.InvariantCulture,
                 $"The last forced restart, at {RoofStatusText.Time(ignored.At)}, was ignored: the controller had started less than {snapshot.ForceRestartMinSeconds} s before."),

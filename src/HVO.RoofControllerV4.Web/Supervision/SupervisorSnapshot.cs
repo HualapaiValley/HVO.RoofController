@@ -71,6 +71,7 @@ public sealed record SupervisedProcess
     /// <summary>The states the supervisor writes.</summary>
     public static class States
     {
+        /// <summary>Not started yet; for the web UI, also while the supervisor prepares it (its copies, its keys directory).</summary>
         public const string Starting = "starting";
         public const string Running = "running";
         /// <summary>Exited, and waiting to be started again (at once after a requested restart, or after a backoff).</summary>
