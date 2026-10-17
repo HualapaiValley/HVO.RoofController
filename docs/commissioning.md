@@ -436,9 +436,11 @@ are verified off.
   `cgroup_disable=memory` to the kernel's command line; append ` cgroup_enable=memory` to the single line in
   `/boot/firmware/cmdline.txt` and reboot the Pi with the roof idle
   ([deployment.md](deployment.md#the-containers-privileges-and-limits)). The fail-safe result of a Pi that does not is
-  a refused deploy: the deploy script, the installer and `install.sh` refuse it before anything changes, with every
-  finding and no override (`tests/deploy/deploy-script-tests.sh`, `InstallerResourceLimitsTests`,
-  `tests/install/install-sh-tests.sh`), and the controller already running keeps running as it is.
+  a refused install, upgrade or deploy: the deploy script, the installer and `install.sh` refuse it before anything
+  changes, with every finding and no override (`tests/deploy/deploy-script-tests.sh`, `InstallerResourceLimitsTests`,
+  `tests/install/install-sh-tests.sh`), and the controller already running keeps running as it is. A rollback, a
+  recovery path, goes ahead instead, with the limits Docker can still enforce and a loud warning, in its output and in
+  the controller's log, of each one it cannot (the owner's decision on #149; C12 step 6).
 - **The HAT's devices are root's on the Pi** (`/dev/i2c-1` and `/dev/gpiomem`: Raspberry Pi OS makes them `root:i2c`
   and `root:gpio`, mode `0660`). The setting that depends on it is the container's capabilities: without
   `CAP_DAC_OVERRIDE` the controller opens them as their owner ([deployment.md](deployment.md#the-containers-privileges-and-limits)).
@@ -481,7 +483,7 @@ register every 0.1 s.
 | 3 | An operator key that is not configured fails the pre-flight, and the running controller is untouched | `deploy-scenarios.sh c12` |
 | 4 | A renamed certificate file, a wrong certificate password and no `RoofOperator` key each fail the pre-flight, and the running controller is untouched | `deploy-scenarios.sh c12` |
 | 5 | `ALLOWED_HOSTS=localhost` passes the pre-flight but fails the remote check. The script rolls back: the previous controller is running and ready under `roof-controller`, and the exit status is non-zero. The rollback time is in the results. | `deploy-scenarios.sh c12` |
-| 6 | `--rollback` twice: the versions swap and swap back, and each is verified from the deploying machine. A rollback the idle check refuses leaves the version it would bring back as it was, its limits included. A rollback given limits (2.5 CPUs, `4g`) gives them to the version it brings back; the next, given none, keeps them for the version it swaps back (an override persists, #149); the default given again (1 vCPU, `2g`) is applied in its turn. | `deploy-scenarios.sh c12` |
+| 6 | `--rollback` twice: the versions swap and swap back, and each is verified from the deploying machine. A rollback the idle check refuses leaves the version it would bring back as it was, its limits included. A rollback given limits (2.5 CPUs, `4g`) gives them to the version it brings back; the next, given none, keeps them for the version it swaps back (an override persists, #149); the default given again (1 vCPU, `2g`) is applied in its turn. A rollback whose `docker info` reports no memory limit support (the run's own wrapper in front of real Docker) goes ahead with the CPU and process limits alone, and warns in its output and in the controller's log (`docker logs`), naming the memory limit and the fix. | `deploy-scenarios.sh c12` |
 | 7 | Relay-register reads fail, so the Stop cannot be verified. The deploy aborts before it stops or replaces the controller, and the controller latches `RelayVerificationFailed` until `ClearFault`. | `deploy-scenarios.sh c12` |
 | 8 | A new controller that cannot reach the HAT passes the pre-flight but never becomes ready. After `READY_TIMEOUT_SECONDS` the script rolls back, and the previous controller is running and ready again. | `deploy-scenarios.sh c12` |
 | 9 | A new version whose web UI cannot start (a setting out of range) passes the pre-flight, which runs only the controller, and its controller becomes ready. Its web UI exits at each start, so the script rolls back, and the previous controller and its web UI are running again. | `deploy-scenarios.sh c12` |

@@ -358,7 +358,8 @@ anything.
      (`MemoryLimit`, `SwapLimit`), CPU limits (`CPUCfsQuota`) and process limits (`PidsLimit`), and at least the CPUs
      of the CPU limit ([The container's privileges and limits](#the-containers-privileges-and-limits)). Otherwise the
      deploy is refused, with every finding and the remedy, and nothing is built, pulled or stopped; there is no
-     override. A memory limit above the Pi's memory is only warned about.
+     override. (A `--rollback` goes ahead instead, with a loud warning: [Rolling back](#rolling-back).) A memory limit
+     above the Pi's memory is only warned about.
 2. **Builds** the image for `BUILD_PLATFORM` (the Pi's, `linux/arm64`) and loads it on the Pi, or with `IMAGE_REF`
    **pulls** a released image instead ([Deploying a released image](#deploying-a-released-image)). The image carries the
    product version as a workstation build (`4.0.0-dev`), the checkout's commit and the time it was built, in its labels
@@ -642,9 +643,14 @@ controller and runs the checks from step 7 against it. Nothing is built. A later
 After the idle check (`REQUIRE_IDLE_ROOF`) and the verified stop, and before the current controller is stopped,
 `--rollback` gives `<name>-previous` this run's limits (`CONTAINER_PIDS_LIMIT`, `CONTAINER_CPUS` and `CONTAINER_MEMORY`,
 a CPU or memory limit not set kept from `<name>`, the controller it replaces, else the default; with `docker update`)
-and checks that Docker kept them; nothing is updated when it already has them. Like a deploy, it is refused before
-anything changes when Docker cannot enforce them. A rollback those checks refuse leaves `<name>-previous` exactly as it
-was, its limits included. A failure of the update stops the rollback with the current controller running, and a failure
+and checks that Docker kept them; nothing is updated when it already has them. A rollback is a recovery path, so unlike
+a deploy it is **not** refused when Docker cannot enforce a limit (the owner's decision on #149): it goes ahead with the
+limits Docker can still enforce, and gives a loud warning that names each limit it cannot and the fix (append
+` cgroup_enable=memory` to `/boot/firmware/cmdline.txt` and reboot with the roof idle), in its output and in the
+restored controller's log (`docker logs <name>`). Its other checks refuse it as before: limits below the floor, a CPU
+limit Docker enforces beyond the CPUs it reports, a Docker that does not answer, the idle check and the verified stop
+([The container's privileges and limits](#the-containers-privileges-and-limits)). A rollback those checks refuse leaves
+`<name>-previous` exactly as it was, its limits included. A failure of the update stops the rollback with the current controller running, and a failure
 or an interrupt after it, before the restored version has started, also puts back the limits `<name>-previous` had:
 Docker cannot take a CPU or memory limit off a container, so one it had none of stays, and the script says so. So a
 rollback keeps the limits the operator chose, and the installer's rollback gives the recorded ones. A container keeps
@@ -1045,8 +1051,9 @@ the relays off. The process limit makes a new thread fail beyond `CONTAINER_PIDS
 `OutOfMemoryException` in the thread that asked: a crash. At that limit the supervisor itself forks nothing it cannot
 afford: a relay-off kills the web UI to make room, a start waits, and a stop frees the tasks before its relay-off
 ([The supervisor at the process limit](#the-supervisor-at-the-process-limit)). A CPU limit never ends a process; it
-only delays. A Docker that cannot enforce the limits is refused before anything changes, so the controller never runs
-with fewer than it was given.
+only delays. A Docker that cannot enforce the limits is refused before anything changes for an install, an upgrade or a
+deploy; only a rollback, a recovery path, runs the version it brings back without a limit Docker cannot enforce, and
+says so loudly ([Rolling back](#rolling-back)).
 
 What it cannot cover:
 
@@ -1250,9 +1257,9 @@ load, 177 MiB for the controller and 132 MiB for the web UI, counts the pages th
 together.
 
 **Docker must enforce them.** Docker drops a limit it cannot enforce with only a warning, and runs the container
-without it. RoofController refuses such a host, as SkyMonitor does (#149; SkyMonitor #1285), and on every deploy and
-rollback, before it changes anything: SkyMonitor checks only when it installs, but RoofController gives its limits each
-time. One `docker info` must report `MemoryLimit` and `SwapLimit` (the memory limit, and no swap beyond it),
+without it. RoofController refuses such a host, as SkyMonitor does (#149; SkyMonitor #1285), on every install, upgrade
+and deploy, before it changes anything: SkyMonitor checks only when it installs, but RoofController gives its limits
+each time. A rollback, a recovery path, goes ahead instead, with a warning (below). One `docker info` must report `MemoryLimit` and `SwapLimit` (the memory limit, and no swap beyond it),
 `CPUCfsQuota` (Docker 29's template field; its JSON key is `CpuCfsQuota`) and `PidsLimit` as `true`; a field Docker
 does not report counts as `false`. Docker must also report at least the CPUs (`NCPU`) of the CPU limit. Otherwise the
 script lists every finding, with the cgroup version, the kernel's cgroup v2 controllers
@@ -1288,10 +1295,34 @@ and one with 1 GB less than the `2g` default) is kept, with a warning: a limit i
 runs out of memory before the container reaches it. After the new container starts, the script checks Docker's record
 of it (`docker inspect`): the limits and privileges must be exactly the ones it gave.
 
+**A rollback on a host that cannot enforce them goes ahead, and warns.** Should a Pi lose its memory controller after
+an upgrade (a firmware update that resets `cmdline.txt`, say), the way back must still work: a rollback is a recovery
+path, so a limit Docker cannot enforce does not refuse it (the owner's decision on #149). It gives the version it
+brings back the limits Docker can still enforce, and none it cannot, and warns of each of those, with the host's details
+and the fix, in its output (also before anything changes, and once more at the end) and in the restored controller's
+log, so that the warning stays where the controller's own messages are:
+
+```text
+[rollback] WARNING: **********************************************************************************************************
+[rollback] WARNING: THE ROLLBACK GOES AHEAD, BUT DOCKER ON roofpi CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:
+[rollback] WARNING:   - docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit false, so the version the rollback brings back runs without its memory limit (2g, and no swap beyond it).
+[rollback] WARNING:   Docker's host: cgroup v2; /sys/fs/cgroup/cgroup.controllers: "cpuset cpu io pids"; Docker warns "WARNING: No memory limit support"; Docker warns "WARNING: No swap limit support".
+[rollback] WARNING:   To fix it on a Raspberry Pi: its firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). Append " cgroup_enable=memory" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot the Pi with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. On another host, give the Docker daemon the memory, cpu and pids cgroup controllers. Then deploy again (docs/deployment.md, "The container's privileges and limits").
+[rollback] WARNING: **********************************************************************************************************
+[rollback] Docker on roofpi (4 CPUs, 8064m of memory) enforces only these limits, which the rollback gives: 1 CPU, no memory limit (Docker here cannot enforce one), at most 512 processes and threads
+```
+
+The script writes the warning into the controller's log by writing to the standard error of the container's first
+process (`tini`), which Docker's log keeps; if it cannot, it says so, and the rollback does not depend on it. A rollback's
+`--dry-run` gives the same warning and exits 0. Every other refusal still holds for a rollback: a limit below the floor
+(given, or kept from the running controller), a CPU limit Docker enforces beyond the CPUs it reports, a Docker that does
+not answer `docker info`, the idle check and the verified stop. The installer's `rollback` warns the same way, and
+refuses the same others. Once the host is fixed, deploy (or upgrade) again to give the controller all its limits.
+
 **A rollback keeps them.** `--rollback` gives the version it brings back the run's limits with `docker update`
-([Rolling back](#rolling-back)): the ones set, else the ones the controller it replaces has, else the default. It does
-so only after every check that can refuse the rollback: Docker's enforcement above, the idle check
-(`REQUIRE_IDLE_ROOF`) and the roof's verified stop. A rollback refused there leaves that version's limits as they were.
+([Rolling back](#rolling-back)): the ones set, else the ones the controller it replaces has, else the default (on a
+host that cannot enforce some, the ones it can). It does so only after every check that can refuse the rollback: the
+floor and the CPUs above, the idle check (`REQUIRE_IDLE_ROOF`) and the roof's verified stop. A rollback refused there leaves that version's limits as they were.
 If the rollback fails or is interrupted after the change but before the version it brings back has started, the script
 puts that version's limits back. Docker cannot take a CPU or memory limit off a container, though: one the version had
 none of stays (the script says so). The installer records the limits and gives them on every deploy, upgrade and

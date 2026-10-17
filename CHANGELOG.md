@@ -71,15 +71,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   1 vCPU / 1 GiB floor is refused before anything changes; more is accepted. There is no longer a setting for no limit:
   an empty `CONTAINER_CPUS` or `CONTAINER_MEMORY` is the default, not none (#149).
 - **The installer, `install.sh` and the deploy script refuse a host whose Docker does not enforce the container's
-  limits, with nothing changed and no override, as SkyMonitor does (#1285), on every install, upgrade, deploy and
-  rollback** (SkyMonitor checks only at install). One `docker info` must report `MemoryLimit` and `SwapLimit`,
+  limits, with nothing changed and no override, as SkyMonitor does (#1285), on every install, upgrade and deploy**
+  (SkyMonitor checks only at install). One `docker info` must report `MemoryLimit` and `SwapLimit`,
   `CPUCfsQuota` and `PidsLimit` as `true` (one it does not report counts as unsupported), and at least the CPUs of the
   CPU limit. The refusal lists every finding, with the cgroup version, the kernel's cgroup v2 controllers and Docker's
   warnings about limits, and the remedy. **A stock Raspberry Pi OS is refused**: its firmware adds
   `cgroup_disable=memory` to the kernel's command line, so append ` cgroup_enable=memory` to the end of the single line
   in `/boot/firmware/cmdline.txt` (the later argument wins) and reboot the Pi with the roof idle before the first
-  deploy. The deploy script's `--dry-run` reports the refusal (exit 1); `--stop` is not refused. A memory limit above
-  the machine's memory is kept, with a warning: a limit is a cap, not a reservation (#129, #149).
+  deploy. The deploy script's `--dry-run` reports the refusal (exit 1); `--stop` is not refused. A **rollback**, a
+  recovery path, is not refused for a limit Docker cannot enforce: it goes ahead with the ones it can, and warns loudly,
+  naming each limit and the fix, in its output and in the controller's log (`docker logs`); its other refusals (the
+  floor, the CPUs, a Docker that does not answer, the verified stop) stand. A memory limit above the machine's memory is
+  kept, with a warning: a limit is a cap, not a reservation (#129, #149).
 - The mounted secrets, certificate, identity and settings directories must be root's, as the installer and
   [deployment.md](docs/deployment.md#one-time-preparation-on-the-pi) make them: the controller no longer has
   `CAP_DAC_OVERRIDE`, and the deployment check refuses a directory it cannot reach (#129).

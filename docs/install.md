@@ -707,9 +707,8 @@ other limits redeploys the controller with them (the plan says `redeployed with 
 limit out redeploy it with the default, and so does an upgrade of a controller deployed before the default was on. The
 wizard asks nothing about them: it keeps what the record says, or what the command line gives.
 
-Before it changes anything, at an install, an upgrade and a rollback alike, the installer checks that this machine's
-Docker enforces the limits, as the deploy script does again, and refuses (exit code 3) when one `docker info` does not
-report `MemoryLimit` and `SwapLimit`, `CPUCfsQuota` or `PidsLimit` as `true` (a field it does not report counts as
+Before it changes anything, at an install and an upgrade alike, the installer checks that this machine's Docker
+enforces the limits, as the deploy script does again, and refuses (exit code 3) when one `docker info` does not report `MemoryLimit` and `SwapLimit`, `CPUCfsQuota` or `PidsLimit` as `true` (a field it does not report counts as
 `false`), or reports fewer CPUs than the CPU limit. The refusal lists every finding, with the cgroup version, the
 kernel's cgroup v2 controllers (`/sys/fs/cgroup/cgroup.controllers`, when Docker runs on this machine) and Docker's
 warnings about limits, and the remedy; there is no override. A stock Raspberry Pi OS is refused so: its firmware adds
@@ -718,7 +717,15 @@ warnings about limits, and the remedy; there is no override. A stock Raspberry P
 reboot the Pi with the roof idle, and check that
 `docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'` prints `true` four times. A
 memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs, and one with 1 GB
-less than the default) is kept, with a warning: a limit is a cap, not a reservation. On a Mac, Docker Desktop's
+less than the default) is kept, with a warning: a limit is a cap, not a reservation.
+
+A `rollback` is a recovery path, so a limit Docker cannot enforce does not refuse it (the owner's decision on #149):
+should a Pi lose its memory controller after an upgrade, the way back still works. It goes ahead, the deploy script
+giving the version it brings back the limits Docker can still enforce, with a loud warning that names each limit it
+cannot and the fix, here (`Warning: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS ...`), in the
+install log, in the deploy script's output and in the controller's log. It is still refused (exit code 3) when the
+recorded CPU limit is beyond the CPUs Docker reports and Docker enforces CPU limits, or when Docker does not answer.
+Fix the host, then upgrade again. On a Mac, Docker Desktop's
 resources (Settings, Resources) must have the CPUs. What the limits do, and what a controller ended at its memory limit
 leaves the relays in, is in [deployment.md](deployment.md#the-containers-privileges-and-limits).
 
