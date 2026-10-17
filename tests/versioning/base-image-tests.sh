@@ -264,6 +264,27 @@ check "a build image index without arm64" 1 "${RPI}:2: ${SDK_REF} is not an inde
   registry "${amd64}" "${all}"
 check "a registry that cannot be read" 1 "${SDK_REF} could not be read from its registry: unauthorized" \
   registry "${all}" "${all}" unauthorized
+# Platform entries alone do not prove the response is an index. Require one schema-2 index document.
+wrong_media="${WORK}/wrong-media.json"
+jq '.mediaType = "application/vnd.oci.image.manifest.v1+json"' "${all}" > "${wrong_media}"
+check "image manifest cannot pose as index" 1 "is not a schemaVersion 2 Docker manifest list or OCI image index" \
+  registry "${all}" "${wrong_media}"
+wrong_schema="${WORK}/wrong-schema.json"
+jq '.schemaVersion = 1' "${all}" > "${wrong_schema}"
+check "index schema version must be two" 1 "is not a schemaVersion 2 Docker manifest list or OCI image index" \
+  registry "${all}" "${wrong_schema}"
+missing_media="${WORK}/missing-media.json"
+jq 'del(.mediaType)' "${all}" > "${missing_media}"
+check "index media type is required" 1 "is not a schemaVersion 2 Docker manifest list or OCI image index" \
+  registry "${all}" "${missing_media}"
+multiple_documents="${WORK}/multiple-documents.json"
+cat "${all}" "${all}" > "${multiple_documents}"
+check "registry response must be one document" 1 "is not a schemaVersion 2 Docker manifest list or OCI image index" \
+  registry "${all}" "${multiple_documents}"
+oci="${WORK}/oci.json"
+jq '.mediaType = "application/vnd.oci.image.index.v1+json"' "${all}" > "${oci}"
+check "OCI index accepted" 0 "${RUNTIME_REF}: an index holding linux/amd64 linux/arm64" registry "${oci}" "${oci}"
+
 # All external bases, in both files, are inspected once; only earlier stage aliases and scratch are exempt.
 TOOLS_REF="example/tools:1@$(digest tools)"
 r=$(repo third-base)

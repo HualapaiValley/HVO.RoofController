@@ -256,7 +256,7 @@ for dockerfile in "${DOCKERFILES[@]}"; do
   [[ ${runtime_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${RUNTIME} line."
 done
 
-# Each digest must be the tag's index, not one platform's image: a single-platform image would be used for every
+# Each pinned digest must be an index, not one platform's image: a single-platform image would be used for every
 # platform built.
 if [[ ${errors} -eq 0 && ${registry} -eq 1 ]]; then
   for ((i = 0; i < ${#external_refs[@]}; i++)); do
@@ -265,8 +265,14 @@ if [[ ${errors} -eq 0 && ${registry} -eq 1 ]]; then
       problem "${file}" "${line}" "${ref} could not be read from its registry: ${raw}"
       continue
     fi
-    held=$(jq -r '(.manifests // [])[] | .platform // empty | "\(.os)/\(.architecture)"' <<<"${raw}" 2>/dev/null) || held=""
     missing=0
+    if ! jq -se 'length == 1 and (.[0] | type == "object" and .schemaVersion == 2 and
+        (.mediaType == "application/vnd.docker.distribution.manifest.list.v2+json" or
+         .mediaType == "application/vnd.oci.image.index.v1+json"))' <<<"${raw}" >/dev/null 2>&1; then
+      problem "${file}" "${line}" "${ref} is not a schemaVersion 2 Docker manifest list or OCI image index."
+      missing=1
+    fi
+    held=$(jq -r '(.manifests // [])[] | .platform // empty | "\(.os)/\(.architecture)"' <<<"${raw}" 2>/dev/null) || held=""
     for platform in "${PLATFORMS[@]}"; do
       if ! grep -qxF "${platform}" <<<"${held}"; then
         problem "${file}" "${line}" "${ref} is not an index holding ${platform}: pin the digest that 'docker buildx imagetools inspect ${ref%@*}' prints for the tag, not one platform's."

@@ -41,8 +41,9 @@ asks for this.
 - the SDK's tag is the SDK `src/global.json` pins;
 - both Dockerfiles use the same SDK image and the same runtime image, tag and digest;
 - with `--registry`, every distinct external reference across both files is inspected once,
-  including bases beyond the required SDK and runtime; each digest must be an index holding
-  `linux/amd64` and `linux/arm64`, not one platform's image.
+  including bases beyond the required SDK and runtime; the response must be one schema-version-2
+  Docker manifest list or OCI image index (checked by media type), holding `linux/amd64` and
+  `linux/arm64` entries.
 
 The checker needs Python 3 and jq (plus Docker Buildx for `--registry`). It accepts the standard
 Dockerfile frontend, with no syntax directive or `# syntax=docker/dockerfile:1`, and matches
