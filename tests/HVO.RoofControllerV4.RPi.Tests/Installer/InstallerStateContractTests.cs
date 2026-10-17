@@ -486,10 +486,20 @@ public sealed class InstallerStateContractTests
     // that backup; a backup refused leaves the record, and everything else, as it was.
 
     [TestMethod]
-    public async Task AnUpgradesRecord_IsMarkedOnlyOnceTheStoresAreBackedUp_AndNamesTheBackup()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AnUpgradesRecord_IsMarkedOnlyOnceTheStoresAreBackedUp_AndNamesTheBackup(bool releasesOwnInstaller)
     {
         using var pi = await InstalledPiAsync();
         pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+
+        // Handed over to, the release's installer keeps the backup the installer before it took; run on its own, it takes
+        // the backup as its plan's first step, which comes before the mark.
+        if (releasesOwnInstaller)
+        {
+            pi.InstallerVersion = NewVersion;
+        }
+
         var recordFolder = Path.GetDirectoryName(InstallPaths.SystemRecord)!;
         bool? backedUpAtTheMark = null;
         InstallRecord? atDeploy = null;
@@ -980,7 +990,8 @@ public sealed class InstallerStateContractTests
     }
 
     // #136 N2: a store's file that is not a file (a FIFO, a socket, a device) is refused before anything reads it, and is
-    // never waited on: each of these fails, rather than hangs, should it be.
+    // never waited on. Each of these fails, and never hangs, should anything open the FIFO to read and wait on it, with the
+    // fix or without it (WithoutWaitingAsync).
 
     [TestMethod]
     [DataRow("a FIFO")]
@@ -991,7 +1002,7 @@ public sealed class InstallerStateContractTests
         using var pi = await InstalledPiAsync();
         using var made = NotAFile(pi, IdentityFile, kind);
 
-        var states = await WithoutWaitingAsync(pi, IdentityFile, Task.Run(() => StateContractGuard.Read(pi.Machine, ControllerLayout.System)));
+        var states = await WithoutWaitingAsync(pi, kind == "a FIFO" ? IdentityFile : null, () => Task.FromResult(StateContractGuard.Read(pi.Machine, ControllerLayout.System)));
 
         states[0].Problem.Should().Be($"{IdentityFile} is {kind}, not a file: it is not a store the controller reads");
     }
@@ -1007,7 +1018,7 @@ public sealed class InstallerStateContractTests
         foreach (var installer in new[] { "4.0.0", NewVersion })
         {
             pi.InstallerVersion = installer;
-            var run = await WithoutWaitingAsync(pi, IdentityFile, pi.RunAsync("upgrade"));
+            var run = await WithoutWaitingAsync(pi, IdentityFile, () => pi.RunAsync("upgrade"));
 
             run.ExitCode.Should().Be((int)InstallerExitCode.Refused, $"{installer}: {run}");
             run.Error.Should().Contain($"Release {NewVersion} cannot read the data here: {IdentityFile} is a FIFO, not a file: it is not a store the controller reads.");
@@ -1024,7 +1035,7 @@ public sealed class InstallerStateContractTests
         MakeFifo(pi, IdentityFile);
         var before = State(pi, IdentityFile);
 
-        var run = await WithoutWaitingAsync(pi, IdentityFile, pi.RunAsync("rollback", "--restore-backup", "--yes"));
+        var run = await WithoutWaitingAsync(pi, IdentityFile, () => pi.RunAsync("rollback", "--restore-backup", "--yes"));
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Output.Should().Contain($"{IdentityFile} is a FIFO: a backup puts back only a file. Move it aside, then run the rollback again");
@@ -1057,26 +1068,43 @@ public sealed class InstallerStateContractTests
         mkfifo(pi.OnDisk(path), 0b110_000_000).Should().Be(0);
     }
 
-    // What reading gives, without waiting on a FIFO at fifo: should it wait there, a writer opening the FIFO and closing it
-    // again lets it go on, and the test fails rather than hangs.
-    private static async Task<T> WithoutWaitingAsync<T>(FakeMachine pi, string fifo, Task<T> reading)
+    // What read gives, run away from the test's own thread, checked never to have waited on the FIFO at fifo (null for
+    // none). From a second after it starts, whatever has that FIFO open to read is let go, as often as it opens it: the
+    // FIFO's other end is opened to write without waiting (which succeeds only while something has it open to read) and
+    // closed at once, so a reader waiting in open goes on and reads nothing. So the test never hangs, whether or not the
+    // installer refuses the FIFO before reading it; it fails when anything had to be let go.
+    private static async Task<T> WithoutWaitingAsync<T>(FakeMachine pi, string? fifo, Func<Task<T>> read)
     {
-        if (await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(30))) != reading)
+        var reading = Task.Run(read);
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var released = 0;
+        while (await Task.WhenAny(reading, Task.Delay(TimeSpan.FromMilliseconds(100))) != reading)
         {
-            var release = Task.Run(() =>
+            if (fifo is not null && started.Elapsed > TimeSpan.FromSeconds(1) && open(pi.OnDisk(fifo), OperatingSystem.IsMacOS() ? 0x1 | 0x4 : 0x1 | 0x800) is var writer and >= 0)
             {
-                using var writer = new FileStream(pi.OnDisk(fifo), FileMode.Open, FileAccess.Write);
-            });
-            await Task.WhenAny(release, Task.Delay(TimeSpan.FromSeconds(5)));
-            await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(5)));
-            Assert.Fail($"Reading {fifo} waited on it.");
+                released++;
+                close(writer);
+            }
+
+            if (started.Elapsed > TimeSpan.FromMinutes(2))
+            {
+                Assert.Fail($"It has not finished in two minutes, with {released} readers of {fifo ?? "no FIFO"} let go.");
+            }
         }
 
+        released.Should().Be(0, $"nothing opened {fifo} to read and waited on it: it was refused before anything read it");
         return await reading;
     }
 
     [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
     private static extern int mkfifo(string path, uint mode);
+
+    // open(2) with O_WRONLY and O_NONBLOCK: on a FIFO, -1 (ENXIO) unless something has it open to read.
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int open(string path, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int close(int descriptor);
 
     // What a run that refuses must leave as it was: every file (the installer, the record, the stores and the backups),
     // and the containers.
