@@ -161,8 +161,10 @@ write_results() {
 remove_controllers() {
   docker compose -f "${compose_file}" -f "${work}/compose.override.yaml" -p "${compose_project}" --profile pi \
     down --volumes --remove-orphans >/dev/null 2>&1 || true
-  # With their volumes: each controller keeps the web UI's sign-in keys on one of its own.
+  # With their volumes: each controller keeps the web UI's sign-in keys on one of its own. And the deploy script's desired
+  # limits, in a volume of their own.
   docker rm -f -v "${controller}" "${previous}" "${controller}-swap" >/dev/null 2>&1 || true
+  docker volume rm -f "${controller}-limits" >/dev/null 2>&1 || true
 }
 
 cleanup() {
@@ -776,6 +778,9 @@ setup() {
   docker compose version >/dev/null 2>&1 || fail "docker compose is required"
   if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap)?$")" ]]; then
     fail "a ${controller} container exists on this Docker host; these scenarios deploy their own under that name. Remove it first."
+  fi
+  if docker volume inspect "${controller}-limits" >/dev/null 2>&1; then
+    fail "the ${controller}-limits volume exists on this Docker host: the deploy script's desired limits, which these scenarios' deploys keep their own in. Remove it first."
   fi
   if [[ -n "$(docker ps -aq --filter "name=^/(${emulator_name}|${registry_name})$")" ]] \
       || docker network inspect "${network}" >/dev/null 2>&1; then
@@ -1709,7 +1714,7 @@ scenario_c12() {
     || fail "the rolled-back controller's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
   deploy -- --rollback
   (( DEPLOY_STATUS == 0 )) || fail "the rollback with no limits given failed (exit ${DEPLOY_STATUS})"
-  expect_deploy_log "[deploy] The container's limits: 2.5 CPUs (kept from ${controller}), 4g of memory (kept from ${controller}) and no swap"
+  expect_deploy_log "[deploy] The container's limits: 2.5 CPUs (kept from the last deploy), 4g of memory (kept from the last deploy) and no swap"
   limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${controller}")
   [[ "$(container_id "${controller}")" == "${current_id}" && "${limits}" == "2500000000 4294967296 4294967296 512" ]] \
     || fail "the controller swapped back runs with ${limits}, not the 2.5 CPUs and 4g kept from the one it replaced"
@@ -1761,6 +1766,11 @@ WRAPPER
     || fail "${controller}'s log does not name the memory limit"
   container_log_has "${controller}" 'Append " cgroup_enable=memory" to the end of the single line in /boot/firmware/cmdline.txt' "${rollback_start}" \
     || fail "${controller}'s log does not name the fix"
+  # The desired limits outlive the rollback that could not enforce them (review ROOF-151-R1 F2).
+  local desired
+  desired=$(docker volume inspect --format '{{index .Labels "io.hvo.roof.desired-cpus"}} {{index .Labels "io.hvo.roof.desired-memory"}}' "${controller}-limits") \
+    || fail "the desired limits' volume ${controller}-limits is missing"
+  [[ "${desired}" == "1 2g" ]] || fail "the rollback on a host that cannot enforce the memory limit kept the desired limits ${desired}, not 1 and 2g"
   deploy CONTAINER_CPUS=1 CONTAINER_MEMORY=2g -- --rollback
   (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits, on Docker as it is, failed (exit ${DEPLOY_STATUS})"
   ! deploy_log_has "WARNING: THE ROLLBACK GOES AHEAD" || fail "a rollback on Docker as it is warned of a limit"

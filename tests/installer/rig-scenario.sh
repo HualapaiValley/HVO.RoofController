@@ -1349,6 +1349,8 @@ scenario_restore() {
   for volume in ${volumes}; do
     ! docker volume inspect "${volume}" >/dev/null 2>&1 || fail "the volume ${volume} of a removed controller is left"
   done
+  # And the deploy script's desired limits, which go with the controller (#149).
+  ! docker volume inspect "${controller}-limits" >/dev/null 2>&1 || fail "the desired limits' volume ${controller}-limits is left"
   relays_still
   pass "the containers (with their volumes), the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
 
