@@ -1349,8 +1349,10 @@ scenario_restore() {
   for volume in ${volumes}; do
     ! docker volume inspect "${volume}" >/dev/null 2>&1 || fail "the volume ${volume} of a removed controller is left"
   done
-  # And the deploy script's desired limits, which go with the controller (#149).
-  ! docker volume inspect "${controller}-limits" >/dev/null 2>&1 || fail "the desired limits' volume ${controller}-limits is left"
+  # And the deploy script's desired-limits records, which the uninstall removes (#149; review ROOF-151-R2 F6).
+  local records
+  records=$(docker volume ls --quiet --filter "name=${controller}-limits" | grep -E "^${controller}-limits(-g[0-9]+)?\$" || true)
+  [[ -z "${records}" ]] || fail "the desired limits' records are left: ${records//$'\n'/ }"
   relays_still
   pass "the containers (with their volumes), the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
 

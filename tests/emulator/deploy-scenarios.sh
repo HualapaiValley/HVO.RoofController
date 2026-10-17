@@ -158,13 +158,22 @@ write_results() {
   } > "${SCN_RESULTS_DIR}/deploy-scenarios.md"
 }
 
+# desired_records: the deploy script's desired-limits records for this run's controller (<name>-limits-g<generation>,
+# and the earlier format's <name>-limits), one a line.
+desired_records() {
+  docker volume ls --quiet --filter "name=${controller}-limits" 2>/dev/null | grep -E "^${controller}-limits(-g[0-9]+)?\$" || true
+}
+
 remove_controllers() {
+  local record
   docker compose -f "${compose_file}" -f "${work}/compose.override.yaml" -p "${compose_project}" --profile pi \
     down --volumes --remove-orphans >/dev/null 2>&1 || true
   # With their volumes: each controller keeps the web UI's sign-in keys on one of its own. And the deploy script's desired
-  # limits, in a volume of their own.
+  # limits' records, each a volume of its own.
   docker rm -f -v "${controller}" "${previous}" "${controller}-swap" >/dev/null 2>&1 || true
-  docker volume rm -f "${controller}-limits" >/dev/null 2>&1 || true
+  for record in $(desired_records); do
+    docker volume rm -f "${record}" >/dev/null 2>&1 || true
+  done
 }
 
 cleanup() {
@@ -779,8 +788,8 @@ setup() {
   if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap)?$")" ]]; then
     fail "a ${controller} container exists on this Docker host; these scenarios deploy their own under that name. Remove it first."
   fi
-  if docker volume inspect "${controller}-limits" >/dev/null 2>&1; then
-    fail "the ${controller}-limits volume exists on this Docker host: the deploy script's desired limits, which these scenarios' deploys keep their own in. Remove it first."
+  if [[ -n "$(desired_records)" ]]; then
+    fail "a ${controller}-limits volume exists on this Docker host ($(desired_records | tr '\n' ' ')): the deploy script's desired-limits records, which these scenarios' deploys write their own in. Remove them first."
   fi
   if [[ -n "$(docker ps -aq --filter "name=^/(${emulator_name}|${registry_name})$")" ]] \
       || docker network inspect "${network}" >/dev/null 2>&1; then
@@ -1766,11 +1775,16 @@ WRAPPER
     || fail "${controller}'s log does not name the memory limit"
   container_log_has "${controller}" 'Append " cgroup_enable=memory" to the end of the single line in /boot/firmware/cmdline.txt' "${rollback_start}" \
     || fail "${controller}'s log does not name the fix"
-  # The desired limits outlive the rollback that could not enforce them (review ROOF-151-R1 F2).
-  local desired
-  desired=$(docker volume inspect --format '{{index .Labels "io.hvo.roof.desired-cpus"}} {{index .Labels "io.hvo.roof.desired-memory"}}' "${controller}-limits") \
-    || fail "the desired limits' volume ${controller}-limits is missing"
-  [[ "${desired}" == "1 2g" ]] || fail "the rollback on a host that cannot enforce the memory limit kept the desired limits ${desired}, not 1 and 2g"
+  # The desired limits outlive the rollback that could not enforce them (reviews ROOF-151-R1 F2, R2 F5): one record, the
+  # rollback's, written for the version it brought back.
+  local desired records
+  records=$(desired_records)
+  [[ -n "${records}" && "${records}" != *$'\n'* && "${records}" == "${controller}-limits-g"* ]] \
+    || fail "the desired limits' records are '${records}', not one ${controller}-limits-g<generation>"
+  desired=$(docker volume inspect --format '{{index .Labels "io.hvo.roof.limits"}} {{index .Labels "io.hvo.roof.limits.cpus"}} {{index .Labels "io.hvo.roof.limits.memory"}} {{index .Labels "io.hvo.roof.limits.written-by"}} {{index .Labels "io.hvo.roof.limits.controller"}}' "${records}") \
+    || fail "the desired limits' record ${records} cannot be read"
+  [[ "${desired}" == "1 1 2g rollback ${current_id:0:12}" ]] \
+    || fail "the rollback on a host that cannot enforce the memory limit recorded '${desired}', not 1 CPU and 2g by the rollback for ${current_id:0:12}"
   deploy CONTAINER_CPUS=1 CONTAINER_MEMORY=2g -- --rollback
   (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits, on Docker as it is, failed (exit ${DEPLOY_STATUS})"
   ! deploy_log_has "WARNING: THE ROLLBACK GOES AHEAD" || fail "a rollback on Docker as it is warned of a limit"
