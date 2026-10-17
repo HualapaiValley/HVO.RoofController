@@ -385,7 +385,7 @@ anything.
    returns 200 with `isMoving` `false` and `commandedMotion` `None`, the deploy stops before the Stop, with nothing
    changed. Run it again once the roof is idle.
 5. **Stops the old container gracefully** with `docker stop -t 30` (SIGTERM). The container's supervisor stops the
-   controller first, whose shutdown path stops the roof again and ends camera streams, then the web UI. The old container is renamed `<name>-previous` with restart policy `no`, so it can
+   controller, whose shutdown path stops the roof again and ends camera streams, and the web UI at once. The old container is renamed `<name>-previous` with restart policy `no`, so it can
    be restored but never starts by itself. An older, stopped `<name>-previous` is removed only after this stop has
    succeeded, just before the rename, so an aborted deploy keeps it. The script reads the container states again
    after the pre-flight, and a `<name>-previous` that is running by then still aborts before anything is stopped.
