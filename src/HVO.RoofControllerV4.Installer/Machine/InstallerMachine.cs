@@ -437,9 +437,17 @@ public sealed class InstallerMachine
         }
         catch (IOException)
         {
+            // Best effort: what failed is the sync, and that is what is thrown.
             foreach (var folder in Enumerable.Reverse(made).Where(folder => DirectoryExists(folder) && ListNames(folder).Count == 0))
             {
-                Directory.Delete(OnDisk(folder));
+                try
+                {
+                    Directory.Delete(OnDisk(folder));
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    break;
+                }
             }
 
             throw;
