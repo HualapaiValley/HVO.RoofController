@@ -50,7 +50,15 @@ import re
 import sys
 from pathlib import Path
 
-SPACE = " \t\v\f\r"
+SPACE = " \t\r"
+# Mirror BuildKit v0.29.0 frontend/dockerfile/parser/directives.go:
+# https://github.com/moby/buildkit/blob/v0.29.0/frontend/dockerfile/parser/directives.go#L14-L24
+# https://github.com/moby/buildkit/blob/v0.29.0/frontend/dockerfile/parser/directives.go#L40-L91
+# The anchored regex uses Go's ASCII \s = [\t\n\f\r ], NOT Python's Unicode \s (nor re.ASCII's \s, which adds VT).
+# ParseLine cuts '#', trims left whitespace, lowercases keys only, knows syntax/escape/check, stops on the first
+# non-directive (including an ordinary comment or blank line), and rejects a repeated key while still active.
+DIRECTIVE = re.compile(r"^([a-zA-Z][a-zA-Z0-9]*)[\t\n\f\r ]*=[\t\n\f\r ]*(.+?)[\t\n\f\r ]*$")
+DIRECTIVES = {"syntax", "escape", "check"}
 COMMANDS = set("add arg cmd copy entrypoint env expose from healthcheck label maintainer onbuild run shell "
                "stopsignal user volume workdir".split())
 DELIMITER = r"[A-Za-z_][A-Za-z0-9_.-]*"
@@ -83,15 +91,23 @@ def flags_and_args(args, line, instruction):
 
 def parse(path):
     try:
-        data = Path(path).read_bytes().decode("utf-8-sig")
-    except (OSError, UnicodeError):
-        reject(1, "cannot read Dockerfile as UTF-8")
+        data = Path(path).read_bytes().decode("utf-8", errors="surrogateescape")
+    except OSError:
+        reject(1, "cannot read Dockerfile")
+    # Validate the whole input before trimming, skipping comments or consuming heredocs. Never strip a BOM or echo
+    # rejected source text. Invalid UTF-8 bytes become U+DC80..U+DCFF via surrogateescape and are rejected here too.
+    number = 1
+    for char in data:
+        if not (0x20 <= ord(char) <= 0x7E or char in "\t\n\r"):
+            reject(number, f"unsupported character U+{ord(char):04X} (expected printable ASCII, TAB, LF or CR)")
+        if char == "\n":
+            number += 1
     # Split on LF only: splitlines() would turn other whitespace into instruction boundaries.
     lines = data.split("\n")
     if lines[-1] == "":
         lines.pop()
     lines = [line.rstrip("\r") for line in lines]
-    escape, prologue, directives, records = "\\", True, set(), []
+    escape, prologue, header, directives, records = "\\", True, True, set(), []
     i = 0
     while i < len(lines):
         start = i + 1
@@ -99,23 +115,32 @@ def parse(path):
         i += 1
         if text.startswith("#!"):
             reject(start, "unsupported Dockerfile shebang/frontend syntax")
+        directive = DIRECTIVE.fullmatch(text[1:].lstrip(SPACE)) if text.startswith("#") else None
+        key = directive[1].lower() if directive else ""
+        recognized = key in DIRECTIVES
+        # Stricter than BuildKit by policy: near-miss escape/syntax comments in the header must not silently alter
+        # our interpretation. Continue checking the header even after a normal comment has ended the prologue.
+        if header and text.startswith("#") and ("escape" in text.lower() or "syntax" in text.lower()):
+            if not recognized:
+                reject(start, "ambiguous escape/syntax header (expected an exact recognized directive)")
         if prologue:
-            directive = re.fullmatch(r"#\s*([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+?)\s*", text)
-            if directive and directive[1].lower() in {"escape", "syntax", "check"}:
-                key, value = directive[1].lower(), directive[2]
+            if recognized:
                 if key in directives:
                     reject(start, "duplicate " + key + " directive")
                 directives.add(key)
-                if key == "escape":
-                    if value not in {"\\", "`"}:
-                        reject(start, "unsupported escape directive (expected backslash or backtick)")
-                    escape = value
-                if key == "syntax" and value != "docker/dockerfile:1":
-                    reject(start, "unsupported syntax frontend (expected docker/dockerfile:1)")
             else:
                 prologue = False
+        if recognized and header:
+            value = directive[2]  # Values stay case-sensitive, as in BuildKit.
+            if key == "escape" and value not in {"\\", "`"}:
+                reject(start, "unsupported escape directive (expected backslash or backtick)")
+            if key == "syntax" and value != "docker/dockerfile:1":
+                reject(start, "unsupported syntax frontend (expected docker/dockerfile:1)")
+            if prologue and key == "escape":
+                escape = value
         if not text or text.startswith("#"):
             continue
+        header = False
         logical = ""
         while True:
             # This matches BuildKit's rule: the final escape continues only if it is not itself preceded by one.
@@ -130,8 +155,6 @@ def parse(path):
                 reject(start, "unterminated line continuation")
             text = lines[i]  # Continuation indentation is significant; never insert or remove whitespace here.
             i += 1
-        if "\x00" in logical or any(c.isspace() and c not in SPACE for c in logical):
-            reject(start, "unsupported control character or non-ASCII instruction whitespace")
         words = re.split(r"[ \t\v\f\r]+", logical.strip(SPACE), maxsplit=1)
         command, args = words[0].lower(), words[1] if len(words) == 2 else ""
         if command not in COMMANDS:

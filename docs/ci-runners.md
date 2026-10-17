@@ -45,6 +45,19 @@ asks for this.
   Docker manifest list or OCI image index (checked by media type), holding `linux/amd64` and
   `linux/arm64` entries.
 
+Before parsing, the checker rejects any character outside printable ASCII plus TAB, LF and CR,
+including in comments and heredoc bodies. This excludes all other control characters, Unicode
+(including Unicode whitespace) and BOMs; errors give the file, line and code point without
+printing the rejected source text. Invalid UTF-8 bytes are reported as surrogate code points
+`U+DC80` through `U+DCFF`.
+
+Directive recognition mirrors BuildKit v0.29.0's ASCII regex, its `syntax`/`escape`/`check` keys,
+case-insensitive key names and case-sensitive values. Only the initial uninterrupted directive
+prologue is active: a blank, ordinary comment, unknown directive or instruction ends it;
+repeating an active directive is an error. As an additional fail-closed rule, header comments
+mentioning `escape` or `syntax` must match a recognized directive exactly, with supported values,
+even after an ordinary header comment has ended the active prologue.
+
 The checker needs Python 3 and jq (plus Docker Buildx for `--registry`). It accepts the standard
 Dockerfile frontend, with no syntax directive or `# syntax=docker/dockerfile:1`, and matches
 instruction keywords without regard to case. It handles unquoted leading flags such as

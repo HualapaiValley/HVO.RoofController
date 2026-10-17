@@ -2,7 +2,7 @@
 # Tests for build/check-base-images.sh (the Dockerfiles' base images pinned by tag and digest). It runs against
 # repositories made here, holding src/global.json and the two Dockerfiles, and its --registry check against a stand-in
 # for docker, so no Docker or network is needed; and, without --registry, against this repository's own files. Requires
-# bash, jq and sha256sum or shasum.
+# bash, python3, jq and sha256sum or shasum.
 # Run: tests/versioning/base-image-tests.sh
 set -uo pipefail
 
@@ -314,6 +314,80 @@ check "earlier stage names match case-insensitively" 0 "${RUNTIME_REF}: an index
 check "files checked first" 1 "${RPI}:4: FROM ${RUNTIME}:10.0.13 is not pinned" \
   env PATH="${WORK}/bin:${PATH}" FAKE_DOCKER_CALLED="${WORK}/called" "${SCRIPT}" --registry "${WORK}/two-problems"
 check "registry not read" 1 "" test -e "${WORK}/called"
+
+# F3: the input alphabet is checked before comments, directives, continuations or heredoc bodies can hide it.
+# Character diagnostics must contain a code point and must not echo the fixture's raw source text.
+f3_character() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import sys
+from pathlib import Path
+path, point, kind = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+text = path.read_text()
+char = chr(point)
+if kind == "escape":
+    text = "# escape" + char + "= `\n" + text + "RUN true # `\nFROM alpine:latest AS tools\n"
+elif kind == "bom":
+    text = char + text
+elif kind == "heredoc":
+    text += "RUN <<EOF\nraw-source-sentinel " + char + "\nEOF\n"
+else:
+    text += "# raw-source-sentinel " + char + "\n"
+path.write_bytes(text.encode("utf-8"))
+PY
+}
+redacted_rejection() {
+  local output status
+  output=$("$@" 2>&1)
+  status=$?
+  printf '%s\n' "${output}"
+  [[ "${output}" != *raw-source-sentinel* ]] || return 99
+  return "${status}"
+}
+for point in 11 160; do
+  r=$(repo "f3-escape-${point}")
+  f3_character "${r}/${RPI}" "${point}" escape
+  codepoint=$(printf 'U+%04X' "${point}")
+  check "escape whitespace ${codepoint}" 1 "${RPI}:1: unsupported character ${codepoint}" \
+    redacted_rejection "${SCRIPT}" "${r}"
+  check "escape whitespace ${codepoint} with registry" 1 "${RPI}:1: unsupported character ${codepoint}" \
+    redacted_rejection env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" \
+    "${SCRIPT}" --registry "${r}"
+done
+r=$(repo f3-form-feed)
+f3_character "${r}/${RPI}" 12 comment
+check "form feed in comment fails closed" 1 "${RPI}:7: unsupported character U+000C" \
+  redacted_rejection "${SCRIPT}" "${r}"
+r=$(repo f3-bom)
+f3_character "${r}/${RPI}" 65279 bom
+check "initial BOM fails closed" 1 "${RPI}:1: unsupported character U+FEFF" \
+  redacted_rejection "${SCRIPT}" "${r}"
+r=$(repo f3-unicode-body)
+f3_character "${r}/${EMULATOR}" 233 heredoc
+check "non-ASCII heredoc content fails closed" 1 "${EMULATOR}:8: unsupported character U+00E9" \
+  redacted_rejection "${SCRIPT}" "${r}"
+
+# Cover the rest of the forbidden ASCII control range, plus representative Unicode spaces and a non-BMP code point.
+for point in 0 1 2 3 4 5 6 7 8 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 127 133 5760 8195 8232 8239 12288 128512; do
+  r=$(repo "f3-alphabet-${point}")
+  f3_character "${r}/${RPI}" "${point}" comment
+  codepoint=$(printf 'U+%04X' "${point}")
+  check "forbidden alphabet ${codepoint}" 1 "${RPI}:7: unsupported character ${codepoint}" \
+    redacted_rejection "${SCRIPT}" "${r}"
+done
+r=$(repo f3-invalid-utf8)
+printf '# raw-source-sentinel \377\n' >> "${r}/${RPI}"
+check "invalid UTF-8 byte fails closed without raw text" 1 "${RPI}:7: unsupported character U+DCFF" \
+  redacted_rejection "${SCRIPT}" "${r}"
+
+# Near misses remain errors even after an ordinary header comment has ended BuildKit's directive prologue.
+for header in '#escape =' '# syntax docker/dockerfile:1 trailing junk' '# escape?=`' '# note: SYNTAX typo'; do
+  r=$(repo "f3-near-miss-${PASSED}-${FAILED}")
+  { printf '%s\n' "${header}"; dockerfile "${SDK_REF}" "${RUNTIME_REF}"; } > "${r}/${RPI}"
+  check "near-miss directive ${header}" 1 "${RPI}:1: ambiguous escape/syntax header" "${SCRIPT}" "${r}"
+done
+r=$(repo f3-near-miss-after-comment)
+{ printf '# ordinary header\n#escape =\n'; dockerfile "${SDK_REF}" "${RUNTIME_REF}"; } > "${r}/${RPI}"
+check "near miss after header comment fails closed" 1 "${RPI}:2: ambiguous escape/syntax header" "${SCRIPT}" "${r}"
 
 # ---------------------------------------------------------------------------------------------------------------------
 
