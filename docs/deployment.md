@@ -317,7 +317,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `CONTAINER_CPUS` | (empty: no CPU limit) | A CPU limit for the container (`docker run --cpus`), at least 1, with at most two decimals. Less than 1 is refused, with no exception. Empty, for no limit, until a follow-up turns RoofController's default on ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6): see [The container's privileges and limits](#the-containers-privileges-and-limits). |
 | `CONTAINER_MEMORY` | (empty: no memory limit) | A memory limit for the container, at least `1g`: a whole number of MiB or GiB (`1024m`, `1g`), with `--memory-swap` the same, so the container never swaps. Less than `1g` is refused, with no exception. Empty until that follow-up, as for `CONTAINER_CPUS`. |
 | `CONTAINER_PIDS_LIMIT` | `512` | The most processes and threads the container runs at once (`--pids-limit`), from 256 to 32768 |
-| `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 22 s for the controller's shutdown, then up to 5 s to turn the relays off while the web UI gets 2 s ([Shutdown timing](#shutdown-timing)). |
+| `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 22 s for the controller's shutdown (and up to 2 s for the web UI's, at the same time), then up to 5 s to turn the relays off ([Shutdown timing](#shutdown-timing)). |
 | `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
 | `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
@@ -890,7 +890,7 @@ both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals t
 
 | Event | What the supervisor does |
 |-------|--------------------------|
-| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Stops the controller first and waits up to 22 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), while it stops the web UI, waiting up to 2 s for it (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL), and given at most 1 s more to end: one stuck in the kernel (a hung filesystem or bus) can no longer run its own code, and the stop goes on without it. A [web UI preparation](#the-web-uis-user-and-settings) still running is abandoned at once (its processes are killed), and the web UI is not started. The whole stop is timed from the signal, work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script) stops the same way first. |
+| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Sends SIGTERM to the controller and the web UI at once, and waits up to 22 s for the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off, and up to 2 s for the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`). Once both have ended, it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), and exits. Until then it starts no process, so the stop works, and in time, also at the container's [process limit](#the-supervisor-at-the-process-limit). A process that is still running when its wait runs out is killed (SIGKILL), and given at most 1 s more to end: one stuck in the kernel (a hung filesystem or bus) can no longer run its own code, and the stop goes on without it. A [web UI preparation](#the-web-uis-user-and-settings) still running is abandoned at once (its processes are killed), and the web UI is not started. The whole stop is timed from the signal (its time taken in the signal's trap, without a fork), work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script, a fork that failed for good) stops the same way first. |
 | The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Turns the relays off, then starts it again at once, once they are verified off. The web UI and the container keep running, and Docker's restart count does not change. |
 | The relays cannot be verified off (at the first start, before a restart, after a crash, on a forced restart) | Does not start the controller: holds it stopped (`relays-unverified`) and tries the relays again after 1, 2, 4, 8, 16 and then every 30 s, for as long as it takes, and starts it once a read-back shows every relay off ([below](#the-relays-when-the-controller-exits)). The web UI keeps running and says why; the health check fails. |
 | The controller exits otherwise (a crash, a kill, a failed start) | Turns the relays off at once, then starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`), once the relays are verified off. The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`), with the relays off, instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
@@ -1034,9 +1034,11 @@ for the kernel to end a process, each handled as any other exit. At a memory lim
 given) it ends one as above: the web UI is started again alone, and the controller after its relays are turned off. At
 the future `2g` default against the 90-220 MiB the two use, only a runaway reaches it; one that reaches it again soon
 after each start ends in the crash loop, with the relays off. The process limit makes a new thread fail beyond
-`CONTAINER_PIDS_LIMIT`, which .NET reports as an `OutOfMemoryException` in the thread that asked: a crash. A CPU limit
-never ends a process; it only delays. The CPU and memory limits stay off by default until a follow-up turns them on
-([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6).
+`CONTAINER_PIDS_LIMIT`, which .NET reports as an `OutOfMemoryException` in the thread that asked: a crash. At that limit
+the supervisor itself forks nothing it cannot afford: a relay-off kills the web UI to make room, a start waits, and a
+stop frees the tasks before its relay-off ([The supervisor at the process limit](#the-supervisor-at-the-process-limit)).
+A CPU limit never ends a process; it only delays. The CPU and memory limits stay off by default until a follow-up turns
+them on ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6).
 
 What it cannot cover:
 
@@ -1051,6 +1053,11 @@ What it cannot cover:
 - **A HAT that does not answer**, or a relay the read-back still shows on: the relays cannot be verified off, so the
   controller is held stopped (above). The supervisor says so (`WARNING`s) and keeps trying; until then use the
   independent stop (commissioning C1).
+- **A task that does not end at SIGKILL** (a thread stuck in the kernel, on a hung filesystem or bus) keeps its place
+  under the container's process limit; so do processes the supervisor did not start (`docker exec`). Should they fill
+  the limit, the supervisor waits for room as long as the stop allows, and then leaves the relays as they are, with a
+  `WARNING`, rather than fork without room ([The supervisor at the process
+  limit](#the-supervisor-at-the-process-limit)).
 - **The read-back proves the HAT's register, not the relay contacts**: a welded contact passes it
   ([commissioning.md C2](commissioning.md#c2-relay-register-versus-contacts)).
 - **The Pi's timings are not measured.** The relay-off times above, and the stop's, are from the x64 emulator rig. On the
@@ -1167,18 +1174,18 @@ or `unknown` (not tried yet), with when and why they were last turned off.
 Its log lines, in `docker logs`, start with `[supervisor]`:
 
 ```text
-[supervisor] Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; a stop ends within 27s of its request: up to 22s for the controller, then up to 5s for the relays off, with 2s for the web UI at the same time)
+[supervisor] Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; a stop ends within 27s of its request: up to 22s for the controller, with 2s for the web UI at the same time, then up to 5s for the relays off)
 [supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 160 ms (before the controller starts)
 [supervisor] Started the controller (pid 7, start 1)
 [supervisor] Started the web UI (pid 8, start 1)
 [supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 150 ms (the controller exited (exit code 75))
 [supervisor] The controller asked to be restarted (exit code 75); starting it again
-[supervisor] Stopping: the controller first, then the relays off while the web UI stops, all within 27s of the stop request
+[supervisor] Stopping: the controller and the web UI, then the relays off, all within 27s of the stop request
 [supervisor] Stopping the controller (SIGTERM, up to 22s)
-[supervisor] The controller stopped (exit code 0)
 [supervisor] Stopping the web UI (SIGTERM, up to 2s)
-[supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 150 ms (the supervisor is stopping)
 [supervisor] The web UI stopped (exit code 0)
+[supervisor] The controller stopped (exit code 0)
+[supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 150 ms (the supervisor is stopping)
 [supervisor] Stopped, 4320 ms after the stop request
 ```
 
@@ -1248,6 +1255,39 @@ more than the limit's CPU time in a 100 ms period (1 vCPU's worth at the floor),
 next period begins. On the x64 emulator rig with 2 CPUs that happened 7 times while the container started (57 ms in
 all), and twice more under the load above (117 ms in all); on the Pi's slower cores it may happen more. A busy web UI at
 the same time as a move could delay the controller's safety loops by up to the rest of a period.
+
+### The supervisor at the process limit
+
+At the container's process limit (`CONTAINER_PIDS_LIMIT`, 512 tasks by default: processes and threads together) a new
+process cannot start, and bash, which runs the [supervisor](#the-containers-two-processes), retries a fork for
+about 15 s and then ends the script: the supervisor would end late, a stop's signal would wait for it, and the relays
+would be left as they are. So once it has begun, the supervisor forks only to start a process (the controller, the web
+UI, its preparation, the relay-off helper), to replace its state file or to remove a forced restart's request, and only
+when its cgroup (`/sys/fs/cgroup`'s `pids.max` and `pids.current`, read without a fork) shows room: at least 40 tasks
+free, as the relay-off helper, a .NET program, used up to 24 when measured. Everything else it does (its time, its
+waits, the text of its log and state) uses bash's builtins. Without a limit (`pids.max` of `max`), or without the files,
+nothing is held back. At the limit:
+
+- **A stop** forks nothing until the controller, the web UI and the web UI's preparation have ended or been killed,
+  which frees their tasks; only then does it start the last relay-off ([Shutdown timing](#shutdown-timing)). From the
+  signal, that relay-off begins by 23 s and ends by 27 s with the defaults, when they were what held the tasks.
+- **A relay-off outside a stop** (after the controller exits, or tried again) first kills the web UI and its preparation
+  to make room (never the relay-off: the controller is not running then), and waits up to 1 s for it. The web UI starts
+  again later, with its backoff. If there is still no room, the relays stay unverified, so the controller stays
+  [held stopped](#the-relays-when-the-controller-exits), and it is tried again.
+- **A start** of the controller, the web UI or its preparation waits, without a fork meanwhile, until there is room
+  (logged once), and **a forced restart** waits too; `docker stop` and `docker restart` work then.
+- **The state file** is written in place instead of replaced, so a reader may find it empty or half written for a
+  moment: the web UI then reports it unreadable, and the health check and the deploy script find no state in it.
+
+What is left: a task that SIGKILL cannot end (stuck in the kernel), or tasks of processes the supervisor did not start
+(`docker exec`), can keep the limit full once the controller and the web UI have ended. The stop then waits for room
+until 1 s before its deadline (26 s with the defaults). Room by then starts the last relay-off late, with only the time
+left before the deadline (at least 1 s, which a .NET start may not be enough for); none leaves the relays as they are,
+with a `WARNING`, rather than fork without room. Either way the stop ends by 27 s. A limit the supervisor cannot see in
+its own cgroup is not held back for (a cgroup v1 host, `--cgroupns=host`, or the Pi's own `pid_max` or thread limit),
+though the stop still forks nothing before its processes have ended; and a burst that takes the last 40 tasks between
+the check and the fork makes that fork wait as before.
 
 ## Health and readiness
 
@@ -1323,12 +1363,12 @@ read `/health` with a Viewer key and expect Healthy.
 | Unverified shutdown retry | every 500 ms | Re-runs the all-off sequence until it verifies, the controller is disposed or 15 s pass. Each unverified shutdown call waits up to 5 s on it. Disposal usually ends it, about 10 s after SIGTERM plus the web server's stop time; when all three calls run, the 15 s limit ends it first. |
 | Controller disposal | 2 s | Waits for the controller lock and then for its background tasks. If blocked HAT I/O holds the lock, disposal stops waiting (Critical: relay state unknown) rather than block the exit, and runs its all-off stop if the call returns before the process ends. |
 | Camera streams | end at `ApplicationStopping` | An open viewer never holds up shutdown |
-| Supervisor, the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`) | 22 s | The [supervisor](#the-containers-two-processes) passes SIGTERM to the controller first and waits this long for it, above the app's 20 s. Then it kills it (SIGKILL). |
-| Supervisor, the relays (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`) | 5 s | Once the controller has exited: the supervisor [turns the relays off](#the-relays-when-the-controller-exits) and verifies them, and kills the run that takes longer. |
-| Supervisor, the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`) | 2 s | At the same time as the relays: SIGTERM to the web UI, then SIGKILL. |
+| Supervisor, the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`) | 22 s | The [supervisor](#the-containers-two-processes) passes SIGTERM to the controller (and the web UI) and waits this long for it, above the app's 20 s. Then it kills it (SIGKILL). |
+| Supervisor, the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`) | 2 s | At the same time as the controller: SIGTERM to the web UI, then SIGKILL. |
+| Supervisor, the relays (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`) | 5 s | Once the controller and the web UI have ended: the supervisor [turns the relays off](#the-relays-when-the-controller-exits) and verifies them, and kills the run that takes longer. |
 | Supervisor, after a SIGKILL | at most 1 s | A process killed when its wait ran out is given this long to end. One stuck in the kernel (a hung filesystem or bus) cannot run its own code again, so the stop goes on without it. |
 | Supervisor, the web UI's preparation (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`) | 10 s, not part of the stop | It runs in the background before each start of the web UI; a stop abandons it at once (its processes are killed), so it adds nothing to the stop. |
-| Supervisor, the whole stop | 27 s from the signal | The controller's wait and the longer of the other two. The supervisor times the stop from the signal: nothing starts after it, a relay-off already running when it came runs on within its own 5 s and counts against the 27 s, and each later wait is cut to the time left, the controller's ending early enough to leave the last relay-off at least 4 s of its 5 s (all 5 s unless the controller has to be killed and takes up to its 1 s to end), so the last relay-off begins and ends within the 27 s. Only a process that does not end at SIGKILL can make the supervisor itself exit up to 1 s later. The stop's own work (logging, starting the helper) adds a few hundred milliseconds. |
+| Supervisor, the whole stop | 27 s from the signal | The controller's wait and the longer of the other two. The supervisor times the stop from the signal, in the signal's trap and without a fork: nothing starts after it, a relay-off already running when it came runs on within its own 5 s and counts against the 27 s, and each later wait is cut to the time left, the controller's and the web UI's ending early enough to leave the last relay-off at least 4 s of its 5 s (all 5 s unless one of them has to be killed and takes up to its 1 s to end), so the last relay-off begins by 23 s and ends by 27 s. The stop forks nothing before then, and the last relay-off's process starts only once the controller, the web UI and the preparation have ended and freed their tasks, so this holds at the container's [process limit](#the-supervisor-at-the-process-limit) too, also when the limit lasts until they are killed. When something else holds the tasks after they have ended, the last relay-off waits for room until 26 s and may begin late or, with none, not at all; the stop still ends by 27 s. Only a process that does not end at SIGKILL can make the supervisor itself exit up to 1 s later. The stop's own work (logging, starting the helper) adds a few hundred milliseconds. |
 | Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the whole stop (27 s). Docker sends SIGKILL to everything in the container after this. |
 
 Keep each layer above the one inside it: the app's 20 s inside the supervisor's 22 s, and the supervisor's 27 s inside
@@ -1339,10 +1379,15 @@ stop then takes at most that relay-off and the last one: 8.5-8.6 s in the tests 
 the web UI's preparation abandons it: 0.2 s in the tests, and 22.0 s with a preparation stalled for 31 s and a
 controller that ignores SIGTERM (its 22 s, then the last relay-off). A signal while the web UI's environment is gathered
 starts no web UI (0.26 s), and an environment that stalls, or a file of it that cannot be read, does not delay the stop
-(2.1 s and 0.2 s in the tests, with 2 s for the controller). If the supervisor
-kills the controller, the controller cannot confirm that the relays are off, and the supervisor turns them off itself.
-If Docker kills the container first, nothing in it can: they stay as they were until the next start, whose supervisor
-turns them off first
+(2.1 s and 0.2 s in the tests, with 2 s for the controller). At the container's process limit (the tests make the
+supervisor's forks fail), with 2 s for a controller that ignores SIGTERM: a stop while the limit lasts 3 s more took
+3.0 s (its deadline 5 s), and one while it lasts until the controller and the web UI are killed 2.1 s (its deadline
+4 s); before, the controller got SIGTERM only 6 s after the signal, and with the limit lasting, never. With the
+defaults, a controller that ignores SIGTERM, a 4.5 s relay-off and the limit lasting 10 s (the review's case), the last
+relay-off ran from 22.1 s to 26.6 s after the signal; before, the controller got SIGTERM only at 14 s, and the relay-off
+ran from 36.1 s to 40.6 s, after Docker's 30 s. If the supervisor kills the controller, the controller cannot confirm
+that the relays are off, and the supervisor turns them off itself. If Docker kills the container first, nothing in it
+can: they stay as they were until the next start, whose supervisor turns them off first
 ([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)).
 
 ## After deploying: checks on the device

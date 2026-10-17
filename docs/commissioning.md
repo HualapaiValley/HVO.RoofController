@@ -435,11 +435,12 @@ are verified off.
   verify the relays off, so it holds the controller stopped, which never becomes ready, and the deploy script removes
   it, restoring the one it replaced (C12 step 8).
 - **Docker gives the container at least 30 s to stop.** The supervisor waits up to 22 s for the controller's shutdown,
-  then up to 5 s to turn the relays off while the web UI gets 2 s, the whole stop within 27 s of the signal. The settings
-  that depend on it are the deploy script's `STOP_TIMEOUT_SECONDS`, Compose's `stop_grace_period` and the supervisor's
-  `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS` and `HVO_SUPERVISOR_RELAYS_OFF_SECONDS`. The fail-safe result of a shorter grace period is that Docker kills the container
-  during the controller's shutdown or the supervisor's relay-off: the relays stay held until the container starts again
-  and its supervisor turns them off.
+  with 2 s for the web UI at the same time, then up to 5 s to turn the relays off, the whole stop within 27 s of the
+  signal, also at the container's process limit. The settings that depend on it are the deploy script's
+  `STOP_TIMEOUT_SECONDS`, Compose's `stop_grace_period` and the supervisor's `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`
+  and `HVO_SUPERVISOR_RELAYS_OFF_SECONDS`. The fail-safe result of a shorter grace period is that Docker kills the
+  container during the controller's shutdown or the supervisor's relay-off: the relays stay held until the container
+  starts again and its supervisor turns them off.
 
 If a shutdown log shows `Shutdown could not verify the relay register all-off state`, the controller re-runs the all-off
 sequence every 500 ms. It stops when the register verifies, when the controller is disposed, or after 15 s. Disposal

@@ -105,8 +105,9 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   controller's own `--relays-off`; it never turns a relay on and never runs while a controller does. The controller
   starts only once a read-back has shown every relay off: until then it is held stopped (`relays-unverified`) and the
   supervisor keeps trying (the owner's decision, #138). Nothing starts after a stop request, and the whole stop ends
-  within 27 s of the signal. A whole container killed is the gap it
-  cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
+  within 27 s of the signal, also at the container's process limit: the supervisor forks only to start a process, and
+  only with room for it, and the stop forks nothing until the controller and the web UI have ended. A whole container
+  killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see

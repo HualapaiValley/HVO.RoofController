@@ -121,7 +121,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   controller turned them off). A whole container killed (`docker kill`) still leaves them held until it starts again.
   The supervisor now waits 22 s (was 25 s) for the controller's shutdown, then up to 5 s for the relays, starts nothing
   once a stop is asked for, and times the whole stop from the signal, so it ends within 27 s, inside Docker's 30 s
-  ([deployment.md](docs/deployment.md#the-relays-when-the-controller-exits), #138).
+  ([deployment.md](docs/deployment.md#the-relays-when-the-controller-exits), #138). That holds at the container's
+  process limit too, where a fork would wait about 15 s and then end the supervisor: the stop forks nothing until the
+  controller, the web UI and its preparation have ended (the web UI is now stopped at the same time as the controller),
+  and at the limit a relay-off outside a stop first kills the web UI to make room, while starts wait for room
+  ([deployment.md](docs/deployment.md#the-supervisor-at-the-process-limit)). Should something else hold the tasks
+  then (a task stuck in the kernel, `docker exec`), the stop still ends within 27 s, but its relay-off may begin late,
+  or not at all (logged).
 
 ### Security
 
