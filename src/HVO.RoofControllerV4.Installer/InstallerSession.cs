@@ -177,8 +177,8 @@ public sealed class InstallerSession
             return [];
         }
 
-        var resources = (Answers.Controller ?? new ControllerSettings()).Normalised().Resources;
-        return [.. RoleGuards.ContainerLimitWarnings(Survey.Docker.Limits, resources), .. RoleGuards.DesiredLimitWarnings(Survey.Docker.DesiredLimits, resources)];
+        var resolved = ResolvedResources.Resolve((Answers.Controller ?? new ControllerSettings()).Normalised().Resources, Survey);
+        return [.. RoleGuards.ContainerLimitWarnings(Survey.Docker.Limits, resolved.Resources), .. resolved.Warnings];
     }
 
     /// <summary>

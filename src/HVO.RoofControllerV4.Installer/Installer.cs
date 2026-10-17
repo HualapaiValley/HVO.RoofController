@@ -58,12 +58,12 @@ public static class Installer
         var release = ReleaseOption("Read the release");
         var cpus = new Option<decimal?>("--cpus")
         {
-            Description = "The controller container's CPU limit, at least 1 (1 by default). Kept in the install record for upgrades and rollbacks.",
+            Description = "The controller container's CPU limit, at least 1. Kept in the install record for upgrades and rollbacks; without it, the deploy script's last one, else the running controller's, else 1.",
             HelpName = "CPUS"
         };
         var memory = new Option<string?>("--memory")
         {
-            Description = "The controller container's memory limit in MiB or GiB, at least 1024m or 1g (2g by default), kept as --cpus is. The container gets no swap beyond it.",
+            Description = "The controller container's memory limit in MiB or GiB, at least 1024m or 1g, kept as --cpus is (else 2g). The container gets no swap beyond it.",
             HelpName = "SIZE"
         };
         var pidsLimit = new Option<int?>("--pids-limit")

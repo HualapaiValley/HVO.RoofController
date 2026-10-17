@@ -67,10 +67,10 @@ public sealed class InstallerResourceLimitsTests
     [DataRow(null, "4gb", 512, "not '4gb'")]
     [DataRow(null, null, 255, "must be from 256 to 32768, not 255")]
     [DataRow(null, null, 32769, "must be from 256 to 32768, not 32769")]
-    [DataRow("0.99", null, 512, "The controller's CPU limit of 0.99 (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1, or leave it out for the default of 1.")]
+    [DataRow("0.99", null, 512, "The controller's CPU limit of 0.99 (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1 (the default is 1).")]
     [DataRow("0.9", "2g", 512, "CPU limit of 0.9 (controller.resources.cpus, or --cpus) is less than 1 vCPU")]
     [DataRow("0.5", null, 512, "CPU limit of 0.5 (controller.resources.cpus, or --cpus) is less than 1 vCPU")]
-    [DataRow(null, "1023m", 512, "The controller's memory limit of 1023m (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g, or leave it out for the default of 2g.")]
+    [DataRow(null, "1023m", 512, "The controller's memory limit of 1023m (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g (the default is 2g).")]
     [DataRow(null, "512m", 512, "memory limit of 512m (controller.resources.memory, or --memory) is less than 1g")]
     public void LimitsTheControllerIsNotGiven_AreProblems(string? cpus, string? memory, int pids, string problem)
     {
@@ -144,7 +144,7 @@ public sealed class InstallerResourceLimitsTests
         var run = await pi.RunAsync("--answers", answers);
 
         run.ExitCode.Should().Be(0, run.ToString());
-        pi.Deploys.Should().ContainSingle().Which.Should().Contain(Limits("1", "2g", "512"));
+        pi.Deploys.Should().ContainSingle().Which.Should().Contain(Limits("", "", "512"), "the deploy script resolves the ones not given, to the default here");
         pi.Deploys.Single().Should().NotContainKey("ALLOW_LIMITS_BELOW_MINIMUM");
         pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.NanoCpus == 1_000_000_000 && running.Memory == 2L * 1024 * 1024 * 1024 && running.PidsLimit == 512);
         // The default is not recorded as a choice: an upgrade gives the installer's default then.
@@ -332,33 +332,294 @@ public sealed class InstallerResourceLimitsTests
         var upgrade = await pi.RunAsync("upgrade");
         upgrade.ExitCode.Should().Be(0, upgrade.ToString());
         pi.Deploys[^1].Should().Contain(Limits("1.5", "6g", "512"));
-        upgrade.Error.Should().NotContain("The deploy script here was last given", "the desired limits are the record's");
+        upgrade.Error.Should().NotContain("Warning: The controller's", "the deploy script's record keeps the install record's");
     }
 
     [TestMethod]
-    public async Task DesiredLimits_TheDeployScriptWasGivenByHand_AreNamed_AndTheRecordsAreGiven()
+    public async Task TheLimits_ResolveAsTheDeployScriptResolvesThem_GivenThenTheRecordThenTheRunningControllerThenTheDefault()
+    {
+        // Review ROOF-151-R2 F5: one store and one precedence everywhere. The installer gives the script only the limits
+        // given, and says in its plan the ones the script will resolve.
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources()));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.Deploys[^1].Should().Contain(Limits("", "", "512"), "the installer gives only the limits given");
+        pi.NewestDesiredLimits!["io.hvo.roof.limits.cpus-source"].Should().Be("default");
+        pi.NewestDesiredLimits!["io.hvo.roof.limits.memory-source"].Should().Be("default");
+        pi.DesiredLimitsRecord.Should().Be("1,2g");
+
+        // Someone ran the deploy script by hand with 1.5 CPUs and 6g: the record has them as set, and the answers give
+        // none, so they are kept.
+        pi.WithContainer(MachineSurveyor.ControllerContainer, pi.Containers[MachineSurveyor.ControllerContainer] with { NanoCpus = 1_500_000_000, Memory = 6L << 30 });
+        pi.SeedDesiredLimits("1.5", "6g", generation: 2);
+        var plan = await pi.RunAsync("--plan", "--answers", answers);
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Output.Should().MatchRegex(@"unchanged +roof-controller ").And.NotContain("redeployed with its limits");
+        plan.Error.Should().NotContain("Warning:", "a limit kept from the record is no warning");
+
+        // Answers that give 2g: the one given comes first, with a warning that names the record and says which wins.
+        var given = pi.WriteAnswers(Controller(new ContainerResources { Memory = "2g" }), "given.json");
+        plan = await pi.RunAsync("--plan", "--answers", given);
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Output.Should().Contain("redeployed with its limits: 1.5 CPUs, 2g of memory and no swap, at most 512 processes and threads (the CPUs kept from the last deploy)");
+        plan.Error.Should().Contain($"Warning: The controller's memory limit is given as 2g (controller.resources.memory, or --memory), and the deploy script's last record, roof-controller-limits-g2 (written by a deploy at 2026-10-17T00:00:00Z for container {pi.Containers[MachineSurveyor.ControllerContainer].Id[..12]}), keeps 6g: the one given comes first, and the deploy records it in its place.");
+        var run = await pi.RunAsync("--answers", given);
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Deploys[^1].Should().Contain(Limits("", "2g", "512"));
+        pi.Containers[MachineSurveyor.ControllerContainer].Memory.Should().Be(2L << 30);
+        pi.Containers[MachineSurveyor.ControllerContainer].NanoCpus.Should().Be(1_500_000_000);
+        pi.DesiredLimitsRecord.Should().Be("1.5,2g");
+        pi.DesiredLimitRecords.Should().Equal("roof-controller-limits-g3");
+
+        // A record that keeps the default gives the default, not the running controller's limit.
+        pi.Volumes.Clear();
+        answers = pi.WriteAnswers(Controller(new ContainerResources()), "none.json");
+        pi.SeedDesiredLimits("1", "2g", 4, null, ("cpus-source", "default"), ("memory-source", "default"));
+        pi.WithContainer(MachineSurveyor.ControllerContainer, pi.Containers[MachineSurveyor.ControllerContainer] with { NanoCpus = 2_000_000_000, Memory = 4L << 30 });
+        plan = await pi.RunAsync("--plan", "--answers", answers);
+        plan.Output.Should().Contain("redeployed with its limits: 1 CPU, 2g of memory and no swap, at most 512 processes and threads");
+
+        // No record (a controller deployed before them): the running controller's.
+        pi.Volumes.Clear();
+        plan = await pi.RunAsync("--plan", "--answers", answers);
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Output.Should().MatchRegex(@"unchanged +roof-controller ").And.NotContain("redeployed with its limits");
+        var survey = await MachineSurveyor.SurveyAsync(pi.Machine, CancellationToken.None);
+        var resolved = ResolvedResources.Resolve(new ContainerResources(), survey);
+        resolved.Describe().Should().Be("2 CPUs, 4g of memory and no swap, at most 512 processes and threads (the CPUs kept from roof-controller, the memory kept from roof-controller)");
+
+        // Neither: the default.
+        pi.Containers.Remove(MachineSurveyor.ControllerContainer);
+        survey = await MachineSurveyor.SurveyAsync(pi.Machine, CancellationToken.None);
+        resolved = ResolvedResources.Resolve(new ContainerResources(), survey);
+        (resolved.CpusSource, resolved.MemorySource, resolved.Resources.Describe()).Should().Be(("the default", "the default", "1 CPU, 2g of memory and no swap, at most 512 processes and threads"));
+    }
+
+    [TestMethod]
+    public async Task ARecordWrittenForAnotherContainer_StillComesFirst_WithAWarning()
     {
         using var pi = new FakeMachine().WithPi();
         var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
         (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
-        pi.DesiredLimitsVolume.Should().Be("1,2g", "the deploy script keeps what it was given");
+        pi.SeedDesiredLimits("1", "6g", 2, "abcdefabcdef");
+        var running = pi.Containers[MachineSurveyor.ControllerContainer].Id[..12];
 
-        // Someone ran the deploy script by hand with others.
-        pi.DesiredLimitsVolume = "1.5,6g";
         var plan = await pi.RunAsync("--plan", "--answers", answers);
 
         plan.ExitCode.Should().Be(0, plan.ToString());
-        plan.Error.Should().Contain("Warning: The deploy script here was last given 1.5 CPUs and 6g of memory (the desired limits in volume roof-controller-limits), not the installer's 1 and 2g: the installer gives its own. To keep those, give --cpus 1.5 --memory 6g.");
-        DesiredLimits.Parse("1.5,6g\n").Should().Be(new DesiredLimits("1.5", "6g"));
-        DesiredLimits.Parse(",\n").Should().BeNull();
-        DesiredLimits.Parse("<no value>,6g").Should().Be(new DesiredLimits(null, "6g"));
-        RoleGuards.DesiredLimitWarnings(new DesiredLimits("1", "2048m"), new ContainerResources()).Should().BeEmpty("2048m is the 2g the installer gives");
-        RoleGuards.DesiredLimitWarnings(null, new ContainerResources()).Should().BeEmpty();
+        plan.Output.Should().Contain("redeployed with its limits: 1 CPU, 6g of memory and no swap, at most 512 processes and threads (the CPUs kept from the last deploy, the memory kept from the last deploy)");
+        plan.Error.Should().Contain($"Warning: The desired limits' record, roof-controller-limits-g2, was written for container abcdefabcdef, not for the running roof-controller ({running}): a limit not given still takes the record's value, not the running controller's.");
+    }
 
-        // An uninstall removes them with the controller: the record keeps the installer's.
+    [TestMethod]
+    [DataRow("memory", "512m", "its memory '512m' is less than 1g, the minimum")]
+    [DataRow("cpus", "0.5", "its CPUs '0.5' are less than 1 vCPU, the minimum")]
+    [DataRow("cpus", "1.555", "its CPUs '1.555' are not a number of CPUs with at most two decimals")]
+    [DataRow("memory", "2gb", "its memory '2gb' is not a whole number of MiB or GiB")]
+    [DataRow("", "2", "its format (io.hvo.roof.limits) is '2', not 1")]
+    [DataRow("generation", "7", "its generation label '7' is not the 2 of its name")]
+    [DataRow("memory-source", "operator", "its sources 'set' and 'operator' are not set or default")]
+    [DataRow("written-by", null, "it does not say which run wrote it, and for which container ('', ")]
+    public async Task ARecordThatIsNotValid_IsNeverApplied_RefusedWhenALimitIsNeeded_AndWarnedWhenBothAreGiven(string label, string? value, string problem)
+    {
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.SeedDesiredLimits("1", "6g", 2, null, (label, value));
+        pi.WithRelease(NewVersion, latest: true);
+        var deploys = pi.Deploys.Count;
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var installer = File.ReadAllBytes(pi.OnDisk(InstallPaths.SystemInstaller));
+
+        foreach (var arguments in new[] { new[] { "--plan", "--answers", answers }, ["--answers", answers], ["upgrade"] })
+        {
+            var refused = await pi.RunAsync(arguments);
+            refused.ExitCode.Should().Be((int)InstallerExitCode.Refused, refused.ToString());
+            refused.Error.Should().Contain($"The newest desired-limits record, roof-controller-limits-g2, is not valid: {problem}");
+            refused.Error.Should().Contain("It is not applied, and nothing was changed: give controller.resources.cpus and controller.resources.memory (or --cpus and --memory; the deploy then records them in its place), or remove it (docker volume rm roof-controller-limits-g2).");
+        }
+
+        pi.Deploys.Should().HaveCount(deploys, "nothing was deployed");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+        File.ReadAllBytes(pi.OnDisk(InstallPaths.SystemInstaller)).Should().Equal(installer, "the upgrade did not hand over");
+        Backups(pi).Should().BeEmpty();
+
+        // Both given: a warning, and the deploy records them in its place.
+        var both = pi.WriteAnswers(Controller(new ContainerResources { Cpus = 2, Memory = "3g" }), "both.json");
+        var run = await pi.RunAsync("--answers", both);
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Error.Should().Contain($"Warning: The newest desired-limits record, roof-controller-limits-g2, is not valid ({problem}");
+        run.Error.Should().Contain("): it is not applied, and the deploy records the limits given in its place.");
+        pi.DesiredLimitRecords.Should().Equal("roof-controller-limits-g3");
+        pi.DesiredLimitsRecord.Should().Be("2,3g");
+    }
+
+    [TestMethod]
+    public async Task RecordsThatCannotBeRead_RefuseBeforeAnythingChanges()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.VolumeListFails = true;
+        var deploys = pi.Deploys.Count;
+
+        var refused = await pi.RunAsync("--answers", answers);
+
+        refused.ExitCode.Should().Be((int)InstallerExitCode.Refused, refused.ToString());
+        refused.Error.Should().Contain("Could not read the desired limits' records from Docker (volumes roof-controller-limits-g<generation>; a limit not given keeps them): docker volume ls failed: Error response from daemon: volume ls failed. Nothing was changed; check Docker and run it again.");
+        pi.Deploys.Should().HaveCount(deploys);
+    }
+
+    [TestMethod]
+    public void TheRecords_AreReadAsTheDeployScriptReadsThem()
+    {
+        var names = new[] { "roof-controller-limits", "roof-controller-limits-g2", "roof-controller-limits-g10", "roof-controller-limits-gx", "roof-controller-limits-g01", "other-roof-controller-limits-g99", "" };
+        var (volumes, newest, generation) = DesiredLimits.Records("roof-controller", names);
+        volumes.Should().Equal("roof-controller-limits", "roof-controller-limits-g2", "roof-controller-limits-g10");
+        (newest, generation).Should().Be(("roof-controller-limits-g10", 10));
+        DesiredLimits.Records("roof-controller", []).Newest.Should().BeNull();
+
+        var record = DesiredLimits.Parse("roof-controller-limits-g10", 10, "1|10|1.5|set|6g|default|rollback|2026-10-17T01:02:03Z|0123456789ab\n");
+        record.IsValid.Should().BeTrue(record.Problem);
+        (record.Cpus, record.CpusSource, record.Memory, record.MemorySource, record.WrittenBy, record.Controller)
+            .Should().Be(("1.5", "set", "6g", "default", "rollback", "0123456789ab"));
+        record.Written.Should().Be("written by a rollback at 2026-10-17T01:02:03Z for container 0123456789ab");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, "|||||||||").Problem.Should().Be("its format (io.hvo.roof.limits) is '', not 1");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, "<no value>|<no value>").Problem.Should().Be("its format (io.hvo.roof.limits) is '', not 1");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, "1|1|1|set|1G|set|deploy|t|0123456789ab|extra").Problem
+            .Should().Be("it does not say which run wrote it, and for which container ('deploy', '0123456789ab|extra')", "a field past the last goes with the last, as the script reads it");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, "1|1|1|set|1G|set|deploy|t|0123456789ab").IsValid.Should().BeTrue("1G is 1 GiB, the minimum");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, "1|1|1|set|1023m|set|deploy|t|0123456789ab").Problem.Should().Be("its memory '1023m' is less than 1g, the minimum");
+    }
+
+    [TestMethod]
+    public async Task TheUninstallAndThePurge_RemoveTheRecords_WhetherOrNotTheContainerIsThere()
+    {
+        // Review ROOF-151-R2 F6.
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources { Memory = "6g" }));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.Volumes["roof-controller-limits"] = new() { ["io.hvo.roof.desired-memory"] = "6g" };
+        pi.Volumes["other-data"] = [];
+
+        // The controller removed by hand: the uninstall removes the records all the same, the earlier format's too.
+        pi.Containers.Remove(MachineSurveyor.ControllerContainer);
+        pi.Containers.Remove(ControllerRollbackStep.PreviousContainer);
+        var plan = await pi.RunAsync("uninstall", "--plan");
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Output.Should().Contain("removed: roof-controller-limits, roof-controller-limits-g1");
+        pi.DesiredLimitRecords.Should().HaveCount(2, "a plan changes nothing");
         var uninstall = await pi.RunAsync("uninstall", "--yes");
         uninstall.ExitCode.Should().Be(0, uninstall.ToString());
-        pi.DesiredLimitsVolume.Should().BeNull("the desired limits go with the controller");
+        pi.DesiredLimitRecords.Should().BeEmpty();
+        pi.Volumes.Keys.Should().Equal("other-data");
+        pi.Read(InstallPaths.SystemLog).Should().Contain("Removed the desired-limits record roof-controller-limits-g1.");
+
+        // A reinstall starts from the default.
+        var fresh = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }, "fresh.json");
+        (await pi.RunAsync("--answers", fresh)).ExitCode.Should().Be(0);
+        pi.Containers[MachineSurveyor.ControllerContainer].Memory.Should().Be(2L << 30);
+
+        // A record left beside an uninstall (a deploy by hand after it): a purge later removes it.
+        (await pi.RunAsync("uninstall", "--yes")).ExitCode.Should().Be(0);
+        pi.SeedDesiredLimits("1", "6g", 5);
+        var purge = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+        purge.ExitCode.Should().Be(0, purge.ToString());
+        pi.DesiredLimitRecords.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task AnUninstallThatCannotRemoveARecord_Fails_AndRunningItAgainRemovesIt()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources { Memory = "6g" }));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.VolumeRemoveFails.Add("roof-controller-limits-g1");
+
+        var failed = await pi.RunAsync("uninstall", "--yes");
+
+        failed.ExitCode.Should().NotBe(0, failed.ToString());
+        failed.Error.Should().Contain("Could not remove the desired-limits record roof-controller-limits-g1");
+        pi.Containers.Should().NotContainKey(MachineSurveyor.ControllerContainer, "the controller went before");
+        Record(pi).UninstalledAt.Should().BeNull("the record does not say it is uninstalled until everything is");
+
+        pi.VolumeRemoveFails.Clear();
+        var again = await pi.RunAsync("uninstall", "--yes");
+        again.ExitCode.Should().Be(0, again.ToString());
+        pi.DesiredLimitRecords.Should().BeEmpty();
+        Record(pi).UninstalledAt.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ARollback_SaysTheDesiredLimitsWarnings_AndLogsThem_BeforeItChangesAnything(bool planOnly)
+    {
+        // Review ROOF-151-R2 F7: the record gives 2g, and the deploy script's record keeps 6g.
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources { Memory = "2g" }));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.WithRelease(NewVersion, latest: true);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+        pi.SeedDesiredLimits("1", "6g", 9);
+        var deploys = pi.Deploys.Count;
+        var warning = $"Warning: The controller's memory limit is given as 2g (controller.resources.memory, or --memory), and the deploy script's last record, roof-controller-limits-g9 (written by a deploy at 2026-10-17T00:00:00Z for container {pi.Containers[MachineSurveyor.ControllerContainer].Id[..12]}), keeps 6g: the one given comes first, and the deploy records it in its place.";
+
+        var log = pi.Read(InstallPaths.SystemLog);
+
+        var rollback = planOnly ? await pi.RunAsync("rollback", "--plan") : await pi.RunAsync("rollback");
+
+        rollback.ExitCode.Should().Be(0, rollback.ToString());
+        rollback.Error.Should().Contain(warning);
+        if (planOnly)
+        {
+            // A plan writes nothing, its log included (InstallLog.None): it says the warning.
+            rollback.Output.Should().Contain("back to release 4.0.0");
+            pi.Read(InstallPaths.SystemLog).Should().Be(log);
+            pi.Deploys.Should().HaveCount(deploys, "a plan changes nothing");
+            pi.DesiredLimitsRecord.Should().Be("1,6g");
+        }
+        else
+        {
+            log = pi.Read(InstallPaths.SystemLog);
+            var logged = log.LastIndexOf(warning, StringComparison.Ordinal);
+            logged.Should().BeGreaterThan(-1, "the rollback logs it");
+            log.IndexOf("--rollback", logged, StringComparison.Ordinal).Should().BeGreaterThan(logged, "the warning comes before the rollback runs the deploy script");
+            pi.DeployOptions[^1].Should().Be("--rollback");
+            pi.Deploys[^1].Should().Contain(Limits("", "2g", "512"));
+            pi.DesiredLimitsRecord.Should().Be("1,2g", "the one given comes first, and the rollback records it");
+        }
+    }
+
+    [TestMethod]
+    public async Task ALimitSetByHand_PersistsThroughADegradedRollback_AndTheUpgradeAfterIt()
+    {
+        // Review ROOF-151-R2 F5, with nothing in the install record: 6g given to the deploy script by hand, a rollback on
+        // a host whose memory controller went away, then the host fixed and an upgrade that gives nothing applies 6g.
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] });
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.WithRelease(NewVersion, latest: true);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+        pi.WithContainer(MachineSurveyor.ControllerContainer, pi.Containers[MachineSurveyor.ControllerContainer] with { Memory = 6L << 30 });
+        pi.SeedDesiredLimits("1", "6g", 7);
+
+        pi.DockerInfo = "false,true,true,false,4,8589934592,2,docker-host";
+        var rollback = await pi.RunAsync("rollback");
+        rollback.ExitCode.Should().Be(0, rollback.ToString());
+        rollback.Error.Should().Contain("docker-memory-limit-unsupported");
+        pi.DesiredLimitsRecord.Should().Be("1,6g");
+        pi.NewestDesiredLimits!["io.hvo.roof.limits.written-by"].Should().Be("rollback");
+
+        pi.DockerInfo = "true,true,true,true,4,8589934592,2,docker-host";
+        pi.InstallerVersion = "4.0.0";
+        var upgrade = await pi.RunAsync("upgrade");
+        upgrade.ExitCode.Should().Be(0, upgrade.ToString());
+        pi.Deploys[^1].Should().Contain(Limits("", "", "512"));
+        pi.Containers[MachineSurveyor.ControllerContainer].Memory.Should().Be(6L << 30);
+        upgrade.Error.Should().NotContain("Warning: The desired limits' record");
     }
 
     [TestMethod]
@@ -418,9 +679,15 @@ public sealed class InstallerResourceLimitsTests
         pi.Deploys[^1].Should().Contain(Limits("3", "6g", "1024"));
         Record(pi).Controller!.Resources.Memory.Should().Be("6g");
 
-        // Answers that leave them out again: the controller is redeployed with the default.
+        // Answers that leave them out again keep the last deploy's (review ROOF-151-R2 F5: the desired-limits record comes
+        // before the default); giving the default goes back to it.
         var none = pi.WriteAnswers(Controller(new ContainerResources { PidsLimit = 1024 }), "none.json");
         plan = await pi.RunAsync("--plan", "--answers", none);
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.Output.Should().NotContain("redeployed with its limits");
+        plan.Output.Should().MatchRegex(@"unchanged +roof-controller ");
+        var defaults = pi.WriteAnswers(Controller(new ContainerResources { Cpus = 1, Memory = "2g", PidsLimit = 1024 }), "defaults.json");
+        plan = await pi.RunAsync("--plan", "--answers", defaults);
         plan.ExitCode.Should().Be(0, plan.ToString());
         plan.Output.Should().Contain("redeployed with its limits: 1 CPU, 2g of memory and no swap, at most 1024 processes and threads");
     }
@@ -600,7 +867,8 @@ public sealed class InstallerResourceLimitsTests
         var run = await bench.RunAsync("--answers", answers, "--cpus", "4");
 
         run.ExitCode.Should().Be(0, run.ToString());
-        bench.Deploys.Should().ContainSingle().Which.Should().Contain(Limits("4", "2g", "512"));
+        bench.Deploys.Should().ContainSingle().Which.Should().Contain(Limits("4", "", "512"));
+        bench.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.NanoCpus == 4_000_000_000 && running.Memory == 2L << 30);
     }
 
     [TestMethod]
@@ -639,13 +907,13 @@ public sealed class InstallerResourceLimitsTests
         pi.WithRelease(NewVersion, latest: true);
 
         (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
-        pi.Deploys[^1].Should().Contain(Limits("1", "2g", "512"));
+        pi.Deploys[^1].Should().Contain(Limits("", "", "512"));
         pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.NanoCpus == 1_000_000_000 && running.Memory == 2L * 1024 * 1024 * 1024);
 
         pi.InstallerVersion = NewVersion;
         (await pi.RunAsync("rollback")).ExitCode.Should().Be(0);
         pi.DeployOptions[^1].Should().Be("--rollback");
-        pi.Deploys[^1].Should().Contain(Limits("1", "2g", "512"));
+        pi.Deploys[^1].Should().Contain(Limits("", "", "512"));
         pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.Version == "4.0.0" && running.NanoCpus == 1_000_000_000 && running.Memory == 2L * 1024 * 1024 * 1024);
     }
 

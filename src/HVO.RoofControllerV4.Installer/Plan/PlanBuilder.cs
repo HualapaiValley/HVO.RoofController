@@ -396,6 +396,13 @@ public static class PlanBuilder
             }
         }
 
+        // The controller's desired-limits records go whether or not its container is there (review ROOF-151-R2 F6): also
+        // when a run before removed the container and stopped, or for a purge after an uninstall that left some.
+        if (survey.Docker.IsUsable && (InstallRoles.RunsController(roles) || survey.Docker.DesiredLimitVolumes.Count > 0))
+        {
+            steps.Add(new DesiredLimitsRemovalStep());
+        }
+
         if (machine.FileExists(LinuxAuthStep.StateFile))
             steps.Add(new LinuxAuthRemovalStep());
 

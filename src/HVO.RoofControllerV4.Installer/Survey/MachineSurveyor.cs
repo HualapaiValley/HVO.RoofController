@@ -256,16 +256,42 @@ public static partial class MachineSurveyor
             parsed = parsed with { CgroupControllers = controllers };
         }
 
-        // The desired limits the deploy script keeps (none when there is no such volume).
-        var desired = await machine.Commands.RunAsync(
-            new CommandLine("docker", "volume", "inspect", "--format", DesiredLimits.Format, DesiredLimits.Volume(ControllerContainer)), cancellationToken).ConfigureAwait(false);
+        var (volumes, desired, desiredProblem) = await SurveyDesiredLimitsAsync(machine, cancellationToken).ConfigureAwait(false);
         return new DockerSurvey
         {
             Version = server.Output.Trim(),
             ComposeVersion = compose.Succeeded ? compose.Output.Trim() : null,
             Limits = parsed,
-            DesiredLimits = desired.Succeeded ? DesiredLimits.Parse(desired.Output) : null
+            DesiredLimits = desired,
+            DesiredLimitVolumes = volumes,
+            DesiredLimitsProblem = desiredProblem
         };
+    }
+
+    /// <summary>
+    /// The controller's desired-limits records here, as the deploy script reads them (<see cref="DesiredLimits"/>): every
+    /// record volume, the newest one read and validated, or why they could not be read.
+    /// </summary>
+    public static async Task<(IReadOnlyList<string> Volumes, DesiredLimits? Newest, string? Problem)> SurveyDesiredLimitsAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        var listed = await machine.Commands.RunAsync(
+            new CommandLine("docker", "volume", "ls", "--quiet", "--filter", $"name={DesiredLimits.LegacyVolume(ControllerContainer)}"), cancellationToken).ConfigureAwait(false);
+        if (!listed.Succeeded)
+        {
+            return ([], null, $"docker volume ls failed: {FirstLine(listed.Reason)}");
+        }
+
+        var (volumes, newest, generation) = DesiredLimits.Records(ControllerContainer, listed.Output.Split('\n'));
+        if (newest is null)
+        {
+            return (volumes, null, null);
+        }
+
+        var read = await machine.Commands.RunAsync(new CommandLine("docker", "volume", "inspect", "--format", DesiredLimits.Format, newest), cancellationToken).ConfigureAwait(false);
+        return read.Succeeded
+            ? (volumes, DesiredLimits.Parse(newest, generation, read.Output), null)
+            : (volumes, null, $"docker volume inspect {newest} failed: {FirstLine(read.Reason)}");
     }
 
     /// <summary>The kernel's cgroup v2 controllers (at most 512 characters), or null when they cannot be read.</summary>
@@ -370,6 +396,7 @@ public static partial class MachineSurveyor
             return new ContainerSurvey
             {
                 Name = name,
+                Id = container.TryGetProperty("Id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() ?? string.Empty : string.Empty,
                 PublishedPorts = published,
                 ServesHttps = urls is null ? null : urls.Contains("https://", StringComparison.OrdinalIgnoreCase),
                 AllowedHosts = environment.GetValueOrDefault("AllowedHosts") is { Length: > 0 } allowed && allowed != "*" ? allowed : null,

@@ -190,14 +190,16 @@ public sealed record ControllerSettings
 
 /// <summary>
 /// The controller container's resource limits, as the deploy script gives them (CONTAINER_CPUS, CONTAINER_MEMORY and
-/// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"), always: each one not set is
-/// RoofController's default, 1 vCPU and 2 GiB (owner decision on #149) and 512 processes. A CPU or memory limit not set
-/// is recorded as none, so that an upgrade moves it to the installer's default, while one an operator set is recorded and
-/// kept, as SkyMonitor's instance manifest keeps its own. One that is set is at least the RoofController floor of
-/// 1 vCPU and 1 GiB (owner decision on #129, 2026-10-16); less is refused, with no exception, and there is no setting
-/// for no limit. The container gets no swap beyond its memory. The kernel ends a controller that reaches its memory
-/// limit, and the container's supervisor then turns the relays off (docs/deployment.md, "The relays when the controller
-/// exits").
+/// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"), always. A CPU or memory limit an
+/// operator set is recorded and kept, as SkyMonitor's instance manifest keeps its own; one not set is recorded as none,
+/// and the deploy script resolves it (<see cref="Roles.ResolvedResources"/>; review ROOF-151-R2 F5): the desired-limits
+/// record's, then the running controller's, then RoofController's default, 1 vCPU and 2 GiB (owner decision on #149). A
+/// record that keeps the default follows it, so an upgrade moves a limit nobody set to a new default; to go back to the
+/// default from one that was set, give the default. The process limit is 512 unless set. One that is set is at least
+/// the RoofController floor of 1 vCPU and 1 GiB (owner decision on #129, 2026-10-16); less is refused, with no
+/// exception, and there is no setting for no limit. The container gets no swap beyond its memory. The kernel ends a
+/// controller that reaches its memory limit, and the container's supervisor then turns the relays off
+/// (docs/deployment.md, "The relays when the controller exits").
 /// </summary>
 public sealed partial record ContainerResources
 {
@@ -267,7 +269,7 @@ public sealed partial record ContainerResources
             }
             else if (cpus < MinimumCpus)
             {
-                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1, or leave it out for the default of 1.";
+                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1 (the default is 1).";
             }
         }
 
@@ -279,7 +281,7 @@ public sealed partial record ContainerResources
             }
             else if (memory < MinimumMemoryBytes)
             {
-                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g, or leave it out for the default of {DefaultMemory}.";
+                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g (the default is {DefaultMemory}).";
             }
         }
 

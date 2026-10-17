@@ -339,14 +339,6 @@ public sealed class ContainerRemovalStep(string name, string purpose, PlanStep? 
         await DockerAsync(context, $"remove {name}", cancellationToken, "rm", "-v", name).ConfigureAwait(false);
         context.Log.Write($"Removed {name}.");
 
-        // The controller's desired limits, which the deploy script keeps for its next deploy in a volume of their own
-        // (DesiredLimits), go with it: the record keeps the ones the installer gives.
-        if (name == MachineSurveyor.ControllerContainer)
-        {
-            var desired = await machine.Commands.RunAsync(new CommandLine("docker", "volume", "rm", "--force", DesiredLimits.Volume(name)) { Timeout = TimeSpan.FromMinutes(2) }, cancellationToken).ConfigureAwait(false);
-            context.Log.Write(desired.Succeeded ? $"Removed its desired limits ({DesiredLimits.Volume(name)})." : $"Kept its desired limits ({DesiredLimits.Volume(name)}): {desired.Reason}");
-        }
-
         // Another container (the one kept for a rollback) may use the same image: it then stays, and goes with that one.
         var image = await machine.Commands.RunAsync(new CommandLine("docker", "image", "rm", container.Image) { Timeout = TimeSpan.FromMinutes(2) }, cancellationToken).ConfigureAwait(false);
         context.Log.Write(image.Succeeded ? $"Removed its image {container.Image}." : $"Kept its image {container.Image}: {image.Reason}");
@@ -384,6 +376,50 @@ public sealed class NetworkRemovalStep : PlanStep
 
     public override Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
         => ContainerRemovalStep.DockerAsync(context, $"remove the {HatEmulatorStep.Network} network", cancellationToken, "network", "rm", HatEmulatorStep.Network);
+}
+
+/// <summary>
+/// The controller's desired-limits records (<see cref="DesiredLimits"/>), which the deploy script writes for its next
+/// deploy, removed by the uninstall and the purge whether or not the controller's container is there (review ROOF-151-R2
+/// F6), so that a reinstall starts from RoofController's defaults: every record volume, the earlier format's included.
+/// A run that stops part way, or cannot remove one, fails before the record says it is uninstalled, so running it again
+/// removes the ones left; a purge later removes any left.
+/// </summary>
+public sealed class DesiredLimitsRemovalStep : PlanStep
+{
+    public override StepKind Kind => StepKind.Container;
+
+    public override string Target => $"volumes {DesiredLimits.Prefix(MachineSurveyor.ControllerContainer)}<generation>";
+
+    public override string Purpose => "the controller's desired limits, which the deploy script records for its next deploy";
+
+    public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var (volumes, _, problem) = await MachineSurveyor.SurveyDesiredLimitsAsync(context.Machine, cancellationToken).ConfigureAwait(false);
+        if (problem is not null)
+        {
+            return new StepCheck(StepChange.Blocked, $"the installer could not list them ({problem}): run it again once Docker answers");
+        }
+
+        return volumes.Count == 0 ? StepCheck.Unchanged("none here") : new StepCheck(StepChange.Remove, $"removed: {string.Join(", ", volumes)}");
+    }
+
+    public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var (volumes, _, problem) = await MachineSurveyor.SurveyDesiredLimitsAsync(context.Machine, cancellationToken).ConfigureAwait(false);
+        if (problem is not null)
+        {
+            throw new InstallerException($"The installer could not list the controller's desired-limits records ({problem}). Run the uninstall again once Docker answers.");
+        }
+
+        foreach (var volume in volumes)
+        {
+            await ContainerRemovalStep.DockerAsync(context, $"remove the desired-limits record {volume}", cancellationToken, "volume", "rm", "--force", volume).ConfigureAwait(false);
+            context.Log.Write($"Removed the desired-limits record {volume}.");
+        }
+    }
 }
 
 /// <summary>The kiosk's service, stopped and disabled, and its unit removed (<c>hvo-roof-install uninstall</c>).</summary>

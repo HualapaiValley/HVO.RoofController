@@ -65,6 +65,7 @@ public sealed class InstallerSurveyTests
         survey.Controller.Should().BeEquivalentTo(new ContainerSurvey
         {
             Name = MachineSurveyor.ControllerContainer,
+            Id = bench.Containers[MachineSurveyor.ControllerContainer].Id,
             Image = $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}",
             ImageId = FakeMachine.PulledImageId($"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}"),
             State = "running",

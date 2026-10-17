@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
@@ -153,10 +154,28 @@ public sealed record DockerSurvey
     /// <summary>The limits Docker says it can put on a container, and the CPUs and memory it reports; null when it did not answer.</summary>
     public DockerLimits? Limits { get; init; }
 
-    /// <summary>The controller's desired limits the deploy script keeps for its next deploy; null when there are none.</summary>
+    /// <summary>
+    /// The newest of the controller's desired-limits records, which the deploy script writes for its next deploy, valid or
+    /// not (<see cref="Survey.DesiredLimits.Problem"/>); null when there is none, or they could not be read.
+    /// </summary>
     public DesiredLimits? DesiredLimits { get; init; }
 
+    /// <summary>Every desired-limits record volume here (the earlier format's included), which the uninstall removes.</summary>
+    public IReadOnlyList<string> DesiredLimitVolumes { get; init; } = [];
+
+    /// <summary>Why the desired-limits records could not be read, when they could not: the deploy script refuses then.</summary>
+    public string? DesiredLimitsProblem { get; init; }
+
     public bool IsUsable => Problem is null && Version is not null;
+
+    /// <summary>The same answer: the record volumes compared one by one, not as the same list.</summary>
+    public bool Equals(DockerSurvey? other)
+        => other is not null
+            && (Version, ComposeVersion, Problem, Limits, DesiredLimits, DesiredLimitsProblem)
+                == (other.Version, other.ComposeVersion, other.Problem, other.Limits, other.DesiredLimits, other.DesiredLimitsProblem)
+            && DesiredLimitVolumes.SequenceEqual(other.DesiredLimitVolumes);
+
+    public override int GetHashCode() => HashCode.Combine(Version, ComposeVersion, Problem, Limits, DesiredLimits, DesiredLimitsProblem, DesiredLimitVolumes.Count);
 }
 
 /// <summary>
@@ -225,28 +244,169 @@ public sealed record DockerLimits(bool? Memory, bool? Cpu, bool? Pids, bool? Swa
 }
 
 /// <summary>
-/// The controller's desired CPU and memory limits, as the deploy script keeps them for its next deploy (#149, review
-/// ROOF-151-R1 F2): the ones the last deploy or rollback gave, whether or not the host could enforce them, in the labels
-/// of a Docker volume of their own (<c>roof-controller-limits</c>), which nothing mounts. The installer gives the deploy
-/// script the limits its record holds; it reads these to say when someone gave the script others by hand.
+/// The newest of the controller's desired-limits records, as the deploy script writes them for its next deploy (#149;
+/// reviews ROOF-151-R1 F2 and R2 F5): the CPU and memory limits the last deploy or rollback gave, whether or not the host
+/// could enforce them, each set or RoofController's default, and which run wrote it, for which container. Each record is
+/// a Docker volume of its own that nothing mounts, <c>roof-controller-limits-g&lt;generation&gt;</c>, with the values in
+/// its labels. A volume's labels cannot change, so an update creates the next generation (which commits it) and only then
+/// removes the older ones: the newest generation is the record, never an older one. It is validated whole as the script
+/// validates it (<see cref="Problem"/>), and one that is not valid is never applied. The installer reads it to resolve the
+/// limits as the script does (<see cref="Roles.ResolvedResources"/>), and its uninstall removes every record.
 /// </summary>
-public sealed record DesiredLimits(string? Cpus, string? Memory)
+public sealed partial record DesiredLimits
 {
-    /// <summary>The <c>docker volume inspect --format</c> template that reads them, comma-separated.</summary>
-    public const string Format = "{{index .Labels \"io.hvo.roof.desired-cpus\"}},{{index .Labels \"io.hvo.roof.desired-memory\"}}";
+    /// <summary>The label that marks a record, with its format (1); its fields are labels under it.</summary>
+    public const string Label = "io.hvo.roof.limits";
 
-    /// <summary>The volume that holds the desired limits of the controller container <paramref name="container"/>.</summary>
-    public static string Volume(string container) => $"{container}-limits";
+    /// <summary>The <c>docker volume inspect --format</c> template that reads a record: its labels, '|'-separated.</summary>
+    public const string Format = "{{index .Labels \"io.hvo.roof.limits\"}}|{{index .Labels \"io.hvo.roof.limits.generation\"}}|{{index .Labels \"io.hvo.roof.limits.cpus\"}}|{{index .Labels \"io.hvo.roof.limits.cpus-source\"}}|{{index .Labels \"io.hvo.roof.limits.memory\"}}|{{index .Labels \"io.hvo.roof.limits.memory-source\"}}|{{index .Labels \"io.hvo.roof.limits.written-by\"}}|{{index .Labels \"io.hvo.roof.limits.written-at\"}}|{{index .Labels \"io.hvo.roof.limits.controller\"}}";
 
-    /// <summary>The answer to <see cref="Format"/>; null when it holds neither.</summary>
-    public static DesiredLimits? Parse(string output)
+    /// <summary>A value the record keeps as set (given, or kept), not RoofController's default.</summary>
+    public const string Set = "set";
+
+    /// <summary>A value the record keeps as RoofController's default, which follows the default.</summary>
+    public const string Default = "default";
+
+    /// <summary>The record volume's name.</summary>
+    public required string Volume { get; init; }
+
+    /// <summary>Its generation, from its name.</summary>
+    public required int Generation { get; init; }
+
+    public string? Cpus { get; init; }
+
+    public string? CpusSource { get; init; }
+
+    public string? Memory { get; init; }
+
+    public string? MemorySource { get; init; }
+
+    /// <summary>The run that wrote it: deploy or rollback.</summary>
+    public string? WrittenBy { get; init; }
+
+    /// <summary>When (UTC, ISO 8601).</summary>
+    public string? WrittenAt { get; init; }
+
+    /// <summary>The first 12 characters of the ID of the controller's container it was written for.</summary>
+    public string? Controller { get; init; }
+
+    /// <summary>Why it is not a valid record (its format, its generation, its writer, the floor), as the script says; null when it is.</summary>
+    public string? Problem { get; init; }
+
+    public bool IsValid => Problem is null;
+
+    /// <summary>Who wrote it, as the deploy script says it.</summary>
+    public string Written => $"written by a {WrittenBy ?? "?"} at {WrittenAt ?? "?"} for container {Controller ?? "?"}";
+
+    /// <summary>The start of the name of every record of the controller container <paramref name="container"/>.</summary>
+    public static string Prefix(string container) => $"{container}-limits-g";
+
+    /// <summary>The earlier format's volume (this change's first version, never released), which is not read.</summary>
+    public static string LegacyVolume(string container) => $"{container}-limits";
+
+    /// <summary>
+    /// The record volumes among <paramref name="names"/> (<c>docker volume ls --quiet</c>, which matches part of a name),
+    /// the earlier format's included, and the newest generation's name and number (null and 0 when there is none).
+    /// </summary>
+    public static (IReadOnlyList<string> Volumes, string? Newest, int Generation) Records(string container, IEnumerable<string> names)
     {
-        var fields = (output ?? string.Empty).Trim().Split(',');
-        static string? Text(string value) => value.Trim() is { Length: > 0 } text && text != "<no value>" ? text : null;
-        return fields.Length == 2 && (Text(fields[0]), Text(fields[1])) is var (cpus, memory) && (cpus ?? memory) is not null
-            ? new DesiredLimits(cpus, memory)
-            : null;
+        ArgumentNullException.ThrowIfNull(names);
+        var volumes = new List<string>();
+        string? newest = null;
+        var highest = 0;
+        foreach (var name in names.Select(name => name.Trim()).Where(name => name.Length > 0))
+        {
+            if (name == LegacyVolume(container))
+            {
+                volumes.Add(name);
+            }
+            else if (name.StartsWith(Prefix(container), StringComparison.Ordinal)
+                && GenerationPattern().IsMatch(name[Prefix(container).Length..])
+                && int.TryParse(name[Prefix(container).Length..], NumberStyles.None, CultureInfo.InvariantCulture, out var generation))
+            {
+                volumes.Add(name);
+                if (generation > highest)
+                {
+                    (highest, newest) = (generation, name);
+                }
+            }
+        }
+
+        return (volumes, newest, highest);
     }
+
+    /// <summary>The record <paramref name="volume"/>, generation <paramref name="generation"/>, from its answer to <see cref="Format"/>, validated.</summary>
+    public static DesiredLimits Parse(string volume, int generation, string output)
+    {
+        // As the script's read: a field past the last goes with the last.
+        var fields = (output ?? string.Empty).TrimEnd('\r', '\n').Split('|', 9);
+        string? Field(int index) => index < fields.Length && fields[index] is { Length: > 0 } text && text != "<no value>" ? text : null;
+        var record = new DesiredLimits
+        {
+            Volume = volume,
+            Generation = generation,
+            Cpus = Field(2),
+            CpusSource = Field(3),
+            Memory = Field(4),
+            MemorySource = Field(5),
+            WrittenBy = Field(6),
+            WrittenAt = Field(7),
+            Controller = Field(8)
+        };
+        return record with { Problem = ProblemOf(record, Field(0), Field(1)) };
+    }
+
+    // As the deploy script validates a record (read_desired_limits, desired_problem), in the same words.
+    private static string? ProblemOf(DesiredLimits record, string? schema, string? generation)
+    {
+        if (schema != "1")
+        {
+            return $"its format ({Label}) is '{schema}', not 1";
+        }
+
+        if (generation != record.Generation.ToString(CultureInfo.InvariantCulture))
+        {
+            return $"its generation label '{generation}' is not the {record.Generation} of its name";
+        }
+
+        if (record.WrittenBy is not ("deploy" or "rollback") || record.Controller is null || !ControllerPattern().IsMatch(record.Controller))
+        {
+            return $"it does not say which run wrote it, and for which container ('{record.WrittenBy}', '{record.Controller}')";
+        }
+
+        if (CpusPattern().Match(record.Cpus ?? string.Empty) is not { Success: true } cpus)
+        {
+            return $"its CPUs '{record.Cpus}' are not a number of CPUs with at most two decimals";
+        }
+
+        if (decimal.Parse(record.Cpus!, NumberStyles.Number, CultureInfo.InvariantCulture) < ContainerResources.MinimumCpus)
+        {
+            return $"its CPUs '{record.Cpus}' are less than 1 vCPU, the minimum";
+        }
+
+        if (new ContainerResources { Memory = record.Memory ?? string.Empty }.Normalised() is not { Memory: not null, MemoryBytes: { } bytes })
+        {
+            return $"its memory '{record.Memory}' is not a whole number of MiB or GiB";
+        }
+
+        if (bytes < ContainerResources.MinimumMemoryBytes)
+        {
+            return $"its memory '{record.Memory}' is less than 1g, the minimum";
+        }
+
+        return record.CpusSource is Set or Default && record.MemorySource is Set or Default
+            ? null
+            : $"its sources '{record.CpusSource}' and '{record.MemorySource}' are not set or default";
+    }
+
+    [GeneratedRegex("^[1-9][0-9]{0,8}$")]
+    private static partial Regex GenerationPattern();
+
+    [GeneratedRegex("^[0-9a-f]{12}$")]
+    private static partial Regex ControllerPattern();
+
+    [GeneratedRegex(@"^([0-9]{1,3})(\.([0-9]{1,2}))?$")]
+    private static partial Regex CpusPattern();
 }
 
 /// <summary>Who made a container.</summary>
@@ -263,6 +423,9 @@ public enum ContainerOrigin
 public sealed record ContainerSurvey
 {
     public required string Name { get; init; }
+
+    /// <summary>Its container ID, as Docker gives it (Id); empty when it did not.</summary>
+    public string Id { get; init; } = string.Empty;
 
     /// <summary>The image it runs, as it was given (with its digest when deployed by one, its ID when loaded from an archive).</summary>
     public required string Image { get; init; }

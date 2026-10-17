@@ -4,6 +4,7 @@ using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Deployment;
 using HVO.RoofControllerV4.Installer.Machine;
+using HVO.RoofControllerV4.Installer.Roles;
 using HVO.RoofControllerV4.Installer.Survey;
 
 namespace HVO.RoofControllerV4.Installer.Plan;
@@ -372,7 +373,7 @@ public sealed class ControllerStep(
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)
         {
-            return new StepCheck(StepChange.Create, $"release {release.Version} {OfflineImages.How(context, release.Controller)}, through the deploy script, with {settings.Resources.Describe()}");
+            return new StepCheck(StepChange.Create, $"release {release.Version} {OfflineImages.How(context, release.Controller)}, through the deploy script, with {ResolvedResources.Resolve(settings.Resources, context.Survey).Describe()}");
         }
 
         if (container.Origin == ContainerOrigin.Compose)
@@ -473,11 +474,13 @@ public sealed class ControllerStep(
                 : $"redeployed as release {release.Version} (it runs {(container.Version is { } version ? $"version {version}" : "another image")})";
         }
 
-        // Its limits and privileges are the deploy script's (docs/deployment.md, "The container's privileges and limits").
-        var resources = settings.Resources;
+        // Its limits and privileges are the deploy script's (docs/deployment.md, "The container's privileges and limits"),
+        // with the limits it resolves: the ones given, then the desired-limits record's, the running controller's, the default.
+        var resolved = ResolvedResources.Resolve(settings.Resources, context.Survey);
+        var resources = resolved.Resources;
         if (container.NanoCpus != resources.NanoCpus || container.MemoryBytes != resources.MemoryBytes || container.PidsLimit != resources.PidsLimit)
         {
-            return $"redeployed with its limits: {resources.Describe()}";
+            return $"redeployed with its limits: {resolved.Describe()}";
         }
 
         if (!container.ReadOnlyRootFilesystem)
@@ -744,11 +747,12 @@ public sealed class ControllerStep(
             // The script's Stop refuses a roof that moves, or that its Status cannot show idle, before it replaces the controller.
             ["REQUIRE_IDLE_ROOF"] = "true",
 
-            // The container's limits, from the answers or the record, RoofController's default for one not set, always
-            // given: the script never keeps the running controller's in place of the record's. --rollback gives them to
-            // the version it brings back.
-            ["CONTAINER_CPUS"] = settings.Resources.CpusText,
-            ["CONTAINER_MEMORY"] = settings.Resources.MemoryOrDefault,
+            // The container's limits, only the ones given (the answers', the record's, --cpus and --memory): the script
+            // resolves one not given as the installer does (ResolvedResources), from its desired-limits record, then the
+            // running controller, then the default, and records whether each was set. --rollback gives them to the
+            // version it brings back.
+            ["CONTAINER_CPUS"] = settings.Resources.Cpus is null ? string.Empty : settings.Resources.CpusText,
+            ["CONTAINER_MEMORY"] = settings.Resources.Memory ?? string.Empty,
             ["CONTAINER_PIDS_LIMIT"] = settings.Resources.PidsLimit.ToString(CultureInfo.InvariantCulture),
 
             // The key for the Stop and Status checks, as a file only root reads; never the key itself.

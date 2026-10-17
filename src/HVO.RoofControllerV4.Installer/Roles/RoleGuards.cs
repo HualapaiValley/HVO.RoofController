@@ -182,7 +182,10 @@ public static class RoleGuards
         }
         else if (InstallRoles.RunsController(roles))
         {
-            problems.AddRange(ContainerLimitProblems(survey.Docker.Limits, (answers.Controller ?? new ControllerSettings()).Normalised().Resources));
+            // The limits the deploy gives: the ones given, then the desired-limits record's, the running controller's, the default.
+            var resolved = ResolvedResources.Resolve((answers.Controller ?? new ControllerSettings()).Normalised().Resources, survey);
+            problems.AddRange(resolved.Problems);
+            problems.AddRange(ContainerLimitProblems(survey.Docker.Limits, resolved.Resources));
         }
 
         if (!planOnly && NeedsRigConfirmation(survey, roles) && !string.Equals(answers.RigConfirmation?.Trim(), survey.HostName, StringComparison.Ordinal))
@@ -353,8 +356,9 @@ public static class RoleGuards
 
     /// <summary>
     /// What refuses deploying the controller with <paramref name="answers"/>' limits here, checked before anything
-    /// changes: limits below the floor, Docker that is not usable, and a Docker that cannot enforce them or has fewer CPUs
-    /// (<see cref="ContainerLimitProblems"/>). Empty when the answers run no controller. For the paths that change
+    /// changes: limits below the floor, Docker that is not usable, desired-limits records that cannot be read or are not
+    /// valid when a limit is needed from them (<see cref="ResolvedResources"/>), and a Docker that cannot enforce the
+    /// limits or has fewer CPUs (<see cref="ContainerLimitProblems"/>). Empty when the answers run no controller. For the paths that change
     /// something before an install's own guards run (review ROOF-151-R1 F4): an upgrade's hand-over to another release's
     /// installer (its backup, and the installer it puts in place), and a restore (the files it puts back).
     /// </summary>
@@ -372,30 +376,20 @@ public static class RoleGuards
             return [$"The controller runs in Docker. {survey.Docker.Problem}"];
         }
 
-        var resources = (answers.Controller ?? new ControllerSettings()).Normalised().Resources;
-        return [.. resources.Problems(), .. ContainerLimitProblems(survey.Docker.Limits, resources)];
+        var given = (answers.Controller ?? new ControllerSettings()).Normalised().Resources;
+        var resolved = ResolvedResources.Resolve(given, survey);
+        return [.. given.Problems(), .. resolved.Problems, .. ContainerLimitProblems(survey.Docker.Limits, resolved.Resources)];
     }
 
     /// <summary>
-    /// The deploy script's desired limits here (<see cref="DesiredLimits"/>) when someone gave it others by hand than the
-    /// installer gives (<paramref name="resources"/>, from its record or answers): the installer's replace them.
+    /// What the installer warns of in the desired-limits records here (<see cref="DesiredLimits"/>), against the limits
+    /// <paramref name="given"/> (the record's, the answers', --cpus and --memory), as the deploy script warns: a limit given
+    /// that differs from the record's (the one given comes first, and the deploy records it), a record written for another
+    /// container than the running controller (it still comes first for a limit not given), and a record that is not valid
+    /// when every limit is given (it is not applied). <see cref="ResolvedResources.Warnings"/>.
     /// </summary>
-    public static IEnumerable<string> DesiredLimitWarnings(DesiredLimits? desired, ContainerResources resources)
-    {
-        ArgumentNullException.ThrowIfNull(resources);
-        if (desired is null)
-        {
-            yield break;
-        }
-
-        var cpus = desired.Cpus is { } text && decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) ? number : (decimal?)null;
-        var memory = desired.Memory is { } given ? new ContainerResources { Memory = given }.Normalised().MemoryBytes : null;
-        if ((cpus is { } c && c != resources.CpusOrDefault) || (memory is { } m && m != resources.MemoryBytes))
-        {
-            yield return $"The deploy script here was last given {desired.Cpus ?? "?"} CPUs and {desired.Memory ?? "?"} of memory (the desired limits in volume {DesiredLimits.Volume(MachineSurveyor.ControllerContainer)}), "
-                + $"not the installer's {resources.CpusText} and {resources.MemoryOrDefault}: the installer gives its own. To keep those, give --cpus {desired.Cpus ?? resources.CpusText} --memory {desired.Memory ?? resources.MemoryOrDefault}.";
-        }
-    }
+    public static IReadOnlyList<string> DesiredLimitWarnings(MachineSurvey survey, ContainerResources given)
+        => ResolvedResources.Resolve(given, survey).Warnings;
 
     /// <summary>
     /// What the installer warns of in the controller's limits: a memory limit above the memory Docker reports here. It is

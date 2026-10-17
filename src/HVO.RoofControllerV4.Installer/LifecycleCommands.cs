@@ -331,21 +331,23 @@ internal static partial class LifecycleCommands
             throw new InstallerUsageException("--yes goes with --restore-backup.");
         }
 
-        // The deploy script's --rollback gives the version it brings back the recorded limits. A rollback is a recovery
+        // The deploy script's --rollback gives the version it brings back the limits it resolves: the recorded ones, then
+        // the desired-limits record's, the running controller's, the default (ResolvedResources). A rollback is a recovery
         // path, so a limit Docker here cannot enforce does not refuse it (the owner's decision on #149): it goes ahead with
         // the ones Docker can enforce, with a loud warning, here and in the deploy script's output and the controller's log.
         // Everything else that refuses an install refuses it still, before anything changes (the CPUs, a Docker that does
-        // not answer).
+        // not answer, a desired-limits record that cannot be read or is not valid). The desired limits' warnings come here
+        // too, with --plan as without, before anything changes (review ROOF-151-R2 F7).
         if (InstallRoles.RunsController(record.Roles))
         {
-            var resources = (record.ToAnswers().Controller ?? new ControllerSettings()).Normalised().Resources;
-            var limits = RoleGuards.ContainerLimitProblems(session.Survey.Docker.Limits, resources, rollback: true).ToArray();
+            var resolved = ResolvedResources.Resolve((record.ToAnswers().Controller ?? new ControllerSettings()).Normalised().Resources, session.Survey);
+            var limits = resolved.Problems.Concat(RoleGuards.ContainerLimitProblems(session.Survey.Docker.Limits, resolved.Resources, rollback: true)).ToArray();
             if (limits.Length > 0)
             {
                 throw new InstallerRefusedException(string.Join(Environment.NewLine, limits));
             }
 
-            foreach (var warning in RoleGuards.ContainerLimitRollbackWarnings(session.Survey.Docker.Limits, resources))
+            foreach (var warning in RoleGuards.ContainerLimitRollbackWarnings(session.Survey.Docker.Limits, resolved.Resources).Concat(resolved.Warnings))
             {
                 host.Error.WriteLine($"Warning: {warning}");
                 session.Log.Write($"Warning: {warning}");
