@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   refuse another before anything changes; each removes only the folders it made, and only what it put there. The installer trusts a container's release
   label only for an image with one of those IDs. See
   [The release it installs](docs/install.md#the-release-it-installs) (#127).
+- Resource limits for the controller's container: at most 512 processes by default, and a CPU and a memory limit (no
+  swap) only when given, with `hvo-roof-install`'s `controller.resources` answers or `--cpus`, `--memory` and
+  `--pids-limit`, or the deploy script's `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`. A CPU limit
+  below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused, with no exception (also before
+  Compose starts either process or its deployment check). The install
+  record keeps them, and upgrade and rollback give them again. **No CPU or memory limit is given by default yet:** the
+  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up once the
+  supervisor de-energises the relays whenever the controller exits (#138), because a killed or crash-looping controller leaves the drive running (#129).
 - State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
   `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
   the settings files). `upgrade` and `rollback` refuse (exit 3, nothing changed) a release that cannot read the stores
@@ -56,6 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `install.sh --from DIR` no longer checks that ghcr.io answers: it checks that `DIR` holds the release's offline
   image archives for this machine instead (#127).
+- **The installer, `install.sh` and the deploy script refuse a host whose Docker does not enforce process limits, or
+  memory or CPU limits when one is given, or that has fewer CPUs than a CPU limit, with nothing changed.** Raspberry Pi
+  OS boots with the memory controller off: that refuses only a memory limit, and then add `cgroup_enable=memory` to the
+  single line in `/boot/firmware/cmdline.txt` and reboot. A memory limit above the machine's memory is kept, with a
+  warning: a limit is a cap, not a reservation (#129).
+- The mounted secrets, certificate, identity and settings directories must be root's, as the installer and
+  [deployment.md](docs/deployment.md#one-time-preparation-on-the-pi) make them: the controller no longer has
+  `CAP_DAC_OVERRIDE`, and the deployment check refuses a directory it cannot reach (#129).
+- The deploy script's `EXTRA_DOCKER_ARGS` refuses options that would change the container's privileges or limits,
+  `--privileged` included in every mode (#129).
 
 - Upgrading from installed 4.1.1 to this schema-3 release requires the new release's
   `install.sh upgrade --version <VERSION>` bootstrap, which verifies the downloaded installer. The old installed installer rejects schema 3 before replacing
@@ -90,6 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Persist commissioning retirement and guess limits; reject pending-state restore and schema-incompatible rollback.
   Native revalidation distinguishes confirmed account revocation from unavailable checks.
+- The controller's container runs with a read-only root filesystem, no Linux capabilities but the supervisor's
+  (`CHOWN`, `KILL`, `SETGID`, `SETUID`) and `no-new-privileges`, from the deploy script, the Compose profiles and so the
+  installer. The supervisor's forced-restart directory is now root's, writable by the web UI's group. What a controller
+  killed at its limits, or otherwise, leaves the relays and the drive in is recorded in
+  [deployment.md](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in): the relays stay held
+  until a restarted controller reaches its initialization and turns them off, or the roof reaches its limit. A
+  controller that cannot start again (a crash loop of starts that fail before the initialization) leaves them held, as
+  the supervisor writes nothing to the relays; that is #138 (#129).
 
 ## [4.1.1] - 2026-10-15
 

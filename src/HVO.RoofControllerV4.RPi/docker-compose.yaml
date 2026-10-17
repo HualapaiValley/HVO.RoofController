@@ -15,6 +15,13 @@
 #
 # Each controller container runs two processes under a supervisor (docs/deployment.md, "The container's two
 # processes"): the controller and the web UI. docker stop stops the controller first, so its shutdown stops the roof.
+# Every controller container, and each deployment check, has the deploy script's privileges and limits (x-hardening;
+# docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_PIDS_LIMIT (default 512) always, and a CPU and
+# a memory limit only when HVO_ROOF_CPUS and HVO_ROOF_MEMORY are set (none by default, until the supervisor de-energises
+# the relays whenever the controller exits, #138). One that is set must be at least 1 vCPU and 1g, RoofController's
+# floor (owner decision on #129, 2026-10-16). The supervisor checks that floor before starting either process or the
+# deployment check. Compose does not check Docker's cgroup support; check docker info first. The future default is
+# 1 vCPU / 2 GiB, enabled by a follow-up after #138.
 #
 # A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
 # container and image names and its own network, so it does not collide with either profile above:
@@ -40,7 +47,12 @@
 # running. Run the check on its own first (docs/deployment.md):
 #   docker compose --profile pi build && docker compose --profile pi run --rm roof-controller-check
 
+x-resource-environment: &resource-environment
+  HVO_ROOF_CPUS: ${HVO_ROOF_CPUS:-}
+  HVO_ROOF_MEMORY: ${HVO_ROOF_MEMORY:-}
+
 x-roof-environment: &roof-environment
+  <<: *resource-environment
   ASPNETCORE_ENVIRONMENT: Production
   HVO_FORCE_RASPBERRY_PI: "true"
   RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
@@ -152,7 +164,40 @@ x-logging: &logging
     max-size: "10m"
     max-file: "5"
 
+# The container's privileges and limits, as the deploy script gives them: a read-only root filesystem, with tmpfs for
+# what the container writes outside its mounts (the supervisor's run directory, /tmp and the controller's ASP.NET Core
+# key ring); only the supervisor's capabilities (CHOWN, KILL, SETGID and SETUID, to run the web UI as its own user);
+# no-new-privileges; and the limits, with the memory limit for memswap_limit too, so the container never swaps. 0, the
+# default for the CPUs and the memory, is no limit.
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m
+    - /run/hvo-roof:size=4m,mode=0755
+    - /root/.aspnet:size=4m,mode=0700
+  cap_drop:
+    - ALL
+  cap_add:
+    - CHOWN
+    - KILL
+    - SETGID
+    - SETUID
+  security_opt:
+    - no-new-privileges
+  cpus: ${HVO_ROOF_CPUS:-0}
+  mem_limit: ${HVO_ROOF_MEMORY:-0}
+  memswap_limit: ${HVO_ROOF_MEMORY:-0}
+  pids_limit: ${HVO_ROOF_PIDS_LIMIT:-512}
+
+# The web UI's sign-in keys (/var/lib/hvo-roof-web): a volume of the container's own beside the read-only root
+# filesystem, so the people signed in stay signed in when the container restarts. A recreated container starts with new
+# keys, as one the deploy script replaces does.
+x-web-keys-volume: &web-keys-volume
+  type: volume
+  target: /var/lib/hvo-roof-web
+
 x-roof-controller: &roof-controller
+  <<: *hardening
   image: hvov9/roof-controller:v4
   build:
     context: ../..
@@ -179,6 +224,7 @@ x-roof-controller: &roof-controller
   logging: *logging
 
 x-deployment-check: &deployment-check
+  <<: *hardening
   image: hvov9/roof-controller:v4
   # Built by the controller service; never pulled.
   pull_policy: never
@@ -195,6 +241,7 @@ x-deployment-check: &deployment-check
 # explicitly (HatEmulator__AllowOutsideDevelopment): a deployment's configuration except for the HAT, HTTPS and the
 # cameras.
 x-emulated-environment: &emulated-environment
+  <<: *resource-environment
   ASPNETCORE_ENVIRONMENT: Production
   ASPNETCORE_URLS: "http://+:8080"
   # Plain HTTP, published on loopback only (a warning is logged at startup).
@@ -250,6 +297,7 @@ services:
       - *identity-mount
       - *config-mount
       - *managed-secrets-mount
+      - *web-keys-volume
     profiles:
       - pi
 
@@ -279,6 +327,7 @@ services:
       - *identity-mount
       - *config-mount
       - *managed-secrets-mount
+      - *web-keys-volume
     profiles:
       - pi-lan-http
 
@@ -302,6 +351,7 @@ services:
       - emulator
 
   roof-controller-emulated:
+    <<: *hardening
     image: hvo/roof-controller:emulated
     build:
       context: ../..
@@ -311,6 +361,8 @@ services:
       hat-emulator:
         condition: service_healthy
     environment: *emulated-environment
+    volumes:
+      - *web-keys-volume
     ports:
       - "127.0.0.1:${HVO_EMULATED_ROOF_PORT:-5195}:8080"
       - "127.0.0.1:${HVO_EMULATED_WEB_PORT:-5196}:8088"

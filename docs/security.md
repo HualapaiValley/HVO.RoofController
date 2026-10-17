@@ -237,6 +237,11 @@ above. Never give them to UID 1654: that is the image's `app` user, which runs t
 the controller's secrets (the supervisor warns at start when it can). If the directory was given to 1654 before, give it
 back with `sudo chown -R root:root /etc/hvo-roof/secrets`. Do not make the files world-readable.
 
+Root in the container has no `CAP_DAC_OVERRIDE` (nor any capability but the supervisor's: [The container's privileges
+and limits](deployment.md#the-containers-privileges-and-limits)), so it reads this directory, and writes the identity
+and settings directories, only as their owner: a directory given to another user stops the deployment check with
+`Access to the path '...' is denied`, and nothing is replaced.
+
 The web UI, in the same container, can read neither this directory nor the controller's environment. For HTTPS it gets
 a private copy of the certificate it serves and of that certificate's password: by default the controller's, so a
 compromised web UI could impersonate the controller to its clients. To keep the controller's key out of the web UI,

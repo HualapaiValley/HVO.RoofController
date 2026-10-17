@@ -71,6 +71,12 @@ public sealed class InstallerSession
     /// <summary>Explicit package-setup consent for this run only.</summary>
     public bool SetupPrerequisites { get; set; }
 
+    /// <summary>
+    /// The controller container's limits given on the command line (<c>--cpus</c> and the others), for the wizard: the
+    /// defaults of a controller chosen there (<see cref="DefaultController"/>).
+    /// </summary>
+    public ContainerResourcesOverride? ResourcesOverride { get; set; }
+
     public async Task RefreshSurveyAsync(CancellationToken cancellationToken = default)
         => Survey = await MachineSurveyor.SurveyAsync(Machine, cancellationToken).ConfigureAwait(false);
 
@@ -121,6 +127,7 @@ public sealed class InstallerSession
     /// </summary>
     public ControllerSettings DefaultController => new()
     {
+        Resources = ResourcesOverride?.Apply(null) ?? new ContainerResources(),
         Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa,
         TelemetryEndpoint = Survey.Controller?.TelemetryEndpoint is { Length: > 0 } endpoint ? endpoint : null,
         Rig = new RigSettings
@@ -158,6 +165,12 @@ public sealed class InstallerSession
             return [error.Message];
         }
     }
+
+    /// <summary>What the installer warns of in the answers here without refusing them: a memory limit above this machine's memory.</summary>
+    public IReadOnlyList<string> Warnings()
+        => InstallRoles.RunsController(Answers.Roles)
+            ? [.. RoleGuards.ContainerLimitWarnings(Survey.Docker.Limits, (Answers.Controller ?? new ControllerSettings()).Normalised().Resources)]
+            : [];
 
     /// <summary>
     /// The records of this run's roles, what an upgrade starts from: the machine's for the machine's roles (the controller,
@@ -562,6 +575,11 @@ public sealed class InstallerSession
         lines.Add(survey.Docker.IsUsable
             ? $"Docker:      {survey.Docker.Version}{(survey.Docker.ComposeVersion is null ? ", no Compose v2" : $", Compose {survey.Docker.ComposeVersion}")}"
             : $"Docker:      {survey.Docker.Problem}");
+        if (survey.Docker.Limits is { } limits)
+        {
+            static string Flag(bool? flag) => flag switch { true => "yes", false => "no", null => "?" };
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"             enforces memory limits {Flag(limits.Memory)}, CPU {Flag(limits.Cpu)}, processes {Flag(limits.Pids)}, swap {Flag(limits.Swap)}; reports {limits.Cpus?.ToString(CultureInfo.InvariantCulture) ?? "?"} CPUs, {(limits.MemoryBytes is { } bytes ? (bytes / (1024 * 1024)).ToString(CultureInfo.InvariantCulture) + "m" : "?")} of memory"));
+        }
         lines.Add($"Recorded:    {DescribeRecord(survey.SystemRecord, "the machine's")}; {DescribeRecord(survey.UserRecord, "your")}");
         foreach (var problem in survey.RecordProblems)
         {

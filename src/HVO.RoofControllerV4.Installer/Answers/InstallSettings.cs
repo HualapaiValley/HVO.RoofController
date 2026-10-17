@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 
@@ -76,6 +77,13 @@ public sealed record ControllerSettings
     public LinuxAuthSettings? LinuxAuth { get; init; }
 
     /// <summary>
+    /// The controller container's resource limits (docs/deployment.md, "The container's privileges and limits"): the
+    /// process limit, and a CPU and a memory limit only when given (none by default, until #138). Kept in the install
+    /// record, so an upgrade and a rollback give the container the same.
+    /// </summary>
+    public ContainerResources Resources { get; init; } = new();
+
+    /// <summary>
     /// An <c>appsettings.Local.json</c> from a backup (its full path), to start the controller with: copied into the
     /// settings folder as it is when the controller has no settings yet, and never over settings it has. Not recorded:
     /// an import is done once.
@@ -115,7 +123,8 @@ public sealed record ControllerSettings
             yield return $"'{domain}' is not a domain: give names of letters, digits and hyphens joined by dots (observatory.example).";
         }
 
-        foreach (var problem in (FirstAdmin?.Problems() ?? []).Concat(Camera?.Problems() ?? []).Concat(Rig?.Problems() ?? []).Concat(LinuxAuth?.Problems() ?? []))
+        foreach (var problem in (FirstAdmin?.Problems() ?? []).Concat(Camera?.Problems() ?? []).Concat(Rig?.Problems() ?? []).Concat(LinuxAuth?.Problems() ?? [])
+            .Concat((Resources ?? new ContainerResources()).Problems()))
         {
             yield return problem;
         }
@@ -146,7 +155,8 @@ public sealed record ControllerSettings
             ? camera with { BaseUrl = camera.BaseUrl.Trim(), UserName = string.IsNullOrWhiteSpace(camera.UserName) ? null : camera.UserName.Trim() }
             : null,
         TelemetryEndpoint = string.IsNullOrWhiteSpace(TelemetryEndpoint) ? null : TelemetryEndpoint.Trim(),
-        ImportSettingsFrom = string.IsNullOrWhiteSpace(ImportSettingsFrom) ? null : ImportSettingsFrom.Trim()
+        ImportSettingsFrom = string.IsNullOrWhiteSpace(ImportSettingsFrom) ? null : ImportSettingsFrom.Trim(),
+        Resources = (Resources ?? new ContainerResources()).Normalised()
     };
 
     public bool Equals(ControllerSettings? other)
@@ -162,10 +172,11 @@ public sealed record ControllerSettings
             && string.Equals(TelemetryEndpoint, other.TelemetryEndpoint, StringComparison.Ordinal)
             && Equals(Rig, other.Rig)
             && Equals(LinuxAuth, other.LinuxAuth)
-            && string.Equals(ImportSettingsFrom, other.ImportSettingsFrom, StringComparison.Ordinal);
+            && string.Equals(ImportSettingsFrom, other.ImportSettingsFrom, StringComparison.Ordinal)
+            && Equals(Resources, other.Resources);
 
     public override int GetHashCode()
-        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig, ImportSettingsFrom, LinuxAuth));
+        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig, ImportSettingsFrom, LinuxAuth, Resources));
 
     public static string Describe(ConnectionMode mode) => mode switch
     {
@@ -175,6 +186,139 @@ public sealed record ControllerSettings
         ConnectionMode.Http => "HTTP, with no encryption (only on a network you trust)",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
     };
+}
+
+/// <summary>
+/// The controller container's resource limits, as the deploy script gives them (CONTAINER_CPUS, CONTAINER_MEMORY and
+/// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"). The process limit is always given.
+/// The CPU and memory limits are given only when set: none is by default until the supervisor de-energises the relays
+/// whenever the controller exits (#138), as a limit is one more way for the kernel to end the controller mid-motion. One
+/// that is set is at least the RoofController floor of 1 vCPU and 1 GiB (owner decision on #129, 2026-10-16); less is
+/// refused, with no exception.
+/// The future default is 1 vCPU / 2 GiB, enabled by a follow-up after #138. The container gets no swap beyond its memory.
+/// </summary>
+public sealed partial record ContainerResources
+{
+    public const int DefaultPidsLimit = 512;
+
+    /// <summary>RoofController's minimum CPUs, for a CPU limit that is set.</summary>
+    public const decimal MinimumCpus = 1;
+
+    /// <summary>RoofController's minimum memory, for a memory limit that is set: 1 GiB.</summary>
+    public const long MinimumMemoryBytes = 1L * 1024 * 1024 * 1024;
+
+    public const int MinimumPidsLimit = 256;
+    public const int MaximumPidsLimit = 32768;
+
+    /// <summary>CPUs, as <c>docker run --cpus</c> takes them (2, 2.5), with at most two decimals; none (the default) for no CPU limit.</summary>
+    public decimal? Cpus { get; init; }
+
+    /// <summary>Memory, as a whole number of MiB or GiB (1024m, 1g); none (the default) for no memory limit.</summary>
+    public string? Memory { get; init; }
+
+    /// <summary>The most processes and threads the container runs at once (<c>docker run --pids-limit</c>).</summary>
+    public int PidsLimit { get; init; } = DefaultPidsLimit;
+
+    /// <summary>The memory in bytes; null when there is no memory limit, or <see cref="Memory"/> is not a whole number of MiB or GiB.</summary>
+    [JsonIgnore]
+    public long? MemoryBytes
+        => MemoryPattern().Match(Memory ?? string.Empty) is { Success: true } match
+            && long.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+                ? number * (char.ToLowerInvariant(match.Groups[2].Value[0]) == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024)
+                : null;
+
+    /// <summary>The CPUs as Docker counts them (HostConfig.NanoCpus); 0 for no CPU limit.</summary>
+    [JsonIgnore]
+    public long NanoCpus => Cpus is { } cpus ? (long)(cpus * 1_000_000_000m) : 0;
+
+    /// <summary>The CPUs as the deploy script and Docker write them (2, 2.5); null for no CPU limit.</summary>
+    [JsonIgnore]
+    public string? CpusText => Cpus?.ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// <summary>The limits, as the plan and the deploy script say them.</summary>
+    public string Describe()
+    {
+        var limits = (Cpus, Memory) switch
+        {
+            (not null, not null) => $"{CpusText} CPUs, {Memory} of memory and no swap",
+            (not null, null) => $"{CpusText} CPUs and no memory limit",
+            (null, not null) => $"no CPU limit, {Memory} of memory and no swap",
+            _ => "no CPU or memory limit"
+        };
+        return string.Create(CultureInfo.InvariantCulture, $"{limits}, at most {PidsLimit} processes and threads");
+    }
+
+    public IEnumerable<string> Problems()
+    {
+        if (Cpus is { } cpus)
+        {
+            if (cpus <= 0 || cpus > 999 || decimal.Round(cpus, 2) != cpus)
+            {
+                yield return string.Create(CultureInfo.InvariantCulture, $"The controller's CPUs (controller.resources.cpus) must be a number such as 2 or 2.5, with at most two decimals, not {cpus}.");
+            }
+            else if (cpus < MinimumCpus)
+            {
+                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1, or leave it out for no CPU limit.";
+            }
+        }
+
+        if (Memory is not null)
+        {
+            if (MemoryBytes is not { } memory)
+            {
+                yield return $"The controller's memory (controller.resources.memory) must be a whole number of MiB or GiB, such as 1024m or 1g, not '{Memory}'.";
+            }
+            else if (memory < MinimumMemoryBytes)
+            {
+                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g, or leave it out for no memory limit.";
+            }
+        }
+
+        if (PidsLimit is < MinimumPidsLimit or > MaximumPidsLimit)
+        {
+            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's process limit (controller.resources.pidsLimit) must be from {MinimumPidsLimit} to {MaximumPidsLimit}, not {PidsLimit}.");
+        }
+    }
+
+    /// <summary>
+    /// These limits with the memory written plainly (4G as 4g, 04096m as 4096m), the CPUs without trailing zeros, and an
+    /// empty memory as none.
+    /// </summary>
+    public ContainerResources Normalised() => this with
+    {
+        Cpus = Cpus is { } cpus && decimal.Round(cpus, 2) == cpus ? decimal.Parse(CpusText!, NumberStyles.Number, CultureInfo.InvariantCulture) : Cpus,
+        Memory = string.IsNullOrWhiteSpace(Memory)
+            ? null
+            : MemoryPattern().Match(Memory) is { Success: true } match
+                && long.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+                    ? string.Create(CultureInfo.InvariantCulture, $"{number}{char.ToLowerInvariant(match.Groups[2].Value[0])}")
+                    : Memory.Trim()
+    };
+
+    // As the deploy script reads CONTAINER_MEMORY.
+    [GeneratedRegex("^([0-9]{1,6})([mMgG])$")]
+    private static partial Regex MemoryPattern();
+}
+
+/// <summary>
+/// The limits given on the command line (<c>--cpus</c>, <c>--memory</c> and <c>--pids-limit</c>): each one given replaces
+/// the answers', the record's or the default.
+/// </summary>
+public sealed record ContainerResourcesOverride(decimal? Cpus, string? Memory, int? PidsLimit)
+{
+    /// <summary>True when nothing is given.</summary>
+    public bool IsEmpty => Cpus is null && Memory is null && PidsLimit is null;
+
+    public ContainerResources Apply(ContainerResources? resources)
+    {
+        var current = resources ?? new ContainerResources();
+        return (current with
+        {
+            Cpus = Cpus ?? current.Cpus,
+            Memory = Memory ?? current.Memory,
+            PidsLimit = PidsLimit ?? current.PidsLimit
+        }).Normalised();
+    }
 }
 
 /// <summary>The controller's first person: an admin, who signs in to the web UI and adds everyone else.</summary>

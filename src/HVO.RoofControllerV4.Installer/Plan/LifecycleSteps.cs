@@ -334,7 +334,9 @@ public sealed class ContainerRemovalStep(string name, string purpose, PlanStep? 
             await DockerAsync(context, $"stop {name}", cancellationToken, "stop", name).ConfigureAwait(false);
         }
 
-        await DockerAsync(context, $"remove {name}", cancellationToken, "rm", name).ConfigureAwait(false);
+        // With its anonymous volume: the controller keeps the web UI's sign-in keys on one (deployment.md, "The container's
+        // privileges and limits").
+        await DockerAsync(context, $"remove {name}", cancellationToken, "rm", "-v", name).ConfigureAwait(false);
         context.Log.Write($"Removed {name}.");
 
         // Another container (the one kept for a rollback) may use the same image: it then stays, and goes with that one.

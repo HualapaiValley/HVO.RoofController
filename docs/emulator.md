@@ -249,7 +249,10 @@ tests/emulator/deploy-scenarios.sh c12                  # one
 SCN_RESULTS_DIR=out tests/emulator/deploy-scenarios.sh  # also writes out/deploy-scenarios.md, with the timings
 ```
 
-It needs docker with buildx and compose 2.24 or later, curl, jq and openssl; `pull` also pulls the `registry:2` image
+It needs docker with buildx and compose 2.24 or later, curl, jq, openssl, and sudo without a password (`sudo -n`): the
+controller runs with the deploy script's [privileges](deployment.md#the-containers-privileges-and-limits), without
+`CAP_DAC_OVERRIDE`, so the run gives its fixtures (the secrets, certificate, identity and settings directories) to
+root, as the installer makes them on a Pi. `pull` also pulls the `registry:2` image
 from Docker Hub, by its digest. The controller is named `roof-controller`, as the script and the Compose `pi` profile
 name it, so the run refuses to start while a `roof-controller` container, or the run's emulator container
 (`hvo-deploy-scenarios-hat`), registry container (`hvo-deploy-scenarios-registry`) or network (`hvo-deploy-scenarios`),

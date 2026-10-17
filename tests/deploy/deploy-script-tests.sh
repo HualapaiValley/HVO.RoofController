@@ -78,6 +78,20 @@ seed_restart_count() {
     "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
 }
 
+# seed_limits <name> <NanoCpus> <Memory> <MemorySwap> <PidsLimit|null>: the limits the seeded container has (docker
+# inspect reports them).
+seed_limits() {
+  jq --arg name "$1" --argjson nano "$2" --argjson memory "$3" --argjson swap "$4" --argjson pids "$5" \
+    '.containers[$name].limits = {nano: $nano, memory: $memory, swap: $swap, pids: $pids}' \
+    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+}
+
+# container_limits <id>: the container's NanoCpus, Memory, MemorySwap and PidsLimit as the fake keeps them (0 for none).
+container_limits() {
+  jq -r --arg id "$1" '.containers[] | select(.id == $id) | .limits // {}
+    | "\(.nano // 0) \(.memory // 0) \(.swap // 0) \(.pids // 0)"' "${FAKE_STATE_DIR}/state.json"
+}
+
 # build_command [NAME=value...] [-- script args...]: sets RUN_CMD to run the deploy script with the test environment
 # plus the given variables. The script runs in ${WORK} and records its PID in script.pid (for FAKE_SIGNAL_ON).
 build_command() {
@@ -1017,10 +1031,11 @@ test_older_previous_is_replaced_after_successful_deploy() {
   assert_container roof-controller-previous old false no
   [[ "$(kind_count older)" == "0" ]] || fail_test "the older roof-controller-previous was kept"
 
-  # The older -previous is removed (by ID) only after the old controller has stopped, just before the rename.
+  # The older -previous is removed (by ID, with its volume: the web UI's keys) only after the old controller has stopped,
+  # just before the rename.
   local i_stop i_rm i_rename
   i_stop=$(call_index '"stop", "-t"')
-  i_rm=$(call_index "\"rm\", \"${older_id}\"")
+  i_rm=$(call_index "\"rm\", \"-v\", \"${older_id}\"")
   i_rename=$(call_index '"rename", "roof-controller", "roof-controller-previous"')
   if ! (( i_stop > 0 && i_stop < i_rm && i_rm < i_rename )); then
     fail_test "unexpected order: stop=${i_stop} rm=${i_rm} rename=${i_rename}"
@@ -1614,7 +1629,7 @@ test_extra_docker_args_cannot_override_name_restart_ports_stop_or_platform() {
       "-P" "--publish-all" "-itd" "-tp 80:8080" "--stop-timeout 1" "--stop-timeout=1" "--stop-signal SIGKILL" \
       "--stop-signal=KILL" "--platform linux/amd64" "--platform=linux/amd64"; do
     : > "${FAKE_STATE_DIR}/calls.log"
-    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
+    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--label hvo.test=1 ${value}"
     assert_status 1
     assert_output_contains "EXTRA_DOCKER_ARGS must not contain '${value%% *}'"
     assert_no_docker_calls "${value}"
@@ -1625,12 +1640,12 @@ test_extra_docker_args_cannot_override_name_restart_ports_stop_or_platform() {
 test_extra_docker_args_are_passed_without_glob_expansion() {
   seed_container roof-controller old true 8443:8443
   : > "${WORK}/GLOB=expanded"
-  deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2   --env GLOB=*"
+  deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--label hvo.test=1   --env GLOB=*"
 
   assert_status 0
   local args
   for args in "$(preflight_args)" "$(controller_run_args)"; do
-    jq -e '(.[index("--cpus") + 1] == "2") and (.[index("GLOB=*") - 1] == "--env") and (index("GLOB=expanded") | not)' \
+    jq -e '(.[index("--label") + 1] == "hvo.test=1") and (.[index("GLOB=*") - 1] == "--env") and (index("GLOB=expanded") | not)' \
       <<<"${args}" >/dev/null || fail_test "EXTRA_DOCKER_ARGS not passed as given: ${args}"
   done
 }
@@ -2783,7 +2798,7 @@ test_extra_docker_args_cannot_set_emulator_settings() {
   for value in "--env HatEmulator__Enabled=true" "-e hatemulator__allowoutsidedevelopment=true" \
       "--env=HatEmulator:Enabled=true" "-eHATEMULATOR__PORT=1"; do
     : > "${FAKE_STATE_DIR}/calls.log"
-    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
+    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--label hvo.test=1 ${value}"
     assert_status 1
     assert_output_contains "HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT"
     assert_no_docker_calls "${value}"
@@ -2836,7 +2851,7 @@ test_env_file_with_emulator_settings_is_refused_before_any_docker_call() {
     printf '# settings\n\nTZ=UTC\n%s\n' "${setting}" > "${WORK}/extra.env"
     for form in "--env-file ${WORK}/extra.env" "--env-file=${WORK}/extra.env"; do
       : > "${FAKE_STATE_DIR}/calls.log"
-      deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--cpus 2 ${form}"
+      deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--label hvo.test=1 ${form}"
       assert_status 1
       assert_output_contains "EXTRA_DOCKER_ARGS must not contain '--env-file ${WORK}/extra.env: "
       assert_output_contains "HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT"
@@ -2896,7 +2911,7 @@ test_emulator_mode_refuses_extra_args_that_reach_the_hat() {
     value=${case%%|*}
     expected=${case#*|}
     : > "${FAKE_STATE_DIR}/calls.log"
-    deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true "EXTRA_DOCKER_ARGS=--cpus 2 ${value}"
+    deploy "${HTTPS_ENV[@]}" HAT_EMULATOR_ENDPOINT=hat-emulator:5291 ALLOW_EMULATED_HAT=true "EXTRA_DOCKER_ARGS=--label hvo.test=1 ${value}"
     assert_status 1
     assert_output_contains "EXTRA_DOCKER_ARGS ${expected}"
     assert_output_contains "HAT emulator mode"
@@ -3042,6 +3057,479 @@ test_rollback_requires_certificate_or_explicit_insecure_opt_in() {
   assert_status 0
   assert_container roof-controller old true unless-stopped
   assert_container roof-controller-previous current false no
+}
+
+# --- The container's privileges and limits ----------------------------------------------------------------------------
+
+# The options hardening_args gives the pre-flight container and the controller, each as `option value` or alone.
+HARDENING=("--read-only" "--tmpfs /tmp:size=64m" "--tmpfs /run/hvo-roof:size=4m,mode=0755"
+  "--tmpfs /root/.aspnet:size=4m,mode=0700" "--mount type=volume,dst=/var/lib/hvo-roof-web" "--cap-drop ALL"
+  "--cap-add CHOWN" "--cap-add KILL" "--cap-add SETGID" "--cap-add SETUID" "--security-opt no-new-privileges")
+
+# assert_confined <run args JSON> <cpus> <memory> <pids>: the run has every hardening option and exactly these limits;
+# an empty <cpus> or <memory> is no CPU or memory limit (the default).
+assert_confined() {
+  local args=$1 option options=("${HARDENING[@]}" "--pids-limit $4") absent=()
+  if [[ -n "$2" ]]; then options+=("--cpus $2"); else absent+=(--cpus); fi
+  if [[ -n "$3" ]]; then options+=("--memory $3" "--memory-swap $3"); else absent+=(--memory --memory-swap); fi
+  for option in "${options[@]}"; do
+    if [[ "${option}" == *" "* ]]; then
+      jq -e --arg name "${option%% *}" --arg value "${option#* }" \
+        '[range(0; length - 1) as $i | select(.[$i] == $name and .[$i + 1] == $value)] | length == 1' <<<"${args}" >/dev/null \
+        || fail_test "the run does not give ${option} once: ${args}"
+    else
+      jq -e --arg name "${option}" 'index($name)' <<<"${args}" >/dev/null || fail_test "the run lacks ${option}: ${args}"
+    fi
+  done
+  for option in ${absent[@]+"${absent[@]}"}; do
+    jq -e --arg name "${option}" 'index($name) == null' <<<"${args}" >/dev/null \
+      || fail_test "the run gives ${option}, which it was not asked for: ${args}"
+  done
+  jq -e '[.[] | select(test("^--(privileged|cpu-quota|cpu-period|oom-kill-disable)"))] | length == 0' <<<"${args}" >/dev/null \
+    || fail_test "the run undoes the hardening: ${args}"
+}
+
+test_the_controller_and_its_check_run_read_only_with_the_supervisors_capabilities_and_no_cpu_or_memory_limit_by_default() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}"
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  local args
+  for args in "$(preflight_args)" "$(controller_run_args)"; do
+    [[ -n "${args}" ]] || fail_test "a docker run is missing"
+    assert_confined "${args}" "" "" 512
+  done
+  assert_output_contains "Docker on pi.test (4 CPUs, 8192m of memory) enforces the limits: no CPU or memory limit, at most 512 processes and threads"
+  assert_output_contains "The new controller has a read-only root filesystem, only the capabilities CHOWN, KILL, SETGID and SETUID, no-new-privileges, and no CPU or memory limit, at most 512 processes and threads"
+  assert_output_not_contains "WARNING"
+
+  # Docker is asked which limits it enforces before anything is built or stopped.
+  local i_info i_build i_stop
+  i_info=$(call_index '"info", "--format"')
+  i_build=$(call_index '"buildx"')
+  i_stop=$(call_index '"stop", "-t"')
+  if ! (( i_info > 0 && i_info < i_build && i_build < i_stop )); then
+    fail_test "unexpected order: info=${i_info} build=${i_build} stop=${i_stop}"
+  fi
+}
+
+test_without_cpu_or_memory_limits_docker_need_not_enforce_them() {
+  # Raspberry Pi OS boots with the memory cgroup off: with no memory limit to give, the deploy goes ahead.
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_CPUCFSQUOTA=false FAKE_INFO_SWAPLIMIT=false
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_confined "$(controller_run_args)" "" "" 512
+  assert_output_not_contains "WARNING"
+}
+
+test_limits_are_given_as_set_and_written_plainly() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=03.50 CONTAINER_MEMORY=06144M CONTAINER_PIDS_LIMIT=01024
+
+  assert_status 0
+  assert_confined "$(preflight_args)" 3.5 6144m 1024
+  assert_confined "$(controller_run_args)" 3.5 6144m 1024
+  assert_output_contains "3.5 CPUs, 6144m of memory and no swap, at most 1024 processes and threads"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2.05 CONTAINER_MEMORY=5G
+  assert_status 0
+  assert_confined "$(controller_run_args)" 2.05 5g 512
+
+  # Each one on its own, and the minimum itself.
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2
+  assert_status 0
+  assert_confined "$(controller_run_args)" 2 "" 512
+  assert_output_contains "and 2 CPUs and no memory limit, at most 512 processes and threads"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=4096m
+  assert_status 0
+  assert_confined "$(controller_run_args)" "" 4096m 512
+  assert_output_contains "and no CPU limit, 4096m of memory and no swap, at most 512 processes and threads"
+}
+
+test_malformed_limits_are_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local case setting expected
+  for case in \
+      "CONTAINER_CPUS=two|CONTAINER_CPUS must be a number of CPUs such as 2 or 2.5 (at most two decimals), or empty for no CPU limit, got 'two'" \
+      "CONTAINER_CPUS=2.555|got '2.555'" "CONTAINER_CPUS=-2|got '-2'" "CONTAINER_CPUS=2.|got '2.'" \
+      "CONTAINER_CPUS=1e3|got '1e3'" "CONTAINER_CPUS=2000|got '2000'" \
+      "CONTAINER_MEMORY=4|CONTAINER_MEMORY must be a whole number of MiB or GiB such as 1024m or 1g, or empty for no memory limit, got '4'" \
+      "CONTAINER_MEMORY=4gb|got '4gb'" "CONTAINER_MEMORY=4.5g|got '4.5g'" "CONTAINER_MEMORY=4t|got '4t'" \
+      "CONTAINER_MEMORY=-4g|got '-4g'" "CONTAINER_MEMORY=4294967296|got '4294967296'" \
+      "CONTAINER_PIDS_LIMIT=100|CONTAINER_PIDS_LIMIT must be a whole number from 256 to 32768, got '100'" \
+      "CONTAINER_PIDS_LIMIT=40000|got '40000'" "CONTAINER_PIDS_LIMIT=-1|got '-1'"; do
+    setting=${case%%|*}
+    expected=${case#*|}
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "${setting}"
+    assert_status 1
+    assert_output_contains "${expected}"
+    assert_no_docker_calls "${setting}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_roofcontroller_floor_is_accepted() {
+  local memory
+  for memory in 1g 1024m; do
+    setup
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=1 "CONTAINER_MEMORY=${memory}" FAKE_INFO_NCPU=1
+    assert_status 0
+    assert_confined "$(preflight_args)" 1 "${memory}" 512
+    assert_confined "$(controller_run_args)" 1 "${memory}" 512
+    teardown
+  done
+  setup
+}
+
+test_limits_below_the_minimum_are_refused_with_no_exception() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local case setting expected mode
+  # ALLOW_LIMITS_BELOW_MINIMUM (an acknowledgment an earlier draft had) changes nothing.
+  for case in \
+      "CONTAINER_CPUS=0.99|CONTAINER_CPUS=0.99 is less than 1 vCPU, the minimum (RoofController's" \
+      "CONTAINER_CPUS=0.9|CONTAINER_CPUS=0.9 is less than 1 vCPU" "CONTAINER_CPUS=0.01|CONTAINER_CPUS=0.01 is less than 1 vCPU" \
+      "CONTAINER_CPUS=0.5|CONTAINER_CPUS=0.5 is less than 1 vCPU" "CONTAINER_CPUS=0|CONTAINER_CPUS=0 is less than 1 vCPU" \
+      "CONTAINER_MEMORY=1023m|CONTAINER_MEMORY=1023m is less than 1g, the minimum (RoofController's" \
+      "CONTAINER_MEMORY=1022m|CONTAINER_MEMORY=1022m is less than 1g" "CONTAINER_MEMORY=1m|CONTAINER_MEMORY=1m is less than 1g" \
+      "CONTAINER_MEMORY=512m|CONTAINER_MEMORY=512m is less than 1g" "CONTAINER_MEMORY=0g|CONTAINER_MEMORY=0g is less than 1g"; do
+    setting=${case%%|*}
+    expected=${case#*|}
+    for mode in deploy rollback; do
+      : > "${FAKE_STATE_DIR}/calls.log"
+      if [[ "${mode}" == "deploy" ]]; then
+        deploy "${HTTPS_ENV[@]}" "${setting}" ALLOW_LIMITS_BELOW_MINIMUM=true
+      else
+        deploy "${HTTPS_ENV[@]}" "${setting}" ALLOW_LIMITS_BELOW_MINIMUM=true -- --rollback
+      fi
+      assert_status 1
+      assert_output_contains "${expected}"
+      assert_output_contains "Nothing was changed."
+      assert_output_not_contains "ALLOW_LIMITS_BELOW_MINIMUM"
+      assert_no_docker_calls "${mode} with ${setting}"
+    done
+  done
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+test_docker_that_cannot_enforce_the_limits_changes_nothing() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local case settings expected hint mode
+  for case in \
+      "FAKE_INFO_MEMORYLIMIT=false CONTAINER_MEMORY=4g|does not enforce memory limits (docker info: MemoryLimit false, CPUCfsQuota true, PidsLimit true)|add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot, or leave CONTAINER_MEMORY empty for no memory limit" \
+      "FAKE_INFO_MEMORYLIMIT= CONTAINER_MEMORY=4g|does not enforce memory limits (docker info: MemoryLimit ?,|add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot, or leave CONTAINER_MEMORY empty for no memory limit" \
+      "FAKE_INFO_CPUCFSQUOTA=false CONTAINER_CPUS=2|does not enforce CPU limits|cpu and pids cgroup controllers" \
+      "FAKE_INFO_PIDSLIMIT=false|does not enforce process limits|cpu and pids cgroup controllers"; do
+    IFS='|' read -r settings expected hint <<<"${case}"
+    for mode in deploy rollback; do
+      : > "${FAKE_STATE_DIR}/calls.log"
+      if [[ "${mode}" == "deploy" ]]; then
+        # shellcheck disable=SC2086 # one or two settings
+        deploy "${HTTPS_ENV[@]}" ${settings}
+      else
+        # shellcheck disable=SC2086 # one or two settings
+        deploy "${HTTPS_ENV[@]}" ${settings} -- --rollback
+      fi
+      assert_status 1
+      assert_output_contains "Docker on pi.test ${expected}"
+      assert_output_contains "${hint}"
+      assert_output_contains "Nothing was changed."
+      [[ -z "$(docker_calls buildx)$(docker_calls run)$(docker_calls stop)$(docker_calls rename)$(docker_calls update)" ]] \
+        || fail_test "${mode} with ${settings} built, ran, stopped, renamed or updated something"
+      [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "${mode} with ${settings} requested a Stop"
+    done
+  done
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+test_a_cpu_limit_beyond_the_hosts_cpus_changes_nothing() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_NCPU=1 CONTAINER_CPUS=2
+  assert_status 1
+  assert_output_contains "CONTAINER_CPUS=2 is more than the 1 CPUs Docker reports on pi.test: give from 1 to 1, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
+
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_NCPU=2 CONTAINER_CPUS=2.5
+  assert_status 1
+  assert_output_contains "CONTAINER_CPUS=2.5 is more than the 2 CPUs Docker reports on pi.test: give from 1 to 2, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
+  [[ -z "$(docker_calls buildx)$(docker_calls run)$(docker_calls stop)" ]] || fail_test "a CPU limit beyond the host built, ran or stopped something"
+  assert_container roof-controller old true unless-stopped
+}
+
+test_a_memory_limit_beyond_the_hosts_memory_warns_and_is_kept() {
+  # A Pi with 4 GB has a little less than 4g for programs: the limit is a cap, not a reservation, so it stays 4g.
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMTOTAL=4045848576 CONTAINER_CPUS=2 CONTAINER_MEMORY=4g
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_output_contains "WARNING: CONTAINER_MEMORY=4g is more than the 3858m of memory Docker reports on pi.test. It is kept: a memory limit is a cap, not a reservation"
+  assert_confined "$(preflight_args)" 2 4g 512
+  assert_confined "$(controller_run_args)" 2 4g 512
+}
+
+test_without_swap_limits_a_memory_limit_warns_and_goes_on() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_SWAPLIMIT=false CONTAINER_MEMORY=4g
+
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_output_contains "WARNING: Docker on pi.test cannot keep the container from swapping (docker info: SwapLimit false). The memory limit still holds"
+}
+
+test_a_limit_docker_drops_rolls_back() {
+  local dropped
+  for dropped in memory cpus pids; do
+    setup
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g "FAKE_DROPPED_LIMIT=${dropped}"
+    assert_status 1
+    assert_output_contains "the new controller does not have the limits (2 CPUs, 4g of memory and no swap, at most 512 processes and threads): Docker reports"
+    assert_output_contains "Rolled back: the previous controller is running and ready."
+    assert_container roof-controller old true unless-stopped
+    [[ "$(kind_count new)" == "0" ]] || fail_test "the new controller without its ${dropped} limit was kept"
+    docker_calls rm | jq -e -s 'any(.[]; .[1:3] == ["-f", "-v"])' >/dev/null \
+      || fail_test "the new controller was not removed with its volume: $(docker_calls rm)"
+    assert_output_not_contains "[verify] Waiting"
+    teardown
+  done
+  setup
+}
+
+test_extra_docker_args_cannot_change_the_containers_privileges_or_limits() {
+  seed_container roof-controller old true 8443:8443
+  local value expected
+  for value in "--privileged" "--privileged=true" "--privileged=1" "--read-only=false" "--tmpfs /data" "--tmpfs=/data" \
+      "--cap-add SYS_ADMIN" "--cap-add=ALL" "--cap-drop CHOWN" "--security-opt seccomp=unconfined" \
+      "--security-opt=apparmor=unconfined" "--cpus 4" "--cpus=4" "--cpu-quota 400000" "--cpu-period=1000" \
+      "--cpu-rt-runtime 950000" "--memory 8g" "--memory=8g" "-m 8g" "-m8g" "-itm 8g" "--memory-swap -1" \
+      "--oom-kill-disable" "--oom-kill-disable=true" "--pids-limit -1" "--pids-limit=0" "--kernel-memory 1g" \
+      "--mount type=tmpfs,dst=/data" "--mount=type=TMPFS,destination=/data"; do
+    case "${value}" in
+      --privileged*) expected="must not contain '${value}': it gives the controller every capability and every host device" ;;
+      --mount*) expected="must not mount a tmpfs ('--mount ${value#--mount[ =]}')" ;;
+      *) expected="must not contain '${value%% *}': the script sets the container's privileges and limits itself" ;;
+    esac
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "EXTRA_DOCKER_ARGS=--label hvo.test=1 ${value}"
+    assert_status 1
+    assert_output_contains "EXTRA_DOCKER_ARGS ${expected}"
+    assert_no_docker_calls "${value}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_rollback_gives_the_previous_version_the_limits_after_the_verified_stop() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local previous_id current_id
+  previous_id=$(container_field roof-controller-previous id)
+  current_id=$(container_field roof-controller id)
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=3 CONTAINER_MEMORY=6g CONTAINER_PIDS_LIMIT=1024 -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-previous current false no
+  assert_output_contains "[rollback] Giving roof-controller-previous the limits: 3 CPUs, 6g of memory and no swap, at most 1024 processes and threads"
+  # A version seeded without them was deployed before the privileges were narrowed: it keeps its own, with a warning.
+  assert_output_contains "WARNING: roof-controller-previous does not have the container's privileges"
+  assert_output_contains "deploy a release again to narrow them"
+  docker_calls update | jq -e -s --arg id "${previous_id}" \
+    'any(.[]; . == ["update", "--cpus", "3", "--memory", "6g", "--memory-swap", "6g", "--pids-limit", "1024", $id])' >/dev/null \
+    || fail_test "the previous version was not given the limits: $(docker_calls update)"
+  # Every check that can refuse the rollback (the idle check and the verified Stop) comes before the change; the old
+  # controller is stopped only after it.
+  local i_update i_stop_request i_stop
+  i_update=$(call_index '"update", "--cpus"')
+  i_stop_request=$(call_index '"http://localhost:8080/api/v4.0/RoofControl/Stop"')
+  i_stop=$(call_index '"stop", "-t"')
+  (( i_stop_request > 0 && i_stop_request < i_update && i_update < i_stop )) \
+    || fail_test "unexpected order: Stop=${i_stop_request} update=${i_update} docker stop=${i_stop}"
+  [[ "$(container_limits "${previous_id}")" == "3000000000 6442450944 6442450944 1024" ]] \
+    || fail_test "the rolled-back version does not have the limits: $(container_limits "${previous_id}")"
+
+  # And back: the version swapped out gets them too.
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=3 CONTAINER_MEMORY=6g CONTAINER_PIDS_LIMIT=1024 -- --rollback
+  assert_status 0
+  assert_container roof-controller current true unless-stopped
+  docker_calls update | jq -e -s --arg id "${current_id}" 'any(.[]; .[0:2] == ["update", "--cpus"] and .[-1] == $id)' >/dev/null \
+    || fail_test "the version swapped back was not given the limits: $(docker_calls update)"
+}
+
+test_rollback_with_the_default_limits_gives_only_the_process_limit() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local previous_id
+  previous_id=$(container_field roof-controller-previous id)
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  docker_calls update | jq -e -s --arg id "${previous_id}" 'any(.[]; . == ["update", "--pids-limit", "512", $id])' >/dev/null \
+    || fail_test "the previous version was not given the process limit alone: $(docker_calls update)"
+  [[ "$(container_limits "${previous_id}")" == "0 0 0 512" ]] \
+    || fail_test "the rolled-back version has other limits: $(container_limits "${previous_id}")"
+  assert_output_not_contains "keeps a CPU limit"
+}
+
+test_rollback_without_cpu_or_memory_limits_keeps_the_ones_the_previous_version_has() {
+  # Docker cannot take a CPU or memory limit off a container: the version brought back keeps its own, with a warning.
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local previous_id
+  previous_id=$(container_field roof-controller-previous id)
+  seed_limits roof-controller-previous 3000000000 6442450944 6442450944 1024
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_output_contains "WARNING: roof-controller-previous keeps a CPU limit and a memory limit it was deployed with (Docker reports NanoCpus 3000000000, Memory 6442450944), which this run does not give"
+  [[ "$(container_limits "${previous_id}")" == "3000000000 6442450944 6442450944 512" ]] \
+    || fail_test "the rolled-back version's limits: $(container_limits "${previous_id}")"
+}
+
+test_rollback_to_a_version_with_the_limits_changes_nothing_of_them() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_limits roof-controller-previous 2000000000 4294967296 4294967296 512
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_output_contains "[rollback] roof-controller-previous already has the limits: 2 CPUs, 4g of memory and no swap, at most 512 processes and threads"
+  [[ -z "$(docker_calls update | jq -c 'select(.[1] != "--restart")')" ]] \
+    || fail_test "the limits were updated: $(docker_calls update)"
+}
+
+test_rollback_to_a_version_this_script_deployed_keeps_its_privileges_without_a_warning() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_output_contains "does not have the container's privileges"
+
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_output_not_contains "does not have the container's privileges"
+}
+
+# assert_previous_limits_untouched <id> <limits>: a rollback that was refused changed none of the version it would have
+# brought back: no docker update of its limits, and the limits it had.
+assert_previous_limits_untouched() {
+  [[ -z "$(docker_calls update | jq -c --arg id "$1" 'select(.[-1] == $id and .[1] != "--restart")')" ]] \
+    || fail_test "the refused rollback updated the previous version's limits: $(docker_calls update)"
+  [[ "$(container_limits "$1")" == "$2" ]] || fail_test "the previous version's limits changed: $(container_limits "$1")"
+}
+
+test_a_refused_rollback_leaves_the_previous_versions_limits_as_they_were() {
+  local case settings expected previous_id
+  for case in \
+      "REQUIRE_IDLE_ROOF=true FAKE_CURRENT_MOTION=Closing|The roof is moving (commandedMotion=Closing, isMoving=true)" \
+      "REQUIRE_IDLE_ROOF=true FAKE_CURRENT_STATUS_CODE=503|Status returned HTTP 503, so the roof is not known to be idle" \
+      "FAKE_CURRENT_STOP=unverified|The roof stop could not be verified"; do
+    IFS='|' read -r settings expected <<<"${case}"
+    setup
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    previous_id=$(container_field roof-controller-previous id)
+    seed_limits roof-controller-previous 3000000000 6442450944 6442450944 1024
+    # shellcheck disable=SC2086 # two settings
+    deploy "${HTTPS_ENV[@]}" ${settings} CONTAINER_CPUS=2 CONTAINER_MEMORY=4g -- --rollback
+    assert_status 1
+    assert_output_contains "${expected}"
+    assert_output_not_contains "Giving roof-controller-previous the limits"
+    assert_previous_limits_untouched "${previous_id}" "3000000000 6442450944 6442450944 1024"
+    assert_container roof-controller current true unless-stopped
+    assert_container roof-controller-previous old false
+    [[ -z "$(docker_calls stop)$(docker_calls rename)" ]] || fail_test "the rollback stopped or renamed a container (${settings})"
+    teardown
+  done
+  setup
+}
+
+test_rollback_that_cannot_give_the_limits_changes_no_container() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local previous_id
+  previous_id=$(container_field roof-controller-previous id)
+  seed_limits roof-controller-previous 3000000000 6442450944 6442450944 1024
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g FAKE_FAIL="update --cpus" -- --rollback
+
+  assert_status 1
+  assert_output_contains "Could not give roof-controller-previous the limits (see above). The current controller was not stopped."
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+  [[ "$(container_limits "${previous_id}")" == "3000000000 6442450944 6442450944 1024" ]] \
+    || fail_test "the previous version's limits changed: $(container_limits "${previous_id}")"
+  [[ -z "$(docker_calls stop)$(docker_calls rename)" ]] || fail_test "the rollback stopped or renamed a container"
+}
+
+test_a_rollback_that_fails_after_the_limits_puts_them_back() {
+  local case settings expected previous_id
+  # The start of the version brought back fails (the swap is undone), or a TERM arrives while Docker changes its limits.
+  for case in "FAKE_FAIL=start roof-controller@1|Could not start the rolled-back controller roof-controller" \
+      "FAKE_SIGNAL_ON=update --cpus|the script stopped unexpectedly"; do
+    IFS='|' read -r settings expected <<<"${case}"
+    setup
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    previous_id=$(container_field roof-controller-previous id)
+    seed_limits roof-controller-previous 3000000000 6442450944 6442450944 1024
+    deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g "${settings}" -- --rollback
+    assert_status_is "$([[ "${settings}" == FAKE_SIGNAL_ON=* ]] && echo 143 || echo 1)"
+    [[ "${settings}" == FAKE_SIGNAL_ON=* ]] || assert_output_contains "${expected}"
+    assert_output_contains "Put back the limits container ${previous_id:0:12} had before this rollback."
+    [[ "$(container_limits "${previous_id}")" == "3000000000 6442450944 6442450944 1024" ]] \
+      || fail_test "the previous version's limits were not put back (${settings}): $(container_limits "${previous_id}")"
+    assert_container roof-controller current true unless-stopped
+    assert_container roof-controller-previous old false
+    teardown
+  done
+  setup
+}
+
+test_a_failed_rollback_reports_the_limits_docker_cannot_take_off() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local previous_id
+  previous_id=$(container_field roof-controller-previous id)
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g "FAKE_FAIL=start roof-controller@1" -- --rollback
+
+  assert_status 1
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+  assert_output_contains "WARNING: container ${previous_id:0:12} keeps a CPU limit and a memory limit this rollback gave it, which it had none of before: Docker cannot take a CPU or memory limit off a container."
+  # Its process limit, which Docker can take off, is off again.
+  [[ "$(container_limits "${previous_id}")" == "2000000000 4294967296 4294967296 0" ]] \
+    || fail_test "the previous version's limits: $(container_limits "${previous_id}")"
+}
+
+test_dry_run_reports_the_containers_privileges_and_limits() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false -- --dry-run
+
+  assert_status 0
+  assert_output_contains "[dry-run] The container: a read-only root filesystem, only the capabilities CHOWN, KILL, SETGID and SETUID, no-new-privileges, and no CPU or memory limit, at most 512 processes and threads"
+  assert_output_contains "[dry-run] Docker reports MemoryLimit false, CPUCfsQuota true, PidsLimit true, SwapLimit true, NCPU 4, MemTotal 8589934592: PidsLimit must be true"
+
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2.5 CONTAINER_MEMORY=4g -- --dry-run
+  assert_status 0
+  assert_output_contains "no-new-privileges, and 2.5 CPUs, 4g of memory and no swap, at most 512 processes and threads"
+  [[ -z "$(docker_calls run)$(docker_calls stop)$(docker_calls update)" ]] || fail_test "dry run changed something"
 }
 
 # --- Container state (fail closed) ------------------------------------------------------------------------------------
