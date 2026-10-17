@@ -56,6 +56,14 @@ public sealed record InstallRecord
     /// </summary>
     public string? UpgradeBackup { get; init; }
 
+    /// <summary>
+    /// The release an upgrade (or a reinstall over an uninstalled release's data) started from, while it has not finished.
+    /// From before its first change the record says the new release (<see cref="UpgradeStarted"/>), so one that stops part
+    /// way leaves the newer release recorded, and no installer, older ones included, goes back from it but <c>rollback</c>.
+    /// The run's last step, which writes the record, clears it.
+    /// </summary>
+    public string? UpgradingFrom { get; init; }
+
     /// <summary>When <c>uninstall</c> removed the roles (the record keeps the choices, for a reinstall); null while installed.</summary>
     public DateTimeOffset? UninstalledAt { get; init; }
 
@@ -90,6 +98,28 @@ public sealed record InstallRecord
         Kiosk = Kiosk
     }.Normalised();
 
+    /// <summary>
+    /// The record as an upgrade to <paramref name="version"/> leaves it before its first change: it says that release, with
+    /// this one before it for a rollback (none after an uninstall), and that the upgrade has not finished. Never for an
+    /// installed record with another upgrade unfinished, whose baseline this would replace: that upgrade is finished or
+    /// rolled back first (<c>RecordStep.MarkUpgradeStarted</c> refuses it). It names the backup this upgrade took of the
+    /// stores (<paramref name="upgradeBackup"/>, taken before the mark), or none: never the last upgrade's, which is of
+    /// another release.
+    /// </summary>
+    public InstallRecord UpgradeStarted(string version, string? upgradeBackup = null)
+    {
+        var from = Version;
+        return this with
+        {
+            Version = version,
+            InstallerVersion = version,
+            PreviousVersion = UninstalledAt is null ? from : null,
+            RolledBackFrom = null,
+            UpgradeBackup = upgradeBackup,
+            UpgradingFrom = from
+        };
+    }
+
     public string ToJson() => JsonSerializer.Serialize(this, InstallerJson.Options) + "\n";
 
     /// <summary>True when the two say the same, whenever each was written.</summary>
@@ -114,7 +144,7 @@ public sealed record InstallRecord
         }
 
         // upgrade, rollback and restore compare these: each must be a release version.
-        foreach (var (name, version) in new[] { ("version", record.Version), ("previousVersion", record.PreviousVersion), ("rolledBackFrom", record.RolledBackFrom) })
+        foreach (var (name, version) in new[] { ("version", record.Version), ("previousVersion", record.PreviousVersion), ("rolledBackFrom", record.RolledBackFrom), ("upgradingFrom", record.UpgradingFrom) })
         {
             if (version is not null && !RoofSemVer.IsValid(version))
             {

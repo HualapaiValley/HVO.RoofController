@@ -16,11 +16,12 @@ namespace HVO.RoofControllerV4.Installer;
 internal static partial class LifecycleCommands
 {
     /// <summary>
-    /// Before an upgrade to <paramref name="target"/>: refuses one that cannot read the stores here, and otherwise says
-    /// what they are, and when <paramref name="tell"/>, whether the target makes a breaking change from the release the
-    /// controller here runs. Nothing to check where the record runs no controller.
+    /// Before an upgrade to <paramref name="target"/> from <paramref name="from"/> (the release installed, or the one
+    /// an unfinished upgrade started from): refuses one that cannot read the stores here, and otherwise says what they are,
+    /// and when <paramref name="tell"/>, whether the target makes a breaking change from the release the controller here
+    /// runs. Nothing to check where the record runs no controller.
     /// </summary>
-    private static void CheckUpgradeState(InstallerHost host, InstallerSession session, InstallRecord record, ReleaseManifest target, bool tell)
+    private static void CheckUpgradeState(InstallerHost host, InstallerSession session, InstallRecord record, string from, ReleaseManifest target, bool tell)
     {
         if (!InstallRoles.RunsController(record.Roles))
         {
@@ -34,7 +35,7 @@ internal static partial class LifecycleCommands
             session.Log.Write($"Refused: release {target.Version} cannot read the stores here: {string.Join("; ", problems)}.");
             throw new InstallerRefusedException(
                 $"Release {target.Version} cannot read the data here: {string.Join("; ", problems)}. "
-                + $"Upgrade through a release in between first (the upgrade notes of {target.Version} say which), or stay on {record.Version}. Nothing was changed.");
+                + $"Upgrade through a release in between first (the upgrade notes of {target.Version} say which), or stay on {from}. Nothing was changed.");
         }
 
         if (!tell)
@@ -51,14 +52,14 @@ internal static partial class LifecycleCommands
         }
 
         var changes = string.Join(" and ", breaking.Select(change =>
-            $"{StateContract.Describe(change.Store)} to schema {change.Target.Writes}, which {record.Version} does not read (it reads {change.Installed.DescribeReads()})"));
+            $"{StateContract.Describe(change.Store)} to schema {change.Target.Writes}, which {from} does not read (it reads {change.Installed.DescribeReads()})"));
         var backup = machine.Os == InstallerOs.Linux && ScopeFor(machine) == InstallScope.System;
         host.Out.WriteLine(
             $"Release {target.Version} makes a breaking state change: it may move {changes}. "
             + (backup
-                ? $"The upgrade backs up the stores first. Once a store has moved, a rollback to {record.Version} puts it back from that backup ({Sudo(InstallScope.System)}{Installer.CommandName} rollback --restore-backup), and what changed in it after the upgrade is lost."
-                : $"Once a store has moved, there is no going back to {record.Version}: only forward, to a release that reads it."));
-        session.Log.Write($"Release {target.Version} makes a breaking state change from {record.Version}: {changes}.");
+                ? $"The upgrade backs up the stores first. Once a store has moved, a rollback to {from} puts it back from that backup ({Sudo(InstallScope.System)}{Installer.CommandName} rollback --restore-backup), and what changed in it after the upgrade is lost."
+                : $"Once a store has moved, there is no going back to {from}: only forward, to a release that reads it."));
+        session.Log.Write($"Release {target.Version} makes a breaking state change from {from}: {changes}.");
     }
 
     /// <summary>

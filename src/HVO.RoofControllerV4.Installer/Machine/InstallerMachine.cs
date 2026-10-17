@@ -70,8 +70,16 @@ public sealed class InstallerMachine
         FetchCaAsync = FetchCaAsync,
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory,
-        RunProgramAsync = RunProgramAsync
+        RunProgramAsync = RunProgramAsync,
+        SyncFolderOnDisk = SyncFolderOnDisk
     };
+
+    /// <summary>
+    /// Makes a folder's entries durable, given where the folder is on disk: a file renamed into it is still there after a
+    /// power loss, not the one it replaced. Throws an <see cref="IOException"/> when the system does not say it is done.
+    /// <see cref="SyncDirectory"/> calls it; a test fakes it.
+    /// </summary>
+    public Action<string> SyncFolderOnDisk { get; init; } = onDisk => SyncFolder(onDisk, OperatingSystem.IsMacOS(), Libc);
 
     /// <summary>
     /// True when something on this machine accepts connections on the TCP port: it answers on the loopback address
@@ -310,6 +318,24 @@ public sealed class InstallerMachine
 
     public void WriteAtomically(string path, string content, UnixFileMode mode)
         => WriteAtomically(path, Encoding.UTF8.GetBytes(content), mode);
+
+    /// <summary>
+    /// Writes <paramref name="path"/> in one step, as <see cref="WriteAtomically(string, string, UnixFileMode)"/> does, then
+    /// syncs its folder (<see cref="SyncDirectory"/>), so the new content, not the old, is there after a power loss: for
+    /// what the changes after it rely on, the install record. Throws an <see cref="IOException"/> when that cannot be made
+    /// sure of; the file may then have either content.
+    /// </summary>
+    public void WriteDurably(string path, string content, UnixFileMode mode)
+    {
+        WriteAtomically(path, content, mode);
+        SyncDirectory(Path.GetDirectoryName(path)!);
+    }
+
+    /// <summary>
+    /// Makes the folder's entries durable (<see cref="SyncFolderOnDisk"/>): a file renamed into it stays there after a power
+    /// loss. A file's own flush does not do this; the rename is the folder's.
+    /// </summary>
+    public void SyncDirectory(string path) => SyncFolderOnDisk(OnDisk(path));
 
     /// <summary>
     /// Replaces a file's text in one step, through a new file renamed over it, and sets no mode: for a file system that
@@ -609,15 +635,106 @@ public sealed class InstallerMachine
         }
     }
 
+    // Opens the folder to read, then makes its entries durable: fsync(2) on Linux. macOS's fsync can leave them in the
+    // drive's cache, where a power loss can lose them, so there only F_FULLFSYNC will do, which has the drive write its
+    // cache out. When it fails, for whatever reason (a file system that does not support it among them), the sync fails:
+    // fsync is never tried in its place. Anything that fails throws. libc's calls are given, so a test can fail them.
+    internal static void SyncFolder(string onDisk, bool macOS, FolderSyncCalls calls)
+    {
+        var descriptor = Retried(() => calls.Open(onDisk, macOS ? MacCloseOnExec : LinuxCloseOnExec), out var error);
+        if (descriptor < 0)
+        {
+            throw SyncFailed(onDisk, "open", error);
+        }
+
+        try
+        {
+            if (macOS)
+            {
+                if (Retried(() => calls.FullFsync(descriptor), out error) != 0)
+                {
+                    throw FullSyncFailed(onDisk, error);
+                }
+            }
+            else if (Retried(() => calls.Fsync(descriptor), out error) != 0)
+            {
+                throw SyncFailed(onDisk, "fsync", error);
+            }
+        }
+        finally
+        {
+            _ = calls.Close(descriptor);
+        }
+    }
+
+    // A call into libc, again while a signal interrupts it, with its errno when it fails.
+    private static int Retried(Func<int> call, out int error)
+    {
+        int result;
+        do
+        {
+            result = call();
+            error = result < 0 ? Marshal.GetLastPInvokeError() : 0;
+        }
+        while (result < 0 && error == Interrupted);
+
+        return result;
+    }
+
+    private static IOException SyncFailed(string folder, string call, int error)
+        => new($"Could not sync the folder {folder} to disk ({call}: {Marshal.GetPInvokeErrorMessage(error)}).");
+
+    // F_FULLFSYNC's failure; ENOTSUP or EINVAL says the folder's file system does not support it.
+    private static IOException FullSyncFailed(string folder, int error)
+        => error is MacNotSupported or InvalidArgument
+            ? new($"Could not sync the folder {folder} to disk (F_FULLFSYNC: {Marshal.GetPInvokeErrorMessage(error)}): its file system "
+                + "cannot have the drive write its cache out, which a Mac needs for a change to survive a power loss. Keep the folder "
+                + "on a file system that can, as APFS on the Mac's own drive does.")
+            : SyncFailed(folder, "F_FULLFSYNC", error);
+
     [DllImport("libc", SetLastError = false)]
     private static extern uint geteuid();
 
     // W_OK, the same on Linux and macOS.
     private const int WriteAccess = 2;
 
+    // EINTR, the same on Linux and macOS.
+    private const int Interrupted = 4;
+
+    // EINVAL, the same on Linux and macOS.
+    private const int InvalidArgument = 22;
+
+    // O_RDONLY (0) with O_CLOEXEC, which differs between them; F_FULLFSYNC and its ENOTSUP are macOS's alone here.
+    private const int LinuxCloseOnExec = 0x80000;
+    private const int MacCloseOnExec = 0x1000000;
+    private const int FullFsync = 51;
+    private const int MacNotSupported = 45;
+
+    // libc's own calls, for SyncFolder.
+    private static readonly FolderSyncCalls Libc = new(open, descriptor => fcntl(descriptor, FullFsync), fsync, close);
+
     [DllImport("libc", SetLastError = false, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
     private static extern int access(string path, int mode);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int open(string path, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int fsync(int descriptor);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int fcntl(int descriptor, int command);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int close(int descriptor);
 }
+
+/// <summary>
+/// The libc calls that sync a folder to disk (<see cref="InstallerMachine.SyncFolderOnDisk"/>): open(2), with the flags
+/// given; fcntl(2) with F_FULLFSYNC; fsync(2); and close(2). Each answers as libc does, -1 when it fails, with errno as
+/// the last P/Invoke error (<see cref="Marshal.GetLastPInvokeError"/>). A test fakes them.
+/// </summary>
+internal sealed record FolderSyncCalls(Func<string, int, int> Open, Func<int, int> FullFsync, Func<int, int> Fsync, Func<int, int> Close);
 
 /// <summary>An address of the machine, and the network interface it is on (eth0, wlan0, docker0).</summary>
 public sealed record NetworkAddress(string Interface, IPAddress Address)

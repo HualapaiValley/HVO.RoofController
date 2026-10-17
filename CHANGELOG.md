@@ -24,10 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reads the file once and checks that what it read has that SHA-256 and is this machine's backup of the release
   installed. A backup that cannot be taken, or a store's file a backup cannot hold (a link), refuses the upgrade
   (exit 3) with nothing changed. Through an installer from 4.1.1 or earlier, which replaces itself before the new one
-  takes the backup, the new installer stays in place and nothing else changes. A backup's manifest names the stores'
-  files that were not there (`absent`). Backups are written to and read from `/var/backups/hvo-roof` only while it,
-  and each folder above it, is root's alone and not a link: one that is not is refused (exit 3), never repaired
-  (#130).
+  takes the backup, the new installer stays in place and nothing else changes. The upgrade marks its record
+  (`upgradingFrom`, #131) only once the backup is taken, and the mark names it, so a refused backup leaves the record
+  as it was. A backup's manifest names the stores' files that were not there (`absent`). Backups are written to and
+  read from `/var/backups/hvo-roof` only while it, and each folder above it, is root's alone and not a link: one that
+  is not is refused (exit 3), never repaired (#130).
 - `rollback --restore-backup [FILE] [--yes]`: across a breaking state change, puts back from that backup the stores the
   release before cannot read, after the controller's verified Stop, saying plainly that the changes made to them since
   the upgrade are lost; the files it replaces are kept beside them. Without it, such a rollback is refused. Nothing is
@@ -46,6 +47,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   requires each image's state contract label (#130).
 - `uninstall` no longer takes a controller Docker cannot answer for (Docker not running, say) for none: stopping it is
   blocked, and nothing is removed, until Docker answers (#130).
+
+### Fixed
+
+- An upgrade that stopped part way (the new controller deployed, the kiosk's download failed) left the record saying
+  the old release, so `upgrade` to that release, or an older installer's install, wizard or `--plan`, could deploy the
+  older controller again without `rollback`. The record now says the new release from before the upgrade's first
+  change, marked `upgradingFrom` until it finishes, and its folder is synced to disk before that change, so a power
+  loss does not take it back (on a Mac with `F_FULLFSYNC`, never `fsync` in its place, so the record's folder must be
+  on a file system that supports it, as APFS on the Mac's own drive does); an upgrade that cannot sync it stops
+  (exit 1) with nothing else changed. `upgrade` again
+  finishes it, `rollback` goes back one release (with that release's files only), and anything older is refused
+  (exit 3), by older installers too. Until it is finished or rolled back, another release is refused as well (exit 3),
+  so that `rollback` still goes back to the controller the deploy script kept (#131).
+- A `--plan` without `sudo` for the machine's roles checked your own record's release instead of the machine's: it
+  refused a valid upgrade when your `hvo-roof` was newer, and skipped the check when you had no record. Each role's
+  record is now checked (#131).
 
 ### Security
 

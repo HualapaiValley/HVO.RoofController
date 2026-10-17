@@ -41,8 +41,12 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
     /// <summary>
     /// Makes the changes, step by step in order. Each step is checked again just before it runs, so one that an earlier
     /// step already took care of is skipped. A failure stops the install there; running it again carries on.
+    /// <paramref name="beforeChanges"/> runs once, when nothing refused the plan, before its first change that is not a
+    /// copy (<see cref="PlanStep.OnlyCopies"/>: the upgrade's backup, which comes first): an upgrade says its release in the
+    /// record there, synced to disk (<see cref="RecordStep.MarkUpgradeStarted"/>), once its backup is taken. When it
+    /// throws, no step after the copies runs; a copy that fails leaves the record as it was.
     /// </summary>
-    public async Task ApplyAsync(InstallContext context, Action<string>? progress = null, CancellationToken cancellationToken = default)
+    public async Task ApplyAsync(InstallContext context, Action<string>? progress = null, CancellationToken cancellationToken = default, Action<InstallContext>? beforeChanges = null)
     {
         if (IsBlocked)
         {
@@ -56,6 +60,7 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
                 $"The install needs {string.Join(" and ", missing.Select(InstallSecrets.Describe))}, which {(missing.Length == 1 ? "was" : "were")} not given, so nothing was installed.");
         }
 
+        var started = false;
         foreach (var (step, planned) in Steps)
         {
             if (!planned.MakesChange)
@@ -64,6 +69,12 @@ public sealed class CheckedPlan(IReadOnlyList<CheckedStep> steps)
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            if (!started && !step.OnlyCopies)
+            {
+                started = true;
+                beforeChanges?.Invoke(context);
+            }
+
             var doing = PlanText.Doing(planned.Change, step);
             try
             {

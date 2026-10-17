@@ -468,7 +468,7 @@ public sealed class InstallerStateContractTests
     {
         using var pi = await UpgradedPiAsync(SchemaOne);
         var session = await InstallerSession.StartAsync(pi.Machine, InstallLog.None, NewVersion, pi.RunsAt);
-        var stop = PlanBuilder.BuildUninstall(pi.Machine, session.Survey, session.Record!, purge: false).Steps.OfType<ControllerStopStep>().Single();
+        var stop = PlanBuilder.BuildUninstall(pi.Machine, session.Survey, session.Survey.SystemRecord!, purge: false).Steps.OfType<ControllerStopStep>().Single();
 
         pi.DockerError = DockerDown;
         var check = await stop.CheckAsync(session.Context, CancellationToken.None);
@@ -480,6 +480,70 @@ public sealed class InstallerStateContractTests
         pi.DockerError = null;
         pi.Containers.Remove(MachineSurveyor.ControllerContainer);
         (await stop.CheckAsync(session.Context, CancellationToken.None)).Should().Be(StepCheck.Unchanged("not there"));
+    }
+
+    // With #134's mark (upgradingFrom): the record says an upgrade started only once the stores are backed up, and names
+    // that backup; a backup refused leaves the record, and everything else, as it was.
+
+    [TestMethod]
+    public async Task AnUpgradesRecord_IsMarkedOnlyOnceTheStoresAreBackedUp_AndNamesTheBackup()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        var recordFolder = Path.GetDirectoryName(InstallPaths.SystemRecord)!;
+        bool? backedUpAtTheMark = null;
+        InstallRecord? atDeploy = null;
+        pi.DuringDirectorySync = folder =>
+        {
+            if (folder == recordFolder)
+            {
+                backedUpAtTheMark ??= pi.Exists(Backup);
+            }
+        };
+        pi.DuringDeploy = () => atDeploy = Record(pi);
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        backedUpAtTheMark.Should().BeTrue("the record is marked, and its folder synced, only once the backup is taken");
+        atDeploy.Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0" && record.UpgradeBackup == Backup,
+            "from the mark on, the record names this upgrade's backup");
+        Record(pi).Should().Match<InstallRecord>(record => record.UpgradingFrom == null && record.UpgradeBackup == Backup && record.PreviousVersion == "4.0.0");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ABackupTheReleasesInstallerCannotTake_LeavesTheRecordAndEverythingElseAsTheyWere(bool afterAnOlderInstallersHandOver)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+
+        // A folder the backup holds whole that someone other than root can change: the plan's check passes (it looks at
+        // the stores' files alone), and the backup refuses as it is taken, the plan's first step.
+        File.SetUnixFileMode(pi.OnDisk(ControllerLayout.System.Configuration), GroupWritable);
+        pi.InstallerVersion = NewVersion;
+        if (afterAnOlderInstallersHandOver)
+        {
+            // As an installer from 4.1.1 or earlier hands over: it has replaced itself, keeping its own beside it, and it
+            // hands over no backup.
+            pi.Write(ProgramFile.Previous(InstallPaths.SystemInstaller), pi.Read(InstallPaths.SystemInstaller));
+            pi.Write(InstallPaths.SystemInstaller, Encoding.UTF8.GetString(FakeMachine.InstallerProgram(NewVersion, "linux-arm64")));
+            pi.Environment[LifecycleCommands.ContinuedVariable] = NewVersion;
+        }
+
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var deploys = pi.Deploys.Count;
+        var before = State(pi);
+
+        var run = await pi.RunAsync("upgrade", "--version", NewVersion);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain($"{ControllerLayout.System.Configuration} is root:root's, 0775: someone other than root can change what is in it");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record, "the record is marked only once the backup is taken");
+        Unchanged(pi, before);
+        pi.Deploys.Should().HaveCount(deploys, "the controller is not replaced");
+        pi.Exists(BackupCommands.DefaultFolder).Should().BeFalse("no backup is kept");
     }
 
     // #136 F5: a store is put back only once Docker says both controller containers are stopped or not there (the one

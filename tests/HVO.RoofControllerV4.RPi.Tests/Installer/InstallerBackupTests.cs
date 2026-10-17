@@ -316,6 +316,28 @@ public sealed class InstallerBackupTests
         run.Error.Should().Contain("The backup is of 4.0.1, newer than this installer (4.0.0): restore it with release 4.0.1's installer");
     }
 
+    // A backup made while an upgrade had not finished (#131) is that upgrade's release's to restore, which finishes it: the
+    // install after another release's restore would refuse it, so the restore is refused before a file goes back.
+    [TestMethod]
+    public async Task ARestore_OfABackupMadeDuringAnUnfinishedUpgrade_IsRefused_ByAnotherRelease()
+    {
+        using var pi = await InstallerLifecycleTests.InstalledPiAsync();
+        pi.WithRelease("4.0.1", latest: true);
+        pi.FileDownloads.Remove(ReleaseManifest.DownloadUri("4.0.1", FakeMachine.KioskAssetName("4.0.1")).ToString());
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be((int)InstallerExitCode.Failed, "the kiosk's download fails after the controller deployed");
+        pi.InstallerVersion = "4.0.1";
+        await BackUpAndPurgeAsync(pi);
+        pi.WithRelease("4.0.2", latest: true);
+        pi.InstallerVersion = "4.0.2";
+        var files = pi.Snapshot(InstallPaths.SystemLog);
+
+        var run = await RestoreAsync(pi, Kept);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain("The backup was made while the upgrade from 4.0.0 to 4.0.1 had not finished: restore it with release 4.0.1's installer");
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
+    }
+
     [TestMethod]
     [DataRow("changed", "/etc/hvo-roof/install.json is not as its manifest says (its SHA-256 differs): the backup is damaged.")]
     [DataRow("unlisted", "it holds etc/hvo-roof/extra, which its manifest does not list.")]

@@ -222,6 +222,9 @@ afterwards. It refuses the installer unless:
 - its attestation, when `gh` is installed and signed in, says the release workflow built it from the release's tag;
 - its `--version` is the release's.
 
+`SHA256SUMS` and the attestation are the whole of a release's trust, the same for every HVO product: nothing else signs
+it ([Trust](releasing.md#trust)).
+
 It then starts the installer: with sudo for the machine's roles (the controller, a rig on Linux and the kiosk), and as
 you for yours.
 
@@ -271,7 +274,9 @@ The installer runs as root for the machine's roles, and as you for your own ([Ro
 - **The controller, a rig on Linux or the kiosk:** run it with `sudo`.
 - **`hvo-roof` or the Mac app:** run it as yourself, without `sudo`.
 - **A rig on a Mac:** run it as yourself too, and on its own: `hvo-roof` and the Mac app are installed in a later run,
-  once the rig is running ([The guards](#the-guards)).
+  once the rig is running ([The guards](#the-guards)). Its record's folder, `~/.config/hvo-roof`, must be on a file
+  system that supports a full flush (`F_FULLFSYNC`), as APFS on the Mac's own drive does
+  ([The record and the log](#the-record-and-the-log)).
 
 It refuses to mix the two in one run, and refuses the wrong one for a role. `--plan` does not need root, but planning
 the controller or a rig needs Docker access (on Linux, root or the `docker` group).
@@ -290,6 +295,12 @@ their digests, and no others: the deploy script deploys the controller's image o
 For a machine that cannot reach GitHub, download `release.json` from the release's page on a machine that can, and give
 its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 
+An installer never installs over a newer release, or over one that an unfinished upgrade was installing, and while an
+upgrade has not finished it installs no other release over it ([Routine upgrades](#routine-upgrades)): the install,
+the wizard and `--plan` are refused (exit 3). It checks the
+record of the roles it installs, whoever runs it: the machine's record for the controller, a rig on Linux and the kiosk,
+including in a `--plan` you run without `sudo`, and your own for the rest ([The record and the log](#the-record-and-the-log)).
+
 ### Exit codes
 
 `install.sh` and scripts rely on these.
@@ -299,7 +310,7 @@ its folder with `--release DIR`. Docker still pulls the images from `ghcr.io`.
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone or that a newer release made, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; a backup written to or read from `/var/backups/hvo-roof` when it, or a folder above it, is a link or a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer, or an unfinished upgrade to another release; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release, or to another release while an upgrade has not finished; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone, that a newer release made, or that was made during an unfinished upgrade to a release other than the installer's, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; a backup written to or read from `/var/backups/hvo-roof` when it, or a folder above it, is a link or a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -1083,15 +1094,20 @@ Each installer installs its own release, so the installer hands over to the new 
    - first, the backup it was handed: its file and SHA-256 come with the hand-over. It opens the file once, and checks
      that what it read there is that backup (its SHA-256), whole, root's, and this machine's of the release installed:
      the bytes it hashes are the ones it checks, whatever takes the file's place meanwhile. One that is not stops the
-     upgrade before the controller is replaced. An installer from before state contracts hands over none, and the new
-     one takes the backup itself, first;
+     upgrade before anything changes. An installer from before state contracts hands over none, and the new one takes
+     the backup itself, first: one that cannot be taken stops the upgrade there (exit 3), the record and everything
+     else as they were;
+   - then, before its first other change, it writes the record to say the new release already, with the one before it
+     (`previousVersion`) for a rollback, the backup (`upgradeBackup`), and `upgradingFrom`, which says the upgrade has
+     not finished. It syncs the record's folder to disk, so that a power loss does not take the record back; when that
+     fails, the upgrade stops there (exit 1), with nothing else changed;
    - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
      controller, checked before the old one is let go and kept as `roof-controller-previous`;
    - a rig's HAT emulator, from the new release;
    - the kiosk's program, keeping the one it replaces as `hvo-roof-kiosk.previous`; and `hvo-roof` and the Mac app,
      keeping the ones they replace beside them.
-6. The record then says the new release, the one before it (`previousVersion`) for a rollback, and the backup
-   (`upgradeBackup`).
+6. The record is written again, without `upgradingFrom`: the upgrade has finished. It says the new release, the one
+   before it (`previousVersion`) for a rollback, and the backup (`upgradeBackup`).
 
 ```text
 $ sudo hvo-roof-install upgrade
@@ -1114,12 +1130,32 @@ Upgrading from 4.0.0 to 4.0.1.
 …
 ```
 
-An upgrade never goes back: a release older than the one installed is refused, and [Rolling back](#rolling-back) is
-the way back. The release that is installed already is checked, and repaired, as a second run of the installer would
-be: "4.0.1 is installed here: checking that everything is as it should be." So after a failed step or Ctrl+C,
-`upgrade` again carries on, with the new installer already in place. Once the new controller has replaced the old
-one, a run that carries on takes no new backup (the new controller may have moved its stores on): the record names the
-one taken before it.
+An upgrade never goes back: a release older than the one installed is refused (exit 3) and nothing changes, and
+[Rolling back](#rolling-back) is the way back. That holds for the latest release, `--version` and `--release DIR`
+(`install.sh --from`) alike, and a release candidate is older than its release: 4.0.1-rc.1 comes before 4.0.1. An
+installer older than the release installed does not install over it either. The release that is installed already is
+checked, and repaired, as a second run of the installer would be: "4.0.1 is installed here: checking that everything is
+as it should be."
+
+An upgrade that stops part way, at a failed step, Ctrl+C or a power loss, can leave parts of the new release in place: the new
+controller with the old kiosk, say, when the kiosk's download fails. Its record already says the new release, so
+nothing takes the controller back to the release the upgrade started from, except a rollback. `upgrade` again, with
+the new installer already in place, finishes it: "The upgrade from 4.0.0 to 4.0.1 did not finish here: finishing it."
+Once the new controller has replaced the old one, a run that finishes it takes no new backup (the new controller may
+have moved its stores on): the record names the one taken before it. `rollback` goes back to 4.0.0.
+`upgrade --version 4.0.0` is refused (exit 3) and changes nothing, as are the install,
+the wizard and `--plan` of an installer older than 4.0.1. That includes the installers of releases from before
+`upgradingFrom` (4.1.1 and earlier), which compare their own release with the record's, with one gap: they pick the
+record by who runs them, so their `--plan` of the machine's roles, run without `sudo`, checks your own record instead
+of the machine's, and checks nothing when you have none. Such a plan changes nothing, and making the changes needs
+`sudo`, which reads the machine's record and refuses.
+
+While an upgrade is unfinished, no other release goes over it: `upgrade` to another release, and the install, the
+wizard and `--plan` of a newer installer, are refused (exit 3) until it is finished or rolled back. Otherwise the
+unfinished release would become the one `rollback` goes back to, though the controller the deploy script kept may be
+the one from before it, when the upgrade stopped before the controller was replaced. When the unfinished release's
+files are gone, finishing it fails and says so; `rollback` needs only the release before's, and `upgrade` then goes on
+to the latest.
 
 ### State contracts
 
@@ -1179,6 +1215,11 @@ without sudo, which may not read the files, leaves them to the run as root ("whi
   upgrade kept beside them when those are the release before's. A release from before the installer was a release
   asset has no installer, and the one here stays.
 - The record says the release before, and the release it went back from (`rolledBackFrom`).
+
+After an upgrade that stopped part way, it goes back to the release that upgrade started from, with only that
+release's files: the unfinished release's are not needed. Each piece is checked
+against that release's own: the controller by its image's digest, the programs by their SHA-256. One the upgrade never
+reached is left as it is.
 
 It goes back one release, once: a rollback leaves no `previousVersion` or `upgradeBackup`, and running it again says
 so, changes nothing and exits 0. `upgrade` goes forward again. A machine with only one release ever installed has
@@ -1286,7 +1327,8 @@ changes nothing; `--release DIR` reads the release from a folder.
 
 - The archive must be root's and `0600` or `0400`. The restore checks the file it opened, as well as the path, so a
   file put in its place in between is refused too. A backup a newer installer made, or of a newer release, is refused:
-  restore it with that release's installer.
+  restore it with that release's installer. So is one made while an upgrade had not finished, unless the installer is
+  that upgrade's release, whose install finishes it.
 - A restore is for a machine with nothing installed. Uninstall first; a plain uninstall keeps the data, which the
   restore then replaces only with `--replace`, so the data is never overwritten by mistake.
 - The files go back with their modes and owners, and the install that follows checks them as any run does. The first
@@ -1344,16 +1386,22 @@ purposes:
 - to refuse a test rig on the real HAT's machine;
 - to upgrade, roll back or uninstall.
 
-It is written last, once everything before it is in place, and it holds no secret. Besides the roles and their
-choices, it says:
+It is written last, once everything before it is in place, and it holds no secret. An upgrade also writes it before
+its first change, once the stores are backed up ([Routine upgrades](#routine-upgrades)). Each time, the record's folder is synced to disk, so a power
+loss leaves the record as written: with `fsync` on Linux, and on a Mac with `F_FULLFSYNC`, which has the drive write
+its cache out too. A Mac's `fsync` can leave the record in that cache, so it is never used in its place: on a Mac,
+the record's folder must be on a file system that supports `F_FULLFSYNC`, as APFS on the Mac's own drive does, and
+not, say, a network share. A run that cannot sync it stops (exit 1): an upgrade, before its first change. Besides the
+roles and their choices, it says:
 
 | Field | What it says |
 |-------|--------------|
-| `version` | The release installed. |
+| `version` | The release installed, or, with `upgradingFrom`, the one an unfinished upgrade is installing. |
 | `installerVersion` | The installer that last wrote it. |
 | `previousVersion` | The release installed before the last upgrade: what `rollback` goes back to. A rollback clears it. |
 | `rolledBackFrom` | The release `rollback` went back from. An upgrade clears it. |
-| `upgradeBackup` | The backup the last upgrade took of the stores before it changed anything: what `rollback --restore-backup` puts back. A rollback or an uninstall clears it. |
+| `upgradeBackup` | The backup the last upgrade took of the stores before it changed anything, named from the upgrade's first change on: what `rollback --restore-backup` puts back. A rollback or an uninstall clears it. |
+| `upgradingFrom` | The release an upgrade started from, while the upgrade has not finished. From the upgrade's first change, `version` says the new release. The upgrade's last step clears it, as do `rollback` and `uninstall`. While it is there, only `version`'s release is installed, to finish the upgrade. |
 | `uninstalledAt` | When `uninstall` removed the roles, keeping the data and the choices. An install clears it. |
 | `installedAt`, `updatedAt` | When it was first written, and last. |
 

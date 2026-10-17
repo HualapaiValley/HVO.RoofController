@@ -306,9 +306,11 @@ public static class PlanBuilder
     /// <c>hvo-roof-install rollback</c>: what <paramref name="record"/> installed in its scope, put back to the release
     /// before, which the context's release is. The controller is swapped with the one the deploy script kept (nothing is
     /// pulled for it), the kiosk, hvo-roof and the Mac app with the programs kept beside them (or the release's), the
-    /// installer with its own, and the record says it went back from <paramref name="rolledBackFrom"/>. With
-    /// <paramref name="restore"/> (<c>--restore-backup</c>), the controller is stopped first, after a verified Stop of the
-    /// roof, and the stores the release before cannot read are put back from the backup the upgrade took, before the swap.
+    /// installer with its own, and the record says it went back from <paramref name="rolledBackFrom"/>. Each is checked
+    /// against the release before's own (the controller by its image's digest, the programs by their SHA-256) and left as
+    /// it is when it is that already, as after an upgrade that stopped part way. With <paramref name="restore"/>
+    /// (<c>--restore-backup</c>), the controller is stopped first, after a verified Stop of the roof, and the stores the
+    /// release before cannot read are put back from the backup the upgrade took, before the swap.
     /// </summary>
     public static InstallPlan BuildRollback(InstallerMachine machine, MachineSurvey survey, InstallRecord record, string rolledBackFrom, StateRestore? restore = null)
     {
@@ -358,7 +360,8 @@ public static class PlanBuilder
             InstallerVersion = context.Version,
             PreviousVersion = null,
             RolledBackFrom = rolledBackFrom,
-            UpgradeBackup = null
+            UpgradeBackup = null,
+            UpgradingFrom = null
         }));
         return new InstallPlan(steps);
     }
@@ -428,6 +431,7 @@ public static class PlanBuilder
                 PreviousVersion = null,
                 RolledBackFrom = null,
                 UpgradeBackup = null,
+                UpgradingFrom = null,
                 UninstalledAt = existing?.UninstalledAt ?? context.Time.GetUtcNow()
             }));
         }

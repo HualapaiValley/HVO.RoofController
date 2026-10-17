@@ -141,31 +141,96 @@ public sealed class InstallerSession
     public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true)
         => [.. VersionProblems(), .. RoleGuards.Check(Survey, Answers, planOnly, clientChosen)];
 
-    /// <summary>The record of this run's roles (the machine's as root, else the person's): what an upgrade starts from.</summary>
-    public InstallRecord? Record => Survey.IsRoot ? Survey.SystemRecord : Survey.UserRecord;
-
     /// <summary>
-    /// Why this installer will not install over what the record says: a newer release is installed. Going back is
-    /// <c>rollback</c>'s, which knows what the release before left; an older installer does not.
+    /// The records of this run's roles, what an upgrade starts from: the machine's for the machine's roles (the controller,
+    /// a rig on Linux, the kiosk) and the person's for theirs, whoever plans them. With no roles chosen yet, this run's: the
+    /// machine's as root, else the person's.
     /// </summary>
-    public IReadOnlyList<string> VersionProblems()
+    public IEnumerable<(InstallScope Scope, InstallRecord Record)> Records()
     {
-        if (Record is not { } record || !RoofSemVer.IsValid(record.Version) || !RoofSemVer.IsValid(Version) || !RoofSemVer.IsOlder(Version, record.Version))
+        var scopes = Answers.Roles.Select(role => InstallRoles.ScopeOf(role, Survey.Os)).Distinct().Order().ToArray();
+        foreach (var scope in scopes.Length > 0 ? scopes : [Survey.IsRoot ? InstallScope.System : InstallScope.User])
         {
-            return [];
+            if ((scope == InstallScope.System ? Survey.SystemRecord : Survey.UserRecord) is { } record)
+            {
+                yield return (scope, record);
+            }
         }
-
-        var sudo = Survey.IsRoot ? "sudo " : string.Empty;
-        return [record.UninstalledAt is null
-            ? $"{record.Version} is installed here, newer than this installer ({Version}). To go back to the release before it: {sudo}hvo-roof-install rollback"
-            : $"{record.Version} was uninstalled here, keeping its data, which is newer than this installer ({Version}). Install {record.Version} or newer, or remove the data first: {sudo}hvo-roof-install uninstall --purge"];
     }
 
-    /// <summary>"Upgrading from 4.0.0 to 4.0.1." when the record has an older release installed; null otherwise.</summary>
+    /// <summary>
+    /// Why this installer will not install over what the records of this run's roles say: a newer release is installed, or
+    /// was being installed, or another release's upgrade has not finished. Going back is <c>rollback</c>'s, which knows
+    /// what the release before left; an older installer does not. A newer one waits for the unfinished upgrade to be
+    /// finished or rolled back (<see cref="UnfinishedUpgradeProblem"/>).
+    /// </summary>
+    public IReadOnlyList<string> VersionProblems()
+        => [.. Records()
+            .Where(entry => RoofSemVer.IsValid(entry.Record.Version) && RoofSemVer.IsValid(Version)
+                && (RoofSemVer.IsOlder(Version, entry.Record.Version) || entry.Record is { UpgradingFrom: not null, UninstalledAt: null } && entry.Record.Version != Version))
+            .Select(entry => VersionProblem(entry.Scope, entry.Record))];
+
+    /// <summary>
+    /// Why <paramref name="doing"/> (upgrading to 4.0.2, installing 4.0.2) waits while the record has an upgrade that did not
+    /// finish. Another release over it would make the unfinished release the one <c>rollback</c> goes back to, though the
+    /// deploy script may have kept the controller from before it (when the upgrade stopped before replacing it), and the
+    /// rollback would be refused. Going back needs only the release before's files, so it works when the unfinished
+    /// release's are gone.
+    /// </summary>
+    internal static string UnfinishedUpgradeProblem(InstallScope scope, InstallRecord record, string doing)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var sudo = scope == InstallScope.System ? "sudo " : string.Empty;
+        return $"The upgrade from {record.UpgradingFrom} to {record.Version} did not finish here: finish it, or go back, before {doing}, so that rollback still goes back to the controller the deploy script kept. "
+            + $"Finish it with {sudo}hvo-roof-install upgrade --version {record.Version}, or go back to {record.UpgradingFrom} with {sudo}hvo-roof-install rollback (it needs only {record.UpgradingFrom}'s release), then run this again";
+    }
+
+    private string VersionProblem(InstallScope scope, InstallRecord record)
+    {
+        var sudo = scope == InstallScope.System ? "sudo " : string.Empty;
+        return record switch
+        {
+            { UpgradingFrom: not null, UninstalledAt: null } when RoofSemVer.IsOlder(record.Version, Version) =>
+                UnfinishedUpgradeProblem(scope, record, $"installing {Version}"),
+            { UpgradingFrom: { } from, UninstalledAt: null } =>
+                $"The upgrade from {from} to {record.Version} did not finish here, and parts of {record.Version} may be in place, newer than this installer ({Version}). "
+                + $"Finish it ({sudo}hvo-roof-install upgrade --version {record.Version}), or go back to {from} ({sudo}hvo-roof-install rollback)",
+            { UpgradingFrom: { } from } =>
+                $"The install of {record.Version} over {from}'s data did not finish here, and parts of it may be in place, newer than this installer ({Version}). "
+                + $"Install {record.Version} or newer, or remove the data first: {sudo}hvo-roof-install uninstall --purge",
+            { UninstalledAt: null } =>
+                $"{record.Version} is installed here, newer than this installer ({Version}). To go back to the release before it: {sudo}hvo-roof-install rollback",
+            _ =>
+                $"{record.Version} was uninstalled here, keeping its data, which is newer than this installer ({Version}). Install {record.Version} or newer, or remove the data first: {sudo}hvo-roof-install uninstall --purge"
+        };
+    }
+
+    /// <summary>
+    /// "Upgrading from 4.0.0 to 4.0.1." when a record of this run's roles has an older release installed, "Finishing the
+    /// upgrade from 4.0.0 to 4.0.1." when it has this release's upgrade unfinished; null otherwise.
+    /// </summary>
     public string? UpgradeLine()
-        => Record is { UninstalledAt: null } record && RoofSemVer.IsValid(record.Version) && RoofSemVer.IsValid(Version) && RoofSemVer.IsOlder(record.Version, Version)
-            ? $"Upgrading from {record.Version} to {Version}."
-            : null;
+    {
+        foreach (var (_, record) in Records())
+        {
+            if (record.UninstalledAt is not null || !RoofSemVer.IsValid(record.Version) || !RoofSemVer.IsValid(Version))
+            {
+                continue;
+            }
+
+            if (RoofSemVer.IsOlder(record.Version, Version))
+            {
+                return $"Upgrading from {record.Version} to {Version}.";
+            }
+
+            if (record is { UpgradingFrom: { } from } && record.Version == Version)
+            {
+                return $"Finishing the upgrade from {from} to {Version}.";
+            }
+        }
+
+        return null;
+    }
 
     public InstallContext Context => ContextFor(null);
 
@@ -196,18 +261,19 @@ public sealed class InstallerSession
     }
 
     /// <summary>
-    /// For an upgrade of the machine's controller on Linux (an older release recorded, and installed), the backup of its
-    /// stores the plan takes first; null otherwise.
+    /// For an upgrade of the machine's controller on Linux (an older release recorded, and installed, or this release's
+    /// upgrade not finished), the backup of its stores the plan takes first, of the release the upgrade started from; null
+    /// otherwise.
     /// </summary>
     public UpgradeBackupStep? UpgradeBackup()
     {
-        if (Machine.Os != InstallerOs.Linux || !Survey.IsRoot || UpgradeLine() is null || Record is not { } record
+        if (Machine.Os != InstallerOs.Linux || !Survey.IsRoot || UpgradeLine() is null || Survey.SystemRecord is not { } record
             || !InstallRoles.RunsController(record.Roles))
         {
             return null;
         }
 
-        return new UpgradeBackupStep(record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version), HandedOverBackup);
+        return new UpgradeBackupStep(record.UpgradingFrom ?? record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version), HandedOverBackup);
     }
 
     /// <summary>
@@ -228,8 +294,21 @@ public sealed class InstallerSession
 
         await Prerequisites.PrepareAsync(this, cancellationToken).ConfigureAwait(false);
         Log.Write($"Installing {InstallRoles.Describe(Answers.Roles)}: {PlanText.Summary(plan)}");
-        await plan.ApplyAsync(ContextFor(progress), progress, cancellationToken).ConfigureAwait(false);
+        await plan.ApplyAsync(ContextFor(progress), progress, cancellationToken, beforeChanges: context => MarkUpgradeStarted(plan, context)).ConfigureAwait(false);
         Log.Write($"Installed {InstallRoles.Describe(Answers.Roles)}.");
+    }
+
+    // An upgrade, or a reinstall over an older release's data, says its release in each record it writes before its first
+    // change, synced to disk: one that stops part way, or loses power, then leaves a record that no installer goes back
+    // from but rollback. The upgrade's backup comes first (PlanStep.OnlyCopies), so a backup refused leaves the record as
+    // it was; the machine's record then names that backup.
+    private static void MarkUpgradeStarted(CheckedPlan plan, InstallContext context)
+    {
+        var backup = plan.Steps.Select(step => step.Step).OfType<UpgradeBackupStep>().FirstOrDefault()?.Kept;
+        foreach (var record in plan.Steps.Select(step => step.Step).OfType<RecordStep>())
+        {
+            record.MarkUpgradeStarted(context, backup);
+        }
     }
 
     /// <summary>Where the wizard offers to save the answers: the folder the installer was started in.</summary>
@@ -577,5 +656,6 @@ public sealed class InstallerSession
     internal static string Date(DateTimeOffset? date) => date is { } value ? AuthorityAssessment.Date(value.UtcDateTime) : "?";
 
     private static string DescribeRecord(InstallRecord? record, string whose)
-        => record is null ? $"nothing in {whose} record" : $"{InstallRoles.Describe(record.Roles)} {record.Version} in {whose} record";
+        => record is null ? $"nothing in {whose} record"
+            : $"{InstallRoles.Describe(record.Roles)} {record.Version} in {whose} record{(record.UpgradingFrom is { } from ? $" (its upgrade from {from} did not finish)" : string.Empty)}";
 }

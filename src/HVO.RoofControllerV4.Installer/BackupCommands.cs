@@ -577,6 +577,14 @@ internal static class BackupCommands
                 $"The backup is of {record.Version}, newer than this installer ({version}): restore it with release {record.Version}'s installer, from {ReleaseManifest.PageUri(record.Version)}.");
         }
 
+        // The install after it would refuse another release over that unfinished upgrade (InstallerSession.VersionProblems),
+        // once the files were back: refused before them.
+        if (record is { UpgradingFrom: { } started, UninstalledAt: null, Roles.Count: > 0 } && record.Version != version)
+        {
+            throw new InstallerRefusedException(
+                $"The backup was made while the upgrade from {started} to {record.Version} had not finished: restore it with release {record.Version}'s installer, from {ReleaseManifest.PageUri(record.Version)}, which finishes it.");
+        }
+
         var session = await InstallerSession.StartAsync(
             machine,
             planOnly ? InstallLog.None : InstallLog.Open(machine, InstallPaths.Log(machine), host.Time),

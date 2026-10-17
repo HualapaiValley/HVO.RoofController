@@ -27,6 +27,9 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
 
     public override string Purpose => $"the settings, identity store and secrets as {from} has them, backed up before the upgrade (no logs)";
 
+    /// <summary>It only copies the stores: an upgrade's record is marked once it is taken, so one refused leaves the record as it was.</summary>
+    public override bool OnlyCopies => true;
+
     /// <summary>
     /// The backup the record names once the upgrade is done: this one, or the one an earlier run of the same upgrade took
     /// before it replaced the controller. Null when there is none. Set by the last check.
