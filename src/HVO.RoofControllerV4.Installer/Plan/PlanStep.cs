@@ -148,6 +148,13 @@ public abstract class PlanStep
     /// </summary>
     public virtual IReadOnlyList<InstallSecret> SecretsNeeded(StepCheck check) => [];
 
+    /// <summary>
+    /// True for a step that only copies what is there and changes nothing the install uses, as the upgrade's backup
+    /// does: it runs before <see cref="CheckedPlan.ApplyAsync"/>'s <c>beforeChanges</c>, so one that refuses leaves an
+    /// upgrade's record as it was.
+    /// </summary>
+    public virtual bool OnlyCopies => false;
+
     /// <summary>Makes the change <paramref name="check"/> found. Called only when it makes one.</summary>
     public abstract Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken);
 

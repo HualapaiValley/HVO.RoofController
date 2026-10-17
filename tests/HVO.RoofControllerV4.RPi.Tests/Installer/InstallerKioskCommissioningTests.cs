@@ -43,8 +43,8 @@ public sealed class InstallerKioskCommissioningTests
         machine.Write(layout.IdentityFile, "{\"schemaVersion\":3}");
         var release=HVO.RoofControllerV4.Installer.Deployment.ReleaseManifest.Parse(FakeMachine.ReleaseJson(), "4.0.0");
         foreach(var schema in new[]{1,2})
-            IdentitySchemaGuard.Problem(machine.Machine,layout.IdentityFile,release with {IdentityStoreSchema=schema}).Should().Contain("refused");
-        IdentitySchemaGuard.Problem(machine.Machine,layout.IdentityFile,release with {IdentityStoreSchema=3}).Should().BeNull();
+            StateContractGuard.Problem(machine.Machine,layout,release with {IdentityStoreSchema=schema}).Should().Contain("refused");
+        StateContractGuard.Problem(machine.Machine,layout,release with {IdentityStoreSchema=3}).Should().BeNull();
         machine.Read(layout.IdentityFile).Should().Be("{\"schemaVersion\":3}");
     }
 

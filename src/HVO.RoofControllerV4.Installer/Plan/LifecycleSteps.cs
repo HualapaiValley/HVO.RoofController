@@ -64,9 +64,11 @@ public sealed class InstallerProgramStep(InstallScope scope, InstallerMachine ma
 /// The controller put back to the release before (<c>hvo-roof-install rollback</c>): the deploy script's
 /// <c>--rollback</c> swaps it with the one it kept as <c>roof-controller-previous</c>, after the same verified Stop of the
 /// roof a deploy makes, and checks the one put back as it checks a new one. Nothing is pulled: the one kept is the
-/// release before's, by digest, or there is nothing to go back to.
+/// release before's, by digest, or there is nothing to go back to. The release before must read the stores here, or the
+/// ones <paramref name="restored"/> says the steps before it put back from the backup the upgrade took
+/// (<see cref="StateRestoreStep"/>).
 /// </summary>
-public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
+public sealed class ControllerRollbackStep(ControllerStep controller, IReadOnlyList<StoreState>? restored = null) : PlanStep
 {
     /// <summary>The controller the deploy script kept when it replaced it: what <c>--rollback</c> puts back.</summary>
     public const string PreviousContainer = MachineSurveyor.ControllerContainer + "-previous";
@@ -88,7 +90,9 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
         _deployKeyFile = null;
         var machine = context.Machine;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
-        if (IdentitySchemaGuard.Problem(machine, ControllerLayout.For(machine).IdentityFile, release) is { } schemaProblem)
+        var states = StateContractGuard.Read(machine, ControllerLayout.For(machine))
+            .Select(state => restored?.FirstOrDefault(put => put.Store == state.Store) ?? state).ToArray();
+        if (StateContractGuard.Problem(states, release) is { } schemaProblem)
             return new StepCheck(StepChange.Blocked, schemaProblem);
         var current = await MachineSurveyor.SurveyContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
         if (current is { IsRunning: true } && current.ImageDigest == release.Controller.Digest)
@@ -146,6 +150,18 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
     {
         ArgumentNullException.ThrowIfNull(context);
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+
+        // The stores the controller before will read are on disk first, put back by the steps before or by a run before
+        // this one: a power loss after the swap must not take them back from under it.
+        try
+        {
+            StateContractGuard.MakeDurable(context.Machine, ControllerLayout.For(context.Machine));
+        }
+        catch (IOException error)
+        {
+            throw new InstallerException($"Before the controller before is started, the installer could not make sure that the stores here are on disk: {error.Message} Nothing was swapped; run the rollback again.", error);
+        }
+
         using var work = new DeployScript.WorkFolder(context.Machine);
         var environment = await controller.EnvironmentAsync(context, work, release.Controller.Reference, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--rollback").ConfigureAwait(false);
@@ -165,9 +181,10 @@ public sealed class ControllerRollbackStep(ControllerStep controller) : PlanStep
 }
 
 /// <summary>
-/// The controller stopped before it is removed (<c>hvo-roof-install uninstall</c>): the deploy script's <c>--stop</c>
-/// makes the same verified Stop of the roof a deploy makes, then stops the container gracefully. The roof is never left
-/// moving with no controller.
+/// The controller stopped before it is removed (<c>hvo-roof-install uninstall</c>) or its stores are put back
+/// (<c>rollback --restore-backup</c>): the deploy script's <c>--stop</c> makes the same verified Stop of the roof a deploy
+/// makes, then stops the container gracefully. The roof is never left moving with no controller. Docker must say the
+/// controller is not there or stopped: one Docker cannot answer for is never taken for none.
 /// </summary>
 public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
 {
@@ -184,12 +201,21 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
         ArgumentNullException.ThrowIfNull(context);
         _deployKeyFile = null;
         var machine = context.Machine;
-        if (await MachineSurveyor.SurveyContainerAsync(machine, ControllerRollbackStep.SwapContainer, cancellationToken).ConfigureAwait(false) is not null)
+        ContainerSurvey? current;
+        try
         {
-            return new StepCheck(StepChange.Blocked, ControllerRollbackStep.SwapProblem);
+            if (await MachineSurveyor.ConfirmContainerAsync(machine, ControllerRollbackStep.SwapContainer, cancellationToken).ConfigureAwait(false) is not null)
+            {
+                return new StepCheck(StepChange.Blocked, ControllerRollbackStep.SwapProblem);
+            }
+
+            current = await MachineSurveyor.ConfirmContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InstallerException error)
+        {
+            return new StepCheck(StepChange.Blocked, error.Message.TrimEnd('.'));
         }
 
-        var current = await MachineSurveyor.SurveyContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
         if (current is null)
         {
             return StepCheck.Unchanged("not there");
@@ -230,7 +256,7 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
         // --stop deploys no image, and ignores IMAGE_REF.
         var environment = await controller.EnvironmentAsync(context, work, string.Empty, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--stop").ConfigureAwait(false);
-        var now = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
+        var now = await MachineSurveyor.ConfirmContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
         if (now is { IsStopped: false })
         {
             throw new InstallerException($"The deploy script's --stop finished, but {Target} is {now.State}: see docker ps and the install log.");
