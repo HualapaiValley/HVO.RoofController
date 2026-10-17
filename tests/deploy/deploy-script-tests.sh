@@ -2633,9 +2633,11 @@ test_a_folder_put_in_the_place_of_the_scripts_own_is_left_as_it_is() {
 
     assert_status 0
     assert_container roof-controller new true unless-stopped
-    local archive_dir work_dir
-    archive_dir=$(find "${WORK}" -maxdepth 1 -name 'hvo-roof-archive.*' ! -name '*.moved' ! -name '*.target')
-    work_dir=$(find "${WORK}" -maxdepth 1 -name 'hvo-roof-deploy.*' ! -name '*.moved' ! -name '*.target')
+    # The script names its folders by their physical paths (on macOS, the temporary folder's /var is /private/var).
+    local archive_dir work_dir here
+    here=$(cd -P -- "${WORK}" && pwd)
+    archive_dir=$(find "${here}" -maxdepth 1 -name 'hvo-roof-archive.*' ! -name '*.moved' ! -name '*.target')
+    work_dir=$(find "${here}" -maxdepth 1 -name 'hvo-roof-deploy.*' ! -name '*.moved' ! -name '*.target')
     [[ -n "${archive_dir}" && -n "${work_dir}" ]] || fail_test "${kind}: the folders put in place of the script's were removed"
     if [[ "${kind}" == 0700 ]]; then
       assert_output_contains "[load] WARNING: ${archive_dir} holds more than this script put there, so it was left as it is."
