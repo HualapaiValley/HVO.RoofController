@@ -60,10 +60,11 @@ public sealed class DeployToolsStep : PlanStep
 }
 
 /// <summary>
-/// A rig's HAT emulator: the release's image, pulled by its digest and run on a Docker network of its own
-/// (<see cref="Network"/>), where the controller reaches its register port; its unauthenticated control API and camera
-/// are published on this machine's loopback address only. One that differs from the answers or the release is
-/// replaced (the emulated roof starts again where the emulator starts it); one Docker Compose made is never touched.
+/// A rig's HAT emulator: the release's image, pulled by its digest (or loaded from the release's offline archive, from
+/// a release's folder: <see cref="OfflineImages"/>) and run on a Docker network of its own (<see cref="Network"/>), where
+/// the controller reaches its register port; its unauthenticated control API and camera are published on this
+/// machine's loopback address only. One that differs from the answers or the release is replaced (the emulated roof
+/// starts again where the emulator starts it); one Docker Compose made is never touched.
 /// </summary>
 public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
 {
@@ -81,13 +82,25 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
 
     public override string Purpose => "the HAT emulator: the roof, drive and limit switches the rig drives";
 
+    /// <summary>What the archive of the HAT emulator's image is, in what the installer says about it.</summary>
+    internal const string ImageDescription = "the HAT emulator's image";
+
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
+    {
+        var check = await CheckChangeAsync(context, cancellationToken).ConfigureAwait(false);
+        var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+        return check.MakesChange && await OfflineImages.ProblemAsync(context, release, release.HatEmulator, ImageDescription).ConfigureAwait(false) is { } problem
+            ? new StepCheck(StepChange.Blocked, problem)
+            : check;
+    }
+
+    private async Task<StepCheck> CheckChangeAsync(InstallContext context, CancellationToken cancellationToken)
     {
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)
         {
-            return new StepCheck(StepChange.Create, $"release {release.Version}'s image by digest, on the {Network} network, its control API on {ControlAddress}:{ControlPort}");
+            return new StepCheck(StepChange.Create, $"release {release.Version}'s image {OfflineImages.How(context, release.HatEmulator)}, on the {Network} network, its control API on {ControlAddress}:{ControlPort}");
         }
 
         if (container.Origin == ContainerOrigin.Compose)
@@ -97,7 +110,10 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
                 $"Docker Compose made it (project {container.ComposeProject}), and the installer does not replace it. Remove it with that project (docker compose down), then run the installer again.");
         }
 
-        var reason = container.ImageDigest != release.HatEmulator.Digest ? $"replaced with release {release.Version}'s image"
+        // One run by its image's ID is the release's only when Docker's ID for that image is one the release gives it.
+        var platform = ControllerStep.Platform(context.Machine);
+        var claim = container.FalseClaim(release.HatEmulator, platform) is { } falseClaim ? $": {falseClaim}" : string.Empty;
+        var reason = !container.Runs(release.HatEmulator, platform) ? $"replaced with release {release.Version}'s image{claim}"
             : container.Network != Network ? $"replaced on the {Network} network"
             : !container.PublishedPorts.SequenceEqual([ControlPort]) || container.PublishAddress != ControlAddress ? $"replaced with its control API on {ControlAddress}:{ControlPort} only"
             : !Same(container.EmulatorTimeScale, RigSettings.DefaultTimeScale, rig.TimeScale) ? $"replaced to run {Number(rig.TimeScale)} times as fast as real time"
@@ -112,17 +128,29 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
     {
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
-        var image = release.HatEmulator.Reference;
-        await Docker(context, "pull the HAT emulator's image", TimeSpan.FromMinutes(20), cancellationToken, "pull", "--platform", ControllerStep.Platform(context.Machine), image).ConfigureAwait(false);
+        string image;
+        IReadOnlyList<string> options = [];
+        if (OfflineImages.For(context, release.HatEmulator) is { } archive)
+        {
+            // From the release's folder: loaded, checked, and run by its ID, with nothing pulled.
+            image = await OfflineImages.LoadAsync(context, release, release.HatEmulator, archive, ImageDescription, cancellationToken).ConfigureAwait(false);
+            options = OfflineImages.RunOptions(release.HatEmulator);
+        }
+        else
+        {
+            image = release.HatEmulator.Reference;
+            await Docker(context, "pull the HAT emulator's image", TimeSpan.FromMinutes(20), cancellationToken, "pull", "--platform", ControllerStep.Platform(context.Machine), image).ConfigureAwait(false);
+        }
+
         if (!await StopEmulatedControllerAsync(context, cancellationToken).ConfigureAwait(false))
         {
-            await StartAsync(context, check, image, cancellationToken).ConfigureAwait(false);
+            await StartAsync(context, check, image, options, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         try
         {
-            await StartAsync(context, check, image, cancellationToken).ConfigureAwait(false);
+            await StartAsync(context, check, image, options, cancellationToken).ConfigureAwait(false);
         }
         catch (InstallerException error)
         {
@@ -133,7 +161,7 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
         }
     }
 
-    private async Task StartAsync(InstallContext context, StepCheck check, string image, CancellationToken cancellationToken)
+    private async Task StartAsync(InstallContext context, StepCheck check, string image, IReadOnlyList<string> options, CancellationToken cancellationToken)
     {
         var network = await context.Machine.Commands.RunAsync(new CommandLine("docker", "network", "inspect", Network), cancellationToken).ConfigureAwait(false);
         if (!network.Succeeded)
@@ -152,11 +180,14 @@ public sealed class HatEmulatorStep(RigSettings rig) : PlanStep
             $"start {Target}",
             TimeSpan.FromMinutes(2),
             cancellationToken,
-            "run", "-d", "--name", Target, "--network", Network, "--restart", "unless-stopped",
-            "-p", string.Create(CultureInfo.InvariantCulture, $"{ControlAddress}:{ControlPort}:{ControlPort}"),
-            "--env", $"{MachineSurveyor.EmulatorTimeScaleSetting}={Number(rig.TimeScale)}",
-            "--env", $"{MachineSurveyor.EmulatorCameraFramesSetting}={Number(rig.CameraFramesPerSecond)}",
-            image).ConfigureAwait(false);
+            [
+                "run", "-d", "--name", Target, "--network", Network, "--restart", "unless-stopped",
+                "-p", string.Create(CultureInfo.InvariantCulture, $"{ControlAddress}:{ControlPort}:{ControlPort}"),
+                "--env", $"{MachineSurveyor.EmulatorTimeScaleSetting}={Number(rig.TimeScale)}",
+                "--env", $"{MachineSurveyor.EmulatorCameraFramesSetting}={Number(rig.CameraFramesPerSecond)}",
+                .. options,
+                image
+            ]).ConfigureAwait(false);
         context.Log.Write($"Started {Target} from {image}.");
 
         // Its health check asks its control API; the controller's deploy needs it answering.
@@ -271,6 +302,9 @@ public sealed class ControllerStep(
     /// </summary>
     public bool CertificateOnly { get; set; }
 
+    /// <summary>What the archive of the controller's image is, in what the installer says about it.</summary>
+    internal const string ImageDescription = "the controller's image";
+
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
         MoreThanCertificateChanged = false;
@@ -278,6 +312,16 @@ public sealed class ControllerStep(
         if (check.MakesChange && RefusedKey(context.Machine) is { } refused)
         {
             return refused;
+        }
+
+        // From a release's folder, the deploy script loads the image from its offline archive, which must be there.
+        if (check.MakesChange)
+        {
+            var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+            if (await OfflineImages.ProblemAsync(context, release, release.Controller, ImageDescription).ConfigureAwait(false) is { } missing)
+            {
+                return new StepCheck(StepChange.Blocked, missing);
+            }
         }
 
         if (CertificateOnly && check.MakesChange && !OnlyCertificateDiffers)
@@ -328,7 +372,7 @@ public sealed class ControllerStep(
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)
         {
-            return new StepCheck(StepChange.Create, $"release {release.Version} by digest, through the deploy script, with {settings.Resources.Describe()}");
+            return new StepCheck(StepChange.Create, $"release {release.Version} {OfflineImages.How(context, release.Controller)}, through the deploy script, with {settings.Resources.Describe()}");
         }
 
         if (container.Origin == ContainerOrigin.Compose)
@@ -419,9 +463,14 @@ public sealed class ControllerStep(
             return "redeployed to answer only to its names (it answers to any)";
         }
 
-        if (container.ImageDigest != release.Controller.Digest)
+        // One run by its image's ID is the release's only when Docker's ID for that image is one the release gives it: its
+        // label alone is a claim. One that only claims it is replaced as any other image is, after the verified Stop.
+        var platform = Platform(context.Machine);
+        if (!container.Runs(release.Controller, platform))
         {
-            return $"redeployed as release {release.Version} (it runs {(container.Version is { } version ? $"version {version}" : "another image")})";
+            return container.FalseClaim(release.Controller, platform) is { } claim
+                ? $"redeployed as release {release.Version}: {claim}"
+                : $"redeployed as release {release.Version} (it runs {(container.Version is { } version ? $"version {version}" : "another image")})";
         }
 
         // Its limits and privileges are the deploy script's (docs/deployment.md, "The container's privileges and limits").
@@ -615,12 +664,20 @@ public sealed class ControllerStep(
     {
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         using var work = new DeployScript.WorkFolder(context.Machine);
-        var environment = await EnvironmentAsync(context, work, release.Controller.Reference, _deployKeyFile, cancellationToken).ConfigureAwait(false);
+
+        // From a release's folder, the deploy script loads the image from its offline archive, checked here first: it loads
+        // a copy of its own, which must have release.json's SHA-256 for the archive.
+        (string Path, string Sha256)? archive = OfflineImages.For(context, release.Controller) is { } offline
+            ? (await OfflineImages.PathAsync(context, release, offline, work, cancellationToken).ConfigureAwait(false), offline.Sha256)
+            : null;
+        var environment = await EnvironmentAsync(context, work, release.Controller.Reference, archive, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await RunScriptAsync(context, work, environment, cancellationToken).ConfigureAwait(false);
         var deployed = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, CancellationToken.None).ConfigureAwait(false);
-        if (deployed is not { IsRunning: true } || deployed.ImageDigest != release.Controller.Digest)
+        var platform = Platform(context.Machine);
+        if (deployed is not { IsRunning: true } || !deployed.Runs(release.Controller, platform))
         {
-            throw new InstallerException($"The deploy script finished, but {Target} does not run release {release.Version}'s image: see docker ps and the install log.");
+            var claim = deployed?.FalseClaim(release.Controller, platform) is { } falseClaim ? $" ({falseClaim})" : string.Empty;
+            throw new InstallerException($"The deploy script finished, but {Target} does not run release {release.Version}'s image{claim}: see docker ps and the install log.");
         }
 
         context.Log.Write($"Deployed {Target}: release {release.Version}, verified by the deploy script.");
@@ -628,14 +685,18 @@ public sealed class ControllerStep(
 
     /// <summary>
     /// What the deploy script runs with for this controller: <paramref name="imageReference"/> (a release's image by
-    /// digest; <c>--rollback</c> and <c>--stop</c> ignore it), and <paramref name="keyFile"/> for its verified Stop (the
-    /// operator key's file when null). The settings, names and trust are the plan's, so every mode checks the controller
-    /// the same way.
+    /// digest; <c>--rollback</c> and <c>--stop</c> ignore it), <paramref name="imageArchive"/> (the release's offline
+    /// archive of that image and its SHA-256 in release.json: the script copies it into a folder of its own inside
+    /// <paramref name="work"/>, checks that the copy has that SHA-256, and loads the copy in place of a pull; null to pull
+    /// it), and <paramref name="keyFile"/>
+    /// for its verified Stop (the operator key's file when null). The settings, names and trust are the plan's, so every
+    /// mode checks the controller the same way.
     /// </summary>
     internal async Task<Dictionary<string, string>> EnvironmentAsync(
         InstallContext context,
         DeployScript.WorkFolder work,
         string imageReference,
+        (string Path, string Sha256)? imageArchive,
         string? keyFile,
         CancellationToken cancellationToken)
     {
@@ -654,6 +715,8 @@ public sealed class ControllerStep(
             ["REMOTE_CONNECT_TO"] = host == "localhost" ? string.Empty : "::127.0.0.1:",
             ["DOCKER_CONTEXT"] = dockerContext.Succeeded && dockerContext.Output.Trim() is { Length: > 0 } name ? name : "default",
             ["IMAGE_REF"] = imageReference,
+            ["IMAGE_ARCHIVE"] = imageArchive?.Path ?? string.Empty,
+            ["IMAGE_ARCHIVE_SHA256"] = imageArchive?.Sha256 ?? string.Empty,
             ["BUILD_PLATFORM"] = Platform(context.Machine),
             ["CONTAINER_NAME"] = Target,
             ["HOST_PORT"] = Port(settings.HttpPort),
@@ -691,6 +754,13 @@ public sealed class ControllerStep(
             ["OPERATOR_KEY_FILE"] = keyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),
             ["ROOF_OPERATOR_API_KEY"] = string.Empty
         };
+        if (imageArchive is not null)
+        {
+            // The script's copy of the archive goes in TMPDIR: here, inside the installer's own folder, which only root can
+            // open and which goes when the run ends, even if the script could not remove its copy itself.
+            environment["TMPDIR"] = work.Path;
+        }
+
         if (settings.LinuxAuth is { Enabled: true })
         {
             environment["LINUX_AUTH_ENABLED"] = "true";

@@ -30,7 +30,10 @@
 #              publishes it, pushed to a registry of this run's own on loopback and deployed by the index's digest with
 #              no build; a reference without a digest, a digest the registry does not hold and an image with nothing for
 #              the other platform each change nothing; --rollback between the pulled and the built version, with an
-#              IMAGE_REF it ignores.
+#              IMAGE_REF it ignores. Then a release offline (#127): its image split into its offline archives by
+#              build/release-assets.py, the registry removed, and the archive deployed (IMAGE_ARCHIVE), loaded and run
+#              by its ID with nothing pulled; an archive of another image changes nothing; --rollback to the pulled
+#              version and back.
 #
 # The controller runs as the deploy script runs it (docs/deployment.md, "The container's privileges and limits"): a
 # read-only root filesystem, only the supervisor's capabilities and the default limits (512 processes, and no CPU or
@@ -191,6 +194,9 @@ cleanup() {
   # The pulled image (by its digest); the images the run built stay, as the build cache.
   docker images --digests --format '{{.Repository}}@{{.Digest}}' "${release_repository}" 2>/dev/null \
     | grep '@sha256:' | xargs -r docker rmi >/dev/null 2>&1
+  # The image loaded from its offline archive, by its tag: the classic image store gives it no digest.
+  docker images --format '{{.Repository}}:{{.Tag}}' "${release_repository}" 2>/dev/null \
+    | grep -v ':<none>$' | xargs -r docker rmi >/dev/null 2>&1
   docker network rm "${network}" >/dev/null 2>&1
   write_results
   # The fixtures are root's.
@@ -2045,6 +2051,78 @@ scenario_pull() {
   relays_stayed_off
   assert_relays_off
   pass "deployed the two-platform index ${digest:0:19}... from a registry in ${pull_seconds} s with no build; a reference without a digest, a digest the registry does not hold and an image with nothing for ${other_platform} each changed nothing; --rollback swapped to the built version and back; relays 0 throughout"
+
+  # Still C12 step 11, for a release installed without a registry.
+  current_check="C12 step 11: a released image loaded from its offline archive, with no registry"
+  # Another release of the same image, split into its offline archives as build/release-assets.py splits the archive
+  # the release workflow pushed; then the registry goes, so nothing can be pulled.
+  local offline_tag=4.0.0-offline offline_digest offline_ref archive loaded_id
+  printf 'FROM %s\nLABEL org.opencontainers.image.version=%s\n' "${image}" "${offline_tag}" > "${work}/release-image/Dockerfile"
+  printf 'FROM scratch\nLABEL org.opencontainers.image.version=%s\n' "${offline_tag}" > "${work}/other-image/Dockerfile"
+  push_image "${platform}" "${work}/release-image" "${offline_tag}-${platform#linux/}"
+  single=${PUSHED_DIGEST}
+  push_image "${other_platform}" "${work}/other-image" "${offline_tag}-${other_platform#linux/}"
+  other=${PUSHED_DIGEST}
+  docker buildx imagetools create --progress quiet -t "${release_repository}:${offline_tag}" \
+    "${release_repository}@${single}" "${release_repository}@${other}" >/dev/null \
+    || fail "could not push the offline release's index"
+  offline_digest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${release_repository}:${offline_tag}" | jq -r .digest)
+  [[ "${offline_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "the registry reported no index digest for ${release_repository}:${offline_tag}"
+  offline_ref="${release_repository}:${offline_tag}@${offline_digest}"
+  mkdir -p "${work}/offline"
+  "${repo_root}/tests/releasing/offline-archives-from-registry.py" "127.0.0.1:${registry_port}" "${release_repository#*/}" \
+    "${offline_digest}" roof-controller "${release_repository}" "${offline_tag}" "${work}/offline" > "${work}/offline.json" \
+    || fail "could not make the offline archives"
+  archive="${work}/offline/roof-controller-${offline_tag}-linux-${platform#linux/}.oci.tar"
+  [[ -f "${archive}" ]] || fail "there is no offline archive for ${platform}"
+  docker rm -f "${registry_name}" >/dev/null || fail "could not remove the registry"
+  ! registry_ready || fail "the registry still answers"
+
+  start_relay_monitor
+  deploy "IMAGE_REF=${offline_ref}" "IMAGE_ARCHIVE=${archive}"
+  (( DEPLOY_STATUS == 0 )) || fail "the deploy from the offline archive failed (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[load] ${archive} holds ${offline_digest}, with its image for ${platform}"
+  expect_deploy_log "[load] Checking a copy of ${archive} that only this user can change (SHA-256 "
+  expect_deploy_log "[load] Loading the checked copy of ${archive} into Docker context 'default' (nothing is pulled)..."
+  expect_deploy_log "[load] ${offline_digest} for ${platform}, image sha256:"
+  expect_deploy_log ": version ${offline_tag}"
+  expect_deploy_log "[done] Deployment complete and verified at ${roof}"
+  ! deploy_log_has "[pull]" || fail "the deploy from the offline archive pulled"
+  loaded_id=$(container_image "${controller}")
+  jq -e --arg id "${loaded_id}" --arg digest "${offline_digest}" --arg platform "${platform}" \
+    '.[] | select(.platform == $platform) | [$digest, .manifestDigest, .configDigest] | index($id) != null' \
+    "${work}/offline.json" >/dev/null || fail "${controller} runs ${loaded_id}, which is not one of the archive's IDs"
+  [[ "$(docker inspect --format '{{.Config.Image}}' "${controller}")" == "${loaded_id}" ]] \
+    || fail "${controller} was not run by its image's ID"
+  [[ "$(docker inspect --format '{{index .Config.Labels "io.hvo.roof.release-image"}}' "${controller}")" == "${offline_ref}" ]] \
+    || fail "${controller} does not carry the release-image label naming ${offline_ref}"
+  [[ "$(container_id "${previous}")" == "${new_id}" ]] || fail "the pulled controller is not kept as ${previous}"
+  web_ui_live || fail "the web UI is not live at ${web}"
+  relays_stayed_off
+  assert_relays_off
+  local offline_seconds=${DEPLOY_SECONDS} offline_id
+  offline_id=$(container_id "${controller}")
+
+  # An archive that does not hold the image IMAGE_REF names changes nothing, before any Docker call.
+  deploy "IMAGE_REF=${ref}" "IMAGE_ARCHIVE=${archive}"
+  (( DEPLOY_STATUS != 0 )) || fail "an archive of another image was deployed"
+  expect_deploy_log "does not hold the image ${digest} that IMAGE_REF names"
+  expect_untouched "${offline_id}"
+
+  # --rollback swaps the loaded version with the pulled one and back, ignoring IMAGE_ARCHIVE.
+  start_relay_monitor
+  deploy "IMAGE_REF=${offline_ref}" "IMAGE_ARCHIVE=${archive}" -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback from the loaded image failed (exit ${DEPLOY_STATUS})"
+  [[ "$(container_id "${controller}")" == "${new_id}" && "$(container_id "${previous}")" == "${offline_id}" ]] \
+    || fail "the rollback did not swap the loaded version with the pulled one"
+  ! deploy_log_has "[load]" || fail "--rollback loaded the archive"
+  deploy -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback to the loaded image failed (exit ${DEPLOY_STATUS})"
+  [[ "$(container_id "${controller}")" == "${offline_id}" && "$(container_image "${controller}")" == "${loaded_id}" ]] \
+    || fail "the second rollback did not return to the loaded version"
+  relays_stayed_off
+  assert_relays_off
+  pass "deployed ${offline_digest:0:19}... from its offline archive in ${offline_seconds} s with the registry gone, run by its ID ${loaded_id:0:19}... with the release-image label; an archive of another image changed nothing; --rollback swapped to the pulled version and back; relays 0 throughout"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------

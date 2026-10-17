@@ -201,8 +201,22 @@ public sealed record ContainerSurvey
 {
     public required string Name { get; init; }
 
-    /// <summary>The image it runs, as it was given (with its digest when deployed by one).</summary>
+    /// <summary>The image it runs, as it was given (with its digest when deployed by one, its ID when loaded from an archive).</summary>
     public required string Image { get; init; }
+
+    /// <summary>
+    /// The ID Docker gives the image it runs (the container's own <c>Image</c>, sha256:…), however it was given and
+    /// whatever its labels say; null when Docker does not say.
+    /// </summary>
+    public string? ImageId { get; init; }
+
+    /// <summary>
+    /// The release's image its label (<see cref="MachineSurveyor.ReleaseImageLabel"/>) names, by its reference: the
+    /// deploy script and the installer give a container that label when they run an image loaded from the release's
+    /// offline archive by its ID. Null when it has none. Anyone can set a label, so it only claims the release:
+    /// <see cref="Runs"/> checks the claim against <see cref="ImageId"/>.
+    /// </summary>
+    public string? ReleaseImage { get; init; }
 
     /// <summary>running, exited, created…</summary>
     public required string State { get; init; }
@@ -280,8 +294,45 @@ public sealed record ContainerSurvey
     /// </summary>
     public bool IsStopped => State is "created" or "exited" or "dead";
 
-    /// <summary>The digest of the image it runs (sha256:…), when it was deployed by one; null for a tag alone.</summary>
-    public string? ImageDigest => Image.LastIndexOf('@') is > 0 and var at && Image[(at + 1)..].StartsWith("sha256:", StringComparison.Ordinal) ? Image[(at + 1)..] : null;
+    /// <summary>The digest it was deployed by (sha256:…); null for a tag alone, or an image run by its ID.</summary>
+    public string? ImageDigest => DigestOf(Image);
+
+    /// <summary>
+    /// True when it runs <paramref name="image"/>, a release's image, for <paramref name="platform"/> (linux/arm64):
+    /// deployed by the image's digest, or loaded from the release's offline archive for the platform and run by its ID.
+    /// For the second, its label claims the release's image, and Docker's ID for the image it runs
+    /// (<see cref="ImageId"/>) must be one the release gives that archive (<see cref="Deployment.ReleaseImage.LoadedIds"/>):
+    /// a container of another image carrying the label (set by hand, copied, or inherited from its image) does not run
+    /// the release's.
+    /// </summary>
+    public bool Runs(Deployment.ReleaseImage image, string platform)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (ImageDigest is { } digest)
+        {
+            return digest == image.Digest;
+        }
+
+        return ReleaseImage is { } claimed && DigestOf(claimed) == image.Digest
+            && image.ArchiveFor(platform) is { } archive
+            && ImageId is { } id && image.LoadedIds(archive).Contains(id, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Why it does not run <paramref name="image"/> though its label says it does (<see cref="Runs"/>): Docker gives the
+    /// image it runs an ID the release does not give its archive for <paramref name="platform"/>. Null when it runs the
+    /// image, or its label does not name it.
+    /// </summary>
+    public string? FalseClaim(Deployment.ReleaseImage image, string platform)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        return ImageDigest is null && ReleaseImage is { } claimed && DigestOf(claimed) == image.Digest && !Runs(image, platform)
+            ? $"its label names {claimed}, but it runs {(ImageId is { } id ? $"the image {id}" : "an image Docker gives no ID")}, not one with an ID release.json gives that image for {platform}"
+            : null;
+    }
+
+    private static string? DigestOf(string image)
+        => image.LastIndexOf('@') is > 0 and var at && image[(at + 1)..].StartsWith("sha256:", StringComparison.Ordinal) ? image[(at + 1)..] : null;
 }
 
 /// <summary>A systemd service.</summary>

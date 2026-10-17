@@ -44,6 +44,13 @@ public static partial class MachineSurveyor
 
     public const string VersionLabel = "org.opencontainers.image.version";
 
+    /// <summary>
+    /// The label that names the release's image, by its reference, on a container that runs one loaded from the
+    /// release's offline archive, by its ID: the deploy script and the installer set it once they have checked the image.
+    /// It is only a claim; the installer believes it only for an image whose ID the release gives (<see cref="ContainerSurvey.Runs"/>).
+    /// </summary>
+    public const string ReleaseImageLabel = "io.hvo.roof.release-image";
+
     /// <summary>The controller image's state contract (JSON, as release.json's <c>stateContracts.controller</c>).</summary>
     public const string StateContractsLabel = "io.hvo.roof.state-contracts";
 
@@ -336,6 +343,9 @@ public static partial class MachineSurveyor
                 ServesHttps = urls is null ? null : urls.Contains("https://", StringComparison.OrdinalIgnoreCase),
                 AllowedHosts = environment.GetValueOrDefault("AllowedHosts") is { Length: > 0 } allowed && allowed != "*" ? allowed : null,
                 Image = config.TryGetProperty("Image", out var image) ? image.GetString() ?? string.Empty : string.Empty,
+                ImageId = container.TryGetProperty("Image", out var imageId) && imageId.ValueKind == JsonValueKind.String
+                    && imageId.GetString() is { Length: > 0 } dockerId ? dockerId : null,
+                ReleaseImage = labels.GetValueOrDefault(ReleaseImageLabel) is { Length: > 0 } released ? released : null,
                 State = container.TryGetProperty("State", out var state) && state.TryGetProperty("Status", out var status) ? status.GetString() ?? "unknown" : "unknown",
                 Origin = string.IsNullOrEmpty(composeProject) ? ContainerOrigin.DeployScript : ContainerOrigin.Compose,
                 ComposeProject = string.IsNullOrEmpty(composeProject) ? null : composeProject,

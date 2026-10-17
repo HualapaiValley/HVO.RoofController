@@ -350,6 +350,8 @@ public sealed partial class InstallerRealHatTests
             ["HVO_FORCE_RASPBERRY_PI"] = "true",
             ["IDENTITY_DIR"] = "/var/lib/hvo-roof/identity",
             ["IGNORE_PHYSICAL_LIMIT_SWITCHES"] = "false",
+            ["IMAGE_ARCHIVE"] = "",
+            ["IMAGE_ARCHIVE_SHA256"] = "",
             ["IMAGE_REF"] = $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}",
             ["MANAGED_SECRETS_DIR"] = "/var/lib/hvo-roof/settings-secrets",
             ["OPERATOR_KEY_FILE"] = ApiKeyFiles.KeyFile(Secrets, 0),

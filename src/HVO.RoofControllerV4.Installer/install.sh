@@ -75,9 +75,10 @@ Options, before the installer's arguments:
   --roles LIST      What this machine is for, so the right things are checked: controller, rig, kiosk, cli or mac-app,
                     separated by commas. Without it: an answers file's roles, what is installed (for a command such as
                     upgrade), or a question.
-  --from DIR        Take hvo-roof-install and SHA256SUMS from DIR, a folder holding the release's files, not from
-                    GitHub. The installer reads the release from DIR too (its --release DIR), except for rollback,
-                    whose --release is the release before.
+  --from DIR        Take hvo-roof-install, SHA256SUMS and the images (the release's offline image archives for this
+                    machine) from DIR, a folder holding the release's files, not from GitHub and ghcr.io. The
+                    installer reads the release from DIR too (its --release DIR), except for rollback, whose --release
+                    is the release before.
   --check           Check this machine, then stop: download nothing and change nothing.
   --install-docker  When Docker is needed and missing, install it from Docker's apt repository without asking
                     (Debian, Raspberry Pi OS and Ubuntu).
@@ -160,6 +161,35 @@ EOF
     fi
   }
 
+  # trusted_folder <folder>: prints <folder>'s physical path (every link in it followed) when that folder, and every
+  # folder above it up to /, is a real folder (not a link) that is root's or yours and that no one else can write to
+  # unless it is sticky (as /tmp is: there no one else can rename or remove what root or you own). No one else can then
+  # rename the folder this script makes in it, or put another in its place, between the check of the installer it
+  # downloads there and the installer's start as root. Fails, printing nothing, otherwise. (-O is bash's own test that
+  # you own a file: the tests fake id.)
+  trusted_folder() {
+    local physical folder
+    physical=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    folder=${physical}
+    while :; do
+      if [ ! -d "${folder}" ] || [ -L "${folder}" ]; then
+        return 1
+      fi
+      if [ ! -O "${folder}" ] && [ -z "$(find "${folder}" -maxdepth 0 -user 0 2>/dev/null)" ]; then
+        return 1
+      fi
+      [ -n "$(find "${folder}" -maxdepth 0 \( -perm -1000 -o \( ! -perm -0020 ! -perm -0002 \) \) 2>/dev/null)" ] || return 1
+      [ "${folder}" != / ] || break
+      folder=$(dirname "${folder}")
+    done
+    printf '%s\n' "${physical}"
+  }
+
+  # own_folder <folder>: <folder> is still the folder this script made: a real folder (not a link), yours, mode 0700.
+  own_folder() {
+    [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -n "$(find "$1" -maxdepth 0 -perm 0700 2>/dev/null)" ]
+  }
+
   # check_space <path> <KiB needed> <what it is for>: the free space on the file system that holds the path (or the
   # nearest folder above it that is there).
   check_space() {
@@ -228,12 +258,18 @@ EOF
   fetch_and_start() {
     local base_url="https://github.com/${repository}/releases/download/v${release_version}"
     local release_page="https://github.com/${repository}/releases/tag/v${release_version}"
-    local asset="hvo-roof-install-${rid}" work installer expected actual status=0
-    work=$(mktemp -d "${TMPDIR:-/tmp}/hvo-roof-install.XXXXXXXX")
+    local asset="hvo-roof-install-${rid}" work installer expected actual status=0 parent
+    # The download goes in a new folder of this script's own, made by its physical path in a TMPDIR only you and root
+    # can change (trusted_folder), so the installer that runs as root is the one checked. Only that folder is removed,
+    # and only while it is still the one made, and only what this script put in it.
+    parent=$(trusted_folder "${TMPDIR:-/tmp}") \
+      || die "TMPDIR (${TMPDIR:-/tmp}) is not a folder only you and root can change: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change the installer after it is checked and before it runs as root. Nothing was made in it. Set TMPDIR to a folder that is, such as /tmp, then run this again."
+    work=$(mktemp -d "${parent%/}/hvo-roof-install.XXXXXXXX") || die "Could not make a folder in ${parent} for the download."
+    own_folder "${work}" || die "The folder made for the download, ${work}, is not a folder of yours with mode 0700: nothing was installed."
     local quoted_work
     printf -v quoted_work '%q' "${work}"
     # shellcheck disable=SC2064 # The folder is named now, so the trap needs no variable when it runs.
-    trap "rm -rf ${quoted_work}" EXIT
+    trap "if own_folder ${quoted_work}; then rm -f -- ${quoted_work}/hvo-roof-install ${quoted_work}/SHA256SUMS; rmdir -- ${quoted_work} 2>/dev/null || true; fi" EXIT
     installer="${work}/hvo-roof-install"
 
     if [ -n "${from}" ]; then
@@ -651,7 +687,25 @@ EOF
       no) note "the clock is not synchronised: turn synchronisation on (sudo timedatectl set-ntp true), so that it stays right" ;;
     esac
   fi
-  if ${needs_docker}; then
+  # The images. From a folder (--from), the release's offline archives for this machine, which the installer loads:
+  # nothing is pulled, and ghcr.io is not asked. A rollback puts back the controller kept here, and loads nothing from
+  # this release. Otherwise Docker pulls them from ghcr.io.
+  if ${needs_docker} && [ -n "${from}" ]; then
+    local arch=arm64 image archive images=""
+    [ "${rid}" != linux-x64 ] || arch=amd64
+    if [ "${command}" != rollback ]; then
+      images=roof-controller
+      ! contains "${roles}" rig || images="${images} roof-hat-emulator"
+    fi
+    for image in ${images}; do
+      archive="${image}-${release_version}-linux-${arch}.oci.tar"
+      if [ -f "${from}/${archive}" ]; then
+        ok "${archive} is in ${from}: the installer loads the $([ "${image}" = roof-controller ] && printf "controller's" || printf "HAT emulator's") image from it, and pulls nothing from ghcr.io"
+      else
+        failed "${from} has no ${archive}, the $([ "${image}" = roof-controller ] && printf "controller's" || printf "HAT emulator's") image for this machine: download it from https://github.com/${repository}/releases/tag/v${release_version} into ${from}, then run this again."
+      fi
+    done
+  elif ${needs_docker}; then
     local code
     status=0
     code=$(probe https://ghcr.io/v2/ -o /dev/null -w '%{http_code}' 2>/dev/null) || status=$?

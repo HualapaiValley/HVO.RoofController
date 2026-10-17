@@ -65,6 +65,59 @@ public static class ReleaseFiles
         return path;
     }
 
+    /// <summary>
+    /// Copies the release's <paramref name="asset"/> from <paramref name="source"/> to <paramref name="copy"/>, a new file
+    /// that only the installer's user can read, in a folder only it can open (<see cref="DeployScript.WorkFolder"/>): the
+    /// source is read once, and what is written to the copy is checked against release.json's size and SHA-256 as it is
+    /// written. The copy is then the release's file whatever later becomes of <paramref name="source"/> (replaced, or
+    /// written over in place), so it is what is used, never the source. Throws, and leaves no copy, when it is not the
+    /// release's file or cannot be written.
+    /// </summary>
+    public static async Task CopyCheckedAsync(InstallContext context, ReleaseAsset asset, string source, string copy, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(asset);
+        var from = context.Machine.OpenRead(source) ?? throw new InstallerException($"{source} is not there.");
+        bool released;
+        try
+        {
+            await using (from.ConfigureAwait(false))
+            {
+                var to = context.Machine.CreateNew(copy, Modes.PrivateFile);
+                await using (to.ConfigureAwait(false))
+                {
+                    using var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    var buffer = new byte[81920];
+                    long length = 0;
+                    int read;
+
+                    // At most one byte more than release.json's size: a larger file is not the release's, and is never copied whole.
+                    while (length <= asset.Size
+                        && (read = await from.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, asset.Size + 1 - length)), cancellationToken).ConfigureAwait(false)) > 0)
+                    {
+                        sha256.AppendData(buffer, 0, read);
+                        await to.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                        length += read;
+                    }
+
+                    await to.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    released = length == asset.Size && Convert.ToHexStringLower(sha256.GetHashAndReset()) == asset.Sha256;
+                }
+            }
+        }
+        catch (IOException error)
+        {
+            context.Machine.DeleteFile(copy);
+            throw new InstallerException($"Could not copy {source} into {Path.GetDirectoryName(copy)}: {error.Message}");
+        }
+
+        if (!released)
+        {
+            context.Machine.DeleteFile(copy);
+            throw new InstallerException($"{source} is not the release's {asset.Name}: its size or SHA-256 differs from {ReleaseManifest.FileName}'s.");
+        }
+    }
+
     /// <summary>A release's single-file program (<paramref name="asset"/>), fetched and checked, then copied to <paramref name="path"/> as a program.</summary>
     public static async Task CopyProgramAsync(InstallContext context, ReleaseManifest release, ReleaseAsset asset, string path, CancellationToken cancellationToken)
     {

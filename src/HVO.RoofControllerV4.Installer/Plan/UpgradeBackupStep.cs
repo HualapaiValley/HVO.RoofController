@@ -69,10 +69,13 @@ public sealed class UpgradeBackupStep(string from, string to, string path, (stri
         }
 
         // An earlier run of this upgrade replaced the controller already, and the new one may have moved its stores on:
-        // the backup from before it is the one to keep, not one of the stores as they are now.
+        // the backup from before it is the one to keep, not one of the stores as they are now. The controller runs the new
+        // release when ContainerSurvey.Runs says so: by the digest it was deployed by, or, loaded from the release's
+        // offline archive, by Docker's ID for its image (one release.json gives that archive). Its label alone, or a tag,
+        // does not make it the new release.
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         var controller = await MachineSurveyor.SurveyContainerAsync(machine, MachineSurveyor.ControllerContainer, cancellationToken).ConfigureAwait(false);
-        if (controller?.ImageDigest == release.Controller.Digest)
+        if (controller is not null && controller.Runs(release.Controller, ControllerStep.Platform(machine)))
         {
             Kept = await EarlierAsync(context, cancellationToken).ConfigureAwait(false);
             return Kept is null

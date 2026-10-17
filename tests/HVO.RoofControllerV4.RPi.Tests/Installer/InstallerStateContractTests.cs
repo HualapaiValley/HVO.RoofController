@@ -717,6 +717,71 @@ public sealed class InstallerStateContractTests
 
     // As if the first run of the upgrade stopped after the deploy script replaced the controller, before the record: the
     // new controller has moved its store on since. The next run keeps the backup from before it.
+    // The retry's check of the controller (#127 meets #130): an earlier run replaced it with the new release only when it
+    // runs that release (ContainerSurvey.Runs), by the digest it was deployed by or, loaded from the release's offline
+    // archive, by Docker's ID for its image. The release-image label on another image, or a tag, is no such proof.
+
+    [TestMethod]
+    public async Task AnUpgradeRunAgain_AfterTheControllerWasLoadedFromItsOfflineArchive_KeepsTheBackupFromBeforeIt()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        AsIfTheFirstRunStoppedAfterTheController(pi);
+        AsIfTheControllerRunsByAnImagesId(pi, FakeMachine.ArchiveConfigDigest(FakeMachine.OfflineArchiveName("roof-controller", "arm64", NewVersion)));
+        var deploys = pi.Deploys.Count;
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain($"taken before an earlier run of this upgrade: {Backup}");
+        Directory.EnumerateFiles(pi.OnDisk(BackupCommands.DefaultFolder)).Select(Path.GetFileName).Should().Equal(Path.GetFileName(Backup));
+        Record(pi).UpgradeBackup.Should().Be(Backup);
+        pi.Deploys.Should().HaveCount(deploys, "the controller runs the new release already");
+    }
+
+    [TestMethod]
+    [DataRow("mislabelled", DisplayName = "the release-image label on another image")]
+    [DataRow("tag", DisplayName = "the new release's tag, with no digest")]
+    public async Task AnUpgradeRunAgain_WithAControllerThatOnlyClaimsTheNewRelease_BacksUpTheStoresAndReplacesIt(string claim)
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        AsIfTheFirstRunStoppedAfterTheController(pi);
+        if (claim == "mislabelled")
+        {
+            AsIfTheControllerRunsByAnImagesId(pi, "sha256:" + new string('e', 64));
+        }
+        else
+        {
+            pi.Containers[MachineSurveyor.ControllerContainer] = pi.Containers[MachineSurveyor.ControllerContainer] with
+            {
+                RunAs = $"ghcr.io/hualapaivalley/roof-controller:{NewVersion}"
+            };
+        }
+
+        var deploys = pi.Deploys.Count;
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().NotContain("taken before an earlier run of this upgrade");
+        run.Output.Should().NotContain($"the controller runs {NewVersion} already");
+        var backups = Directory.EnumerateFiles(pi.OnDisk(BackupCommands.DefaultFolder)).Select(Path.GetFileName).ToArray();
+        backups.Should().HaveCount(2, "the stores are backed up as they are, the controller not being proven the new release");
+        Record(pi).UpgradeBackup.Should().NotBe(Backup).And.EndWith($"-before-{NewVersion}.tar.gz");
+        pi.Deploys.Should().HaveCount(deploys + 1, "the controller is replaced with the new release");
+    }
+
+    // As if the first run had loaded the new release's controller from its offline archive: release.json lists the
+    // archives, and the controller runs the image with that ID, under the release-image label naming the new release.
+    private static void AsIfTheControllerRunsByAnImagesId(FakeMachine pi, string imageId)
+    {
+        var json = FakeMachine.ReleaseJson(NewVersion, FakeMachine.ControllerDigestFor(NewVersion), FakeMachine.EmulatorDigestFor(NewVersion), null, MovesToTwo, 2, offlineArchives: true);
+        pi.Downloads[ReleaseManifest.DownloadUri(NewVersion).ToString()] = json;
+        pi.Downloads[ReleaseManifest.LatestUri.ToString()] = json;
+        var controller = pi.Containers[MachineSurveyor.ControllerContainer];
+        controller.Digest.Should().Be(FakeMachine.ControllerDigestFor(NewVersion), "the first run deployed the new release");
+        pi.Containers[MachineSurveyor.ControllerContainer] = controller with { ImageId = imageId };
+    }
+
     private static void AsIfTheFirstRunStoppedAfterTheController(FakeMachine pi)
     {
         var record = JsonNode.Parse(pi.Read(InstallPaths.SystemRecord))!;
