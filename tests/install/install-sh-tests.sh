@@ -18,7 +18,7 @@ COMMIT="0123456789abcdef0123456789abcdef01234567"
 RELEASE_URL="https://github.com/HualapaiValley/HVO.RoofController/releases/download/v${VERSION}"
 PI_DESCRIPTION="Linux on aarch64, Debian GNU/Linux 12 (bookworm), Raspberry Pi 5 Model B Rev 1.0 (linux-arm64)"
 # The real commands install.sh and the fakes use; everything else on the PATH is a fake, or missing.
-REAL_TOOLS="cat tr awk sed grep tail head dirname mktemp rm rmdir cp chmod mkdir ln wc find"
+REAL_TOOLS="cat tr awk sed grep tail head dirname mktemp rm rmdir cp mv chmod mkdir ln wc find"
 # The fakes (tests/install/fakes/fake-command, linked under each name).
 FAKES="uname sysctl sw_vers getconf ldd id sudo curl docker dpkg apt-get raspi-config timedatectl ss lsof df tar sha256sum shasum gh date"
 # A Mac with Apple silicon (also: make_mac).
@@ -1490,6 +1490,24 @@ test_a_sticky_tmpdir_as_tmp_is_and_a_link_to_a_private_one_are_used() {
   assert_output_contains "hvo-roof-install ran"
   assert_called "gh attestation verify ${physical}/real/hvo-roof-install."
   [ -z "$(ls -A "${WORK}/real")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${WORK}/real")"
+}
+
+# install.sh removes its download folder only while it is still the one it made, and then only the two files it put
+# there: a folder or a link put in its place (here by the installer it runs, FAKE_INSTALLER_REPLACES_FOLDER) is left as
+# it is, with what is in it.
+test_a_folder_put_in_the_place_of_the_download_folder_is_left_as_it_is() {
+  local replacement folder
+  for replacement in 0700 0755 link; do
+    rm -rf "${WORK}/tmp" && mkdir -m 0700 "${WORK}/tmp"
+    install_sh FAKE_INSTALLER_REPLACES_FOLDER="${replacement}" -- --roles rig
+
+    assert_status 0
+    assert_output_contains "hvo-roof-install ran"
+    folder=$(find "${WORK}/tmp" -maxdepth 1 -name 'hvo-roof-install.*' ! -name '*.moved' ! -name '*.target')
+    [ -n "${folder}" ] || fail_test "${replacement}: what was put in the download folder's place was removed"
+    [ "${replacement}" != link ] || folder="${folder}.target"
+    [ "$(cat "${folder}/keep" 2>/dev/null)" = keep ] || fail_test "${replacement}: ${folder}/keep was removed"
+  done
 }
 
 test_a_noexec_tmpdir_is_explained() {
