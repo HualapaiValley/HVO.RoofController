@@ -3148,8 +3148,9 @@ assert_refused_unchanged() {
   [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "$1 requested a Stop"
 }
 
-# Docker drops a limit it cannot enforce with only a warning; RoofController refuses such a host (#149, as SkyMonitor
-# #1285), on a deploy and on a rollback, before anything changes, with every finding and no override.
+# Docker drops a limit it cannot enforce with only a warning; RoofController refuses such a host for a deploy (#149, as
+# SkyMonitor #1285), and its dry run, before anything changes, with every finding and no override. A rollback goes ahead
+# instead (test_a_rollback_on_a_host_that_cannot_enforce_a_limit_goes_ahead_and_warns).
 test_a_host_that_cannot_enforce_a_limit_is_refused_with_nothing_changed() {
   seed_container roof-controller current true 8443:8443
   seed_container roof-controller-previous old false 8443:8443
@@ -3166,14 +3167,13 @@ test_a_host_that_cannot_enforce_a_limit_is_refused_with_nothing_changed() {
       "FAKE_INFO_CPUCFSQUOTA=<no value>|docker-cpu-quota-unsupported: docker info reports CPUCfsQuota not reported" \
       "FAKE_INFO_PIDSLIMIT=|docker-pids-limit-unsupported: docker info reports PidsLimit not reported"; do
     IFS='|' read -r settings findings <<<"${case}"
-    for mode in deploy rollback dry-run; do
+    for mode in deploy dry-run; do
       : > "${FAKE_STATE_DIR}/calls.log"
       local args=()
       # One setting a word; <no value> (what a Go template prints for a field it lacks) is one setting.
       if [[ "${settings}" == *"<no value>" ]]; then args=("${settings}"); else read -r -a args <<<"${settings}"; fi
       case "${mode}" in
         deploy) deploy "${HTTPS_ENV[@]}" "${args[@]}" ;;
-        rollback) deploy "${HTTPS_ENV[@]}" "${args[@]}" -- --rollback ;;
         dry-run) deploy "${HTTPS_ENV[@]}" "${args[@]}" -- --dry-run ;;
       esac
       assert_status 1
@@ -3201,6 +3201,153 @@ test_a_host_that_cannot_enforce_a_limit_is_refused_with_nothing_changed() {
   done
   assert_container roof-controller current true unless-stopped
   assert_container roof-controller-previous old false
+}
+
+# finding_of <memory|cpu|pids>: the code of the finding for a limit Docker cannot enforce.
+finding_of() {
+  case "$1" in
+    memory) echo "docker-memory-limit-unsupported:" ;;
+    cpu) echo "docker-cpu-quota-unsupported:" ;;
+    pids) echo "docker-pids-limit-unsupported:" ;;
+  esac
+}
+
+# container_log <id>: what was written to the fake container's log (docker logs), a line each.
+container_log() {
+  jq -r --arg id "$1" '.containers[] | select(.id == $id) | .log // [] | .[]' "${FAKE_STATE_DIR}/state.json"
+}
+
+# A rollback is a recovery path (the owner's decision on #149): on a host that cannot enforce a limit it goes ahead with
+# the limits Docker can still enforce, and warns loudly of each one it cannot, with the fix, in its output and in the
+# controller's log. An install, an upgrade or a deploy on the same host is refused
+# (test_a_host_that_cannot_enforce_a_limit_is_refused_with_nothing_changed).
+test_a_rollback_on_a_host_that_cannot_enforce_a_limit_goes_ahead_and_warns() {
+  local case settings unenforced given code finding previous_id log args=()
+  for case in \
+      "FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false|memory|--cpus 1 --pids-limit 512" \
+      "FAKE_INFO_SWAPLIMIT=false|memory|--cpus 1 --pids-limit 512" \
+      "FAKE_INFO_CPUCFSQUOTA=false|cpu|--memory 2g --memory-swap 2g --pids-limit 512" \
+      "FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false FAKE_INFO_CPUCFSQUOTA=false|memory cpu|--pids-limit 512" \
+      "FAKE_INFO_PIDSLIMIT=false|pids|--cpus 1 --memory 2g --memory-swap 2g" \
+      "FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false FAKE_INFO_CPUCFSQUOTA=false FAKE_INFO_PIDSLIMIT=false|memory cpu pids|"; do
+    IFS='|' read -r settings unenforced given <<<"${case}"
+    setup
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    previous_id=$(container_field roof-controller-previous id)
+    read -r -a args <<<"${settings}"
+    deploy "${HTTPS_ENV[@]}" "${args[@]}" -- --rollback
+
+    assert_status 0
+    assert_container roof-controller old true unless-stopped
+    assert_container roof-controller-previous current false no
+    assert_output_contains "[rollback] WARNING: THE ROLLBACK GOES AHEAD, BUT DOCKER ON pi.test CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:"
+    for code in memory cpu pids; do
+      finding=$(finding_of "${code}")
+      if [[ " ${unenforced} " == *" ${code} "* ]]; then
+        assert_output_contains "[rollback] WARNING:   - ${finding} docker info reports"
+      else
+        assert_output_not_contains "${finding}"
+      fi
+    done
+    assert_output_contains "[rollback] WARNING:   - docker-"
+    assert_output_contains "so the version the rollback brings back runs without its"
+    assert_output_contains "[rollback] WARNING:   Docker's host: cgroup v2;"
+    assert_output_contains "Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot the Pi with the roof idle"
+    assert_output_not_contains "ERROR"
+    # It gives the limits Docker can still enforce, and only those.
+    if [[ -z "${given}" ]]; then
+      assert_output_contains "[rollback] Docker here enforces none of the limits: roof-controller-previous is given none (see the warning above)"
+      [[ -z "$(docker_calls update | jq -c 'select(.[1] != "--restart")')" ]] || fail_test "the rollback gave a limit Docker cannot enforce: $(docker_calls update)"
+    else
+      docker_calls update | jq -e -s --arg id "${previous_id}" --argjson given "$(jq -nc --arg s "${given}" '$s | split(" ")')" \
+        'any(.[]; . == (["update"] + $given + [$id]))' >/dev/null \
+        || fail_test "${settings}: the rollback did not give exactly ${given}: $(docker_calls update)"
+      assert_output_contains "enforces only these limits, which the rollback gives:"
+    fi
+    # And the warning is in the controller's log, where it stays.
+    log=$(container_log "${previous_id}")
+    grep -qF "[rollback] WARNING: from deploy-roofcontroller-rpi.sh --rollback," <<<"${log}" || fail_test "${settings}: no warning in the controller's log: ${log}"
+    grep -qF "THE ROLLBACK GOES AHEAD, BUT DOCKER ON pi.test CANNOT ENFORCE THESE LIMITS" <<<"${log}" || fail_test "${settings}: the controller's log lacks the warning"
+    for code in ${unenforced}; do
+      grep -qF "  - $(finding_of "${code}")" <<<"${log}" || fail_test "${settings}: the controller's log lacks ${code}"
+    done
+    grep -qF 'cgroup_enable=memory' <<<"${log}" || fail_test "${settings}: the controller's log lacks the fix"
+    assert_output_contains "[rollback] The warning is in the controller's log too (docker logs roof-controller)."
+    assert_output_contains "[done] WARNING: roof-controller runs without the limits Docker on pi.test cannot enforce"
+    teardown
+  done
+  setup
+}
+
+test_a_rollbacks_dry_run_on_a_host_that_cannot_enforce_a_limit_warns_and_changes_nothing() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false -- --dry-run --rollback
+
+  assert_status 0
+  assert_output_contains "[dry-run] WARNING: A ROLLBACK WOULD GO AHEAD, BUT DOCKER ON pi.test CANNOT ENFORCE THESE LIMITS"
+  assert_output_contains "[dry-run] WARNING:   - docker-memory-limit-unsupported:"
+  assert_output_contains "[dry-run] Docker on pi.test (4 CPUs, 8192m of memory) enforces only these limits, which the rollback gives: 1 CPU, no memory limit (Docker here cannot enforce one), at most 512 processes and threads"
+  [[ -z "$(docker_calls run)$(docker_calls stop)$(docker_calls update)$(docker_calls rename)$(docker_calls exec | jq -c 'select(index("sh"))')" ]] \
+    || fail_test "the dry run changed something"
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
+test_a_rollback_on_a_host_that_cannot_enforce_a_limit_is_still_refused_for_everything_else() {
+  local case settings expected args=()
+  # Below the floor (given, or kept from the running controller), more CPUs than Docker reports for a CPU limit it
+  # enforces, a Docker that does not answer, and a roof whose stop cannot be verified.
+  for case in \
+      "CONTAINER_CPUS=0.5|CONTAINER_CPUS=0.5 is less than 1 vCPU, the minimum" \
+      "CONTAINER_MEMORY=512m|CONTAINER_MEMORY=512m is less than 1g, the minimum" \
+      "SEED_LIMITS=500000000|CONTAINER_CPUS=0.5 (kept from roof-controller) is less than 1 vCPU, the minimum" \
+      "FAKE_INFO_NCPU=1 CONTAINER_CPUS=2|so the rollback is refused. Nothing was changed. Every finding:" \
+      "FAKE_FAIL=info --format|Could not ask Docker (context 'test-context') which limits it enforces. Nothing was changed." \
+      "FAKE_CURRENT_STOP=unverified|The roof stop could not be verified"; do
+    IFS='|' read -r settings expected <<<"${case}"
+    setup
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    if [[ "${settings}" == SEED_LIMITS=* ]]; then
+      seed_limits roof-controller "${settings#SEED_LIMITS=}" 2147483648 2147483648 512
+      args=()
+    elif [[ "${settings}" == FAKE_FAIL=* ]]; then
+      args=("${settings}")
+    else
+      read -r -a args <<<"${settings}"
+    fi
+    deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false ${args[@]+"${args[@]}"} -- --rollback
+    assert_status 1
+    assert_output_contains "${expected}"
+    [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls update | jq -c 'select(.[1] != "--restart")')" ]] \
+      || fail_test "the refused rollback (${settings}) stopped, renamed or updated something"
+    assert_container roof-controller current true unless-stopped
+    assert_container roof-controller-previous old false
+    teardown
+  done
+  setup
+
+  # A CPU limit beyond the CPUs Docker reports does not count when Docker cannot enforce a CPU limit: none is given.
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_CPUCFSQUOTA=false FAKE_INFO_NCPU=1 CONTAINER_CPUS=2 -- --rollback
+  assert_status 0
+  assert_output_contains "[rollback] WARNING:   - docker-cpu-quota-unsupported:"
+  assert_output_not_contains "docker-host-cpus-insufficient"
+}
+
+test_a_rollback_whose_warning_cannot_reach_the_controllers_log_still_goes_ahead() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false FAKE_CONTAINER_LOG_FAIL=true -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_output_contains "[rollback] WARNING: THE ROLLBACK GOES AHEAD"
+  assert_output_contains "[rollback] WARNING: could not write the warning above to the controller's log (docker exec failed): it is only in this output."
+  assert_output_not_contains "The warning is in the controller's log too"
 }
 
 test_no_setting_gets_past_the_refusal() {

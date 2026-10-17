@@ -64,6 +64,8 @@ Other switches:
                                    FAKE_INFO_MEMORYLIMIT=false; an empty value is a field Docker does not report
   FAKE_INFO_WARNINGS=<w>[;<w>...]  the warnings `info --format '{{range .Warnings}}{{println .}}{{end}}'` lists (none by
                                    default)
+  FAKE_CONTAINER_LOG_FAIL=true     `exec -i <c> sh -c 'cat > /proc/1/fd/2'` (a line for the container's log, which the
+                                   fake keeps in the container's "log") fails
   FAKE_CONTEXT_HOST=<endpoint>     what `context inspect --format '{{.Endpoints.docker.Host}}' <context>` reports
                                    (default ssh://roof@pi.test: Docker on another machine)
   FAKE_DROPPED_LIMIT=memory|cpus|pids
@@ -566,6 +568,13 @@ def exec_curl(state, ref, curl_args, stdin_text):
     kind = c["kind"]
     if curl_args == ["cat", "/run/hvo-roof/supervisor.json"]:
         supervisor_json(state, c)
+        return
+    if curl_args == ["sh", "-c", "cat > /proc/1/fd/2"]:
+        # A line for the container's log (docker logs): its first process's standard error.
+        if os.environ.get("FAKE_CONTAINER_LOG_FAIL") == "true":
+            die("sh: 1: cannot create /proc/1/fd/2: Permission denied")
+        c.setdefault("log", []).extend(stdin_text.splitlines())
+        save(state)
         return
     url = curl_args[-1]
     method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"

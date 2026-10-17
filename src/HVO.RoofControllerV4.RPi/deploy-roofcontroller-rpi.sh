@@ -36,7 +36,8 @@ set -euo pipefail
 #   upgrades and rollbacks, and is otherwise RoofController's default of 1 vCPU and 2g. Before anything changes, one
 #   docker info on the Pi must report that Docker enforces memory, CPU and process limits, and at least as many CPUs as
 #   the CPU limit: a host that cannot is refused, with every finding and the remedy, and there is no override (a memory
-#   limit above its memory is a cap, not a reservation: a warning says so). The new controller's container must then
+#   limit above its memory is a cap, not a reservation: a warning says so). A rollback, a recovery path, is not refused
+#   for a limit Docker cannot enforce: it gives the ones it can and warns loudly, here and in the controller's log. The new controller's container must then
 #   carry exactly them. The pre-flight container runs with the same. --rollback gives the version it brings back the
 #   same limits (docker update), only after the roof's verified stop; its privileges stay as it was deployed with.
 #
@@ -1160,19 +1161,32 @@ docker_runs_here() {
 
 # Docker drops a limit it cannot enforce with only a warning, and runs the controller without it: the Raspberry Pi's
 # firmware adds cgroup_disable=memory to the kernel's command line, for one (it is not in /boot/firmware/cmdline.txt).
-# RoofController refuses such a host, as SkyMonitor does (#149; SkyMonitor #1285), on every deploy and rollback, before
-# anything changes, since each gives the controller its limits: one docker info must report MemoryLimit and SwapLimit
-# (the memory limit, and no swap beyond it), CPUCfsQuota and PidsLimit true, a field it does not report counting as
-# unsupported, and at least the CPUs of the CPU limit. Every finding is listed at once, with the cgroup version, the
-# kernel's cgroup v2 controllers when Docker runs on this machine, Docker's own warnings about limits, and the remedy;
-# there is no override. A memory limit is a cap, not a reservation: one above the memory Docker reports is kept, with a
-# warning. Docker 29's template field is CPUCfsQuota (its JSON key CpuCfsQuota).
-# check_docker_limits <deploy|dry-run>: dry-run reports the findings as what a deploy would refuse, and exits 1 too.
+# RoofController refuses such a host for a deploy, as SkyMonitor does (#149; SkyMonitor #1285), before anything changes:
+# one docker info must report MemoryLimit and SwapLimit (the memory limit, and no swap beyond it), CPUCfsQuota and
+# PidsLimit true, a field it does not report counting as unsupported, and at least the CPUs of the CPU limit. Every
+# finding is listed at once, with the cgroup version, the kernel's cgroup v2 controllers when Docker runs on this
+# machine, Docker's own warnings about limits, and the remedy; there is no override.
+# A rollback is a recovery path, so a limit Docker cannot enforce does not refuse it (the owner's decision on #149): it
+# goes ahead with the limits Docker can still enforce (ENFORCE_CPU, ENFORCE_MEMORY and ENFORCE_PIDS, and limit_args and
+# LIMITS_SUMMARY say only those), and warns loudly of each one it cannot, with the remedy, here and in the controller's
+# log (UNENFORCED_WARNING, which warn_in_container_log writes there once it runs). Every other refusal still holds for a
+# rollback: the floor, more CPUs than Docker reports for a CPU limit it gives, and a Docker that does not answer.
+# A memory limit is a cap, not a reservation: one above the memory Docker reports is kept, with a warning. Docker 29's
+# template field is CPUCfsQuota (its JSON key CpuCfsQuota).
+# check_docker_limits <deploy|dry-run|rollback>: dry-run reports what a deploy would refuse (exit 1), or what a rollback
+# (--dry-run --rollback) would warn of and go ahead with.
 DOCKER_INFO_FORMAT=$'{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}},{{.Name}}\n{{range .Warnings}}{{println .}}{{end}}'
+ENFORCE_CPU=true ENFORCE_MEMORY=true ENFORCE_PIDS=true
+UNENFORCED_WARNING=()
 check_docker_limits() {
   local prefix="[$1]" info memory cpu pids swap ncpu total cgroup_version name line controllers memory_text="?"
-  local findings=() capabilities=false host="" refused="the deploy is refused" cpus_note="" memory_note=""
-  [[ "$1" != "dry-run" ]] || refused="a deploy would be refused"
+  local capabilities=() findings=() host="" refused="the deploy is refused" cpus_note="" memory_note="" remedy
+  local rollback=false without="so Docker would run the controller without" goes="THE ROLLBACK GOES AHEAD"
+  [[ "${ROLLBACK}" != "true" ]] || { rollback=true; refused="the rollback is refused"; without="so the version the rollback brings back runs without"; }
+  if [[ "$1" == "dry-run" ]]; then
+    refused="a deploy would be refused"
+    [[ "${rollback}" != "true" ]] || { refused="a rollback would be refused"; goes="A ROLLBACK WOULD GO AHEAD"; }
+  fi
   [[ "${CPUS_SOURCE}" == given ]] || cpus_note=" (${CPUS_SOURCE})"
   [[ "${MEMORY_SOURCE}" == given ]] || memory_note=" (${MEMORY_SOURCE})"
   info=$(dockerc info --format "${DOCKER_INFO_FORMAT}") \
@@ -1180,51 +1194,122 @@ check_docker_limits() {
   # Commas, so that a field Docker leaves empty stays in its place; Docker's warnings follow, one a line.
   IFS=, read -r memory cpu pids swap ncpu total cgroup_version name <<<"${info%%$'\n'*}"
   if [[ "${memory}" != "true" || "${swap}" != "true" ]]; then
-    findings+=("docker-memory-limit-unsupported: docker info reports MemoryLimit $(reported "${memory}") and SwapLimit $(reported "${swap}"), so Docker would run the controller without its memory limit (${CONTAINER_MEMORY}, and no swap beyond it).")
+    ENFORCE_MEMORY=false
+    capabilities+=("docker-memory-limit-unsupported: docker info reports MemoryLimit $(reported "${memory}") and SwapLimit $(reported "${swap}"), ${without} its memory limit (${CONTAINER_MEMORY}, and no swap beyond it).")
   fi
   if [[ "${cpu}" != "true" ]]; then
-    findings+=("docker-cpu-quota-unsupported: docker info reports CPUCfsQuota $(reported "${cpu}"), so Docker would run the controller without its CPU limit (${CONTAINER_CPUS}).")
+    ENFORCE_CPU=false
+    capabilities+=("docker-cpu-quota-unsupported: docker info reports CPUCfsQuota $(reported "${cpu}"), ${without} its CPU limit (${CONTAINER_CPUS}).")
   fi
   if [[ "${pids}" != "true" ]]; then
-    findings+=("docker-pids-limit-unsupported: docker info reports PidsLimit $(reported "${pids}"), so Docker would run the controller without its process limit (${CONTAINER_PIDS_LIMIT}).")
+    ENFORCE_PIDS=false
+    capabilities+=("docker-pids-limit-unsupported: docker info reports PidsLimit $(reported "${pids}"), ${without} its process limit (${CONTAINER_PIDS_LIMIT}).")
   fi
-  (( ${#findings[@]} == 0 )) || capabilities=true
-  if [[ ! "${ncpu}" =~ ^[0-9]+$ ]]; then
-    findings+=("docker-host-cpus-unreported: docker info reports NCPU '${ncpu}', so the CPU limit of ${CONTAINER_CPUS} cannot be checked against the CPUs.")
-  elif (( CPU_HUNDREDTHS > 10#${ncpu} * 100 )); then
-    if (( 10#${ncpu} >= 1 )); then
-      findings+=("docker-host-cpus-insufficient: docker info reports ${ncpu} CPUs, fewer than the CPU limit of ${CONTAINER_CPUS}${cpus_note}: give CONTAINER_CPUS from 1 to ${ncpu}.")
-    else
-      findings+=("docker-host-cpus-insufficient: docker info reports ${ncpu} CPUs, and the CPU limit is at least 1.")
+  # The CPUs count for a CPU limit Docker gives; a rollback gives none it cannot enforce.
+  if [[ "${rollback}" != "true" || "${ENFORCE_CPU}" == "true" ]]; then
+    if [[ ! "${ncpu}" =~ ^[0-9]+$ ]]; then
+      findings+=("docker-host-cpus-unreported: docker info reports NCPU '${ncpu}', so the CPU limit of ${CONTAINER_CPUS} cannot be checked against the CPUs.")
+    elif (( CPU_HUNDREDTHS > 10#${ncpu} * 100 )); then
+      if (( 10#${ncpu} >= 1 )); then
+        findings+=("docker-host-cpus-insufficient: docker info reports ${ncpu} CPUs, fewer than the CPU limit of ${CONTAINER_CPUS}${cpus_note}: give CONTAINER_CPUS from 1 to ${ncpu}.")
+      else
+        findings+=("docker-host-cpus-insufficient: docker info reports ${ncpu} CPUs, and the CPU limit is at least 1.")
+      fi
     fi
   fi
+  if (( ${#capabilities[@]} > 0 )); then
+    if [[ "${cgroup_version}" =~ ^[0-9]+$ ]]; then host="cgroup v${cgroup_version}"; else host="cgroup version not reported"; fi
+    if docker_runs_here "${name}" && controllers=$(head -c 512 "${CGROUP_CONTROLLERS_FILE}" 2>/dev/null); then
+      host+="; ${CGROUP_CONTROLLERS_FILE}: \"${controllers//[[:cntrl:]]/ }\""
+    else
+      host+="; /sys/fs/cgroup/cgroup.controllers on ${PI_HOST} lists the kernel's cgroup v2 controllers (Docker needs memory, cpu and pids)"
+    fi
+    while IFS= read -r line; do
+      case "${line}" in
+        *[Ll][Ii][Mm][Ii][Tt]*|*[Cc][Ff][Ss]*|*[Cc][Gg][Rr][Oo][Uu][Pp]*) host+="; Docker warns \"${line//[[:cntrl:]]/ }\"" ;;
+      esac
+    done < <(tail -n +2 <<<"${info}")
+    remedy="To fix it on a Raspberry Pi: its firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot the Pi with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. On another host, give the Docker daemon the memory, cpu and pids cgroup controllers."
+  fi
+  # A deploy is refused for every finding; a rollback only for the ones that are not a limit Docker cannot enforce.
+  [[ "${rollback}" == "true" ]] || findings=(${capabilities[@]+"${capabilities[@]}"} ${findings[@]+"${findings[@]}"})
   if (( ${#findings[@]} > 0 )); then
     log_err "${prefix} ERROR: Docker on ${PI_HOST} cannot give the controller its limits (${LIMITS_SUMMARY}), so ${refused}. Nothing was changed. Every finding:"
     for line in "${findings[@]}"; do
       log_err "${prefix}   - ${line}"
     done
-    if [[ "${capabilities}" == "true" ]]; then
-      if [[ "${cgroup_version}" =~ ^[0-9]+$ ]]; then host="cgroup v${cgroup_version}"; else host="cgroup version not reported"; fi
-      if docker_runs_here "${name}" && controllers=$(head -c 512 "${CGROUP_CONTROLLERS_FILE}" 2>/dev/null); then
-        host+="; ${CGROUP_CONTROLLERS_FILE}: \"${controllers//[[:cntrl:]]/ }\""
-      else
-        host+="; /sys/fs/cgroup/cgroup.controllers on ${PI_HOST} lists the kernel's cgroup v2 controllers (Docker needs memory, cpu and pids)"
-      fi
-      while IFS= read -r line; do
-        case "${line}" in
-          *[Ll][Ii][Mm][Ii][Tt]*|*[Cc][Ff][Ss]*|*[Cc][Gg][Rr][Oo][Uu][Pp]*) host+="; Docker warns \"${line//[[:cntrl:]]/ }\"" ;;
-        esac
-      done < <(tail -n +2 <<<"${info}")
+    if [[ "${rollback}" != "true" && ${#capabilities[@]} -gt 0 ]]; then
       log_err "${prefix}   Docker's host: ${host}."
-      log_err "${prefix}   To fix it on a Raspberry Pi: its firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot the Pi with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. On another host, give the Docker daemon the memory, cpu and pids cgroup controllers. There is no override (docs/deployment.md, \"The container's privileges and limits\")."
+      log_err "${prefix}   ${remedy} There is no override (docs/deployment.md, \"The container's privileges and limits\")."
     fi
     exit 1
   fi
+  if (( ${#capabilities[@]} > 0 )); then
+    UNENFORCED_WARNING=("**********************************************************************************************************"
+      "${goes}, BUT DOCKER ON ${PI_HOST} CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:")
+    for line in "${capabilities[@]}"; do
+      UNENFORCED_WARNING+=("  - ${line}")
+    done
+    UNENFORCED_WARNING+=("  Docker's host: ${host}."
+      "  ${remedy} Then deploy again (docs/deployment.md, \"The container's privileges and limits\")."
+      "**********************************************************************************************************")
+    for line in "${UNENFORCED_WARNING[@]}"; do
+      log_err "${prefix} WARNING: ${line}"
+    done
+    enforceable_limits
+  fi
   [[ ! "${total}" =~ ^[0-9]+$ ]] || memory_text="$(( 10#${total} / 1048576 ))m"
-  if [[ "${total}" =~ ^[0-9]+$ ]] && (( MEMORY_BYTES > 10#${total} )); then
+  if [[ "${ENFORCE_MEMORY}" == "true" && "${total}" =~ ^[0-9]+$ ]] && (( MEMORY_BYTES > 10#${total} )); then
     log_err "${prefix} WARNING: CONTAINER_MEMORY=${CONTAINER_MEMORY}${memory_note} is more than the ${memory_text} of memory Docker reports on ${PI_HOST}. It is kept: a memory limit is a cap, not a reservation, so the machine runs out of memory before the container reaches it."
   fi
-  echo "${prefix} Docker on ${PI_HOST} (${ncpu} CPUs, ${memory_text} of memory) enforces the limits: ${LIMITS_SUMMARY}"
+  if (( ${#capabilities[@]} > 0 )); then
+    echo "${prefix} Docker on ${PI_HOST} (${ncpu:-?} CPUs, ${memory_text} of memory) enforces only these limits, which the rollback gives: ${LIMITS_SUMMARY}"
+  else
+    echo "${prefix} Docker on ${PI_HOST} (${ncpu} CPUs, ${memory_text} of memory) enforces the limits: ${LIMITS_SUMMARY}"
+  fi
+}
+
+# enforceable_limits: for a rollback on a Docker that cannot enforce some limits, the ones it can (limit_args), and what
+# they are (LIMITS_SUMMARY): the version brought back runs without the others.
+enforceable_limits() {
+  local parts=()
+  limit_args=()
+  if [[ "${ENFORCE_CPU}" == "true" ]]; then
+    limit_args+=(--cpus "${CONTAINER_CPUS}")
+    if (( CPU_HUNDREDTHS == 100 )); then parts+=("1 CPU"); else parts+=("${CONTAINER_CPUS} CPUs"); fi
+  else
+    parts+=("no CPU limit (Docker here cannot enforce one)")
+  fi
+  if [[ "${ENFORCE_MEMORY}" == "true" ]]; then
+    limit_args+=(--memory "${CONTAINER_MEMORY}" --memory-swap "${CONTAINER_MEMORY}")
+    parts+=("${CONTAINER_MEMORY} of memory and no swap")
+  else
+    parts+=("no memory limit (Docker here cannot enforce one)")
+  fi
+  if [[ "${ENFORCE_PIDS}" == "true" ]]; then
+    limit_args+=(--pids-limit "${CONTAINER_PIDS_LIMIT}")
+    parts+=("at most ${CONTAINER_PIDS_LIMIT} processes and threads")
+  else
+    parts+=("no process limit (Docker here cannot enforce one)")
+  fi
+  LIMITS_SUMMARY="${parts[0]}, ${parts[1]}, ${parts[2]}"
+}
+
+# warn_in_container_log <container>: UNENFORCED_WARNING in the restored controller's own log (docker logs), as well as
+# in this output, so that it stays where the controller's are: written to the standard error of the container's first
+# process (tini), which is the container's log. One that cannot be written is a warning of its own: the rollback does
+# not depend on it.
+warn_in_container_log() {
+  local line when
+  (( ${#UNENFORCED_WARNING[@]} > 0 )) || return 0
+  when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if { echo "[rollback] WARNING: from deploy-roofcontroller-rpi.sh --rollback, ${when}:"
+       for line in "${UNENFORCED_WARNING[@]}"; do echo "[rollback] WARNING: ${line}"; done
+     } | dockerc exec -i "$1" sh -c 'cat > /proc/1/fd/2' >/dev/null 2>&1; then
+    echo "[rollback] The warning is in the controller's log too (docker logs ${CONTAINER_NAME})."
+  else
+    log_err "[rollback] WARNING: could not write the warning above to the controller's log (docker exec failed): it is only in this output."
+  fi
 }
 
 # read_confinement <container>: what Docker reports of a container's privileges and limits, in CONF_READ_ONLY,
@@ -1240,16 +1325,18 @@ read_confinement() {
 }
 
 # check_limits <container> <name>: the limits Docker gave the container (it can drop one with only a warning), from
-# read_confinement: exactly the ones this run gives, for a new controller and for the version a rollback brings back.
-# Sets FAILURE and returns 1 when they differ.
+# read_confinement: exactly the ones this run gives, for a new controller and for the version a rollback brings back
+# (on a Docker that cannot enforce one, the ones it can). Sets FAILURE and returns 1 when they differ.
 check_limits() {
   local id=$1 name=$2
   if ! read_confinement "${id}"; then
     FAILURE="could not read the privileges and limits of ${name} from Docker"
     return 1
   fi
-  if [[ "${CONF_NANO}" != "${WANT_NANO}" || "${CONF_MEMORY}" != "${WANT_MEMORY}" || "${CONF_SWAP}" != "${WANT_SWAP}" \
-      || "${CONF_PIDS}" != "${CONTAINER_PIDS_LIMIT}" ]]; then
+  # A rollback on a Docker that cannot enforce a limit gives none of it (check_docker_limits), so it is not checked.
+  if [[ "${ENFORCE_CPU}" == "true" && "${CONF_NANO}" != "${WANT_NANO}" ]] \
+      || [[ "${ENFORCE_MEMORY}" == "true" && ( "${CONF_MEMORY}" != "${WANT_MEMORY}" || "${CONF_SWAP}" != "${WANT_SWAP}" ) ]] \
+      || [[ "${ENFORCE_PIDS}" == "true" && "${CONF_PIDS}" != "${CONTAINER_PIDS_LIMIT}" ]]; then
     FAILURE="${name} does not have the limits (${LIMITS_SUMMARY}): Docker reports NanoCpus ${CONF_NANO:-?}, Memory ${CONF_MEMORY:-?}, MemorySwap ${CONF_SWAP:-?} and PidsLimit ${CONF_PIDS:-?}"
     return 1
   fi
@@ -1280,14 +1367,18 @@ give_rollback_limits() {
   local id=$1 name=$2 restore=() kept=""
   read_confinement "${id}" \
     || fail "Could not read the limits of ${name} from Docker. The current controller was not stopped."
-  if [[ "${CONF_NANO}" != "${WANT_NANO}" ]]; then
+  if [[ ${#limit_args[@]} -eq 0 ]]; then
+    echo "[rollback] Docker here enforces none of the limits: ${name} is given none (see the warning above)"
+    return 0
+  fi
+  if [[ "${ENFORCE_CPU}" == "true" && "${CONF_NANO}" != "${WANT_NANO}" ]]; then
     if (( CONF_NANO > 0 )); then
       restore+=(--cpus "$(( CONF_NANO / 1000000000 )).$(printf '%09d' $(( CONF_NANO % 1000000000 )))")
     else
       kept="a CPU limit"
     fi
   fi
-  if [[ "${CONF_MEMORY}" != "${WANT_MEMORY}" || "${CONF_SWAP}" != "${WANT_SWAP}" ]]; then
+  if [[ "${ENFORCE_MEMORY}" == "true" && ( "${CONF_MEMORY}" != "${WANT_MEMORY}" || "${CONF_SWAP}" != "${WANT_SWAP}" ) ]]; then
     if (( CONF_MEMORY > 0 )); then
       restore+=(--memory "${CONF_MEMORY}")
       (( CONF_SWAP == 0 )) || restore+=(--memory-swap "${CONF_SWAP}")
@@ -1295,7 +1386,7 @@ give_rollback_limits() {
       kept+="${kept:+ and }a memory limit"
     fi
   fi
-  if [[ "${CONF_PIDS}" != "${CONTAINER_PIDS_LIMIT}" ]]; then
+  if [[ "${ENFORCE_PIDS}" == "true" && "${CONF_PIDS}" != "${CONTAINER_PIDS_LIMIT}" ]]; then
     # Docker takes -1 for no process limit.
     if (( CONF_PIDS > 0 )); then restore+=(--pids-limit "${CONF_PIDS}"); else restore+=(--pids-limit -1); fi
   fi
@@ -2407,7 +2498,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; identity dir: ${IDENTITY_DIR:-<none, kept in memory>}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
   echo "[dry-run] Settings dir on Pi: ${CONFIG_DIR:-<none, kept in memory>}; managed secrets dir: ${MANAGED_SECRETS_DIR:-<none, kept in memory>}"
   # Last, as the deploy would check it first: a Docker that cannot enforce the limits fails the dry run as it would the
-  # deploy.
+  # deploy, and a rollback's dry run warns as the rollback would.
   check_docker_limits dry-run
   exit 0
 fi
@@ -2442,8 +2533,12 @@ fi
 [[ "${STOP}" != "true" ]] || fail "internal error: the --stop path did not finish; nothing was built or deployed."
 
 # A deploy and a rollback both give the controller the limits: Docker must be able to enforce them, before the build,
-# the pull or a Stop. A host that cannot is refused, with no override.
-check_docker_limits deploy
+# the pull or a Stop. A host that cannot is refused, with no override; a rollback goes ahead with those it can, and warns.
+if [[ "${ROLLBACK}" == "true" ]]; then
+  check_docker_limits rollback
+else
+  check_docker_limits deploy
+fi
 
 if [[ "${ROLLBACK}" == "true" ]]; then
   lookup_container "$(name_filter "${SWAP_CONTAINER_NAME}")" \
@@ -2524,6 +2619,7 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   # Started: whatever the checks say, it is left running (run --rollback again to swap back), with this run's limits.
   RESTORE_MODE=""
   LIMITS_RESTORE_ID=""
+  warn_in_container_log "${CONTAINER_NAME}"
 
   if ! verify_controller "${CONTAINER_NAME}"; then
     show_containers
@@ -2533,6 +2629,9 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   fi
   show_containers
   echo "[done] Rolled back. ${CONTAINER_NAME} is verified at ${REMOTE_BASE_URL}. HAT: hatMode ${VERIFIED_HAT_MODE}. The replaced version is kept as ${PREVIOUS_CONTAINER_NAME}."
+  if (( ${#UNENFORCED_WARNING[@]} > 0 )); then
+    log_err "[done] WARNING: ${CONTAINER_NAME} runs without the limits Docker on ${PI_HOST} cannot enforce (${LIMITS_SUMMARY}): fix the host as the warning above says, then deploy again. An install, an upgrade or a deploy is refused until then."
+  fi
   exit 0
 fi
 
