@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -149,7 +150,40 @@ public sealed record DockerSurvey
     /// <summary>Why Docker cannot be used, when it cannot: not installed, not running, or not allowed.</summary>
     public string? Problem { get; init; }
 
+    /// <summary>The limits Docker says it can put on a container, and the CPUs and memory it reports; null when it did not answer.</summary>
+    public DockerLimits? Limits { get; init; }
+
     public bool IsUsable => Problem is null && Version is not null;
+}
+
+/// <summary>
+/// What <c>docker info</c> says about the limits Docker enforces on a container (MemoryLimit, CPUCfsQuota, PidsLimit and
+/// SwapLimit) and about the machine (NCPU, MemTotal); null for what it did not say. Docker drops a limit it cannot
+/// enforce with only a warning, so the installer checks these before it deploys the controller with its limits.
+/// </summary>
+public sealed record DockerLimits(bool? Memory, bool? Cpu, bool? Pids, bool? Swap, int? Cpus, long? MemoryBytes)
+{
+    /// <summary>The <c>docker info --format</c> template that reads them, comma-separated so an empty field keeps its place.</summary>
+    public const string Format = "{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}";
+
+    /// <summary>The answer to <see cref="Format"/>; null when it is not one.</summary>
+    public static DockerLimits? Parse(string output)
+    {
+        var fields = (output ?? string.Empty).Trim().Split(',');
+        if (fields.Length != 6)
+        {
+            return null;
+        }
+
+        static bool? Flag(string value) => bool.TryParse(value, out var flag) ? flag : null;
+        return new DockerLimits(
+            Flag(fields[0]),
+            Flag(fields[1]),
+            Flag(fields[2]),
+            Flag(fields[3]),
+            int.TryParse(fields[4], NumberStyles.None, CultureInfo.InvariantCulture, out var cpus) ? cpus : null,
+            long.TryParse(fields[5], NumberStyles.None, CultureInfo.InvariantCulture, out var memory) ? memory : null);
+    }
 }
 
 /// <summary>Who made a container.</summary>
@@ -225,6 +259,18 @@ public sealed record ContainerSurvey
 
     /// <summary>When it last started (State.StartedAt); null when it never has. It read its secrets then.</summary>
     public DateTimeOffset? StartedAt { get; init; }
+
+    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus); 0 for none.</summary>
+    public long NanoCpus { get; init; }
+
+    /// <summary>Its memory limit in bytes (HostConfig.Memory); 0 for none.</summary>
+    public long MemoryBytes { get; init; }
+
+    /// <summary>Its process limit (HostConfig.PidsLimit); null for none.</summary>
+    public long? PidsLimit { get; init; }
+
+    /// <summary>Whether its root filesystem is read-only (HostConfig.ReadonlyRootfs), as the deploy script runs the controller.</summary>
+    public bool ReadOnlyRootFilesystem { get; init; }
 
     public bool IsRunning => State == "running";
 

@@ -64,6 +64,18 @@ internal sealed record FakeContainer
 
     /// <summary>When it last started; null for one that says it never has.</summary>
     public DateTimeOffset? StartedAt { get; init; }
+
+    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus): by default none (0), the installer's default.</summary>
+    public long NanoCpus { get; init; }
+
+    /// <summary>Its memory limit, and as much with swap (HostConfig.Memory, MemorySwap): by default none (0).</summary>
+    public long Memory { get; init; }
+
+    /// <summary>Its process limit (HostConfig.PidsLimit): by default 512; null for none.</summary>
+    public long? PidsLimit { get; init; } = 512;
+
+    /// <summary>Its root filesystem is read-only, as the deploy script runs the controller.</summary>
+    public bool ReadOnly { get; init; } = true;
 }
 
 /// <summary>A person the fake controller was asked to add through its API: what the installer sent.</summary>
@@ -150,6 +162,12 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     public string? DockerVersion { get; set; } = "27.3.1";
 
     public string? ComposeVersion { get; set; } = "2.29.7";
+
+    /// <summary>
+    /// What <c>docker info</c> says of the limits Docker enforces and the machine (<see cref="DockerLimits.Format"/>):
+    /// memory, CPU, process and swap limits, 4 CPUs and 8 GiB by default; null fails the command.
+    /// </summary>
+    public string? DockerInfo { get; set; } = "true,true,true,true,4,8589934592";
 
     /// <summary>What docker says when it cannot answer (not running, not allowed).</summary>
     public string? DockerError { get; set; }
@@ -727,6 +745,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         CommandResult? result = command.Program switch
         {
             "docker" when arguments is ["version", "--format", "{{.Server.Version}}"] => Docker(() => Answer(DockerVersion!)),
+            "docker" when arguments is ["info", "--format", DockerLimits.Format] => Docker(() => DockerInfo is null
+                ? new CommandResult(1, string.Empty, "Error response from daemon: info failed\n")
+                : Answer(DockerInfo)),
             "docker" when arguments is ["compose", "version", "--short"] => Docker(() => ComposeVersion is null
                 ? new CommandResult(1, string.Empty, "docker: 'compose' is not a docker command.\n")
                 : Answer(ComposeVersion)),
@@ -747,6 +768,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 ? Answer(name, after: () => Containers[name] = container with { State = "exited" })
                 : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
             "docker" when arguments is ["rm", var name] => Docker(() => Containers.Remove(name) ? Answer(name) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {name}\n")),
+            "docker" when arguments is ["rm", "-v", var withVolumes] => Docker(() => Containers.Remove(withVolumes) ? Answer(withVolumes) : new CommandResult(1, string.Empty, $"Error response from daemon: No such container: {withVolumes}\n")),
             "docker" when arguments is ["run", "-d", "--name", MachineSurveyor.HatEmulatorContainer, ..] => Docker(() => RunEmulator(arguments)),
             "bash" when arguments is [var script, ..] && script.EndsWith("/" + DeployScript.FileName, StringComparison.Ordinal) => Deploy(script, arguments.Skip(1).ToArray(), command, cancellationToken),
             "systemctl" when arguments is ["is-enabled", MachineSurveyor.KioskUnit] => !Exists(MachineSurveyor.KioskUnitFile)
@@ -1112,7 +1134,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 Containers.Remove(ControllerRollbackStep.PreviousContainer);
             }
 
-            Containers[MachineSurveyor.ControllerContainer] = previous with { State = "running", StartedAt = DateTimeOffset.UtcNow };
+            // It runs with the limits the script was given (docker update), and keeps its own privileges.
+            Containers[MachineSurveyor.ControllerContainer] = WithLimits(previous, environment) with { State = "running", StartedAt = DateTimeOffset.UtcNow };
             ControllerKeys.Clear();
             ControllerKeys.UnionWith(ApiKeyValues());
             return new CommandResult(0, "[deploy] Rolled back\n", string.Empty);
@@ -1147,8 +1170,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         }
 
         var https = environment["HTTPS_CERT_DIR"].Length > 0;
-        Containers[MachineSurveyor.ControllerContainer] = new FakeContainer
+        Containers[MachineSurveyor.ControllerContainer] = WithLimits(new FakeContainer(), environment) with
         {
+            ReadOnly = true,
             Emulated = environment["HAT_EMULATOR_ENDPOINT"].Length > 0,
             HatEmulatorEndpoint = environment["HAT_EMULATOR_ENDPOINT"] is { Length: > 0 } endpoint ? endpoint : HatEmulatorStep.Endpoint,
             Version = image[(image.LastIndexOf(':', image.IndexOf('@', StringComparison.Ordinal)) + 1)..image.IndexOf('@', StringComparison.Ordinal)],
@@ -1177,6 +1201,22 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             ServedCertificates[apiPort] = served;
         }
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
+    }
+
+    // A container with the limits the deploy script was given: CONTAINER_CPUS, CONTAINER_MEMORY and CONTAINER_PIDS_LIMIT. An
+    // empty CPU or memory limit leaves the container's own, as docker update does (a new container has none).
+    private static FakeContainer WithLimits(FakeContainer container, IReadOnlyDictionary<string, string> environment)
+    {
+        var cpus = environment["CONTAINER_CPUS"];
+        var memory = environment["CONTAINER_MEMORY"];
+        return container with
+        {
+            NanoCpus = cpus.Length == 0 ? container.NanoCpus : (long)(decimal.Parse(cpus, System.Globalization.CultureInfo.InvariantCulture) * 1_000_000_000m),
+            Memory = memory.Length == 0
+                ? container.Memory
+                : long.Parse(memory[..^1], System.Globalization.CultureInfo.InvariantCulture) * (memory[^1] == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024),
+            PidsLimit = long.Parse(environment["CONTAINER_PIDS_LIMIT"], System.Globalization.CultureInfo.InvariantCulture)
+        };
     }
 
     private string Inspect(string name, FakeContainer container)
@@ -1240,7 +1280,16 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             {
                 Name = "/" + name,
                 Config = new { Image = image, Labels = labels, Env = environment },
-                HostConfig = new { PortBindings = ports, NetworkMode = container.Network ?? "bridge" },
+                HostConfig = new
+                {
+                    PortBindings = ports,
+                    NetworkMode = container.Network ?? "bridge",
+                    container.NanoCpus,
+                    container.Memory,
+                    MemorySwap = container.Memory,
+                    container.PidsLimit,
+                    ReadonlyRootfs = container.ReadOnly
+                },
                 State = new
                 {
                     Status = container.State,

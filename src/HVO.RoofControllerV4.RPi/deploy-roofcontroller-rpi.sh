@@ -28,6 +28,17 @@ set -euo pipefail
 #    From that stop on, docker runs in its own session (setsid, or perl on macOS), so an interrupt cannot cut a docker
 #    call short: the restore begins once the call in progress returns.
 #
+# The container (docs/deployment.md, "The container's privileges and limits"): a read-only root filesystem (tmpfs for
+#   /tmp, /run/hvo-roof and /root/.aspnet, and a volume of the container's own for the web UI's sign-in keys), no Linux
+#   capabilities but CHOWN, KILL, SETGID and SETUID (the supervisor's, to run the web UI as its own user),
+#   no-new-privileges, and limits: CONTAINER_PIDS_LIMIT (default 512) always, and CONTAINER_CPUS and CONTAINER_MEMORY (no
+#   swap) only when they are set, at least 1 vCPU and 1g. They are not set by default until the supervisor de-energises
+#   the relays whenever the controller exits (#138). Before anything changes, Docker on the Pi must report that it
+#   enforces the limits this run gives, and at least as many CPUs as a CPU limit (a memory limit above its memory is a
+#   cap, not a reservation: a warning says so); the new controller's container must then carry exactly them. The
+#   pre-flight container runs with the same. --rollback gives the version it brings back the same limits (docker
+#   update), only after the roof's verified stop; its privileges stay as it was deployed with.
+#
 # Usage: PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh [--dry-run] [--force-unverified-stop] [--rollback]
 #        PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh --stop [--force-unverified-stop]
 #        PI_HOST=<pi> ./deploy-roofcontroller-rpi.sh --verify-remote
@@ -117,6 +128,17 @@ PUBLISH_ADDRESS=${PUBLISH_ADDRESS:-}
 # stop, platform) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and
 # BUILD_PLATFORM.
 EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
+# The controller container's resource limits (docs/deployment.md, "The container's privileges and limits"), for the
+# pre-flight container too: the most processes and threads at once (256 to 32768), always; CPUs as `docker run --cpus`
+# takes them (2, 2.5) and memory as a whole number of MiB or GiB (1024m, 1g; the container gets no swap beyond it), each
+# only when set. Empty, the default, gives no CPU or memory limit: the kernel would end a controller that reached one
+# mid-motion, and until the supervisor de-energises the relays whenever the controller exits (#138) a killed controller
+# leaves the drive running. One that is set must be at least RoofController's floor of 1 vCPU and 1g; less
+# is refused. The future default is 1 vCPU / 2 GiB, enabled by a follow-up after #138. --rollback gives them to the
+# version it brings back.
+CONTAINER_CPUS=${CONTAINER_CPUS:-}
+CONTAINER_MEMORY=${CONTAINER_MEMORY:-}
+CONTAINER_PIDS_LIMIT=${CONTAINER_PIDS_LIMIT:-512}
 HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI:-true}
 IGNORE_PHYSICAL_LIMIT_SWITCHES=${IGNORE_PHYSICAL_LIMIT_SWITCHES:-false}
 OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-hvo-roof-controller}
@@ -272,6 +294,55 @@ case "${POLL_INTERVAL_SECONDS}" in
   ''|.|*[!0-9.]*|*.*.*) fail "POLL_INTERVAL_SECONDS must be a number of seconds such as 3 or 0.5, got '${POLL_INTERVAL_SECONDS}'." ;;
 esac
 
+# The limits, held for the checks in hundredths of a CPU (CPU_HUNDREDTHS) and in bytes (MEMORY_BYTES), 0 when not set,
+# and written back plainly (2.50 as 2.5, 4G as 4g). Docker counts CPUs in billionths, so two decimals are given to it
+# exactly. One that is set is never below RoofController's floor of 1 vCPU and 1g: there is no exception.
+require_number CONTAINER_PIDS_LIMIT 256 32768
+CPU_HUNDREDTHS=0
+if [[ -n "${CONTAINER_CPUS}" ]]; then
+  cpus_pattern='^([0-9]{1,3})(\.([0-9]{1,2}))?$'
+  [[ "${CONTAINER_CPUS}" =~ ${cpus_pattern} ]] \
+    || fail "CONTAINER_CPUS must be a number of CPUs such as 2 or 2.5 (at most two decimals), or empty for no CPU limit, got '${CONTAINER_CPUS}'. Nothing was changed."
+  cpu_fraction="${BASH_REMATCH[3]}00"
+  CPU_HUNDREDTHS=$(( 10#${BASH_REMATCH[1]} * 100 + 10#${cpu_fraction:0:2} ))
+  CONTAINER_CPUS=$(( CPU_HUNDREDTHS / 100 ))
+  if (( CPU_HUNDREDTHS % 100 != 0 )); then
+    cpu_fraction=$(printf '%02d' $(( CPU_HUNDREDTHS % 100 )))
+    CONTAINER_CPUS+=".${cpu_fraction%0}"
+  fi
+  if (( CPU_HUNDREDTHS < 100 )); then
+    fail "CONTAINER_CPUS=${CONTAINER_CPUS} is less than 1 vCPU, the minimum (RoofController's; docs/deployment.md, \"The container's privileges and limits\"): give at least 1, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
+  fi
+fi
+MEMORY_BYTES=0
+if [[ -n "${CONTAINER_MEMORY}" ]]; then
+  memory_pattern='^([0-9]{1,6})([mMgG])$'
+  [[ "${CONTAINER_MEMORY}" =~ ${memory_pattern} ]] \
+    || fail "CONTAINER_MEMORY must be a whole number of MiB or GiB such as 1024m or 1g, or empty for no memory limit, got '${CONTAINER_MEMORY}'. Nothing was changed."
+  case "${BASH_REMATCH[2]}" in
+    m|M) CONTAINER_MEMORY="$(( 10#${BASH_REMATCH[1]} ))m" MEMORY_BYTES=$(( 10#${BASH_REMATCH[1]} * 1048576 )) ;;
+    *) CONTAINER_MEMORY="$(( 10#${BASH_REMATCH[1]} ))g" MEMORY_BYTES=$(( 10#${BASH_REMATCH[1]} * 1073741824 )) ;;
+  esac
+  if (( MEMORY_BYTES < 1073741824 )); then
+    fail "CONTAINER_MEMORY=${CONTAINER_MEMORY} is less than 1g, the minimum (RoofController's; docs/deployment.md, \"The container's privileges and limits\"): give at least 1g, or leave CONTAINER_MEMORY empty for no memory limit. Nothing was changed."
+  fi
+fi
+# What the run gives (limit_args, for docker run and the rollback's docker update) and says it gives.
+limit_args=()
+[[ -z "${CONTAINER_CPUS}" ]] || limit_args+=(--cpus "${CONTAINER_CPUS}")
+[[ -z "${CONTAINER_MEMORY}" ]] || limit_args+=(--memory "${CONTAINER_MEMORY}" --memory-swap "${CONTAINER_MEMORY}")
+limit_args+=(--pids-limit "${CONTAINER_PIDS_LIMIT}")
+if [[ -n "${CONTAINER_CPUS}" && -n "${CONTAINER_MEMORY}" ]]; then
+  LIMITS_SUMMARY="${CONTAINER_CPUS} CPUs, ${CONTAINER_MEMORY} of memory and no swap"
+elif [[ -n "${CONTAINER_CPUS}" ]]; then
+  LIMITS_SUMMARY="${CONTAINER_CPUS} CPUs and no memory limit"
+elif [[ -n "${CONTAINER_MEMORY}" ]]; then
+  LIMITS_SUMMARY="no CPU limit, ${CONTAINER_MEMORY} of memory and no swap"
+else
+  LIMITS_SUMMARY="no CPU or memory limit"
+fi
+LIMITS_SUMMARY+=", at most ${CONTAINER_PIDS_LIMIT} processes and threads"
+
 # Emulator mode needs the explicit flag: a controller on the HAT emulator does not operate the roof.
 HAT_EMULATOR_HOST="" HAT_EMULATOR_PORT=""
 if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
@@ -319,11 +390,12 @@ fi
 # A second --name would make Docker run the controller under that name: the checks and the restore would then act on
 # the wrong container while the new one drives the HAT. --rm, --detach, --restart, --cidfile and published ports would
 # break the restore, the restart policy or the pre-flight container, --stop-timeout or --stop-signal could cut the
-# controller's shutdown stop short, and --platform could run another platform's image than the one checked. Short
-# options may be combined (-itd, -p8443:8443). HatEmulator settings (in any case, as .NET reads them), given directly or
-# in an --env-file, would switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report. In
-# emulator mode the HAT's bus stays unmapped: no I2C device, no --privileged (which maps every device) and no mount of
-# the host's /dev.
+# controller's shutdown stop short, and --platform could run another platform's image than the one checked. The
+# container's privileges and limits are the script's too: --privileged, the read-only root filesystem and tmpfs mounts,
+# capabilities, --security-opt and the CPU, memory and process limits. Short options may be combined (-itd,
+# -p8443:8443, -m4g). HatEmulator settings (in any case, as .NET reads them), given directly or in an --env-file, would
+# switch the HAT without HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, and the report. In emulator mode the HAT's bus
+# stays unmapped: no I2C device and no mount of the host's /dev.
 EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and ALLOW_EMULATED_HAT, so that the deployment records it."
 
 refuse_emulator_setting() {
@@ -358,6 +430,9 @@ check_extra_option() {
         IFS=',' read -r -a fields <<<"${value}"
         for field in ${fields[@]+"${fields[@]}"}; do
           case "${field}" in source=*|src=*) source=${field#*=} ;; esac
+          if [[ "$(printf '%s' "${field}" | tr '[:upper:]' '[:lower:]')" == "type=tmpfs" ]]; then
+            fail "EXTRA_DOCKER_ARGS must not mount a tmpfs ('--mount ${value}'): the script gives the container's read-only root filesystem its writable places itself (docs/deployment.md, \"The container's privileges and limits\"). Nothing was changed."
+          fi
         done
       fi
       if [[ -n "${HAT_EMULATOR_ENDPOINT}" && ( "${source}" == "/" || "${source}" == /dev || "${source}" == /dev/* ) ]]; then
@@ -381,13 +456,16 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
       --env-file|--device|--volume|--mount) pending_option=${arg} ;;
       --env-file=*|--device=*|--volume=*|--mount=*) check_extra_option "${arg%%=*}" "${arg#*=}" ;;
       --privileged|--privileged=*)
-        # Docker reads the value as Go's strconv.ParseBool does, so 1, t and True turn it on as well as true.
-        if [[ -n "${HAT_EMULATOR_ENDPOINT}" ]]; then
-          case "$(printf '%s' "${arg#--privileged}" | tr '[:upper:]' '[:lower:]')" in
-            =false|=f|=0) ;;
-            *) fail "EXTRA_DOCKER_ARGS must not contain '${arg}' in HAT emulator mode: it maps every host device, the HAT's I2C bus included." ;;
-          esac
-        fi
+        # Docker reads the value as Go's strconv.ParseBool does, so 1, t and True turn it on as well as true. It gives the
+        # container every capability and every host device: never, and in HAT emulator mode the HAT's bus with them.
+        case "$(printf '%s' "${arg#--privileged}" | tr '[:upper:]' '[:lower:]')" in
+          =false|=f|=0) ;;
+          *)
+            [[ -z "${HAT_EMULATOR_ENDPOINT}" ]] \
+              || fail "EXTRA_DOCKER_ARGS must not contain '${arg}' in HAT emulator mode: it maps every host device, the HAT's I2C bus included."
+            fail "EXTRA_DOCKER_ARGS must not contain '${arg}': it gives the controller every capability and every host device, undoing the container's privileges (docs/deployment.md, \"The container's privileges and limits\"). Nothing was changed."
+            ;;
+        esac
         ;;
       *)
         # -v and boolean short options combined with it (-itv), with the volume next or attached (-v/dev:/dev).
@@ -413,6 +491,22 @@ for arg in ${extra_args[@]+"${extra_args[@]}"}; do
   esac
   if [[ "${reserved}" == "true" ]]; then
     fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container name, --detach, --rm, --restart, --cidfile, the published ports, --stop-timeout, --stop-signal and --platform itself (use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and BUILD_PLATFORM)."
+  fi
+  case "${arg}" in
+    --read-only|--read-only=*|--tmpfs|--tmpfs=*|--cap-add|--cap-add=*|--cap-drop|--cap-drop=*|--security-opt|--security-opt=*)
+      confining=true ;;
+    --cpus|--cpus=*|--cpu-period|--cpu-period=*|--cpu-quota|--cpu-quota=*|--cpu-rt-period|--cpu-rt-period=*|--cpu-rt-runtime|--cpu-rt-runtime=*)
+      confining=true ;;
+    --memory|--memory=*|--memory-swap|--memory-swap=*|--kernel-memory|--kernel-memory=*|--oom-kill-disable|--oom-kill-disable=*|--pids-limit|--pids-limit=*)
+      confining=true ;;
+    *)
+      confining=false
+      # -m (the memory limit), alone or after boolean short options (-itm 1g, -m1g).
+      if [[ "${arg}" =~ ^-[ditPq]*m ]]; then confining=true; fi
+      ;;
+  esac
+  if [[ "${confining}" == "true" ]]; then
+    fail "EXTRA_DOCKER_ARGS must not contain '${arg}': the script sets the container's privileges and limits itself (the read-only root filesystem and its tmpfs mounts, --cap-drop and --cap-add, --security-opt, --cpus, --memory, --memory-swap and --pids-limit; use CONTAINER_CPUS, CONTAINER_MEMORY and CONTAINER_PIDS_LIMIT). See docs/deployment.md, \"The container's privileges and limits\". Nothing was changed."
   fi
   refuse_emulator_setting "${arg}"
 done
@@ -955,6 +1049,172 @@ show_containers() {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
+# The container's privileges and limits
+
+# Docker drops a limit it cannot enforce with only a warning, and runs the controller without it: Raspberry Pi OS boots
+# with cgroup_disable=memory, for one. So before anything changes, Docker on the Pi must say that it enforces the limits
+# this run gives (the process limit always, a CPU or a memory limit when one is set), and report at least the CPUs a CPU
+# limit gives. A memory limit is a cap, not a reservation: one above the memory Docker reports is kept, with a warning.
+# When a memory limit is given and Docker cannot keep the container from swapping, it warns (the memory limit still
+# holds) and expects Docker to record no swap limit (WANT_SWAP -1).
+# The NanoCpus, Memory and MemorySwap Docker records for this run's limits (0 for one it does not give).
+WANT_NANO=$(( CPU_HUNDREDTHS * 10000000 ))
+WANT_MEMORY=${MEMORY_BYTES}
+WANT_SWAP=${MEMORY_BYTES}
+check_docker_limits() {
+  local info memory cpu pids swap ncpu total missing="" guidance cpu_range memory_text="?"
+  info=$(dockerc info --format '{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}') \
+    || fail "Could not ask Docker (context '${DOCKER_CONTEXT}') which limits it enforces. Nothing was changed."
+  # Commas, so that a field Docker leaves empty stays in its place.
+  IFS=, read -r memory cpu pids swap ncpu total <<<"${info}"
+  [[ -z "${CONTAINER_MEMORY}" || "${memory}" == "true" ]] || missing="memory"
+  [[ -z "${CONTAINER_CPUS}" || "${cpu}" == "true" ]] || missing+="${missing:+, }CPU"
+  [[ "${pids}" == "true" ]] || missing+="${missing:+, }process"
+  if [[ -n "${missing}" ]]; then
+    guidance="Give the Docker daemon the memory, cpu and pids cgroup controllers"
+    if [[ "${missing}" == *memory* ]]; then
+      guidance="On Raspberry Pi OS, add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot, or leave CONTAINER_MEMORY empty for no memory limit; elsewhere, give the Docker daemon the memory, cpu and pids cgroup controllers"
+    fi
+    fail "Docker on ${PI_HOST} does not enforce ${missing} limits (docker info: MemoryLimit ${memory:-?}, CPUCfsQuota ${cpu:-?}, PidsLimit ${pids:-?}), so the controller would run without them. ${guidance} (docs/deployment.md, \"The container's privileges and limits\"). Nothing was changed."
+  fi
+  if [[ -n "${CONTAINER_CPUS}" ]]; then
+    [[ "${ncpu}" =~ ^[0-9]+$ ]] \
+      || fail "Docker on ${PI_HOST} did not report its CPUs (docker info: NCPU '${ncpu}'), so CONTAINER_CPUS=${CONTAINER_CPUS} cannot be checked against them. Nothing was changed."
+    if (( CPU_HUNDREDTHS > 10#${ncpu} * 100 )); then
+      cpu_range="give from 1 to ${ncpu}, or leave CONTAINER_CPUS empty for no CPU limit"
+      (( 10#${ncpu} >= 1 )) || cpu_range="leave CONTAINER_CPUS empty for no CPU limit (one is at least 1)"
+      fail "CONTAINER_CPUS=${CONTAINER_CPUS} is more than the ${ncpu} CPUs Docker reports on ${PI_HOST}: ${cpu_range}. Nothing was changed."
+    fi
+  fi
+  [[ ! "${total}" =~ ^[0-9]+$ ]] || memory_text="$(( 10#${total} / 1048576 ))m"
+  if [[ -n "${CONTAINER_MEMORY}" ]]; then
+    if [[ "${total}" =~ ^[0-9]+$ ]] && (( MEMORY_BYTES > 10#${total} )); then
+      log_err "[deploy] WARNING: CONTAINER_MEMORY=${CONTAINER_MEMORY} is more than the ${memory_text} of memory Docker reports on ${PI_HOST}. It is kept: a memory limit is a cap, not a reservation, so the machine runs out of memory before the container reaches it."
+    fi
+    if [[ "${swap}" != "true" ]]; then
+      # Docker then records no swap limit (-1).
+      WANT_SWAP=-1
+      log_err "[deploy] WARNING: Docker on ${PI_HOST} cannot keep the container from swapping (docker info: SwapLimit ${swap:-?}). The memory limit still holds; the controller may also use swap."
+    fi
+  fi
+  echo "[deploy] Docker on ${PI_HOST} (${ncpu:-?} CPUs, ${memory_text} of memory) enforces the limits: ${LIMITS_SUMMARY}"
+}
+
+# read_confinement <container>: what Docker reports of a container's privileges and limits, in CONF_READ_ONLY,
+# CONF_NANO, CONF_MEMORY, CONF_SWAP, CONF_PIDS (0 for none: Docker reports null, or 0 once a limit was taken off),
+# CONF_DROP, CONF_ADD and CONF_OPTIONS. Returns 1 when Docker cannot be asked.
+CONF_READ_ONLY="" CONF_NANO="" CONF_MEMORY="" CONF_SWAP="" CONF_PIDS="" CONF_DROP="" CONF_ADD="" CONF_OPTIONS=""
+read_confinement() {
+  local config
+  config=$(dockerc inspect --format '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{json .HostConfig.PidsLimit}} {{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}} {{json .HostConfig.SecurityOpt}}' "$1") \
+    || return 1
+  read -r CONF_READ_ONLY CONF_NANO CONF_MEMORY CONF_SWAP CONF_PIDS CONF_DROP CONF_ADD CONF_OPTIONS <<<"${config}"
+  [[ "${CONF_PIDS}" != "null" ]] || CONF_PIDS=0
+}
+
+# check_limits <container> <name> <exact|given>: the limits Docker gave the container (it can drop one with only a
+# warning), from read_confinement. exact, for a new controller: the limits this run gives and no CPU or memory limit it
+# does not. given, for the version a rollback brings back: the limits this run gives; a CPU or memory limit it does not
+# give may stay, as Docker cannot take one off a container. Sets FAILURE and returns 1 when they differ.
+check_limits() {
+  local id=$1 name=$2 how=$3 differs=false
+  if ! read_confinement "${id}"; then
+    FAILURE="could not read the privileges and limits of ${name} from Docker"
+    return 1
+  fi
+  if [[ -n "${CONTAINER_CPUS}" || "${how}" == "exact" ]] && [[ "${CONF_NANO}" != "${WANT_NANO}" ]]; then
+    differs=true
+  fi
+  if [[ -n "${CONTAINER_MEMORY}" || "${how}" == "exact" ]] && [[ "${CONF_MEMORY}" != "${WANT_MEMORY}" || "${CONF_SWAP}" != "${WANT_SWAP}" ]]; then
+    differs=true
+  fi
+  if [[ "${differs}" == "true" || "${CONF_PIDS}" != "${CONTAINER_PIDS_LIMIT}" ]]; then
+    FAILURE="${name} does not have the limits (${LIMITS_SUMMARY}): Docker reports NanoCpus ${CONF_NANO:-?}, Memory ${CONF_MEMORY:-?}, MemorySwap ${CONF_SWAP:-?} and PidsLimit ${CONF_PIDS:-?}"
+    return 1
+  fi
+}
+
+# check_privileges <name>: the privileges this script gives a new controller (hardening_args), from read_confinement.
+# Sets FAILURE and returns 1 when they differ.
+check_privileges() {
+  # Docker writes the capabilities with or without CAP_, as it was given them or by its version.
+  if [[ "${CONF_READ_ONLY}" != "true" || "${CONF_DROP//CAP_/}" != '["ALL"]' || "${CONF_ADD//CAP_/}" != '["CHOWN","KILL","SETGID","SETUID"]' \
+      || "${CONF_OPTIONS}" != *'"no-new-privileges'* ]]; then
+    FAILURE="$1 does not have the container's privileges (read-only root filesystem ${CONF_READ_ONLY:-?}, capabilities dropped ${CONF_DROP:-?} and added ${CONF_ADD:-?}, security options ${CONF_OPTIONS:-?})"
+    return 1
+  fi
+}
+
+# --rollback gives the version it brings back this run's limits (docker update), and puts back the ones it had if the
+# rollback does not get as far as starting it: LIMITS_RESTORE holds them as docker update options, for container
+# LIMITS_RESTORE_ID, from the change until the start (the EXIT trap runs restore_rollback_limits). Docker cannot take a
+# CPU or memory limit off a container (0 leaves one as it is), so one the version had none of stays: LIMITS_KEPT names it.
+LIMITS_RESTORE=()
+LIMITS_RESTORE_ID=""
+LIMITS_KEPT=""
+
+# give_rollback_limits <container> <name>: called only once the roof's verified stop has passed, so that no check that
+# refuses the rollback comes after the change. Fails, with the limits put back, when Docker cannot give them.
+give_rollback_limits() {
+  local id=$1 name=$2 restore=() kept=""
+  read_confinement "${id}" \
+    || fail "Could not read the limits of ${name} from Docker. The current controller was not stopped."
+  if [[ -n "${CONTAINER_CPUS}" && "${CONF_NANO}" != "${WANT_NANO}" ]]; then
+    if (( CONF_NANO > 0 )); then
+      restore+=(--cpus "$(( CONF_NANO / 1000000000 )).$(printf '%09d' $(( CONF_NANO % 1000000000 )))")
+    else
+      kept="a CPU limit"
+    fi
+  fi
+  if [[ -n "${CONTAINER_MEMORY}" && ( "${CONF_MEMORY}" != "${WANT_MEMORY}" || "${CONF_SWAP}" != "${WANT_SWAP}" ) ]]; then
+    if (( CONF_MEMORY > 0 )); then
+      restore+=(--memory "${CONF_MEMORY}")
+      (( CONF_SWAP == 0 )) || restore+=(--memory-swap "${CONF_SWAP}")
+    else
+      kept+="${kept:+ and }a memory limit"
+    fi
+  fi
+  if [[ "${CONF_PIDS}" != "${CONTAINER_PIDS_LIMIT}" ]]; then
+    # Docker takes -1 for no process limit.
+    if (( CONF_PIDS > 0 )); then restore+=(--pids-limit "${CONF_PIDS}"); else restore+=(--pids-limit -1); fi
+  fi
+  if [[ ${#restore[@]} -eq 0 && -z "${kept}" ]]; then
+    echo "[rollback] ${name} already has the limits: ${LIMITS_SUMMARY}"
+    return 0
+  fi
+
+  echo "[rollback] Giving ${name} the limits: ${LIMITS_SUMMARY}"
+  LIMITS_RESTORE=(${restore[@]+"${restore[@]}"})
+  LIMITS_RESTORE_ID=${id}
+  LIMITS_KEPT=${kept}
+  if ! dockerc update "${limit_args[@]}" "${id}" >/dev/null; then
+    restore_rollback_limits
+    fail "Could not give ${name} the limits (see above). The current controller was not stopped."
+  fi
+  if ! check_limits "${id}" "${name}" given; then
+    restore_rollback_limits
+    fail "${FAILURE}. The current controller was not stopped."
+  fi
+}
+
+# Puts back the limits give_rollback_limits changed (by container ID, wherever the rollback got to) and disarms it.
+restore_rollback_limits() {
+  local id=${LIMITS_RESTORE_ID}
+  [[ -n "${id}" ]] || return 0
+  LIMITS_RESTORE_ID=""
+  if [[ ${#LIMITS_RESTORE[@]} -gt 0 ]]; then
+    if dockerc update "${LIMITS_RESTORE[@]}" "${id}" >/dev/null 2>&1; then
+      log_err "[rollback] Put back the limits container ${id:0:12} had before this rollback."
+    else
+      log_err "[rollback] WARNING: could not put back the limits container ${id:0:12} had before this rollback (docker update ${LIMITS_RESTORE[*]}); check them with docker inspect."
+    fi
+  fi
+  if [[ -n "${LIMITS_KEPT}" ]]; then
+    log_err "[rollback] WARNING: container ${id:0:12} keeps ${LIMITS_KEPT} this rollback gave it, which it had none of before: Docker cannot take a CPU or memory limit off a container. Deploy again to run without it."
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Pull mode
 
 # inspect_pulled <format>: fields of the pulled image, for the platform it was pulled for. Docker's containerd image
@@ -1035,7 +1295,7 @@ retire_switch_container() {
   dockerc logs --tail 60 "${id}" >&2 2>&1 || true
   log_err "[rollback] Stopping and removing the new controller (SIGTERM first, so it stops the roof)"
   dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${id}" >/dev/null 2>&1
-  dockerc rm -f "${id}" >/dev/null 2>&1
+  dockerc rm -f -v "${id}" >/dev/null 2>&1
   if ! lookup_container "id=${id}" || [[ "${CSTATE}" != "missing" ]]; then
     RESTORE_OUTCOME="The new controller (container ${id:0:12}) could not be removed, so the previous controller was NOT restarted: two controllers must never drive the HAT. Remove it (docker rm -f ${id:0:12}), then restore ${PREVIOUS_CONTAINER_NAME} by hand."
     return 1
@@ -1318,6 +1578,11 @@ on_exit() {
     fi
     [[ "${status}" != "0" ]] || status=1
   fi
+  # A rollback that changed the limits of the version it was bringing back and did not start it puts them back.
+  if [[ -n "${LIMITS_RESTORE_ID}" ]]; then
+    restore_rollback_limits
+    [[ "${status}" != "0" ]] || status=1
+  fi
   if [[ -n "${WORK_DIR}" ]]; then
     rm -rf "${WORK_DIR}"
   fi
@@ -1391,6 +1656,12 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] Would ${image_step}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
     echo "[dry-run] HAT: ${HAT_SUMMARY}"
   fi
+  echo "[dry-run] The container: a read-only root filesystem, only the capabilities CHOWN, KILL, SETGID and SETUID, no-new-privileges, and ${LIMITS_SUMMARY}"
+  if info=$(dockerc info --format 'MemoryLimit {{.MemoryLimit}}, CPUCfsQuota {{.CPUCfsQuota}}, PidsLimit {{.PidsLimit}}, SwapLimit {{.SwapLimit}}, NCPU {{.NCPU}}, MemTotal {{.MemTotal}}'); then
+    echo "[dry-run] Docker reports ${info}: PidsLimit must be true, and MemoryLimit and CPUCfsQuota too for a memory or CPU limit; NCPU at least a CPU limit (a memory limit above MemTotal only warns)."
+  else
+    echo "[dry-run] Could not ask Docker which limits it enforces."
+  fi
   echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; identity dir: ${IDENTITY_DIR:-<none, kept in memory>}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
   echo "[dry-run] Settings dir on Pi: ${CONFIG_DIR:-<none, kept in memory>}; managed secrets dir: ${MANAGED_SECRETS_DIR:-<none, kept in memory>}"
   exit 0
@@ -1425,6 +1696,10 @@ fi
 
 [[ "${STOP}" != "true" ]] || fail "internal error: the --stop path did not finish; nothing was built or deployed."
 
+# A deploy and a rollback both give the controller the limits: Docker must be able to enforce them, before the build,
+# the pull or a Stop.
+check_docker_limits
+
 if [[ "${ROLLBACK}" == "true" ]]; then
   lookup_container "$(name_filter "${SWAP_CONTAINER_NAME}")" \
     || fail "Could not read the state of ${SWAP_CONTAINER_NAME} from Docker. Nothing was changed; check the Docker context and retry."
@@ -1451,9 +1726,28 @@ if [[ "${ROLLBACK}" == "true" ]]; then
     fail "Rollback refused: ${SCHEMA_FAILURE}. The target is kept stopped with restart=no; the current controller was not stopped. Identity data and backups were not changed; repair forward with a compatible release."
   fi
 
+  # What the version brought back runs with, read before anything changes. Its privileges stay as it was deployed: Docker
+  # cannot change them on a container. A CPU or memory limit this run does not give stays too, for the same reason.
+  read_confinement "${PREVIOUS_ID}" \
+    || fail "Could not read the privileges and limits of ${PREVIOUS_CONTAINER_NAME} from Docker. Nothing was changed; check the Docker context and retry."
+  if ! check_privileges "${PREVIOUS_CONTAINER_NAME}"; then
+    log_err "[rollback] WARNING: ${FAILURE}. It was deployed before this script narrowed the container's privileges, and keeps the ones it has; deploy a release again to narrow them."
+  fi
+  previous_kept=""
+  [[ -n "${CONTAINER_CPUS}" || "${CONF_NANO}" == "0" ]] || previous_kept="a CPU limit"
+  [[ -n "${CONTAINER_MEMORY}" || "${CONF_MEMORY}" == "0" ]] || previous_kept+="${previous_kept:+ and }a memory limit"
+  if [[ -n "${previous_kept}" ]]; then
+    log_err "[rollback] WARNING: ${PREVIOUS_CONTAINER_NAME} keeps ${previous_kept} it was deployed with (Docker reports NanoCpus ${CONF_NANO}, Memory ${CONF_MEMORY}), which this run does not give: Docker cannot take a CPU or memory limit off a container. Deploy again to run without it."
+  fi
+
+  # Every check that can refuse the rollback comes before anything changes: the roof's idle check and its verified stop
+  # (on a refusal, both containers are as they were, the limits included). Only then does the version brought back get
+  # this run's limits, so that a rollback keeps the limits the operator chose; from the change until it has started, a
+  # failure or an interrupt puts its own back (give_rollback_limits).
   if [[ "${STATE}" == "running" ]]; then
     stop_roof_before_replacing
   fi
+  give_rollback_limits "${PREVIOUS_ID}" "${PREVIOUS_CONTAINER_NAME}"
 
   # From here until the restored version has started, a failure or an interrupt undoes the swap (restore_original).
   ORIGINAL_ID=${CURRENT_ID}
@@ -1488,8 +1782,9 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   echo "[rollback] Starting ${CONTAINER_NAME}"
   dockerc start "${CONTAINER_NAME}" >/dev/null \
     || abort_switch "Could not start the rolled-back controller ${CONTAINER_NAME}"
-  # Started: whatever the checks say, it is left running (run --rollback again to swap back).
+  # Started: whatever the checks say, it is left running (run --rollback again to swap back), with this run's limits.
   RESTORE_MODE=""
+  LIMITS_RESTORE_ID=""
 
   if ! verify_controller "${CONTAINER_NAME}"; then
     show_containers
@@ -1538,6 +1833,27 @@ else
   echo "[deploy] Loading image into Docker context '${DOCKER_CONTEXT}'"
   dockerc load < "${WORK_DIR}/image.tar"
 fi
+
+# The container's privileges and limits (docs/deployment.md, "The container's privileges and limits"), for the pre-flight
+# container and the controller alike. The root filesystem is read-only. What the container writes outside its mounts has
+# a place of its own: the supervisor's run directory, /tmp (.NET's diagnostics sockets) and the controller's ASP.NET Core
+# key ring, which protects nothing that must outlive the container, are tmpfs; the web UI's sign-in keys are on a volume
+# of the container's own, so people stay signed in when the container restarts. Of the Linux capabilities only the
+# supervisor's are kept: CHOWN for the web UI's files, SETUID and SETGID to start it as its own user, and KILL to signal
+# it. Nothing in the container can gain privileges (a setuid program included). The limits are the ones checked above
+# (limit_args: the process limit, and a CPU or memory limit only when set); --memory-swap the same as --memory keeps the
+# container from swapping.
+# shellcheck disable=SC2054 # commas are part of --tmpfs values
+hardening_args=(
+  --read-only
+  --tmpfs /tmp:size=64m
+  --tmpfs /run/hvo-roof:size=4m,mode=0755
+  --tmpfs /root/.aspnet:size=4m,mode=0700
+  --mount type=volume,dst=/var/lib/hvo-roof-web
+  --cap-drop ALL --cap-add CHOWN --cap-add KILL --cap-add SETGID --cap-add SETUID
+  --security-opt no-new-privileges
+  "${limit_args[@]}"
+)
 
 # Environment, devices and mounts of the controller container. The pre-flight check runs with exactly these.
 # shellcheck disable=SC2054 # commas are part of --mount values
@@ -1642,7 +1958,7 @@ container_args+=(${extra_args[@]+"${extra_args[@]}"})
 # not open the HAT). The key's SHA-256 lets it confirm this script's key is configured without passing the key.
 echo "[deploy] Pre-flight: validating the new container's configuration on the Pi"
 deploy_key_sha256=$(printf '%s' "${OPERATOR_KEY}" | sha256_hex)
-if ! dockerc run --rm ${image_platform_args[@]+"${image_platform_args[@]}"} "${container_args[@]}" \
+if ! dockerc run --rm ${image_platform_args[@]+"${image_platform_args[@]}"} "${hardening_args[@]}" "${container_args[@]}" \
     --env "DeploymentCheck__DeployKeySha256=${deploy_key_sha256}" "${DEPLOY_IMAGE}" --validate-deployment; then
   fail "Pre-flight failed (see above). The running controller was not touched."
 fi
@@ -1679,10 +1995,11 @@ case "${STATE}" in
 esac
 
 if [[ "${STATE}" != "missing" ]]; then
-  # Only now, once the old controller has stopped, is an older stopped <name>-previous removed (by ID).
+  # Only now, once the old controller has stopped, is an older stopped <name>-previous removed (by ID), with its volume
+  # (the web UI's sign-in keys).
   if [[ "${PREVIOUS_STATE}" == "stopped" ]]; then
     echo "[deploy] Removing the older ${PREVIOUS_CONTAINER_NAME}"
-    dockerc rm "${PREVIOUS_ID}" >/dev/null \
+    dockerc rm -v "${PREVIOUS_ID}" >/dev/null \
       || abort_switch "Could not remove the older ${PREVIOUS_CONTAINER_NAME}; ${CONTAINER_NAME} was not replaced"
   fi
   echo "[deploy] Keeping the old controller as ${PREVIOUS_CONTAINER_NAME} (not restarted automatically)"
@@ -1698,9 +2015,13 @@ echo "[deploy] Starting the new container on ${PI_HOST}"
 NEW_CIDFILE="${WORK_DIR}/new-controller.cid"
 NEW_CONTAINER_ID=$(dockerc run -d --cidfile "${NEW_CIDFILE}" --name "${CONTAINER_NAME}" --restart unless-stopped \
     --stop-timeout "${STOP_TIMEOUT_SECONDS}" --log-driver local --log-opt max-size=10m --log-opt max-file=5 \
-    ${image_platform_args[@]+"${image_platform_args[@]}"} "${publish_args[@]}" "${container_args[@]}" "${DEPLOY_IMAGE}") \
+    ${image_platform_args[@]+"${image_platform_args[@]}"} "${hardening_args[@]}" "${publish_args[@]}" "${container_args[@]}" \
+    "${DEPLOY_IMAGE}") \
   || abort_switch "docker run failed for the new controller"
 
+check_limits "${NEW_CONTAINER_ID}" "the new controller" exact || abort_switch "${FAILURE}"
+check_privileges "the new controller" || abort_switch "${FAILURE}"
+echo "[deploy] The new controller has a read-only root filesystem, only the capabilities CHOWN, KILL, SETGID and SETUID, no-new-privileges, and ${LIMITS_SUMMARY}"
 verify_controller "${CONTAINER_NAME}" || abort_switch "${FAILURE}"
 # The switch is complete and verified, and what is left only reports it: from here neither a signal nor a lost terminal
 # ends the script with an error while the new controller runs.

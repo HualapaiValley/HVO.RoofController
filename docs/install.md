@@ -203,6 +203,11 @@ nothing until every check has passed: then it installs Docker, or turns I2C on, 
   that is not synchronised.
 - **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. It notes a
   missing Compose v2, which the installer does not need.
+- **For the controller and a rig, on Linux:** Docker enforces process limits (`docker info`), which the
+  controller's container runs with ([The controller's limits](#the-controllers-limits)). CPU and memory enforcement
+  are advisory at bootstrap and required by the installer only when those limits are set. On a Pi it names the boot
+  setting to change. It notes a Docker that cannot limit swap, and a machine below the 1 vCPU floor; a memory cap
+  above host RAM only warns. The installer checks the limits it is given.
 - **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
 - **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
   install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
@@ -310,7 +315,7 @@ including in a `--plan` you run without `sudo`, and your own for the rest ([The 
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer, or an unfinished upgrade to another release; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release, or to another release while an upgrade has not finished; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone, that a newer release made, or that was made during an unfinished upgrade to a release other than the installer's, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; a backup written to or read from `/var/backups/hvo-roof` when it, or a folder above it, is a link or a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker, Docker's limits); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer, or an unfinished upgrade to another release; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release, or to another release while an upgrade has not finished; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone, that a newer release made, or that was made during an unfinished upgrade to a release other than the installer's, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; a backup written to or read from `/var/backups/hvo-roof` when it, or a folder above it, is a link or a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -356,6 +361,8 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
   (`display-manager.service`) holding it, now or at the next boot: use Raspberry Pi OS Lite, or boot to the console.
   Once the kiosk is installed, a screen that is off or unplugged does not stop an update.
 - **Docker.** The controller and a rig need Docker running, and the right to use it.
+- **Docker's limits.** The controller and a rig need Docker to enforce memory, CPU and process limits, and this machine
+  to have the CPUs and memory [their limits](#the-controllers-limits) give.
 - **Root rules.** See [Running it](#running-it).
 - **The rig before its clients on a Mac.** A rig on a Mac is refused with `hvo-roof` or the Mac app in the same run:
   they trust the rig's CA by its SHA-256, which you can compare only once the rig has made it. Install the rig, then
@@ -388,7 +395,8 @@ Before asking anything, and without changing anything, the installer looks at th
   its password opens it. Each run warns when either expires soon, or when the certificate is not for a name clients
   use ([Renewing](#renewing)).
 - **The HAT's devices:** `/dev/i2c-1`, `/dev/gpiomem` and `/sys/class/thermal/thermal_zone0/temp`.
-- **Docker:** its version, and Compose v2's version.
+- **Docker:** its version, Compose v2's version, which limits it enforces on a container, and the CPUs and memory it
+  reports.
 - **The install records:** the machine's, and yours. A record the installer cannot read is reported and replaced, and
   until then a test rig is refused, since the record may say the machine drives the real HAT. A record from a newer
   installer is never replaced: install with that installer, or a newer one.
@@ -546,7 +554,8 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
     "domains": ["observatory.example"],
     "firstAdmin": { "name": "observer", "pin": true },
     "camera": { "baseUrl": "http://192.168.0.4:81", "userName": "roof-viewer" },
-    "telemetryEndpoint": "http://collector:4318"
+    "telemetryEndpoint": "http://collector:4318",
+    "resources": { "pidsLimit": 512 }
   }
 }
 ```
@@ -603,6 +612,9 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
+| `controller.resources.cpus` | A CPU limit for the controller container, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) |
+| `controller.resources.memory` | A memory limit for it, at least `1g`: a whole number of MiB or GiB, such as `1024m` or `1g`; the container gets no swap beyond it | None: no memory limit, until #138 |
+| `controller.resources.pidsLimit` | The most processes and threads it runs at once, from 256 to 32768 | `512` |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
@@ -626,6 +638,43 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 The `controller` section applies to a rig too. A section for a role that is not chosen is dropped. An answers file
 has no place for a password, a PIN or a key: a member such as `password` is an error. The wizard never
 saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on its own. The wizard saves answers to `hvo-roof-answers.json` in the folder where the installer was started, unless you give another path.
+
+### The controller's limits
+
+The controller's container (a rig's too) runs with at most 512 processes and threads, and, for now, with no CPU or
+memory limit. A limit is one more way for the kernel to end the controller, and a controller ended while the roof
+moves leaves the drive running until a restarted controller turns the relays off, or, when it cannot start again,
+until the roof reaches its limit. RoofController's future default of 1 vCPU and 2 GiB is turned on by a follow-up
+once the supervisor de-energises the relays whenever the controller exits
+([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138);
+[deployment.md](deployment.md#the-containers-privileges-and-limits)). Until then, give a CPU or memory limit in the
+answers' `controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
+
+```bash
+sudo hvo-roof-install --answers controller.json --cpus 1 --memory 2g --pids-limit 1024
+```
+
+| Option | What it sets |
+|--------|--------------|
+| `--cpus CPUS` | `controller.resources.cpus` |
+| `--memory SIZE` | `controller.resources.memory` |
+| `--pids-limit N` | `controller.resources.pidsLimit` |
+
+A CPU limit below 1 vCPU, or a memory limit below `1g`, RoofController's floor, is refused, with no exception: exit code 2
+when the command line or an answers file gives it, 3 when the install record holds it (an `upgrade`). Leave it out for
+no limit. The install record keeps the limits, so `upgrade` and `rollback` give the container the same, and a run with
+other limits redeploys the controller with them (the plan says `redeployed with its limits: ...`); answers that leave a
+limit out redeploy it without one. The wizard asks nothing about them: it keeps what the record says, or what the
+command line gives.
+
+Before it changes anything, the installer checks that this machine's Docker can enforce the limits it gives, and
+refuses (exit code 3) when `docker info` says it does not enforce process limits, or memory or CPU limits when one is
+given, or reports fewer CPUs than a CPU limit. Raspberry Pi OS boots with the memory controller off: that matters only
+for a memory limit, and then add `cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt` and reboot.
+A memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs) is kept, with a
+warning: a limit is a cap, not a reservation. On a Mac, Docker Desktop's resources (Settings, Resources) must have the
+CPUs. What the limits do, and what a controller ended at its memory limit leaves the relays in, is in
+[deployment.md](deployment.md#the-containers-privileges-and-limits).
 
 ### Passwords and PINs
 
@@ -706,7 +755,7 @@ Packages
   info       bash, curl, setsid or perl, jq or python3     what the deploy script runs (found bash, curl, setsid, jq)
 Containers
   create     hat-emulator                                  the HAT emulator: the roof, drive and limit switches the rig drives (release 4.0.0's image by digest, on the hvo-emulator network, its control API on 127.0.0.1:5290)
-  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script)
+  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script, with no CPU or memory limit, at most 512 processes and threads)
 Ports
   info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)
   info       8088                                          the web UI (free; roof-controller will listen on it)

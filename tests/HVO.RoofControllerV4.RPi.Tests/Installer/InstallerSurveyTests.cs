@@ -26,7 +26,12 @@ public sealed class InstallerSurveyTests
         survey.PiModel.Should().Be("Raspberry Pi 5 Model B Rev 1.0", "the device tree's model ends in a NUL");
         survey.HasHat.Should().BeTrue();
         survey.MissingHatDevices().Should().BeEmpty();
-        survey.Docker.Should().Be(new DockerSurvey { Version = "27.3.1", ComposeVersion = "2.29.7" });
+        survey.Docker.Should().Be(new DockerSurvey
+        {
+            Version = "27.3.1",
+            ComposeVersion = "2.29.7",
+            Limits = new DockerLimits(Memory: true, Cpu: true, Pids: true, Swap: true, Cpus: 4, MemoryBytes: 8L * 1024 * 1024 * 1024)
+        });
         survey.SystemRecord.Should().BeNull();
         survey.HasSystemConfiguration.Should().BeFalse();
         survey.Controller.Should().BeNull();
@@ -52,7 +57,7 @@ public sealed class InstallerSurveyTests
     public async Task AContainerTheDeployScriptMade_IsAdoptable_AndSaysWhichHatItDrives()
     {
         using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench")
-            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = true })
+            .WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Emulated = true, NanoCpus = 2_000_000_000, Memory = 4L * 1024 * 1024 * 1024 })
             .WithContainer(MachineSurveyor.HatEmulatorContainer, new FakeContainer { State = "exited", Version = null });
 
         var survey = await MachineSurveyor.SurveyAsync(bench.Machine);
@@ -66,7 +71,11 @@ public sealed class InstallerSurveyTests
             HatEmulator = "hat-emulator:5291",
             Version = "4.0.0",
             PublishedPorts = [8088, 8443],
-            ServesHttps = true
+            ServesHttps = true,
+            NanoCpus = 2_000_000_000,
+            MemoryBytes = 4L * 1024 * 1024 * 1024,
+            PidsLimit = 512,
+            ReadOnlyRootFilesystem = true
         });
         survey.HatEmulator!.IsRunning.Should().BeFalse();
         survey.HatEmulator.Version.Should().BeNull();

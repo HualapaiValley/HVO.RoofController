@@ -236,10 +236,12 @@ public static partial class MachineSurveyor
         }
 
         var compose = await machine.Commands.RunAsync(new CommandLine("docker", "compose", "version", "--short"), cancellationToken).ConfigureAwait(false);
+        var limits = await machine.Commands.RunAsync(new CommandLine("docker", "info", "--format", DockerLimits.Format), cancellationToken).ConfigureAwait(false);
         return new DockerSurvey
         {
             Version = server.Output.Trim(),
-            ComposeVersion = compose.Succeeded ? compose.Output.Trim() : null
+            ComposeVersion = compose.Succeeded ? compose.Output.Trim() : null,
+            Limits = limits.Succeeded ? DockerLimits.Parse(limits.Output) : null
         };
     }
 
@@ -325,6 +327,7 @@ public static partial class MachineSurveyor
                     ? networkMode
                     : null;
             var urls = environment.GetValueOrDefault("ASPNETCORE_URLS");
+            long Number(string property) => hasHostConfig && hostConfig.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number) ? number : 0;
 
             return new ContainerSurvey
             {
@@ -347,7 +350,11 @@ public static partial class MachineSurveyor
                 LinuxAuthEnabled = environment.GetValueOrDefault("RoofControllerSecurity__Identity__LinuxAuth__Enabled") == "true",
                 EmulatorTimeScale = environment.GetValueOrDefault(EmulatorTimeScaleSetting),
                 EmulatorCameraFramesPerSecond = environment.GetValueOrDefault(EmulatorCameraFramesSetting),
-                StartedAt = container.TryGetProperty("State", out var started) ? StartedAt(started) : null
+                StartedAt = container.TryGetProperty("State", out var started) ? StartedAt(started) : null,
+                NanoCpus = Number("NanoCpus"),
+                MemoryBytes = Number("Memory"),
+                PidsLimit = Number("PidsLimit") is > 0 and var pids ? pids : null,
+                ReadOnlyRootFilesystem = hasHostConfig && hostConfig.TryGetProperty("ReadonlyRootfs", out var readOnly) && readOnly.ValueKind == JsonValueKind.True
             };
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)

@@ -704,6 +704,9 @@ jobs:
       - name: install.sh tests
         run: tests/install/install-sh-tests.sh
 
+      - name: Installer bootstrap preservation tests
+        run: python3 -m unittest discover -s tests/installer -p 'test_*.py' -v
+
       # The container's supervisor and health check (src/HVO.RoofControllerV4.RPi/container), with stand-in processes.
       - name: Container supervisor tests
         run: tests/container/supervisor-tests.sh
@@ -759,6 +762,59 @@ jobs:
                 | all]
               | length == 2 and all' >/dev/null || {
               echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::the ${profile} services do not all keep the settings files in writable mounts"
+              exit 1
+            }
+          done
+          # Every controller and deployment check has the deploy script's privileges and limits (x-hardening;
+          # docs/deployment.md, "The container's privileges and limits"): a read-only root filesystem and its tmpfs
+          # mounts, only the supervisor's capabilities, no-new-privileges, the process limit, no CPU or memory limit
+          # by default (until #138) and the ones given with no swap, and for a controller the volume for the web UI's
+          # keys.
+          for limits in "default" "floor" "future" "given"; do
+            for profile in pi pi-lan-http emulator; do
+              if [[ "${limits}" == "given" ]]; then
+                config=$(HVO_ROOF_CPUS=2.5 HVO_ROOF_MEMORY=6g docker compose --profile "${profile}" config --format json)
+              elif [[ "${limits}" == "floor" ]]; then
+                config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=1g docker compose --profile "${profile}" config --format json)
+              elif [[ "${limits}" == "future" ]]; then
+                # Still explicit until #138: this is the future 1 vCPU / 2 GiB default, not today's default.
+                config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=2g docker compose --profile "${profile}" config --format json)
+              else
+                config=$(docker compose --profile "${profile}" config --format json)
+              fi
+              jq -e --arg limits "${limits}" '
+                [.services[] | select(.image | test("roof-controller"))] as $controllers
+                | ($controllers | length) > 0 and all($controllers[];
+                    .read_only == true
+                    and .tmpfs == ["/tmp:size=64m", "/run/hvo-roof:size=4m,mode=0755", "/root/.aspnet:size=4m,mode=0700"]
+                    and .cap_drop == ["ALL"] and .cap_add == ["CHOWN", "KILL", "SETGID", "SETUID"]
+                    and .security_opt == ["no-new-privileges"]
+                    and (if $limits == "given"
+                      then .cpus == 2.5 and .mem_limit == "6442450944" and .memswap_limit == .mem_limit
+                      elif $limits == "floor"
+                      then .cpus == 1 and .mem_limit == "1073741824" and .memswap_limit == .mem_limit
+                      elif $limits == "future"
+                      then .cpus == 1 and .mem_limit == "2147483648" and .memswap_limit == .mem_limit
+                      else .cpus == null and .mem_limit == null and .memswap_limit == null end)
+                    and .pids_limit == 512
+                    and .environment.HVO_ROOF_CPUS == (if $limits == "given" then "2.5" elif $limits == "default" then "" else "1" end)
+                    and .environment.HVO_ROOF_MEMORY == (if $limits == "given" then "6g" elif $limits == "floor" then "1g" elif $limits == "future" then "2g" else "" end)
+                    and ((.command // [] | index("--validate-deployment")) != null
+                      or ([.volumes[] | select(.type == "volume" and .target == "/var/lib/hvo-roof-web")] | length) == 1))' \
+                <<<"${config}" >/dev/null || {
+                echo "::error file=src/HVO.RoofControllerV4.RPi/docker-compose.yaml::a ${profile} controller or deployment check lacks the deploy script's privileges and limits (x-hardening, ${limits} limits)"
+                exit 1
+              }
+            done
+          done
+          # And the deploy script gives the same (its hardening_args and its default limits).
+          for expected in "--read-only" "--tmpfs /tmp:size=64m" "--tmpfs /run/hvo-roof:size=4m,mode=0755" \
+              "--tmpfs /root/.aspnet:size=4m,mode=0700" "--mount type=volume,dst=/var/lib/hvo-roof-web" \
+              "--cap-drop ALL --cap-add CHOWN --cap-add KILL --cap-add SETGID --cap-add SETUID" \
+              "--security-opt no-new-privileges" 'CONTAINER_CPUS=${CONTAINER_CPUS:-}' \
+              'CONTAINER_MEMORY=${CONTAINER_MEMORY:-}' 'CONTAINER_PIDS_LIMIT=${CONTAINER_PIDS_LIMIT:-512}'; do
+            grep -qF -- "${expected}" deploy-roofcontroller-rpi.sh || {
+              echo "::error file=src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh::the deploy script does not give ${expected}, as docker-compose.yaml does"
               exit 1
             }
           done

@@ -27,7 +27,14 @@
 #              the other platform each change nothing; --rollback between the pulled and the built version, with an
 #              IMAGE_REF it ignores.
 #
-# Needs docker (buildx, and compose 2.24 or later), curl, jq and openssl. It runs only against the local Docker daemon
+# The controller runs as the deploy script runs it (docs/deployment.md, "The container's privileges and limits"): a
+# read-only root filesystem, only the supervisor's capabilities and the default limits (512 processes, and no CPU or
+# memory limit until #138; c12 gives one to a rollback). Without CAP_DAC_OVERRIDE, root in
+# the container reaches its mounts only where root owns them, as the installer and the deployment docs make them, so the
+# fixtures (secrets, certificate, identity and settings directories) are given to root with sudo -n.
+#
+# Needs docker (buildx, and compose 2.24 or later), curl, jq, openssl and sudo without a password (sudo -n), as GitHub's
+# runners have it. It runs only against the local Docker daemon
 # (the default context, with DOCKER_HOST unset or a unix socket), not on a Raspberry Pi, and touches no hardware: the
 # controller runs in HAT emulator mode, maps no host device, and reaches the emulator over a network of this run's own.
 # The controller is named roof-controller, as the script and the Compose `pi` profile name it, so the run refuses to
@@ -136,8 +143,9 @@ write_results() {
 
 remove_controllers() {
   docker compose -f "${compose_file}" -f "${work}/compose.override.yaml" -p "${compose_project}" --profile pi \
-    down --remove-orphans >/dev/null 2>&1 || true
-  docker rm -f "${controller}" "${previous}" "${controller}-swap" >/dev/null 2>&1 || true
+    down --volumes --remove-orphans >/dev/null 2>&1 || true
+  # With their volumes: each controller keeps the web UI's sign-in keys on one of its own.
+  docker rm -f -v "${controller}" "${previous}" "${controller}-swap" >/dev/null 2>&1 || true
 }
 
 cleanup() {
@@ -148,7 +156,7 @@ cleanup() {
   if (( owns_resources != 1 )); then
     # Refused before it created anything: what exists belongs to someone else.
     write_results
-    rm -rf "${work}"
+    rm -rf "${work}" 2>/dev/null || sudo -n rm -rf "${work}"
     exit "${status}"
   fi
   if (( status != 0 )); then
@@ -166,14 +174,20 @@ cleanup() {
   fi
   stop_relay_monitor
   remove_controllers
-  docker rm -f "${emulator_name}" "${registry_name}" >/dev/null 2>&1
+  docker rm -f -v "${emulator_name}" "${registry_name}" >/dev/null 2>&1
   # The pulled image (by its digest); the images the run built stay, as the build cache.
   docker images --digests --format '{{.Repository}}@{{.Digest}}' "${release_repository}" 2>/dev/null \
     | grep '@sha256:' | xargs -r docker rmi >/dev/null 2>&1
   docker network rm "${network}" >/dev/null 2>&1
   write_results
-  rm -rf "${work}"
+  # The fixtures are root's.
+  rm -rf "${work}" 2>/dev/null || sudo -n rm -rf "${work}"
   exit "${status}"
+}
+
+# as_root <command...>: a command on a fixture, which is root's as on a Pi.
+as_root() {
+  sudo -n "$@"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -479,6 +493,15 @@ container_id() {
   docker inspect --format '{{.Id}}' "$1" 2>/dev/null || true
 }
 
+# container_cgroup <container>: its cgroup's cpu.max, memory.max, memory.swap.max and pids.max (cgroup v2), on one line;
+# empty where the host has cgroup v1.
+container_cgroup() {
+  if docker exec "$1" test -e /sys/fs/cgroup/cgroup.controllers; then
+    docker exec "$1" cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max \
+      | paste -sd ' ' || fail "could not read the cgroup of $1"
+  fi
+}
+
 container_running() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == true ]]
 }
@@ -594,6 +617,7 @@ setup() {
   for tool in docker curl jq openssl; do
     command -v "${tool}" >/dev/null || fail "${tool} is required"
   done
+  sudo -n true 2>/dev/null || fail "sudo without a password (sudo -n) is required: the fixtures are given to root, as the installer makes them"
   docker buildx version >/dev/null 2>&1 || fail "docker buildx is required"
   docker compose version >/dev/null 2>&1 || fail "docker compose is required"
   if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap)?$")" ]]; then
@@ -651,6 +675,10 @@ setup() {
   # The camera proxy reads the emulator's camera, as it reads Blue Iris on the Pi (C11).
   printf '%s' "http://${emulator_name}:5290" > "${work}/secrets/BlueIris__BaseUrl"
   chmod 600 "${work}/secrets/BlueIris__BaseUrl"
+  # Root's, as the installer and docs/deployment.md make them: the controller, root without CAP_DAC_OVERRIDE, reads and
+  # writes them as their owner.
+  as_root chown -R 0:0 "${work}/certs" "${work}/secrets" "${work}/secrets-wrong-password" "${work}/secrets-viewer-only" \
+    "${work}/identity" "${work}/config" "${work}/settings-secrets" || fail "could not give the fixtures to root"
 
   if [[ "${SCN_NO_BUILD:-0}" != 1 ]]; then
     say "Building the HAT emulator image"
@@ -708,6 +736,8 @@ services:
       - type: bind
         source: ${work}/settings-secrets
         target: /var/lib/hvo-roof/settings-secrets
+      - type: volume
+        target: /var/lib/hvo-roof-web
     networks:
       - hat
 networks:
@@ -942,6 +972,42 @@ scenario_supervisor() {
   expect_refused app "the web UI's user can create a link in /run/hvo-roof/web" ln -s /app/x /run/hvo-roof/web/probe
   pass "the web UI (pid ${ui_pid}) runs as app with its RoofWeb__* settings and none of the controller's, cannot read /run/secrets, and cannot write its private directory (root:app 750)"
 
+  current_check="Supervisor: the container's privileges and limits"
+  local config controller_pid status copies control cgroup
+  # As the deploy script gave them, and as Docker kept them.
+  config=$(docker inspect --format '{{json .HostConfig}}' "${controller}") || fail "could not inspect ${controller}"
+  jq -e '.ReadonlyRootfs == true and .CapDrop == ["ALL"]
+    and ([.CapAdd[] | ltrimstr("CAP_")] == ["CHOWN", "KILL", "SETGID", "SETUID"])
+    and (.SecurityOpt | index("no-new-privileges") != null)
+    and .NanoCpus == 0 and .Memory == 0 and .MemorySwap == 0 and .PidsLimit == 512
+    and .Tmpfs == {"/tmp": "size=64m", "/run/hvo-roof": "size=4m,mode=0755", "/root/.aspnet": "size=4m,mode=0700"}' <<<"${config}" >/dev/null \
+    || fail "${controller} does not have the deploy script's privileges and limits: $(jq -c '{ReadonlyRootfs, CapDrop, CapAdd, SecurityOpt, NanoCpus, Memory, MemorySwap, PidsLimit, Tmpfs}' <<<"${config}")"
+  docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/hvo-roof-web"}}{{.Type}}{{end}}{{end}}' "${controller}" \
+    | grep -qx volume || fail "the web UI's keys are not on a volume of the container's own"
+  # Nothing writes the root filesystem, not even root.
+  expect_refused root "root can write the container's root filesystem" touch /hvo-scenario-probe
+  # The controller keeps the supervisor's capabilities (CHOWN, KILL, SETGID, SETUID: 0xe1), the web UI none, and neither
+  # can gain any.
+  controller_pid=$(supervised_value '.controller.pid')
+  status=$(docker exec "${controller}" grep -E '^(CapEff|NoNewPrivs):' "/proc/${controller_pid}/status" | tr -s '\t ' ' ' | paste -sd ' ') \
+    || fail "could not read the controller's status"
+  [[ "${status}" == "CapEff: 00000000000000e1 NoNewPrivs: 1" ]] || fail "the controller (pid ${controller_pid}) has ${status}"
+  status=$(docker exec -u app "${controller}" grep -E '^(CapEff|NoNewPrivs):' "/proc/${ui_pid}/status" | tr -s '\t ' ' ' | paste -sd ' ') \
+    || fail "could not read the web UI's status"
+  [[ "${status}" == "CapEff: 0000000000000000 NoNewPrivs: 1" ]] || fail "the web UI (pid ${ui_pid}) has ${status}"
+  # Without CAP_FOWNER and CAP_DAC_OVERRIDE the supervisor gives the web UI its copies (app's, 0400) and keeps the control
+  # directory, which the web UI writes, its own (root:app 0770).
+  copies=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/web/certificate.pfx /run/hvo-roof/web/certificate-password | paste -sd ' ') \
+    || fail "no certificate copies in /run/hvo-roof/web"
+  [[ "${copies}" == "app:app 400 app:app 400" ]] || fail "the web UI's certificate copies are ${copies}, not app:app 400"
+  control=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/control) || fail "no /run/hvo-roof/control"
+  [[ "${control}" == "root:app 770" ]] || fail "/run/hvo-roof/control is ${control}, not root:app 770"
+  # The kernel enforces the process limit, and no CPU or memory limit by default: the container's own cgroup (cgroup v2).
+  cgroup=$(container_cgroup "${controller}")
+  [[ -z "${cgroup}" || "${cgroup}" == "max 100000 max max 512" ]] \
+    || fail "the container's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
+  pass "read-only root filesystem (tmpfs /tmp, /run/hvo-roof, /root/.aspnet; a volume for the web UI's keys); the controller has only CHOWN, KILL, SETGID and SETUID, the web UI none, both no-new-privileges; the web UI's copies are app:app 400 and the control directory root:app 770; by default 512 processes and no CPU or memory limit${cgroup:+ (cgroup: ${cgroup})}"
+
   container=$(container_id "${controller}")
   restarts=$(docker inspect --format '{{.RestartCount}}' "${controller}")
 
@@ -1059,9 +1125,9 @@ scenario_supervisor() {
 
   # CommissioningCheck("C11")
   current_check="Supervisor: the web UI's keys directory is in a directory only root can change"
-  # What the links below name: a directory made for this step, which only root can change, so that a link followed by
-  # mistake changes nothing outside the container.
-  local keys_dir=/var/lib/hvo-roof-web target=/var/lib/hvo-scenario-target owners target_was setting
+  # What the links below name: a directory made for this step (in /tmp: the root filesystem is read-only), which only
+  # root can change, so that a link followed by mistake changes nothing outside the container.
+  local keys_dir=/var/lib/hvo-roof-web target=/tmp/hvo-scenario-target owners target_was setting
   docker exec "${controller}" install -d -m 0750 -o root -g root "${target}" || fail "could not make ${target}"
   target_was=$(docker exec "${controller}" stat -c '%U:%G %a' "${target}") || fail "no ${target}"
   owners=$(docker exec "${controller}" stat -c '%U:%G %a' "${keys_dir}" "${keys_dir}/keys" | paste -sd ' ') \
@@ -1083,16 +1149,18 @@ scenario_supervisor() {
   docker exec -u app "${controller}" bash -c "mv ${keys_dir}/keys ${keys_dir}/keys.scenario && ln -s ${target} ${keys_dir}/keys" \
     || fail "the web UI's user could not put a link in place of ${keys_dir}/keys"
   expect_keys_link_refused "${keys_dir}/keys" "${target}" "${target_was}"
-  docker exec "${controller}" bash -c "rm ${keys_dir}/keys && mv ${keys_dir}/keys.scenario ${keys_dir}/keys \
-    && mv ${keys_dir} ${keys_dir}.scenario && ln -s ${target} ${keys_dir}" || fail "could not put a link in place of ${keys_dir}"
-  expect_keys_link_refused "${keys_dir}" "${target}" "${target_was}"
-  docker exec "${controller}" bash -c "rm ${keys_dir} && mv ${keys_dir}.scenario ${keys_dir} && rmdir ${target}" \
-    || fail "could not put ${keys_dir} back, or remove ${target}"
+  docker exec "${controller}" bash -c "rm ${keys_dir}/keys && mv ${keys_dir}/keys.scenario ${keys_dir}/keys" \
+    || fail "could not put ${keys_dir}/keys back"
+  # ${keys_dir} itself is the volume's mount point, on the read-only root filesystem: not even root can put a link in its
+  # place.
+  expect_refused root "root can move ${keys_dir} aside" mv "${keys_dir}" "${keys_dir}.scenario"
+  expect_refused root "root can make a link beside ${keys_dir}" ln -s "${target}" "${keys_dir}.scenario"
+  docker exec "${controller}" rmdir "${target}" || fail "could not remove ${target}"
   restart_web_ui
   setting=$(web_ui_keys_setting) || fail "could not read the web UI's keys setting"
   [[ "${setting}" == "RoofWeb__DataProtectionPath=${keys_dir}/keys" ]] \
-    || fail "the web UI was not given ${keys_dir}/keys again once the links were gone (${setting:-no setting})"
-  pass "${keys_dir} is root:root 755 and its keys directory app:app 700; the web UI's user cannot make a link there, and a ${keys_dir} given to that user is root's again at the web UI's next start; a link in place of the keys directory (made by the web UI's user) or of ${keys_dir} is refused: the web UI keeps its keys in memory and writes none under its home, and ${target}, which the links named, is still ${target_was}; the directory is used again once the link is gone"
+    || fail "the web UI was not given ${keys_dir}/keys again once the link was gone (${setting:-no setting})"
+  pass "${keys_dir} is root:root 755 and its keys directory app:app 700; the web UI's user cannot make a link there, and a ${keys_dir} given to that user is root's again at the web UI's next start; a link in place of the keys directory (made by the web UI's user) is refused: the web UI keeps its keys in memory and writes none under its home, and ${target}, which the link named, is still ${target_was}; ${keys_dir}, a mount point on the read-only root filesystem, cannot be replaced; the directory is used again once the link is gone"
 }
 
 # expect_keys_link_refused <link> <target> <target's owners and mode before>: at the web UI's next start, the supervisor
@@ -1135,7 +1203,7 @@ scenario_c12() {
   identity_response=$(admin_call POST Identity/Users "${work}/rollback-person.json")
   [[ "$(tail -n 1 <<<"${identity_response}")" == 201 ]] \
     || fail "creating rollback fixture identity answered HTTP $(tail -n 1 <<<"${identity_response}")"
-  [[ -f "${work}/identity/identity.json" ]] || fail "the controller did not persist the rollback fixture identity"
+  as_root test -f "${work}/identity/identity.json" || fail "the controller did not persist the rollback fixture identity"
   unset identity_response
   rm -f "${work}/rollback-person.json" "${work}/rollback-password"
   pass "the controller persisted an identity before rollback; missing-store recovery remains fail-closed"
@@ -1222,6 +1290,44 @@ scenario_c12() {
   relays_stayed_off
   assert_relays_off
   pass "swapped in ${first_seconds} s and back in ${DEPLOY_SECONDS} s, each verified from this machine; relays 0 in ${RELAY_SAMPLES} samples"
+
+  # A rollback the roof's idle check refuses changes nothing of the version it would bring back, its limits included:
+  # the limits are given only after every check that can refuse it.
+  current_check="C12 step 6: a refused rollback leaves the version it would bring back as it was"
+  local limits limits_before cgroup
+  limits_before=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${previous}")
+  start_travel Open
+  deploy REQUIRE_IDLE_ROOF=true CONTAINER_CPUS=2.5 CONTAINER_MEMORY=4g -- --rollback
+  (( DEPLOY_STATUS != 0 )) || fail "the rollback went ahead while the roof moved"
+  expect_deploy_log "The roof is moving"
+  ! deploy_log_has "Giving ${previous} the limits" || fail "the refused rollback gave ${previous} the limits"
+  limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${previous}")
+  [[ "${limits}" == "${limits_before}" ]] || fail "the refused rollback changed ${previous}'s limits from ${limits_before} to ${limits}"
+  [[ "$(container_id "${controller}")" == "${current_id}" && "$(container_id "${previous}")" == "${previous_id}" ]] \
+    || fail "the refused rollback swapped the versions"
+  container_running "${controller}" || fail "the refused rollback stopped ${controller}"
+  roof_post Stop >/dev/null
+  assert_relays_off
+  pass "refused while the roof moved; ${previous} kept its limits (${limits})"
+
+  # The limits a rollback is given go to the version it brings back (docker update), and the next ones to the other.
+  current_check="C12 step 6: a rollback gives the version it brings back the limits"
+  deploy CONTAINER_CPUS=2.5 CONTAINER_MEMORY=4g -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback with CPU and memory limits failed (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[rollback] Giving ${previous} the limits: 2.5 CPUs, 4g of memory and no swap, at most 512 processes and threads"
+  limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}} {{.HostConfig.ReadonlyRootfs}}' "${controller}")
+  [[ "$(container_id "${controller}")" == "${previous_id}" && "${limits}" == "2500000000 4294967296 4294967296 512 true" ]] \
+    || fail "the rolled-back controller runs with ${limits}, not 2.5 CPUs and 4g"
+  cgroup=$(container_cgroup "${controller}")
+  [[ -z "${cgroup}" || "${cgroup}" == "250000 100000 4294967296 0 512" ]] \
+    || fail "the rolled-back controller's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
+  deploy -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits failed (exit ${DEPLOY_STATUS})"
+  limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${controller}")
+  [[ "$(container_id "${controller}")" == "${current_id}" && "${limits}" == "0 0 0 512" ]] \
+    || fail "the controller swapped back runs with ${limits}, not the default limits"
+  assert_relays_off
+  pass "a rollback with 2.5 CPUs and 4g brought back ${previous} with them${cgroup:+ (cgroup: ${cgroup})}, and the next, with the defaults, swapped back with no CPU or memory limit; relays off"
 
   # CommissioningCheck("C12", "3")
   current_check="C12 step 3: an operator key that is not configured"
@@ -1430,9 +1536,9 @@ scenario_migration() {
   compose_session=$(jq -r '.token // empty' <<<"${response}")
   [[ -n "${compose_session}" ]] || fail "the person could not sign in on the Compose controller"
   session_knows_person "${compose_session}" || fail "the Compose controller does not know the person's session"
-  [[ -f "${work}/identity/identity.json" ]] || fail "the Compose controller did not save identity.json in the identity mount"
-  [[ "$(stat -c %a "${work}/identity/identity.json")" == 600 ]] \
-    || fail "identity.json is mode $(stat -c %a "${work}/identity/identity.json"), not 600"
+  as_root test -f "${work}/identity/identity.json" || fail "the Compose controller did not save identity.json in the identity mount"
+  [[ "$(as_root stat -c %a "${work}/identity/identity.json")" == 600 ]] \
+    || fail "identity.json is mode $(as_root stat -c %a "${work}/identity/identity.json"), not 600"
   pass "an admin added a person, who signed in; identity.json is saved in the identity mount, mode 600"
 
   current_check="Migration: a setting changed on the Compose controller"
@@ -1446,12 +1552,12 @@ scenario_migration() {
   [[ "$(tail -n 1 <<<"${response}")" == 200 ]] \
     || fail "changing the ui settings answered HTTP $(tail -n 1 <<<"${response}"): $(sed '$d' <<<"${response}")"
   default_camera_is scenario-camera || fail "the Compose controller does not show the changed setting from the settings file"
-  [[ -f "${settings_file}" ]] || fail "the Compose controller did not save appsettings.Local.json in the settings mount"
-  [[ "$(stat -c %a "${settings_file}")" == 644 ]] \
-    || fail "appsettings.Local.json is mode $(stat -c %a "${settings_file}"), not 644"
-  jq -e '.HvoRoofSettings.Version == 2 and .RoofControllerUi.DefaultCamera == "scenario-camera"
-    and .RoofControllerUi.KioskScreenTimeout == "00:10:00"' "${settings_file}" >/dev/null \
-    || fail "appsettings.Local.json does not hold the change and version 2: $(cat "${settings_file}")"
+  as_root test -f "${settings_file}" || fail "the Compose controller did not save appsettings.Local.json in the settings mount"
+  [[ "$(as_root stat -c %a "${settings_file}")" == 644 ]] \
+    || fail "appsettings.Local.json is mode $(as_root stat -c %a "${settings_file}"), not 644"
+  as_root cat "${settings_file}" | jq -e '.HvoRoofSettings.Version == 2 and .RoofControllerUi.DefaultCamera == "scenario-camera"
+    and .RoofControllerUi.KioskScreenTimeout == "00:10:00"' >/dev/null \
+    || fail "appsettings.Local.json does not hold the change and version 2: $(as_root cat "${settings_file}")"
   logging_is_writable || fail "the Compose controller does not let the API change the log levels: $(admin_call GET Settings \
     | sed '$d' | jq -c '[.settings[] | select(.group == "logging") | {key, canWrite, source}]')"
   pass "an admin changed the ui settings; appsettings.Local.json is saved in the settings mount, mode 644, at version 2; the log levels are writable, from the shipped defaults"
@@ -1486,7 +1592,7 @@ scenario_migration() {
   deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
   (( DEPLOY_STATUS == 0 )) || fail "the Stop before the move was not verified (--verify-remote exit ${DEPLOY_STATUS})"
   docker tag "${image}" "${image}-compose"
-  compose down >/dev/null 2>&1
+  compose down --volumes >/dev/null 2>&1
   [[ -z "$(container_id "${controller}")" ]] || fail "docker compose down left ${controller}"
   deploy
   (( DEPLOY_STATUS == 0 )) || fail "the first script deploy failed (exit ${DEPLOY_STATUS})"
@@ -1522,8 +1628,8 @@ scenario_migration() {
   deploy DOCKER_CONTEXT=hvo-deploy-scenarios-no-context -- --verify-remote
   (( DEPLOY_STATUS == 0 )) || fail "the Stop before the move was not verified (--verify-remote exit ${DEPLOY_STATUS})"
   docker stop -t 30 "${controller}" >/dev/null
-  docker rm "${controller}" >/dev/null
-  docker rm "${previous}" >/dev/null 2>&1 || true
+  docker rm -v "${controller}" >/dev/null
+  docker rm -v "${previous}" >/dev/null 2>&1 || true
   docker tag "${image}-compose" "${image}"
   compose run --rm roof-controller-check >/dev/null 2>"${work}/compose.err" \
     || fail "the Compose deployment check failed: $(cat "${work}/compose.err")"
@@ -1538,7 +1644,7 @@ scenario_migration() {
   assert_relays_off
   pass "a verified Stop (--verify-remote), docker stop and rm, the Compose version tagged back, then the check, compose up and --verify-remote: the Compose version runs again, the person still signs in, and the changed setting is still in effect"
 
-  compose down >/dev/null 2>&1
+  compose down --volumes >/dev/null 2>&1
   docker rmi "${image}-compose" >/dev/null 2>&1 || true
 }
 
