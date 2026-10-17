@@ -10,6 +10,7 @@
 #   times.log              the same lines, each preceded by the time it happened (EPOCHREALTIME)
 #   relays-off.args        its arguments, one per line
 #   relays-off.oom         its oom_score_adj
+#   relays-off.pid         its pid
 set -uo pipefail
 
 dir=${FAKE_DIR:?}
@@ -20,6 +21,7 @@ event() {
 
 runs=$(grep -c '^relays-off run$' "${dir}/events.log" 2>/dev/null)
 runs=${runs:-0}
+printf '%s\n' "$$" >"${dir}/relays-off.pid"
 event run
 printf '%s\n' "$@" >"${dir}/relays-off.args"
 cat /proc/self/oom_score_adj >"${dir}/relays-off.oom" 2>/dev/null

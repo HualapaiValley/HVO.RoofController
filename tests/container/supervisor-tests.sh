@@ -989,14 +989,91 @@ test_relays_not_verified_are_tried_again_while_the_controller_waits_to_start() {
 
 test_a_relay_off_that_hangs_is_killed_after_its_time() {
   echo 10 >"${FAKE_DIR}/relays-off.delay"
-  local started=${EPOCHREALTIME} seconds
   start_supervisor HVO_SUPERVISOR_RELAYS_OFF_SECONDS=1
+  wait_until 5 "the first relay-off running" relay_off_runs_at_least 1 || return
+  local helper
+  helper=$(cat "${FAKE_DIR}/relays-off.pid")
+  wait_until 5 "the hung relay-off killed" grep -qF \
+    "WARNING: the relays could not be verified off (before the controller starts): turning them off did not finish within 1s and was killed" \
+    "${WORK}/supervisor.log" || return
+  ! kill -0 "${helper}" 2>/dev/null || fail_test "the hung helper (pid ${helper}) still runs"
+  # Not verified, so the controller is held stopped; once a relay-off answers in time, it starts.
+  expect_equal "controller starts while held" "$(event_count controller start)" 0
+  rm -f "${FAKE_DIR}/relays-off.delay"
+  wait_until 15 "the controller started once a relay-off verified the relays off" started controller 1 || return
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The owner's decision (#138, 2026-10-17): if the relays cannot be verified off, the controller stays stopped. The
+# supervisor holds it stopped (state relays-unverified) and starts it only after a read-back shows every relay off.
+
+# wait_until_held: the supervisor reports the controller held stopped (relays-unverified) within 10 s; otherwise the test
+# fails with what the stand-ins did.
+wait_until_held() {
+  wait_until 10 "the controller held stopped" state_is .controller.state relays-unverified && return 0
+  fail_test "what happened instead: $(controller_and_relay_events | paste -sd ','); state $(state .controller.state)"
+  return 1
+}
+
+test_relays_that_cannot_be_verified_off_hold_the_controller_stopped_and_a_stop_is_still_honoured() {
+  echo 1 >"${FAKE_DIR}/relays-off.exit-codes"
+  start_supervisor
+  wait_until_held || return
+  wait_until 10 "the web UI running" state_is .ui.state running || return
+  # The tries go on (with the backoff maximum of 1 s here).
+  wait_until 10 "three more tries" relay_off_runs_at_least 4 || return
+  expect_equal "controller starts" "$(event_count controller start)" 0
+  expect_equal "the supervisor's controller starts" "$(state .controller.starts)" 0
+  expect_equal "relays state" "$(state .relays.state)" unverified
+  grep -qF "WARNING: the controller is HELD STOPPED: the relays could not be verified off (before the controller starts)" \
+    "${WORK}/supervisor.log" || fail_test "the hold is not logged: $(grep -i held "${WORK}/supervisor.log")"
+  grep -qF "(trying again: the controller is held stopped until the relays are verified off)" "${WORK}/supervisor.log" \
+    || fail_test "the tries while held are not logged"
+  ! grep -qE '^\[supervisor\] The relays are off' "${WORK}/supervisor.log" || fail_test "a failed relay-off logged as a success"
+  # A stop while held: within the grace period, with a last relay-off, and still no controller.
+  echo 1 >"${FAKE_DIR}/relays-off.delay"
+  stop_and_expect_it_within 30
+  expect_equal "controller starts after the stop" "$(event_count controller start)" 0
+}
+
+test_the_controller_starts_only_after_the_relays_are_verified_off() {
+  printf '%s\n' 1 1 1 0 >"${FAKE_DIR}/relays-off.exit-codes"
+  start_supervisor
+  wait_until_held || return
+  wait_until 15 "the controller started" started controller 1 || return
+  expect_equal "events up to the start" "$(controller_and_relay_events | head -n 9 | paste -sd ',')" \
+    "relays-off run,relays-off done 1,relays-off run,relays-off done 1,relays-off run,relays-off done 1,relays-off run,relays-off done 0,controller start"
+  wait_until 5 "the controller running" state_is .controller.state running || return
+  expect_equal "relays state" "$(state .relays.state)" controller
+}
+
+test_a_crash_with_relays_that_cannot_be_verified_off_does_not_restart_the_controller() {
+  printf '%s\n' 0 1 >"${FAKE_DIR}/relays-off.exit-codes"
+  start_supervisor
   wait_both_running || return
-  seconds=$(awk -v a="${started}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.3f", b - a }')
-  awk -v s="${seconds}" 'BEGIN { exit !(s >= 1 && s < 3) }' || fail_test "the start took ${seconds}s, expected 1-3s"
-  grep -qF "WARNING: the relays could not be verified off (before the controller starts): turning them off did not finish within 1s and was killed" \
-    "${WORK}/supervisor.log" || fail_test "the hung helper is not reported: $(grep relays "${WORK}/supervisor.log")"
-  ! pgrep -f "${WORK}/bin/relays-off" >/dev/null || fail_test "the hung helper still runs"
+  kill -KILL "$(pid_of controller)"
+  wait_until_held || return
+  sleep 3
+  expect_equal "controller starts" "$(event_count controller start)" 1
+  expect_equal "exit reason" "$(state .controller.lastExitReason)" "crashed (killed by signal 9)"
+  relay_off_runs_at_least 4 || fail_test "the supervisor stopped trying the relays"
+  expect_relays_never_turned_off_under_a_running_controller
+}
+
+test_a_forced_restart_with_relays_that_cannot_be_verified_off_does_not_restart_the_controller() {
+  printf '%s\n' 0 1 >"${FAKE_DIR}/relays-off.exit-codes"
+  start_supervisor
+  wait_both_running || return
+  touch "${WORK}/run/control/force-restart-controller"
+  wait_until_held || return
+  sleep 3
+  expect_equal "controller starts" "$(event_count controller start)" 1
+  expect_equal "forced restart outcome" "$(state .lastForcedRestart.outcome)" held
+  expect_equal "exit reason" "$(state .controller.lastExitReason)" "forced restart"
+  # Once the relays are verified off, the held controller starts.
+  echo 0 >"${FAKE_DIR}/relays-off.exit-codes"
+  wait_until 10 "the controller started once the relays verified off" started controller 2 || return
+  expect_relays_never_turned_off_under_a_running_controller
 }
 
 test_a_forced_restart_turns_the_relays_off_between_the_kill_and_the_start() {

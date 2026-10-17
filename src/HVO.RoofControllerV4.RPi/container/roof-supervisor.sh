@@ -7,7 +7,9 @@
 #   back (de_energize_relays), because the HAT holds its relays as last written until it loses power, so a controller
 #   that died during a move would leave the drive running. It does this as soon as the controller exits (a crash, a
 #   kill, a failed start, a requested restart), before each start, again and again while the controller is not running
-#   until it succeeds, and when it stops itself. It never turns a relay on.
+#   until it succeeds, and when it stops itself. It never turns a relay on. The controller starts only once a read-back
+#   has shown every relay off: until then it is held stopped (state relays-unverified) and the relay-off is tried again,
+#   at the initial start, before every restart, after a crash and on a forced restart (the owner's decision, #138).
 # - on docker stop (SIGTERM, also SIGINT, SIGHUP and SIGQUIT): starts nothing more, and stops the controller first and
 #   waits for it, because its shutdown stops the roof and verifies the relays off. It waits up to
 #   HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS, then turns the relays off (the controller may have been killed, or have failed
@@ -27,10 +29,11 @@
 #   not touched.
 # - on a forced restart: <run dir>/control/force-restart-controller appears (docker exec ... touch, or the web UI's
 #   ControllerForcedRestart) when the controller does not answer. The controller is killed (SIGKILL, as docker kill
-#   does, with the same guarantees: commissioning.md C11) and started again at once. This also starts a controller
-#   left stopped after a crash loop. A request that arrives within HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS of the
-#   controller's start is ignored, so a repeated request cannot kill a controller that is still starting.
-#   supervisor.json records what was done with the last request.
+#   does), the relays are turned off, and it is started again at once, once they are verified off (otherwise it is
+#   held stopped). This also starts a controller left stopped after a crash loop. A request that arrives within
+#   HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS of the controller's start is ignored, so a repeated request cannot kill a
+#   controller that is still starting. supervisor.json records what was done with the last request (restarted, held
+#   or ignored).
 # - with arguments (the deployment check, --validate-deployment): runs only the controller with them, in its place. It
 #   never turns the relays off then: another controller may be driving the HAT.
 #
@@ -146,7 +149,7 @@ if [[ -n "${UI_USER}" ]]; then
 fi
 
 # The state of each process: running, restarting (waiting to start again), crash-loop (left stopped: controller only),
-# stopping or stopped.
+# relays-unverified (held stopped until the relays are verified off: controller only), stopping or stopped.
 declare -A STATE=([controller]=starting [ui]=starting)
 declare -A PID=([controller]="" [ui]="")
 # Microseconds since the epoch.
@@ -327,7 +330,7 @@ de_energize_relays() {
     *) why="ended with $(describe_exit "${code}")" ;;
   esac
   log "WARNING: the relays could not be verified off (${reason}): turning them off ${why}, after ${elapsed_ms} ms." \
-    "The supervisor tries again in ${delay}s while the controller is not running, and before it starts it. Until then" \
+    "The supervisor tries again in ${delay}s, and does not start the controller until they are verified off. Until then" \
     "the drive may still be running: if the roof moves, use the independent stop (commissioning.md C1)."
   write_state
   return 1
@@ -357,16 +360,32 @@ raise_oom_score_adj() {
   return 0
 }
 
-# Whether the controller starts although the relays could not be verified off just before. This is the policy for that
-# case, and only here (the owner's decision is pending, #139). Now: it starts. The controller's initialization turns
-# every relay off and verifies the register before anything else, and if it cannot, it stays uninitialized, latches the
-# fault and refuses motion. The other choice, keeping the controller stopped until the supervisor has verified the relays
-# off, is this body instead:
-#   START_DUE[controller]=${RELAYS_RETRY_DUE}; STATE[controller]=restarting; write_state
-#   log "The controller is kept stopped until the relays are verified off; the supervisor tries again in ...s"; return 1
-# retry_relays_off already tries again while the controller waits to start, and tick starts it at START_DUE.
+# What the supervisor does when the relays could not be verified off just before a start: the policy for that case, and
+# only here. The owner's decision (#138, 2026-10-17): "if the relays cannot be verified off, the controller stays
+# stopped." So it does not start: the controller is held stopped (state relays-unverified, logged as a WARNING), and
+# retry_held_controller tries the relays again after a delay that doubles from 1 s to HVO_SUPERVISOR_BACKOFF_MAX_SECONDS
+# (30 s), for as long as it takes, and starts the controller once a read-back shows every relay off. A stop request is
+# still honoured meanwhile (note_stop, shutdown). Returns 1: do not start. (Returning 0 would start it anyway, the
+# earlier policy.)
 start_with_unverified_relays() {
-  return 0
+  local delay=$(( (RELAYS_RETRY_DUE - $(now_us) + 500000) / 1000000 ))
+  (( delay >= 0 )) || delay=0
+  STATE[controller]=relays-unverified
+  PID[controller]=""
+  log "WARNING: the controller is HELD STOPPED: the relays could not be verified off (${RELAYS_REASON}), and it starts" \
+    "only once a read-back shows every relay off (#138). The supervisor tries again in ${delay}s, the delay doubling to" \
+    "at most ${BACKOFF_MAX_SECONDS}s, for as long as it takes. Until then the drive may still be running: if the roof" \
+    "moves, use the independent stop (commissioning.md C1)."
+  write_state
+  return 1
+}
+
+# The controller is held stopped because the relays could not be verified off: tries them again (tick, when due), and
+# starts the controller once a read-back shows every relay off.
+retry_held_controller() {
+  de_energize_relays "trying again: the controller is held stopped until the relays are verified off" || return 0
+  log "The relays are verified off: starting the controller, held stopped until now"
+  start_controller
 }
 
 start_controller() {
@@ -642,8 +661,11 @@ handle_force_restart_request() {
   LAST_EXIT_REASON[controller]="forced restart"
   # A deliberate restart: earlier crashes no longer count towards the crash loop.
   CRASHES[controller]=""
-  # Not when a stop was asked for meanwhile (start_controller checks).
-  start_controller
+  # Not when a stop was asked for meanwhile, and not with the relays unverified (start_controller checks both).
+  if ! start_controller && [[ "${STATE[controller]}" == relays-unverified ]]; then
+    FORCED_RESTART_OUTCOME=held
+    write_state
+  fi
 }
 
 tick() {
@@ -657,6 +679,8 @@ tick() {
         is_running "${name}" || handle_exit "${name}" ;;
       restarting)
         (( $(now_us) >= START_DUE[${name}] )) && start "${name}" ;;
+      relays-unverified)
+        (( $(now_us) >= RELAYS_RETRY_DUE )) && retry_held_controller ;;
     esac
   done
   retry_relays_off
