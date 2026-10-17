@@ -139,8 +139,8 @@ require_whole_number() {
 }
 
 # Compose passes its explicit limits here as well as to Docker. Refuse a value below RoofController's floor before
-# any controller process (including --validate-deployment), filesystem setup or HAT access. Unset means no limit until
-# #138; a follow-up then enables the 1 vCPU / 2 GiB default. The deploy script validates its own inputs before Docker.
+# any controller process (including --validate-deployment), filesystem setup or HAT access. Unset means no limit until a
+# follow-up (#138 item 6) enables the 1 vCPU / 2 GiB default. The deploy script validates its own inputs before Docker.
 check_compose_limits() {
   local cpus=${HVO_ROOF_CPUS:-} memory=${HVO_ROOF_MEMORY:-} pattern fraction bytes
   if [[ -n "${cpus}" ]]; then
