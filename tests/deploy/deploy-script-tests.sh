@@ -2543,20 +2543,127 @@ test_no_room_for_the_private_copy_changes_nothing() {
   assert_no_private_copy
 }
 
+# assert_no_work_dir [<TMPDIR>]: the script left no work folder in TMPDIR (by default ${WORK}).
+assert_no_work_dir() {
+  [[ -z "$(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-deploy.*')" ]] \
+    || fail_test "the script left its work folder in ${1:-${WORK}}: $(find "${1:-${WORK}}" -maxdepth 1 -name 'hvo-roof-deploy.*')"
+}
+
+# F5: the script's folders are made only in a TMPDIR that, with every folder above it, is root's or this user's and
+# writable by no one else unless sticky. In any other, someone else could put a link or another folder in the place of
+# the one made, and so change what Docker loads or what the cleanup removes: nothing is made there at all (the
+# BASH_FUNC_mktemp below records each mktemp the script runs).
 test_a_temporary_folder_others_can_change_changes_nothing() {
   offline_archive || return
   seed_container roof-controller old true 8443:8443
-  mkdir "${WORK}/shared"
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local record='BASH_FUNC_mktemp%%=() { printf "%s\n" "$*" >> "${MKTEMP_LOG}"; command mktemp "$@"; }' tmpdir
+  mkdir -p "${WORK}/shared/inner"
   chmod 0777 "${WORK}/shared"
-  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${WORK}/shared"
-  assert_archive_refused "is not private: someone other than this user and root could change it or a folder above it, and so the archive after it is checked. Set TMPDIR to a folder only you (or root) can change, such as /tmp. Nothing was changed." "a folder anyone can write to"
-  assert_no_private_copy "${WORK}/shared"
+  chmod 0700 "${WORK}/shared/inner"
+  for tmpdir in "${WORK}/shared" "${WORK}/shared/inner" "${WORK}/missing"; do
+    : > "${WORK}/mktemp.log"
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${tmpdir}" \
+      "MKTEMP_LOG=${WORK}/mktemp.log" "${record}"
+    assert_archive_refused "TMPDIR (${tmpdir}) is not a folder only this user and root can change, for the copy of IMAGE_ARCHIVE that Docker loads: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change what is written there. Nothing was made in it. Set TMPDIR to a folder that is, such as /tmp. Nothing was changed." "TMPDIR ${tmpdir}"
+    [[ ! -s "${WORK}/mktemp.log" ]] || fail_test "a folder was made in ${tmpdir} before it was checked: $(cat "${WORK}/mktemp.log")"
+  done
+  [[ -z "$(ls -A "${WORK}/shared/inner")" ]] || fail_test "something was made in ${WORK}/shared/inner"
 
-  # Sticky, as /tmp is: no one else can rename or remove the script's folder in it.
+  # Sticky, as /tmp is: no one else can rename or remove the script's folders in it.
   chmod 1777 "${WORK}/shared"
   deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${WORK}/shared"
   assert_status 0
   assert_loaded_a_private_copy "$(sha256_hex < "${ARCHIVE}")" "${WORK}/shared"
+  assert_no_work_dir "${WORK}/shared"
+}
+
+# F5: the work folder (the new controller's cidfile, the identity check's copies, a built image) is made the same way,
+# before any Docker call, whatever the script deploys or does.
+test_a_work_folder_others_can_change_is_refused_before_any_docker_call() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  mkdir "${WORK}/shared"
+  chmod 0777 "${WORK}/shared"
+  local mode
+  for mode in "" --rollback --stop; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" "TMPDIR=${WORK}/shared" -- ${mode:+"${mode}"}
+    assert_status 1
+    assert_output_contains "TMPDIR (${WORK}/shared) is not a folder only this user and root can change, for its work folder: "
+    assert_output_contains "Nothing was changed."
+    assert_no_docker_calls "a work folder others can change (${mode:-deploy})"
+    assert_container roof-controller current true unless-stopped
+  done
+  [[ -z "$(ls -A "${WORK}/shared")" ]] || fail_test "something was made in ${WORK}/shared: $(ls -A "${WORK}/shared")"
+}
+
+# F5: the folder the script makes is the one it uses and removes. Here its name is turned into a link to another folder
+# of this user's between mktemp and the script's own check of it (BASH_FUNC_mktemp): the script refuses, follows
+# nothing and removes nothing, so the other folder is left as it was.
+test_a_folder_turned_into_a_link_once_made_changes_nothing() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  mkdir -m 0700 "${WORK}/mine"
+  echo keep > "${WORK}/mine/keep"
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local swap='BASH_FUNC_mktemp%%=() { local made; made=$(command mktemp "$@") || return; case "${made}" in */hvo-roof-archive.*) mv "${made}" "${made}.made" && ln -s "${SWAP_TARGET}" "${made}" ;; esac; printf "%s\n" "${made}"; }'
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "SWAP_TARGET=${WORK}/mine" "${swap}"
+  assert_archive_refused "Could not make a private folder in ${WORK} for the copy of IMAGE_ARCHIVE that Docker loads ($(cd "${WORK}" && pwd -P)/hvo-roof-archive." "a folder turned into a link"
+  [[ "$(ls -A "${WORK}/mine")" == keep && "$(cat "${WORK}/mine/keep")" == keep ]] \
+    || fail_test "the folder the link pointed at was changed: $(ls -lA "${WORK}/mine")"
+  [[ -n "$(find "${WORK}" -maxdepth 1 -name 'hvo-roof-archive.*' -type l)" ]] || fail_test "the link was removed or followed"
+}
+
+# F5: the script removes its folders only while each is still the folder it made, and then only what it put there. A
+# folder or a link put in the place of its copy's folder and of its work folder, once Docker has read the copy
+# (FAKE_AFTER_LOAD), is left as it is, with what is in it, and the script says so.
+test_a_folder_put_in_the_place_of_the_scripts_own_is_left_as_it_is() {
+  offline_archive || return
+  local kind
+  # This function is run by the fake docker's shell, not by this shell.
+  # shellcheck disable=SC2016
+  local replace='for d in "$(dirname "${FAKE_LOAD_ARCHIVE}")" "${TMPDIR}"/hvo-roof-deploy.*; do mv "$d" "$d.moved" || exit 1; if [ "${KIND}" = link ]; then mkdir -m 0700 "$d.target" && echo keep > "$d.target/keep" && ln -s "$d.target" "$d"; else mkdir -m "${KIND}" "$d" && echo keep > "$d/keep"; fi || exit 1; done'
+  for kind in 0700 0755 link; do
+    reset_fake_docker
+    rm -rf "${WORK}"/hvo-roof-*
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "KIND=${kind}" "FAKE_AFTER_LOAD=${replace}"
+
+    assert_status 0
+    assert_container roof-controller new true unless-stopped
+    local archive_dir work_dir
+    archive_dir=$(find "${WORK}" -maxdepth 1 -name 'hvo-roof-archive.*' ! -name '*.moved' ! -name '*.target')
+    work_dir=$(find "${WORK}" -maxdepth 1 -name 'hvo-roof-deploy.*' ! -name '*.moved' ! -name '*.target')
+    [[ -n "${archive_dir}" && -n "${work_dir}" ]] || fail_test "${kind}: the folders put in place of the script's were removed"
+    if [[ "${kind}" == 0700 ]]; then
+      assert_output_contains "[load] WARNING: ${archive_dir} holds more than this script put there, so it was left as it is."
+      assert_output_contains "[deploy] WARNING: ${work_dir} holds more than this script put there, so it was left as it is."
+    else
+      assert_output_contains "[load] WARNING: ${archive_dir} is no longer the folder this script made for its copy of IMAGE_ARCHIVE (a folder of this user's, mode 0700), so it was left as it is."
+      assert_output_contains "[deploy] WARNING: ${work_dir} is no longer the work folder this script made (a folder of this user's, mode 0700), so it was left as it is."
+    fi
+    local folder
+    for folder in "${archive_dir}" "${work_dir}"; do
+      [[ "${kind}" != link ]] || folder="${folder}.target"
+      [[ "$(cat "${folder}/keep" 2>/dev/null)" == keep ]] || fail_test "${kind}: ${folder}/keep was removed"
+    done
+  done
+}
+
+# F5: a TMPDIR that is a link to a private folder is followed once, before anything is made: the script's folders go
+# under the folder it names, by that folder's own path, and are removed as usual.
+test_a_stable_link_to_a_private_temporary_folder_is_followed() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  mkdir -m 0700 "${WORK}/real"
+  ln -s "${WORK}/real" "${WORK}/link"
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" "TMPDIR=${WORK}/link"
+  assert_status 0
+  assert_loaded_a_private_copy "$(sha256_hex < "${ARCHIVE}")" "${WORK}/real"
+  assert_no_work_dir "${WORK}/real"
+  [[ -L "${WORK}/link" && -z "$(ls -A "${WORK}/real")" ]] || fail_test "the link or the folder it names was changed: $(ls -lA "${WORK}/real")"
 }
 
 test_a_dry_run_leaves_no_copy_of_the_archive() {

@@ -48,7 +48,10 @@ Other switches:
   FAKE_INSPECT_PLATFORM=false      the CLI has no `image inspect --platform` (Docker before 28)
   FAKE_LOAD_FAIL=true              `load -i <archive>` fails, and loads nothing
   FAKE_ON_LOAD=<shell command>     runs just before `load -i <archive>` reads the archive (a test changes the release's
-                                   archive there, once the deploy script has checked it)
+                                   archive there, once the deploy script has checked it), with FAKE_LOAD_ARCHIVE the path
+                                   it was given
+  FAKE_AFTER_LOAD=<shell command>  runs once `load -i <archive>` has read the archive, with FAKE_LOAD_ARCHIVE the same
+                                   (a test changes the script's own folders there, before the script removes them)
   FAKE_LOADED_ID=sha256:<hex>      the ID `load -i <archive>` gives the image (default: its config's digest, as Docker's
                                    classic image store does, or its index's with FAKE_IMAGE_STORE=containerd)
   FAKE_STOP_FAIL=true              `stop` fails
@@ -228,8 +231,9 @@ def load_archive(state, path):
     """`load -i <archive>`: an offline image archive, loaded as Docker's classic image store loads one (its manifest.json:
     the image's ID is its config's digest) or, with FAKE_IMAGE_STORE=containerd, as the containerd store does (its
     index.json: the ID is the index's digest, holding each platform whose manifest the archive has)."""
+    hook_env = {**os.environ, "FAKE_LOAD_ARCHIVE": path}
     if os.environ.get("FAKE_ON_LOAD"):
-        subprocess.run(["/bin/sh", "-c", os.environ["FAKE_ON_LOAD"]], check=True)
+        subprocess.run(["/bin/sh", "-c", os.environ["FAKE_ON_LOAD"]], check=True, env=hook_env)
     if os.environ.get("FAKE_LOAD_FAIL") == "true":
         die("unexpected EOF")
     with open(path, "rb") as f:
@@ -240,6 +244,8 @@ def load_archive(state, path):
         "mode": oct(os.stat(path).st_mode & 0o777),
         "folder_mode": oct(os.stat(os.path.dirname(os.path.abspath(path))).st_mode & 0o777),
     })
+    if os.environ.get("FAKE_AFTER_LOAD"):
+        subprocess.run(["/bin/sh", "-c", os.environ["FAKE_AFTER_LOAD"]], check=True, env=hook_env)
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         names = set(tar.getnames())
 

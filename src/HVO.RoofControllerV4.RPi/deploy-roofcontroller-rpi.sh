@@ -1328,7 +1328,7 @@ check_json_once() {
 #    <repository>:<tag> or not at all;
 #  - every blob is the one its digest names, layers included.
 # What is checked is what Docker loads: the archive is copied once, first, into a folder of the script's own that no one
-# but this user and root can change (ARCHIVE_DIR, private_folder), and that copy (ARCHIVE_COPY) is checked, has its
+# but this user and root can change (ARCHIVE_DIR, make_private_folder), and that copy (ARCHIVE_COPY) is checked, has its
 # SHA-256 compared with IMAGE_ARCHIVE_SHA256 when it is given, and is the file docker load reads. Whatever then happens
 # to IMAGE_ARCHIVE (replaced, or written over in place) changes nothing Docker reads. ARCHIVE_MANIFEST and ARCHIVE_CONFIG
 # are then the platform's manifest and config: with the index, the IDs Docker gives the image it loads (the containerd
@@ -1342,24 +1342,132 @@ ARCHIVE_COPY=""
 # Room the copy must leave on its file system, for the members the check takes out of it beside it: 16 MiB, in KiB.
 ARCHIVE_HEADROOM_KB=16384
 
-# private_folder <folder>: true when no one but root and this script's user can change <folder>, a physical path (no
-# symbolic link in it), or what it holds: it is this user's folder with mode 0700, and every folder above it is root's or
-# this user's, and writable by no one else unless it is sticky (as /tmp is), so no one else can rename it, or a folder
-# above it, away and put another in its place.
-private_folder() {
-  local folder=$1 user
+# Private folders. The script's work folder (WORK_DIR) and its copy of IMAGE_ARCHIVE (ARCHIVE_DIR) are each made as a
+# new folder, mode 0700, by its physical path, and only in a TMPDIR that is a trusted_folder (make_private_folder); each
+# is removed only while it is still the folder that was made (private_folder), and only the exact path that was made.
+# No one but root and this user can then change what is in them, rename them, or put another folder or a link in their
+# place, so what the script writes there, checks and reads back (the copy Docker loads, the new controller's cidfile, the
+# identity check's copies) stays what it wrote, and their removal can only remove them.
+
+# trusted_folder <folder>: prints <folder>'s physical path (every symbolic link in it followed) when that folder, and
+# every folder above it up to /, is a real folder (not a link), root's or this user's, that no one else can write to
+# unless it is sticky (as /tmp is: there, no one else can rename or remove what root or this user owns). No one else can
+# then change what that path names, or a path below it that root or this user made. Fails, printing nothing, otherwise.
+trusted_folder() {
+  local physical folder user
   user=$(id -u) || return 1
-  [[ -d "${folder}" && ! -L "${folder}" && -n "$(find "${folder}" -maxdepth 0 -type d -user "${user}" -perm 0700 2>/dev/null)" ]] \
-    || return 1
-  while [[ "${folder}" != / ]]; do
-    folder=$(dirname "${folder}")
+  physical=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+  folder=${physical}
+  while true; do
+    [[ -d "${folder}" && ! -L "${folder}" ]] || return 1
     [[ -n "$(find "${folder}" -maxdepth 0 -type d \( -user 0 -o -user "${user}" \) \
         \( -perm -1000 -o \( ! -perm -0020 ! -perm -0002 \) \) 2>/dev/null)" ]] || return 1
+    [[ "${folder}" != / ]] || break
+    folder=$(dirname "${folder}")
   done
+  printf '%s\n' "${physical}"
+}
+
+# private_folder <folder>: <folder> is still a folder make_private_folder made: a real folder (not a link), this user's,
+# mode 0700.
+private_folder() {
+  [[ -d "$1" && ! -L "$1" && -n "$(find "$1" -maxdepth 0 -type d -user "$(id -u)" -perm 0700 2>/dev/null)" ]]
+}
+
+# make_private_folder <name>: makes a new folder, <name>.<random> with mode 0700, under TMPDIR's physical path (TMPDIR is
+# /tmp when it is not set) once TMPDIR is a trusted_folder, and prints the exact path it made. Returns 2, having made
+# nothing, when TMPDIR is not a trusted_folder; 1 when the folder cannot be made, or is not then a private_folder (it
+# then prints the path, which is never removed).
+make_private_folder() {
+  local parent folder
+  parent=$(trusted_folder "${TMPDIR:-/tmp}") || return 2
+  folder=$(umask 077 && mktemp -d "${parent%/}/$1.XXXXXX") || return 1
+  printf '%s\n' "${folder}"
+  private_folder "${folder}"
+}
+
+# The reason make_private_folder's return code <status> gives for <what>, for a message.
+private_folder_problem() {
+  if (( $1 == 2 )); then
+    printf '%s' "TMPDIR (${TMPDIR:-/tmp}) is not a folder only this user and root can change, for $2: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change what is written there. Nothing was made in it. Set TMPDIR to a folder that is, such as /tmp"
+  elif [[ -n "${3:-}" ]]; then
+    printf '%s' "Could not make a private folder in ${TMPDIR:-/tmp} for $2 ($3 is not a folder of this user's with mode 0700 once made)"
+  else
+    printf '%s' "Could not make a private folder in ${TMPDIR:-/tmp} for $2"
+  fi
+}
+
+# make_work_dir: WORK_DIR, the script's work folder (make_private_folder), unless it is made already. Sets FAILURE and
+# fails when it cannot be.
+make_work_dir() {
+  local folder status=0
+  [[ -z "${WORK_DIR}" ]] || return 0
+  folder=$(make_private_folder hvo-roof-deploy) || status=$?
+  if (( status != 0 )); then
+    FAILURE=$(private_folder_problem "${status}" "its work folder" "${folder}")
+    return 1
+  fi
+  WORK_DIR=${folder}
+}
+
+# remove_work_dir: removes WORK_DIR, only while it is still the private_folder that was made, and only what the script
+# puts there: the new controller's cidfile, a built image, the identity check's store copy and its copy of the secrets
+# (from docker cp, so only that one folder is removed whole, and rm never follows a link in it), then the folder with
+# rmdir. Anything else there is left, with the folder, and said. WORK_DIR is forgotten either way.
+remove_work_dir() {
+  local folder=${WORK_DIR}
+  [[ -n "${folder}" ]] || return 0
+  WORK_DIR=""
+  if ! private_folder "${folder}"; then
+    log_err "[deploy] WARNING: ${folder} is no longer the work folder this script made (a folder of this user's, mode 0700), so it was left as it is."
+    return 1
+  fi
+  rm -f -- "${folder}/new-controller.cid" "${folder}/image.tar" "${folder}/identity-schema-check.json" 2>/dev/null || true
+  rm -rf -- "${folder}/identity-schema-secrets" 2>/dev/null || true
+  if ! rmdir -- "${folder}" 2>/dev/null; then
+    log_err "[deploy] WARNING: ${folder} holds more than this script put there, so it was left as it is."
+    return 1
+  fi
+}
+
+# remove_archive_members <folder>: removes what check_image_archive took out of the archive into <folder> (inside
+# ARCHIVE_DIR), file by known file, then its folders with rmdir; anything else there is left.
+remove_archive_members() {
+  local members=$1
+  [[ -d "${members}" && ! -L "${members}" ]] || return 0
+  if [[ -d "${members}/blobs" && ! -L "${members}/blobs" ]]; then
+    if [[ -d "${members}/blobs/sha256" && ! -L "${members}/blobs/sha256" ]]; then
+      rm -f -- "${members}"/blobs/sha256/* 2>/dev/null || true
+      rmdir -- "${members}/blobs/sha256" 2>/dev/null || true
+    fi
+    rmdir -- "${members}/blobs" 2>/dev/null || true
+  fi
+  rm -f -- "${members}/oci-layout" "${members}/index.json" "${members}/manifest.json" 2>/dev/null || true
+  rmdir -- "${members}" 2>/dev/null || true
+}
+
+# remove_archive_dir: removes ARCHIVE_DIR, only while it is still the private_folder that was made, and only what the
+# script put there: the copy and the members it took out, file by known file, then the folder with rmdir. Anything
+# else there is left, with the folder, and said. ARCHIVE_DIR is forgotten either way.
+remove_archive_dir() {
+  local folder=${ARCHIVE_DIR}
+  [[ -n "${folder}" ]] || return 0
+  ARCHIVE_DIR=""
+  if ! private_folder "${folder}"; then
+    log_err "[load] WARNING: ${folder} is no longer the folder this script made for its copy of IMAGE_ARCHIVE (a folder of this user's, mode 0700), so it was left as it is."
+    return 1
+  fi
+  remove_archive_members "${folder}/members"
+  rm -f -- "${folder}/image.oci.tar" 2>/dev/null || true
+  if ! rmdir -- "${folder}" 2>/dev/null; then
+    log_err "[load] WARNING: ${folder} holds more than this script put there, so it was left as it is."
+    return 1
+  fi
 }
 
 check_image_archive() {
   local folder listing kind members member named names manifest config layer layers blobs expected docker size free needed digest
+  local status
   local digest_pattern='^sha256:[0-9a-f]{64}$' blob_pattern='^blobs/sha256/[0-9a-f]{64}$' image_name image_tag=""
   local release_archive="give the release's archive of that image. Nothing was changed."
   local release_archive_sentence="Give the release's archive of that image. Nothing was changed."
@@ -1372,15 +1480,13 @@ check_image_archive() {
     image_name=""
   fi
 
-  # The copy Docker will load, in a folder of the script's own that only this user and root can change. The folder is
-  # used by its physical path, so no link above it can be pointed elsewhere.
-  folder=$(mktemp -d "${TMPDIR:-/tmp}/hvo-roof-archive.XXXXXX") \
-    || fail "Could not make a folder in ${TMPDIR:-/tmp} to copy IMAGE_ARCHIVE into. Nothing was changed."
+  # The copy Docker will load goes in a new folder of the script's own (make_private_folder): made by its physical path,
+  # only in a TMPDIR that no one but this user and root can change, and removed (remove_archive_dir) only while it is
+  # still that folder. Only the exact folder made is ever removed.
+  status=0
+  folder=$(make_private_folder hvo-roof-archive) || status=$?
+  (( status == 0 )) || fail "$(private_folder_problem "${status}" "the copy of IMAGE_ARCHIVE that Docker loads" "${folder}"). Nothing was changed."
   ARCHIVE_DIR=${folder}
-  folder=$(cd "${folder}" && pwd -P) || fail "Could not open the folder ${ARCHIVE_DIR} to copy IMAGE_ARCHIVE into. Nothing was changed."
-  ARCHIVE_DIR=${folder}
-  private_folder "${folder}" \
-    || fail "The folder IMAGE_ARCHIVE would be copied into, ${folder}, is not private: someone other than this user and root could change it or a folder above it, and so the archive after it is checked. Set TMPDIR to a folder only you (or root) can change, such as /tmp. Nothing was changed."
   size=$(wc -c < "${IMAGE_ARCHIVE}" | tr -d ' ') || size=""
   free=$(df -Pk "${folder}" 2>/dev/null | awk 'NR == 2 { print $4 }') || free=""
   [[ "${size}" =~ ^[0-9]+$ && "${free}" =~ ^[0-9]+$ ]] \
@@ -1509,7 +1615,7 @@ check_image_archive() {
     [[ -z "${layer}" || "$(tar -xOf "${ARCHIVE_COPY}" "blobs/sha256/${layer#sha256:}" 2>/dev/null | sha256_hex)" == "${layer#sha256:}" ]] \
       || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its layer ${layer} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
   done <<<"${layers}"
-  rm -rf "${folder}"
+  remove_archive_members "${folder}"
   ARCHIVE_MANIFEST=${manifest}
   ARCHIVE_CONFIG=${config}
   echo "[load] ${IMAGE_ARCHIVE} holds ${IMAGE_DIGEST}, with its image for ${BUILD_PLATFORM} (manifest ${ARCHIVE_MANIFEST}, config ${ARCHIVE_CONFIG}), and nothing else"
@@ -1650,9 +1756,7 @@ print(paths[0],end="")' 2>/dev/null); then
     SCHEMA_FAILURE="the preserved container has no unambiguous explicit identity store path"
     return 1
   fi
-  if [[ -z "${WORK_DIR}" ]]; then
-    WORK_DIR=$(mktemp -d) || return 1
-  fi
+  make_work_dir || return 1
   # AddKeyPerFile has higher precedence than environment. Refuse an override rather
   # than guess which store is live; the normal deployed secrets directory is required.
   secrets_dir="${WORK_DIR}/identity-schema-secrets"
@@ -1679,9 +1783,7 @@ print(paths[0],end="")' 2>/dev/null); then
     schema=1
   else
     [[ "${store_path}" == /* && "${store_path}" != *$'\n'* && "${store_path}" != *$'\r'* ]] || return 1
-    if [[ -z "${WORK_DIR}" ]]; then
-      WORK_DIR=$(mktemp -d) || return 1
-    fi
+    make_work_dir || return 1
     schema_file="${WORK_DIR}/identity-schema-check.json"
     rm -f "${schema_file}" || return 1
     if ! dockerc cp "${target}:${store_path}" "${schema_file}" >/dev/null 2>&1 \
@@ -1875,12 +1977,8 @@ on_exit() {
     fi
     [[ "${status}" != "0" ]] || status=1
   fi
-  if [[ -n "${WORK_DIR}" ]]; then
-    rm -rf "${WORK_DIR}"
-  fi
-  if [[ -n "${ARCHIVE_DIR}" ]]; then
-    rm -rf "${ARCHIVE_DIR}"
-  fi
+  remove_work_dir
+  remove_archive_dir
   exit "${status}"
 }
 # The script's stdout and stderr, kept on fds 8 and 9. A signal's trap runs inside the call it interrupted, with that
@@ -1910,6 +2008,10 @@ fi
 
 # The offline archive, before any Docker call: one that does not hold the release's image changes nothing.
 [[ -z "${IMAGE_ARCHIVE}" ]] || check_image_archive
+
+# The work folder, before any Docker call too: the new controller's cidfile (by which a restore removes it), the
+# identity check's copies and a built image go there.
+make_work_dir || fail "${FAILURE}. Nothing was changed."
 
 # Checked as the switch runs docker: in its own session, with no terminal to prompt on. A context that asks for a
 # password or a host key confirmation would otherwise pass here and fail at the old controller's stop.
@@ -2069,7 +2171,7 @@ fi
 
 [[ "${ROLLBACK}" != "true" ]] || fail "internal error: the --rollback path did not finish; nothing was built or deployed."
 
-WORK_DIR=$(mktemp -d)
+make_work_dir || fail "${FAILURE}. The running controller was not touched."
 
 if [[ -n "${IMAGE_ARCHIVE}" ]]; then
   # Offline: the copy of the release's archive checked above, never IMAGE_ARCHIVE itself, is loaded into the Pi's Docker,
@@ -2078,7 +2180,7 @@ if [[ -n "${IMAGE_ARCHIVE}" ]]; then
   echo "[load] Loading the checked copy of ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (nothing is pulled)..."
   dockerc load -i "${ARCHIVE_COPY}" \
     || fail "Could not load ${IMAGE_ARCHIVE} into Docker context '${DOCKER_CONTEXT}' (see above). The running controller was not touched."
-  rm -rf "${ARCHIVE_DIR}" && ARCHIVE_DIR=""
+  remove_archive_dir || true
   check_loaded_image
 elif [[ -n "${IMAGE_REF}" ]]; then
   # Pull mode: the Pi's Docker pulls the released image, and it is used only if it is the image the digest names, for
