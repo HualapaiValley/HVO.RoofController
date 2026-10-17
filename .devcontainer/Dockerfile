@@ -1,7 +1,9 @@
 # See here for image contents: https://github.com/devcontainers/images/tree/main/src/dotnet
-# 2.2.3-10.0 ships .NET SDK 10.0.401, which satisfies src/global.json. CI ("Check dev container
-# SDK") fails when this image's SDK falls outside the feature band that global.json pins.
-FROM mcr.microsoft.com/devcontainers/dotnet:2.2.3-10.0
+# Pin the complete image version, .NET line and Ubuntu variant, plus the multi-platform index.
+# Dependabot updates this tag and digest; build/check-base-images.sh validates the pin.
+# This newest version still ships SDK 10.0.401; global.json retains that minimum with patch
+# roll-forward until an upstream dev-container image ships the product SDK 10.0.402 (#141).
+FROM mcr.microsoft.com/devcontainers/dotnet:2.3.2-10.0-noble@sha256:694076b55f447d4b9f5b49bc6616c2e904d63e1a61e43680b2bbea46011b6783
 
 # The base image may include a Yarn APT source without the signing key,
 # causing apt failures. Remove it since we don't need it.

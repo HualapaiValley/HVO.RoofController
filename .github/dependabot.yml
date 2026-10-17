@@ -19,8 +19,8 @@ updates:
   # Both Dockerfiles must use the same images, tag and digest (build/check-base-images.sh, in
   # the "Pi image" and "Emulator image" workflows), so each image is bumped in both Dockerfiles
   # in one PR (group-by: dependency-name).
-  # The sdk tag must match src/global.json: a PR that bumps the SDK image's tag must update
-  # src/global.json in the same PR. The image workflows fail until they agree.
+  # The SDK tag must satisfy src/global.json and its patch roll-forward policy. A feature-band
+  # change must update src/global.json in the same PR; a newer patch in its band is accepted.
   - package-ecosystem: "docker"
     directories:
       - "/src/HVO.RoofControllerV4.RPi"
@@ -33,8 +33,9 @@ updates:
         patterns:
           - "*"
 
-  # Dev container image (mcr.microsoft.com/devcontainers/dotnet). Its SDK must be in the
-  # feature band that src/global.json pins; CI ("Check dev container SDK") fails until it is.
+  # Dev container image (mcr.microsoft.com/devcontainers/dotnet), pinned by tag and index digest.
+  # Keep this ecosystem: Dependabot updates the tag and digest, including digest-only rebuilds.
+  # Its SDK must be in the feature band that src/global.json pins; CI ("Check dev container SDK") fails until it is.
   - package-ecosystem: "docker"
     directory: "/.devcontainer"
     schedule:

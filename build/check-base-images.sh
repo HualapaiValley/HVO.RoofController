@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Checks the base images of the controller's and the HAT emulator's Dockerfiles: every external FROM names its image by tag and
+# Checks the controller, HAT emulator and dev container Dockerfiles: every external FROM names its image by tag and
 # by the digest of its multi-platform index (image:tag@sha256:<digest>), so a rebuild of the same commit uses the same
-# bases; the SDK's tag is the SDK src/global.json pins; and the two Dockerfiles use the same SDK and the same ASP.NET
-# Core runtime, tag and digest. With --registry, it also reads each pinned digest from its registry, which must be an
+# bases; the SDK's tag satisfies src/global.json's version and patch roll-forward policy; and the product Dockerfiles
+# use the same SDK and the same ASP.NET Core runtime, tag and digest. With --registry, it also reads each pinned digest from its registry, which must be an
 # index holding linux/amd64 and linux/arm64. Reports pin problems and fails closed on unsupported syntax, with file:line
 # diagnostics and, in GitHub Actions, annotations.
 #
@@ -13,9 +13,12 @@ set -euo pipefail
 
 SDK=mcr.microsoft.com/dotnet/sdk
 RUNTIME=mcr.microsoft.com/dotnet/aspnet
+DEV_IMAGE=mcr.microsoft.com/devcontainers/dotnet
+DEV_DOCKERFILE=.devcontainer/Dockerfile
 PLATFORMS=(linux/amd64 linux/arm64)
 GLOBAL_JSON=src/global.json
-DOCKERFILES=(src/HVO.RoofControllerV4.RPi/Dockerfile src/HVO.RoofControllerV4.Emulator/Dockerfile)
+PRODUCT_DOCKERFILES=(src/HVO.RoofControllerV4.RPi/Dockerfile src/HVO.RoofControllerV4.Emulator/Dockerfile)
+DOCKERFILES=("${PRODUCT_DOCKERFILES[@]}" "${DEV_DOCKERFILE}")
 
 registry=0
 if [[ "${1:-}" == --registry ]]; then
@@ -213,13 +216,29 @@ except Unsupported as error:
 PY
 }
 
-pin=""
+pin="" roll_forward=""
 if [[ ! -f "${root}/${GLOBAL_JSON}" ]]; then
   problem "${GLOBAL_JSON}" "" "was not found."
 else
   pin=$(jq -r '.sdk.version // ""' "${root}/${GLOBAL_JSON}" 2>/dev/null) || pin=""
+  roll_forward=$(jq -r '.sdk.rollForward // "patch"' "${root}/${GLOBAL_JSON}" 2>/dev/null) || roll_forward=""
   [[ -n "${pin}" ]] || problem "${GLOBAL_JSON}" "" "has no sdk.version."
 fi
+
+# Exact matches always work; a later patch must stay in the same feature band and be explicitly allowed.
+sdk_satisfies_pin() {
+  python3 - "${pin}" "$1" "${roll_forward}" <<'PYSDK'
+import re
+import sys
+pin, tag, policy = sys.argv[1:]
+if tag == pin:
+    sys.exit(0)
+if policy != "patch" or not all(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]{3}", v) for v in (pin, tag)):
+    sys.exit(1)
+wanted, actual = (tuple(map(int, v.split("."))) for v in (pin, tag))
+sys.exit(0 if actual[:2] == wanted[:2] and actual[2] // 100 == wanted[2] // 100 and actual[2] >= wanted[2] else 1)
+PYSDK
+}
 
 # A tag cannot hold ':' or '/', so the image is everything before the last ':' ahead of the '@'. The digest is sha256,
 # in lower case.
@@ -239,7 +258,7 @@ for dockerfile in "${DOCKERFILES[@]}"; do
     problem "${dockerfile}" "${records%%$'\t'*}" "${records#*$'\t'}"
     continue
   fi
-  stages=" scratch " sdk_seen=0 runtime_seen=0
+  stages=" scratch " sdk_seen=0 runtime_seen=0 dev_seen=0
   while IFS=$'\t' read -r number ref stage; do
     [[ -n "${number}" ]] || continue
     # An earlier stage of this Dockerfile, or scratch, is not a base image to pin.
@@ -253,12 +272,13 @@ for dockerfile in "${DOCKERFILES[@]}"; do
       [[ "${image##*/}" != *:* ]] || image=${image%:*}
       [[ "${image}" != "${SDK}" ]] || sdk_seen=1
       [[ "${image}" != "${RUNTIME}" ]] || runtime_seen=1
+      [[ "${image}" != "${DEV_IMAGE}" ]] || dev_seen=1
       if [[ ! "${ref}" =~ ${pinned} ]]; then
         problem "${dockerfile}" "${number}" "FROM ${ref} is not pinned by tag and digest (image:tag@sha256:<the digest of the image's multi-platform index>)."
       elif [[ "${image}" == "${SDK}" ]]; then
         tag=${BASH_REMATCH[2]}
-        if [[ -n "${pin}" && "${tag}" != "${pin}" ]]; then
-          problem "${dockerfile}" "${number}" "the build image ${SDK}:${tag} does not match ${GLOBAL_JSON} (${pin}); update both in the same change."
+        if [[ -n "${pin}" ]] && ! sdk_satisfies_pin "${tag}"; then
+          problem "${dockerfile}" "${number}" "the build image ${SDK}:${tag} does not satisfy ${GLOBAL_JSON} (${pin}, rollForward: ${roll_forward}); use the pinned SDK or an allowed later patch in the same feature band."
         fi
         if [[ -z "${sdk_ref}" ]]; then
           sdk_ref=${ref} sdk_file=${dockerfile} sdk_line=${number}
@@ -275,8 +295,12 @@ for dockerfile in "${DOCKERFILES[@]}"; do
     fi
     [[ -z "${stage}" ]] || stages+="$(printf '%s' "${stage}" | tr '[:upper:]' '[:lower:]') "
   done <<<"${records}"
-  [[ ${sdk_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${SDK} line."
-  [[ ${runtime_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${RUNTIME} line."
+  if [[ "${dockerfile}" == "${DEV_DOCKERFILE}" ]]; then
+    [[ ${dev_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${DEV_IMAGE} line."
+  else
+    [[ ${sdk_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${SDK} line."
+    [[ ${runtime_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${RUNTIME} line."
+  fi
 done
 
 # Each pinned digest must be an index, not one platform's image: a single-platform image would be used for every

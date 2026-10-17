@@ -64,8 +64,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Verify SDK selected by global.json
         run: |
@@ -83,11 +86,12 @@ jobs:
           fi
 
       # post-create.sh restores from src/ inside the dev container, so its SDK has to satisfy
-      # global.json as well. Dependabot bumps the image tag; this catches a tag outside the band.
+      # global.json as well. Check the immutable base, including its pin and platform index.
       - name: Check dev container SDK
         run: |
+          ../build/check-base-images.sh --registry
           pin=$(jq -r '.sdk.version' global.json)
-          image=$(sed -n 's#^FROM \(mcr\.microsoft\.com/devcontainers/dotnet:[^ @]*\).*#\1#p' ../.devcontainer/Dockerfile | head -n 1)
+          image=$(sed -n 's#^FROM \(mcr\.microsoft\.com/devcontainers/dotnet:[^ ]*\).*#\1#p' ../.devcontainer/Dockerfile | head -n 1)
           if [ -z "${image}" ]; then
             echo "::error file=.devcontainer/Dockerfile::No mcr.microsoft.com/devcontainers/dotnet FROM line found"
             exit 1
@@ -404,8 +408,11 @@ jobs:
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Download hvo-roof-kiosk
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -450,8 +457,11 @@ jobs:
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Download HVO Roof.app
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -571,8 +581,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       # tmux, and bash 4 or later for the scripts (the Mac's own bash is 3.2).
       - name: Install tmux and bash

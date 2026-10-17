@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for build/check-base-images.sh (the Dockerfiles' base images pinned by tag and digest). It runs against
-# repositories made here, holding src/global.json and the two Dockerfiles, and its --registry check against a stand-in
+# repositories made here, holding src/global.json and the three Dockerfiles, and its --registry check against a stand-in
 # for docker, so no Docker or network is needed; and, without --registry, against this repository's own files. Requires
 # bash, python3, jq and sha256sum or shasum.
 # Run: tests/versioning/base-image-tests.sh
@@ -12,6 +12,8 @@ SDK=mcr.microsoft.com/dotnet/sdk
 RUNTIME=mcr.microsoft.com/dotnet/aspnet
 RPI=src/HVO.RoofControllerV4.RPi/Dockerfile
 EMULATOR=src/HVO.RoofControllerV4.Emulator/Dockerfile
+DEV=.devcontainer/Dockerfile
+DEV_IMAGE=mcr.microsoft.com/devcontainers/dotnet
 
 PASSED=0
 FAILED=0
@@ -43,8 +45,9 @@ digest() {
   printf 'sha256:%s' "$(printf '%s' "$1" | sha256)"
 }
 
-SDK_REF="${SDK}:10.0.401@$(digest sdk)"
+SDK_REF="${SDK}:10.0.402@$(digest sdk)"
 RUNTIME_REF="${RUNTIME}:10.0.13@$(digest aspnet)"
+DEV_REF="${DEV_IMAGE}:2.3.2-10.0-noble@$(digest devcontainer)"
 
 # dockerfile <build image> <runtime image>: a Dockerfile shaped like the repository's, with a stage built on another.
 dockerfile() {
@@ -54,13 +57,14 @@ dockerfile() {
 }
 
 # repo <name> [<Pi build> <Pi runtime> <emulator build> <emulator runtime> [<global.json SDK>]]: a repository holding
-# src/global.json and the two Dockerfiles, by default with matching pins, and prints its path.
+# src/global.json and the three Dockerfiles, by default with matching pins, and prints its path.
 repo() {
   local dir="${WORK}/$1"
-  mkdir -p "${dir}/src/HVO.RoofControllerV4.RPi" "${dir}/src/HVO.RoofControllerV4.Emulator"
-  printf '{\n  "sdk": {\n    "version": "%s",\n    "rollForward": "patch"\n  }\n}\n' "${6-10.0.401}" > "${dir}/src/global.json"
+  mkdir -p "${dir}/src/HVO.RoofControllerV4.RPi" "${dir}/src/HVO.RoofControllerV4.Emulator" "${dir}/.devcontainer"
+  printf '{\n  "sdk": {\n    "version": "%s",\n    "rollForward": "patch"\n  }\n}\n' "${6-10.0.402}" > "${dir}/src/global.json"
   dockerfile "${2-${SDK_REF}}" "${3-${RUNTIME_REF}}" > "${dir}/${RPI}"
   dockerfile "${4-${SDK_REF}}" "${5-${RUNTIME_REF}}" > "${dir}/${EMULATOR}"
+  printf 'FROM %s\n' "${DEV_REF}" > "${dir}/${DEV}"
   echo "${dir}"
 }
 
@@ -70,11 +74,27 @@ check "the repository's own Dockerfiles" 0 "and runtime image ${RUNTIME}:" "${SC
 
 r=$(repo good)
 check "pinned and matching" 0 \
-  "Build image ${SDK_REF} (src/global.json: 10.0.401) and runtime image ${RUNTIME_REF}, in ${RPI} ${EMULATOR}" \
+  "Build image ${SDK_REF} (src/global.json: 10.0.402) and runtime image ${RUNTIME_REF}, in ${RPI} ${EMULATOR} ${DEV}" \
   "${SCRIPT}" "${r}"
 
-r=$(repo sdk-tag-only "${SDK}:10.0.401")
-check "build image by tag only" 1 "${RPI}:2: FROM ${SDK}:10.0.401 is not pinned by tag and digest" "${SCRIPT}" "${r}"
+r=$(repo dev-tag-only)
+printf 'FROM %s:2.3.2-10.0-noble\n' "${DEV_IMAGE}" > "${r}/${DEV}"
+check "dev container requires a digest" 1 "${DEV}:1: FROM ${DEV_IMAGE}:2.3.2-10.0-noble is not pinned" "${SCRIPT}" "${r}"
+r=$(repo dev-digest-only)
+printf 'FROM %s@%s\n' "${DEV_IMAGE}" "$(digest devcontainer)" > "${r}/${DEV}"
+check "dev container requires a tag" 1 "${DEV}:1: FROM ${DEV_IMAGE}@" "${SCRIPT}" "${r}"
+r=$(repo dev-missing)
+rm "${r}/${DEV}"
+check "dev Dockerfile is required" 1 "${DEV}: was not found" "${SCRIPT}" "${r}"
+r=$(repo dev-wrong-base)
+printf 'FROM scratch\n' > "${r}/${DEV}"
+check "dev container base is required" 1 "${DEV}: has no FROM ${DEV_IMAGE} line" "${SCRIPT}" "${r}"
+r=$(repo dev-stage)
+printf 'FROM %s AS dev\nFROM DEV AS final\n' "${DEV_REF}" > "${r}/${DEV}"
+check "dev container needs no product runtime stage" 0 "Build image ${SDK_REF}" "${SCRIPT}" "${r}"
+
+r=$(repo sdk-tag-only "${SDK}:10.0.402")
+check "build image by tag only" 1 "${RPI}:2: FROM ${SDK}:10.0.402 is not pinned by tag and digest" "${SCRIPT}" "${r}"
 r=$(repo runtime-tag-only "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME}:10.0.13")
 check "runtime image by tag only" 1 "${EMULATOR}:4: FROM ${RUNTIME}:10.0.13 is not pinned by tag and digest" \
   "${SCRIPT}" "${r}"
@@ -89,11 +109,24 @@ r=$(repo short-digest "${SDK_REF}" "${RUNTIME}:10.0.13@${short%?}")
 check "digest too short" 1 "is not pinned by tag and digest" "${SCRIPT}" "${r}"
 r=$(repo floating "${SDK}:10.0@$(digest sdk)" "${RUNTIME_REF}" "${SDK}:10.0@$(digest sdk)")
 check "build image not global.json's" 1 \
-  "${RPI}:2: the build image ${SDK}:10.0 does not match src/global.json (10.0.401); update both in the same change" \
+  "${RPI}:2: the build image ${SDK}:10.0 does not satisfy src/global.json (10.0.402, rollForward: patch)" \
   "${SCRIPT}" "${r}"
-r=$(repo other-sdk-pin "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF}" 10.0.402)
-check "global.json moved alone" 1 "${EMULATOR}:2: the build image ${SDK}:10.0.401 does not match src/global.json (10.0.402)" \
+r=$(repo other-sdk-pin "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF}" 10.0.403)
+check "global.json moved alone" 1 "${EMULATOR}:2: the build image ${SDK}:10.0.402 does not satisfy src/global.json (10.0.403, rollForward: patch)" \
   "${SCRIPT}" "${r}"
+
+# global.json can keep the dev container's minimum while product builds use a later patched SDK.
+PATCH_REF="${SDK}:10.0.403@$(digest sdk-next-patch)"
+r=$(repo sdk-patch "${PATCH_REF}" "${RUNTIME_REF}" "${PATCH_REF}" "${RUNTIME_REF}")
+check "later patch in the same feature band" 0 "Build image ${PATCH_REF}" "${SCRIPT}" "${r}"
+sed 's/"patch"/"disable"/' "${r}/src/global.json" > "${r}/src/global.json.tmp"
+mv "${r}/src/global.json.tmp" "${r}/src/global.json"
+check "disabled roll-forward requires an exact SDK" 1 "rollForward: disable" "${SCRIPT}" "${r}"
+for version in 10.0.401 10.0.500 11.0.402 10.0.403-preview.1; do
+  ref="${SDK}:${version}@$(digest invalid-sdk)"
+  r=$(repo "sdk-policy-${version}" "${ref}" "${RUNTIME_REF}" "${ref}" "${RUNTIME_REF}")
+  check "reject incompatible SDK ${version}" 1 "does not satisfy src/global.json" "${SCRIPT}" "${r}"
+done
 
 # The two Dockerfiles: the same build image and the same runtime image, tag and digest.
 r=$(repo runtime-tags "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME}:10.0.12@$(digest aspnet-12)")
@@ -103,8 +136,8 @@ check "runtime tags differ" 1 \
 r=$(repo runtime-digests "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME}:10.0.13@$(digest aspnet-rebuilt)")
 check "runtime digests differ" 1 "the runtime image ${RUNTIME}:10.0.13@$(digest aspnet-rebuilt) differs from ${RUNTIME_REF}" \
   "${SCRIPT}" "${r}"
-r=$(repo sdk-digests "${SDK_REF}" "${RUNTIME_REF}" "${SDK}:10.0.401@$(digest sdk-rebuilt)")
-check "build image digests differ" 1 "${EMULATOR}:2: the build image ${SDK}:10.0.401@$(digest sdk-rebuilt) differs from ${SDK_REF}" \
+r=$(repo sdk-digests "${SDK_REF}" "${RUNTIME_REF}" "${SDK}:10.0.402@$(digest sdk-rebuilt)")
+check "build image digests differ" 1 "${EMULATOR}:2: the build image ${SDK}:10.0.402@$(digest sdk-rebuilt) differs from ${SDK_REF}" \
   "${SCRIPT}" "${r}"
 
 # Other images: pinned the same way, and they do not stand in for the runtime.
@@ -118,12 +151,12 @@ check "a registry port is not a tag" 1 "FROM registry.example:5000/aspnet@$(dige
 
 # Instructions in any case, a file without a final newline, and every problem reported.
 r=$(repo lower-case)
-printf 'from --platform=%s %s as build\nfrom %s as runtime\n' "\$BUILDPLATFORM" "${SDK}:10.0.401" "${RUNTIME_REF}" \
+printf 'from --platform=%s %s as build\nfrom %s as runtime\n' "\$BUILDPLATFORM" "${SDK}:10.0.402" "${RUNTIME_REF}" \
   > "${r}/${RPI}"
-check "lower-case from" 1 "${RPI}:1: FROM ${SDK}:10.0.401 is not pinned" "${SCRIPT}" "${r}"
+check "lower-case from" 1 "${RPI}:1: FROM ${SDK}:10.0.402 is not pinned" "${SCRIPT}" "${r}"
 printf 'FROM %s AS build\nFROM %s' "${SDK_REF}" "${RUNTIME}:10.0.13" > "${r}/${RPI}"
 check "no final newline" 1 "${RPI}:2: FROM ${RUNTIME}:10.0.13 is not pinned" "${SCRIPT}" "${r}"
-r=$(repo two-problems "${SDK}:10.0.401" "${RUNTIME}:10.0.13")
+r=$(repo two-problems "${SDK}:10.0.402" "${RUNTIME}:10.0.13")
 check "every problem reported" 1 "2 problem(s) with the base images" "${SCRIPT}" "${r}"
 check "annotations in GitHub Actions" 1 \
   "::error file=${RPI},line=4::FROM ${RUNTIME}:10.0.13 is not pinned by tag and digest" \
@@ -224,6 +257,7 @@ cat > "${WORK}/bin/docker" <<'FAKE'
 case "$5" in
   */sdk:*) cat "${FAKE_SDK_INDEX}" ;;
   */aspnet:*) cat "${FAKE_RUNTIME_INDEX}" ;;
+  */devcontainers/dotnet:*) cat "${FAKE_DEV_INDEX:-${FAKE_RUNTIME_INDEX}}" ;;
   *) cat "${FAKE_OTHER_INDEX:-${FAKE_RUNTIME_INDEX}}" ;;
 esac
 FAKE
@@ -303,11 +337,22 @@ printf 'FROM %s AS tools\n' "${TOOLS_REF}" >> "${r}/${EMULATOR}"
 check "third external index accepted" 0 "${TOOLS_REF}: an index holding linux/amd64 linux/arm64" \
   env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_OTHER_INDEX="${all}" \
   FAKE_DOCKER_LOG="${WORK}/registry-calls" "${SCRIPT}" --registry "${r}"
-check "each unique external base inspected once" 0 "" test "$(wc -l < "${WORK}/registry-calls")" -eq 3
+check "each unique external base inspected once" 0 "" test "$(wc -l < "${WORK}/registry-calls")" -eq 4
 r=$(repo case-insensitive-stages)
 printf 'FROM RUNTIME AS Another\nFROM aNoThEr AS final-again\nFROM scratch AS Empty\nFROM EMPTY AS empty-again\n' >> "${r}/${RPI}"
 check "earlier stage names match case-insensitively" 0 "${RUNTIME_REF}: an index holding linux/amd64 linux/arm64" \
   env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_OTHER_INDEX="${single}" \
+  "${SCRIPT}" --registry "${r}"
+
+r=$(repo dev-registry)
+check "dev container index is inspected" 0 "${DEV_REF}: an index holding linux/amd64 linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_DEV_INDEX="${oci}" \
+  "${SCRIPT}" --registry "${r}"
+check "dev container single-platform base is rejected" 1 "${DEV}:1: ${DEV_REF} is not a schemaVersion 2" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_DEV_INDEX="${single}" \
+  "${SCRIPT}" --registry "${r}"
+check "dev container index must include arm64" 1 "${DEV}:1: ${DEV_REF} is not an index holding linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_DEV_INDEX="${amd64}" \
   "${SCRIPT}" --registry "${r}"
 
 # The registry is read only when the files are right.

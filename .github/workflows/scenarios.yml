@@ -67,8 +67,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Build
         run: |
@@ -118,8 +121,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Build
         run: |
@@ -201,8 +207,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Install by install.sh, again, hvo-roof, motion, change, renew, names, back up, restore, upgrade, roll back
         run: tests/installer/rig-scenario.sh
@@ -256,8 +265,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Build
         run: |
@@ -329,8 +341,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          global-json-file: src/global.json
+          dotnet-version: '10.0.402'
 
       - name: Build
         run: |
