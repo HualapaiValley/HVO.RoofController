@@ -11,10 +11,15 @@ namespace HVO.RoofControllerV4.RPi.Settings;
 /// </summary>
 internal sealed class RoofSettingsFileSource : IConfigurationSource
 {
-    public RoofSettingsFileSource(RoofSettingsFileKind kind, string? path)
+    /// <param name="leftOut">
+    /// Null (the controller): a file that cannot be used throws <see cref="RoofSettingsFileException"/>. Otherwise (the
+    /// relay-off helper only) such a file is left out, serving nothing, and why is added here.
+    /// </param>
+    public RoofSettingsFileSource(RoofSettingsFileKind kind, string? path, ICollection<string>? leftOut = null)
     {
         Kind = kind;
         Path = string.IsNullOrWhiteSpace(path) ? null : path.Trim();
+        LeftOut = leftOut;
     }
 
     public RoofSettingsFileKind Kind { get; }
@@ -22,7 +27,10 @@ internal sealed class RoofSettingsFileSource : IConfigurationSource
     /// <summary>The file, or null when changes are held in memory only.</summary>
     public string? Path { get; }
 
-    public IConfigurationProvider Build(IConfigurationBuilder builder) => new RoofSettingsFileProvider(Kind, Path);
+    /// <summary>Where a file left out is reported, or null when one that cannot be used throws.</summary>
+    public ICollection<string>? LeftOut { get; }
+
+    public IConfigurationProvider Build(IConfigurationBuilder builder) => new RoofSettingsFileProvider(Kind, Path, LeftOut);
 }
 
 /// <summary>
@@ -34,8 +42,11 @@ internal sealed class RoofSettingsFileProvider : ConfigurationProvider
 {
     private bool _loaded;
 
-    public RoofSettingsFileProvider(RoofSettingsFileKind kind, string? path)
+    private readonly ICollection<string>? _leftOut;
+
+    public RoofSettingsFileProvider(RoofSettingsFileKind kind, string? path, ICollection<string>? leftOut = null)
     {
+        _leftOut = leftOut;
         Kind = kind;
         Path = path;
     }
@@ -61,7 +72,18 @@ internal sealed class RoofSettingsFileProvider : ConfigurationProvider
 
         if (Path is not null)
         {
-            SetDocument(RoofSettingsFile.Read(Path, Kind));
+            try
+            {
+                SetDocument(RoofSettingsFile.Read(Path, Kind));
+            }
+            catch (RoofSettingsFileException ex) when (_leftOut is not null)
+            {
+                // The relay-off helper: the file serves nothing. Each rebuild of the configuration loads it again.
+                if (!_leftOut.Contains(ex.Message))
+                {
+                    _leftOut.Add(ex.Message);
+                }
+            }
         }
 
         _loaded = true;

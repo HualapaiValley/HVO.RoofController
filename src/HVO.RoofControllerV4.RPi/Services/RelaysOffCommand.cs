@@ -2,7 +2,6 @@ using System.Diagnostics;
 using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
-using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -20,10 +19,11 @@ namespace HVO.RoofControllerV4.RPi.Services;
 /// <para>
 /// It reaches the HAT as the controller does: <see cref="RoofHatConnection"/> chooses the HAT emulator (the
 /// <c>HatEmulator</c> settings) or the Pi's I2C bus, at the HAT library's default bus and address, which the controller
-/// uses too (<c>Program.ConfigureServices</c>). It needs nothing else from the controller's settings and does not validate
-/// them, so it works when the controller cannot start because of them. When the settings cannot be read at all (a file
-/// that is not valid JSON), the HAT's are read from the environment, the command line and the secrets directory, where
-/// the deploy script and Compose put them.
+/// uses too (<c>Program.ConfigureServices</c>). The configuration and the environment are the ones the controller's own
+/// host builder makes (<c>Program.RunRelaysOff</c>). It needs nothing else from the controller's settings and does not
+/// validate them, so it works when the controller cannot start because of them; a settings file of the API's that the
+/// controller cannot use is left out alone, as it never selects the HAT. When anything else cannot be read, the
+/// controller's HAT cannot be identified, and nothing is written.
 /// </para>
 /// <para>
 /// One write of the relay register (register 0) turns all four relays off in a single I2C transaction: the write the
@@ -122,31 +122,6 @@ public static class RelaysOffCommand
         }
     }
 
-    /// <summary>
-    /// The settings the HAT's connection needs when the controller's cannot be read: the environment variables, then
-    /// <paramref name="args"/>, then the files in <paramref name="secretsDirectory"/>, in the controller's order (the
-    /// secrets directory last). The environment's name is the controller's: <c>--environment</c>, then
-    /// <c>ASPNETCORE_ENVIRONMENT</c>, then <c>DOTNET_ENVIRONMENT</c>, then Production. A secrets directory that cannot be
-    /// read is left out.
-    /// </summary>
-    internal static (IConfigurationRoot Configuration, IHostEnvironment Environment) EnvironmentSettings(string[] args, string secretsDirectory)
-    {
-        ArgumentNullException.ThrowIfNull(args);
-        IConfigurationRoot configuration;
-        try
-        {
-            configuration = new ConfigurationBuilder().AddEnvironmentVariables().AddCommandLine(args)
-                .AddKeyPerFile(secretsDirectory, optional: true).Build();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            configuration = new ConfigurationBuilder().AddEnvironmentVariables().AddCommandLine(args).Build();
-        }
-
-        var name = configuration["environment"] ?? configuration["ASPNETCORE_ENVIRONMENT"] ?? configuration["DOTNET_ENVIRONMENT"];
-        return (configuration, new SettingsEnvironment(string.IsNullOrWhiteSpace(name) ? Environments.Production : name));
-    }
-
     /// <summary>Writes why the relays were not verified off and returns <see cref="NotVerifiedExitCode"/>.</summary>
     internal static int Fail(TextWriter output, string reason)
     {
@@ -157,16 +132,4 @@ public static class RelaysOffCommand
     // The type and message: the HAT library, the socket client and the configuration loaders name the device, the
     // endpoint or the file, never a setting's value.
     private static string Describe(Exception? error) => error is null ? "no error given" : $"{error.GetType().Name}: {error.Message}";
-
-    /// <summary>The environment's name alone: all <see cref="RoofHatConnection"/> asks of it.</summary>
-    private sealed class SettingsEnvironment(string name) : IHostEnvironment
-    {
-        public string EnvironmentName { get; set; } = name;
-
-        public string ApplicationName { get; set; } = typeof(RelaysOffCommand).Assembly.GetName().Name ?? string.Empty;
-
-        public string ContentRootPath { get; set; } = Directory.GetCurrentDirectory();
-
-        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
-    }
 }

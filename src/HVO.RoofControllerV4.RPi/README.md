@@ -47,8 +47,10 @@ starting the host or touching the HAT.
 In the container, the supervisor runs the image with `--relays-off` whenever the controller is not
 running: it turns every relay off through the controller's HAT access and verifies the register,
 without the controller's settings checks, and exits 0 only when the register reads back all off
-([docs/deployment.md](../../docs/deployment.md#the-relays-when-the-controller-exits)). Never run it
-while a controller drives the HAT: it would stop that controller's move.
+([docs/deployment.md](../../docs/deployment.md#the-relays-when-the-controller-exits)). It reads the
+configuration with the controller's own host builder; when a source other than a settings file of
+the API's cannot be read, it cannot tell which HAT the controller uses, and writes nothing. Never run
+it while a controller drives the HAT: it would stop that controller's move.
 
 ## API testing with REST Client
 - Install the VS Code REST Client extension (`humao.rest-client`).

@@ -9,7 +9,9 @@ using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
 using HVO.RoofControllerV4.Simulation.Emulator;
 using HVO.RoofControllerV4.Simulation.Hat;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Services;
 
@@ -119,21 +121,94 @@ public sealed class RelaysOffCommandTests
     }
 
     [TestMethod]
-    public void SettingsThatCannotBeRead_LeaveTheHatsSettingsToTheEnvironmentTheCommandLineAndTheSecrets()
+    [DataRow("appsettings.json")]
+    [DataRow("appsettings.Production.json")]
+    public void AShippedSettingsFileThatCannotBeRead_LeavesTheHatUnidentified_AndNothingIsWritten(string file)
     {
-        // A shipped settings file that is not JSON stops CreateBuilder itself. The emulator's port comes from the secrets
-        // directory here, its other settings from the command line.
-        File.WriteAllText(Path.Combine(_contentRoot, "appsettings.json"), "{ \"HatEmulator\": { \"Port\": ");
-        File.WriteAllText(Path.Combine(_secrets, "HatEmulator__Port"), _server.LocalEndPoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        // A settings file the API does not manage can select the HAT, so without it the controller's HAT is not known:
+        // nothing is written, not even to the emulator the command line names, rather than to a HAT it may not use.
+        File.WriteAllText(Path.Combine(_contentRoot, file), "{ \"HatEmulator\": { \"Port\": ");
 
-        var (exitCode, output) = RunRelaysOff(
-            "--HatEmulator:Enabled", "true", "--HatEmulator:Host", "127.0.0.1", "--HatEmulator:AllowOutsideDevelopment", "true");
+        var (exitCode, output) = RunRelaysOff();
+
+        exitCode.Should().Be(RelaysOffCommand.NotVerifiedExitCode, output);
+        output.Should().Contain(
+            "[relays-off] FAILED: the controller's HAT could not be identified, so nothing was written: its settings could not be read (InvalidDataException: ");
+        _plant.Hat.RelayRegister.Should().Be(OpeningRelays);
+        _server.AcceptedConnections.Should().Be(0);
+    }
+
+    [TestMethod]
+    [DataRow("settings", "{ \"RoofControllerOptionsV4\": { \"SafetyWatchdogTimeout\": ", "is not valid JSON")]
+    [DataRow("secrets", """{ "RoofControllerOptionsV4": { "SafetyWatchdogTimeout": "00:03:00" } }""", "which is not a secret setting")]
+    public void AnApiSettingsFileThatCannotBeUsed_IsLeftOutAlone_AndTheHatTheOtherFilesSelectIsKept(string kind, string content, string problem)
+    {
+        // #139 review F2: the emulator is selected by a settings file of the deployment's (as appsettings.Development.json
+        // selects it in Development), not by the command line. Leaving out the file the API manages, which cannot select the
+        // HAT, must not lose that selection and turn to the I2C bus.
+        File.WriteAllText(Path.Combine(_contentRoot, "appsettings.Production.json"), EmulatorSettingsJson(allowOutsideDevelopment: true));
+        var arguments = SettingsFileArguments(WriteSettingsFile(kind == "settings" ? content : "{}"));
+        if (kind == "secrets")
+        {
+            File.WriteAllText(arguments[3], content);
+        }
+
+        var (exitCode, output) = Run([RelaysOffCommand.CommandLineSwitch, "--contentRoot", _contentRoot, "--environment", "Production", .. arguments]);
 
         exitCode.Should().Be(RelaysOffCommand.VerifiedExitCode, output);
         _plant.Hat.RelayRegister.Should().Be(0);
-        output.Should().Contain("[relays-off] The controller's settings could not be read (InvalidDataException: ")
-            .And.Contain("the HAT's settings are taken from the environment, the command line and the secrets directory.")
+        output.Should().Contain("[relays-off] Left out, as the controller cannot use it: ").And.Contain(problem)
             .And.Contain($"Every relay is off on the HAT emulator at 127.0.0.1:{_server.LocalEndPoint.Port}");
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    [DataRow("Development", "Production")]
+    [DataRow("Production", "Development")]
+    public void TheEnvironment_IsTheOneTheControllersHostBuilderResolves_WithConflictingVariables(string dotnetEnvironment, string aspNetCoreEnvironment)
+    {
+        // #139 review F3. Emulator mode without consent outside Development is accepted only in Development, so whether the
+        // relays go off shows the environment used. A settings file the controller cannot use is there too: the helper
+        // must not resolve the environment another way then. Serial: it sets the process's environment.
+        var dotnetBefore = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        var aspNetCoreBefore = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", dotnetEnvironment);
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", aspNetCoreEnvironment);
+        try
+        {
+            // What the controller's own host builder makes of the two.
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                Args = ["--contentRoot", _contentRoot, "--hostBuilder:reloadConfigOnChange=false"]
+            });
+            var controllers = builder.Environment.EnvironmentName;
+            ((IDisposable)builder.Configuration).Dispose();
+            var arguments = SettingsFileArguments(WriteSettingsFile("{ \"RoofControllerOptionsV4\": "));
+
+            var (exitCode, output) = Run(
+            [
+                RelaysOffCommand.CommandLineSwitch, "--contentRoot", _contentRoot,
+                "--HatEmulator:Enabled", "true", "--HatEmulator:Host", "127.0.0.1",
+                "--HatEmulator:Port", _server.LocalEndPoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), .. arguments
+            ]);
+
+            if (controllers == Environments.Development)
+            {
+                exitCode.Should().Be(RelaysOffCommand.VerifiedExitCode, output);
+                _plant.Hat.RelayRegister.Should().Be(0);
+            }
+            else
+            {
+                exitCode.Should().Be(RelaysOffCommand.NotVerifiedExitCode, output);
+                output.Should().Contain($"HAT emulator mode (HatEmulator:Enabled) is refused in the {controllers} environment.");
+                _plant.Hat.RelayRegister.Should().Be(OpeningRelays);
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", dotnetBefore);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", aspNetCoreBefore);
+        }
     }
 
     [TestMethod]
@@ -145,7 +220,7 @@ public sealed class RelaysOffCommandTests
 
         exitCode.Should().Be(RelaysOffCommand.VerifiedExitCode, output);
         _plant.Hat.RelayRegister.Should().Be(0);
-        output.Should().Contain("[relays-off] The controller's settings could not be read (RoofSettingsFileException: ");
+        output.Should().Contain($"[relays-off] Left out, as the controller cannot use it: The settings file '{settingsPath}' is not valid JSON");
     }
 
     [TestMethod]
@@ -241,18 +316,10 @@ public sealed class RelaysOffCommandTests
         output.ToString().Should().Contain("[relays-off] FAILED: I2C bus 250 could not be opened, so no HAT was written");
     }
 
-    [TestMethod]
-    public void TheEnvironmentSettings_UseTheControllersOrderAndEnvironmentName()
-    {
-        File.WriteAllText(Path.Combine(_secrets, "HatEmulator__Port"), "6001");
-
-        var (configuration, environment) = RelaysOffCommand.EnvironmentSettings(["--HatEmulator:Port", "6000", "--environment", "Staging"], _secrets);
-
-        configuration["HatEmulator:Port"].Should().Be("6001", "the secrets directory is the controller's last source");
-        environment.EnvironmentName.Should().Be("Staging");
-        RelaysOffCommand.EnvironmentSettings([], Path.Combine(_secrets, "absent")).Environment.EnvironmentName
-            .Should().BeOneOf(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production");
-    }
+    private string EmulatorSettingsJson(bool allowOutsideDevelopment)
+        => "{ \"HatEmulator\": { \"Enabled\": true, \"Host\": \"127.0.0.1\", \"Port\": "
+           + _server.LocalEndPoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)
+           + (allowOutsideDevelopment ? ", \"AllowOutsideDevelopment\": true" : string.Empty) + " } }";
 
     private string WriteSettingsFile(string content)
     {

@@ -129,11 +129,14 @@ public class Program
     }
 
     /// <summary>
-    /// Runs <see cref="RelaysOffCommand"/> with the settings the controller would load from <paramref name="args"/>
-    /// (without <see cref="RelaysOffCommand.CommandLineSwitch"/>) and <paramref name="secretsDirectory"/>, or, when those
-    /// cannot be read, with the environment, the command line and the secrets directory alone. Writes what it did to
-    /// <paramref name="output"/> and returns the exit code: <see cref="RelaysOffCommand.VerifiedExitCode"/> only when the
-    /// relay register read back with every relay off.
+    /// Runs <see cref="RelaysOffCommand"/> with the configuration and the environment the controller's own host builder
+    /// makes from <paramref name="args"/> (without <see cref="RelaysOffCommand.CommandLineSwitch"/>) and
+    /// <paramref name="secretsDirectory"/>, so it reaches the HAT the controller reaches. The one difference: a settings
+    /// file of the API's (the settings file or the managed secrets file) that the controller cannot use is left out
+    /// alone; those files hold only catalogue settings and never select the HAT. When anything else cannot be read (a
+    /// shipped or environment settings file, the secrets directory), the controller's HAT cannot be identified, and
+    /// nothing is written. Writes what it did to <paramref name="output"/> and returns the exit code:
+    /// <see cref="RelaysOffCommand.VerifiedExitCode"/> only when the relay register read back with every relay off.
     /// </summary>
     internal static int RunRelaysOff(string[] args, string secretsDirectory, TextWriter output)
     {
@@ -143,29 +146,30 @@ public class Program
         // The switch is not a setting (see RunValidation), and a configuration read once needs no file watchers.
         var settings = args.Where(arg => arg != RelaysOffCommand.CommandLineSwitch)
             .Append("--hostBuilder:reloadConfigOnChange=false").ToArray();
+        var leftOut = new List<string>();
         ConfigurationManager? configuration = null;
-        IConfigurationRoot? fallback = null;
         try
         {
-            IConfiguration source;
-            IHostEnvironment environment;
+            WebApplicationBuilder builder;
             try
             {
-                var builder = CreateBuilder(settings, secretsDirectory);
+                builder = CreateBuilder(settings, secretsDirectory, leftOut);
                 configuration = builder.Configuration;
-                (source, environment) = (configuration, builder.Environment);
             }
             catch (Exception ex)
             {
-                // The controller cannot read them either, so it did not start; one before it may still have left the relays on.
-                output.WriteLine($"{RelaysOffCommand.Prefix} The controller's settings could not be read ({ex.GetType().Name}: {ex.Message}); " +
-                    "the HAT's settings are taken from the environment, the command line and the secrets directory.");
-                (fallback, environment) = RelaysOffCommand.EnvironmentSettings(settings, secretsDirectory);
-                source = fallback;
+                // Never a guess: with a source missing, the HAT the rest selects may not be the controller's.
+                return RelaysOffCommand.Fail(output,
+                    $"the controller's HAT could not be identified, so nothing was written: its settings could not be read ({ex.GetType().Name}: {ex.Message})");
             }
 
-            ApplyHardwareDetectionOverrides(source);
-            return RelaysOffCommand.Run(source, environment, output);
+            foreach (var problem in leftOut)
+            {
+                output.WriteLine($"{RelaysOffCommand.Prefix} Left out, as the controller cannot use it: {problem}");
+            }
+
+            ApplyHardwareDetectionOverrides(configuration);
+            return RelaysOffCommand.Run(configuration, builder.Environment, output);
         }
         catch (Exception ex)
         {
@@ -174,11 +178,14 @@ public class Program
         finally
         {
             configuration?.Dispose();
-            (fallback as IDisposable)?.Dispose();
         }
     }
 
-    private static WebApplicationBuilder CreateBuilder(string[] args, string secretsDirectory)
+    /// <param name="leftOutSettingsFiles">
+    /// Null (the controller, the deployment check): a settings file of the API's that cannot be used stops the start.
+    /// Otherwise (the relay-off helper) such a file is left out alone, and why is added here.
+    /// </param>
+    private static WebApplicationBuilder CreateBuilder(string[] args, string secretsDirectory, ICollection<string>? leftOutSettingsFiles = null)
     {
         var builder = WebApplication.CreateBuilder(args);
 
@@ -188,7 +195,7 @@ public class Program
 
         // The settings changed through the API (appsettings.Local.json) and the managed secrets file, above the shipped
         // appsettings files and below the user secrets, environment, command line and secrets directory.
-        builder.Configuration.AddRoofSettingsFiles(builder.Environment.EnvironmentName, builder.Environment.ContentRootPath);
+        builder.Configuration.AddRoofSettingsFiles(builder.Environment.EnvironmentName, builder.Environment.ContentRootPath, leftOutSettingsFiles);
         return builder;
     }
 
