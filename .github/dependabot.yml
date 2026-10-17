@@ -12,12 +12,15 @@ updates:
     schedule:
       interval: "weekly"
 
-  # Pi image and HAT emulator image base images (mcr.microsoft.com/dotnet/sdk and aspnet).
-  # The emulator's aspnet tag must equal the Pi image's ("Emulator image" workflow), so each
-  # image is bumped in both Dockerfiles in one PR (group-by: dependency-name).
-  # The sdk tag must match src/global.json: a PR that bumps the SDK image must update
-  # src/global.json in the same PR. The "Pi image" and "Emulator image" workflows fail until
-  # they agree.
+  # Pi image and HAT emulator image base images (mcr.microsoft.com/dotnet/sdk and aspnet), each
+  # pinned by tag and by the digest of its multi-platform index (tag@sha256:...). Dependabot
+  # updates the tag and the digest together, and proposes a new digest alone when the same tag
+  # is republished (Microsoft rebuilds its images for base OS fixes).
+  # Both Dockerfiles must use the same images, tag and digest (build/check-base-images.sh, in
+  # the "Pi image" and "Emulator image" workflows), so each image is bumped in both Dockerfiles
+  # in one PR (group-by: dependency-name).
+  # The sdk tag must match src/global.json: a PR that bumps the SDK image's tag must update
+  # src/global.json in the same PR. The image workflows fail until they agree.
   - package-ecosystem: "docker"
     directories:
       - "/src/HVO.RoofControllerV4.RPi"

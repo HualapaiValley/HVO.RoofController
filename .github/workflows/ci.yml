@@ -657,6 +657,11 @@ jobs:
       - name: Version script tests
         run: tests/versioning/version-tests.sh
 
+      # build/check-base-images.sh (the Dockerfiles' base images pinned by tag and digest), against made-up repositories
+      # and a stand-in for docker, and against this repository's Dockerfiles. The image workflows run it with --registry.
+      - name: Base image pin tests
+        run: tests/versioning/base-image-tests.sh
+
       - name: Screenshot converter tests
         run: python3 -m unittest discover -s tests/cli -p 'test_*.py' -v
 
