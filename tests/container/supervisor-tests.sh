@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh, the container's supervisor of the controller and
 # the web UI, and for healthcheck.sh, the container's health check. Both processes are stand-ins (fake-process.sh), and so
-# are the controller's --relays-off (fake-relays-off), curl (fake-curl), install where a test needs it (fake-install) and,
-# for the tests that give the web UI its own user, setpriv (fake-setpriv), so no Docker, .NET, root or hardware is needed; the timings are shortened. They also check supervisor-state.sample.json, which the web
+# are the controller's --relays-off (fake-relays-off), curl (fake-curl), install and env where a test needs them
+# (fake-install, fake-env) and, for the tests that give the web UI its own user, setpriv (fake-setpriv), so no Docker, .NET, root or hardware is needed; the timings are shortened. They also check supervisor-state.sample.json, which the web
 # UI's and the deploy script's tests read, against the supervisor's own output. The container scenarios
 # (tests/emulator/deploy-scenarios.sh, group supervisor) run the real image.
 # Requires bash 5, jq and setsid.
@@ -1236,13 +1236,20 @@ relay_off_runs_at_least() {
   (( $(grep -c '^relays-off run$' "${FAKE_DIR}/events.log") >= $1 ))
 }
 
-# stop_and_expect_it_within <seconds>: SIGTERM to the supervisor; it must exit 0 within that many seconds of the signal,
-# start neither the controller nor the web UI after it, and turn the relays off once more after it, beginning and ending
-# in that time. Sets STOP_SECONDS.
+# stop_and_expect_it_within <seconds> [give up]: SIGTERM to the supervisor; it must exit 0 within that many seconds of
+# the signal, start neither the controller nor the web UI after it, and turn the relays off once more after it,
+# beginning and ending in that time. It is killed after [give up] seconds (60). Sets STOP_SECONDS.
 stop_and_expect_it_within() {
-  local bound=$1 signalled=${EPOCHREALTIME} late_starts final_run final_done
+  local signalled=${EPOCHREALTIME}
   kill -TERM "${SUPERVISOR_PID}"
-  wait_supervisor_exit 60
+  expect_the_stop_within "${signalled}" "$@"
+}
+
+# expect_the_stop_within <signalled> <seconds> [give up]: as stop_and_expect_it_within, for a SIGTERM sent at
+# <signalled> (EPOCHREALTIME) by someone else, a stand-in.
+expect_the_stop_within() {
+  local signalled=$1 bound=$2 give_up=${3:-60} late_starts final_run final_done
+  wait_supervisor_exit "${give_up}"
   STOP_SECONDS=$(awk -v a="${signalled}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.3f", b - a }')
   echo "    (the stop took ${STOP_SECONDS}s from SIGTERM)"
   expect_equal "exit status" "${EXIT_STATUS}" 0
@@ -1420,6 +1427,59 @@ test_a_web_ui_preparation_that_outlasts_its_time_is_killed_and_prepared_again() 
   rm -f "${FAKE_DIR}/install.delay"
   wait_until 10 "the web UI started once a preparation finished" started ui 1 || return
   expect_equal "controller starts" "$(event_count controller start)" 1
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The web UI's environment (#139 review F5): gathered by its preparation, so a stop abandons it and it cannot hold the
+# supervisor up; and nothing the supervisor does between its last stop check and a start can block.
+
+# start_supervisor_with_a_fake_env [NAME=value...]: start_supervisor, with a stand-in env (fake-env) on its PATH.
+start_supervisor_with_a_fake_env() {
+  mkdir -p "${WORK}/env-bin"
+  ln -sf "${TESTS_DIR}/fake-env" "${WORK}/env-bin/env"
+  start_supervisor "PATH=${WORK}/env-bin:${PATH}" "$@"
+}
+
+test_a_stop_while_the_web_uis_environment_is_gathered_starts_no_web_ui() {
+  # The reviewer's interleaving: the producer of the web UI's environment sends the supervisor SIGTERM as it starts, then
+  # gives the environment at once. Short times: 2 s for the controller, then 2 s for the relays.
+  touch "${FAKE_DIR}/env.signal"
+  start_supervisor_with_a_fake_env HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=2 HVO_SUPERVISOR_UI_STOP_SECONDS=1 \
+    HVO_SUPERVISOR_RELAYS_OFF_SECONDS=2
+  wait_until 10 "the web UI's environment gathered" grep -q '^env signal' "${FAKE_DIR}/events.log" || return
+  expect_the_stop_within "$(event_times env signal | head -n 1)" 4.5 10
+  expect_equal "web UI starts" "$(event_count ui start)" 0
+}
+
+test_a_stalled_web_ui_environment_neither_delays_the_stop_nor_starts_the_web_ui() {
+  # The producer of the environment stalls for 6 s. Short times: a controller that ignores SIGTERM gets its 2 s, then the
+  # relays 2 s, so the stop and its last relay-off must end within 4 s of the signal; and the producer is ended with it.
+  echo 6 >"${FAKE_DIR}/env.delay"
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor_with_a_fake_env HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=2 HVO_SUPERVISOR_UI_STOP_SECONDS=1 \
+    HVO_SUPERVISOR_RELAYS_OFF_SECONDS=2 HVO_SUPERVISOR_UI_PREPARE_SECONDS=30
+  wait_until 10 "the web UI's environment stalled" grep -q '^env stall' "${FAKE_DIR}/events.log" || return
+  sleep 0.5
+  stop_and_expect_it_within 4.5 12
+  expect_equal "web UI starts" "$(event_count ui start)" 0
+  local producer
+  producer=$(<"${FAKE_DIR}/env.pid")
+  ! kill -0 "${producer}" 2>/dev/null || fail_test "the stalled producer (pid ${producer}) still runs after the stop"
+}
+
+test_a_web_ui_environment_that_cannot_be_read_does_not_hold_up_the_supervisor() {
+  # Once the preparation has written the web UI's environment, a FIFO takes the file's place: opening it to read waits for
+  # a writer that never comes. Only the new web UI process may wait on it, never the supervisor, which must still stop in
+  # time (2 s for the controller, then 2 s for the relays) with its last relay-off.
+  touch "${FAKE_DIR}/install.fifo"
+  mkdir -p "${WORK}/install-bin"
+  ln -sf "${TESTS_DIR}/fake-install" "${WORK}/install-bin/install"
+  start_supervisor "PATH=${WORK}/install-bin:${PATH}" HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=2 \
+    HVO_SUPERVISOR_UI_STOP_SECONDS=1 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=2
+  wait_until 10 "the FIFO in place of the web UI's environment" grep -q '^install fifo' "${FAKE_DIR}/events.log" || return
+  sleep 1
+  stop_and_expect_it_within 4.5 12
+  expect_equal "web UI starts" "$(event_count ui start)" 0
 }
 
 test_invalid_settings_are_refused() {

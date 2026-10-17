@@ -4,7 +4,9 @@
 # /var/lib/hvo-roof-web. Every other call goes to the real install, found on PATH without this stand-in's directory.
 # With FAKE_DIR/install.delay, a call that makes a keys directory (its last argument ends in /keys) first takes that many
 # seconds, as on a slow or hung filesystem: it writes its pid to install.pid, and "install keys <pid>" and then
-# "install keys done" to events.log (and, with times, to times.log).
+# "install keys done" to events.log (and, with times, to times.log). With FAKE_DIR/install.fifo, that call first puts a
+# FIFO in place of the file the preparation writes the web UI's environment to (HVO_SUPERVISOR_RUN_DIR/web-settings), so
+# that opening it to read waits for a writer that never comes, and writes "install fifo" to events.log.
 set -uo pipefail
 
 printf '%s\n' "$*" >>"${FAKE_DIR}/install.log"
@@ -15,6 +17,12 @@ if [[ -f "${FAKE_DIR}/install.delay" && "${*: -1}" == */keys ]]; then
   sleep "$(<"${FAKE_DIR}/install.delay")"
   printf '%s install keys done\n' "${EPOCHREALTIME}" >>"${FAKE_DIR}/times.log"
   printf 'install keys done\n' >>"${FAKE_DIR}/events.log"
+fi
+if [[ -f "${FAKE_DIR}/install.fifo" && "${*: -1}" == */keys ]]; then
+  rm -f "${HVO_SUPERVISOR_RUN_DIR}/web-settings"
+  mkfifo "${HVO_SUPERVISOR_RUN_DIR}/web-settings"
+  printf '%s install fifo\n' "${EPOCHREALTIME}" >>"${FAKE_DIR}/times.log"
+  printf 'install fifo\n' >>"${FAKE_DIR}/events.log"
 fi
 case "${*: -1}" in
   /var/lib/hvo-roof-web | /var/lib/hvo-roof-web/*) exit 0 ;;

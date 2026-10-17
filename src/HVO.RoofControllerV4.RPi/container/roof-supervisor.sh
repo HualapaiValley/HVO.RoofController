@@ -30,11 +30,15 @@
 # - when the web UI exits: starts only the web UI again, with the same backoff, and never gives up. The controller is
 #   not touched.
 # - before each start of the web UI: prepares it (its copies of the certificate and the Stop key, its keys directory,
-#   and the check that it cannot read the controller's secrets) in a process of its own, in the background, which must
-#   finish within HVO_SUPERVISOR_UI_PREPARE_SECONDS or is killed (and tried again later, with the backoff). Nothing the
-#   preparation waits for (a slow or hung filesystem) holds up the supervisor: a controller that exits meanwhile has its
-#   relays turned off at once, a stop abandons the preparation, and the web UI starts only once it is done, when no stop
-#   has been asked for.
+#   the check that it cannot read the controller's secrets, and its whole environment) in a process of its own, in the
+#   background, which must finish within HVO_SUPERVISOR_UI_PREPARE_SECONDS or is killed (and tried again later, with
+#   the backoff). Nothing the preparation waits for (a slow or hung filesystem, a stalled environment) holds up the
+#   supervisor: a controller that exits meanwhile has its relays turned off at once, a stop abandons the preparation,
+#   and the web UI starts only once it is done, when no stop has been asked for.
+# - Nothing starts once a stop is asked for: the last thing the supervisor does before it starts the controller or the
+#   web UI is to check for a stop, with nothing that can wait in between, and the new process checks its copy of that
+#   flag again before it becomes the controller or the web UI. What the new web UI process reads (its environment) it
+#   reads itself, so that a read that waits holds up only that process, which a stop ends.
 # - on a forced restart: <run dir>/control/force-restart-controller appears (docker exec ... touch, or the web UI's
 #   ControllerForcedRestart) when the controller does not answer. The controller is killed (SIGKILL, as docker kill
 #   does), the relays are turned off, and it is started again at once, once they are verified off (otherwise it is
@@ -238,7 +242,8 @@ STOP_BY_US=0
 # The relay-off helper while it runs.
 RELAYS_OFF_PID=""
 # The web UI's preparation while it runs (start_ui): the pid of its timeout, which leads a process group of its own made
-# only of the preparation's processes, and the file the settings it prints are written to.
+# only of the preparation's processes, and the file it writes the web UI's whole environment to (ui_environment; root's,
+# mode 0600).
 UI_PREPARE_PID=""
 UI_SETTINGS_FILE="${RUN_DIR}/web-settings"
 # How the last process reap_within waited for ended (its exit status).
@@ -368,11 +373,11 @@ relays_retry_seconds() {
 # retry_relays_off then tries again. Once a stop is asked for, only the stop's own runs.
 de_energize_relays() {
   local reason=$1 seconds=${2:-} code=0 started elapsed_ms why delay signals
+  started=$(now_us)
   if [[ -z "${seconds}" ]]; then
     (( ! STOP_REQUESTED )) || return 1
     seconds=${RELAYS_OFF_SECONDS}
   fi
-  started=$(now_us)
   # In the background, so that a stop signal is handled at once (its trap notes when it came) while the helper runs on
   # to its end, within its time.
   (cd "${APP_DIR}" && exec timeout -s KILL "${seconds}" "${RELAYS_OFF_EXEC[@]}") &
@@ -464,16 +469,27 @@ retry_held_controller() {
   start_controller
 }
 
+# The controller's own process (start_controller starts it): ends at once if a stop was handled just before the fork
+# (its copy of STOP_REQUESTED), and becomes the controller, with a raised oom_score_adj.
+exec_controller() {
+  (( ! STOP_REQUESTED )) || exit 0
+  cd "${APP_DIR}" || exit 1
+  raise_oom_score_adj "${CONTROLLER_OOM_SCORE_RAISE}" "the controller"
+  exec "${CONTROLLER_EXEC[@]}"
+}
+
 start_controller() {
   # Nothing starts once a stop is asked for.
   (( ! STOP_REQUESTED )) || return 1
   # Never with the relays as something else left them: at the supervisor's start (a container killed during a move),
   # or after a try that failed.
   [[ "${RELAYS_STATE}" == off ]] || de_energize_relays "before the controller starts"
-  # A stop asked for while the relays were turned off: nothing starts after it.
+  # Held stopped unless they are verified off; but not for a stop asked for while they were turned off, which the check
+  # below ends.
+  (( STOP_REQUESTED )) || [[ "${RELAYS_STATE}" == off ]] || start_with_unverified_relays || return 1
+  # The last stop check, immediately before the fork: nothing runs between them (exec_controller checks again).
   (( ! STOP_REQUESTED )) || return 1
-  [[ "${RELAYS_STATE}" == off ]] || start_with_unverified_relays || return 1
-  (cd "${APP_DIR}" && raise_oom_score_adj "${CONTROLLER_OOM_SCORE_RAISE}" "the controller" && exec "${CONTROLLER_EXEC[@]}") &
+  exec_controller &
   PID[controller]=$!
   STARTED_AT[controller]=$(now_us)
   STARTS[controller]=$((STARTS[controller] + 1))
@@ -595,15 +611,42 @@ prepare_ui_data_protection() {
   printf 'RoofWeb__DataProtectionPath=%s\n' "${path}"
 }
 
-# Starts the web UI, in two steps. First its preparation (check_secrets_are_private, prepare_ui_certificate,
-# prepare_ui_stop_key and prepare_ui_data_protection), which this script runs itself (--prepare-ui) as a process of its
-# own, in the background, under timeout: when HVO_SUPERVISOR_UI_PREPARE_SECONDS run out, timeout kills its process group,
-# which holds only the preparation's processes. The supervisor never waits for it, so nothing it waits for (a slow or hung
-# filesystem) holds up the relays, the controller or a stop: tick starts the web UI (launch_ui) once it has ended, and a
-# stop abandons it (stop_ui_preparation). The settings it prints (paths, no secret) go to a file only root can read.
+# The web UI's environment, each NAME=value ended by a NUL: only its own settings and a few general variables (never the
+# controller's keys or settings), the settings for its copies and its keys directory (prepare_ui_certificate,
+# prepare_ui_stop_key, prepare_ui_data_protection), where the supervisor's state and control directory are, and its HOME
+# (and USER). The preparation writes it, so that reading the container's environment is bounded and abandoned at a stop
+# like the rest of it (#139 review F5); the web UI's own process reads it (exec_ui).
+ui_environment() {
+  local entry name
+  local -a ui_env=("PATH=${PATH}" "TZ=${TZ:-UTC}")
+  while IFS= read -r -d '' entry; do
+    name=${entry%%=*}
+    case "${name}" in
+      RoofWeb__Certificate__Path|RoofWeb__Certificate__PasswordFile|RoofWeb__StopKeyFile|RoofWeb__DataProtectionPath) ;;
+      RoofWeb__*|DOTNET_*|ASPNETCORE_ENVIRONMENT|LANG|LC_*) ui_env+=("${entry}") ;;
+    esac
+  done < <(env -0)
+  while IFS= read -r entry; do
+    [[ -n "${entry}" ]] && ui_env+=("${entry}")
+  done < <(prepare_ui_certificate; prepare_ui_stop_key; prepare_ui_data_protection)
+  ui_env+=("RoofWeb__SupervisorStatePath=${STATE_FILE}" "RoofWeb__SupervisorControlPath=${CONTROL_DIR}")
+  if [[ -n "${UI_USER}" ]]; then
+    ui_env+=("HOME=${UI_HOME:-/tmp}" "USER=${UI_USER}")
+  else
+    ui_env+=("HOME=${HOME:-/tmp}")
+  fi
+  printf '%s\0' "${ui_env[@]}"
+}
+
+# Starts the web UI, in two steps. First its preparation (check_secrets_are_private and ui_environment), which this
+# script runs itself (--prepare-ui) as a process of its own, in the background, under timeout: when
+# HVO_SUPERVISOR_UI_PREPARE_SECONDS run out, timeout kills its process group, which holds only the preparation's
+# processes. The supervisor never waits for it, so nothing it waits for (a slow or hung filesystem, a stalled
+# environment) holds up the relays, the controller or a stop: tick starts the web UI (launch_ui) once it has ended, and
+# a stop abandons it (stop_ui_preparation). It writes the web UI's environment to a file only root can read.
 start_ui() {
   (( ! STOP_REQUESTED )) || return 1
-  (umask 077; exec timeout -s KILL "${UI_PREPARE_SECONDS}" "${BASH}" "${SELF}" --prepare-ui >"${UI_SETTINGS_FILE}") &
+  (umask 077; exec timeout -s KILL "${UI_PREPARE_SECONDS}" "${BASH}" "${SELF}" --prepare-ui) &
   UI_PREPARE_PID=$!
   STATE[ui]=starting
   write_state
@@ -622,11 +665,29 @@ stop_ui_preparation() {
   kill -KILL "${UI_PREPARE_PID}" 2>/dev/null
 }
 
-# The web UI's preparation has ended: starts the web UI with the settings it printed. A preparation that failed (killed
-# when its time ran out) counts as a failed start: the web UI is prepared again later, with the backoff.
+# The web UI's own process (launch_ui starts it): ends at once if a stop was handled just before the fork (its copy of
+# STOP_REQUESTED), reads the environment its preparation wrote, and becomes the web UI with only that environment, as
+# its own user, with a raised oom_score_adj. The read is here, in the new process, so that whatever it may wait for
+# holds up only this process (which a stop ends), never the supervisor.
+exec_ui() {
+  local -a ui_env=()
+  (( ! STOP_REQUESTED )) || exit 0
+  mapfile -d '' -t ui_env <"${UI_SETTINGS_FILE}" || exit 1
+  if [[ -n "${UI_USER}" ]]; then
+    cd "${APP_DIR}/web" || exit 1
+    raise_oom_score_adj "${UI_OOM_SCORE_RAISE}" "the web UI"
+    exec setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs \
+      env -i "${ui_env[@]}" "${UI_EXEC[@]}"
+  fi
+  cd "${APP_DIR}/web" 2>/dev/null || cd "${APP_DIR}" || exit 1
+  raise_oom_score_adj "${UI_OOM_SCORE_RAISE}" "the web UI"
+  exec env -i "${ui_env[@]}" "${UI_EXEC[@]}"
+}
+
+# The web UI's preparation has ended: starts the web UI (exec_ui). A preparation that failed (killed when its time ran
+# out) counts as a failed start: the web UI is prepared again later, with the backoff.
 launch_ui() {
-  local -a ui_env=("PATH=${PATH}" "TZ=${TZ:-UTC}")
-  local entry name code why delay
+  local code why delay
   wait "${UI_PREPARE_PID}" 2>/dev/null
   code=$?
   UI_PREPARE_PID=""
@@ -644,31 +705,10 @@ launch_ui() {
     write_state
     return 1
   fi
-  # Nothing starts once a stop is asked for: checked again here, just before the web UI starts.
+  # The last stop check, immediately before the fork: the preparation has gathered the web UI's environment and the new
+  # process reads it itself, so nothing runs between them (exec_ui checks again).
   (( ! STOP_REQUESTED )) || return 1
-  # Only the web UI's settings and a few general variables; never the controller's keys or settings.
-  while IFS= read -r -d '' entry; do
-    name=${entry%%=*}
-    case "${name}" in
-      RoofWeb__Certificate__Path|RoofWeb__Certificate__PasswordFile|RoofWeb__StopKeyFile|RoofWeb__DataProtectionPath) ;;
-      RoofWeb__*|DOTNET_*|ASPNETCORE_ENVIRONMENT|LANG|LC_*) ui_env+=("${entry}") ;;
-    esac
-  done < <(env -0)
-  while IFS= read -r entry; do
-    [[ -n "${entry}" ]] && ui_env+=("${entry}")
-  done <"${UI_SETTINGS_FILE}"
-  ui_env+=("RoofWeb__SupervisorStatePath=${STATE_FILE}" "RoofWeb__SupervisorControlPath=${CONTROL_DIR}")
-
-  if [[ -n "${UI_USER}" ]]; then
-    ui_env+=("HOME=${UI_HOME:-/tmp}" "USER=${UI_USER}")
-    (cd "${APP_DIR}/web" && raise_oom_score_adj "${UI_OOM_SCORE_RAISE}" "the web UI" \
-      && exec setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs \
-      env -i "${ui_env[@]}" "${UI_EXEC[@]}") &
-  else
-    ui_env+=("HOME=${HOME:-/tmp}")
-    (cd "${APP_DIR}/web" 2>/dev/null || cd "${APP_DIR}" || exit 1; raise_oom_score_adj "${UI_OOM_SCORE_RAISE}" "the web UI"
-      exec env -i "${ui_env[@]}" "${UI_EXEC[@]}") &
-  fi
+  exec_ui &
   PID[ui]=$!
   STARTED_AT[ui]=$(now_us)
   STARTS[ui]=$((STARTS[ui] + 1))
@@ -964,13 +1004,11 @@ on_exit() {
   shutdown
 }
 
-# The web UI's preparation (start_ui runs this script with --prepare-ui, as a process of its own): prints the web UI's
-# settings for its copies and its keys directory, one a line, and ends.
+# The web UI's preparation (start_ui runs this script with --prepare-ui, as a process of its own): writes the web UI's
+# environment, with its copies and its keys directory, and ends.
 if [[ "${1:-}" == --prepare-ui ]]; then
   check_secrets_are_private
-  prepare_ui_certificate
-  prepare_ui_stop_key
-  prepare_ui_data_protection
+  ui_environment >"${UI_SETTINGS_FILE}" || exit 1
   exit 0
 fi
 
