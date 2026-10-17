@@ -59,8 +59,13 @@ Other switches:
   FAKE_LOADED_ID=sha256:<hex>      the ID `load -i <archive>` gives the image (default: its config's digest, as Docker's
                                    classic image store does, or its index's with FAKE_IMAGE_STORE=containerd)
   FAKE_INFO_<FIELD>=<value>        what `info --format` reports for MemoryLimit, CPUCfsQuota, PidsLimit and SwapLimit
-                                   (default true each), NCPU (default 4) and MemTotal (default 8 GiB), as
-                                   FAKE_INFO_MEMORYLIMIT=false
+                                   (default true each), NCPU (default 4), MemTotal (default 8 GiB), CgroupVersion
+                                   (default 2) and Name (Docker's host name, default pi-test-host), as
+                                   FAKE_INFO_MEMORYLIMIT=false; an empty value is a field Docker does not report
+  FAKE_INFO_WARNINGS=<w>[;<w>...]  the warnings `info --format '{{range .Warnings}}{{println .}}{{end}}'` lists (none by
+                                   default)
+  FAKE_CONTEXT_HOST=<endpoint>     what `context inspect --format '{{.Endpoints.docker.Host}}' <context>` reports
+                                   (default ssh://roof@pi.test: Docker on another machine)
   FAKE_DROPPED_LIMIT=memory|cpus|pids
                                    `run -d` drops that limit, as Docker does with only a warning when the kernel cannot
                                    enforce it
@@ -759,8 +764,14 @@ def main():
     if command == "info" and "--format" in args:
         fmt = args[args.index("--format") + 1]
         values = {"MemoryLimit": "true", "CPUCfsQuota": "true", "PidsLimit": "true", "SwapLimit": "true",
-                  "NCPU": "4", "MemTotal": str(8 * 1024 ** 3)}
-        out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: os.environ.get("FAKE_INFO_" + m.group(1).upper(), values[m.group(1)]), fmt))
+                  "NCPU": "4", "MemTotal": str(8 * 1024 ** 3), "CgroupVersion": "2", "Name": "pi-test-host"}
+        warnings = [w for w in os.environ.get("FAKE_INFO_WARNINGS", "").split(";") if w]
+        fmt = fmt.replace("{{range .Warnings}}{{println .}}{{end}}", "".join(w + "\n" for w in warnings))
+        out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: os.environ.get("FAKE_INFO_" + m.group(1).upper(), values[m.group(1)]), fmt),
+            end="" if fmt.endswith("\n") else "\n")
+        return
+    if command == "context" and args[:1] == ["inspect"]:
+        out(os.environ.get("FAKE_CONTEXT_HOST", "ssh://roof@pi.test"))
         return
     if command in ("info", "buildx"):
         return
