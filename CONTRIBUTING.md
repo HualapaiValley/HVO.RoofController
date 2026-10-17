@@ -6,8 +6,8 @@ and instructions for contributing to this project.
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) matching `src/global.json`
-  (10.0.402 for current product builds; the dev container retains the minimum in
-  `src/global.json` until its upstream image ships that patch)
+  (use the SDK tag in the product Dockerfiles, also enforced for CI by
+  `build/check-base-images.sh`; the dev container may retain the compatible global minimum)
 - [Docker](https://www.docker.com/) with Buildx (for building the Pi image)
 - A code editor (VS Code with Dev Containers recommended)
 

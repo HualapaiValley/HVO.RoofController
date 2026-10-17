@@ -70,18 +70,14 @@ jobs:
         with:
           dotnet-version: '10.0.402'
 
-      - name: Verify SDK selected by global.json
+      - name: Verify SDK matches the product image
         run: |
-          pin=$(jq -r '.sdk.version' global.json)
+          ../build/check-base-images.sh
+          expected=$(sed -n 's#^FROM .*mcr\.microsoft\.com/dotnet/sdk:\([^@ ]*\)@sha256:.*#\1#p' HVO.RoofControllerV4.RPi/Dockerfile | head -n 1)
           actual=$(dotnet --version)
-          echo "src/global.json pins SDK ${pin} (rollForward: $(jq -r '.sdk.rollForward' global.json)); dotnet resolves ${actual}"
-          # rollForward "patch" accepts later patches in the pinned feature band.
-          case "${actual}" in
-            "${pin%??}"[0-9][0-9]) ;;
-            *) echo "::error file=src/global.json::Resolved SDK ${actual} is not in the feature band of the pinned SDK ${pin}"; exit 1 ;;
-          esac
-          if [ "${actual##*.}" -lt "${pin##*.}" ]; then
-            echo "::error file=src/global.json::Resolved SDK ${actual} is older than the pinned SDK ${pin}"
+          echo "Product image SDK ${expected}; dotnet resolves ${actual}"
+          if [ -z "${expected}" ] || [ "${actual}" != "${expected}" ]; then
+            echo "::error file=.github/workflows/ci.yml::Resolved SDK ${actual} must equal product image SDK ${expected}"
             exit 1
           fi
 

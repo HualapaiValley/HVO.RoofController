@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Checks the controller, HAT emulator and dev container Dockerfiles: every external FROM names its image by tag and
+# Checks the controller, HAT emulator, dev container and disposable installer guest Dockerfiles: every external FROM names its image by tag and
 # by the digest of its multi-platform index (image:tag@sha256:<digest>), so a rebuild of the same commit uses the same
 # bases; the SDK's tag satisfies src/global.json's version and patch roll-forward policy; and the product Dockerfiles
-# use the same SDK and the same ASP.NET Core runtime, tag and digest. With --registry, it also reads each pinned digest from its registry, which must be an
+# use the same SDK and the same ASP.NET Core runtime, tag and digest. Every workflow dotnet-version must equal the
+# product SDK tag. With --registry, it also reads each pinned digest from its registry, which must be an
 # index holding linux/amd64 and linux/arm64. Reports pin problems and fails closed on unsupported syntax, with file:line
 # diagnostics and, in GitHub Actions, annotations.
 #
@@ -15,10 +16,11 @@ SDK=mcr.microsoft.com/dotnet/sdk
 RUNTIME=mcr.microsoft.com/dotnet/aspnet
 DEV_IMAGE=mcr.microsoft.com/devcontainers/dotnet
 DEV_DOCKERFILE=.devcontainer/Dockerfile
+GUEST_DOCKERFILE=tests/installer/disposable-guest/Dockerfile
 PLATFORMS=(linux/amd64 linux/arm64)
 GLOBAL_JSON=src/global.json
 PRODUCT_DOCKERFILES=(src/HVO.RoofControllerV4.RPi/Dockerfile src/HVO.RoofControllerV4.Emulator/Dockerfile)
-DOCKERFILES=("${PRODUCT_DOCKERFILES[@]}" "${DEV_DOCKERFILE}")
+DOCKERFILES=("${PRODUCT_DOCKERFILES[@]}" "${DEV_DOCKERFILE}" "${GUEST_DOCKERFILE}")
 
 registry=0
 if [[ "${1:-}" == --registry ]]; then
@@ -297,11 +299,56 @@ for dockerfile in "${DOCKERFILES[@]}"; do
   done <<<"${records}"
   if [[ "${dockerfile}" == "${DEV_DOCKERFILE}" ]]; then
     [[ ${dev_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${DEV_IMAGE} line."
-  else
+  elif [[ "${dockerfile}" != "${GUEST_DOCKERFILE}" ]]; then
     [[ ${sdk_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${SDK} line."
     [[ ${runtime_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${RUNTIME} line."
   fi
 done
+
+# Keep explicitly configured setup-dotnet versions equal to the agreed product SDK. These inputs deliberately use
+# literal, single-line scalars; fail closed on expressions, block scalars or inline mappings instead of skipping them.
+if [[ ${errors} -eq 0 ]]; then
+  sdk_tag=${sdk_ref%%@*}
+  sdk_tag=${sdk_tag##*:}
+  if ! workflow_problems=$(python3 - "${root}" "${sdk_tag}" <<'PYWORKFLOWS'
+import re
+import sys
+from pathlib import Path
+root, expected = Path(sys.argv[1]), sys.argv[2]
+version = r"[0-9]+\.[0-9]+\.[0-9]{3}"
+key = r"(?:dotnet-version|'dotnet-version'|\"dotnet-version\")"
+field = re.compile(r"\s*" + key + r"\s*:\s*(?:'(" + version + r")'|\"(" + version + r")\"|(" + version + r"))\s*(?:#.*)?")
+marker = re.compile(r"(?<![A-Za-z0-9_-])" + key + r"\s*:")
+count = 0
+for path in sorted((root / ".github/workflows").glob("*.yml")):
+    relative = path.relative_to(root).as_posix()
+    try:
+        lines = path.read_text().splitlines()
+    except (OSError, UnicodeError):
+        print(f"{relative}\t1\tcannot read workflow SDK inputs")
+        continue
+    for number, line in enumerate(lines, 1):
+        if line.lstrip().startswith("#") or not marker.search(line):
+            continue
+        count += 1
+        match = field.fullmatch(line)
+        if not match:
+            print(f"{relative}\t{number}\tdotnet-version must be a literal single-line SDK version")
+        else:
+            actual = next(v for v in match.groups() if v is not None)
+            if actual != expected:
+                print(f"{relative}\t{number}\tworkflow SDK {actual} must equal product SDK {expected}")
+if count == 0:
+    print(".github/workflows\t1\tno dotnet-version inputs found; workflows must select the product SDK")
+PYWORKFLOWS
+); then
+    problem ".github/workflows" "" "cannot check workflow SDK versions."
+  else
+    while IFS=$'\t' read -r file line message; do
+      [[ -z "${file}" ]] || problem "${file}" "${line}" "${message}"
+    done <<<"${workflow_problems}"
+  fi
+fi
 
 # Each pinned digest must be an index, not one platform's image: a single-platform image would be used for every
 # platform built.

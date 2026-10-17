@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for build/check-base-images.sh (the Dockerfiles' base images pinned by tag and digest). It runs against
-# repositories made here, holding src/global.json and the three Dockerfiles, and its --registry check against a stand-in
+# repositories made here, holding src/global.json and the four Dockerfiles, and its --registry check against a stand-in
 # for docker, so no Docker or network is needed; and, without --registry, against this repository's own files. Requires
 # bash, python3, jq and sha256sum or shasum.
 # Run: tests/versioning/base-image-tests.sh
@@ -14,6 +14,7 @@ RPI=src/HVO.RoofControllerV4.RPi/Dockerfile
 EMULATOR=src/HVO.RoofControllerV4.Emulator/Dockerfile
 DEV=.devcontainer/Dockerfile
 DEV_IMAGE=mcr.microsoft.com/devcontainers/dotnet
+GUEST=tests/installer/disposable-guest/Dockerfile
 
 PASSED=0
 FAILED=0
@@ -48,6 +49,7 @@ digest() {
 SDK_REF="${SDK}:10.0.402@$(digest sdk)"
 RUNTIME_REF="${RUNTIME}:10.0.13@$(digest aspnet)"
 DEV_REF="${DEV_IMAGE}:2.3.2-10.0-noble@$(digest devcontainer)"
+GUEST_REF="ubuntu:24.04@$(digest guest)"
 
 # dockerfile <build image> <runtime image>: a Dockerfile shaped like the repository's, with a stage built on another.
 dockerfile() {
@@ -57,14 +59,18 @@ dockerfile() {
 }
 
 # repo <name> [<Pi build> <Pi runtime> <emulator build> <emulator runtime> [<global.json SDK>]]: a repository holding
-# src/global.json and the three Dockerfiles, by default with matching pins, and prints its path.
+# src/global.json and the four Dockerfiles, by default with matching pins, and prints its path.
 repo() {
-  local dir="${WORK}/$1"
-  mkdir -p "${dir}/src/HVO.RoofControllerV4.RPi" "${dir}/src/HVO.RoofControllerV4.Emulator" "${dir}/.devcontainer"
+  local dir="${WORK}/$1" workflow_sdk="${2-${SDK_REF}}"
+  workflow_sdk=${workflow_sdk%%@*}
+  workflow_sdk=${workflow_sdk##*:}
+  mkdir -p "${dir}/src/HVO.RoofControllerV4.RPi" "${dir}/src/HVO.RoofControllerV4.Emulator" "${dir}/.devcontainer" "${dir}/tests/installer/disposable-guest" "${dir}/.github/workflows"
   printf '{\n  "sdk": {\n    "version": "%s",\n    "rollForward": "patch"\n  }\n}\n' "${6-10.0.402}" > "${dir}/src/global.json"
   dockerfile "${2-${SDK_REF}}" "${3-${RUNTIME_REF}}" > "${dir}/${RPI}"
   dockerfile "${4-${SDK_REF}}" "${5-${RUNTIME_REF}}" > "${dir}/${EMULATOR}"
   printf 'FROM %s\n' "${DEV_REF}" > "${dir}/${DEV}"
+  printf 'FROM %s\n' "${GUEST_REF}" > "${dir}/${GUEST}"
+  printf "jobs:\n  build:\n    steps:\n      - uses: actions/setup-dotnet@1111111111111111111111111111111111111111\n        with:\n          dotnet-version: '%s'\n" "${workflow_sdk}" > "${dir}/.github/workflows/ci.yml"
   echo "${dir}"
 }
 
@@ -74,8 +80,40 @@ check "the repository's own Dockerfiles" 0 "and runtime image ${RUNTIME}:" "${SC
 
 r=$(repo good)
 check "pinned and matching" 0 \
-  "Build image ${SDK_REF} (src/global.json: 10.0.402) and runtime image ${RUNTIME_REF}, in ${RPI} ${EMULATOR} ${DEV}" \
+  "Build image ${SDK_REF} (src/global.json: 10.0.402) and runtime image ${RUNTIME_REF}, in ${RPI} ${EMULATOR} ${DEV} ${GUEST}" \
   "${SCRIPT}" "${r}"
+
+# F1: a Dependabot-shaped product-only bump must fail until every workflow follows it.
+r=$(repo ci-sdk-drift)
+for file in "${RPI}" "${EMULATOR}"; do
+  sed 's/sdk:10.0.402@/sdk:10.0.403@/' "${r}/${file}" > "${r}/${file}.tmp"
+  mv "${r}/${file}.tmp" "${r}/${file}"
+done
+check "Dockerfiles-only SDK bump fails workflow equality" 1 "workflow SDK 10.0.402 must equal product SDK 10.0.403" "${SCRIPT}" "${r}"
+sed 's/10.0.402/10.0.403/' "${r}/.github/workflows/ci.yml" > "${r}/.github/workflows/ci.yml.tmp"
+mv "${r}/.github/workflows/ci.yml.tmp" "${r}/.github/workflows/ci.yml"
+check "aligned SDK bump passes" 0 "Build image ${SDK}:10.0.403@" "${SCRIPT}" "${r}"
+printf "dotnet-version: '10.0.402'\n" > "${r}/.github/workflows/scenarios.yml"
+check "a different workflow cannot lag the SDK" 1 \
+  ".github/workflows/scenarios.yml:1: workflow SDK 10.0.402 must equal product SDK 10.0.403" "${SCRIPT}" "${r}"
+r=$(repo ci-second-sdk)
+printf "dotnet-version: '10.0.403'\n" >> "${r}/.github/workflows/ci.yml"
+check "every SDK field in a workflow is checked" 1 "workflow SDK 10.0.403 must equal product SDK 10.0.402" "${SCRIPT}" "${r}"
+r=$(repo ci-sdk-block)
+printf 'dotnet-version: |\n  10.0.402\n' > "${r}/.github/workflows/ci.yml"
+check "multiline workflow SDK syntax fails closed" 1 "dotnet-version must be a literal single-line SDK version" "${SCRIPT}" "${r}"
+r=$(repo ci-sdk-inline)
+printf 'with: {dotnet-version: "10.0.402"}\n' > "${r}/.github/workflows/ci.yml"
+check "inline workflow SDK syntax fails closed" 1 "dotnet-version must be a literal single-line SDK version" "${SCRIPT}" "${r}"
+r=$(repo ci-sdk-missing)
+rm "${r}/.github/workflows/ci.yml"
+check "workflow SDK inputs cannot disappear" 1 "no dotnet-version inputs found" "${SCRIPT}" "${r}"
+r=$(repo guest-tag-only)
+printf 'FROM ubuntu:24.04\n' > "${r}/${GUEST}"
+check "guest image needs a digest" 1 "${GUEST}:1: FROM ubuntu:24.04 is not pinned" "${SCRIPT}" "${r}"
+r=$(repo guest-missing)
+rm "${r}/${GUEST}"
+check "guest Dockerfile is required" 1 "${GUEST}: was not found" "${SCRIPT}" "${r}"
 
 r=$(repo dev-tag-only)
 printf 'FROM %s:2.3.2-10.0-noble\n' "${DEV_IMAGE}" > "${r}/${DEV}"
@@ -258,6 +296,7 @@ case "$5" in
   */sdk:*) cat "${FAKE_SDK_INDEX}" ;;
   */aspnet:*) cat "${FAKE_RUNTIME_INDEX}" ;;
   */devcontainers/dotnet:*) cat "${FAKE_DEV_INDEX:-${FAKE_RUNTIME_INDEX}}" ;;
+  ubuntu:*) cat "${FAKE_GUEST_INDEX:-${FAKE_RUNTIME_INDEX}}" ;;
   *) cat "${FAKE_OTHER_INDEX:-${FAKE_RUNTIME_INDEX}}" ;;
 esac
 FAKE
@@ -337,7 +376,7 @@ printf 'FROM %s AS tools\n' "${TOOLS_REF}" >> "${r}/${EMULATOR}"
 check "third external index accepted" 0 "${TOOLS_REF}: an index holding linux/amd64 linux/arm64" \
   env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_OTHER_INDEX="${all}" \
   FAKE_DOCKER_LOG="${WORK}/registry-calls" "${SCRIPT}" --registry "${r}"
-check "each unique external base inspected once" 0 "" test "$(wc -l < "${WORK}/registry-calls")" -eq 4
+check "each unique external base inspected once" 0 "" test "$(wc -l < "${WORK}/registry-calls")" -eq 5
 r=$(repo case-insensitive-stages)
 printf 'FROM RUNTIME AS Another\nFROM aNoThEr AS final-again\nFROM scratch AS Empty\nFROM EMPTY AS empty-again\n' >> "${r}/${RPI}"
 check "earlier stage names match case-insensitively" 0 "${RUNTIME_REF}: an index holding linux/amd64 linux/arm64" \
@@ -353,6 +392,17 @@ check "dev container single-platform base is rejected" 1 "${DEV}:1: ${DEV_REF} i
   "${SCRIPT}" --registry "${r}"
 check "dev container index must include arm64" 1 "${DEV}:1: ${DEV_REF} is not an index holding linux/arm64" \
   env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_DEV_INDEX="${amd64}" \
+  "${SCRIPT}" --registry "${r}"
+
+r=$(repo guest-registry)
+check "guest OCI index is inspected" 0 "${GUEST_REF}: an index holding linux/amd64 linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_GUEST_INDEX="${oci}" \
+  "${SCRIPT}" --registry "${r}"
+check "guest single-platform manifest is rejected" 1 "${GUEST}:1: ${GUEST_REF} is not a schemaVersion 2" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_GUEST_INDEX="${single}" \
+  "${SCRIPT}" --registry "${r}"
+check "guest index requires arm64" 1 "${GUEST}:1: ${GUEST_REF} is not an index holding linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_GUEST_INDEX="${amd64}" \
   "${SCRIPT}" --registry "${r}"
 
 # The registry is read only when the files are right.

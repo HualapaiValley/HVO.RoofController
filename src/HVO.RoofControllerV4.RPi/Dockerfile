@@ -10,9 +10,9 @@
 #   "Digest" that docker buildx imagetools inspect <image>:<tag> prints, so that linux/amd64
 #   and linux/arm64 both resolve; never one platform's manifest. Dependabot updates the tag
 #   and the digest together, and proposes a new digest when a tag is republished.
-# - SDK 10.0.402 satisfies src/global.json (rollForward: patch). A floating
-#   sdk:10.0 tag can move to a newer feature band, which global.json rejects. When the SDK pin
-#   changes, update src/global.json and this tag in the same change.
+# - The SDK tag must satisfy src/global.json's minimum and patch roll-forward policy. A later
+#   patch in the same feature band need not raise that minimum; a feature-band change must.
+#   Every workflow dotnet-version must equal this tag (build/check-base-images.sh).
 # - The runtime tag pins an ASP.NET Core patch release. The app is framework-dependent, so
 #   it runs on the newest 10.0 patch installed in the image; keep this on the latest patch
 #   for security fixes.

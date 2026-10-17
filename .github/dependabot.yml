@@ -19,8 +19,9 @@ updates:
   # Both Dockerfiles must use the same images, tag and digest (build/check-base-images.sh, in
   # the "Pi image" and "Emulator image" workflows), so each image is bumped in both Dockerfiles
   # in one PR (group-by: dependency-name).
-  # The SDK tag must satisfy src/global.json and its patch roll-forward policy. A feature-band
-  # change must update src/global.json in the same PR; a newer patch in its band is accepted.
+  # The SDK tag must satisfy src/global.json and its patch roll-forward policy. Every workflow
+  # dotnet-version must equal that tag: a future SDK Dependabot PR fails the base-image gate
+  # until its workflows move too. A feature-band change must also update src/global.json.
   - package-ecosystem: "docker"
     directories:
       - "/src/HVO.RoofControllerV4.RPi"
