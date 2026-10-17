@@ -323,12 +323,12 @@ public sealed class ControllerStep(
         _deployKeyFile = null;
         OnlyCertificateDiffers = false;
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
-        if (IdentitySchemaGuard.Problem(context.Machine, layout.IdentityFile, release) is { } schemaProblem)
+        if (StateContractGuard.Problem(context.Machine, layout, release) is { } schemaProblem)
             return new StepCheck(StepChange.Blocked, schemaProblem);
         var container = await MachineSurveyor.SurveyContainerAsync(context.Machine, Target, cancellationToken).ConfigureAwait(false);
         if (container is null)
         {
-            return new StepCheck(StepChange.Create, $"release {release.Version} by digest, through the deploy script");
+            return new StepCheck(StepChange.Create, $"release {release.Version} by digest, through the deploy script, with {settings.Resources.Describe()}");
         }
 
         if (container.Origin == ContainerOrigin.Compose)
@@ -422,6 +422,18 @@ public sealed class ControllerStep(
         if (container.ImageDigest != release.Controller.Digest)
         {
             return $"redeployed as release {release.Version} (it runs {(container.Version is { } version ? $"version {version}" : "another image")})";
+        }
+
+        // Its limits and privileges are the deploy script's (docs/deployment.md, "The container's privileges and limits").
+        var resources = settings.Resources;
+        if (container.NanoCpus != resources.NanoCpus || container.MemoryBytes != (resources.MemoryBytes ?? 0) || container.PidsLimit != resources.PidsLimit)
+        {
+            return $"redeployed with its limits: {resources.Describe()}";
+        }
+
+        if (!container.ReadOnlyRootFilesystem)
+        {
+            return "redeployed with the container's privileges narrowed (a read-only root filesystem and only the supervisor's capabilities)";
         }
 
         if (keys.FirstOrDefault(key => key.Use == ApiKeyUse.WebStop) is { IsKnown: true } webStop && container.WebStopKeyFile != ApiKeyFiles.ContainerKeyFile(webStop.Index))
@@ -668,6 +680,12 @@ public sealed class ControllerStep(
 
             // The script's Stop refuses a roof that moves, or that its Status cannot show idle, before it replaces the controller.
             ["REQUIRE_IDLE_ROOF"] = "true",
+
+            // The container's limits, from the answers or the record: --rollback gives them to the version it brings back.
+            // Empty is no CPU or memory limit (the default, until #138).
+            ["CONTAINER_CPUS"] = settings.Resources.CpusText ?? string.Empty,
+            ["CONTAINER_MEMORY"] = settings.Resources.Memory ?? string.Empty,
+            ["CONTAINER_PIDS_LIMIT"] = settings.Resources.PidsLimit.ToString(CultureInfo.InvariantCulture),
 
             // The key for the Stop and Status checks, as a file only root reads; never the key itself.
             ["OPERATOR_KEY_FILE"] = keyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),

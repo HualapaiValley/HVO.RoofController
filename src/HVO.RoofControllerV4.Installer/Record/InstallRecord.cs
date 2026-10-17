@@ -50,6 +50,13 @@ public sealed record InstallRecord
     public string? RolledBackFrom { get; init; }
 
     /// <summary>
+    /// The backup the last upgrade took of the small stores before it changed anything (<see cref="Plan.UpgradeBackupStep"/>):
+    /// what <c>rollback --restore-backup</c> puts back when the release before cannot read them. Null before an upgrade,
+    /// and after a rollback or an uninstall.
+    /// </summary>
+    public string? UpgradeBackup { get; init; }
+
+    /// <summary>
     /// The release an upgrade (or a reinstall over an uninstalled release's data) started from, while it has not finished.
     /// From before its first change the record says the new release (<see cref="UpgradeStarted"/>), so one that stops part
     /// way leaves the newer release recorded, and no installer, older ones included, goes back from it but <c>rollback</c>.
@@ -95,9 +102,11 @@ public sealed record InstallRecord
     /// The record as an upgrade to <paramref name="version"/> leaves it before its first change: it says that release, with
     /// this one before it for a rollback (none after an uninstall), and that the upgrade has not finished. Never for an
     /// installed record with another upgrade unfinished, whose baseline this would replace: that upgrade is finished or
-    /// rolled back first (<c>RecordStep.MarkUpgradeStarted</c> refuses it).
+    /// rolled back first (<c>RecordStep.MarkUpgradeStarted</c> refuses it). It names the backup this upgrade took of the
+    /// stores (<paramref name="upgradeBackup"/>, taken before the mark), or none: never the last upgrade's, which is of
+    /// another release.
     /// </summary>
-    public InstallRecord UpgradeStarted(string version)
+    public InstallRecord UpgradeStarted(string version, string? upgradeBackup = null)
     {
         var from = Version;
         return this with
@@ -106,6 +115,7 @@ public sealed record InstallRecord
             InstallerVersion = version,
             PreviousVersion = UninstalledAt is null ? from : null,
             RolledBackFrom = null,
+            UpgradeBackup = upgradeBackup,
             UpgradingFrom = from
         };
     }

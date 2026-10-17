@@ -74,7 +74,8 @@ public sealed class InstallerBootstrapTests
         var run = await machine.RunAsync(planOnly ? ["rollback", "--plan"] : ["rollback"]);
 
         run.ExitCode.Should().Be(3, run.ToString());
-        run.Output.Should().Contain("Rollback is refused before replacing the controller");
+        run.Error.Should().Contain("Rollback is refused before replacing the controller")
+            .And.Contain("identity store here is schema 3, and release 4.0.0 reads identity schemas 1 to 2");
         machine.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
         machine.Deploys.Should().HaveCount(deployments);
         machine.Launches.Should().HaveCount(launches);

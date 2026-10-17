@@ -138,6 +138,39 @@ require_whole_number() {
   fi
 }
 
+# Compose passes its explicit limits here as well as to Docker. Refuse a value below RoofController's floor before
+# any controller process (including --validate-deployment), filesystem setup or HAT access. Unset means no limit until
+# #138; a follow-up then enables the 1 vCPU / 2 GiB default. The deploy script validates its own inputs before Docker.
+check_compose_limits() {
+  local cpus=${HVO_ROOF_CPUS:-} memory=${HVO_ROOF_MEMORY:-} pattern fraction bytes
+  if [[ -n "${cpus}" ]]; then
+    pattern='^([0-9]{1,3})(\.([0-9]{1,2}))?$'
+    if [[ ! "${cpus}" =~ ${pattern} ]]; then
+      log "HVO_ROOF_CPUS must be a number of CPUs with at most two decimals, at least RoofController's floor of 1 vCPU."
+      exit 2
+    fi
+    fraction="${BASH_REMATCH[3]:-}00"
+    if (( 10#${BASH_REMATCH[1]} * 100 + 10#${fraction:0:2} < 100 )); then
+      log "HVO_ROOF_CPUS=${cpus} is below RoofController's floor of 1 vCPU."
+      exit 2
+    fi
+  fi
+  if [[ -n "${memory}" ]]; then
+    pattern='^([0-9]{1,6})([mMgG])$'
+    if [[ ! "${memory}" =~ ${pattern} ]]; then
+      log "HVO_ROOF_MEMORY must be a whole number of MiB or GiB (1024m or 1g), at least RoofController's floor of 1 GiB."
+      exit 2
+    fi
+    bytes=$(( 10#${BASH_REMATCH[1]} * 1048576 ))
+    [[ "${BASH_REMATCH[2]}" == [gG] ]] && bytes=$(( bytes * 1024 ))
+    if (( bytes < 1073741824 )); then
+      log "HVO_ROOF_MEMORY=${memory} is below RoofController's floor of 1 GiB."
+      exit 2
+    fi
+  fi
+}
+check_compose_limits
+
 # With arguments this is the deployment check (or another one-shot run of the controller): nothing is supervised.
 # --prepare-ui is the web UI's preparation, run near the end of this script.
 if (( $# > 0 )) && [[ "$1" != --prepare-ui ]]; then
@@ -254,15 +287,17 @@ write_state() {
 }
 
 # Creates the run directory: supervisor.json readable by all, the control directory writable only by the web UI's
-# user (and root), and the web UI's private directory for its certificate copy. The private directory belongs to the
-# supervisor's user (root), with the web UI's group allowed to read it: the web UI can read its copies but cannot
-# replace them, or plant a link that the supervisor would then write through.
+# user (its group) and root, and the web UI's private directory for its certificate copy. Both directories belong to the
+# supervisor's user (root): root reaches what the web UI writes in the control directory without CAP_DAC_OVERRIDE, which
+# the container does not have (docs/deployment.md, "The container's privileges and limits"). The web UI's group may read
+# the private directory: the web UI can read its copies but cannot replace them, or plant a link that the supervisor
+# would then write through.
 prepare_run_dir() {
   mkdir -p "${RUN_DIR}" || { log "cannot create ${RUN_DIR}"; exit 1; }
   chmod 0755 "${RUN_DIR}"
   rm -rf "${CONTROL_DIR}" "${UI_PRIVATE_DIR}"
   if [[ -n "${UI_USER}" ]]; then
-    if ! install -d -m 0700 -o "${UI_USER}" -g "${UI_GROUP}" "${CONTROL_DIR}" \
+    if ! install -d -m 0770 -g "${UI_GROUP}" "${CONTROL_DIR}" \
       || ! install -d -m 0750 -g "${UI_GROUP}" "${UI_PRIVATE_DIR}"; then
       log "cannot create the web UI's directories for user ${UI_USER}"
       exit 1
@@ -448,13 +483,24 @@ start_controller() {
   write_state
 }
 
+# copy_for_ui <source> <copy>: a copy of <source> (or /dev/stdin) for the web UI in its private directory, mode 0400 and
+# owned by the web UI's user. install writes it as root, replacing whatever is at the path and never writing through a
+# link, and root then gives it to the web UI's user. (install -o would change the owner first and the mode after it,
+# which needs CAP_FOWNER once root no longer owns the file; the container does not have it: docs/deployment.md, "The
+# container's privileges and limits".) Only root can change the private directory, so nothing can put a link in place of
+# the copy between the two. A copy that cannot be given to the web UI is removed.
+copy_for_ui() {
+  install -m 0400 "$1" "$2" || return 1
+  [[ -z "${UI_USER}" ]] || chown -h "${UI_USER}:${UI_GROUP}" "$2" || { rm -f "$2"; return 1; }
+}
+
 # The web UI's certificate, for HTTPS: either its own (RoofWeb__Certificate__Path, with the password in
 # RoofWeb__Certificate__PasswordFile or none), or else the controller's (Kestrel__Certificates__Default__Path, with the
 # controller's certificate password from the secrets directory or the environment). The controller's password is never
 # given with a certificate of the web UI's own. The web UI's user cannot read the secrets directory or, usually, the
 # certificate mount, so it gets its own copies (owner-only) in its private directory, taken again at each start so a
-# renewed certificate is used. Every copy is written with install, which replaces whatever is at the path and never
-# writes through a link. Prints the RoofWeb__Certificate__* settings for the web UI, one per line.
+# renewed certificate is used. Every copy is written by copy_for_ui. Prints the RoofWeb__Certificate__* settings for the
+# web UI, one per line.
 prepare_ui_certificate() {
   local source password_file="" password=""
   if [[ -n "${RoofWeb__Certificate__Path:-}" ]]; then
@@ -472,10 +518,8 @@ prepare_ui_certificate() {
     return 0
   fi
   local copy="${UI_PRIVATE_DIR}/certificate.pfx" password_copy="${UI_PRIVATE_DIR}/certificate-password"
-  local -a owner=()
-  [[ -z "${UI_USER}" ]] || owner=(-o "${UI_USER}" -g "${UI_GROUP}")
   rm -f "${copy}" "${password_copy}"
-  install -m 0400 "${owner[@]}" "${source}" "${copy}" || return 0
+  copy_for_ui "${source}" "${copy}" || return 0
   printf 'RoofWeb__Certificate__Path=%s\n' "${copy}"
   if [[ -n "${password_file}" && ! -r "${password_file}" ]]; then
     log "WARNING: the web UI's certificate password file ${password_file} cannot be read; the web UI gets no password" \
@@ -483,9 +527,9 @@ prepare_ui_certificate() {
     return 0
   fi
   if [[ -n "${password_file}" ]]; then
-    install -m 0400 "${owner[@]}" "${password_file}" "${password_copy}" || return 0
+    copy_for_ui "${password_file}" "${password_copy}" || return 0
   elif [[ -n "${password}" ]]; then
-    printf '%s' "${password}" | install -m 0400 "${owner[@]}" /dev/stdin "${password_copy}" || return 0
+    printf '%s' "${password}" | copy_for_ui /dev/stdin "${password_copy}" || return 0
   else
     return 0
   fi
@@ -497,15 +541,13 @@ prepare_ui_certificate() {
 # so a rotated key is used. Prints the RoofWeb__StopKeyFile setting for the web UI; nothing without a key.
 prepare_ui_stop_key() {
   local source=${RoofWeb__StopKeyFile:-} copy="${UI_PRIVATE_DIR}/stop-key"
-  local -a owner=()
   [[ -n "${source}" ]] || return 0
   rm -f "${copy}"
   if [[ ! -r "${source}" ]]; then
     log "WARNING: the web UI's Stop key ${source} cannot be read; the web UI's Stop uses the person's session alone"
     return 0
   fi
-  [[ -z "${UI_USER}" ]] || owner=(-o "${UI_USER}" -g "${UI_GROUP}")
-  install -m 0400 "${owner[@]}" "${source}" "${copy}" || return 0
+  copy_for_ui "${source}" "${copy}" || return 0
   printf 'RoofWeb__StopKeyFile=%s\n' "${copy}"
 }
 

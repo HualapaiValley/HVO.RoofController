@@ -203,6 +203,11 @@ nothing until every check has passed: then it installs Docker, or turns I2C on, 
   that is not synchronised.
 - **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. It notes a
   missing Compose v2, which the installer does not need.
+- **For the controller and a rig, on Linux:** Docker enforces process limits (`docker info`), which the
+  controller's container runs with ([The controller's limits](#the-controllers-limits)). CPU and memory enforcement
+  are advisory at bootstrap and required by the installer only when those limits are set. On a Pi it names the boot
+  setting to change. It notes a Docker that cannot limit swap, and a machine below the 1 vCPU floor; a memory cap
+  above host RAM only warns. The installer checks the limits it is given.
 - **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
 - **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
   install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
@@ -310,7 +315,7 @@ including in a `--plan` you run without `sudo`, and your own for the rest ([The 
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
 | 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
-| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer, or an unfinished upgrade to another release; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release, or to another release while an upgrade has not finished; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone, that a newer release made, or that was made during an unfinished upgrade to a release other than the installer's, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
+| 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker, Docker's limits); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer, or an unfinished upgrade to another release; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release, or to another release while an upgrade has not finished; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone, that a newer release made, or that was made during an unfinished upgrade to a release other than the installer's, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; a backup written to or read from `/var/backups/hvo-roof` when it, or a folder above it, is a link or a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
 
 ## Roles
@@ -356,6 +361,8 @@ The installer refuses a choice that would put the roof at risk, or that cannot w
   (`display-manager.service`) holding it, now or at the next boot: use Raspberry Pi OS Lite, or boot to the console.
   Once the kiosk is installed, a screen that is off or unplugged does not stop an update.
 - **Docker.** The controller and a rig need Docker running, and the right to use it.
+- **Docker's limits.** The controller and a rig need Docker to enforce memory, CPU and process limits, and this machine
+  to have the CPUs and memory [their limits](#the-controllers-limits) give.
 - **Root rules.** See [Running it](#running-it).
 - **The rig before its clients on a Mac.** A rig on a Mac is refused with `hvo-roof` or the Mac app in the same run:
   they trust the rig's CA by its SHA-256, which you can compare only once the rig has made it. Install the rig, then
@@ -388,7 +395,8 @@ Before asking anything, and without changing anything, the installer looks at th
   its password opens it. Each run warns when either expires soon, or when the certificate is not for a name clients
   use ([Renewing](#renewing)).
 - **The HAT's devices:** `/dev/i2c-1`, `/dev/gpiomem` and `/sys/class/thermal/thermal_zone0/temp`.
-- **Docker:** its version, and Compose v2's version.
+- **Docker:** its version, Compose v2's version, which limits it enforces on a container, and the CPUs and memory it
+  reports.
 - **The install records:** the machine's, and yours. A record the installer cannot read is reported and replaced, and
   until then a test rig is refused, since the record may say the machine drives the real HAT. A record from a newer
   installer is never replaced: install with that installer, or a newer one.
@@ -546,7 +554,8 @@ kebab-case. A member the installer does not know is an error, so a misspelt one 
     "domains": ["observatory.example"],
     "firstAdmin": { "name": "observer", "pin": true },
     "camera": { "baseUrl": "http://192.168.0.4:81", "userName": "roof-viewer" },
-    "telemetryEndpoint": "http://collector:4318"
+    "telemetryEndpoint": "http://collector:4318",
+    "resources": { "pidsLimit": 512 }
   }
 }
 ```
@@ -603,6 +612,9 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
+| `controller.resources.cpus` | A CPU limit for the controller container, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) |
+| `controller.resources.memory` | A memory limit for it, at least `1g`: a whole number of MiB or GiB, such as `1024m` or `1g`; the container gets no swap beyond it | None: no memory limit, until #138 |
+| `controller.resources.pidsLimit` | The most processes and threads it runs at once, from 256 to 32768 | `512` |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
 | `controller.rig.openToLan` | A rig only: `true` to publish its API and web UI on every address, not only on this machine's loopback address. Needs HTTPS. | `false` |
@@ -626,6 +638,43 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 The `controller` section applies to a rig too. A section for a role that is not chosen is dropped. An answers file
 has no place for a password, a PIN or a key: a member such as `password` is an error. The wizard never
 saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on its own. The wizard saves answers to `hvo-roof-answers.json` in the folder where the installer was started, unless you give another path.
+
+### The controller's limits
+
+The controller's container (a rig's too) runs with at most 512 processes and threads, and, for now, with no CPU or
+memory limit. A limit is one more way for the kernel to end the controller, and a controller ended while the roof
+moves leaves the drive running until a restarted controller turns the relays off, or, when it cannot start again,
+until the roof reaches its limit. RoofController's future default of 1 vCPU and 2 GiB is turned on by a follow-up
+once the supervisor de-energises the relays whenever the controller exits
+([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138);
+[deployment.md](deployment.md#the-containers-privileges-and-limits)). Until then, give a CPU or memory limit in the
+answers' `controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
+
+```bash
+sudo hvo-roof-install --answers controller.json --cpus 1 --memory 2g --pids-limit 1024
+```
+
+| Option | What it sets |
+|--------|--------------|
+| `--cpus CPUS` | `controller.resources.cpus` |
+| `--memory SIZE` | `controller.resources.memory` |
+| `--pids-limit N` | `controller.resources.pidsLimit` |
+
+A CPU limit below 1 vCPU, or a memory limit below `1g`, RoofController's floor, is refused, with no exception: exit code 2
+when the command line or an answers file gives it, 3 when the install record holds it (an `upgrade`). Leave it out for
+no limit. The install record keeps the limits, so `upgrade` and `rollback` give the container the same, and a run with
+other limits redeploys the controller with them (the plan says `redeployed with its limits: ...`); answers that leave a
+limit out redeploy it without one. The wizard asks nothing about them: it keeps what the record says, or what the
+command line gives.
+
+Before it changes anything, the installer checks that this machine's Docker can enforce the limits it gives, and
+refuses (exit code 3) when `docker info` says it does not enforce process limits, or memory or CPU limits when one is
+given, or reports fewer CPUs than a CPU limit. Raspberry Pi OS boots with the memory controller off: that matters only
+for a memory limit, and then add `cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt` and reboot.
+A memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs) is kept, with a
+warning: a limit is a cap, not a reservation. On a Mac, Docker Desktop's resources (Settings, Resources) must have the
+CPUs. What the limits do, and what a controller ended at its memory limit leaves the relays in, is in
+[deployment.md](deployment.md#the-containers-privileges-and-limits).
 
 ### Passwords and PINs
 
@@ -706,7 +755,7 @@ Packages
   info       bash, curl, setsid or perl, jq or python3     what the deploy script runs (found bash, curl, setsid, jq)
 Containers
   create     hat-emulator                                  the HAT emulator: the roof, drive and limit switches the rig drives (release 4.0.0's image by digest, on the hvo-emulator network, its control API on 127.0.0.1:5290)
-  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script)
+  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script, with no CPU or memory limit, at most 512 processes and threads)
 Ports
   info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)
   info       8088                                          the web UI (free; roof-controller will listen on it)
@@ -1048,10 +1097,16 @@ A platform installer downloaded and verified against that release's `SHA256SUMS`
 `upgrade --version "$version"` (with sudo for system roles).
 
 Do not uninstall, delete identity files, re-enroll users or change `identityStoreSchema` to work around the rejection.
-Existing schema-2 stores remain eligible for compatible rollback; a schema-3 store cannot roll back to 4.1.1.
-Rollback keeps current identity data and never replays an old credential backup. The bootstrap does not change
+Existing schema-2 stores remain eligible for compatible rollback; a schema-3 store goes back to 4.1.1 only with
+`rollback --restore-backup`, which puts back the identity store the upgrade backed up, losing the changes made to it
+since ([Rolling back](#rolling-back)). A plain rollback keeps current identity data, and no rollback replays an old
+credential backup unless asked to. The bootstrap does not change
 certificate trust or bypass browser warnings. Local candidate validation does not establish published-download,
 attestation-service or interactive kiosk/browser verification.
+
+The installers from the release after 4.1.1 on read any `identityStoreSchema`: the release's
+[state contracts](#state-contracts), not a list of schemas the installer knows, say whether it can read the stores, so
+a later identity schema needs no bootstrap.
 
 ### Routine upgrades
 
@@ -1066,20 +1121,45 @@ Each installer installs its own release, so the installer hands over to the new 
    up to the new one, oldest first: what someone upgrading must do, such as a setting to change. An upgrade across
    several releases shows every one's. Read them before the upgrade goes on. The new release's installer, run by
    you, shows them too; handed over to, it does not show them again.
-2. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
+2. It reads the schema of each store the controller keeps here, and checks that the new release reads them
+   ([State contracts](#state-contracts)). One that does not is refused (exit 3) before anything changes. It also says
+   when the new release makes a breaking state change, after which the release installed cannot read a store.
+3. As root on Linux, it backs up the controller's stores, as `backup` backs them up, to
+   `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`), in a folder only root
+   can change ([Backing up and restoring](#backing-up-and-restoring)). The backup is on disk before anything relies on
+   it: the archive is synced, then its folder, and each folder the installer made for it through the folder above it
+   ([Durability](#durability)). Handing over from the release after 4.1.1 on, a backup that cannot be taken refuses the
+   upgrade (exit 3) with nothing changed, and one that cannot be synced stops it (exit 1), the archive and any folder
+   made for it taken away again: the installer has not replaced itself yet. An installer from 4.1.1 or earlier takes no backup: it replaces itself first (step 4), and the new
+   installer takes the backup as the first step of its install. On that path a backup that cannot be taken still
+   refuses the upgrade (exit 3) before anything else changes, the record included, but the new release's installer
+   stays in place, with the one before kept as `hvo-roof-install.previous`; once the cause is put right,
+   `sudo hvo-roof-install upgrade` carries on. The bootstrap from 4.1.1
+   ([From 4.1.1 to a release with identity schema 3](#from-411-to-a-release-with-identity-schema-3)) starts the new
+   installer directly, which takes the backup before it puts itself in place.
+4. It puts the release's installer for this machine in its own place, checked against the SHA-256 in `release.json`,
    and keeps the one it replaces as `hvo-roof-install.previous`. A release with no installer for this machine (a build
    of your own) is refused: download that release's installer and run its `upgrade`.
-3. The new installer installs its release, as `--answers` installs the record's choices
-   ([Running it again](#running-it-again)). Before its first change it writes the record to say the new release
-   already, with the one before it (`previousVersion`) for a rollback, and `upgradingFrom`, which says the upgrade
-   has not finished. It syncs the record's folder to disk, so that a power loss does not take the record back; when
-   that fails, the upgrade stops there (exit 1), with nothing else changed. Then:
+5. The new installer installs its release, as `--answers` installs the record's choices
+   ([Running it again](#running-it-again)):
+   - first, the backup it was handed: its file and SHA-256 come with the hand-over. It opens the file once, and checks
+     that what it read there is that backup (its SHA-256), whole, root's, and this machine's of the release installed:
+     the bytes it hashes are the ones it checks, whatever takes the file's place meanwhile. One that is not stops the
+     upgrade before anything changes. An installer from before state contracts hands over none, and the new one takes
+     the backup itself, first: one that cannot be taken stops the upgrade there (exit 3), the record and everything
+     else as they were;
+   - then, before its first other change, it makes sure the backup is on disk (whichever run took it), then writes the
+     record to say the new release already, with the one before it (`previousVersion`) for a rollback, the backup
+     (`upgradeBackup`), and `upgradingFrom`, which says the upgrade has not finished. It syncs the record's folder to
+     disk, so that a power loss does not take the record back, nor leave it naming a backup that is not there; when a
+     sync fails, the upgrade stops there (exit 1), with nothing else changed;
    - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
      controller, checked before the old one is let go and kept as `roof-controller-previous`;
    - a rig's HAT emulator, from the new release;
    - the kiosk's program, keeping the one it replaces as `hvo-roof-kiosk.previous`; and `hvo-roof` and the Mac app,
      keeping the ones they replace beside them.
-4. The record is written again, without `upgradingFrom`: the upgrade has finished.
+6. The record is written again, without `upgradingFrom`: the upgrade has finished. It says the new release, the one
+   before it (`previousVersion`) for a rollback, and the backup (`upgradeBackup`).
 
 ```text
 $ sudo hvo-roof-install upgrade
@@ -1087,8 +1167,12 @@ $ sudo hvo-roof-install upgrade
 
 Upgrade notes for 4.0.1:
   Nothing to do by hand.
+
+The stores here: the identity store, schema 1; the settings files, schema 1. Release 4.0.1 reads them.
 Release 4.0.1: https://github.com/HualapaiValley/HVO.RoofController/releases/tag/v4.0.1
 
+Creating file /var/backups/hvo-roof/hvo-roof-roofpi-20261001T090000Z-before-4.0.1.tar.gz…
+Creating file /var/backups/hvo-roof/hvo-roof-roofpi-20261001T090000Z-before-4.0.1.tar.gz: done.
 /usr/local/sbin/hvo-roof-install: release 4.0.1's, 0755.
 Creating file /usr/local/sbin/hvo-roof-install…
 Creating file /usr/local/sbin/hvo-roof-install: done.
@@ -1109,7 +1193,9 @@ An upgrade that stops part way, at a failed step, Ctrl+C or a power loss, can le
 controller with the old kiosk, say, when the kiosk's download fails. Its record already says the new release, so
 nothing takes the controller back to the release the upgrade started from, except a rollback. `upgrade` again, with
 the new installer already in place, finishes it: "The upgrade from 4.0.0 to 4.0.1 did not finish here: finishing it."
-`rollback` goes back to 4.0.0. `upgrade --version 4.0.0` is refused (exit 3) and changes nothing, as are the install,
+Once the new controller has replaced the old one, a run that finishes it takes no new backup (the new controller may
+have moved its stores on): the record names the one taken before it. `rollback` goes back to 4.0.0.
+`upgrade --version 4.0.0` is refused (exit 3) and changes nothing, as are the install,
 the wizard and `--plan` of an installer older than 4.0.1. That includes the installers of releases from before
 `upgradingFrom` (4.1.1 and earlier), which compare their own release with the record's, with one gap: they pick the
 record by who runs them, so their `--plan` of the machine's roles, run without `sudo`, checks your own record instead
@@ -1122,6 +1208,68 @@ unfinished release would become the one `rollback` goes back to, though the cont
 the one from before it, when the upgrade stopped before the controller was replaced. When the unfinished release's
 files are gone, finishing it fails and says so; `rollback` needs only the release before's, and `upgrade` then goes on
 to the latest.
+
+### State contracts
+
+The controller keeps two stores here whose format a release can change:
+
+| Store | Its files | Its schema |
+|-------|-----------|------------|
+| The identity store: people, sessions and managed API keys | `/var/lib/hvo-roof/identity/identity.json` | Its `schemaVersion`; 1 without one |
+| The settings files: settings, and secrets set through the API | `/etc/hvo-roof/config/appsettings.Local.json` and `/var/lib/hvo-roof/settings-secrets/secrets.json` | 1, the only one so far |
+
+The secrets folder, the certificate, the CA and the kiosk's files have no schema: every release reads them the same
+way. The HAT emulator keeps no state.
+
+Each release declares, for each store, the schema it may write and the schemas it reads, in `release.json`
+(`stateContracts`) and in its controller image's `io.hvo.roof.state-contracts` label
+([State contracts](releasing.md#state-contracts) in the release guide). A release older than state contracts reads
+identity schemas 1 to its `identityStoreSchema`, and settings schema 1. A store never saved is read by every release.
+A store's file that is a folder, or anything else that is not a file (a FIFO, a device, a socket), or that root cannot
+read, is not one any release reads, and is refused as one the release cannot read. The installer opens a store's file
+without waiting on it and checks what it opened before it reads anything, so a FIFO there never holds it up. Only a plan
+without sudo, which may not read the files, leaves them to the run as root ("which only root reads").
+
+- **`upgrade`** refuses (exit 3, nothing changed) a release that cannot read a store as it is here, and says which. The
+  installer handing over checks before it replaces itself; the new release's installer checks again before it
+  installs. The controller's step checks once more before the deploy script runs, whatever runs the install.
+- A release **makes a breaking state change** when it may write a schema that the release installed does not read
+  (the installer reads what that one reads from its controller image's labels). The upgrade says so and names the
+  store. The change is made only when the store moves on, as when native authentication is enabled; until then a
+  rollback is still a swap.
+- **Every upgrade** of the machine's controller, as root on Linux, backs up the stores first, whether or not the
+  release makes a breaking change. It is the archive `backup` writes ([Backing up and restoring](#backing-up-and-restoring)):
+  the controller's and the kiosk's small files, with their secrets, and no log, program or image. There is no bulk data
+  to copy. The record names it (`upgradeBackup`). The backup stays until you remove it; keep it as you keep any backup
+  ([Where to keep it](#backing-up-and-restoring)). The installer handing over takes it before it replaces itself. If it
+  cannot be written (a folder it backs up, or `/var/backups/hvo-roof`, that someone other than root can change, say),
+  the upgrade is refused (exit 3) before anything else changes. So is one with a store's file there that a backup
+  cannot hold (a link, which a backup never follows): put the file itself in its place, then upgrade. An installer
+  from 4.1.1 or earlier takes no backup and replaces itself before the new one takes it: on that path a refused backup
+  leaves the new installer in place, and nothing else changed ([Routine upgrades](#routine-upgrades), step 3). The backup's
+  manifest names the stores' files that were not there (`absent`), so a rollback can tell a store never saved from one
+  the backup left out.
+- **`rollback`** refuses (exit 3, nothing changed) to go back to a release that cannot read a store as it is here, and
+  says how to go on: [Rolling back](#rolling-back).
+
+### Durability
+
+What a later step relies on after a power loss is on disk before that step runs. Each file is synced (`fsync`; on a
+Mac `F_FULLFSYNC`, never `fsync` in its place) before the folder entry that names it, then the folder is synced after
+the rename or removal; each folder the installer makes is synced through the folder above it. When a sync fails, the
+run stops there (exit 1) and goes no further.
+
+| What | On disk before |
+|---|---|
+| The install record, and an upgrade's mark (`upgradingFrom`) | the upgrade's first change after the mark, and the end of the run |
+| An upgrade's backup: the archive, `/var/backups/hvo-roof`, and `/var/backups` when the installer made it | the installer hands over, the record names it, and anything installed changes |
+| `backup`'s archive, `uninstall --purge --backup`'s too | `backup` says it is done, and the purge removes anything |
+| What `restore` puts back, with its owners, and the folders above it | the install that follows |
+| What `rollback --restore-backup` changes in a store's folder: the file kept beside the store, then the store put back (its content, mode and owner set on a file beside it before it is renamed over the store) or moved aside | the next of those changes, and the deploy script starting the controller before; every rollback syncs the stores' files and folders just before that |
+
+The rest of an install or upgrade (the controller's settings, keys and certificate, the programs) is written in one
+step each, but not synced: a power loss can bring back a file's earlier content, never part of one, and running the
+installer again puts it right, as after a step that failed.
 
 ## Rolling back
 
@@ -1144,21 +1292,77 @@ release's files: the unfinished release's are not needed. Each piece is checked
 against that release's own: the controller by its image's digest, the programs by their SHA-256. One the upgrade never
 reached is left as it is.
 
-It goes back one release, once: a rollback leaves no `previousVersion`, and running it again says so, changes nothing
-and exits 0. `upgrade` goes forward again. A machine with only one release ever installed has nothing to go back to,
-and the rollback is refused (exit 3).
+It goes back one release, once: a rollback leaves no `previousVersion` or `upgradeBackup`, and running it again says
+so, changes nothing and exits 0. `upgrade` goes forward again. A machine with only one release ever installed has
+nothing to go back to, and the rollback is refused (exit 3).
+
+### When the release before cannot read the stores
+
+A rollback first checks each store's schema against what the release before reads
+([State contracts](#state-contracts)). While it reads them all, the rollback is the swap above: nothing is copied or
+put back. When the upgrade made a breaking state change and a store has moved on since, a rollback, and its plan, are
+refused with exit 3, and nothing is changed:
+
+```text
+$ sudo hvo-roof-install rollback
+4.2.0 is installed here; going back to 4.1.1, the release before.
+
+Rollback is refused before replacing the controller: release 4.1.1 cannot read the data here: the identity store here is schema 3, and release 4.1.1 reads identity schemas 1 to 2. The upgrade to 4.2.0 backed the stores up first, to /var/backups/hvo-roof/hvo-roof-roofpi-20261020T090000Z-before-4.2.0.tar.gz. To go back to 4.1.1 with the stores it cannot read as that backup has them, losing every change made to them since the upgrade (people, passwords, PINs, API keys, sessions and settings; access removed since comes back): sudo hvo-roof-install rollback --restore-backup. Or stay on 4.2.0, or go forward to a release that reads it. Nothing was changed.
+```
+
+Stay on the release installed, or go forward to one that reads the stores. Or go back, giving up what changed in them
+since the upgrade:
+
+```bash
+sudo hvo-roof-install rollback --restore-backup
+```
+
+With `--restore-backup`:
+
+1. The backup the record names (`upgradeBackup`), or the one `--restore-backup FILE` names (one `backup` made before
+   the upgrade, say), is checked as `restore` checks one: root's, `0600` or `0400`, whole, and as its manifest says. It
+   must be this machine's, of the release the rollback goes back to, with stores that release reads, and with no
+   pending kiosk commissioning. Anything else is refused, with nothing changed.
+2. It says which stores it puts back, and plainly what is lost: every change made to them since the upgrade (people,
+   passwords, PINs, API keys, sessions and settings added or changed), and access removed since comes back. At a
+   terminal it asks first; without one, `--yes` goes ahead without asking. `--plan` shows the steps and changes
+   nothing.
+3. The deploy script's `--stop` stops the controller after a verified Stop of the idle roof. Docker must say the
+   controller is stopped, or not there: when it cannot say (it is not running, say), that is never taken for no
+   controller. The rollback stops there, with nothing put back, and the same command carries on once Docker answers.
+4. Each file of a store the release before cannot read goes back as the backup has it, with its mode and owner. Just
+   before each file is written, Docker must say again that the controller and `roof-controller-previous` (which
+   `--stop` leaves alone) are each stopped or not there, and that there is no `roof-controller-swap` (a rollback
+   stopped halfway). One running, paused or restarting, or one Docker cannot answer for, stops the rollback there
+   (exit 1), with nothing put back: stop it once the roof is idle, then run the same command again. Each change is on
+   disk before the next, and all of them, with the stores' files and folders, before the deploy script starts the
+   controller before ([Durability](#durability)); a sync that fails stops the rollback there (exit 1), nothing swapped.
+   The file it replaces is kept beside it, root's and `0600`, as
+   `<file>.rolled-back-from-<version>-<UTC time>`; a file the backup's manifest says was not there (`absent`) is
+   moved there. A file the backup neither holds nor names as not there (a link `backup` left out, or a backup from an
+   installer before it named them) is never removed: the rollback is refused, with nothing changed. Nothing else in
+   the store's folder changes, so a kiosk's retired commissioning stays retired. A store the release before reads as
+   it is stays as it is.
+5. The rollback then goes on as above: the deploy script's `--rollback` puts the kept controller back, and checks it.
+   If a step stops part way, the controller stays stopped and the roof idle: run the same command again to carry on.
+
+A rollback never puts a backup back on its own: only `--restore-backup` does, as root on Linux, where the upgrade
+takes the backup. A rig on a Mac goes forward instead. When the release before reads the stores, `--restore-backup`
+says so, puts nothing back, and the rollback is a swap.
 
 ## Backing up and restoring
 
-`sudo hvo-roof-install backup` writes one archive of the controller's and the kiosk's files:
+`sudo hvo-roof-install backup` writes one archive of the controller's and the kiosk's files (an upgrade writes one too,
+before it changes anything: [State contracts](#state-contracts)):
 
 - `/etc/hvo-roof`: the settings, the secrets, the certificate, the CA with its key, and the install record;
 - `/var/lib/hvo-roof`: the people, the API keys and the settings set through the API;
 - `/etc/hvo-roof-kiosk` and `/opt/hvo-roof-kiosk/appsettings.Local.json`: the kiosk's device key and settings.
 
 The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,
-written whole or not at all. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
-SHA-256, the host and the release. `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
+written whole or not at all, and on disk (synced, with its folder and any folder made for it) before the backup says it
+is done. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
+SHA-256, the host and the release, and the files of the controller's stores that were not there (`absent`). `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
 only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs
 up or a purge removes, `/opt/hvo-roof-kiosk` included. Before it keeps the archive, it reads it back as a restore
 would: one a restore could not read is not kept, and the backup fails.
@@ -1168,6 +1372,12 @@ would: one a restore could not read is not kept, and the backup fails.
 - Every folder it reads must be root's, with only root writing to it: whoever else could change one could put a file of
   theirs in place of another as it is read. Such a folder is refused, with the `chown` and `chmod` that fix it, and
   nothing is written.
+- `/var/backups/hvo-roof`, and each folder above it up to `/`, must be a folder (not a link), root's, with only root
+  writing to it. The installer makes it so (`0700`, the folders above it `0755`) when it is not there. One that is
+  there but is not so is refused (exit 3), with the `chown` and `chmod` that fix it, whenever a backup is written to
+  it (by `backup` or by an upgrade) or read from it (an upgrade's hand-over, `rollback --restore-backup`, `restore`):
+  whoever else could change it could put another archive, of theirs or an older one of root's, in place of the one
+  taken. The installer never repairs such a folder, even one it made: what is in it may not be its own.
 
 ```text
 $ sudo hvo-roof-install backup --output /root/roofpi.tar.gz
@@ -1216,7 +1426,8 @@ changes nothing; `--release DIR` reads the release from a folder.
 
 The controller goes first. When it does not stop, nothing else is removed: the kiosk goes on showing the roof, and
 `uninstall` again carries on once the roof is idle. The deploy script stops only a running controller: one that is
-paused or restarting blocks the uninstall, which changes nothing; start it or let it settle, then uninstall.
+paused or restarting blocks the uninstall, which changes nothing; start it or let it settle, then uninstall. So does a
+controller Docker cannot answer for (Docker is not running, say): it may be running, and is never taken for none.
 
 The data stays: the settings, secrets, certificate and CA, the people and the kiosk's device key. The record says when
 it was uninstalled, and keeps the choices, so an install that follows can offer them again. The `hvo-kiosk` user, the
@@ -1250,7 +1461,7 @@ purposes:
 - to upgrade, roll back or uninstall.
 
 It is written last, once everything before it is in place, and it holds no secret. An upgrade also writes it before
-its first change ([Routine upgrades](#routine-upgrades)). Each time, the record's folder is synced to disk, so a power
+its first change, once the stores are backed up ([Routine upgrades](#routine-upgrades)). Each time, the record's folder is synced to disk, so a power
 loss leaves the record as written: with `fsync` on Linux, and on a Mac with `F_FULLFSYNC`, which has the drive write
 its cache out too. A Mac's `fsync` can leave the record in that cache, so it is never used in its place: on a Mac,
 the record's folder must be on a file system that supports `F_FULLFSYNC`, as APFS on the Mac's own drive does, and
@@ -1263,6 +1474,7 @@ roles and their choices, it says:
 | `installerVersion` | The installer that last wrote it. |
 | `previousVersion` | The release installed before the last upgrade: what `rollback` goes back to. A rollback clears it. |
 | `rolledBackFrom` | The release `rollback` went back from. An upgrade clears it. |
+| `upgradeBackup` | The backup the last upgrade took of the stores before it changed anything, named from the upgrade's first change on: what `rollback --restore-backup` puts back. A rollback or an uninstall clears it. |
 | `upgradingFrom` | The release an upgrade started from, while the upgrade has not finished. From the upgrade's first change, `version` says the new release. The upgrade's last step clears it, as do `rollback` and `uninstall`. While it is there, only `version`'s release is installed, to finish the upgrade. |
 | `uninstalledAt` | When `uninstall` removed the roles, keeping the data and the choices. An install clears it. |
 | `installedAt`, `updatedAt` | When it was first written, and last. |
@@ -1476,14 +1688,22 @@ The script checks:
 10. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs
     that release. Its `upgrade` shows the new release's upgrade notes and hands over to the new installer, which it
     puts in `/usr/local/sbin`. The controller and the emulator are then the new release's, the old controller is kept
-    as `roof-controller-previous`, and the record says both releases. `upgrade` again changes nothing. Each release
+    as `roof-controller-previous`, and the record says both releases. The new installer says the stores' schemas and
+    the breaking state change (identity schema 3, which the release before does not read), and backs the stores up
+    before it changes anything: an archive in `/var/backups/hvo-roof`, root's and `0600`, of the release before,
+    with no log, that the record names. `upgrade` again changes nothing. Each release
     is a prerelease of its own checkout's `VersionPrefix`, the new one `-rig.2` and the release before `-rig.1`, so a
     pull request that moves the version to 4.0.1 upgrades from `4.0.0-rig.1` to `4.0.1-rig.2`.
 11. **Rollback.** `rollback --plan` changes nothing. `rollback` puts the kept controller back with the deploy script's
     `--rollback`, keeping the newer one in its turn, and the record says it rolled back. A second `rollback` says so
-    and changes nothing, and `upgrade` goes forward again. When the upgrade migrated the identity store beyond the
-    previous release's supported schema, the scenario instead verifies that both rollback planning and execution
-    refuse it, preserving the live identity bytes, installation record and running containers.
+    and changes nothing, and `upgrade` goes forward again, with a new backup. Then the identity store is moved on to
+    schema 3, as a release that migrated it leaves it: `rollback` and its plan are refused (exit 3), naming the
+    upgrade's backup, with the store, the record and the containers unchanged. `rollback --restore-backup --yes` then
+    stops the controller with a verified Stop, puts the identity store back from that backup (keeping the one it
+    replaces beside it), and puts the kept controller back; the first admin signs in with the same password. When an
+    upgrade has already moved the identity store past what the release before reads, the scenario checks only that
+    both rollback planning and execution refuse it, preserving the live identity bytes, installation record and
+    running containers.
 
 Except in step 4, the roof does not move: the relay register stays 0, and the emulator records no direction relay
 closing and no violation.
@@ -1500,8 +1720,8 @@ release's images, and `gh` must be signed in (`GH_TOKEN`).
 
 It refuses to run on a Raspberry Pi. It also refuses on a machine that has a controller or a rig: `/etc/hvo-roof`,
 `/var/lib/hvo-roof`, the installer's log, `/usr/local/sbin/hvo-roof-install`, its containers or network, or a network
-interface named `hvorig0`. It removes all of them when it ends, with the backup, the worktree and the releases'
-images. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and (from the checkout)
+interface named `hvorig0`; and on one with `/var/backups/hvo-roof`, which may hold a controller's backups. It removes
+all of them when it ends, with the backups, the worktree and the releases' images. The ports it uses must be free: the controller's 8443 and 8088, the emulator's 5290, and (from the checkout)
 its registry's 15001. `RIG_HTTPS_PORT` and `RIG_WEB_PORT` move the controller off 8443 and 8088, and
 `RIG_REGISTRY_PORT` moves the registry. `RIG_RESULTS_DIR` writes each check's result and timing to `rig-scenario.md`.
 

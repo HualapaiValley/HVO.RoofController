@@ -118,11 +118,14 @@ archive() {
   echo "${dir}.tar"
 }
 
+STATE_CONTRACTS='{"identity":{"writes":3,"reads":{"min":1,"max":3}},"settings":{"writes":1,"reads":{"min":1,"max":1}}}'
+
 labels() {
   jq -cn --arg version "$1" --arg revision "$2" --arg source "$3" --arg created "$4" --arg title "${5-HVO Roof Controller}" \
+    --arg contracts "${6-${STATE_CONTRACTS}}" \
     '{"org.opencontainers.image.version": $version, "org.opencontainers.image.revision": $revision,
       "org.opencontainers.image.source": $source, "org.opencontainers.image.created": $created,
-      "org.opencontainers.image.title": $title}'
+      "org.opencontainers.image.title": $title, "io.hvo.roof.state-contracts": $contracts}'
 }
 
 good=$(labels 4.0.0 "${REVISION}" "${SOURCE}" 2026-09-30T12:00:00Z)
@@ -147,6 +150,20 @@ printf 'not a tar' > "${WORK}/bad.tar"
 check "not an archive" 1 "is not an OCI archive" "${labels_sh}" "${WORK}/bad.tar" 4.0.0 "${REVISION}"
 check "empty version argument" 1 "must not be empty" "${labels_sh}" "${a}" "" "${REVISION}"
 check "missing arguments" 2 "check-image-labels.sh <oci-archive> <version> <revision> [<platforms>]" "${labels_sh}" "${a}"
+
+# The state contract: an object of stores, each writing a schema it reads; the HAT emulator's is empty.
+a=$(archive emulator-contract "$(labels 4.0.0 "${REVISION}" "${SOURCE}" 2026-09-30T12:00:00Z "HVO Roof Controller HAT emulator" '{}')")
+check "an empty state contract" 0 "linux/amd64: HVO Roof Controller HAT emulator 4.0.0" "${labels_sh}" "${a}" 4.0.0 "${REVISION}"
+n=0
+for contract in "" "not json" '[]' '{"identity":{"writes":3}}' '{"identity":{"writes":4,"reads":{"min":1,"max":3}}}' \
+    '{"identity":{"writes":1,"reads":{"min":2,"max":3}}}' '{"identity":{"writes":0,"reads":{"min":0,"max":0}}}' \
+    '{"identity":{"writes":1.5,"reads":{"min":1,"max":2}}}' '{"identity":{"writes":"1","reads":{"min":1,"max":1}}}' \
+    '{"identity":{"writes":1,"reads":{"min":1,"max":1},"extra":1}}'; do
+  n=$((n + 1))
+  a=$(archive "bad-contract-${n}" "$(labels 4.0.0 "${REVISION}" "${SOURCE}" 2026-09-30T12:00:00Z "HVO Roof Controller" "${contract}")")
+  check "state contract '${contract}'" 1 "linux/amd64: the state contract label (io.hvo.roof.state-contracts) is '${contract}'" \
+    "${labels_sh}" "${a}" 4.0.0 "${REVISION}"
+done
 
 # The platforms the archive must hold, in any order.
 a=$(archive platforms "${good}" linux/amd64 linux/arm64)

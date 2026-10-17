@@ -23,10 +23,10 @@ public sealed record ForcedRestartRequestResult(ForcedRestartRequestOutcome Outc
 /// <summary>
 /// Asks the container's supervisor to kill the controller (SIGKILL, as <c>docker kill</c> does) and start it again,
 /// for a controller that does not answer. The request is the file force-restart-controller in the supervisor's control
-/// directory (<see cref="RoofWebOptions.SupervisorControlPath"/>), which only the web UI's user can write. The
-/// supervisor ignores a request within 10 s of the controller's start (HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS;
-/// <see cref="SupervisorSnapshot.ForceRestartMinSeconds"/>) and records what it did in
-/// <see cref="SupervisorSnapshot.LastForcedRestart"/>. Only an admin may ask, after
+/// directory (<see cref="RoofWebOptions.SupervisorControlPath"/>), which only the web UI's user (its group) and root can
+/// write. The supervisor ignores a request within 10 s of the controller's start
+/// (HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS; <see cref="SupervisorSnapshot.ForceRestartMinSeconds"/>) and records what
+/// it did in <see cref="SupervisorSnapshot.LastForcedRestart"/>. Only an admin may ask, after
 /// confirming what a kill means for the roof (commissioning.md C11); the page that asks checks both.
 /// </summary>
 public sealed class ControllerForcedRestart

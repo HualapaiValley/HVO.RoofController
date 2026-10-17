@@ -88,10 +88,13 @@ credentials. Handle them as credential-bearing backups. Runtime code comes from 
 Modified or unowned files are refused. If the native installation step fails, its original files and
 original service active/enabled states are restored.
 
-An enabled identity store uses schema 2, or schema 3 when first-install kiosk commissioning was provisioned. Release manifests declare identityStoreSchema; older
+An enabled identity store uses schema 2, or schema 3 when first-install kiosk commissioning was provisioned. Release manifests declare identityStoreSchema
+and the identity store's state contract ([State contracts](install.md#state-contracts)); older
 manifests default to schema 1. A rollback to incompatible software is refused before replacing the
-controller. The schema-1 migration backup is never replayed automatically because it could revive
-revoked credentials. Compatible release rollback keeps current identity data and revocations.
+controller. The schema-1 migration backup is never replayed because it could revive
+revoked credentials. Compatible release rollback keeps current identity data and revocations; only
+`rollback --restore-backup`, asked for and confirmed, puts back the identity store the upgrade backed up, losing
+the changes made since ([Rolling back](install.md#rolling-back)).
 
 ## Release and test scope
 

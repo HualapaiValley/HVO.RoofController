@@ -478,6 +478,32 @@ test_a_request_left_from_before_the_start_is_discarded() {
   expect_equal "recorded request" "$(state .lastForcedRestart)" null
 }
 
+test_compose_limits_below_the_roofcontroller_floor_start_no_process() {
+  local setting status
+  echo 77 >"${FAKE_DIR}/controller.exit-at-start"
+  for setting in HVO_ROOF_CPUS=0.9 HVO_ROOF_CPUS=0.99 HVO_ROOF_CPUS=0 HVO_ROOF_CPUS=two HVO_ROOF_MEMORY=1023m HVO_ROOF_MEMORY=0g HVO_ROOF_MEMORY=1.5g; do
+    rm -f "${FAKE_DIR}/controller.pid" "${FAKE_DIR}/ui.pid"
+    env "${SUPERVISOR_ENV[@]}" "${setting}" "${SUPERVISOR}" --validate-deployment >"${WORK}/supervisor.log" 2>&1
+    status=$?
+    expect_equal "invalid Compose limit ${setting}" "${status}" 2
+    [[ ! -e "${FAKE_DIR}/controller.pid" && ! -e "${FAKE_DIR}/ui.pid" ]] || fail_test "${setting} started a process"
+    grep -q "RoofController's floor" "${WORK}/supervisor.log" || fail_test "${setting} did not explain the floor"
+  done
+}
+
+test_compose_limits_accept_the_floor_future_default_and_higher_values() {
+  local settings cpus memory status
+  echo 77 >"${FAKE_DIR}/controller.exit-at-start"
+  for settings in "1 1g" "1 1024m" "1 2g" "2.5 6G"; do
+    read -r cpus memory <<<"${settings}"
+    env "${SUPERVISOR_ENV[@]}" "HVO_ROOF_CPUS=${cpus}" "HVO_ROOF_MEMORY=${memory}" \
+      "${SUPERVISOR}" --validate-deployment >"${WORK}/supervisor.log" 2>&1
+    status=$?
+    expect_equal "valid Compose limits ${settings} reach only the controller" "${status}" 77
+    [[ ! -e "${FAKE_DIR}/ui.pid" ]] || fail_test "the deployment check started the web UI"
+  done
+}
+
 test_arguments_run_only_the_controller_with_them() {
   echo 3 >"${FAKE_DIR}/controller.exit-at-start"
   env "${SUPERVISOR_ENV[@]}" "${SUPERVISOR}" --validate-deployment >"${WORK}/supervisor.log" 2>&1
@@ -770,7 +796,8 @@ test_the_web_ui_runs_as_its_own_user_without_new_privileges() {
   grep -F -- "--reuid=${UI_USER} --regid=${UI_GROUP} --init-groups --no-new-privs | env -i " "${FAKE_DIR}/setpriv.log" \
     | grep -q " ${WORK}/bin/ui\$" || fail_test "the web UI was not started with setpriv: $(cat "${FAKE_DIR}/setpriv.log")"
   grep -qxF "USER=${UI_USER}" <(ui_env) || fail_test "the web UI's environment does not name its user"
-  expect_equal "control directory" "$(stat -c '%a %U %G' "${WORK}/run/control")" "700 ${UI_USER} ${UI_GROUP}"
+  # The supervisor's (root's in the container), so it reaches the web UI's requests without CAP_DAC_OVERRIDE.
+  expect_equal "control directory" "$(stat -c '%a %U %G' "${WORK}/run/control")" "770 $(id -un) ${UI_GROUP}"
   expect_equal "private directory" "$(stat -c '%a %G' "${WORK}/run/web")" "750 ${UI_GROUP}"
   expect_equal "keys directory" "$(stat -c '%a %U %G' "${WORK}/data/keys")" "700 ${UI_USER} ${UI_GROUP}"
   ! grep -q "can read" "${WORK}/supervisor.log" || fail_test "a warning without secrets: $(grep "can read" "${WORK}/supervisor.log")"

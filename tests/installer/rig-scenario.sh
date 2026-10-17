@@ -35,9 +35,16 @@
 #            the admin signs in with the same password, and upgrade with the installed hvo-roof-install changes nothing.
 #   upgrade  The pinned 4.1.1 historical source installed with its own installer and images. Its real schema-2 parser
 #            must refuse the schema-3 candidate before mutation; then install.sh verifies the new installer and bootstraps
-#            the newer installer, preserving identity/configuration with no commissioning/default access.
-#   rollback rollback to the release before (the kept controller put back), rollback again (nothing changes), then
-#            upgrade forward again.
+#            the newer installer, preserving identity/configuration with no commissioning/default access. The new
+#            installer says the stores' schemas and the breaking state change (identity schema 3, which 4.1.1 does not
+#            read), and backs the stores up first: one archive, root's and 0600, of the release before, that the record
+#            names (#130).
+#   rollback rollback to the release before (the kept controller put back, its stores read as they are), rollback again
+#            (nothing changes), then upgrade forward again, with a new backup. Then a store moved on past what the
+#            release before reads (the identity store's schema set to 3, as a release that migrated it leaves it):
+#            rollback refused, its plan too, nothing changed; then rollback --restore-backup: the controller stopped
+#            after a verified Stop, the identity store put back from the upgrade's backup (the one it replaces kept
+#            beside it), the kept controller put back, and the admin signs in with the same password.
 # Except in motion, the roof does not move: the relay register stays 0, and the emulator records no direction relay
 # closing and no violation.
 #
@@ -56,7 +63,7 @@
 # a rig on Linux needs. From this source, also docker buildx, git (the release before is built from a worktree of
 # RIG_PREVIOUS_REF) and the .NET SDK. It runs only against the local Docker daemon, which sudo must reach too, never on
 # a Raspberry Pi, and only on a machine without the rig's folders (/etc/hvo-roof, /var/lib/hvo-roof), the installer's
-# log, the installed installer (/usr/local/sbin/hvo-roof-install), the containers (roof-controller,
+# backups (/var/backups/hvo-roof), its log, the installed installer (/usr/local/sbin/hvo-roof-install), the containers (roof-controller,
 # roof-controller-previous, hat-emulator), the hvo-emulator network and a network interface named hvorig0: it removes
 # them all when it ends, with its backup folder and its worktree. The ports it uses must be free: RIG_HTTPS_PORT,
 # RIG_WEB_PORT, 5290 (the emulator's control API) and, from this source, RIG_REGISTRY_PORT. The images it built stay
@@ -107,6 +114,8 @@ roof_api="${roof}/api/v4.0"
 web="https://localhost:${web_port}"
 install_log=/var/log/hvo-roof-install.log
 installed=/usr/local/sbin/hvo-roof-install
+# Where an upgrade backs up the stores before it changes anything (#130).
+upgrade_backups=/var/backups/hvo-roof
 ca=/etc/hvo-roof/ca.crt
 admin=tester
 # The dummy interface that gives this machine a new address, and the address.
@@ -127,6 +136,7 @@ owns_resources=0
 previous_root="${work}/previous"
 previous_worktree=0
 backup_dir=""
+first_backup=""
 release_dir=""
 previous_dir=""
 made_interface=0
@@ -190,7 +200,8 @@ cleanup() {
         | grep -v -e 'OtlpMetricExporter' -e 'OtlpTraceExporter' -e 'OtlpLogExporter' -e '^ *at ' -e 'Connection refused' \
         | tail -n 40 >&2
     fi
-    docker rm -f "${controller}" "${controller}-previous" "${emulator}" "${registry_name}" >/dev/null 2>&1
+    # With their volumes: each controller keeps the web UI's sign-in keys on one of its own.
+    docker rm -f -v "${controller}" "${controller}-previous" "${emulator}" "${registry_name}" >/dev/null 2>&1
     docker network rm "${network}" >/dev/null 2>&1
     # Each release's images, by digest: the ones the installer pulled.
     local folder
@@ -199,7 +210,7 @@ cleanup() {
       jq -r '.images[] | "\(.repository)@\(.digest)"' "${folder}/release.json" | xargs -r docker rmi >/dev/null 2>&1
     done
     (( made_interface == 0 )) || sudo -n ip link delete "${interface}" >/dev/null 2>&1
-    sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof "${install_log}" "${installed}" "${installed}.previous"
+    sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof "${install_log}" "${installed}" "${installed}.previous" "${upgrade_backups}"
     [[ -z "${backup_dir}" ]] || sudo -n rm -rf "${backup_dir}"
   fi
   if (( previous_worktree == 1 )); then
@@ -349,6 +360,19 @@ runs() {
   expected=$(jq -r ".images.$3.reference" "$2/release.json")
   [[ "$(docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null)" == "${expected}" ]] \
     || fail "$1 does not run ${expected}: $(docker inspect --format '{{.Config.Image}}' "$1" 2>&1)"
+}
+
+# confined <container> <all|limits>: the container has the installer's default limits (512 processes, and no CPU or
+# memory limit until #138), and with all, the deploy script's privileges (a read-only root filesystem, only the supervisor's
+# capabilities, no-new-privileges; docs/deployment.md, "The container's privileges and limits").
+confined() {
+  local config
+  config=$(docker inspect --format '{{json .HostConfig}}' "$1") || fail "could not inspect $1"
+  jq -e --arg what "$2" '.NanoCpus == 0 and .Memory == 0 and .MemorySwap == 0 and .PidsLimit == 512
+    and ($what == "limits" or (.ReadonlyRootfs == true and .CapDrop == ["ALL"]
+      and ([.CapAdd[] | ltrimstr("CAP_")] == ["CHOWN", "KILL", "SETGID", "SETUID"])
+      and (.SecurityOpt | index("no-new-privileges") != null)))' <<<"${config}" >/dev/null \
+    || fail "$1 does not have the $([[ "$2" == all ]] && printf 'privileges and ')limits the deploy script gives: $(jq -c '{ReadonlyRootfs, CapDrop, CapAdd, SecurityOpt, NanoCpus, Memory, MemorySwap, PidsLimit}' <<<"${config}")"
 }
 
 # keys_sha256: the SHA-256 of each key, the CA's files and the certificate (the values are never read here).
@@ -603,6 +627,9 @@ setup() {
     || sudo -n test -e "${installed}"; then
     fail "/etc/hvo-roof, /var/lib/hvo-roof, ${install_log} or ${installed} exists: this machine has a controller or a rig. Run the scenario where there is none."
   fi
+  # A purge keeps the backups, which hold a controller's secrets: never the scenario's to remove.
+  ! sudo -n test -e "${upgrade_backups}" \
+    || fail "${upgrade_backups} exists: it may hold a controller's backups, which the scenario would remove. Move it aside first."
   local previous_commit=""
   if [[ -z "${release_source}" ]]; then
     previous_commit=$(git -C "${repo_root}" rev-parse --verify --quiet "${previous_ref}^{commit}") \
@@ -785,13 +812,16 @@ says_version() {
 # its final release's (4.0.1 for 4.0.1-rig.2), as build/release-assets.py gives a release candidate its release's.
 release() {
   local folder=$1 checkout=$2 release_version=$3 notes=$4 commit controller_digest emulator_digest identity_schema assets="[]"
+  local controller_contracts emulator_contracts
   shift 4
   commit=$(git -C "${checkout}" rev-parse HEAD)
   push_release_image roof-controller "${checkout}" src/HVO.RoofControllerV4.RPi/Dockerfile "${release_version}"
   controller_digest=${PUSHED_INDEX}
   identity_schema=${PUSHED_IDENTITY_SCHEMA}
+  controller_contracts=${PUSHED_STATE_CONTRACTS}
   push_release_image roof-hat-emulator "${checkout}" src/HVO.RoofControllerV4.Emulator/Dockerfile "${release_version}"
   emulator_digest=${PUSHED_INDEX}
+  emulator_contracts=${PUSHED_STATE_CONTRACTS:-"{}"}
   while (( $# >= 2 )); do
     assets=$(jq --arg name "$1" --arg kind "$2" --arg rid "${rid}" --argjson size "$(stat -c %s "${folder}/$1")" \
       --arg sha "$(sha256sum "${folder}/$1" | cut -d' ' -f1)" \
@@ -799,17 +829,22 @@ release() {
       <<<"${assets}")
     shift 2
   done
+  # As build/release-assets.py writes it: each image's state contract, the one its label declares, when the controller's
+  # image declares one (the release before, 4.1.1, has none).
   jq -n --arg version "${release_version}" --arg commit "${commit}" --arg registry "${registry}" \
     --arg controller "${controller_digest}" --arg emulator "${emulator_digest}" --arg notes "${notes}" \
-    --argjson identitySchema "${identity_schema}" --argjson assets "${assets}" '
+    --argjson identitySchema "${identity_schema}" --argjson assets "${assets}" \
+    --arg controllerContracts "${controller_contracts}" --arg emulatorContracts "${emulator_contracts}" '
     def image($name; $digest): { repository: "\($registry)/\($name)", tag: $version, digest: $digest,
       reference: "\($registry)/\($name):\($version)@\($digest)", platforms: ["linux/amd64", "linux/arm64"] };
     { schemaVersion: 1, identityStoreSchema: $identitySchema, product: "HVO Roof Controller", version: $version, tag: "v\($version)",
       prerelease: ($version | contains("-")), commit: $commit,
       images: { controller: image("roof-controller"; $controller), hatEmulator: image("roof-hat-emulator"; $emulator) },
       assets: $assets }
+    + (if $controllerContracts == "" then {} else
+        { stateContracts: { controller: ($controllerContracts | fromjson), hatEmulator: ($emulatorContracts | fromjson) } } end)
     + (if $notes == "" then {} else { upgradeNotes: [{ version: ($version | split("-")[0]), text: $notes }] } end)' \
-    > "${folder}/release.json"
+    > "${folder}/release.json" || fail "could not write ${folder}/release.json"
 }
 
 # push_release_image <name> <checkout> <Dockerfile> <version>: the image as a release publishes it, an index of two
@@ -817,11 +852,17 @@ release() {
 # other one, which builds without emulation. The index's digest is in PUSHED_INDEX.
 PUSHED_INDEX=""
 PUSHED_IDENTITY_SCHEMA=""
+PUSHED_STATE_CONTRACTS=""
 push_release_image() {
   local repository="${registry}/$1" checkout=$2 image_version=$4 single other output
   output=$(docker buildx build --quiet --provenance=false --platform "${platform}" -f "${checkout}/$3" \
     --build-arg "ROOF_VERSION=${image_version}" --build-arg "ROOF_REVISION=$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" \
     -t "${repository}:${image_version}-${platform#linux/}" --load "${checkout}" 2>&1) || fail "could not build $1 ${image_version} for ${platform}: $(tail -n 20 <<<"${output}")"
+  # The image's state contract label (#130), empty on an image from before it.
+  PUSHED_STATE_CONTRACTS=$(docker image inspect --format '{{index .Config.Labels "io.hvo.roof.state-contracts"}}' "${repository}:${image_version}-${platform#linux/}")
+  [[ "${PUSHED_STATE_CONTRACTS}" != "<no value>" ]] || PUSHED_STATE_CONTRACTS=""
+  [[ -z "${PUSHED_STATE_CONTRACTS}" ]] || jq -e 'type == "object"' >/dev/null 2>&1 <<<"${PUSHED_STATE_CONTRACTS}" \
+    || fail "$1 ${image_version}'s state contract label is not a JSON object"
   if [[ "$1" == roof-controller ]]; then
     PUSHED_IDENTITY_SCHEMA=$(docker image inspect --format '{{index .Config.Labels "io.hvo.roof.identity-schema"}}' "${repository}:${image_version}-${platform#linux/}")
     case "${PUSHED_IDENTITY_SCHEMA}" in
@@ -906,7 +947,10 @@ scenario_install() {
   [[ "$(curl -sS --max-time 10 --cacert "${ca}" -o /dev/null -w '%{http_code}' "${web}/")" =~ ^(200|302)$ ]] || fail "the web UI does not answer at ${web}"
   openssl verify -CAfile "${ca}" <(openssl s_client -connect "127.0.0.1:${https_port}" -servername localhost </dev/null 2>/dev/null | openssl x509) >/dev/null \
     || fail "the controller's certificate does not verify with the installer's CA"
-  pass "ready over HTTPS with the installer's CA, the web UI answers, ${admin} signs in as an admin with the password in the file, and Status says hatMode Emulated"
+  confined "${controller}" all
+  sudo -n jq -e '.controller.resources == {pidsLimit: 512}' /etc/hvo-roof/install.json >/dev/null \
+    || fail "the install record does not keep the controller's limits: $(sudo -n jq -c '.controller.resources' /etc/hvo-roof/install.json)"
+  pass "ready over HTTPS with the installer's CA, the web UI answers, ${admin} signs in as an admin with the password in the file, and Status says hatMode Emulated; read-only, with only the supervisor's capabilities and the default limits, which the record keeps"
 
   current_check="install: no secret shown"
   collect_secrets
@@ -1217,16 +1261,24 @@ scenario_backup() {
 
 scenario_restore() {
   current_check="restore: uninstall --purge"
-  local release_images
+  local release_images volumes volume containers=("${controller}")
   release_images=$(jq -r '.images[].reference' "${release_dir}/release.json")
+  # The controllers' own volumes (the web UI's sign-in keys), which go with them.
+  [[ -z "$(docker ps -aq --filter "name=^/${controller}-previous$")" ]] || containers+=("${controller}-previous")
+  volumes=$(docker inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}' \
+    "${containers[@]}" 2>/dev/null | sed '/^$/d')
+  [[ -n "${volumes}" ]] || fail "${controller} has no volume of its own for the web UI's keys"
   start_relay_monitor
   install_with "${installed}" purge uninstall --purge --no-backup --confirm "$(hostname)" --yes
   expect_installed "uninstall --purge"
   expect_output purge "and removing its data:"
   # shellcheck disable=SC2086 # one argument per image
   purged ${release_images}
+  for volume in ${volumes}; do
+    ! docker volume inspect "${volume}" >/dev/null 2>&1 || fail "the volume ${volume} of a removed controller is left"
+  done
   relays_still
-  pass "the containers, the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
+  pass "the containers (with their volumes), the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
 
   current_check="restore: from the backup"
   start_relay_monitor
@@ -1283,30 +1335,7 @@ bootstrap_settings_fixture() {
 }
 
 bootstrap_state() {
-  sudo -n python3 - "$1" <<'STATE' || fail "bootstrap preservation/default-access check failed"
-import hashlib, json, sys
-from pathlib import Path
-identity = json.loads(Path('/var/lib/hvo-roof/identity/identity.json').read_text())
-assert identity.get('kioskCredential') is None, 'existing installation gained commissioning access'
-assert not Path('/var/lib/hvo-roof-commissioning/first-install-claimed').exists(), 'existing installation gained a fresh claim'
-hash_value = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-settings = json.loads(Path('/etc/hvo-roof/config/appsettings.Local.json').read_text())
-assert settings['RoofControllerUi']['DefaultCamera'] == 'bootstrap-preservation-fixture', 'non-default settings fixture lost'
-files = {}
-for folder in ['/etc/hvo-roof/secrets', '/etc/hvo-roof/ca', '/etc/hvo-roof/config', '/etc/hvo-roof/https', '/var/lib/hvo-roof/settings-secrets']:
-    assert Path(folder).is_dir(), f'missing preservation fixture directory: {folder}'
-    for path in Path(folder).rglob('*'):
-        if path.is_file():
-            files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-for required in ['/etc/hvo-roof/ca.crt', '/etc/hvo-roof/ca/ca.key', '/etc/hvo-roof/config/appsettings.Local.json', '/etc/hvo-roof/https/roof-controller.pfx']:
-    path = Path(required)
-    assert path.is_file(), f'missing preservation fixture file: {required}'
-    files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-record = json.loads(Path('/etc/hvo-roof/install.json').read_text())
-value = {'users': hash_value(identity.get('users')), 'nativePrincipals': hash_value(identity.get('linuxPrincipals')),
-         'files': files, 'choices': hash_value({key: record.get(key) for key in ['roles', 'hat', 'controller', 'kiosk']})}
-Path(sys.argv[1]).write_text(json.dumps(value, sort_keys=True))
-STATE
+  sudo -n python3 "${repo_root}/tests/installer/bootstrap_state.py" "$1" || fail "bootstrap preservation/default-access check failed"
 }
 
 scenario_upgrade() {
@@ -1379,10 +1408,11 @@ scenario_upgrade() {
   runs "${controller}-previous" "${previous_dir}" controller
   runs "${emulator}" "${release_dir}" hatEmulator
   [[ "$(docker inspect --format '{{.State.Running}}' "${controller}-previous")" == false ]] || fail "${controller}-previous is running"
+  confined "${controller}" all
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
-  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null"
+  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null and .controller.resources == {pidsLimit: 512}"
   roof_still
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
   sudo -n cat /etc/hvo-roof/install.json > "${work}/record.txt"
@@ -1390,6 +1420,13 @@ scenario_upgrade() {
   bootstrap_state "${work}/bootstrap-after.json"
   cmp -s "${work}/bootstrap-before.json" "${work}/bootstrap-after.json" || fail "bootstrap changed preserved identity/configuration or introduced default access"
   pass "in ${seconds} s: checksum-verified release bootstrap installed ${version}, preserved identity/configuration with no default access, kept ${previous_version}'s controller; same-password sign-in and relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="upgrade: the stores backed up first (#130)"
+  expect_output upgrade "The stores here: the identity store, schema "
+  expect_output upgrade "Release ${version} makes a breaking state change: it may move the identity store to schema 3, which ${previous_version} does not read"
+  first_backup=$(sudo -n jq -er '.upgradeBackup' /etc/hvo-roof/install.json) || fail "the install record names no backup the upgrade took"
+  upgrade_backup_holds "${first_backup}" upgrade
+  pass "the breaking state change said, and the stores of ${previous_version} backed up before anything changed: ${first_backup}, root's and 0600, its manifest first, no log, named by the record"
 
   current_check="upgrade: again"
   local controller_id emulator_id
@@ -1451,10 +1488,14 @@ scenario_rollback() {
   expect_installed "rollback"
   runs "${controller}" "${previous_dir}" controller
   runs "${controller}-previous" "${release_dir}" controller
+  # The release before runs with the recorded limits (the deploy script's docker update), and the privileges its own
+  # deploy script gave it.
+  confined "${controller}" limits
+  expect_output rollback "[rollback] Giving ${controller}-previous the limits: no CPU or memory limit, at most 512 processes and threads"
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
-  record_says ".version == \"${previous_version}\" and .rolledBackFrom == \"${version}\" and .previousVersion == null"
+  record_says ".version == \"${previous_version}\" and .rolledBackFrom == \"${version}\" and .previousVersion == null and .upgradeBackup == null"
   [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "$(sha256sum "${previous_installer}" | cut -d' ' -f1)" ]] \
     || fail "rollback did not restore the historical installer"
   roof_still
@@ -1477,12 +1518,114 @@ scenario_rollback() {
   expect_installed "upgrade (forward again)"
   runs "${controller}" "${release_dir}" controller
   runs "${emulator}" "${release_dir}" hatEmulator
+  confined "${controller}" all
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
-  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null"
+  record_says ".version == \"${version}\" and .previousVersion == \"${previous_version}\" and .rolledBackFrom == null and .controller.resources == {pidsLimit: 512}"
+  local backup
+  backup=$(sudo -n jq -er '.upgradeBackup' /etc/hvo-roof/install.json) || fail "the install record names no backup the upgrade forward took"
+  [[ "${backup}" != "${first_backup}" ]] || fail "the upgrade forward named the first upgrade's backup, ${first_backup}"
+  upgrade_backup_holds "${backup}" forward
   roof_still
-  pass "${version} again, the record saying ${previous_version} is the release before; relay register 0 in ${ROOF_SAMPLES} samples"
+  pass "${version} again, the record saying ${previous_version} is the release before and naming a new backup, ${backup}; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="rollback: a store the release before cannot read is refused (#130)"
+  local identity=/var/lib/hvo-roof/identity/identity.json moved record_before
+  # As a release that migrated it leaves it: schema 3, each person with a principal id, as the controller's own
+  # migration gives them. The running controller keeps the store it read in memory, and saves only on a change.
+  sudo -n python3 - "${identity}" <<'MOVE' || fail "could not move the identity store on to schema 3"
+import json, os, sys, uuid
+path = sys.argv[1]
+before = os.stat(path)
+with open(path, encoding="utf-8") as file:
+    document = json.load(file)
+document["schemaVersion"] = 3
+for user in document.get("users") or []:
+    user.setdefault("principalId", uuid.uuid4().hex)
+temporary = path + ".rig-moving"
+with open(temporary, "w", encoding="utf-8") as file:
+    json.dump(document, file)
+os.chmod(temporary, 0o600)
+os.chown(temporary, before.st_uid, before.st_gid)
+os.replace(temporary, path)
+MOVE
+  moved=$(sudo -n sha256sum "${identity}")
+  record_before=$(sudo -n sha256sum /etc/hvo-roof/install.json)
+  controller_id=$(container_id "${controller}")
+  emulator_id=$(container_id "${emulator}")
+  start_relay_monitor
+  for mode in plan apply; do
+    if [[ "${mode}" == plan ]]; then
+      install_with "${installed}" rollback-moved rollback --plan --release "${previous_dir}"
+    else
+      install_with "${installed}" rollback-moved rollback --release "${previous_dir}"
+    fi
+    (( INSTALL_STATUS == 3 )) || fail "a rollback ${previous_version} cannot read (${mode}) exited ${INSTALL_STATUS}, not refusal 3"
+    expect_output rollback-moved "Rollback is refused before replacing the controller: release ${previous_version} cannot read the data here: the identity store here is schema 3"
+    expect_output rollback-moved "backed the stores up first, to ${backup}."
+    expect_output rollback-moved "sudo hvo-roof-install rollback --restore-backup."
+    expect_output rollback-moved "Nothing was changed."
+    [[ "$(container_id "${controller}")" == "${controller_id}" && "$(container_id "${emulator}")" == "${emulator_id}" ]] \
+      || fail "the refused rollback (${mode}) replaced a container"
+    [[ "$(sudo -n sha256sum "${identity}")" == "${moved}" && "$(sudo -n sha256sum /etc/hvo-roof/install.json)" == "${record_before}" ]] \
+      || fail "the refused rollback (${mode}) changed the identity store or the record"
+    no_secret_in "${work}/rollback-moved.txt"
+  done
+  wait_for "the controller" 60 ready
+  roof_still
+  pass "identity schema 3, which ${previous_version} does not read: rollback and its plan refused (3), naming the upgrade's backup; the store, the record and the containers unchanged; relay register 0 in ${ROOF_SAMPLES} samples"
+
+  current_check="rollback: --restore-backup (#130)"
+  local kept restored backed_up
+  start_relay_monitor
+  install_with "${installed}" rollback-restore rollback --restore-backup --yes --release "${previous_dir}"
+  expect_installed "rollback --restore-backup"
+  expect_output rollback-restore "the identity store put back from ${backup}, the backup taken before the upgrade to ${version}"
+  expect_output rollback-restore "Every change made to it since then is lost"
+  expect_output rollback-restore "Done rolling back."
+  runs "${controller}" "${previous_dir}" controller
+  runs "${controller}-previous" "${release_dir}" controller
+  # The store as the backup has it, before the controller put back saves anything of its own.
+  restored=$(sudo -n jq -c '{schema: (.schemaVersion // 1), users: [.users[]?.name]}' "${identity}") || fail "could not read the identity store put back"
+  backed_up=$(sudo -n tar -xOzf "${backup}" "${identity#/}" | jq -c '{schema: (.schemaVersion // 1), users: [.users[]?.name]}') \
+    || fail "could not read the identity store in ${backup}"
+  [[ "${restored}" == "${backed_up}" ]] || fail "the identity store is ${restored}, not the backup's ${backed_up}"
+  kept=$(sudo -n find "${identity%/*}" -maxdepth 1 -name "identity.json.rolled-back-from-${version}-*")
+  [[ -n "${kept}" && "$(wc -l <<<"${kept}")" -eq 1 ]] || fail "the identity store it replaced was not kept beside it: '${kept}'"
+  mode_is 600 "${kept}"
+  [[ "$(sudo -n jq -r '.schemaVersion' "${kept}")" == 3 ]] || fail "${kept} is not the identity store that moved on"
+  wait_for "the controller" 60 ready
+  sign_in
+  emulated_status
+  record_says ".version == \"${previous_version}\" and .rolledBackFrom == \"${version}\" and .previousVersion == null and .upgradeBackup == null"
+  sudo -n test -f "${backup}" || fail "the rollback removed the backup it put the store back from"
+  roof_still
+  sudo -n cat "${install_log}" > "${work}/install-log.txt"
+  no_secret_in "${work}/rollback-restore.txt" "${work}/install-log.txt"
+  pass "the controller stopped after a verified Stop, the identity store put back from ${backup} (schema ${restored}), the one it replaced kept as ${kept} (0600), the kept controller put back; ${admin} signs in with the same password; relay register 0 in ${ROOF_SAMPLES} samples"
+}
+
+# upgrade_backup_holds <backup> <run>: the backup the upgrade took, as the run said: in the installer's backups folder,
+# root's and 0600, before the release, holding the stores of the release before (its manifest first) and no log.
+upgrade_backup_holds() {
+  local backup=$1 run=$2 entry
+  [[ "${backup}" == "${upgrade_backups}/hvo-roof-"*"-before-${version}.tar.gz" ]] \
+    || fail "the upgrade's backup is ${backup}, not one in ${upgrade_backups} before ${version}"
+  expect_output "${run}" "${backup}"
+  mode_is 700 "${upgrade_backups}"
+  mode_is 600 "${backup}"
+  sudo -n tar -tzf "${backup}" > "${work}/upgrade-backup.txt" || fail "${backup} is not a tar.gz"
+  [[ "$(head -n 1 "${work}/upgrade-backup.txt")" == hvo-roof-backup.json ]] || fail "${backup}'s first entry is not its manifest"
+  for entry in etc/hvo-roof/install.json var/lib/hvo-roof/identity/identity.json; do
+    grep -qxF "${entry}" "${work}/upgrade-backup.txt" || fail "${backup} lacks ${entry}"
+  done
+  ! grep -q '^var/log/' "${work}/upgrade-backup.txt" || fail "${backup} holds a log"
+  [[ "$(sudo -n tar -xOzf "${backup}" hvo-roof-backup.json | jq -r '.recordVersion')" == "${previous_version}" ]] \
+    || fail "${backup} is not a backup of ${previous_version}"
+  [[ "$(sudo -n tar -xOzf "${backup}" etc/hvo-roof/install.json | jq -r '.version')" == "${previous_version}" ]] \
+    || fail "${backup} was not taken before the upgrade changed the record"
+  no_secret_in "${work}/upgrade-backup.txt"
 }
 
 setup

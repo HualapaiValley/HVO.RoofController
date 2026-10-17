@@ -20,12 +20,22 @@ public sealed record ControllerIdentity(IReadOnlyList<IdentityEntry> Users, IRea
     /// <summary>
     /// The identity store at <paramref name="path"/>; <see cref="Empty"/> when there is none yet. Throws
     /// <see cref="UnauthorizedAccessException"/> when only root may read it, and <see cref="InstallerException"/> when it
-    /// is not an identity store.
+    /// is not an identity store (something other than a file, a FIFO say, among them: it is never read, or waited on).
     /// </summary>
     public static ControllerIdentity Read(InstallerMachine machine, string path)
     {
         ArgumentNullException.ThrowIfNull(machine);
-        if (machine.ReadText(path) is not { } json)
+        string? json;
+        try
+        {
+            json = machine.ReadRegularText(path);
+        }
+        catch (NotARegularFileException error)
+        {
+            throw new InstallerException($"{path} is not the controller's identity store: it is {error.Kind}.");
+        }
+
+        if (json is null)
         {
             return Empty;
         }

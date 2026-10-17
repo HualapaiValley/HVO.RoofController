@@ -11,16 +11,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
   mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
+- Resource limits for the controller's container: at most 512 processes by default, and a CPU and a memory limit (no
+  swap) only when given, with `hvo-roof-install`'s `controller.resources` answers or `--cpus`, `--memory` and
+  `--pids-limit`, or the deploy script's `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`. A CPU limit
+  below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused, with no exception (also before
+  Compose starts either process or its deployment check). The install
+  record keeps them, and upgrade and rollback give them again. **No CPU or memory limit is given by default yet:** the
+  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up once the
+  supervisor de-energises the relays whenever the controller exits (#138), because a killed or crash-looping controller leaves the drive running (#129).
+- State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
+  `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
+  the settings files). `upgrade` and `rollback` refuse (exit 3, nothing changed) a release that cannot read the stores
+  here, and `upgrade` says when a release makes a breaking state change. A store's file that is a folder, or not a
+  file at all (a FIFO, a device, a socket: refused before anything reads it, and never waited on), or that root
+  cannot read, is refused too; only a plan without sudo leaves it to the run as root. See
+  [State contracts](docs/install.md#state-contracts).
+- `upgrade` now backs up the controller's stores before it changes anything, as `backup` does, to
+  `/var/backups/hvo-roof`; the record names the backup (`upgradeBackup`). No log, program or image is copied. The
+  installer takes it before it replaces itself and hands its file and SHA-256 to the new release's installer, which
+  reads the file once and checks that what it read has that SHA-256 and is this machine's backup of the release
+  installed. A backup that cannot be taken, or a store's file a backup cannot hold (a link), refuses the upgrade
+  (exit 3) with nothing changed. Through an installer from 4.1.1 or earlier, which replaces itself before the new one
+  takes the backup, the new installer stays in place and nothing else changes. The upgrade marks its record
+  (`upgradingFrom`, #131) only once the backup is taken, and the mark names it, so a refused backup leaves the record
+  as it was. The backup is on disk (the archive synced, then its folder and each folder made for it) before the
+  installer hands over, the record names it, or anything installed changes; a sync that fails stops the upgrade
+  (exit 1), the archive taken away again. A backup's manifest names the stores' files that were not there (`absent`). Backups are written to and
+  read from `/var/backups/hvo-roof` only while it, and each folder above it, is root's alone and not a link: one that
+  is not is refused (exit 3), never repaired (#130).
+- `rollback --restore-backup [FILE] [--yes]`: across a breaking state change, puts back from that backup the stores the
+  release before cannot read, after the controller's verified Stop, saying plainly that the changes made to them since
+  the upgrade are lost; the files it replaces are kept beside them. Without it, such a rollback is refused. Nothing is
+  put back unless Docker says, just before each file, that the controller and the one kept for a rollback are both
+  stopped (or not there), and a store's file is removed only when the backup names it as not there. The file kept
+  beside a store, the store put back (with its owner) or moved aside, and the stores' folders are on disk before the
+  controller before starts; a sync that fails stops the rollback before the swap (exit 1) (#130).
 
 ### Changed
+
+- **The installer, `install.sh` and the deploy script refuse a host whose Docker does not enforce process limits, or
+  memory or CPU limits when one is given, or that has fewer CPUs than a CPU limit, with nothing changed.** Raspberry Pi
+  OS boots with the memory controller off: that refuses only a memory limit, and then add `cgroup_enable=memory` to the
+  single line in `/boot/firmware/cmdline.txt` and reboot. A memory limit above the machine's memory is kept, with a
+  warning: a limit is a cap, not a reservation (#129).
+- The mounted secrets, certificate, identity and settings directories must be root's, as the installer and
+  [deployment.md](docs/deployment.md#one-time-preparation-on-the-pi) make them: the controller no longer has
+  `CAP_DAC_OVERRIDE`, and the deployment check refuses a directory it cannot reach (#129).
+- The deploy script's `EXTRA_DOCKER_ARGS` refuses options that would change the container's privileges or limits,
+  `--privileged` included in every mode (#129).
 
 - Upgrading from installed 4.1.1 to this schema-3 release requires the new release's
   `install.sh upgrade --version <VERSION>` bootstrap, which verifies the downloaded installer. The old installed installer rejects schema 3 before replacing
   itself or showing upgrade notes. See [Upgrading](docs/install.md#upgrading); existing identities and configuration
-  are retained, with no default access added. Schema-incompatible rollback remains refused.
+  are retained, with no default access added. Schema-incompatible rollback remains refused unless
+  `rollback --restore-backup` is asked for.
+- The installer reads any `identityStoreSchema` in a release's `release.json`, and the release's state contracts
+  decide whether it reads the stores, so a later identity schema needs no bootstrap like 4.1.1's. `check-image-labels.sh`
+  requires each image's state contract label (#130).
+- `uninstall` no longer takes a controller Docker cannot answer for (Docker not running, say) for none: stopping it is
+  blocked, and nothing is removed, until Docker answers (#130).
 
 ### Fixed
 
+- `restore` now makes what it puts back durable (each file and folder with its owner, then the folders above them)
+  before the install that follows relies on it; a sync that fails stops it before that install (exit 1) (#130).
 - An upgrade that stopped part way (the new controller deployed, the kiosk's download failed) left the record saying
   the old release, so `upgrade` to that release, or an older installer's install, wizard or `--plan`, could deploy the
   older controller again without `rollback`. The record now says the new release from before the upgrade's first
@@ -58,6 +112,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Persist commissioning retirement and guess limits; reject pending-state restore and schema-incompatible rollback.
   Native revalidation distinguishes confirmed account revocation from unavailable checks.
+- The controller's container runs with a read-only root filesystem, no Linux capabilities but the supervisor's
+  (`CHOWN`, `KILL`, `SETGID`, `SETUID`) and `no-new-privileges`, from the deploy script, the Compose profiles and so the
+  installer. The supervisor's forced-restart directory is now root's, writable by the web UI's group. What a controller
+  killed at its limits, or otherwise, leaves the relays and the drive in is recorded in
+  [deployment.md](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in): the relays stay held
+  until a restarted controller reaches its initialization and turns them off, or the roof reaches its limit. A
+  controller that cannot start again (a crash loop of starts that fail before the initialization) leaves them held, as
+  the supervisor writes nothing to the relays; that is #138 (#129).
 
 ## [4.1.1] - 2026-10-15
 

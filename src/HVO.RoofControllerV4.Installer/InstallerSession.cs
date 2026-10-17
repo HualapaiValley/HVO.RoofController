@@ -71,6 +71,12 @@ public sealed class InstallerSession
     /// <summary>Explicit package-setup consent for this run only.</summary>
     public bool SetupPrerequisites { get; set; }
 
+    /// <summary>
+    /// The controller container's limits given on the command line (<c>--cpus</c> and the others), for the wizard: the
+    /// defaults of a controller chosen there (<see cref="DefaultController"/>).
+    /// </summary>
+    public ContainerResourcesOverride? ResourcesOverride { get; set; }
+
     public async Task RefreshSurveyAsync(CancellationToken cancellationToken = default)
         => Survey = await MachineSurveyor.SurveyAsync(Machine, cancellationToken).ConfigureAwait(false);
 
@@ -121,6 +127,7 @@ public sealed class InstallerSession
     /// </summary>
     public ControllerSettings DefaultController => new()
     {
+        Resources = ResourcesOverride?.Apply(null) ?? new ContainerResources(),
         Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa,
         TelemetryEndpoint = Survey.Controller?.TelemetryEndpoint is { Length: > 0 } endpoint ? endpoint : null,
         Rig = new RigSettings
@@ -140,6 +147,12 @@ public sealed class InstallerSession
     /// </summary>
     public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true)
         => [.. VersionProblems(), .. RoleGuards.Check(Survey, Answers, planOnly, clientChosen)];
+
+    /// <summary>What the installer warns of in the answers here without refusing them: a memory limit above this machine's memory.</summary>
+    public IReadOnlyList<string> Warnings()
+        => InstallRoles.RunsController(Answers.Roles)
+            ? [.. RoleGuards.ContainerLimitWarnings(Survey.Docker.Limits, (Answers.Controller ?? new ControllerSettings()).Normalised().Resources)]
+            : [];
 
     /// <summary>
     /// The records of this run's roles, what an upgrade starts from: the machine's for the machine's roles (the controller,
@@ -257,8 +270,30 @@ public sealed class InstallerSession
             var resolved = await SetupUserEnrollment.ResolveAsync(Machine, settings, cancellationToken).ConfigureAwait(false);
             Answers = Answers with { Controller = Answers.Controller with { LinuxAuth = resolved } };
         }
-        return await PlanBuilder.Build(Machine, Survey, Answers).CheckAsync(Context, cancellationToken).ConfigureAwait(false);
+        return await PlanBuilder.Build(Machine, Survey, Answers, upgradeBackup: UpgradeBackup()).CheckAsync(Context, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// For an upgrade of the machine's controller on Linux (an older release recorded, and installed, or this release's
+    /// upgrade not finished), the backup of its stores the plan takes first, of the release the upgrade started from; null
+    /// otherwise.
+    /// </summary>
+    public UpgradeBackupStep? UpgradeBackup()
+    {
+        if (Machine.Os != InstallerOs.Linux || !Survey.IsRoot || UpgradeLine() is null || Survey.SystemRecord is not { } record
+            || !InstallRoles.RunsController(record.Roles))
+        {
+            return null;
+        }
+
+        return new UpgradeBackupStep(record.UpgradingFrom ?? record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version), HandedOverBackup);
+    }
+
+    /// <summary>
+    /// The backup the installer before this one took before it replaced itself and handed over (<c>upgrade</c>): its file
+    /// and SHA-256. <see cref="UpgradeBackup"/> then checks it is that backup, in place of taking another.
+    /// </summary>
+    public (string Path, string Sha256)? HandedOverBackup { get; set; }
 
     /// <summary>Installs <paramref name="plan"/>: each step checked again as it comes, and logged.</summary>
     public async Task ApplyAsync(CheckedPlan plan, Action<string>? progress = null, CancellationToken cancellationToken = default)
@@ -278,12 +313,29 @@ public sealed class InstallerSession
 
     // An upgrade, or a reinstall over an older release's data, says its release in each record it writes before its first
     // change, synced to disk: one that stops part way, or loses power, then leaves a record that no installer goes back
-    // from but rollback.
+    // from but rollback. The upgrade's backup comes first (PlanStep.OnlyCopies), so a backup refused leaves the record as
+    // it was; the machine's record then names that backup, made durable first, whichever run took it: a power loss must
+    // not leave a record naming a backup that is not there.
     private static void MarkUpgradeStarted(CheckedPlan plan, InstallContext context)
     {
+        var backup = plan.Steps.Select(step => step.Step).OfType<UpgradeBackupStep>().FirstOrDefault()?.Kept;
+        if (backup is not null)
+        {
+            try
+            {
+                BackupCommands.MakeDurable(context.Machine, backup);
+            }
+            catch (IOException error)
+            {
+                var message = $"Before its first change, the installer could not make sure that the backup {backup} is there after a power loss: {error.Message} Nothing else was changed.";
+                context.Log.Write($"Failed: {message}");
+                throw new InstallerException(message, error);
+            }
+        }
+
         foreach (var record in plan.Steps.Select(step => step.Step).OfType<RecordStep>())
         {
-            record.MarkUpgradeStarted(context);
+            record.MarkUpgradeStarted(context, backup);
         }
     }
 
@@ -505,6 +557,11 @@ public sealed class InstallerSession
         lines.Add(survey.Docker.IsUsable
             ? $"Docker:      {survey.Docker.Version}{(survey.Docker.ComposeVersion is null ? ", no Compose v2" : $", Compose {survey.Docker.ComposeVersion}")}"
             : $"Docker:      {survey.Docker.Problem}");
+        if (survey.Docker.Limits is { } limits)
+        {
+            static string Flag(bool? flag) => flag switch { true => "yes", false => "no", null => "?" };
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"             enforces memory limits {Flag(limits.Memory)}, CPU {Flag(limits.Cpu)}, processes {Flag(limits.Pids)}, swap {Flag(limits.Swap)}; reports {limits.Cpus?.ToString(CultureInfo.InvariantCulture) ?? "?"} CPUs, {(limits.MemoryBytes is { } bytes ? (bytes / (1024 * 1024)).ToString(CultureInfo.InvariantCulture) + "m" : "?")} of memory"));
+        }
         lines.Add($"Recorded:    {DescribeRecord(survey.SystemRecord, "the machine's")}; {DescribeRecord(survey.UserRecord, "your")}");
         foreach (var problem in survey.RecordProblems)
         {

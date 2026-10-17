@@ -9,7 +9,11 @@ stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex
 `inspect` supports two --format templates: '{{range .Config.Env}}{{println .}}{{end}}', the --env/-e values the
 container was run with (its "options"), and '{{.State.Status}} {{.RestartCount}}', its docker state and optional
 "restart_count". Starting a stopped container resets the count to 0, as docker start does; starting a running or
-restarting one changes nothing, and starting a paused one fails.
+restarting one changes nothing, and starting a paused one fails. The deploy script's HostConfig template reports the
+privileges and limits the container was run with (--read-only, --cap-drop, --cap-add, --security-opt, --cpus,
+--memory, --memory-swap, --pids-limit in its "options"), as `update` changed them (its "limits", which a test may seed);
+a seeded container has none, as one deployed before them. `update` changes them as Docker does: 0 leaves a limit as it
+is (so a CPU or memory limit cannot be taken off), and a process limit of -1 takes that one off (reported as 0).
 Container behaviour is chosen per container "kind" (old, current, new, ...) with environment variables:
   FAKE_<KIND>_READY=false          /health/ready fails
   FAKE_<KIND>_STATUS_CODE=<code>   HTTP status of the in-container GET Status (default 200)
@@ -46,6 +50,12 @@ Other switches:
                                    fields ("/"), as Docker's containerd store does; by default it fails, as the classic
                                    store does
   FAKE_INSPECT_PLATFORM=false      the CLI has no `image inspect --platform` (Docker before 28)
+  FAKE_INFO_<FIELD>=<value>        what `info --format` reports for MemoryLimit, CPUCfsQuota, PidsLimit and SwapLimit
+                                   (default true each), NCPU (default 4) and MemTotal (default 8 GiB), as
+                                   FAKE_INFO_MEMORYLIMIT=false
+  FAKE_DROPPED_LIMIT=memory|cpus|pids
+                                   `run -d` drops that limit, as Docker does with only a warning when the kernel cannot
+                                   enforce it
   FAKE_STOP_FAIL=true              `stop` fails
   FAKE_STOP_CUT_OFF=true           the first `stop` loses its connection: the client fails and the daemon finishes the
                                    stop by itself FAKE_ASYNC_STOP_SECONDS (default 1) later
@@ -169,6 +179,52 @@ def env_of(c):
     return env
 
 
+HOST_CONFIG_FORMAT = ("{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} "
+                      "{{json .HostConfig.PidsLimit}} {{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}} {{json .HostConfig.SecurityOpt}}")
+UNITS = {"b": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}
+
+
+def to_bytes(value):
+    value = value.lower()
+    return int(value[:-1]) * UNITS[value[-1]] if value[-1] in UNITS else int(value)
+
+
+def option_values(options, name):
+    """Every value of an option given as `name value` or `name=value`."""
+    values = []
+    for i, value in enumerate(options):
+        if value == name and i + 1 < len(options):
+            values.append(options[i + 1])
+        elif value.startswith(name + "="):
+            values.append(value[len(name) + 1:])
+    return values
+
+
+def limits_of(options):
+    """The limits Docker records for these run options: NanoCpus, Memory, MemorySwap and PidsLimit (None when unset)."""
+    limits = {}
+    for name, key, convert in (("--cpus", "nano", lambda v: round(float(v) * 1e9)), ("--memory", "memory", to_bytes),
+                               ("--memory-swap", "swap", to_bytes), ("--pids-limit", "pids", int)):
+        given = option_values(options, name)
+        if given:
+            limits[key] = convert(given[-1])
+    if limits.get("swap") is not None and os.environ.get("FAKE_INFO_SWAPLIMIT", "true") != "true":
+        limits["swap"] = -1
+    return limits
+
+
+def host_config(c):
+    options = c.get("options", [])
+    limits = dict(limits_of(options), **c.get("limits", {}))
+    caps = lambda name: [v if v == "ALL" else "CAP_" + v.upper().removeprefix("CAP_") for v in option_values(options, name)] or None
+    return " ".join([
+        "true" if "--read-only" in options else "false",
+        str(limits.get("nano", 0)), str(limits.get("memory", 0)), str(limits.get("swap", 0)),
+        json.dumps(limits.get("pids")), json.dumps(caps("--cap-drop"), separators=(",", ":")),
+        json.dumps(caps("--cap-add"), separators=(",", ":")),
+        json.dumps(option_values(options, "--security-opt") or None, separators=(",", ":"))])
+
+
 def inspect(state, args):
     fmt, refs, i = None, [], 0
     while i < len(args):
@@ -177,11 +233,13 @@ def inspect(state, args):
         else:
             refs.append(args[i])
             i += 1
-    if fmt not in ("{{json .Config.Env}}", "{{range .Config.Env}}{{println .}}{{end}}", "{{.State.Status}} {{.RestartCount}}", "{{.Image}}", "{{.HostConfig.RestartPolicy.Name}}"):
+    if fmt not in ("{{json .Config.Env}}", "{{range .Config.Env}}{{println .}}{{end}}", "{{.State.Status}} {{.RestartCount}}", "{{.Image}}", "{{.HostConfig.RestartPolicy.Name}}", HOST_CONFIG_FORMAT):
         die(f"fake docker: unsupported inspect format: {fmt}")
     for ref in refs:
         _, c = container(state, ref)
-        if fmt == "{{.Image}}":
+        if fmt == HOST_CONFIG_FORMAT:
+            out(host_config(c))
+        elif fmt == "{{.Image}}":
             out("sha256:" + hashlib.sha256(c["kind"].encode()).hexdigest())
         elif fmt == "{{.HostConfig.RestartPolicy.Name}}":
             out(c["restart"])
@@ -568,6 +626,8 @@ def run(state, args, image):
         die(f'Conflict. The container name "/{name}" is already in use')
 
     cid = new_id()
+    dropped = {"memory": {"memory": 0, "swap": 0}, "cpus": {"nano": 0}, "pids": {"pids": None}}.get(
+        os.environ.get("FAKE_DROPPED_LIMIT", ""), {})
     state["containers"][name] = {
         "kind": "new",
         "running": True,
@@ -576,6 +636,7 @@ def run(state, args, image):
         "image": image,
         "trailing": trailing,
         "options": options,
+        "limits": dropped,
         "id": cid,
     }
     if not run_fail and os.environ.get("FAKE_NEW_IDENTITY_DOCUMENT") is not None:
@@ -623,6 +684,12 @@ def main():
             stop_in_background(state, args[-1])
         sys.exit(130)
 
+    if command == "info" and "--format" in args:
+        fmt = args[args.index("--format") + 1]
+        values = {"MemoryLimit": "true", "CPUCfsQuota": "true", "PidsLimit": "true", "SwapLimit": "true",
+                  "NCPU": "4", "MemTotal": str(8 * 1024 ** 3)}
+        out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: os.environ.get("FAKE_INFO_" + m.group(1).upper(), values[m.group(1)]), fmt))
+        return
     if command in ("info", "buildx"):
         return
     if command == "save":
@@ -704,7 +771,19 @@ def main():
 
     if command == "update":
         ref = args[-1]
-        container(state, ref)[1]["restart"] = args[args.index("--restart") + 1]
+        _, c = container(state, ref)
+        if "--restart" in args:
+            c["restart"] = args[args.index("--restart") + 1]
+        # As Docker (29) updates them: 0 leaves a limit as it is, so a CPU or memory limit cannot be taken off; a
+        # process limit of -1 takes it off (inspect then reports 0); a negative memory limit is refused.
+        given = limits_of(args[:-1])
+        if given.get("memory", 0) < 0:
+            die(f'invalid argument "{option_values(args, "--memory")[-1]}" for "-m, --memory" flag: invalid size')
+        limits = dict(limits_of(c.get("options", [])), **c.get("limits", {}))
+        for key, value in given.items():
+            if value != 0:
+                limits[key] = 0 if key == "pids" and value < 0 else value
+        c["limits"] = limits
         save(state)
         out(ref)
         return
