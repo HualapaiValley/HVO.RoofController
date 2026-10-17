@@ -103,6 +103,11 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     {
         Root = Path.Combine(Path.GetTempPath(), "hvo-roof-installer-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Root);
+
+        // Writable by no one else whatever the umask, as a machine's own folders are: the installer makes its work folders
+        // only in a temporary folder that no one but root or its user can change (InstallerMachine.TrustedFolder).
+        File.SetUnixFileMode(Path.GetDirectoryName(Root)!, Modes.Folder);
+        File.SetUnixFileMode(Root, Modes.Folder);
         Os = os;
         Architecture = architecture;
         IsRoot = root;
@@ -111,6 +116,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         Home = root ? "/root" : os == InstallerOs.MacOS ? $"/Users/{userName}" : $"/home/{userName}";
         Directory.CreateDirectory(OnDisk(Home));
         Directory.CreateDirectory(OnDisk(TemporaryDirectory));
+        File.SetUnixFileMode(OnDisk(TemporaryDirectory), Modes.Folder);
         CurrentDirectory = Home;
         Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = ReleaseJson();
         FileDownloads[ReleaseManifest.DownloadUri("4.0.0", KioskAssetName("4.0.0")).ToString()] = KioskTarball("4.0.0");
@@ -231,8 +237,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What the installer downloaded, in order.</summary>
     public ConcurrentQueue<Uri> Downloaded { get; } = new();
 
-    /// <summary>The machine's folder for temporary files.</summary>
-    public string TemporaryDirectory { get; } = "/tmp";
+    /// <summary>The machine's folder for temporary files: /tmp, unless a test gives another.</summary>
+    public string TemporaryDirectory { get; set; } = "/tmp";
 
     public ConcurrentQueue<CommandLine> Unexpected { get; } = new();
 

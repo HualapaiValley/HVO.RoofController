@@ -24,7 +24,10 @@ public static class DeployScript
 
     /// <summary>
     /// A folder of the installer's own, which only its user can open, for the script and the files it is given; deleted
-    /// when the run ends, whatever happens.
+    /// when the run ends, whatever happens. It is made, new, only in a temporary folder that no one but root (or the
+    /// installer's user) can change, by that folder's physical path (<see cref="InstallerMachine.TrustedFolder"/>), so what
+    /// the installer writes and checks in it (an archive's copy that Docker loads, the deploy script that bash runs) is
+    /// what is read back from it; and it is deleted only while it is still the folder made.
     /// </summary>
     public sealed class WorkFolder : IDisposable
     {
@@ -32,14 +35,16 @@ public static class DeployScript
 
         public WorkFolder(InstallerMachine machine)
         {
+            ArgumentNullException.ThrowIfNull(machine);
             _machine = machine;
-            Path = System.IO.Path.Join(machine.TemporaryDirectory, $"hvo-roof-install-{Guid.NewGuid():N}");
-            machine.CreateDirectory(Path, Modes.PrivateFolder);
+            Path = System.IO.Path.Join(machine.TrustedFolder(machine.TemporaryDirectory), $"hvo-roof-install-{Guid.NewGuid():N}");
+            machine.CreatePrivateDirectory(Path);
         }
 
+        /// <summary>The folder, by its physical path: no link in it.</summary>
         public string Path { get; }
 
-        public void Dispose() => _machine.DeleteDirectory(Path);
+        public void Dispose() => _machine.DeletePrivateDirectory(Path);
     }
 
     /// <summary>

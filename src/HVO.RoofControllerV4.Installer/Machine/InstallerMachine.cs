@@ -258,6 +258,170 @@ public sealed class InstallerMachine
 
     public void SetMode(string path, UnixFileMode mode) => File.SetUnixFileMode(OnDisk(path), mode);
 
+    /// <summary>
+    /// The physical path of the folder <paramref name="path"/>, a path on this machine with every symbolic link in it
+    /// followed, once that folder and every folder above it, up to /, can be changed by no one but root and the
+    /// installer's own user. Each must be a real folder (not a link), root's or that user's, that no one else can write to
+    /// unless it is sticky (as /tmp is: there no one else can rename or remove what root or that user owns). No one else
+    /// can then change what that path names, nor a path below it that root or that user makes: a folder the installer
+    /// makes there stays where it is, and what it writes there stays what it wrote. Throws
+    /// <see cref="InstallerException"/>, naming the folder that is not, otherwise.
+    /// </summary>
+    public string TrustedFolder(string path)
+    {
+        var user = geteuid();
+        var who = user == 0 ? "root" : "root and you";
+        var onDisk = RealPath(OnDisk(path))
+            ?? throw new InstallerException($"The installer's temporary folder {path} is not there. Set TMPDIR to a folder only {who} can change, such as /tmp, then run the installer again.");
+        for (var folder = onDisk; folder is not null; folder = Path.GetDirectoryName(folder))
+        {
+            if (Untrusted(folder, user) is { } problem)
+            {
+                throw new InstallerException(
+                    $"The installer's temporary folder {path} is not one only {who} can change: {OnMachine(folder)} {problem}, so someone else could change "
+                    + $"what the installer writes and checks there (the copy of an image archive that Docker loads, the deploy script) before it is used. Set TMPDIR to a folder only {who} can change, such as /tmp, then run the installer again.");
+            }
+        }
+
+        return OnMachine(onDisk);
+    }
+
+    /// <summary>
+    /// Makes the new folder <paramref name="path"/> with mode 0700. Nothing may be there yet, not even a link, and the
+    /// folder made must then be a real folder of the installer's own user with that mode. Throws
+    /// <see cref="InstallerException"/> otherwise.
+    /// </summary>
+    public void CreatePrivateDirectory(string path)
+    {
+        var onDisk = OnDisk(path);
+        if (mkdir(onDisk, PrivateFolderBits) != 0)
+        {
+            throw new InstallerException($"The installer could not make its folder {path}: {Marshal.GetPInvokeErrorMessage(Marshal.GetLastPInvokeError())}.");
+        }
+
+        // The umask may have taken bits off.
+        File.SetUnixFileMode(onDisk, Modes.PrivateFolder);
+        if (!IsPrivateFolder(onDisk))
+        {
+            throw new InstallerException($"The installer's folder {path}, just made, is not a folder of its own with mode 0700.");
+        }
+    }
+
+    /// <summary>
+    /// Deletes the folder <paramref name="path"/>, which <see cref="CreatePrivateDirectory"/> made, and everything in it,
+    /// only while it is still that folder: a real folder of the installer's own user with mode 0700. Anything else there
+    /// (a link, or another folder put in its place) is left as it is. Nothing when it is not there.
+    /// </summary>
+    public void DeletePrivateDirectory(string path)
+    {
+        var onDisk = OnDisk(path);
+        if (IsPrivateFolder(onDisk))
+        {
+            Directory.Delete(onDisk, recursive: true);
+        }
+    }
+
+    // Where a folder, given where it is on disk, is on this machine: its path less the machine's root (a test's folder),
+    // or as it is when it is above that root.
+    private string OnMachine(string onDisk)
+    {
+        if (Root == "/")
+        {
+            return onDisk;
+        }
+
+        var root = RealPath(Root) ?? Root;
+        return onDisk == root ? "/" : onDisk.StartsWith(root + "/", StringComparison.Ordinal) ? onDisk[root.Length..] : onDisk;
+    }
+
+    // The folder, given where it is on disk, is a real folder of the installer's own user with mode 0700.
+    private static bool IsPrivateFolder(string onDisk)
+        => Inspect(onDisk) is { IsFolder: true, IsLink: false } folder && folder.Owner == geteuid() && (folder.Mode & 0xFFF) == PrivateFolderBits;
+
+    // Why someone other than root and the user could change the folder, given where it is on disk, or what is named
+    // through it; null when no one can.
+    private static string? Untrusted(string onDisk, uint user)
+    {
+        if (Inspect(onDisk) is not { } folder)
+        {
+            return "cannot be examined";
+        }
+
+        if (folder.IsLink)
+        {
+            return "is a symbolic link";
+        }
+
+        if (!folder.IsFolder)
+        {
+            return "is not a folder";
+        }
+
+        if (folder.Owner != 0 && folder.Owner != user)
+        {
+            return $"belongs to user {folder.Owner}";
+        }
+
+        return (folder.Mode & OthersMayWrite) != 0 && (folder.Mode & Sticky) == 0
+            ? $"can be written to by others (mode {Convert.ToString(folder.Mode & 0xFFF, 8).PadLeft(4, '0')}) and is not sticky"
+            : null;
+    }
+
+    // What lstat(2) says of the file, given where it is on disk, without following it when it is a link: its type,
+    // owner and mode; null when it cannot. Linux's statx(2) has the same layout on every architecture: stx_mask at 0,
+    // stx_uid at 20 and stx_mode (16 bits) at 28. macOS's struct stat on arm64 (its only architecture here) has st_mode
+    // (16 bits) at 4 and st_uid at 16.
+    private static Entry? Inspect(string onDisk)
+    {
+        var buffer = new byte[256];
+        ushort mode;
+        uint owner;
+        if (OperatingSystem.IsMacOS())
+        {
+            if (lstat(onDisk, buffer) != 0)
+            {
+                return null;
+            }
+
+            mode = BitConverter.ToUInt16(buffer, 4);
+            owner = BitConverter.ToUInt32(buffer, 16);
+        }
+        else
+        {
+            if (statx(CurrentFolder, onDisk, NoFollow, StatxWanted, buffer) != 0 || (BitConverter.ToUInt32(buffer, 0) & StatxWanted) != StatxWanted)
+            {
+                return null;
+            }
+
+            mode = BitConverter.ToUInt16(buffer, 28);
+            owner = BitConverter.ToUInt32(buffer, 20);
+        }
+
+        var type = mode & FileType;
+        return new Entry(type == FolderType, type == LinkType, owner, mode & 0xFFF);
+    }
+
+    // realpath(3): the path, given where it is on disk, with every link followed; null when it cannot be (one is missing).
+    private static string? RealPath(string onDisk)
+    {
+        var resolved = realpath(onDisk, IntPtr.Zero);
+        if (resolved == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Marshal.PtrToStringUTF8(resolved);
+        }
+        finally
+        {
+            free(resolved);
+        }
+    }
+
+    private sealed record Entry(bool IsFolder, bool IsLink, uint Owner, int Mode);
+
     /// <summary>Makes the folder, and any parent missing, with <paramref name="mode"/> (the parents get 0755).</summary>
     public void CreateDirectory(string path, UnixFileMode mode)
     {
@@ -716,6 +880,21 @@ public sealed class InstallerMachine
     // libc's own calls, for SyncFolder.
     private static readonly FolderSyncCalls Libc = new(open, descriptor => fcntl(descriptor, FullFsync), fsync, close);
 
+    // A file's type and mode bits (S_IFMT, S_IFDIR, S_IFLNK, S_ISVTX, S_IWGRP | S_IWOTH), the same on Linux and macOS.
+    private const int FileType = 0xF000;
+    private const int FolderType = 0x4000;
+    private const int LinkType = 0xA000;
+    private const int Sticky = 0x200;
+    private const int OthersMayWrite = 0x12;
+
+    // 0700.
+    private const int PrivateFolderBits = 0x1C0;
+
+    // statx(2): AT_FDCWD, AT_SYMLINK_NOFOLLOW, and STATX_TYPE | STATX_MODE | STATX_UID.
+    private const int CurrentFolder = -100;
+    private const int NoFollow = 0x100;
+    private const uint StatxWanted = 0x1 | 0x2 | 0x8;
+
     [DllImport("libc", SetLastError = false, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
     private static extern int access(string path, int mode);
 
@@ -730,6 +909,21 @@ public sealed class InstallerMachine
 
     [DllImport("libc", SetLastError = true)]
     private static extern int close(int descriptor);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int mkdir(string path, int mode);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern IntPtr realpath(string path, IntPtr resolved);
+
+    [DllImport("libc")]
+    private static extern void free(IntPtr pointer);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int statx(int folder, string path, int flags, uint mask, [Out] byte[] buffer);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int lstat(string path, [Out] byte[] buffer);
 }
 
 /// <summary>

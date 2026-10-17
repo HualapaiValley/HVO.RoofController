@@ -332,6 +332,143 @@ public sealed class InstallerOfflineImageTests
     }
 
     [TestMethod]
+    [DataRow("/shared", DisplayName = "writable by others")]
+    [DataRow("/shared/inner", DisplayName = "below a folder writable by others")]
+    public async Task ATemporaryFolderOthersCanChange_IsRefusedBeforeAnything_AndNoCopyIsEverMadeThere(string temporary)
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var folder = bench.ReleaseFolder();
+        var name = FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64");
+        Directory.CreateDirectory(bench.OnDisk("/shared/inner"));
+        File.SetUnixFileMode(bench.OnDisk("/shared"), (UnixFileMode)0x1FF);
+        File.SetUnixFileMode(bench.OnDisk("/shared/inner"), Modes.PrivateFolder);
+        bench.TemporaryDirectory = temporary;
+
+        // As someone who can write there would: once the installer has checked its copy, and before Docker reads it, put
+        // another folder, with another archive, in the place of the installer's work folder.
+        bench.BeforeLoad = path =>
+        {
+            if (Path.GetFileName(path) == name)
+            {
+                var work = Path.GetDirectoryName(path)!;
+                Directory.Move(bench.OnDisk(work), bench.OnDisk(work + ".moved"));
+                Directory.CreateDirectory(bench.OnDisk(work));
+                File.WriteAllBytes(bench.OnDisk(path), FakeMachine.OfflineArchiveContent(FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64", "6.6.6")));
+            }
+        };
+
+        var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.ToString().Should().Contain(
+            $"The installer's temporary folder {temporary} is not one only root and you can change: /shared can be written to by others (mode 0777) and is not sticky, so someone else could change "
+            + "what the installer writes and checks there (the copy of an image archive that Docker loads, the deploy script) before it is used.");
+        bench.LoadedArchives.Should().BeEmpty("nothing is copied, or loaded, through a folder others can change");
+        bench.Deploys.Should().BeEmpty();
+        Directory.EnumerateFileSystemEntries(bench.OnDisk(temporary), "hvo-roof-install-*").Should().BeEmpty("no work folder is made there");
+    }
+
+    [TestMethod]
+    public async Task ATemporaryFolderThatIsALink_IsUsedByThePathItNames_WhereverTheLinkPointsLater()
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var folder = bench.ReleaseFolder();
+        var name = FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64");
+        foreach (var made in new[] { "/real-tmp", "/elsewhere" })
+        {
+            Directory.CreateDirectory(bench.OnDisk(made));
+            File.SetUnixFileMode(bench.OnDisk(made), Modes.Folder);
+        }
+
+        File.CreateSymbolicLink(bench.OnDisk("/tmp-link"), bench.OnDisk("/real-tmp"));
+        bench.TemporaryDirectory = "/tmp-link";
+
+        // The link is pointed elsewhere once the installer has checked its copy, at a folder with another archive under the
+        // same name: Docker still reads the copy by the path the link named when the work folder was made.
+        bench.BeforeLoad = path =>
+        {
+            if (Path.GetFileName(path) != name)
+            {
+                return;
+            }
+
+            var relative = path.StartsWith("/tmp-link/", StringComparison.Ordinal) ? path["/tmp-link".Length..] : path["/real-tmp".Length..];
+            Directory.CreateDirectory(bench.OnDisk("/elsewhere" + Path.GetDirectoryName(relative)));
+            File.WriteAllBytes(bench.OnDisk("/elsewhere" + relative), FakeMachine.OfflineArchiveContent(FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64", "6.6.6")));
+            File.Delete(bench.OnDisk("/tmp-link"));
+            File.CreateSymbolicLink(bench.OnDisk("/tmp-link"), bench.OnDisk("/elsewhere"));
+        };
+
+        var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder);
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        bench.LoadedArchives[0].Should().StartWith("/real-tmp/hvo-roof-install-", "the work folder is used by its physical path");
+        bench.LoadedContents[0].Should().Equal(FakeMachine.OfflineArchiveContent(name), "Docker loads the bytes checked against release.json");
+
+        // The controller's step, later, makes its own work folder by the path the link names then: /elsewhere's.
+        bench.Deploys.Should().ContainSingle().Which["TMPDIR"].Should().StartWith("/elsewhere/hvo-roof-install-", "each work folder follows the link once, when it is made");
+        Directory.EnumerateFileSystemEntries(bench.OnDisk("/real-tmp")).Should().BeEmpty("each work folder goes when its step ends");
+    }
+
+    [TestMethod]
+    public async Task ASharedStickyTemporaryFolder_AsTmpIs_IsUsed()
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var folder = bench.ReleaseFolder();
+        Directory.CreateDirectory(bench.OnDisk("/sticky"));
+        File.SetUnixFileMode(bench.OnDisk("/sticky"), (UnixFileMode)0x3FF);
+        bench.TemporaryDirectory = "/sticky";
+
+        var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder);
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        bench.LoadedArchives[0].Should().StartWith("/sticky/hvo-roof-install-");
+        bench.LoadedContents[0].Should().Equal(FakeMachine.OfflineArchiveContent(FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64")));
+    }
+
+    [TestMethod]
+    [DataRow("link", DisplayName = "a link to another folder")]
+    [DataRow("another folder", DisplayName = "another folder")]
+    public void AWorkFolder_IsDeletedOnlyWhileItIsStillTheFolderMade(string replacement)
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var machine = bench.Machine;
+        Directory.CreateDirectory(bench.OnDisk("/mine"));
+        File.WriteAllText(bench.OnDisk("/mine/keep"), "keep");
+        string path;
+        using (var work = new DeployScript.WorkFolder(machine))
+        {
+            path = work.Path;
+            bench.Mode(path).Should().Be(Modes.PrivateFolder);
+            File.WriteAllText(bench.OnDisk($"{path}/script"), "the installer's");
+            Directory.Move(bench.OnDisk(path), bench.OnDisk(path + ".moved"));
+            if (replacement == "link")
+            {
+                File.CreateSymbolicLink(bench.OnDisk(path), bench.OnDisk("/mine"));
+            }
+            else
+            {
+                Directory.CreateDirectory(bench.OnDisk(path));
+                File.SetUnixFileMode(bench.OnDisk(path), Modes.Folder);
+                File.WriteAllText(bench.OnDisk($"{path}/keep"), "keep");
+            }
+        }
+
+        File.ReadAllText(bench.OnDisk("/mine/keep")).Should().Be("keep");
+        (replacement == "link" ? File.ResolveLinkTarget(bench.OnDisk(path), returnFinalTarget: false) is not null : File.Exists(bench.OnDisk($"{path}/keep")))
+            .Should().BeTrue("what was put in the work folder's place is left as it is");
+
+        // The folder made, where it is, goes.
+        using (var work = new DeployScript.WorkFolder(machine))
+        {
+            path = work.Path;
+            File.WriteAllText(bench.OnDisk($"{path}/script"), "the installer's");
+        }
+
+        bench.Exists(path).Should().BeFalse();
+    }
+
+    [TestMethod]
     public async Task TheEmulatorsCopy_GoesWhenDockerCannotLoadIt()
     {
         using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");

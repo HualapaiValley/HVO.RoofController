@@ -139,7 +139,25 @@ public sealed class InstallerSession
     /// the client's controller is not checked (<see cref="RoleGuards.Check"/>).
     /// </summary>
     public IReadOnlyList<string> Problems(bool planOnly = false, bool clientChosen = true)
-        => [.. VersionProblems(), .. RoleGuards.Check(Survey, Answers, planOnly, clientChosen)];
+        => [.. VersionProblems(), .. TemporaryFolderProblems(), .. RoleGuards.Check(Survey, Answers, planOnly, clientChosen)];
+
+    /// <summary>
+    /// Why the installer's temporary folder will not do: someone other than root (or the installer's user) could change it,
+    /// or a folder above it, and so what the installer writes and checks there before it uses it
+    /// (<see cref="DeployScript.WorkFolder"/>). Found before anything changes, as each work folder checks it again.
+    /// </summary>
+    public IReadOnlyList<string> TemporaryFolderProblems()
+    {
+        try
+        {
+            Machine.TrustedFolder(Machine.TemporaryDirectory);
+            return [];
+        }
+        catch (InstallerException error)
+        {
+            return [error.Message];
+        }
+    }
 
     /// <summary>
     /// The records of this run's roles, what an upgrade starts from: the machine's for the machine's roles (the controller,
