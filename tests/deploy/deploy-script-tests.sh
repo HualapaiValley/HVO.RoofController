@@ -2346,6 +2346,68 @@ test_archive_mode_checks_the_archive_with_python_without_jq() {
   done
 }
 
+# edit_as_text <member> <pattern> <replacement>: rewrites that member of ${ARCHIVE} as text: the first match of the
+# pattern (a Python regular expression) is replaced by the replacement exactly as written, escapes and all. JSON with a
+# name given twice can be written this way; a dictionary would keep only one of them.
+edit_as_text() {
+  local code
+  code=$(python3 -c 'import sys
+member, pattern, replacement = sys.argv[1:]
+print("import re\nf = entry(%r)\nf[1], n = re.subn(%r, lambda m: %r, f[1], count=1)\nassert n == 1, %r"
+      % (member, pattern.encode(), replacement.encode(), pattern))' "$1" "$2" "$3") || { fail_test "could not edit $1"; return 1; }
+  edit_archive "${code}"
+}
+
+# F4: a name given twice in one object of a JSON file the check reads, at any depth and however it is spelt, is refused
+# before any Docker call, by either reader (jq, and python3 without jq). Both keep only the last value for a name, while
+# Docker's Go decoder decodes the second annotations object into the map the first made, keeping the name the first
+# gave: docker.io/library/other:latest would be pointed at the release's image.
+test_an_archive_giving_a_name_twice_changes_nothing_with_either_reader() {
+  offline_archive || return
+  seed_container roof-controller old true 8443:8443
+  local pristine="${WORK}/pristine.oci.tar" reader index reader_env=()
+  # This function is run by the script's bash, not by this shell.
+  # shellcheck disable=SC2016
+  local no_jq='BASH_FUNC_command%%=() { if [ "$1" = -v ] && [ "$2" = jq ]; then return 1; fi; builtin command "$@"; }'
+  local other='"io.containerd.image.name":"docker.io/library/other:latest"'
+  local edits=(
+    # The review's attack: the annotations twice, the first naming another image, the second empty.
+    index.json '"annotations":\{[^}]*\}' "\"annotations\":{${other}},\"annotations\":{}"
+    # manifest.json's tags twice.
+    manifest.json '"RepoTags":' '"RepoTags":["docker.io/library/other:latest"],"RepoTags":'
+    # The same names, spelt with escapes: one name once decoded.
+    index.json '"annotations":\{[^}]*\}' "\"annotations\":{${other}},\"\\u0061nnotations\":{}"
+    manifest.json '"RepoTags":' '"RepoTags":["docker.io/library/other:latest"],"Repo\u0054ags":'
+    index.json '"annotations":\{' '"annotations":{"io.containerd.image.n\u0061me":"docker.io/library/other:latest",'
+    # Two unpaired surrogates, which Go decodes alike, as U+FFFD.
+    index.json '"annotations":\{' '"annotations":{"\ud800":"a","\udbff":"b",'
+  )
+  cp "${ARCHIVE}" "${pristine}"
+  for reader in jq python3; do
+    reader_env=()
+    [[ "${reader}" == jq ]] || reader_env=("${no_jq}")
+    for (( index = 0; index < ${#edits[@]}; index += 3 )); do
+      cp "${pristine}" "${ARCHIVE}"
+      edit_as_text "${edits[index]}" "${edits[index + 1]}" "${edits[index + 2]}" || return
+      : > "${FAKE_STATE_DIR}/calls.log"
+      deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" ${reader_env[@]+"${reader_env[@]}"}
+      assert_archive_refused "IMAGE_ARCHIVE ${ARCHIVE}: its ${edits[index]} is not one JSON value that gives each name once in each object (a name given twice, even spelt with escapes, is read one way by this check and another by Docker): give the release's archive of that image. Nothing was changed." \
+        "${reader}: ${edits[index]}: ${edits[index + 2]}"
+    done
+  done
+  cp "${pristine}" "${ARCHIVE}"
+
+  # Escapes alone are no duplicate: both readers decode them, as Docker does.
+  edit_as_text index.json '"annotations":' '"\u0061nnotations":' || return
+  for reader in jq python3; do
+    reader_env=()
+    [[ "${reader}" == jq ]] || reader_env=("${no_jq}")
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}" ${reader_env[@]+"${reader_env[@]}"} -- --dry-run
+    assert_status 0
+    assert_output_contains "[load] ${ARCHIVE} holds ${ARCHIVE_DIGEST}, with its image for linux/arm64"
+  done
+}
+
 test_a_loaded_image_with_another_id_changes_nothing() {
   offline_archive || return
   seed_container roof-controller old true 8443:8443

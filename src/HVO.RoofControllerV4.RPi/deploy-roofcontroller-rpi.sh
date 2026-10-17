@@ -1043,11 +1043,18 @@ check_pulled_image() {
 # ("image <digest>") and its names ("name <key> <value>", by key), with nothing else in it; and "docker",
 # manifest.json's one image ("config <path>", "layer <path>" for each layer, "tag <name>" for each tag), with nothing
 # else. A value that is not printable ASCII without spaces makes "index" and "docker" empty, so no line can pass for
-# another.
+# another. "unique" is "unique" when the file is one JSON value whose every object gives each name once, compared as
+# decoded ("a" and "\u0061" are one name): jq reads its tokens (--stream) before it builds objects, and an object
+# rebuilt from them has fewer tokens when a name is given twice; python3 is given each object's names as they are read
+# (object_pairs_hook). python3 refuses a name given twice in every query, and jq's queries are run only on files that
+# are unique.
 archive_json() {
   local query=$1 file=$2 platform=${3:-}
   if command -v jq >/dev/null 2>&1; then
     case "${query}" in
+      unique) jq -n -r --stream '[inputs] as $tokens | [fromstream($tokens[])] as $values
+        | if ($values | length) == 1 and ([$values[0] | tostream] | length) == ($tokens | length) then "unique" else "" end' \
+        "${file}" ;;
       image) jq -r 'if (.manifests | length) == 1 then (.manifests[0].digest // "") else "" end' "${file}" ;;
       platform) jq -r --arg os "${platform%%/*}" --arg arch "${platform#*/}" \
         '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch)]
@@ -1077,14 +1084,27 @@ archive_json() {
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json,sys
 query, path, platform = sys.argv[1:]
-with open(path) as f:
-    d = json.load(f)
+def once(pairs):
+    # Each name once, as decoded: Go reads an unpaired surrogate escape as U+FFFD, so two of them are one name to it.
+    names = set()
+    for name, _ in pairs:
+        name = "".join("\ufffd" if 0xD800 <= ord(c) <= 0xDFFF else c for c in name)
+        if name in names:
+            raise ValueError("a name given twice")
+        names.add(name)
+    return dict(pairs)
+def constant(name):
+    raise ValueError("not JSON: " + name)
+with open(path, "rb") as f:
+    d = json.loads(f.read().decode("utf-8"), object_pairs_hook=once, parse_constant=constant)
 def present(value, default):
     # As jq'"'"'s // : null and false are absent.
     return default if value is None or value is False else value
 def word(value):
     return isinstance(value, str) and len(value) > 0 and all(32 < ord(c) < 127 for c in value)
-if query == "layout":
+if query == "unique":
+    print("unique")
+elif query == "layout":
     ok = isinstance(d, dict) and list(d) == ["imageLayoutVersion"] and isinstance(d["imageLayoutVersion"], str)
     print(d["imageLayoutVersion"] if ok else "")
 elif query == "index":
@@ -1122,6 +1142,15 @@ else:
   fi
 }
 
+# check_json_once <file> <what>: IMAGE_ARCHIVE is refused unless its <what>, a member check_image_archive took out of it,
+# is one JSON value that gives each name once in each object (archive_json unique). Both readers here keep the last of
+# two values for a name, and Docker's Go decoder can keep parts of both (an object decoded into the map the first one
+# made), so such a file would be read one way by this check and another by Docker.
+check_json_once() {
+  [[ "$(archive_json unique "$1" 2>/dev/null)" == "unique" ]] \
+    || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its $2 is not one JSON value that gives each name once in each object (a name given twice, even spelt with escapes, is read one way by this check and another by Docker): give the release's archive of that image. Nothing was changed."
+}
+
 # check_image_archive: IMAGE_ARCHIVE must be the release's archive of the image IMAGE_REF's digest names, for
 # BUILD_PLATFORM, and hold nothing else, before Docker reads any of it. Each of Docker's image stores loads its own part
 # of an archive and applies all it finds there: the containerd store reads index.json, and the names it gives, when
@@ -1130,6 +1159,8 @@ else:
 # Docker already holds by an allowed ID would pass that check whatever the load did, so the archive is checked whole:
 #  - its members are oci-layout, index.json, manifest.json and blobs/sha256/<hex> for the index, the platform's
 #    manifest, its config and its layers (with the folders blobs and blobs/sha256), each once and each a file;
+#  - every JSON file it reads (oci-layout, index.json, manifest.json, the index, the platform's manifest and its config)
+#    is one value, with no name given twice in an object, so this check and Docker read it alike;
 #  - oci-layout is an OCI image layout 1.0.0, and index.json names that index alone, with no name but IMAGE_REF's own
 #    (io.containerd.image.name <repository>:<tag>, with or without org.opencontainers.image.ref.name <tag>);
 #  - manifest.json is that one image: the platform's config and its layers, in order, tagged IMAGE_REF's
@@ -1240,6 +1271,10 @@ check_image_archive() {
     [[ -f "${folder}/${member}" && ! -L "${folder}/${member}" ]] \
       || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its ${member} is not a file: ${release_archive}"
   done
+  check_json_once "${folder}/oci-layout" oci-layout
+  check_json_once "${folder}/index.json" index.json
+  check_json_once "${folder}/manifest.json" manifest.json
+  check_json_once "${folder}/blobs/sha256/${IMAGE_DIGEST#sha256:}" "index ${IMAGE_DIGEST}"
 
   # index.json: the index IMAGE_REF names, alone and under no other name, in an OCI image layout.
   named=$(archive_json image "${folder}/index.json" 2>/dev/null) || named=""
@@ -1272,6 +1307,7 @@ check_image_archive() {
       || [[ "$(sha256_hex < "${folder}/blobs/sha256/${manifest#sha256:}")" != "${manifest#sha256:}" ]]; then
     fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE} does not hold the image ${IMAGE_DIGEST} has for ${BUILD_PLATFORM}: give the release's archive for ${BUILD_PLATFORM} (<image>-<version>-linux-${BUILD_PLATFORM#linux/}.oci.tar). Nothing was changed."
   fi
+  check_json_once "${folder}/blobs/sha256/${manifest#sha256:}" "${BUILD_PLATFORM} manifest ${manifest}"
   config=$(archive_json config "${folder}/blobs/sha256/${manifest#sha256:}" 2>/dev/null) || config=""
   [[ "${config}" =~ ${digest_pattern} ]] \
     || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: the ${BUILD_PLATFORM} manifest ${manifest} names no config. Nothing was changed."
@@ -1304,6 +1340,7 @@ check_image_archive() {
       || [[ "$(sha256_hex < "${folder}/blobs/sha256/${config#sha256:}")" != "${config#sha256:}" ]]; then
     fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its config ${config} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
   fi
+  check_json_once "${folder}/blobs/sha256/${config#sha256:}" "config ${config}"
   while IFS= read -r layer; do
     [[ -z "${layer}" || "$(tar -xOf "${ARCHIVE_COPY}" "blobs/sha256/${layer#sha256:}" 2>/dev/null | sha256_hex)" == "${layer#sha256:}" ]] \
       || fail "IMAGE_ARCHIVE ${IMAGE_ARCHIVE}: its layer ${layer} for ${BUILD_PLATFORM} is not the blob its digest names: ${release_archive}"
