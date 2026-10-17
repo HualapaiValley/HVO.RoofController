@@ -87,8 +87,8 @@ case "$(uname -m)" in
 esac
 
 # The bounds C11 steps 6 and 10 hold the supervisor to: the seconds from the controller's kill until the relay register
-# reads 0 at the emulator (the relay-off helper's own start included; 0.14-0.17 s on the x64 rig), and until the emulated
-# roof is still (the drive's coast stop after that; 0.34-0.38 s). They allow for a loaded CI runner, and are below what
+# reads 0 at the emulator (the relay-off helper's own start included; 0.10-0.17 s on the x64 rig), and until the emulated
+# roof is still (the drive's coast stop after that; 0.30-0.38 s). They allow for a loaded CI runner, and are below what
 # the restarted controller alone can do (its backoff is 1 s, then .NET starts): before #138 that took 2.0-2.4 s. On the
 # Pi, .NET starts more slowly; that is not measured here.
 relays_off_bound=1

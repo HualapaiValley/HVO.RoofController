@@ -839,8 +839,8 @@ everywhere, the read-back proves the HAT's register, not the relay contacts
 [supervisor] The controller is left stopped with the relays off (verified by read-back).
 ```
 
-On the x64 emulator rig the relays were off 0.14-0.17 s after the controller was killed during travel, and the
-emulated roof still 0.34-0.38 s after the kill, before the supervisor's backoff and the new start
+On the x64 emulator rig the relays were off 0.10-0.17 s after the controller was killed during travel, and the
+emulated roof still 0.30-0.38 s after the kill, before the supervisor's backoff and the new start
 ([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)
 step 6; `deploy-scenarios.sh supervisor` asserts 1 s and 2 s and records the times at each run). Before, the relays were
 held 2.0-2.4 s, until the restarted controller turned them off, and for good when it could not start. On the Pi, .NET
@@ -854,7 +854,7 @@ What it cannot cover:
   installer do.
 - **The supervisor itself killed with SIGKILL** (by hand inside the container, or by the kernel): `tini` and the
   container end with it, and Docker starts the container again (`unless-stopped`); its new supervisor turns the relays
-  off before it starts the controller (0.44 s after the kill on the rig).
+  off before it starts the controller (0.42-0.44 s after the kill on the rig).
 - **A HAT that does not answer**: the relays cannot be verified off. The supervisor says so (a `WARNING`) and keeps
   trying while the controller is not running; until then use the independent stop (commissioning C1).
 

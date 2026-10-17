@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   running: as soon as it exits, before each start, again after a failed try while the controller is not running, and
   when the supervisor stops or ends otherwise. It uses the controller's own HAT access (`--relays-off`), never turns a relay on,
   and makes the kernel end the web UI and then the controller before itself when memory runs out. On the x64 emulator
-  rig the relays were off 0.14-0.17 s after a kill during travel (2.0-2.4 s before, when the restarted controller turned
+  rig the relays were off 0.10-0.17 s after a kill during travel (2.0-2.4 s before, when the restarted controller turned
   them off). A whole container killed (`docker kill`) still leaves them held until it starts again. The supervisor now
   waits 22 s (was 25 s) for the controller's shutdown, then up to 5 s for the relays, so a stop still fits Docker's
   30 s ([deployment.md](docs/deployment.md#the-relays-when-the-controller-exits), #138).
