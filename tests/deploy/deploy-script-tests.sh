@@ -3442,6 +3442,26 @@ test_a_record_of_the_default_gives_the_default() {
   assert_confined "$(controller_run_args)" 1 2g 512
 }
 
+# The supervisor writes its state while it turns the relays off, before it starts the controller (starting, 0 starts):
+# a first reading then counts the first start as the one expected, not as a restart, for a deploy and for a rollback;
+# one started again after it is still caught. (The real-Docker scenarios hit this once the rollback's record write
+# came between its start and its readiness wait.)
+test_a_first_reading_before_the_controller_starts_does_not_count_its_first_start_as_a_restart() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_SUPERVISOR=first-start READY_TIMEOUT_SECONDS=10
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  deploy "${HTTPS_ENV[@]}" FAKE_OLD_SUPERVISOR=first-start READY_TIMEOUT_SECONDS=10 -- --rollback
+  assert_status 0
+  assert_output_contains "[done] Rolled back."
+
+  setup_fresh_state
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_SUPERVISOR=first-start-restarted READY_TIMEOUT_SECONDS=10
+  assert_status 1
+  assert_output_contains "exited before it became ready (it stopped, or Docker restarted it): the container's supervisor reports the controller running after 2 start(s)"
+}
+
 # Review ROOF-151-R2 F5 (1): an update that commits the new record but cannot remove the old one keeps the new one.
 test_an_update_whose_older_record_cannot_be_removed_keeps_the_new_one() {
   seed_container roof-controller old true 8443:8443

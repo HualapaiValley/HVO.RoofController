@@ -888,10 +888,12 @@ supervised_process() {
 # not with 0: a docker start of a container that is still running (a rollback whose stop failed) does not reset it. A
 # controller that exits and is restarted before the first reading is caught at its next restart. Inside the container
 # the supervisor restarts a controller that exits, and leaves it stopped after repeated crashes: a controller waiting to
-# start again, left stopped, or started more often than at the first reading has exited in the same way.
+# start again, left stopped, or started more often than at the first reading has exited in the same way. A first
+# reading taken before the supervisor has started the controller (it turns the relays off first: 0 starts) counts its
+# first start as the one expected, not as a restart.
 wait_ready() {
   local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) state raw restarts first_restarts="" supervised starts
-  local first_starts=""
+  local first_starts="" expected_starts
   while (( SECONDS < deadline )); do
     # If Docker cannot be asked, keep polling until the deadline.
     state=$(container_state "${name}") || state=unknown
@@ -906,7 +908,9 @@ wait_ready() {
     fi
     if read -r supervised starts < <(supervised_process "${name}" controller); then
       first_starts=${first_starts:-${starts}}
-      if [[ "${supervised}" == "restarting" || "${supervised}" == "crash-loop" ]] || (( starts > first_starts )); then
+      expected_starts=${first_starts}
+      (( expected_starts > 0 )) || expected_starts=1
+      if [[ "${supervised}" == "restarting" || "${supervised}" == "crash-loop" ]] || (( starts > expected_starts )); then
         EXIT_DETAIL="the container's supervisor reports the controller ${supervised} after ${starts} start(s)"
         return 2
       fi

@@ -30,7 +30,11 @@ Container behaviour is chosen per container "kind" (old, current, new, ...) with
                                    running, each started once): absent (no such file, as in an image from before the
                                    supervisor), restarting (the controller waits to start again), crash-loop (the
                                    controller is left stopped), restarted (each read finds the controller started once
-                                   more), ui-restarting, or ui-restarted (the same for the web UI)
+                                   more), first-start (the first read finds the controller not started yet, starting
+                                   with 0 starts, as the supervisor writes it while it turns the relays off, and
+                                   /health/ready fails until a later read; each later read finds it running, started
+                                   once), first-start-restarted (the same, but started
+                                   twice after the first read), ui-restarting, or ui-restarted (the same for the web UI)
 Other switches:
   FAKE_PREFLIGHT_EXIT=<code>       exit code of `run --rm ... --validate-deployment`
   FAKE_RUN_FAIL=true               `run -d` fails before creating the container
@@ -550,6 +554,12 @@ def supervisor_json(state, c):
         c[key] = c.get(key, 1) + 1
         save(state)
         processes[name][1] = c[key]
+    elif view in ("first-start", "first-start-restarted"):
+        key = f"supervised_{name}_reads"
+        c[key] = c.get(key, 0) + 1
+        save(state)
+        processes[name] = (["starting", 0] if c[key] == 1
+                           else ["running", 1 if view == "first-start" else 2])
     with open(SUPERVISOR_SAMPLE, encoding="utf-8") as sample:
         document = json.load(sample)
     document["lastForcedRestart"] = None
@@ -583,6 +593,9 @@ def exec_curl(state, ref, curl_args, stdin_text):
     method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"
 
     if url.endswith("/health/ready"):
+        # A controller the supervisor has not started yet (the first-start views' first read) is not ready.
+        if behaviour(kind, "SUPERVISOR", "").startswith("first-start") and c.get("supervised_controller_reads", 0) < 2:
+            sys.exit(22)
         sys.exit(0 if behaviour(kind, "READY", "true") == "true" else 22)
     if url.endswith("/health/live"):
         sys.exit(0 if behaviour(kind, "WEB_LIVE", "true") == "true" else 22)
