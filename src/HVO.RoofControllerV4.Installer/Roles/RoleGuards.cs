@@ -226,8 +226,11 @@ public static class RoleGuards
     /// in one problem, with the cgroup version, the kernel's cgroup v2 controllers when Docker runs here, Docker's
     /// warnings about limits, and the remedy. A memory limit above the machine's memory is only a warning
     /// (<see cref="ContainerLimitWarnings"/>).
+    /// A <paramref name="rollback"/> is a recovery path, so a limit Docker cannot enforce does not refuse it (the owner's
+    /// decision on #149): it is <see cref="ContainerLimitRollbackWarnings"/>' warning instead. The CPUs still count then,
+    /// for a CPU limit Docker enforces.
     /// </summary>
-    public static IEnumerable<string> ContainerLimitProblems(DockerLimits? docker, ContainerResources resources)
+    public static IEnumerable<string> ContainerLimitProblems(DockerLimits? docker, ContainerResources resources, bool rollback = false)
     {
         ArgumentNullException.ThrowIfNull(resources);
         if (docker is null)
@@ -236,34 +239,21 @@ public static class RoleGuards
             yield break;
         }
 
-        static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
-        var findings = new List<string>();
-        if (docker.Memory != true || docker.Swap != true)
+        var capabilities = UnenforcedLimits(docker, resources, "so Docker would run the controller without");
+        List<string> findings = rollback ? [] : [.. capabilities];
+        if (!rollback || docker.Cpu == true)
         {
-            findings.Add($"docker-memory-limit-unsupported: docker info reports MemoryLimit {Flag(docker.Memory)} and SwapLimit {Flag(docker.Swap)}, so Docker would run the controller without its memory limit ({resources.MemoryOrDefault}, and no swap beyond it).");
-        }
-
-        if (docker.Cpu != true)
-        {
-            findings.Add($"docker-cpu-quota-unsupported: docker info reports CPUCfsQuota {Flag(docker.Cpu)}, so Docker would run the controller without its CPU limit ({resources.CpusText}).");
-        }
-
-        if (docker.Pids != true)
-        {
-            findings.Add(string.Create(CultureInfo.InvariantCulture, $"docker-pids-limit-unsupported: docker info reports PidsLimit {Flag(docker.Pids)}, so Docker would run the controller without its process limit ({resources.PidsLimit})."));
-        }
-
-        var capabilities = findings.Count > 0;
-        if (docker.Cpus is not { } cpus)
-        {
-            findings.Add($"docker-host-cpus-unreported: docker info does not report the CPUs (NCPU), so the CPU limit of {resources.CpusText} cannot be checked against them.");
-        }
-        else if (resources.CpusOrDefault > cpus)
-        {
-            findings.Add(string.Create(CultureInfo.InvariantCulture, $"docker-host-cpus-insufficient: docker info reports {cpus} CPUs, fewer than the CPU limit of {resources.CpusText}: ")
-                + (cpus >= ContainerResources.MinimumCpus
-                    ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from {ContainerResources.MinimumCpus} to {cpus}.")
-                    : "the CPU limit is at least 1."));
+            if (docker.Cpus is not { } cpus)
+            {
+                findings.Add($"docker-host-cpus-unreported: docker info does not report the CPUs (NCPU), so the CPU limit of {resources.CpusText} cannot be checked against them.");
+            }
+            else if (resources.CpusOrDefault > cpus)
+            {
+                findings.Add(string.Create(CultureInfo.InvariantCulture, $"docker-host-cpus-insufficient: docker info reports {cpus} CPUs, fewer than the CPU limit of {resources.CpusText}: ")
+                    + (cpus >= ContainerResources.MinimumCpus
+                        ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from {ContainerResources.MinimumCpus} to {cpus}.")
+                        : "the CPU limit is at least 1."));
+            }
         }
 
         if (findings.Count == 0)
@@ -271,31 +261,87 @@ public static class RoleGuards
             yield break;
         }
 
-        var problem = new StringBuilder($"Docker here cannot give the controller its limits ({resources.Describe()}), so the install is refused. Every finding:");
+        var problem = new StringBuilder($"Docker here cannot give the controller its limits ({resources.Describe()}), so the {(rollback ? "rollback" : "install")} is refused. Every finding:");
         foreach (var finding in findings)
         {
             problem.Append(Environment.NewLine).Append("  - ").Append(finding);
         }
 
-        if (capabilities)
+        if (!rollback && capabilities.Count > 0)
         {
-            var host = new StringBuilder(docker.CgroupVersion is { } version ? $"cgroup v{version}" : "cgroup version not reported");
-            host.Append(docker.CgroupControllers is { } controllers
-                ? $"; {MachineSurveyor.CgroupControllersFile}: \"{controllers}\""
-                : $"; {MachineSurveyor.CgroupControllersFile} on Docker's machine lists the kernel's cgroup v2 controllers (Docker needs memory, cpu and pids)");
-            foreach (var warning in docker.Warnings.Where(warning =>
-                         warning.Contains("limit", StringComparison.OrdinalIgnoreCase)
-                         || warning.Contains("cfs", StringComparison.OrdinalIgnoreCase)
-                         || warning.Contains("cgroup", StringComparison.OrdinalIgnoreCase)))
-            {
-                host.Append($"; Docker warns \"{warning}\"");
-            }
-
-            problem.Append(Environment.NewLine).Append("  Docker's host: ").Append(host).Append('.');
+            problem.Append(Environment.NewLine).Append("  Docker's host: ").Append(HostDetails(docker)).Append('.');
             problem.Append(Environment.NewLine).Append("  ").Append(ContainerLimitRemedy).Append(" Then run the installer again.");
         }
 
         yield return problem.ToString();
+    }
+
+    /// <summary>
+    /// The loud warning a rollback gives on a machine whose Docker cannot enforce some of the controller's limits, as the
+    /// deploy script's <c>--rollback</c> gives it too, in its output and in the controller's log: the rollback goes ahead
+    /// with the ones Docker can enforce, and the version it brings back runs without the others (the owner's decision on
+    /// #149). Each limit it cannot enforce is named, with the host's details and the remedy. Empty when Docker enforces
+    /// them all (or did not answer: <see cref="ContainerLimitProblems"/> refuses that).
+    /// </summary>
+    public static IEnumerable<string> ContainerLimitRollbackWarnings(DockerLimits? docker, ContainerResources resources)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        if (docker is null || UnenforcedLimits(docker, resources, "so the version the rollback brings back runs without") is not { Count: > 0 } unenforced)
+        {
+            yield break;
+        }
+
+        var warning = new StringBuilder("THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. ")
+            .Append("A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:");
+        foreach (var limit in unenforced)
+        {
+            warning.Append(Environment.NewLine).Append("  - ").Append(limit);
+        }
+
+        warning.Append(Environment.NewLine).Append("  Docker's host: ").Append(HostDetails(docker)).Append('.');
+        warning.Append(Environment.NewLine).Append("  ").Append(ContainerLimitRemedy).Append(" Then upgrade again.");
+        yield return warning.ToString();
+    }
+
+    // Each limit Docker does not say it enforces, as a finding with its code.
+    private static List<string> UnenforcedLimits(DockerLimits docker, ContainerResources resources, string without)
+    {
+        static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
+        var limits = new List<string>();
+        if (docker.Memory != true || docker.Swap != true)
+        {
+            limits.Add($"docker-memory-limit-unsupported: docker info reports MemoryLimit {Flag(docker.Memory)} and SwapLimit {Flag(docker.Swap)}, {without} its memory limit ({resources.MemoryOrDefault}, and no swap beyond it).");
+        }
+
+        if (docker.Cpu != true)
+        {
+            limits.Add($"docker-cpu-quota-unsupported: docker info reports CPUCfsQuota {Flag(docker.Cpu)}, {without} its CPU limit ({resources.CpusText}).");
+        }
+
+        if (docker.Pids != true)
+        {
+            limits.Add(string.Create(CultureInfo.InvariantCulture, $"docker-pids-limit-unsupported: docker info reports PidsLimit {Flag(docker.Pids)}, {without} its process limit ({resources.PidsLimit})."));
+        }
+
+        return limits;
+    }
+
+    // The cgroup version, the kernel's cgroup v2 controllers when Docker runs here, and Docker's warnings about limits.
+    private static string HostDetails(DockerLimits docker)
+    {
+        var host = new StringBuilder(docker.CgroupVersion is { } version ? $"cgroup v{version}" : "cgroup version not reported");
+        host.Append(docker.CgroupControllers is { } controllers
+            ? $"; {MachineSurveyor.CgroupControllersFile}: \"{controllers}\""
+            : $"; {MachineSurveyor.CgroupControllersFile} on Docker's machine lists the kernel's cgroup v2 controllers (Docker needs memory, cpu and pids)");
+        foreach (var warning in docker.Warnings.Where(warning =>
+                     warning.Contains("limit", StringComparison.OrdinalIgnoreCase)
+                     || warning.Contains("cfs", StringComparison.OrdinalIgnoreCase)
+                     || warning.Contains("cgroup", StringComparison.OrdinalIgnoreCase)))
+        {
+            host.Append($"; Docker warns \"{warning}\"");
+        }
+
+        return host.ToString();
     }
 
     /// <summary>

@@ -217,34 +217,83 @@ public sealed class InstallerResourceLimitsTests
     }
 
     [TestMethod]
-    public async Task AnUpgradeOrARollback_OnDockerThatNoLongerEnforcesTheLimits_IsRefused_AndNothingChanges()
+    [DataRow("false,true,true,false,4,8589934592,2,docker-host", "memory")]
+    [DataRow("true,false,true,true,4,8589934592,2,docker-host", "cpu")]
+    [DataRow("false,false,true,false,4,8589934592,2,docker-host", "memory cpu")]
+    [DataRow("true,true,false,true,4,8589934592,2,docker-host", "pids")]
+    [DataRow("false,false,false,false,4,8589934592,2,docker-host", "memory cpu pids")]
+    public async Task OnDockerThatNoLongerEnforcesTheLimits_AnUpgradeIsRefused_AndARollbackGoesAheadWithALoudWarning(string info, string unenforced)
     {
         // Every deploy that gives the limits checks them, not the first install alone (SkyMonitor checks only at install).
+        // A rollback is a recovery path (the owner's decision on #149): it goes ahead, and warns of each limit.
         using var pi = new FakeMachine().WithPi();
         var answers = pi.WriteAnswers(Controller(new ContainerResources { Cpus = 2, Memory = "3g" }));
         (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
         pi.WithRelease(NewVersion, latest: true);
         var record = pi.Read(InstallPaths.SystemRecord);
-        pi.DockerInfo = StockPiInfo;
+        pi.DockerInfo = info;
 
-        var upgrade = await pi.RunAsync("upgrade");
+        var refused = await pi.RunAsync("upgrade");
 
-        upgrade.ExitCode.Should().Be((int)InstallerExitCode.Refused, upgrade.ToString());
-        upgrade.Error.Should().Contain("Docker here cannot give the controller its limits (2 CPUs, 3g of memory and no swap, at most 512 processes and threads), so the install is refused.");
-        upgrade.Error.Should().Contain("(3g, and no swap beyond it)");
+        refused.ExitCode.Should().Be((int)InstallerExitCode.Refused, refused.ToString());
+        refused.Error.Should().Contain("Docker here cannot give the controller its limits (2 CPUs, 3g of memory and no swap, at most 512 processes and threads), so the install is refused.");
         pi.Deploys.Should().ContainSingle("the upgrade deployed nothing");
         pi.Read(InstallPaths.SystemRecord).Should().Be(record);
 
         pi.DockerInfo = "true,true,true,true,4,8589934592,2,docker-host";
         (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
         pi.InstallerVersion = NewVersion;
-        record = pi.Read(InstallPaths.SystemRecord);
-        pi.DockerInfo = StockPiInfo;
+        pi.DockerInfo = info;
 
         var rollback = await pi.RunAsync("rollback");
 
+        rollback.ExitCode.Should().Be(0, rollback.ToString());
+        pi.DeployOptions[^1].Should().Be("--rollback");
+        pi.Deploys[^1].Should().Contain(Limits("2", "3g", "512"), "the deploy script is given the recorded limits, and gives the ones Docker can enforce");
+        Record(pi).Version.Should().Be("4.0.0", "the rollback went ahead");
+        rollback.Error.Should().Contain("Warning: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:");
+        foreach (var (limit, code) in new[] { ("memory", "docker-memory-limit-unsupported"), ("cpu", "docker-cpu-quota-unsupported"), ("pids", "docker-pids-limit-unsupported") })
+        {
+            if (unenforced.Split(' ').Contains(limit))
+            {
+                rollback.Error.Should().Contain($"  - {code}: docker info reports");
+            }
+            else
+            {
+                rollback.Error.Should().NotContain(code);
+            }
+        }
+
+        rollback.Error.Should().Contain("so the version the rollback brings back runs without its");
+        rollback.Error.Should().Contain(RoleGuards.ContainerLimitRemedy + " Then upgrade again.");
+        rollback.Error.Should().NotContain("is refused. Every finding");
+        pi.Read(InstallPaths.SystemLog).Should().Contain("Warning: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS");
+    }
+
+    [TestMethod]
+    public async Task ARollback_OnDockerThatCannotEnforceTheLimits_IsStillRefused_ForTheCpusItHasAndWhenDockerDoesNotAnswer()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources { Cpus = 2, Memory = "3g" }));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.WithRelease(NewVersion, latest: true);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+        var record = pi.Read(InstallPaths.SystemRecord);
+
+        // The recorded CPU limit beyond the CPUs Docker reports, with the memory limit unenforced: refused, as before.
+        pi.DockerInfo = "false,true,true,false,1,8589934592,2,docker-host";
+        var rollback = await pi.RunAsync("rollback");
         rollback.ExitCode.Should().Be((int)InstallerExitCode.Refused, rollback.ToString());
-        rollback.Error.Should().Contain("docker-memory-limit-unsupported");
+        rollback.Error.Should().Contain("so the rollback is refused. Every finding:");
+        rollback.Error.Should().Contain("  - docker-host-cpus-insufficient: docker info reports 1 CPUs, fewer than the CPU limit of 2");
+        rollback.Error.Should().NotContain("docker-memory-limit-unsupported", "that one is the rollback's warning, not a refusal");
+
+        pi.DockerInfo = null;
+        rollback = await pi.RunAsync("rollback");
+        rollback.ExitCode.Should().Be((int)InstallerExitCode.Refused, rollback.ToString());
+        rollback.Error.Should().Contain("Docker did not say which limits it enforces (docker info)");
+
         pi.DeployOptions.Should().NotContain("--rollback");
         pi.Read(InstallPaths.SystemRecord).Should().Be(record);
     }
@@ -541,6 +590,23 @@ public sealed class InstallerResourceLimitsTests
         RoleGuards.ContainerLimitProblems(supported with { Cpus = null }, defaults).Should().ContainSingle()
             .Which.Should().Contain("  - docker-host-cpus-unreported: docker info does not report the CPUs (NCPU), so the CPU limit of 1 cannot be checked against them.")
             .And.NotContain("cgroup_enable=memory");
+
+        // A rollback: the limits Docker cannot enforce are its warning, not a refusal; the CPUs count only for a CPU limit
+        // Docker enforces.
+        RoleGuards.ContainerLimitProblems(none, limits, rollback: true).Should().BeEmpty("the CPU limit is not enforced, so the CPUs do not count");
+        RoleGuards.ContainerLimitProblems(none with { Cpu = true }, limits, rollback: true).Should().ContainSingle()
+            .Which.Should().StartWith("Docker here cannot give the controller its limits (2 CPUs, 4g of memory and no swap, at most 512 processes and threads), so the rollback is refused. Every finding:")
+            .And.Contain("docker-host-cpus-insufficient").And.NotContain("docker-memory-limit-unsupported");
+        RoleGuards.ContainerLimitProblems(null, limits, rollback: true).Should().ContainSingle().Which.Should().StartWith("Docker did not say which limits it enforces");
+        RoleGuards.ContainerLimitRollbackWarnings(supported, defaults).Should().BeEmpty();
+        RoleGuards.ContainerLimitRollbackWarnings(null, defaults).Should().BeEmpty();
+        RoleGuards.ContainerLimitRollbackWarnings(none, limits).Should().ContainSingle().Which.Should().Be(string.Join(Environment.NewLine,
+            "THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:",
+            "  - docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit false, so the version the rollback brings back runs without its memory limit (4g, and no swap beyond it).",
+            "  - docker-cpu-quota-unsupported: docker info reports CPUCfsQuota false, so the version the rollback brings back runs without its CPU limit (2).",
+            "  - docker-pids-limit-unsupported: docker info reports PidsLimit not reported, so the version the rollback brings back runs without its process limit (512).",
+            "  Docker's host: cgroup v2; /sys/fs/cgroup/cgroup.controllers: \"cpuset io\"; Docker warns \"WARNING: No memory limit support\"; Docker warns \"WARNING: No cpu cfs quota support\".",
+            "  " + RoleGuards.ContainerLimitRemedy + " Then upgrade again."));
     }
 
     [TestMethod]

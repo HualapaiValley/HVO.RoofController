@@ -323,14 +323,24 @@ internal static partial class LifecycleCommands
             throw new InstallerUsageException("--yes goes with --restore-backup.");
         }
 
-        // The deploy script's --rollback gives the version it brings back the recorded limits, so Docker here must be able
-        // to enforce them, as for an install or an upgrade (#149): refused, with every finding, before anything changes.
+        // The deploy script's --rollback gives the version it brings back the recorded limits. A rollback is a recovery
+        // path, so a limit Docker here cannot enforce does not refuse it (the owner's decision on #149): it goes ahead with
+        // the ones Docker can enforce, with a loud warning, here and in the deploy script's output and the controller's log.
+        // Everything else that refuses an install refuses it still, before anything changes (the CPUs, a Docker that does
+        // not answer).
         if (InstallRoles.RunsController(record.Roles))
         {
-            var limits = RoleGuards.ContainerLimitProblems(session.Survey.Docker.Limits, (record.ToAnswers().Controller ?? new ControllerSettings()).Normalised().Resources).ToArray();
+            var resources = (record.ToAnswers().Controller ?? new ControllerSettings()).Normalised().Resources;
+            var limits = RoleGuards.ContainerLimitProblems(session.Survey.Docker.Limits, resources, rollback: true).ToArray();
             if (limits.Length > 0)
             {
                 throw new InstallerRefusedException(string.Join(Environment.NewLine, limits));
+            }
+
+            foreach (var warning in RoleGuards.ContainerLimitRollbackWarnings(session.Survey.Docker.Limits, resources))
+            {
+                host.Error.WriteLine($"Warning: {warning}");
+                session.Log.Write($"Warning: {warning}");
             }
         }
 
