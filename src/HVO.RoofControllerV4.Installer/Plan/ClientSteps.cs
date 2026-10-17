@@ -972,10 +972,11 @@ public sealed class MacCheckStep(string app, string settingsFolder, IReadOnlyLis
             }
         }
 
-        // A check that failed stopped the run before the record: everything else is in place, and it is still due. The
-        // keychain is not the app's, so trusting the CA there or not does not call for another.
+        // A check that failed stopped the run before the record: everything else is in place, and it is still due (an
+        // upgrade's record says its release from the start, marked unfinished). The keychain is not the app's, so trusting
+        // the CA there or not does not call for another.
         if (context.Survey.UserRecord is not { } record || !record.Roles.Contains(InstallRole.MacApp)
-            || record.Version != context.Version || record.Client is not { } recorded
+            || record.Version != context.Version || record.UpgradingFrom is not null || record.Client is not { } recorded
             || recorded.Normalised() with { TrustInKeychain = false } != client.Normalised() with { TrustInKeychain = false })
         {
             return new StepCheck(StepChange.Change, "not checked yet with this release and controller");

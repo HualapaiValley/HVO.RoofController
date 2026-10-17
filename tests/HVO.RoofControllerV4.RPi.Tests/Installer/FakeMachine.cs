@@ -316,7 +316,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         },
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory,
-        RunProgramAsync = RunProgramAsync
+        RunProgramAsync = RunProgramAsync,
+        SyncFolderOnDisk = SyncFolder
     };
 
     /// <summary>The kiosk's program in the fake release of <paramref name="version"/>: a script that says which it is.</summary>
