@@ -182,10 +182,10 @@ version, and check its labels (the state contract's included) and its platforms 
    every program with the release's version. Both must pass. They run within the release's own run, so their results
    are on its page, and the programs CI tested are the ones released.
 3. **The images.** Both images are built again for `linux/amd64` and `linux/arm64`, with no cache and the base images
-   pulled afresh, into OCI archives. `check-image-labels.sh` checks each, and `push-image.sh` pushes each to GHCR with
-   the version as its tag: `ghcr.io/hualapaivalley/roof-controller:4.0.0` and
-   `ghcr.io/hualapaivalley/roof-hat-emulator:4.0.0`. Each image gets a build provenance attestation, which GHCR keeps
-   beside it.
+   pulled afresh at the digests the Dockerfiles pin ([Base images](ci-runners.md#base-images)), into OCI archives.
+   `check-image-labels.sh` checks each, and `push-image.sh` pushes each to GHCR with the version as its tag:
+   `ghcr.io/hualapaivalley/roof-controller:4.0.0` and `ghcr.io/hualapaivalley/roof-hat-emulator:4.0.0`. Each image gets
+   a build provenance attestation, which GHCR keeps beside it.
 4. **The assets.** `release-assets.py` gathers what CI built and tested in this run into the release's assets
    ([The assets](#the-assets)), with the images' digests and the upgrade notes. Before logging in to GHCR, the run
    checks that CI's `hvo-roof` and `hvo-roof-install` for linux-x64 print the version and commit, running each with no
