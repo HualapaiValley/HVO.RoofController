@@ -168,9 +168,10 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
     /// upgrade or an older installer would take as the release to go back to. This step clears the mark at the end.
     /// The record's folder is synced before any change, even when the mark was written by a run before this one: a power
     /// loss must not take the record back to the older release once a newer controller may be deployed. When that cannot
-    /// be made sure of, nothing else changes. Another release's unfinished upgrade is refused here too.
+    /// be made sure of, nothing else changes. Another release's unfinished upgrade is refused here too. The machine's record
+    /// names the backup the upgrade took before this (<paramref name="upgradeBackup"/>), or none.
     /// </summary>
-    public void MarkUpgradeStarted(InstallContext context)
+    public void MarkUpgradeStarted(InstallContext context, string? upgradeBackup = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         var (existing, _) = InstallRecord.Load(context.Machine, path);
@@ -190,7 +191,7 @@ public sealed class RecordStep(InstallScope scope, string path, Func<InstallCont
         {
             if (RoofSemVer.IsValid(context.Version) && RoofSemVer.IsOlder(existing.Version, context.Version))
             {
-                var record = existing.UpgradeStarted(context.Version) with { UpdatedAt = context.Time.GetUtcNow() };
+                var record = existing.UpgradeStarted(context.Version, scope == InstallScope.System ? upgradeBackup : null) with { UpdatedAt = context.Time.GetUtcNow() };
                 context.Machine.WriteDurably(path, record.ToJson(), ModeFor(scope));
                 context.Log.Write($"Wrote {path}: version {record.Version}, its upgrade from {existing.Version} not finished yet.");
             }

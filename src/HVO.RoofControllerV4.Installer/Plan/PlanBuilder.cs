@@ -66,9 +66,10 @@ public static class PlanBuilder
 {
     /// <summary>
     /// The steps that install <paramref name="answers"/>. <paramref name="replacingAuthority"/> is the fingerprint of a
-    /// certificate authority a person asked to replace (<c>--new-ca</c>).
+    /// certificate authority a person asked to replace (<c>--new-ca</c>). <paramref name="upgradeBackup"/>, for an upgrade
+    /// of the machine's roles, backs up the stores first, and the record names the backup.
     /// </summary>
-    public static InstallPlan Build(InstallerMachine machine, MachineSurvey survey, InstallAnswers answers, string? replacingAuthority = null)
+    public static InstallPlan Build(InstallerMachine machine, MachineSurvey survey, InstallAnswers answers, string? replacingAuthority = null, UpgradeBackupStep? upgradeBackup = null)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(survey);
@@ -83,6 +84,12 @@ public static class PlanBuilder
 
         var roles = answers.Roles;
         var steps = new List<PlanStep>();
+        if (upgradeBackup is not null)
+        {
+            // Before anything changes: the stores as the release installed has them.
+            steps.Add(upgradeBackup);
+        }
+
         var layout = ControllerLayout.For(machine);
         IReadOnlyList<ApiKeyAllocation> keys = [];
         CertificateStep? certificate = null;
@@ -208,7 +215,8 @@ public static class PlanBuilder
         foreach (var scope in roles.Select(role => InstallRoles.ScopeOf(role, machine.Os)).Distinct().Order())
         {
             var scopeRoles = roles.Where(role => InstallRoles.ScopeOf(role, machine.Os) == scope).ToArray();
-            steps.Add(new RecordStep(scope, InstallPaths.RecordFor(scope, machine), (context, existing) => BuildRecord(context, scope, scopeRoles, answers, existing)));
+            var backup = scope == InstallScope.System ? upgradeBackup : null;
+            steps.Add(new RecordStep(scope, InstallPaths.RecordFor(scope, machine), (context, existing) => BuildRecord(context, scope, scopeRoles, answers, existing, backup)));
         }
 
         return new InstallPlan(steps);
@@ -300,9 +308,11 @@ public static class PlanBuilder
     /// pulled for it), the kiosk, hvo-roof and the Mac app with the programs kept beside them (or the release's), the
     /// installer with its own, and the record says it went back from <paramref name="rolledBackFrom"/>. Each is checked
     /// against the release before's own (the controller by its image's digest, the programs by their SHA-256) and left as
-    /// it is when it is that already, as after an upgrade that stopped part way.
+    /// it is when it is that already, as after an upgrade that stopped part way. With <paramref name="restore"/>
+    /// (<c>--restore-backup</c>), the controller is stopped first, after a verified Stop of the roof, and the stores the
+    /// release before cannot read are put back from the backup the upgrade took, before the swap.
     /// </summary>
-    public static InstallPlan BuildRollback(InstallerMachine machine, MachineSurvey survey, InstallRecord record, string rolledBackFrom)
+    public static InstallPlan BuildRollback(InstallerMachine machine, MachineSurvey survey, InstallRecord record, string rolledBackFrom, StateRestore? restore = null)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(survey);
@@ -320,7 +330,13 @@ public static class PlanBuilder
 
             if (settings.LinuxAuth is { Enabled: true } linuxAuth)
                 steps.Add(new LinuxAuthStep(linuxAuth));
-            steps.Add(new ControllerRollbackStep(controller));
+            if (restore is not null)
+            {
+                steps.Add(new ControllerStopStep(controller));
+                steps.AddRange(restore.Steps);
+            }
+
+            steps.Add(new ControllerRollbackStep(controller, restore?.States));
             if (roles.Contains(InstallRole.Kiosk))
             {
                 steps.AddRange(KioskSteps.ForRollback(ControllerLayout.For(machine), settings));
@@ -344,6 +360,7 @@ public static class PlanBuilder
             InstallerVersion = context.Version,
             PreviousVersion = null,
             RolledBackFrom = rolledBackFrom,
+            UpgradeBackup = null,
             UpgradingFrom = null
         }));
         return new InstallPlan(steps);
@@ -413,6 +430,7 @@ public static class PlanBuilder
                 Roles = [],
                 PreviousVersion = null,
                 RolledBackFrom = null,
+                UpgradeBackup = null,
                 UpgradingFrom = null,
                 UninstalledAt = existing?.UninstalledAt ?? context.Time.GetUtcNow()
             }));
@@ -510,9 +528,10 @@ public static class PlanBuilder
 
     /// <summary>
     /// The record after this install: the roles already recorded and these (the controller replacing a rig, and a rig the
-    /// controller), with this install's choices for its roles and the recorded ones for the rest.
+    /// controller), with this install's choices for its roles and the recorded ones for the rest. An upgrade names the
+    /// backup <paramref name="upgradeBackup"/> kept.
     /// </summary>
-    public static InstallRecord BuildRecord(InstallContext context, InstallScope scope, IReadOnlyCollection<InstallRole> roles, InstallAnswers answers, InstallRecord? existing)
+    public static InstallRecord BuildRecord(InstallContext context, InstallScope scope, IReadOnlyCollection<InstallRole> roles, InstallAnswers answers, InstallRecord? existing, UpgradeBackupStep? upgradeBackup = null)
     {
         var kept = (existing?.Roles ?? []).Where(role =>
             !(role == InstallRole.Rig && roles.Contains(InstallRole.Controller))
@@ -532,6 +551,7 @@ public static class PlanBuilder
             InstallerVersion = context.Version,
             PreviousVersion = upgraded ? installed!.Version : installed?.PreviousVersion,
             RolledBackFrom = upgraded ? null : installed?.RolledBackFrom,
+            UpgradeBackup = upgraded ? upgradeBackup?.Kept : installed?.UpgradeBackup,
             InstalledAt = existing?.InstalledAt ?? default,
             UpdatedAt = existing?.UpdatedAt ?? default,
             // An import is done once: the record keeps the settings, not where they came from.

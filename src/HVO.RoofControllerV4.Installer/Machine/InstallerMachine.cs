@@ -72,7 +72,9 @@ public sealed class InstallerMachine
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory,
         RunProgramAsync = RunProgramAsync,
-        SyncFolderOnDisk = SyncFolderOnDisk
+        SyncFolderOnDisk = SyncFolderOnDisk,
+        SyncFileOnDisk = SyncFileOnDisk,
+        RenameOnDisk = RenameOnDisk
     };
 
     /// <summary>
@@ -81,6 +83,19 @@ public sealed class InstallerMachine
     /// <see cref="SyncDirectory"/> calls it; a test fakes it.
     /// </summary>
     public Action<string> SyncFolderOnDisk { get; init; } = onDisk => SyncFolder(onDisk, OperatingSystem.IsMacOS(), Libc);
+
+    /// <summary>
+    /// Makes a file's content and metadata (its mode, its owner) durable, given where it is on disk, as
+    /// <see cref="SyncFolderOnDisk"/> does a folder's entries: fsync(2) on Linux, F_FULLFSYNC on a Mac. Throws an
+    /// <see cref="IOException"/> when the system does not say it is done. <see cref="SyncFile"/> calls it; a test fakes it.
+    /// </summary>
+    public Action<string> SyncFileOnDisk { get; init; } = onDisk => SyncFolder(onDisk, OperatingSystem.IsMacOS(), Libc, "file");
+
+    /// <summary>
+    /// Renames a file, given where both names are on disk, over a file there when told to: what
+    /// <see cref="MoveFileDurably"/> renames with. A test fakes it, so that what it knows of the file (its owner) follows it.
+    /// </summary>
+    public Action<string, string, bool> RenameOnDisk { get; init; } = File.Move;
 
     /// <summary>
     /// True when something on this machine accepts connections on the TCP port: it answers on the loopback address
@@ -185,6 +200,25 @@ public sealed class InstallerMachine
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The file's bytes, or null when there is no such file, read only when it is a regular file: something else there (a
+    /// FIFO, a device, a socket, a folder) throws <see cref="NotARegularFileException"/> before anything is read, and
+    /// opening it never waits (<see cref="RegularFiles"/>).
+    /// </summary>
+    public byte[]? ReadRegularBytes(string path) => RegularFiles.Read(OnDisk(path), path);
+
+    /// <summary>The file's text, as <see cref="ReadRegularBytes"/> reads it (without a byte order mark), or null when there is no such file.</summary>
+    public string? ReadRegularText(string path)
+    {
+        if (ReadRegularBytes(path) is not { } bytes)
+        {
+            return null;
+        }
+
+        using var reader = new StreamReader(new MemoryStream(bytes, writable: false), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     /// <summary>The file's or folder's permission bits, or null when it does not exist.</summary>
@@ -491,6 +525,108 @@ public sealed class InstallerMachine
     /// loss. A file's own flush does not do this; the rename is the folder's.
     /// </summary>
     public void SyncDirectory(string path) => SyncFolderOnDisk(OnDisk(path));
+
+    /// <summary>
+    /// Makes the file's content and metadata (its mode, its owner) durable (<see cref="SyncFileOnDisk"/>), as a change made
+    /// after the content was flushed (a chmod, a chown) needs before its name is relied on.
+    /// </summary>
+    public void SyncFile(string path) => SyncFileOnDisk(OnDisk(path));
+
+    // The durable changes. Each makes what it changes durable before it returns: the file itself (content, mode, owner)
+    // before the folder entry that names it, and each folder entry once it is made. When a sync fails, it throws an
+    // IOException and goes no further. For what a later step relies on after a power loss: the backup an upgrade's record
+    // names, and the stores a rollback puts back before the controller before starts on them.
+
+    /// <summary>
+    /// Writes <paramref name="path"/> in one step (<see cref="WriteAtomically(string, byte[], UnixFileMode)"/>), then makes
+    /// it durable: the file synced, then its folder. When a sync fails it throws, and the file may have either content.
+    /// </summary>
+    public void WriteDurably(string path, byte[] content, UnixFileMode mode)
+    {
+        WriteAtomically(path, content, mode);
+        SyncFile(path);
+        SyncDirectory(Path.GetDirectoryName(path)!);
+    }
+
+    /// <summary>
+    /// Renames <paramref name="source"/> to <paramref name="destination"/>, over a file there only with
+    /// <paramref name="overwrite"/>, and makes it durable: the file synced first (so its name never points at content or an
+    /// owner that is not on disk), then the destination's folder, then the source's when it is another. A new name
+    /// (without <paramref name="overwrite"/>) that cannot be made durable is taken away again before it throws, so nothing
+    /// is left there that a later step could take for durable.
+    /// </summary>
+    public void MoveFileDurably(string source, string destination, bool overwrite = false)
+    {
+        SyncFile(source);
+        RenameOnDisk(OnDisk(source), OnDisk(destination), overwrite);
+        var folder = Path.GetDirectoryName(destination)!;
+        try
+        {
+            SyncDirectory(folder);
+            if (Path.GetDirectoryName(source) is { } from && from != folder)
+            {
+                SyncDirectory(from);
+            }
+        }
+        catch (IOException) when (!overwrite)
+        {
+            File.Delete(OnDisk(destination));
+            throw;
+        }
+    }
+
+    /// <summary>Deletes the file and makes that durable: its folder synced. Its folder is synced even when it was not there.</summary>
+    public void DeleteFileDurably(string path)
+    {
+        DeleteFile(path);
+        SyncDirectory(Path.GetDirectoryName(path)!);
+    }
+
+    /// <summary>
+    /// Makes the folder, and any parent missing (0755), as <see cref="CreateDirectory"/> does, and makes each folder made
+    /// durable: the folder above the first one made is synced, then each one made, from the top down. When a sync fails it
+    /// takes away again, deepest first, each folder it made that is still empty, then throws. Nothing to make, nothing synced.
+    /// </summary>
+    public void CreateDirectoryDurably(string path, UnixFileMode mode)
+    {
+        var made = new List<string>();
+        for (var folder = path; !DirectoryExists(folder); folder = Path.GetDirectoryName(folder)!)
+        {
+            made.Insert(0, folder);
+        }
+
+        if (made.Count == 0)
+        {
+            return;
+        }
+
+        CreateDirectory(path, mode);
+        try
+        {
+            SyncDirectory(Path.GetDirectoryName(made[0])!);
+            foreach (var folder in made)
+            {
+                SyncDirectory(folder);
+            }
+        }
+        catch (IOException)
+        {
+            // Best effort: what failed is the sync, and that is what is thrown.
+            foreach (var folder in Enumerable.Reverse(made).Where(folder => DirectoryExists(folder) && ListNames(folder).Count == 0))
+            {
+                try
+                {
+                    Directory.Delete(OnDisk(folder));
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    break;
+                }
+            }
+
+            throw;
+        }
+    }
 
     /// <summary>
     /// Replaces a file's text in one step, through a new file renamed over it, and sets no mode: for a file system that
@@ -802,16 +938,16 @@ public sealed class InstallerMachine
         }
     }
 
-    // Opens the folder to read, then makes its entries durable: fsync(2) on Linux. macOS's fsync can leave them in the
-    // drive's cache, where a power loss can lose them, so there only F_FULLFSYNC will do, which has the drive write its
-    // cache out. When it fails, for whatever reason (a file system that does not support it among them), the sync fails:
+    // Opens the folder (or the file, as what says) to read, then makes its entries (a file's content and metadata) durable:
+    // fsync(2) on Linux. macOS's fsync can leave them in the drive's cache, where a power loss can lose them, so there only
+    // F_FULLFSYNC will do, which has the drive write its cache out. When it fails, for whatever reason (a file system that does not support it among them), the sync fails:
     // fsync is never tried in its place. Anything that fails throws. libc's calls are given, so a test can fail them.
-    internal static void SyncFolder(string onDisk, bool macOS, FolderSyncCalls calls)
+    internal static void SyncFolder(string onDisk, bool macOS, FolderSyncCalls calls, string what = "folder")
     {
         var descriptor = Retried(() => calls.Open(onDisk, macOS ? MacCloseOnExec : LinuxCloseOnExec), out var error);
         if (descriptor < 0)
         {
-            throw SyncFailed(onDisk, "open", error);
+            throw SyncFailed(onDisk, "open", error, what);
         }
 
         try
@@ -820,12 +956,12 @@ public sealed class InstallerMachine
             {
                 if (Retried(() => calls.FullFsync(descriptor), out error) != 0)
                 {
-                    throw FullSyncFailed(onDisk, error);
+                    throw FullSyncFailed(onDisk, error, what);
                 }
             }
             else if (Retried(() => calls.Fsync(descriptor), out error) != 0)
             {
-                throw SyncFailed(onDisk, "fsync", error);
+                throw SyncFailed(onDisk, "fsync", error, what);
             }
         }
         finally
@@ -848,16 +984,16 @@ public sealed class InstallerMachine
         return result;
     }
 
-    private static IOException SyncFailed(string folder, string call, int error)
-        => new($"Could not sync the folder {folder} to disk ({call}: {Marshal.GetPInvokeErrorMessage(error)}).");
+    private static IOException SyncFailed(string path, string call, int error, string what)
+        => new($"Could not sync the {what} {path} to disk ({call}: {Marshal.GetPInvokeErrorMessage(error)}).");
 
-    // F_FULLFSYNC's failure; ENOTSUP or EINVAL says the folder's file system does not support it.
-    private static IOException FullSyncFailed(string folder, int error)
+    // F_FULLFSYNC's failure; ENOTSUP or EINVAL says the file system does not support it.
+    private static IOException FullSyncFailed(string path, int error, string what)
         => error is MacNotSupported or InvalidArgument
-            ? new($"Could not sync the folder {folder} to disk (F_FULLFSYNC: {Marshal.GetPInvokeErrorMessage(error)}): its file system "
-                + "cannot have the drive write its cache out, which a Mac needs for a change to survive a power loss. Keep the folder "
+            ? new($"Could not sync the {what} {path} to disk (F_FULLFSYNC: {Marshal.GetPInvokeErrorMessage(error)}): its file system "
+                + $"cannot have the drive write its cache out, which a Mac needs for a change to survive a power loss. Keep the {what} "
                 + "on a file system that can, as APFS on the Mac's own drive does.")
-            : SyncFailed(folder, "F_FULLFSYNC", error);
+            : SyncFailed(path, "F_FULLFSYNC", error, what);
 
     [DllImport("libc", SetLastError = false)]
     private static extern uint geteuid();

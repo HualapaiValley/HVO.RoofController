@@ -267,7 +267,7 @@ public sealed class LinuxAuthEnrollmentStep(ControllerLayout layout, LinuxAuthSe
     private List<LinuxAuthStep.Enrollment> Pending(InstallerMachine machine)
     {
         var enrollments = LinuxAuthStep.Enrollments(machine);
-        var root = machine.ReadText(layout.IdentityFile) is { } text ? JsonNode.Parse(text) : null;
+        var root = machine.ReadRegularText(layout.IdentityFile) is { } text ? JsonNode.Parse(text) : null;
         var principals = root?["linuxPrincipals"]?.AsArray() ?? [];
         var pending = new List<LinuxAuthStep.Enrollment>();
         foreach (var user in settings.Users)

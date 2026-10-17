@@ -31,7 +31,11 @@ public sealed class SettingsImportStep(ControllerLayout layout, string source) :
         string? current;
         try
         {
-            current = context.Machine.ReadText(Target);
+            current = context.Machine.ReadRegularText(Target);
+        }
+        catch (NotARegularFileException error)
+        {
+            return new StepCheck(StepChange.Blocked, $"{Target} is {error.Kind}, not a file: move it aside");
         }
         catch (UnauthorizedAccessException)
         {
@@ -56,7 +60,7 @@ public sealed class SettingsImportStep(ControllerLayout layout, string source) :
         ArgumentNullException.ThrowIfNull(context);
         try
         {
-            return context.Machine.ReadText(Target) is { } current && Imported(context, current);
+            return context.Machine.ReadRegularText(Target) is { } current && Imported(context, current);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {

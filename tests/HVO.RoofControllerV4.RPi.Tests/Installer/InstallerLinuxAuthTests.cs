@@ -167,8 +167,8 @@ public sealed class InstallerLinuxAuthTests
         var release = ReleaseManifest.Parse(FakeMachine.ReleaseJson(), "4.0.0");
         pi.Write(ControllerLayout.System.IdentityFile, "{\"schemaVersion\":2,\"linuxPrincipals\":[]}");
         pi.Write(ControllerLayout.System.IdentityFile + ".schema1.bak", "{\"schemaVersion\":1}");
-        IdentitySchemaGuard.Problem(pi.Machine, ControllerLayout.System.IdentityFile, release).Should().Contain("refused");
-        IdentitySchemaGuard.Problem(pi.Machine, ControllerLayout.System.IdentityFile, release with { IdentityStoreSchema = 2 }).Should().BeNull();
+        StateContractGuard.Problem(pi.Machine, ControllerLayout.System, release).Should().Contain("refused");
+        StateContractGuard.Problem(pi.Machine, ControllerLayout.System, release with { IdentityStoreSchema = 2 }).Should().BeNull();
         pi.Read(ControllerLayout.System.IdentityFile).Should().Contain("\"schemaVersion\":2");
     }
 
@@ -194,7 +194,7 @@ public sealed class InstallerLinuxAuthTests
         var release = ReleaseManifest.Parse(FakeMachine.ReleaseJson(), "4.0.0") with { IdentityStoreSchema = 2 };
         pi.Write(ControllerLayout.System.IdentityFile, text);
         pi.Write(ControllerLayout.System.IdentityFile + ".schema1.bak", "{\"schemaVersion\":1}");
-        IdentitySchemaGuard.Problem(pi.Machine, ControllerLayout.System.IdentityFile, release).Should().NotBeNull();
+        StateContractGuard.Problem(pi.Machine, ControllerLayout.System, release).Should().NotBeNull();
         pi.Read(ControllerLayout.System.IdentityFile).Should().Be(text);
         pi.Read(ControllerLayout.System.IdentityFile + ".schema1.bak").Should().Be("{\"schemaVersion\":1}");
     }
@@ -207,7 +207,7 @@ public sealed class InstallerLinuxAuthTests
         using var pi = new FakeMachine();
         var release = ReleaseManifest.Parse(FakeMachine.ReleaseJson(), "4.0.0");
         pi.Write(ControllerLayout.System.IdentityFile, text);
-        IdentitySchemaGuard.Problem(pi.Machine, ControllerLayout.System.IdentityFile, release).Should().BeNull();
+        StateContractGuard.Problem(pi.Machine, ControllerLayout.System, release).Should().BeNull();
     }
 
     private sealed class Fixture(FakeMachine pi, Runner runner, InstallContext context) : IDisposable

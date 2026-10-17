@@ -16,7 +16,7 @@ namespace HVO.RoofControllerV4.Installer;
 /// Mac). The controller is only ever replaced or stopped by the deploy script, after a verified Stop of the roof: none of
 /// them moves the roof.
 /// </summary>
-internal static class LifecycleCommands
+internal static partial class LifecycleCommands
 {
     /// <summary>
     /// Set by <c>upgrade</c> for the new release's installer it hands over to, to the version it hands over for: an
@@ -60,16 +60,33 @@ internal static class LifecycleCommands
     {
         var plan = new Option<bool>("--plan") { Description = "Print what the rollback would change, and change nothing." };
         var release = Installer.ReleaseOption("Read the release before");
+        var restoreBackup = new Option<string?>("--restore-backup")
+        {
+            Description = "When the release before cannot read the stores here (a breaking state change), put the ones it cannot read back from the backup the upgrade "
+                + "took (or FILE), losing every change made to them since. Without it, such a rollback is refused.",
+            HelpName = "FILE",
+            Arity = ArgumentArity.ZeroOrOne
+        };
+        var yes = new Option<bool>("--yes") { Description = "With --restore-backup: put the stores back without asking." };
         var rollback = new Command(
             "rollback",
             "Goes back to the release installed before the last upgrade: the deploy script swaps the controller with the one it kept "
             + "(after a verified Stop of the roof), and the kiosk, hvo-roof, the Mac app and the installer go back to the ones kept "
-            + "beside them. It goes back one release, once.");
+            + "beside them. It goes back one release, once. A release before that cannot read the stores here is refused, unless "
+            + "--restore-backup.");
         rollback.Options.Add(plan);
         rollback.Options.Add(release);
+        rollback.Options.Add(restoreBackup);
+        rollback.Options.Add(yes);
         rollback.SetAction((parseResult, token) => Installer.GuardAsync(
             host,
-            () => RollbackAsync(host, parseResult.GetValue(release), parseResult.GetValue(plan), token),
+            () => RollbackAsync(
+                host,
+                parseResult.GetValue(release),
+                parseResult.GetValue(plan),
+                parseResult.GetResult(restoreBackup) is null ? null : parseResult.GetValue(restoreBackup) ?? string.Empty,
+                parseResult.GetValue(yes),
+                token),
             token));
         return rollback;
     }
@@ -199,9 +216,17 @@ internal static class LifecycleCommands
                     host.Out.WriteLine($"The upgrade from {from} to {target} did not finish here: finishing it.");
                 }
 
-                if (machine.Environment(ContinuedVariable) != target)
+                var manifest = await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+                var shown = machine.Environment(ContinuedVariable) != target;
+                if (shown)
                 {
-                    ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), from, target);
+                    ShowUpgradeNotes(host, manifest, from, target);
+                }
+
+                CheckUpgradeState(host, session, record, from, manifest, tell: shown);
+                session.HandedOverBackup = HandedOverBackup(machine, target);
+                if (shown)
+                {
                     host.Out.WriteLine();
                 }
             }
@@ -225,7 +250,11 @@ internal static class LifecycleCommands
         session.Version = target;
         if (from != target)
         {
-            ShowUpgradeNotes(host, await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false), from, target);
+            var manifest = await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+            ShowUpgradeNotes(host, manifest, from, target);
+
+            // Before this installer is replaced: a release that cannot read the stores here changes nothing.
+            CheckUpgradeState(host, session, record, from, manifest, tell: true);
         }
 
         host.Out.WriteLine($"Release {target}: {ReleaseManifest.PageUri(target)}");
@@ -245,6 +274,9 @@ internal static class LifecycleCommands
             throw new InstallerRefusedException($"{installer}: {check.Detail}. Download release {target}'s installer from {ReleaseManifest.PageUri(target)} and run its upgrade.");
         }
 
+        // Before this installer is replaced: a backup that cannot be taken changes nothing.
+        var handOver = new Dictionary<string, string> { [ContinuedVariable] = target };
+        await BackUpBeforeHandingOverAsync(host, session, handOver, cancellationToken).ConfigureAwait(false);
         if (check.MakesChange)
         {
             host.Out.WriteLine($"{installer}: {check.Detail}.");
@@ -260,14 +292,14 @@ internal static class LifecycleCommands
         session.Log.Write($"Handing over to release {target}'s installer: {installer} {string.Join(' ', arguments)}.");
         host.Out.WriteLine($"Handing over to release {target}'s installer.");
         host.Out.WriteLine();
-        return await machine.RunProgramAsync(machine.OnDisk(installer), arguments, new Dictionary<string, string> { [ContinuedVariable] = target }).ConfigureAwait(false);
+        return await machine.RunProgramAsync(machine.OnDisk(installer), arguments, handOver).ConfigureAwait(false);
     }
 
     /// <summary>
     /// <c>rollback</c>: back to the release the record says was installed before the last upgrade, with that release's
     /// files and the ones each upgrade kept. The record then says what it went back from, and there is nothing further back.
     /// </summary>
-    private static async Task<int> RollbackAsync(InstallerHost host, string? releaseFolder, bool planOnly, CancellationToken cancellationToken)
+    private static async Task<int> RollbackAsync(InstallerHost host, string? releaseFolder, bool planOnly, string? restoreBackup, bool yes, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         CertificateCommands.RefuseRootOnMac(machine, "rollback");
@@ -286,12 +318,19 @@ internal static class LifecycleCommands
             throw new InstallerRefusedException($"{record.Version} is the first release installed here: there is no release before it to go back to.");
         }
 
+        if (yes && restoreBackup is null)
+        {
+            throw new InstallerUsageException("--yes goes with --restore-backup.");
+        }
+
         host.Out.WriteLine(record.UpgradingFrom is { } started
             ? $"The upgrade from {started} to {record.Version} did not finish here; going back to {previous}, the release before."
             : $"{record.Version} is installed here; going back to {previous}, the release before.");
         host.Out.WriteLine();
         session.Version = previous;
-        var plan = PlanBuilder.BuildRollback(machine, session.Survey, record, record.Version);
+        var target = await session.Context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+        var restore = await CheckRollbackStateAsync(host, session, record, target, restoreBackup, planOnly, yes, cancellationToken).ConfigureAwait(false);
+        var plan = PlanBuilder.BuildRollback(machine, session.Survey, record, record.Version, restore);
         var checkedPlan = await plan.CheckAsync(session.Context, cancellationToken).ConfigureAwait(false);
         return await RunPlanAsync(host, session, checkedPlan, planOnly, $"release {previous}", "rolling back", cancellationToken).ConfigureAwait(false);
     }

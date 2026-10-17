@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -80,6 +81,20 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
 
     /// <summary>The largest identity store schema this release reads. Old manifests safely default to schema 1.</summary>
     public int IdentityStoreSchema { get; init; } = 1;
+
+    private readonly StateContract? _stateContract;
+
+    /// <summary>
+    /// What the release's controller writes and reads of each store it keeps: release.json's
+    /// <c>stateContracts.controller</c>, or, for a release.json without one (4.1.1 and before), what its
+    /// <see cref="IdentityStoreSchema"/> says (<see cref="StateContract.Legacy"/>). Set to null, it is that one.
+    /// </summary>
+    [AllowNull]
+    public StateContract StateContract
+    {
+        get => _stateContract ?? StateContract.Legacy(IdentityStoreSchema);
+        init => _stateContract = value;
+    }
 
     /// <summary>Where a release's files are on GitHub.</summary>
     public const string ReleasesUrl = "https://github.com/HualapaiValley/HVO.RoofController/releases";
@@ -169,9 +184,12 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
                 throw Invalid("it lists no images");
             }
 
+            var identitySchema = ReadIdentitySchema(root);
+            var contract = ReadStateContract(root, identitySchema);
             return new ReleaseManifest(released, Text(root, "commit"), Image(images, "controller"), Image(images, "hatEmulator"))
             {
-                IdentityStoreSchema = ReadIdentitySchema(root),
+                IdentityStoreSchema = contract?.For(StateContract.Identity)?.ReadsMax ?? identitySchema,
+                StateContract = contract,
                 Assets = ReadAssets(root),
                 UpgradeNotes = ReadUpgradeNotes(root)
             };
@@ -182,12 +200,42 @@ public sealed partial record ReleaseManifest(string Version, string? Commit, Rel
         }
     }
 
+    // Any schema from 1: the release's state contract, not a list this installer knows, says what it reads, so an installer
+    // can read a newer release's release.json to hand over to it (4.1.1's refused schema 3).
     private static int ReadIdentitySchema(JsonElement root)
     {
         if (!root.TryGetProperty("identityStoreSchema", out var value)) return 1;
-        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var schema) || schema is < 1 or > 3)
-            throw Invalid("identityStoreSchema must be 1, 2 or 3");
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var schema) || schema < 1)
+            throw Invalid("identityStoreSchema must be a whole number from 1");
         return schema;
+    }
+
+    // stateContracts.controller when there is one (it must agree with identityStoreSchema, which older installers read);
+    // null otherwise, so the contract is the legacy one identityStoreSchema gives.
+    private static StateContract? ReadStateContract(JsonElement root, int identitySchema)
+    {
+        if (!root.TryGetProperty("stateContracts", out var contracts) || contracts.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (contracts.ValueKind != JsonValueKind.Object || !contracts.TryGetProperty("controller", out var controller))
+        {
+            throw Invalid("its stateContracts are not an object naming the controller's");
+        }
+
+        var contract = StateContract.Parse(controller, Invalid);
+        if (contract.For(StateContract.Identity) is not { } identity)
+        {
+            throw Invalid("the controller's state contract has no identity store");
+        }
+
+        if (root.TryGetProperty("identityStoreSchema", out _) && identity.ReadsMax != identitySchema)
+        {
+            throw Invalid($"identityStoreSchema is {identitySchema}, but the controller's state contract reads identity schemas up to {identity.ReadsMax}");
+        }
+
+        return contract;
     }
 
     private static ReleaseImage Image(JsonElement images, string key)

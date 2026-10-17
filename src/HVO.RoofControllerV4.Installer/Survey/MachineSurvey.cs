@@ -198,6 +198,15 @@ public sealed record ContainerSurvey
     /// <summary>The image's version label (org.opencontainers.image.version), when it has one.</summary>
     public string? Version { get; init; }
 
+    /// <summary>
+    /// The image's state contract label (io.hvo.roof.state-contracts), when it has one: what the release it runs writes
+    /// and reads of each store, for telling whether an upgrade makes a breaking change.
+    /// </summary>
+    public string? StateContracts { get; init; }
+
+    /// <summary>The image's identity schema label (io.hvo.roof.identity-schema), which images from before state contracts have.</summary>
+    public string? IdentitySchema { get; init; }
+
     /// <summary>The ports it publishes on the host, in order.</summary>
     public IReadOnlyList<int> PublishedPorts { get; init; } = [];
 

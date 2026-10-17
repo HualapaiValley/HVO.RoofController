@@ -33,8 +33,8 @@ unless --registry names another (a test's local registry). The assets:
                                               (docs/releasing.md#offline-image-archives)
   release.json                                the version, the commit, each image's digest and offline archives, each
                                               asset's SHA-256, the SHA-256 of each file in the kiosk's tarball (the
-                                              installer checks an installed kiosk against them without downloading it)
-                                              and each release's upgrade notes
+                                              installer checks an installed kiosk against them without downloading it),
+                                              each release's upgrade notes, and each image's state contracts
   SHA256SUMS                                  every asset's SHA-256, release.json's included, as sha256sum writes it
 """
 
@@ -96,6 +96,18 @@ KIOSK_FILES = {
     "hvo-roof-kiosk.service": 0o644,
     "99-hvo-roof-kiosk-backlight.rules": 0o644,
     "appsettings.Local.example.json": 0o644,
+}
+
+# What each image writes and reads of the stores it keeps (docs/releasing.md, "State contracts"): release.json's
+# stateContracts, the same as each Dockerfile's io.hvo.roof.state-contracts label (tests/releasing checks they agree).
+# identityStoreSchema, which installers from before stateContracts read, is the newest identity schema the controller
+# reads. The HAT emulator keeps no state.
+STATE_CONTRACTS = {
+    "controller": {
+        "identity": {"writes": 3, "reads": {"min": 1, "max": 3}},
+        "settings": {"writes": 1, "reads": {"min": 1, "max": 1}},
+    },
+    "hatEmulator": {},
 }
 
 MAC_APP = "HVO Roof.app"
@@ -446,7 +458,7 @@ def manifest(out, assets, version, commit, created, registry, digests, contents,
         }
     return {
         "schemaVersion": 1,
-        "identityStoreSchema": 3,
+        "identityStoreSchema": STATE_CONTRACTS["controller"]["identity"]["reads"]["max"],
         "product": "HVO Roof Controller",
         "version": version,
         "tag": f"v{version}",
@@ -455,6 +467,7 @@ def manifest(out, assets, version, commit, created, registry, digests, contents,
         "created": created,
         "repository": REPOSITORY_URL,
         "images": images,
+        "stateContracts": STATE_CONTRACTS,
         **({"upgradeNotes": notes} if notes else {}),
         "assets": [
             {"name": name, "kind": kind, "platform": platform, "size": (out / name).stat().st_size,

@@ -113,12 +113,64 @@ internal static class BackupCommands
     /// <summary>
     /// Writes a backup to <paramref name="output"/> (a new file in <see cref="DefaultFolder"/> when null), and says what it
     /// holds: paths and counts, nothing from the files. It goes to a file beside the backup first, made 0600, renamed to
-    /// the backup once it is whole; a backup that fails leaves nothing.
+    /// the backup once it is whole, and made durable (the archive, then its folder, synced) before it returns; a backup that
+    /// fails leaves nothing.
     /// </summary>
     internal static async Task<string> WriteAsync(InstallerHost host, InstallerSession session, string? output, CancellationToken cancellationToken)
     {
-        var machine = session.Machine;
         var now = host.Time.GetUtcNow();
+        var written = await WriteArchiveAsync(
+            session.Machine,
+            session.Log,
+            session.Survey.HostName,
+            InstallerSession.RoofVersion(host.Version),
+            session.Survey.SystemRecord?.Version,
+            now,
+            () => OutputPathAsync(session.Machine, session.Survey.HostName, now, output, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        var entries = written.Entries;
+        var files = entries.Count(entry => entry.Type == BackupEntry.File);
+        var folders = entries.Count - files;
+        var path = written.Path;
+        host.Out.WriteLine($"Backed up {files} files and {folders} folders to {path} ({Modes.Octal(Modes.PrivateFile)}, root's):");
+        foreach (var root in Folders.Concat(Files))
+        {
+            var held = entries.Count(entry => entry.Type == BackupEntry.File && Within(entry.Path, root));
+            if (held > 0)
+            {
+                host.Out.WriteLine($"  {root}: {held} {(held == 1 ? "file" : "files")}");
+            }
+        }
+
+        foreach (var left in written.Skipped)
+        {
+            host.Out.WriteLine($"  Left out {left}: a backup holds files and folders only.");
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// Writes a backup to <paramref name="output"/>, which must not be there, as <see cref="WriteAsync"/> does, saying
+    /// nothing but in the log: what <c>upgrade</c> takes before it changes anything (<see cref="UpgradeBackupStep"/>).
+    /// Its manifest names each of the stores' files (<see cref="StoreFiles"/>) that was not there (<c>absent</c>). With
+    /// <paramref name="storesRequired"/> (an upgrade's), one that is there but that a backup cannot hold (a link, say)
+    /// refuses it before anything is written: a rollback could not put that store back.
+    /// </summary>
+    internal static async Task<WrittenBackup> WriteArchiveAsync(
+        InstallerMachine machine,
+        InstallLog log,
+        string hostName,
+        string installerVersion,
+        string? recordVersion,
+        DateTimeOffset now,
+        Func<Task<string>> output,
+        CancellationToken cancellationToken,
+        bool storesRequired = false)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(output);
         var skipped = new List<string>();
         var entries = await CollectAsync(machine, skipped, cancellationToken).ConfigureAwait(false);
         var files = entries.Count(entry => entry.Type == BackupEntry.File);
@@ -127,14 +179,28 @@ internal static class BackupCommands
             throw new InstallerRefusedException($"There is nothing here to back up: {string.Join(", ", Folders)} and {string.Join(", ", Files)} hold no files.");
         }
 
-        var path = OutputPath(machine, session.Survey.HostName, now, output);
+        var absent = new List<string>();
+        foreach (var store in StoreFiles)
+        {
+            if (await IsAbsentAsync(machine, store, cancellationToken).ConfigureAwait(false))
+            {
+                absent.Add(store);
+            }
+            else if (storesRequired && !entries.Any(entry => entry.Path == store && entry.Type == BackupEntry.File))
+            {
+                throw new InstallerRefusedException($"{NotHeld(store, await NotAFileAsync(machine, store, cancellationToken).ConfigureAwait(false) ?? "the backup left it out")}. Nothing was changed.");
+            }
+        }
+
+        var path = await output().ConfigureAwait(false);
         var manifest = new BackupManifest(
             CurrentSchema,
-            session.Survey.HostName,
+            hostName,
             now,
-            InstallerSession.RoofVersion(host.Version),
-            session.Survey.SystemRecord?.Version,
-            entries);
+            installerVersion,
+            recordVersion,
+            entries,
+            absent);
         var partial = path + ".partial";
         try
         {
@@ -160,8 +226,10 @@ internal static class BackupCommands
             }
 
             await ReadBackAsync(machine, partial, path, cancellationToken).ConfigureAwait(false);
+            // Durable before anything relies on it (an upgrade's record names it, a purge removes what it holds): the archive
+            // synced, renamed, then its folder synced. One whose new name cannot be made durable is taken away again.
             machine.SetMode(partial, Modes.PrivateFile);
-            machine.MoveFile(partial, path, overwrite: false);
+            machine.MoveFileDurably(partial, path);
         }
         finally
         {
@@ -171,25 +239,13 @@ internal static class BackupCommands
             }
         }
 
-        var folders = entries.Count - files;
-        session.Log.Write($"Backed up {files} files and {folders} folders to {path}.");
-        host.Out.WriteLine($"Backed up {files} files and {folders} folders to {path} ({Modes.Octal(Modes.PrivateFile)}, root's):");
-        foreach (var root in Folders.Concat(Files))
-        {
-            var held = entries.Count(entry => entry.Type == BackupEntry.File && Within(entry.Path, root));
-            if (held > 0)
-            {
-                host.Out.WriteLine($"  {root}: {held} {(held == 1 ? "file" : "files")}");
-            }
-        }
-
+        log.Write($"Backed up {files} files and {entries.Count - files} folders to {path}.");
         foreach (var left in skipped)
         {
-            host.Out.WriteLine($"  Left out {left}: a backup holds files and folders only.");
-            session.Log.Write($"Left out of the backup: {left}.");
+            log.Write($"Left out of the backup: {left}.");
         }
 
-        return path;
+        return new WrittenBackup(path, entries, skipped);
     }
 
     // The archive just written, read as restore reads it: a backup restore would refuse fails now, not when it is needed.
@@ -305,6 +361,66 @@ internal static class BackupCommands
         }
     }
 
+    /// <summary>
+    /// The files the controller's stores are kept in (the state contracts'): a backup holds each that is there, and its
+    /// manifest names each that was not (<c>absent</c>), so a rollback that puts a store back never takes a file the
+    /// backup left out for one that was never saved.
+    /// </summary>
+    internal static IReadOnlyList<string> StoreFiles { get; } = [.. StateContractGuard.Files(ControllerLayout.System).SelectMany(store => store.Files)];
+
+    /// <summary>
+    /// Why an upgrade cannot back up <paramref name="store"/>, one of <see cref="StoreFiles"/>: it is there, but a backup
+    /// cannot hold it (it holds files and folders only, and follows no link). Null when it can: a file, or nothing there.
+    /// What the upgrade's backup checks before anything changes.
+    /// </summary>
+    internal static async Task<string?> CannotHoldAsync(InstallerMachine machine, string store, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        return await IsAbsentAsync(machine, store, cancellationToken).ConfigureAwait(false) || await NotAFileAsync(machine, store, cancellationToken).ConfigureAwait(false) is not { } what
+            ? null
+            : NotHeld(store, what);
+    }
+
+    // Verified not there: stat finds nothing at the path, not even a link, and says so (it fails no other way).
+    private static async Task<bool> IsAbsentAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+    {
+        var result = await machine.Commands.RunAsync(new CommandLine("stat", "-c", "%F|%U:%G", "--", path), cancellationToken).ConfigureAwait(false);
+        return !result.Succeeded && !machine.FileExists(path) && !machine.DirectoryExists(path)
+            && (result.Error.Contains("No such file or directory", StringComparison.Ordinal) || result.Error.Contains("Not a directory", StringComparison.Ordinal));
+    }
+
+    // What keeps a backup from holding a store's file, as CollectAsync walks to it from the folder it backs up: a folder on
+    // the way that is not one (a link), or the file not a file. Null when nothing does.
+    private static async Task<string?> NotAFileAsync(InstallerMachine machine, string store, CancellationToken cancellationToken)
+    {
+        var root = Folders.First(folder => Within(store, folder));
+        var folders = new List<string>();
+        for (var folder = Path.GetDirectoryName(store)!; ; folder = Path.GetDirectoryName(folder)!)
+        {
+            folders.Insert(0, folder);
+            if (folder == root)
+            {
+                break;
+            }
+        }
+
+        foreach (var folder in folders)
+        {
+            if (await StatAsync(machine, folder, cancellationToken).ConfigureAwait(false) is var (kind, _) && kind != "directory")
+            {
+                return $"{folder} is a {kind}";
+            }
+        }
+
+        return await StatAsync(machine, store, cancellationToken).ConfigureAwait(false) is var (storeKind, _) && storeKind is not ("regular file" or "regular empty file")
+            ? $"it is a {storeKind}"
+            : null;
+    }
+
+    private static string NotHeld(string store, string what)
+        => $"{store} is there, but {what}, and a backup holds only files and folders (it follows no link): the upgrade backs up the stores before it changes anything, "
+            + "and a rollback could not put this one back. Put the file itself in its place, then upgrade";
+
     // What the path is (as stat names it: "regular file", "directory", "symbolic link", …) and who owns it, without
     // following a link (or, with follow, of what a link names); null when it is not there.
     private static async Task<(string Kind, string? Owner)?> StatAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, bool follow = false)
@@ -324,18 +440,105 @@ internal static class BackupCommands
         return (parts[0], owner);
     }
 
-    private static string OutputPath(InstallerMachine machine, string hostName, DateTimeOffset now, string? output)
+    /// <summary>
+    /// A new backup's file in <see cref="DefaultFolder"/>: <c>hvo-roof-&lt;host&gt;-&lt;UTC time&gt;.tar.gz</c>, or, for the one an
+    /// upgrade takes, <c>…-before-&lt;version&gt;.tar.gz</c>.
+    /// </summary>
+    internal static string DefaultPath(string hostName, DateTimeOffset now, string? before = null)
+    {
+        ArgumentNullException.ThrowIfNull(hostName);
+        var shortName = hostName.Split('.')[0];
+        var name = $"hvo-roof-{shortName}-{now.UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}{(before is null ? string.Empty : $"-before-{before}")}.tar.gz";
+        return Path.Join(DefaultFolder, name);
+    }
+
+    /// <summary>
+    /// Makes <see cref="DefaultFolder"/>, only root's, when it is not there (its parents 0755, root's), durably: each folder
+    /// made is synced, and the folder above it (<see cref="InstallerMachine.CreateDirectoryDurably"/>). Refuses one that is
+    /// there but not trusted (<see cref="FolderProblemAsync"/>), and never repairs it: a folder someone else could change
+    /// may hold their archive already.
+    /// </summary>
+    internal static async Task MakeDefaultFolderAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        if (await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
+        {
+            throw new InstallerRefusedException($"{problem}. Nothing was written.");
+        }
+
+        if (!machine.DirectoryExists(DefaultFolder))
+        {
+            machine.CreateDirectoryDurably(DefaultFolder, Modes.PrivateFolder);
+            if (await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } made)
+            {
+                throw new InstallerRefusedException($"{made}. Nothing was written.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Makes the backup at <paramref name="backup"/> durable before anything relies on it: the archive synced, then its
+    /// folder, and, for one in <see cref="DefaultFolder"/>, the folders above it whose entries the installer may have made
+    /// (<c>/var/backups</c>, then <c>/var</c>). What an upgrade does with the backup it keeps before it hands over and
+    /// before its record names it: the one it wrote is durable already, but one an earlier run kept, or the installer
+    /// before this one took, may not be. Throws an <see cref="IOException"/> when a sync fails.
+    /// </summary>
+    internal static void MakeDurable(InstallerMachine machine, string backup)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        machine.SyncFile(backup);
+        var folder = Path.GetDirectoryName(backup)!;
+        machine.SyncDirectory(folder);
+        if (folder == DefaultFolder)
+        {
+            for (var above = Path.GetDirectoryName(DefaultFolder)!; above != "/"; above = Path.GetDirectoryName(above)!)
+            {
+                machine.SyncDirectory(above);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Why a backup cannot be trusted in <see cref="DefaultFolder"/>; null when it can, or when the folder is not there yet
+    /// (the installer makes it). It and each folder above it, up to <c>/</c>, must be a folder, not a link, root's, and
+    /// written to by root alone: whoever else could change one could put another archive (one of theirs, or an older one
+    /// of root's) in place of the one an upgrade took, between the moment it is named and the moment it is read. The
+    /// installer refuses such a folder, and does not repair it, even one it made: what is in it may not be its own.
+    /// </summary>
+    internal static async Task<string?> FolderProblemAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        const UnixFileMode othersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
+        const string why = "a backup is kept, and read, only in folders no one but root can change, so that no other archive can take its place";
+        for (var folder = DefaultFolder; folder is not null; folder = Path.GetDirectoryName(folder))
+        {
+            if (await StatAsync(machine, folder, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
+            {
+                continue;
+            }
+
+            if (kind != "directory")
+            {
+                return $"{folder} is a {kind}, not a folder: {why}. Put a folder of root's that only root writes to in its place, then run it again";
+            }
+
+            if (owner?.StartsWith("root:", StringComparison.Ordinal) != true || machine.GetMode(folder) is not { } mode || (mode & othersWrite) != 0)
+            {
+                var found = machine.GetMode(folder) is { } known ? Modes.Octal(known) : "unknown";
+                return $"{folder} is {owner ?? "an unknown owner"}'s, {found}: someone other than root can change what is in it, and {why}. "
+                    + $"Give it to root, with only root writing (sudo chown root:root {folder}; sudo chmod go-w {folder}), then run it again";
+            }
+        }
+
+        return null;
+    }
+
+    private static async Task<string> OutputPathAsync(InstallerMachine machine, string hostName, DateTimeOffset now, string? output, CancellationToken cancellationToken)
     {
         if (output is null)
         {
-            if (!machine.DirectoryExists(DefaultFolder))
-            {
-                machine.CreateDirectory(DefaultFolder, Modes.PrivateFolder);
-            }
-
-            var shortName = hostName.Split('.')[0];
-            var name = $"hvo-roof-{shortName}-{now.UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}.tar.gz";
-            return Path.Join(DefaultFolder, name);
+            await MakeDefaultFolderAsync(machine, cancellationToken).ConfigureAwait(false);
+            return DefaultPath(hostName, now);
         }
 
         var path = Path.GetFullPath(output, machine.CurrentDirectory);
@@ -353,6 +556,12 @@ internal static class BackupCommands
         if (parent is null || !machine.DirectoryExists(parent))
         {
             throw new InstallerRefusedException($"{parent} is not there: make it first, or give a file in a folder that is.");
+        }
+
+        // The backups' own folder is held to its rule, whoever names a file in it.
+        if (parent == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
+        {
+            throw new InstallerRefusedException($"{problem}. Nothing was written.");
         }
 
         return path;
@@ -385,16 +594,7 @@ internal static class BackupCommands
         var release = Installer.Release(host, releaseFolder);
         var path = Path.GetFullPath(file, machine.CurrentDirectory);
         var backup = await ReadAsync(machine, path, cancellationToken).ConfigureAwait(false);
-        // Never restore temporary access, even onto an empty replacement machine.
-        var identityEntry = backup.Entries.FirstOrDefault(entry => entry.Path == ControllerLayout.System.IdentityFile);
-        if (identityEntry?.Content is { } identityBytes)
-        {
-            using var identity = JsonDocument.Parse(identityBytes);
-            if (identity.RootElement.TryGetProperty("kioskCredential", out var credential)
-                && credential.ValueKind == JsonValueKind.Object && credential.TryGetProperty("state", out var state)
-                && state.GetString() == "pending")
-                throw new InstallerRefusedException("This backup contains pending kiosk commissioning. Temporary access cannot be restored; preserve it and use explicit administrator recovery.");
-        }
+        RefusePendingCommissioning(backup);
         var record = backup.Record;
         var version = InstallerSession.RoofVersion(host.Version);
         if (record is not null && RoofSemVer.IsOlder(version, record.Version))
@@ -475,6 +675,15 @@ internal static class BackupCommands
         host.Out.WriteLine();
         Put(machine, session.Log, changes);
         var owners = await GiveOwnersAsync(machine, session.Log, backup.Entries, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            MakeRestoredDurable(machine, backup.Entries);
+        }
+        catch (IOException error)
+        {
+            throw new InstallerException($"What the backup put back could not be made sure of on disk: {error.Message} The install that follows did not start.", error);
+        }
+
         var written = changes.Count(change => change.Change != StepChange.Unchanged);
         host.Out.WriteLine($"Put back {written} of the backup's {backup.Entries.Count} files and folders.");
         session.Log.Write($"Restored {written} files and folders from {path}.");
@@ -499,6 +708,21 @@ internal static class BackupCommands
         }
 
         return await Installer.InstallAsync(host, restored, answers, $"Restoring from {path}", new Installer.RunOptions(null, false, releaseFolder), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Never restore temporary access, even onto an empty replacement machine: refuses a backup holding pending kiosk commissioning.</summary>
+    internal static void RefusePendingCommissioning(ReadBackup backup)
+    {
+        ArgumentNullException.ThrowIfNull(backup);
+        var identityEntry = backup.Entries.FirstOrDefault(entry => entry.Path == ControllerLayout.System.IdentityFile);
+        if (identityEntry?.Content is { } identityBytes)
+        {
+            using var identity = JsonDocument.Parse(identityBytes);
+            if (identity.RootElement.TryGetProperty("kioskCredential", out var credential)
+                && credential.ValueKind == JsonValueKind.Object && credential.TryGetProperty("state", out var state)
+                && state.GetString() == "pending")
+                throw new InstallerRefusedException("This backup contains pending kiosk commissioning. Temporary access cannot be restored; preserve it and use explicit administrator recovery.");
+        }
     }
 
     private static string Counts(IEnumerable<StepChange> changes)
@@ -574,6 +798,32 @@ internal static class BackupCommands
         }
     }
 
+    // What restore put back, on disk before the install that follows relies on it: each file and folder synced (its
+    // content, mode and owner), then each folder above them, up to /, once, the deepest first (the entries naming what was
+    // written, made or replaced).
+    private static void MakeRestoredDurable(InstallerMachine machine, IReadOnlyList<BackupEntry> entries)
+    {
+        var put = entries.Select(entry => entry.Path).Where(path => machine.FileExists(path) || machine.DirectoryExists(path)).ToList();
+        foreach (var path in put)
+        {
+            machine.SyncFile(path);
+        }
+
+        var folders = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var path in put)
+        {
+            for (var folder = Path.GetDirectoryName(path); folder is not null; folder = Path.GetDirectoryName(folder))
+            {
+                folders.Add(folder);
+            }
+        }
+
+        foreach (var folder in folders.OrderByDescending(folder => folder == "/" ? 0 : folder.Count(character => character == '/')).ThenBy(folder => folder, StringComparer.Ordinal))
+        {
+            machine.SyncDirectory(folder);
+        }
+    }
+
     // Each to the owner the backup says, where that owner is here; the count of those that are not (yet).
     private static async Task<int> GiveOwnersAsync(InstallerMachine machine, InstallLog log, IReadOnlyList<BackupEntry> entries, CancellationToken cancellationToken)
     {
@@ -600,14 +850,39 @@ internal static class BackupCommands
         return failed;
     }
 
-    private sealed record ReadBackup(BackupManifest Manifest, IReadOnlyList<BackupEntry> Entries, InstallRecord? Record);
+    /// <summary>
+    /// A backup read whole and checked: its manifest, its folders and files (with their content), and its record; and the
+    /// SHA-256 of the archive those were read from (lower-case hex).
+    /// </summary>
+    internal sealed record ReadBackup(BackupManifest Manifest, IReadOnlyList<BackupEntry> Entries, InstallRecord? Record)
+    {
+        public string Sha256 { get; init; } = string.Empty;
+    }
+
+    /// <summary>A backup written: where, and the folders and files it holds, and what it left out.</summary>
+    internal sealed record WrittenBackup(string Path, IReadOnlyList<BackupEntry> Entries, IReadOnlyList<string> Skipped);
 
     // The backup, read whole and checked before anything is written: only root may read it; its manifest comes first; it
-    // holds only folders and files, each where a backup puts them, each as the manifest says (size and SHA-256). The path
-    // is checked without following a link, then the file opened is checked again (through /proc, by its descriptor):
-    // whoever can write the folder holding it could swap the path for their own archive between a check and the open.
-    private static async Task<ReadBackup> ReadAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+    // holds only folders and files, each where a backup puts them, each as the manifest says (size and SHA-256).
+    internal static async Task<ReadBackup> ReadAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+        => await ParseAsync(await ReadPrivateAsync(machine, path, cancellationToken).ConfigureAwait(false), path, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// The archive at <paramref name="path"/>, read whole from one open file once that file is checked to be root's alone:
+    /// the path is checked without following a link, then the file opened is checked again (through /proc, by its
+    /// descriptor). Whoever can write the folder holding it could swap the path for another archive between a check and
+    /// the open, or between two opens: so it is opened once, and what is hashed or read as a backup is what was read here
+    /// (<see cref="ParseAsync"/>), never the path opened again. A file in <see cref="DefaultFolder"/> is read only while
+    /// that folder is trusted (<see cref="FolderProblemAsync"/>).
+    /// </summary>
+    internal static async Task<byte[]> ReadPrivateAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(machine);
+        if (Path.GetDirectoryName(path) == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
+        {
+            throw new InstallerRefusedException($"{problem}. Nothing was changed.");
+        }
+
         if (await StatAsync(machine, path, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
         {
             throw new InstallerRefusedException($"{path} is not there.");
@@ -629,8 +904,38 @@ internal static class BackupCommands
                 throw NotPrivate(path, opened.Kind, opened.Owner, openedMode);
             }
 
-            return await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+            if (stream.Length > MaxBytes)
+            {
+                throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
+            }
+
+            using var copy = new MemoryStream();
+            var buffer = new byte[81920];
+            int read;
+            while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                if (copy.Length + read > MaxBytes)
+                {
+                    throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
+                }
+
+                copy.Write(buffer, 0, read);
+            }
+
+            return copy.ToArray();
         }
+    }
+
+    /// <summary>
+    /// The backup in <paramref name="archive"/>, the bytes <see cref="ReadPrivateAsync"/> read from <paramref name="path"/>,
+    /// read whole and checked, with their SHA-256: the archive checked and the one hashed are the same bytes.
+    /// </summary>
+    internal static async Task<ReadBackup> ParseAsync(byte[] archive, string path, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        using var stream = new MemoryStream(archive, writable: false);
+        var backup = await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+        return backup with { Sha256 = Convert.ToHexStringLower(SHA256.HashData(archive)) };
     }
 
     private static bool IsPrivate(string kind, string? owner, UnixFileMode? mode)
@@ -691,6 +996,15 @@ internal static class BackupCommands
             if (entry.Type == BackupEntry.File && (entry.Size is not >= 0 || entry.Sha256 is not { Length: 64 }))
             {
                 throw Unreadable(path, $"{ManifestName} gives {entry.Path} no size or SHA-256");
+            }
+        }
+
+        var absent = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var store in manifest.Absent ?? [])
+        {
+            if (!StoreFiles.Contains(store, StringComparer.Ordinal) || listed.ContainsKey(store) || !absent.Add(store))
+            {
+                throw Unreadable(path, $"{ManifestName} names {store} as not there, which a backup does not say");
             }
         }
 
@@ -791,7 +1105,11 @@ internal static class BackupCommands
 }
 
 /// <summary>What a backup holds: <see cref="BackupCommands.ManifestName"/>, the archive's first entry.</summary>
-internal sealed record BackupManifest(int Schema, string Host, DateTimeOffset CreatedAt, string InstallerVersion, string? RecordVersion, IReadOnlyList<BackupEntry>? Entries);
+/// <param name="Absent">
+/// The stores' files (<see cref="BackupCommands.StoreFiles"/>) that were not there when it was made: null in a backup from
+/// before it was kept. A file neither held nor named here is one the backup left out, not one never saved.
+/// </param>
+internal sealed record BackupManifest(int Schema, string Host, DateTimeOffset CreatedAt, string InstallerVersion, string? RecordVersion, IReadOnlyList<BackupEntry>? Entries, IReadOnlyList<string>? Absent = null);
 
 /// <summary>A folder or file in a backup: its path on the machine, its mode and owner, and a file's size and SHA-256.</summary>
 internal sealed record BackupEntry(string Path, string Type, string Mode, string? Owner, long? Size = null, string? Sha256 = null)

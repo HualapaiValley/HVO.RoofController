@@ -105,9 +105,12 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         Directory.CreateDirectory(Root);
 
         // Writable by no one else whatever the umask, as a machine's own folders are: the installer makes its work folders
-        // only in a temporary folder that no one but root or its user can change (InstallerMachine.TrustedFolder).
+        // only in a temporary folder that no one but root or its user can change (InstallerMachine.TrustedFolder). As on a
+        // Pi, / and /var are root's and only root writes to them: the backups' folder is trusted only under such folders.
         File.SetUnixFileMode(Path.GetDirectoryName(Root)!, Modes.Folder);
         File.SetUnixFileMode(Root, Modes.Folder);
+        Directory.CreateDirectory(OnDisk("/var"));
+        File.SetUnixFileMode(OnDisk("/var"), Modes.Folder);
         Os = os;
         Architecture = architecture;
         IsRoot = root;
@@ -330,7 +333,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         TemporaryDirectory = TemporaryDirectory,
         FreeSpaceOnDisk = _ => FreeSpace,
         RunProgramAsync = RunProgramAsync,
-        SyncFolderOnDisk = SyncFolder
+        SyncFolderOnDisk = SyncFolder,
+        SyncFileOnDisk = SyncFile,
+        RenameOnDisk = Rename
     };
 
     /// <summary>The kiosk's program in the fake release of <paramref name="version"/>: a script that says which it is.</summary>
@@ -384,10 +389,18 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     public static string ArchiveConfigDigest(string name) => "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("config " + name)));
 
     /// <summary>
-    /// A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests;
+    /// A release.json as build/release-assets.py writes it, for <paramref name="version"/>, with the fake release's digests,
+    /// and, when given, its controller's state contract (JSON, as <c>stateContracts.controller</c>) and identityStoreSchema;
     /// with <paramref name="offlineArchives"/>, each image's offline archives too.
     /// </summary>
-    public static string ReleaseJson(string version = "4.0.0", string? controllerDigest = null, string? emulatorDigest = null, IReadOnlyList<UpgradeNote>? upgradeNotes = null, bool offlineArchives = false)
+    public static string ReleaseJson(
+        string version = "4.0.0",
+        string? controllerDigest = null,
+        string? emulatorDigest = null,
+        IReadOnlyList<UpgradeNote>? upgradeNotes = null,
+        string? stateContract = null,
+        int? identitySchema = null,
+        bool offlineArchives = false)
     {
         object[] Archives(string name) => offlineArchives
             ? [.. new[] { ("amd64", "linux/amd64"), ("arm64", "linux/arm64") }.Select(platform =>
@@ -424,7 +437,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 platforms = new[] { "linux/amd64", "linux/arm64" }
             };
 
-        return JsonSerializer.Serialize(new
+        var json = JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
             product = "HVO Roof Controller",
@@ -455,6 +468,22 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 .. offlineArchives ? ArchiveAssetEntries(version) : []
             ])
         });
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(json)!;
+        if (identitySchema is { } schema)
+        {
+            manifest["identityStoreSchema"] = schema;
+        }
+
+        if (stateContract is not null)
+        {
+            manifest["stateContracts"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["controller"] = System.Text.Json.Nodes.JsonNode.Parse(stateContract),
+                ["hatEmulator"] = new System.Text.Json.Nodes.JsonObject()
+            };
+        }
+
+        return manifest.ToJsonString();
     }
 
     // The entries in assets for the offline archives, as build/release-assets.py writes them.
@@ -774,7 +803,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>Runs hvo-roof-install with <paramref name="args"/> on this machine, stopped as a Ctrl-C stops it when <paramref name="interrupt"/> is cancelled.</summary>
     public async Task<InstallerRun> RunAsync(CancellationToken interrupt, params string[] args)
     {
-        using var output = new StringWriter();
+        using var output = new LineWriter(line => OnOutputLine?.Invoke(line));
         using var error = new StringWriter();
         _output = output;
         _error = error;
@@ -1019,6 +1048,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         }
 
         Owners[path] = owner;
+        DurabilityEvents.Add($"chown {path}");
         return Answer(string.Empty);
     }
 
@@ -1335,7 +1365,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
     }
 
-    private static string Inspect(string name, FakeContainer container)
+    private string Inspect(string name, FakeContainer container)
     {
         var labels = new Dictionary<string, string>();
         if (container.Version is { } version)
@@ -1348,6 +1378,14 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             labels[MachineSurveyor.ComposeProjectLabel] = project;
         }
 
+        // The image's own labels, as a release built it: its state contract.
+        foreach (var (label, value) in ImageLabels.GetValueOrDefault(container.Digest ?? (IsController(name) ? ControllerDigest : EmulatorDigest)) ?? new Dictionary<string, string>())
+        {
+            labels[label] = value;
+        }
+
+        // As the deploy script runs a container it loads from an offline archive: by its ID, labelled with the image it
+        // claims to run (docker run --label, which wins over the image's own).
         if (container.ImageId is not null)
         {
             labels[MachineSurveyor.ReleaseImageLabel] = ReferenceOf(name, container);
