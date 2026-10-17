@@ -5,7 +5,7 @@
 # (fake-install, fake-env) and, for the tests that give the web UI its own user, setpriv (fake-setpriv), so no Docker, .NET, root or hardware is needed; the timings are shortened. They also check supervisor-state.sample.json, which the web
 # UI's and the deploy script's tests read, against the supervisor's own output. The container scenarios
 # (tests/emulator/deploy-scenarios.sh, group supervisor) run the real image.
-# Requires bash 5, jq and setsid.
+# Requires bash 5, jq, setsid and prlimit.
 # Run: tests/container/supervisor-tests.sh [test-name ...]
 set -uo pipefail
 
@@ -45,6 +45,7 @@ setup() {
     "HVO_SUPERVISOR_RELAYS_OFF_EXEC=${WORK}/bin/relays-off"
     "HVO_SUPERVISOR_UI_USER="
     "HVO_SUPERVISOR_UI_DATA_DIR=${WORK}/data"
+    "HVO_SUPERVISOR_PIDS_DIR=${WORK}/pids"
     "HVO_SUPERVISOR_TICK_SECONDS=0.1"
     "HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=5"
     "HVO_SUPERVISOR_UI_STOP_SECONDS=2"
@@ -61,6 +62,10 @@ teardown() {
     kill -KILL -- "-${SUPERVISOR_PID}" 2>/dev/null
     wait "${SUPERVISOR_PID}" 2>/dev/null
   fi
+  # A test's background recovery (recover_when_gone): it ends by itself once the stand-ins are gone, so it is only
+  # waited for, never signalled (its pid may have been reused by then).
+  [[ -z "${RECOVERY_PID:-}" ]] || wait "${RECOVERY_PID}" 2>/dev/null
+  RECOVERY_PID=""
   # The stand-ins that timeout put in process groups of their own (the relay-off helper, the web UI's preparation), by
   # the pids they wrote, and only while that pid is still one of this test's stand-ins.
   local file pid
@@ -257,28 +262,32 @@ test_the_defaults_are_the_documented_ones() {
   for entry in "${SUPERVISOR_ENV[@]}"; do
     case "${entry%%=*}" in
       HVO_SUPERVISOR_APP_DIR|HVO_SUPERVISOR_RUN_DIR|HVO_SUPERVISOR_SECRETS_DIR|HVO_SUPERVISOR_CONTROLLER_EXEC|\
-      HVO_SUPERVISOR_UI_EXEC|HVO_SUPERVISOR_RELAYS_OFF_EXEC|HVO_SUPERVISOR_UI_USER|HVO_SUPERVISOR_UI_DATA_DIR) paths+=("${entry}") ;;
+      HVO_SUPERVISOR_UI_EXEC|HVO_SUPERVISOR_RELAYS_OFF_EXEC|HVO_SUPERVISOR_UI_USER|HVO_SUPERVISOR_UI_DATA_DIR|\
+      HVO_SUPERVISOR_PIDS_DIR) paths+=("${entry}") ;;
     esac
   done
   SUPERVISOR_ENV=("${paths[@]}")
   start_supervisor
   wait_both_running || return
-  grep -qF "Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; a stop ends within 27s of its request: up to 22s for the controller, then up to 5s for the relays off, with 2s for the web UI at the same time)" \
+  grep -qF "Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; a stop ends within 27s of its request: up to 22s for the controller, with 2s for the web UI at the same time, then up to 5s for the relays off)" \
     "${WORK}/supervisor.log" || fail_test "the defaults are not the documented ones: $(head -n 1 "${WORK}/supervisor.log")"
   expect_equal "state file settings" "$(state '[.crashLimit, .crashWindowSeconds, .forceRestartMinSeconds] | tojson')" \
     "[5,120,10]"
 }
 
-test_docker_stop_stops_the_controller_first_and_waits_for_it() {
-  # The controller takes 1.5 s over its roof stop; the web UI must not get SIGTERM before it has exited.
+test_docker_stop_stops_the_controller_and_the_web_ui_at_once_and_waits_for_both() {
+  # The controller takes 1.5 s over its roof stop. Both get SIGTERM at once (#139 F6: the relays are turned off only once
+  # both have ended, so the web UI's stop no longer comes after the controller's).
   echo 1.5 >"${FAKE_DIR}/controller.term-delay"
   start_supervisor
   wait_both_running || return
   stop_supervisor
   expect_equal "supervisor exit status" "${STOP_STATUS}" 0
-  local order
-  order=$(process_events | grep -E ' (term|exit)' | tr '\n' ',')
-  expect_equal "stop order" "${order}" "controller term,controller exit 0,ui term,ui exit 0,"
+  local events
+  events=$(process_events | grep -E ' (term|exit)')
+  # Sent one after the other, the two signals are handled in either order.
+  expect_equal "SIGTERM to both first" "$(head -n 2 <<<"${events}" | sort | tr '\n' ',')" "controller term,ui term,"
+  expect_equal "then the exits" "$(tail -n +3 <<<"${events}" | tr '\n' ',')" "ui exit 0,controller exit 0,"
   expect_equal "final state" "$(state '.supervisor + " " + .controller.state + " " + .ui.state')" "stopped stopped stopped"
   expect_equal "controller exit reason" "$(state .controller.lastExitReason)" "stopped with the container"
 }
@@ -1129,8 +1138,9 @@ test_a_forced_restart_turns_the_relays_off_between_the_kill_and_the_start() {
   expect_relays_never_turned_off_under_a_running_controller
 }
 
-test_docker_stop_turns_the_relays_off_after_the_controller_while_the_web_ui_stops() {
-  # Both take 1.5 s: the web UI's stop overlaps the relays off, so the two take 1.5 s together, not 3.
+test_docker_stop_turns_the_relays_off_once_the_controller_and_the_web_ui_have_stopped() {
+  # The controller takes 1 s, the web UI 1.5 s, at the same time; then the relays 1.5 s: 3 s in all. The relay-off
+  # comes only after both have ended (#139 F6), which frees their tasks.
   echo 1 >"${FAKE_DIR}/controller.term-delay"
   start_supervisor HVO_SUPERVISOR_UI_STOP_SECONDS=2
   wait_both_running || return
@@ -1141,13 +1151,13 @@ test_docker_stop_turns_the_relays_off_after_the_controller_while_the_web_ui_stop
   expect_equal "events at the stop" "$(controller_and_relay_events | tail -n 4 | paste -sd ',')" \
     "controller term,controller exit 0,relays-off run,relays-off done 0"
   awk -v s="${STOP_SECONDS}" 'BEGIN { exit !(s >= 2.5 && s < 3.3) }' \
-    || fail_test "stop took ${STOP_SECONDS}s, expected 2.5-3.3s (1 s for the controller, then 1.5 s for both)"
+    || fail_test "stop took ${STOP_SECONDS}s, expected 2.5-3.3s (1.5 s for both, then 1.5 s for the relays)"
   local relays ui_stopping ui_stopped
   ui_stopping=$(grep -n -m 1 -F "Stopping the web UI (SIGTERM" "${WORK}/supervisor.log" | cut -d: -f1)
   relays=$(grep -n -F "(the supervisor is stopping)" "${WORK}/supervisor.log" | cut -d: -f1)
   ui_stopped=$(grep -n -m 1 -F "The web UI stopped" "${WORK}/supervisor.log" | cut -d: -f1)
-  if [[ -z "${ui_stopping}" || -z "${relays}" || -z "${ui_stopped}" ]] || (( ui_stopping > relays || relays > ui_stopped )); then
-    fail_test "not: the web UI told to stop, the relays off, the web UI stopped: lines ${ui_stopping:-none}, ${relays:-none}, ${ui_stopped:-none}"
+  if [[ -z "${ui_stopping}" || -z "${relays}" || -z "${ui_stopped}" ]] || (( ui_stopping > ui_stopped || ui_stopped > relays )); then
+    fail_test "not: the web UI told to stop, the web UI stopped, the relays off: lines ${ui_stopping:-none}, ${ui_stopped:-none}, ${relays:-none}"
   fi
   expect_equal "relays state" "$(state '.supervisor + " " + .relays.state + " " + .relays.reason')" \
     "stopped off the supervisor is stopping"
@@ -1291,6 +1301,9 @@ test_a_stop_during_a_first_relay_off_that_verifies_starts_nothing_and_ends_withi
   sleep 0.5
   stop_and_expect_it_within 30
   expect_equal "controller starts" "$(event_count controller start)" 0
+  # The supervisor's own count: a controller started just before the stop gets its SIGTERM at once, maybe before it
+  # has logged its start.
+  expect_equal "controller starts (the supervisor's count)" "$(state .controller.starts)" 0
   ! grep -qF "Abandoned the web UI's preparation" "${WORK}/supervisor.log" \
     || fail_test "the web UI's preparation was started after the stop"
 }
@@ -1320,6 +1333,7 @@ test_a_stop_during_a_forced_restarts_relay_off_that_verifies_starts_nothing_and_
   sleep 0.5
   stop_and_expect_it_within 30
   expect_equal "controller starts" "$(event_count controller start)" 1
+  expect_equal "controller starts (the supervisor's count)" "$(state .controller.starts)" 1
 }
 
 test_the_whole_stop_fits_the_grace_period_with_a_hung_controller_and_a_slow_relay_off() {
@@ -1480,6 +1494,197 @@ test_a_web_ui_environment_that_cannot_be_read_does_not_hold_up_the_supervisor() 
   sleep 1
   stop_and_expect_it_within 4.5 12
   expect_equal "web UI starts" "$(event_count ui start)" 0
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The container's process limit (#139 review F6). At it, a fork fails, and bash retries it for about 15 s and then ends
+# the script. The tests reach it safely, as the reviewer did: the supervisor's own soft RLIMIT_NPROC is set to 0 (only
+# for its recorded pid; the stand-ins keep theirs), so that its forks fail, and the stand-in cgroup files
+# (HVO_SUPERVISOR_PIDS_DIR) say so, as the kernel's would. The host's limits are never touched.
+
+# start_supervisor_with_pids [NAME=value...]: start_supervisor, with stand-in cgroup files (512 tasks allowed, 100 used),
+# and the supervisor's own RLIMIT_NPROC recorded (NPROC_SOFT, NPROC_HARD), to put back.
+start_supervisor_with_pids() {
+  mkdir -p "${WORK}/pids"
+  echo 512 >"${WORK}/pids/pids.max"
+  echo 100 >"${WORK}/pids/pids.current"
+  start_supervisor "$@"
+  wait_until 5 "the supervisor running" test -r "/proc/${SUPERVISOR_PID}/limits" || return
+  read -r NPROC_SOFT NPROC_HARD < <(prlimit --pid "${SUPERVISOR_PID}" --nproc --output SOFT,HARD --noheadings)
+}
+
+# The supervisor's pid still names the supervisor (so that its limits are only ever changed for it).
+still_the_supervisor() {
+  [[ "$(tr '\0' ' ' 2>/dev/null <"/proc/${SUPERVISOR_PID}/cmdline")" == *roof-supervisor* ]]
+}
+
+# The container at its process limit: the cgroup files first (so that the supervisor stops forking), then its forks fail.
+exhaust() {
+  echo 512 >"${WORK}/pids/pids.current"
+  sleep 0.3
+  still_the_supervisor && prlimit --pid "${SUPERVISOR_PID}" --nproc="0:${NPROC_HARD}"
+}
+
+# Room again: forks work first, then the cgroup files say so.
+recover() {
+  still_the_supervisor && prlimit --pid "${SUPERVISOR_PID}" --nproc="${NPROC_SOFT}:${NPROC_HARD}"
+  echo 100 >"${WORK}/pids/pids.current"
+}
+
+# recover_when_gone <pid>...: in the background (RECOVERY_PID), room again once those stand-ins have ended and been
+# reaped, as the kernel frees their tasks then.
+recover_when_gone() {
+  (
+    local pid
+    for pid in "$@"; do
+      while kill -0 "${pid}" 2>/dev/null; do sleep 0.05; done
+    done
+    recover
+  ) &
+  RECOVERY_PID=$!
+}
+
+# expect_the_last_relay_off_to_begin_within <signalled> <seconds>: the stop's own relay-off (the last one) began within
+# that many seconds of the signal at <signalled>.
+expect_the_last_relay_off_to_begin_within() {
+  local began
+  began=$(awk -v t="$1" '$1 > t && $2 == "relays-off" && $3 == "run" { print $1 }' "${FAKE_DIR}/times.log" | tail -n 1)
+  [[ -n "${began}" ]] || { fail_test "no relay-off began after the signal"; return; }
+  began=$(awk -v t="$1" -v r="${began}" 'BEGIN { printf "%.3f", r - t }')
+  echo "    (the last relay-off began ${began}s after the signal)"
+  awk -v b="${began}" -v s="$2" 'BEGIN { exit !(b < s) }' \
+    || fail_test "the last relay-off began ${began}s after the signal, not within $2s"
+}
+
+# The supervisor did not try to fork at the limit: bash logs "fork: retry: Resource temporarily unavailable" for each
+# failed try, and would end the script after about 15 s of them.
+expect_no_fork_at_the_limit() {
+  local line
+  line=$(grep -m 1 -F "fork: " "${WORK}/supervisor.log")
+  [[ -z "${line}" ]] || fail_test "the supervisor tried to fork at the limit: ${line}"
+}
+
+# The controller got SIGTERM within 0.5 s of the signal at <signalled>: the stop began at once.
+expect_the_controller_told_at_once() {
+  local told
+  told=$(event_times controller term | tail -n 1)
+  awk -v t="$1" -v c="${told}" 'BEGIN { exit !(c != "" && c - t < 0.5) }' \
+    || fail_test "the controller got SIGTERM $(awk -v t="$1" -v c="${told}" 'BEGIN { if (c == "") print "never"; else printf "%.3fs", c - t }') after the signal, not within 0.5s"
+}
+
+test_a_stop_at_the_process_limit_turns_the_relays_off_in_time() {
+  # Short times: 2 s for the controller (which ignores SIGTERM), 1 s for the web UI, 3 s for the relays: the stop's
+  # deadline is 5 s after the signal. The container is at its limit from 0.5 s before the signal (the supervisor idles
+  # at it meanwhile, as it would before a real stop) until 3 s after it, held by something other than the controller
+  # and the web UI: the stop waits for room until 1 s before its deadline, so the last relay-off begins within 4 s.
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor_with_pids HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=2 HVO_SUPERVISOR_UI_STOP_SECONDS=1 \
+    HVO_SUPERVISOR_RELAYS_OFF_SECONDS=3 || return
+  wait_both_running || return
+  exhaust
+  sleep 0.5
+  local signalled=${EPOCHREALTIME}
+  kill -TERM "${SUPERVISOR_PID}"
+  (sleep 3; recover) &
+  RECOVERY_PID=$!
+  expect_the_stop_within "${signalled}" 5 15
+  expect_the_last_relay_off_to_begin_within "${signalled}" 4
+  expect_the_controller_told_at_once "${signalled}"
+  expect_no_fork_at_the_limit
+}
+
+test_a_stop_at_the_process_limit_until_the_controller_and_the_web_ui_end_turns_the_relays_off_in_time() {
+  # As above, with 2 s for the relays (a 4 s deadline), both ignoring SIGTERM, and the container at its limit until
+  # both have ended: only killing them frees the tasks the relay-off needs. The controller is killed 2 s after the
+  # signal, to leave the relays their 2 s, and given at most 1 s to end: the last relay-off begins within 3 s.
+  touch "${FAKE_DIR}/controller.ignore-term" "${FAKE_DIR}/ui.ignore-term"
+  start_supervisor_with_pids HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=2 HVO_SUPERVISOR_UI_STOP_SECONDS=1 \
+    HVO_SUPERVISOR_RELAYS_OFF_SECONDS=2 || return
+  wait_both_running || return
+  exhaust
+  local signalled=${EPOCHREALTIME}
+  kill -TERM "${SUPERVISOR_PID}"
+  recover_when_gone "$(pid_of controller)" "$(pid_of ui)"
+  expect_the_stop_within "${signalled}" 4 12
+  expect_the_last_relay_off_to_begin_within "${signalled}" 3
+  expect_the_controller_told_at_once "${signalled}"
+  expect_no_fork_at_the_limit
+}
+
+test_a_controller_exit_at_the_process_limit_kills_the_web_ui_to_turn_the_relays_off() {
+  # The container is at its limit (the web UI's tasks, say) when the controller exits. The relay-off needs a process:
+  # the supervisor kills the web UI to make room (never the relay-off), turns the relays off and verifies them, and
+  # only then starts the controller again (the hold stays in force); the web UI starts again later.
+  start_supervisor_with_pids || return
+  wait_both_running || return
+  local ui killed gap
+  ui=$(pid_of ui)
+  exhaust
+  recover_when_gone "${ui}"
+  killed=${EPOCHREALTIME}
+  kill -KILL "$(pid_of controller)"
+  wait_until 5 "a relay-off after the controller's exit" relay_off_runs_at_least 2 || return
+  gap=$(awk -v k="${killed}" -v r="$(event_times relays-off run | sed -n 2p)" 'BEGIN { printf "%.3f", r - k }')
+  echo "    (the relay-off began ${gap}s after the controller's exit)"
+  awk -v g="${gap}" 'BEGIN { exit !(g < 1) }' || fail_test "the relay-off began ${gap}s after the exit, not within 1s"
+  grep -qF "killing the web UI to make room for the relay-off" "${WORK}/supervisor.log" \
+    || fail_test "the web UI was not killed to make room"
+  wait_until 5 "the controller started again" started controller 2 || return
+  expect_equal "events after the exit" "$(controller_and_relay_events | tail -n 3 | paste -sd ',')" \
+    "relays-off run,relays-off done 0,controller start"
+  wait_until 10 "the web UI started again" started ui 2 || return
+  expect_relays_never_turned_off_under_a_running_controller
+  kill -0 "${SUPERVISOR_PID}" 2>/dev/null || fail_test "the supervisor ended"
+  expect_no_fork_at_the_limit
+}
+
+test_a_start_at_the_process_limit_waits_and_a_stop_still_begins_at_once() {
+  # At the limit the web UI exits: its start (a fork) waits for room, without a fork meanwhile, and the supervisor still
+  # answers a stop at once and turns the relays off in time (2 s for the controller, 2 s for the relays: the last
+  # relay-off begins within 3 s, as above).
+  start_supervisor_with_pids HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=2 HVO_SUPERVISOR_UI_STOP_SECONDS=1 \
+    HVO_SUPERVISOR_RELAYS_OFF_SECONDS=2 || return
+  wait_both_running || return
+  exhaust
+  echo 1 >"${FAKE_DIR}/ui.exit-now"
+  wait_until 5 "the web UI's start put off" \
+    grep -qF "the web UI is not started: the container is at its process limit" "${WORK}/supervisor.log" || return
+  sleep 1.5
+  expect_equal "web UI starts while at the limit" "$(event_count ui start)" 1
+  kill -0 "${SUPERVISOR_PID}" 2>/dev/null || { fail_test "the supervisor ended"; return; }
+  local signalled=${EPOCHREALTIME}
+  kill -TERM "${SUPERVISOR_PID}"
+  recover_when_gone "$(pid_of controller)"
+  expect_the_stop_within "${signalled}" 4 12
+  expect_the_last_relay_off_to_begin_within "${signalled}" 3
+  expect_the_controller_told_at_once "${signalled}"
+  expect_no_fork_at_the_limit
+}
+
+test_a_stop_with_the_limit_held_to_the_end_ends_in_time_without_a_fork() {
+  # The limit is held by something the stop cannot end (a task stuck in the kernel, a docker exec) until after the
+  # supervisor has ended: 1 s for the controller and the web UI, 2 s for the relays, a 3 s deadline. The stop waits for
+  # room until 1 s before its deadline, then leaves the relays as they are, with a WARNING, rather than fork into
+  # bash's retries, and still ends in time. It idles at the limit for 0.5 s before the signal.
+  start_supervisor_with_pids HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=1 HVO_SUPERVISOR_UI_STOP_SECONDS=1 \
+    HVO_SUPERVISOR_RELAYS_OFF_SECONDS=2 || return
+  wait_both_running || return
+  exhaust
+  sleep 0.5
+  local signalled=${EPOCHREALTIME} took
+  kill -TERM "${SUPERVISOR_PID}"
+  wait_supervisor_exit 8
+  took=$(awk -v a="${signalled}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.3f", b - a }')
+  echo "    (the stop took ${took}s from SIGTERM)"
+  expect_equal "exit status" "${EXIT_STATUS}" 0
+  awk -v s="${took}" 'BEGIN { exit !(s < 3) }' || fail_test "the stop took ${took}s from SIGTERM, not within 3s"
+  expect_equal "relay-offs after SIGTERM" \
+    "$(awk -v t="${signalled}" '$1 > t && $2 == "relays-off" && $3 == "run"' "${FAKE_DIR}/times.log" | wc -l)" 0
+  grep -qF "WARNING: the relays could not be turned off at the stop: the container is still at its process limit" \
+    "${WORK}/supervisor.log" || fail_test "no WARNING that the relays were left as they are"
+  expect_equal "final state" "$(state '.supervisor + " " + .controller.state + " " + .ui.state')" "stopped stopped stopped"
+  expect_the_controller_told_at_once "${signalled}"
+  expect_no_fork_at_the_limit
 }
 
 test_invalid_settings_are_refused() {

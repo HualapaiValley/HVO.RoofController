@@ -10,17 +10,19 @@
 #   until it succeeds, and when it stops itself. It never turns a relay on. The controller starts only once a read-back
 #   has shown every relay off: until then it is held stopped (state relays-unverified) and the relay-off is tried again,
 #   at the initial start, before every restart, after a crash and on a forced restart (the owner's decision, #138).
-# - on docker stop (SIGTERM, also SIGINT, SIGHUP and SIGQUIT): starts nothing more, and stops the controller first and
-#   waits for it, because its shutdown stops the roof and verifies the relays off. It waits up to
-#   HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS, then turns the relays off (the controller may have been killed, or have failed
-#   to verify them) while the web UI stops, waiting up to HVO_SUPERVISOR_UI_STOP_SECONDS for it, and exits. The whole
-#   stop is timed from the signal (note_stop): work already running when it came (a relay-off) counts against it, and
-#   each later wait is cut to what is left, so the stop ends within the controller's wait and the longer of the other two
-#   (27 s with the defaults), below the container's stop timeout: Docker never kills the controller first, and the last
-#   relay-off begins and ends in time. Once a wait runs out, that process is killed (SIGKILL), and given at most 1 s more
-#   to end: a process stuck in the kernel (a hung filesystem or bus) cannot run its own code again, and the stop goes on
-#   without it. A web UI preparation still running is abandoned at once (its processes are killed), and nothing starts
-#   after it. Any other way this script ends (another signal, an error) stops the same way first (on_exit).
+# - on docker stop (SIGTERM, also SIGINT, SIGHUP and SIGQUIT): starts nothing more, and stops the controller and the
+#   web UI, each with SIGTERM: the controller waited for up to HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS, because its
+#   shutdown stops the roof and verifies the relays off, the web UI up to HVO_SUPERVISOR_UI_STOP_SECONDS, at the same
+#   time. Once both have ended, and so freed their tasks, it turns the relays off (the controller may have been killed,
+#   or have failed to verify them), and exits. The whole stop is timed from the signal (note_stop, in the trap, without
+#   a fork): work already running when it came (a relay-off) counts against it, and each later wait is cut to what is
+#   left, so the stop ends within the controller's wait and the longer of the other two (27 s with the defaults), below
+#   the container's stop timeout: Docker never kills the controller first, and the last relay-off begins and ends in
+#   time, also at the container's process limit (it forks nothing before then: see "Forks" below). Once a wait runs out,
+#   that process is killed (SIGKILL), and given at most 1 s more to end: a process stuck in the kernel (a hung
+#   filesystem or bus) cannot run its own code again, and the stop goes on without it. A web UI preparation still
+#   running is abandoned at once (its processes are killed), and nothing starts after it. Any other way this script
+#   ends (another signal, an error, a fork that failed for good) stops the same way first (on_exit).
 # - when the controller exits with 75 (a restart requested through POST System/Restart): starts it again at once.
 # - when the controller exits otherwise (a crash): starts it again after a backoff that doubles from 1 s (1, 2, 4, 8 s,
 #   ...), at most HVO_SUPERVISOR_BACKOFF_MAX_SECONDS. The HVO_SUPERVISOR_CRASH_LIMIT-th crash within
@@ -69,10 +71,22 @@
 #
 # Times are kept in microseconds (EPOCHREALTIME), so every wait is as long as configured, not up to a second shorter.
 #
+# Forks and the container's process limit (#139 review F6). At the container's limit (pids.max: 512 tasks by default), a
+# fork fails, and bash retries it for about 15 s and then ends this script: the stop's trap would wait for it, and the
+# relays would be left as they are. So once it has begun, the supervisor forks only to start a process (the controller,
+# the web UI, its preparation, the relay-off helper), to replace its state file or to remove a forced restart's request,
+# and only when tasks_free finds room for it; all else (the time, its waits and naps, the text of its state and log)
+# uses builtins. When there is no room, a relay-off first kills the web UI to make some (never the relay-off, and the
+# controller is not running then), and a start waits. The stop does not fork at all until the controller, the web UI and
+# the preparation have ended, which frees their tasks; only then does it start the last relay-off. The container's bash
+# is 5.2: EPOCHREALTIME, printf -v with %(...)T, and read -t with a fraction of a second.
+#
 # <run dir>/supervisor.json says what the supervisor is doing, for the web UI and the health check. It is rewritten
-# (atomically) at each change.
+# (atomically, except at the container's process limit: write_state) at each change.
 
 set -uo pipefail
+# The state file is readable by all (write_state), without a chmod, which would fork.
+umask 022
 
 readonly RESTART_EXIT_CODE=75
 # The web UI's data directory when none is set, in directories only root can change (see prepare_ui_data_protection).
@@ -82,6 +96,11 @@ readonly CONTROLLER_OOM_SCORE_RAISE=100
 readonly UI_OOM_SCORE_RAISE=500
 # How long a process sent SIGKILL is waited for before the supervisor goes on without it (see reap_within).
 readonly KILL_WAIT_US=1000000
+# How many tasks (processes and threads) must be free in the container before the supervisor starts a process (see
+# tasks_free): the relay-off helper, a .NET program, uses up to 24 (measured), so 40 leaves a margin.
+readonly TASKS_FOR_A_START=40
+# How long the supervisor waits at a time (nap) while it watches for an exit or a stop: how soon it notices one.
+readonly NAP_SLICE_US=100000
 # This script, which runs the web UI's preparation as a process of its own (start_ui).
 readonly SELF=${BASH_SOURCE[0]}
 
@@ -99,6 +118,8 @@ BACKOFF_MAX_SECONDS=${HVO_SUPERVISOR_BACKOFF_MAX_SECONDS:-30}
 FORCE_RESTART_MIN_SECONDS=${HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS:-10}
 UI_PREPARE_SECONDS=${HVO_SUPERVISOR_UI_PREPARE_SECONDS:-10}
 TICK_SECONDS=${HVO_SUPERVISOR_TICK_SECONDS:-1}
+# The container's cgroup, with its process limit (pids.max) and the tasks in it (pids.current): see tasks_free.
+PIDS_DIR=${HVO_SUPERVISOR_PIDS_DIR:-/sys/fs/cgroup}
 
 if [[ -n "${HVO_SUPERVISOR_CONTROLLER_EXEC:-}" ]]; then
   CONTROLLER_EXEC=("${HVO_SUPERVISOR_CONTROLLER_EXEC}")
@@ -125,13 +146,16 @@ log() {
   printf '[supervisor] %s\n' "$*" >&2
 }
 
-now_iso() {
-  date -u +%Y-%m-%dT%H:%M:%SZ
+# The time now in UTC (2026-09-29T12:00:00Z), in ISO_NOW: printf's own clock, with no fork.
+iso_now() {
+  local -x TZ=UTC0
+  printf -v ISO_NOW '%(%Y-%m-%dT%H:%M:%SZ)T' -1
 }
 
-# The time in microseconds since the epoch (EPOCHREALTIME without its decimal separator, which follows the locale).
-now_us() {
-  printf '%s' "${EPOCHREALTIME//[!0-9]/}"
+# The time now, in microseconds since the epoch, in NOW_US (EPOCHREALTIME without its decimal separator, which follows
+# the locale).
+stamp() {
+  NOW_US=${EPOCHREALTIME//[!0-9]/}
 }
 
 require_whole_number() {
@@ -194,6 +218,10 @@ if [[ ! "${TICK_SECONDS}" =~ ^([0-9]+|[0-9]*\.[0-9]+)$ ]]; then
   log "HVO_SUPERVISOR_TICK_SECONDS must be a number of seconds such as 1 or 0.2, got '${TICK_SECONDS}'."
   exit 2
 fi
+# The tick in microseconds.
+TICK_FRACTION="${TICK_SECONDS#"${TICK_SECONDS%%.*}"}"
+TICK_FRACTION="${TICK_FRACTION#.}000000"
+TICK_US=$(( 10#0${TICK_SECONDS%%.*} * 1000000 + 10#${TICK_FRACTION:0:6} ))
 
 # The web UI's group (its user's primary group) and home. Looked up once, here, before anything is started.
 UI_GROUP=""
@@ -219,10 +247,22 @@ declare -A LAST_EXIT_AT=([controller]="" [ui]="")
 declare -A CRASHES=([controller]="" [ui]="")
 SUPERVISOR_STATE=running
 STOP_REQUESTED=0
+# What the builtin helpers hand back (stamp, iso_now, describe_exit, crash_count, relays_retry_seconds, backoff_seconds,
+# seconds_until, tasks_free), instead of printing it for a command substitution, which would fork.
+NOW_US=0
+ISO_NOW=""
+EXIT_TEXT=""
+CRASH_COUNT=0
+RETRY_SECONDS=1
+BACKOFF_SECONDS=1
+SECONDS_LEFT=1
+TASKS_TEXT=""
+NAP_SINK=""
+# The processes a start waits for room for (start_later), so that the wait is logged once.
+declare -A WAITING_FOR_ROOM=([controller]="" [ui]="")
 # The last forced restart request: when it was handled, and whether the controller was restarted or the request ignored.
 FORCED_RESTART_AT=""
 FORCED_RESTART_OUTCOME=""
-SLEEP_PID=""
 # The relays, as the supervisor knows them: unknown (not tried yet), controller (the controller runs and drives them),
 # off (turned off and verified since the controller last ran) or unverified (the last try failed; retry_relays_off tries
 # again). When and why they were last turned off, failed tries in a row, and when the next is due (microseconds).
@@ -249,46 +289,64 @@ UI_SETTINGS_FILE="${RUN_DIR}/web-settings"
 # How the last process reap_within waited for ended (its exit status).
 REAPED_CODE=0
 
-json_string_or_null() {
-  if [[ -z "$1" ]]; then printf 'null'; else printf '"%s"' "$1"; fi
+# json_text <variable> <text>: sets the variable to the text as a JSON string, or to null when it is empty.
+json_text() {
+  if [[ -z "$2" ]]; then printf -v "$1" 'null'; else printf -v "$1" '"%s"' "$2"; fi
 }
 
-json_number_or_null() {
-  if [[ -z "$1" ]]; then printf 'null'; else printf '%s' "$1"; fi
+# json_number <variable> <number>: sets the variable to the number, or to null when it is empty.
+json_number() {
+  if [[ -z "$2" ]]; then printf -v "$1" 'null'; else printf -v "$1" '%s' "$2"; fi
 }
 
+# process_json <variable> <name>: sets the variable to $2's object in the state file.
 process_json() {
-  local name=$1 crash_count
-  crash_count=$(wc -w <<<"${CRASHES[${name}]}")
-  printf '{"state":"%s","pid":%s,"starts":%s,"recentCrashes":%s,"lastExitCode":%s,"lastExitReason":%s,"lastExitAt":%s}' \
-    "${STATE[${name}]}" "$(json_number_or_null "${PID[${name}]}")" "${STARTS[${name}]}" "${crash_count}" \
-    "$(json_number_or_null "${LAST_EXIT_CODE[${name}]}")" "$(json_string_or_null "${LAST_EXIT_REASON[${name}]}")" \
-    "$(json_string_or_null "${LAST_EXIT_AT[${name}]}")"
+  local name=$2 _pid _code _reason _at
+  crash_count "${name}"
+  json_number _pid "${PID[${name}]}"
+  json_number _code "${LAST_EXIT_CODE[${name}]}"
+  json_text _reason "${LAST_EXIT_REASON[${name}]}"
+  json_text _at "${LAST_EXIT_AT[${name}]}"
+  printf -v "$1" '{"state":"%s","pid":%s,"starts":%s,"recentCrashes":%s,"lastExitCode":%s,"lastExitReason":%s,"lastExitAt":%s}' \
+    "${STATE[${name}]}" "${_pid}" "${STARTS[${name}]}" "${CRASH_COUNT}" "${_code}" "${_reason}" "${_at}"
 }
 
+# forced_restart_json <variable>: sets the variable to the last forced restart's object, or to null.
 forced_restart_json() {
   if [[ -z "${FORCED_RESTART_AT}" ]]; then
-    printf 'null'
+    printf -v "$1" 'null'
   else
-    printf '{"at":"%s","outcome":"%s"}' "${FORCED_RESTART_AT}" "${FORCED_RESTART_OUTCOME}"
+    printf -v "$1" '{"at":"%s","outcome":"%s"}' "${FORCED_RESTART_AT}" "${FORCED_RESTART_OUTCOME}"
   fi
 }
 
+# relays_json <variable>: sets the variable to the relays' object.
 relays_json() {
-  printf '{"state":"%s","at":%s,"reason":%s}' "${RELAYS_STATE}" "$(json_string_or_null "${RELAYS_AT}")" \
-    "$(json_string_or_null "${RELAYS_REASON}")"
+  local _at _reason
+  json_text _at "${RELAYS_AT}"
+  json_text _reason "${RELAYS_REASON}"
+  printf -v "$1" '{"state":"%s","at":%s,"reason":%s}' "${RELAYS_STATE}" "${_at}" "${_reason}"
 }
 
+# Writes supervisor.json (mode 0644: umask 022): into a new file that then replaces it (mv), so that a reader never sees
+# half of it; or, when the container has no room for mv's process (tasks_free), over it in place, which a reader may then
+# find half written for a moment. Its text is made with builtins.
 write_state() {
-  local temp="${STATE_FILE}.tmp"
-  {
-    printf '{"supervisor":"%s","updatedAt":"%s","crashLimit":%s,"crashWindowSeconds":%s,"forceRestartMinSeconds":%s,' \
-      "${SUPERVISOR_STATE}" "$(now_iso)" "${CRASH_LIMIT}" "${CRASH_WINDOW_SECONDS}" "${FORCE_RESTART_MIN_SECONDS}"
-    printf '"lastForcedRestart":%s,"relays":%s,"controller":%s,"ui":%s}\n' "$(forced_restart_json)" "$(relays_json)" \
-      "$(process_json controller)" "$(process_json ui)"
-  } >"${temp}" || { log "WARNING: could not write ${STATE_FILE}"; return; }
-  chmod 0644 "${temp}"
-  mv -f "${temp}" "${STATE_FILE}" || log "WARNING: could not write ${STATE_FILE}"
+  local temp="${STATE_FILE}.tmp" text _forced _relays _controller _ui
+  iso_now
+  forced_restart_json _forced
+  relays_json _relays
+  process_json _controller controller
+  process_json _ui ui
+  printf -v text '{"supervisor":"%s","updatedAt":"%s","crashLimit":%s,"crashWindowSeconds":%s,"forceRestartMinSeconds":%s,%s}\n' \
+    "${SUPERVISOR_STATE}" "${ISO_NOW}" "${CRASH_LIMIT}" "${CRASH_WINDOW_SECONDS}" "${FORCE_RESTART_MIN_SECONDS}" \
+    "\"lastForcedRestart\":${_forced},\"relays\":${_relays},\"controller\":${_controller},\"ui\":${_ui}"
+  if tasks_free; then
+    printf '%s' "${text}" >"${temp}" && mv -f "${temp}" "${STATE_FILE}" && return 0
+  else
+    printf '%s' "${text}" >"${STATE_FILE}" && return 0
+  fi
+  log "WARNING: could not write ${STATE_FILE}"
 }
 
 # Creates the run directory: supervisor.json readable by all, the control directory writable only by the web UI's
@@ -344,9 +402,10 @@ is_running() {
 # the supervisor goes on without it. Each pause is waited for, so that a stop signal is handled at once.
 reap_within() {
   local pid=$1 until=$2
-  while kill -0 "${pid}" 2>/dev/null && (( $(now_us) < until )); do
-    sleep 0.05 &
-    wait "$!"
+  stamp
+  while kill -0 "${pid}" 2>/dev/null && (( NOW_US < until )); do
+    nap "$(( until - NOW_US < 50000 ? until - NOW_US : 50000 ))"
+    stamp
   done
   kill -0 "${pid}" 2>/dev/null && return 1
   wait "${pid}" 2>/dev/null
@@ -354,8 +413,87 @@ reap_within() {
   return 0
 }
 
+# Waits $1 microseconds without a fork: a read with a time limit on NAP_FD, a pipe that never has data (opened at the
+# start). A trapped signal runs its trap at once but does not end the read, so the callers wait in short slices.
+nap() {
+  local seconds
+  printf -v seconds '%d.%06d' "$(( $1 / 1000000 ))" "$(( $1 % 1000000 ))"
+  # shellcheck disable=SC2034 # read needs a variable; nothing is ever read
+  read -r -t "${seconds}" -u "${NAP_FD}" NAP_SINK
+}
+
+# Whether the container has room for a new process: at least TASKS_FOR_A_START tasks free under its process limit
+# (pids.max, less pids.current, in PIDS_DIR: the container's own cgroup), read with builtins. No limit, or files that
+# cannot be read, count as room. Sets TASKS_TEXT ("120 of 512 tasks") for the log.
+tasks_free() {
+  local max current
+  TASKS_TEXT="no process limit"
+  { read -r max <"${PIDS_DIR}/pids.max" && read -r current <"${PIDS_DIR}/pids.current"; } 2>/dev/null || return 0
+  [[ "${max}" =~ ^[0-9]+$ && "${current}" =~ ^[0-9]+$ ]] || return 0
+  TASKS_TEXT="${current} of ${max} tasks"
+  (( max - current >= TASKS_FOR_A_START ))
+}
+
+# Room for the relay-off helper outside a stop (tasks_free). At the container's process limit a fork would wait about
+# 15 s and then end the supervisor, leaving the relays as they are. So the web UI and its preparation are killed first,
+# which frees their tasks (never the relay-off; the controller is not running then), and are started again later with
+# the backoff; then it waits at most 1 s for the room. Returns 1 when there is still none: the relays then stay
+# unverified, so the controller stays stopped (start_with_unverified_relays), and the relay-off is tried again later.
+room_for_relays_off() {
+  local until
+  tasks_free && return 0
+  log "WARNING: the container is at its process limit (${TASKS_TEXT}): killing the web UI to make room for the relay-off"
+  stop_ui_preparation
+  if [[ -n "${UI_PREPARE_PID}" ]]; then
+    stamp
+    reap_within "${UI_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))"
+    UI_PREPARE_PID=""
+  fi
+  if is_running ui; then
+    kill -KILL "${PID[ui]}" 2>/dev/null
+    stamp
+    reap_within "${PID[ui]}" "$(( NOW_US + KILL_WAIT_US ))"
+    LAST_EXIT_CODE[ui]=137
+    LAST_EXIT_REASON[ui]="killed to make room for the relay-off"
+    iso_now
+    LAST_EXIT_AT[ui]=${ISO_NOW}
+  fi
+  if [[ "${STATE[ui]}" == running || "${STATE[ui]}" == starting ]]; then
+    PID[ui]=""
+    record_crash ui
+    backoff_seconds ui
+    stamp
+    START_DUE[ui]=$(( NOW_US + BACKOFF_SECONDS * 1000000 ))
+    STATE[ui]=restarting
+  fi
+  stamp
+  until=$(( NOW_US + KILL_WAIT_US ))
+  until tasks_free; do
+    stamp
+    (( NOW_US < until )) || return 1
+    nap 50000
+  done
+  return 0
+}
+
+# $1 is not started now: the container is at its process limit (tasks_free), where a fork would wait and then end the
+# supervisor. Tried again in a second, without a fork meanwhile; logged once.
+start_later() {
+  local label="the controller"
+  [[ "$1" == ui ]] && label="the web UI"
+  stamp
+  START_DUE[$1]=$(( NOW_US + 1000000 ))
+  STATE[$1]=restarting
+  if [[ -z "${WAITING_FOR_ROOM[$1]}" ]]; then
+    WAITING_FOR_ROOM[$1]=1
+    log "WARNING: ${label} is not started: the container is at its process limit (${TASKS_TEXT}); it starts once" \
+      "there is room"
+    write_state
+  fi
+}
+
 # 1, 2, 4, 8, ... seconds after the first, second, third ... failed try in a row to turn the relays off, at most the
-# backoff maximum.
+# backoff maximum, in RETRY_SECONDS.
 relays_retry_seconds() {
   local count=${RELAYS_FAILURES} delay=1
   while (( count > 1 && delay < BACKOFF_MAX_SECONDS )); do
@@ -363,7 +501,7 @@ relays_retry_seconds() {
     count=$((count - 1))
   done
   (( delay > BACKOFF_MAX_SECONDS )) && delay=${BACKOFF_MAX_SECONDS}
-  printf '%s' "${delay}"
+  RETRY_SECONDS=${delay}
 }
 
 # Turns every relay on the HAT off and verifies the register by reading it back, with the controller's own program
@@ -372,12 +510,20 @@ relays_retry_seconds() {
 # turns a relay on. $1 says why, for the log and the state. Returns 1 when the relays could not be verified off;
 # retry_relays_off then tries again. Once a stop is asked for, only the stop's own runs.
 de_energize_relays() {
-  local reason=$1 seconds=${2:-} code=0 started elapsed_ms why delay signals
-  started=$(now_us)
+  local reason=$1 seconds=${2:-} code=0 started elapsed_ms why signals
   if [[ -z "${seconds}" ]]; then
     (( ! STOP_REQUESTED )) || return 1
     seconds=${RELAYS_OFF_SECONDS}
+    # At the container's process limit, room first (the web UI goes); without it, the relays stay unverified.
+    if ! room_for_relays_off; then
+      relays_not_verified "${reason}" "could not start: the container is at its process limit (${TASKS_TEXT})"
+      return 1
+    fi
+    # The last stop check before the fork.
+    (( ! STOP_REQUESTED )) || return 1
   fi
+  stamp
+  started=${NOW_US}
   # In the background, so that a stop signal is handled at once (its trap notes when it came) while the helper runs on
   # to its end, within its time.
   (cd "${APP_DIR}" && exec timeout -s KILL "${seconds}" "${RELAYS_OFF_EXEC[@]}") &
@@ -391,10 +537,12 @@ de_energize_relays() {
   wait "${RELAYS_OFF_PID}"
   code=$?
   RELAYS_OFF_PID=""
-  elapsed_ms=$(( ($(now_us) - started) / 1000 ))
-  RELAYS_AT=$(now_iso)
-  RELAYS_REASON=${reason}
+  stamp
+  elapsed_ms=$(( (NOW_US - started) / 1000 ))
   if (( code == 0 )); then
+    iso_now
+    RELAYS_AT=${ISO_NOW}
+    RELAYS_REASON=${reason}
     RELAYS_STATE=off
     RELAYS_FAILURES=0
     log "The relays are off: every relay turned off and the HAT's register verified by read-back, ${elapsed_ms} ms" \
@@ -402,19 +550,29 @@ de_energize_relays() {
     write_state
     return 0
   fi
-  RELAYS_STATE=unverified
-  RELAYS_FAILURES=$((RELAYS_FAILURES + 1))
-  delay=$(relays_retry_seconds)
-  RELAYS_RETRY_DUE=$(( $(now_us) + delay * 1000000 ))
   case ${code} in
     124|137) why="did not finish within ${seconds}s and was killed" ;;
-    *) why="ended with $(describe_exit "${code}")" ;;
+    *) describe_exit "${code}"; why="ended with ${EXIT_TEXT}" ;;
   esac
-  log "WARNING: the relays could not be verified off (${reason}): turning them off ${why}, after ${elapsed_ms} ms." \
-    "The supervisor tries again in ${delay}s, and does not start the controller until they are verified off. Until then" \
-    "the drive may still be running: if the roof moves, use the independent stop (commissioning.md C1)."
-  write_state
+  relays_not_verified "${reason}" "${why}, after ${elapsed_ms} ms"
   return 1
+}
+
+# The relays could not be verified off ($1 says why they were being turned off, $2 how that went): recorded, logged as
+# a WARNING, and tried again after a delay that doubles (relays_retry_seconds).
+relays_not_verified() {
+  stamp
+  iso_now
+  RELAYS_AT=${ISO_NOW}
+  RELAYS_REASON=$1
+  RELAYS_STATE=unverified
+  RELAYS_FAILURES=$((RELAYS_FAILURES + 1))
+  relays_retry_seconds
+  RELAYS_RETRY_DUE=$(( NOW_US + RETRY_SECONDS * 1000000 ))
+  log "WARNING: the relays could not be verified off ($1): turning them off $2." \
+    "The supervisor tries again in ${RETRY_SECONDS}s, and does not start the controller until they are verified off." \
+    "Until then the drive may still be running: if the roof moves, use the independent stop (commissioning.md C1)."
+  write_state
 }
 
 # While the controller is not running (waiting to start again, or left stopped after a crash loop) and the relays are
@@ -423,7 +581,8 @@ retry_relays_off() {
   (( ! STOP_REQUESTED )) || return 0
   [[ "${RELAYS_STATE}" == unverified ]] || return 0
   [[ "${STATE[controller]}" == restarting || "${STATE[controller]}" == crash-loop ]] || return 0
-  (( $(now_us) >= RELAYS_RETRY_DUE )) || return 0
+  stamp
+  (( NOW_US >= RELAYS_RETRY_DUE )) || return 0
   de_energize_relays "trying again while the controller is not running"
 }
 
@@ -449,7 +608,9 @@ raise_oom_score_adj() {
 # still honoured meanwhile (note_stop, shutdown). Returns 1: do not start. (Returning 0 would start it anyway, the
 # earlier policy.)
 start_with_unverified_relays() {
-  local delay=$(( (RELAYS_RETRY_DUE - $(now_us) + 500000) / 1000000 ))
+  local delay
+  stamp
+  delay=$(( (RELAYS_RETRY_DUE - NOW_US + 500000) / 1000000 ))
   (( delay >= 0 )) || delay=0
   STATE[controller]=relays-unverified
   PID[controller]=""
@@ -487,11 +648,15 @@ start_controller() {
   # Held stopped unless they are verified off; but not for a stop asked for while they were turned off, which the check
   # below ends.
   (( STOP_REQUESTED )) || [[ "${RELAYS_STATE}" == off ]] || start_with_unverified_relays || return 1
+  # At the container's process limit, later (start_later): a fork would wait and then end the supervisor.
+  (( STOP_REQUESTED )) || tasks_free || { start_later controller; return 1; }
   # The last stop check, immediately before the fork: nothing runs between them (exec_controller checks again).
   (( ! STOP_REQUESTED )) || return 1
   exec_controller &
   PID[controller]=$!
-  STARTED_AT[controller]=$(now_us)
+  WAITING_FOR_ROOM[controller]=""
+  stamp
+  STARTED_AT[controller]=${NOW_US}
   STARTS[controller]=$((STARTS[controller] + 1))
   STATE[controller]=running
   RELAYS_STATE=controller
@@ -646,6 +811,9 @@ ui_environment() {
 # a stop abandons it (stop_ui_preparation). It writes the web UI's environment to a file only root can read.
 start_ui() {
   (( ! STOP_REQUESTED )) || return 1
+  tasks_free || { start_later ui; return 1; }
+  # The last stop check, immediately before the fork.
+  (( ! STOP_REQUESTED )) || return 1
   (umask 077; exec timeout -s KILL "${UI_PREPARE_SECONDS}" "${BASH}" "${SELF}" --prepare-ui) &
   UI_PREPARE_PID=$!
   STATE[ui]=starting
@@ -694,23 +862,29 @@ launch_ui() {
   if (( code != 0 )); then
     case ${code} in
       124|137) why="did not finish within ${UI_PREPARE_SECONDS}s and was killed" ;;
-      *) why="ended with $(describe_exit "${code}")" ;;
+      *) describe_exit "${code}"; why="ended with ${EXIT_TEXT}" ;;
     esac
     record_crash ui
-    delay=$(backoff_seconds ui)
-    START_DUE[ui]=$(( $(now_us) + delay * 1000000 ))
+    backoff_seconds ui
+    delay=${BACKOFF_SECONDS}
+    stamp
+    START_DUE[ui]=$(( NOW_US + delay * 1000000 ))
     STATE[ui]=restarting
     log "WARNING: the web UI's preparation (its copies of the certificate and the Stop key, its keys directory) ${why};" \
       "the web UI was not started. Preparing it again in ${delay}s"
     write_state
     return 1
   fi
+  # At the container's process limit, later: prepared again then.
+  tasks_free || { start_later ui; return 1; }
   # The last stop check, immediately before the fork: the preparation has gathered the web UI's environment and the new
   # process reads it itself, so nothing runs between them (exec_ui checks again).
   (( ! STOP_REQUESTED )) || return 1
   exec_ui &
   PID[ui]=$!
-  STARTED_AT[ui]=$(now_us)
+  WAITING_FOR_ROOM[ui]=""
+  stamp
+  STARTED_AT[ui]=${NOW_US}
   STARTS[ui]=$((STARTS[ui] + 1))
   STATE[ui]=running
   log "Started the web UI (pid ${PID[ui]}, start ${STARTS[ui]})"
@@ -730,58 +904,72 @@ record_crash() {
   CRASHES[${name}]=${kept% }
 }
 
-# 1, 2, 4, 8, ... seconds for the first, second, third ... crash within the window, at most the backoff maximum.
+# 1, 2, 4, 8, ... seconds for the first, second, third ... crash within the window, at most the backoff maximum, in
+# BACKOFF_SECONDS.
 backoff_seconds() {
   local count delay=1
-  count=$(wc -w <<<"${CRASHES[$1]}")
+  crash_count "$1"
+  count=${CRASH_COUNT}
   while (( count > 1 && delay < BACKOFF_MAX_SECONDS )); do
     delay=$((delay * 2))
     count=$((count - 1))
   done
   (( delay > BACKOFF_MAX_SECONDS )) && delay=${BACKOFF_MAX_SECONDS}
-  printf '%s' "${delay}"
+  BACKOFF_SECONDS=${delay}
 }
 
+# How many crashes of $1 are within the crash window, in CRASH_COUNT (the times are separated by single spaces).
+crash_count() {
+  local spaces=${CRASHES[$1]//[^ ]/}
+  CRASH_COUNT=0
+  [[ -z "${CRASHES[$1]}" ]] || CRASH_COUNT=$(( ${#spaces} + 1 ))
+}
+
+# How an exit status ($1) ended a process, in EXIT_TEXT: "exit code N" or "killed by signal N".
 describe_exit() {
-  local code=$1
-  if (( code > 128 )); then
-    printf 'killed by signal %s' "$((code - 128))"
+  if (( $1 > 128 )); then
+    printf -v EXIT_TEXT 'killed by signal %s' "$(( $1 - 128 ))"
   else
-    printf 'exit code %s' "${code}"
+    printf -v EXIT_TEXT 'exit code %s' "$1"
   fi
 }
 
 # $1 has exited: reap it, record why, and decide when (or whether) it starts again.
 handle_exit() {
-  local name=$1 code=0 label delay count
+  local name=$1 code=0 label delay count how
   wait "${PID[${name}]}" 2>/dev/null
   code=$?
   PID[${name}]=""
   LAST_EXIT_CODE[${name}]=${code}
-  LAST_EXIT_AT[${name}]=$(now_iso)
+  iso_now
+  LAST_EXIT_AT[${name}]=${ISO_NOW}
+  describe_exit "${code}"
+  how=${EXIT_TEXT}
   label="the controller"
   [[ "${name}" == ui ]] && label="the web UI"
 
   # Whatever ended it, the relays first: the HAT holds them as the controller left them, possibly during a move.
   if [[ "${name}" == controller ]]; then
-    de_energize_relays "the controller exited ($(describe_exit "${code}"))"
+    de_energize_relays "the controller exited (${how})"
   fi
 
   if [[ "${name}" == controller && ${code} -eq ${RESTART_EXIT_CODE} ]]; then
     LAST_EXIT_REASON[${name}]="restart requested"
     log "The controller asked to be restarted (exit code ${RESTART_EXIT_CODE}); starting it again"
-    START_DUE[${name}]=$(now_us)
+    stamp
+    START_DUE[${name}]=${NOW_US}
     STATE[${name}]=restarting
     write_state
     return
   fi
 
-  LAST_EXIT_REASON[${name}]="crashed ($(describe_exit "${code}"))"
+  LAST_EXIT_REASON[${name}]="crashed (${how})"
   record_crash "${name}"
-  count=$(wc -w <<<"${CRASHES[${name}]}")
+  crash_count "${name}"
+  count=${CRASH_COUNT}
   if [[ "${name}" == controller ]] && (( count >= CRASH_LIMIT )); then
     STATE[${name}]=crash-loop
-    log "The controller stopped ($(describe_exit "${code}")): ${count} crashes within ${CRASH_WINDOW_SECONDS}s." \
+    log "The controller stopped (${how}): ${count} crashes within ${CRASH_WINDOW_SECONDS}s." \
       "It is left stopped, and the container's health check fails (Docker marks it unhealthy after three failed" \
       "checks). Find the cause in the log above; a forced restart (${FORCE_RESTART_REQUEST}), or a restart of the" \
       "container, starts it again."
@@ -793,10 +981,12 @@ handle_exit() {
     write_state
     return
   fi
-  delay=$(backoff_seconds "${name}")
-  START_DUE[${name}]=$(( $(now_us) + delay * 1000000 ))
+  backoff_seconds "${name}"
+  delay=${BACKOFF_SECONDS}
+  stamp
+  START_DUE[${name}]=$(( NOW_US + delay * 1000000 ))
   STATE[${name}]=restarting
-  log "${label^} stopped ($(describe_exit "${code}")); starting it again in ${delay}s (crash ${count} within ${CRASH_WINDOW_SECONDS}s)"
+  log "${label^} stopped (${how}); starting it again in ${delay}s (crash ${count} within ${CRASH_WINDOW_SECONDS}s)"
   write_state
 }
 
@@ -804,9 +994,21 @@ handle_force_restart_request() {
   (( ! STOP_REQUESTED )) || return 0
   local running_us
   [[ -e "${FORCE_RESTART_REQUEST}" || -L "${FORCE_RESTART_REQUEST}" ]] || return 0
+  # Its steps need forks (removing the request, the relay-off, the new controller): at the container's process limit
+  # the request waits for room. docker stop or restart still works then (shutdown does not fork until it has room).
+  if ! tasks_free; then
+    if [[ "${FORCED_RESTART_OUTCOME}" != waiting ]]; then
+      FORCED_RESTART_OUTCOME=waiting
+      log "WARNING: a forced restart waits: the container is at its process limit (${TASKS_TEXT}); docker restart" \
+        "works now"
+    fi
+    return 0
+  fi
   rm -f "${FORCE_RESTART_REQUEST}"
-  FORCED_RESTART_AT=$(now_iso)
-  running_us=$(( $(now_us) - STARTED_AT[controller] ))
+  iso_now
+  FORCED_RESTART_AT=${ISO_NOW}
+  stamp
+  running_us=$(( NOW_US - STARTED_AT[controller] ))
   if [[ "${STATE[controller]}" == running ]] && (( running_us < FORCE_RESTART_MIN_SECONDS * 1000000 )); then
     FORCED_RESTART_OUTCOME=ignored
     log "Ignored a forced restart request: the controller started $((running_us / 1000000))s ago, less than" \
@@ -819,14 +1021,17 @@ handle_force_restart_request() {
   if is_running controller; then
     log "Killing the controller (SIGKILL, pid ${PID[controller]})"
     kill -KILL "${PID[controller]}" 2>/dev/null
-    reap_within "${PID[controller]}" "$(( $(now_us) + KILL_WAIT_US ))" \
+    stamp
+    reap_within "${PID[controller]}" "$(( NOW_US + KILL_WAIT_US ))" \
       || log "WARNING: the controller (pid ${PID[controller]}) has not ended 1s after SIGKILL (stuck in the kernel?); it" \
         "can no longer run its own code, and the relays are turned off now"
     LAST_EXIT_CODE[controller]=137
-    LAST_EXIT_AT[controller]=$(now_iso)
+    iso_now
+    LAST_EXIT_AT[controller]=${ISO_NOW}
     PID[controller]=""
     STATE[controller]=restarting
-    START_DUE[controller]=$(now_us)
+    stamp
+    START_DUE[controller]=${NOW_US}
     de_energize_relays "the controller was killed for a forced restart"
   fi
   LAST_EXIT_REASON[controller]="forced restart"
@@ -849,9 +1054,11 @@ tick() {
       running)
         is_running "${name}" || handle_exit "${name}" ;;
       restarting)
-        (( $(now_us) >= START_DUE[${name}] )) && start "${name}" ;;
+        stamp
+        (( NOW_US >= START_DUE[${name}] )) && start "${name}" ;;
       relays-unverified)
-        (( $(now_us) >= RELAYS_RETRY_DUE )) && retry_held_controller ;;
+        stamp
+        (( NOW_US >= RELAYS_RETRY_DUE )) && retry_held_controller ;;
       starting)
         # The web UI while it is prepared: started once its preparation has ended.
         [[ "${name}" == ui && -n "${UI_PREPARE_PID}" ]] && ! ui_preparation_runs && launch_ui ;;
@@ -860,62 +1067,60 @@ tick() {
   retry_relays_off
 }
 
-# Sleeps for a tick. A signal ends the sleep at once (the trap runs, then wait returns), and so does the exit of a running
-# process (or of the web UI's preparation), so that the next tick turns the relays off as soon as the controller has
-# exited.
+# Sleeps for a tick, in naps of at most 0.1 s (NAP_SLICE_US), and ends early when a stop is asked for or a running process
+# (or the web UI's preparation) has exited, so that the next tick turns the relays off as soon as the controller has
+# exited. It never forks (see "Forks" above).
 sleep_tick() {
-  local name
-  local -a running=()
-  for name in controller ui; do
-    [[ "${STATE[${name}]}" != running || -z "${PID[${name}]}" ]] || running+=("${PID[${name}]}")
+  local name until
+  stamp
+  until=$(( NOW_US + TICK_US ))
+  while (( ! STOP_REQUESTED )); do
+    for name in controller ui; do
+      [[ "${STATE[${name}]}" == running ]] && ! is_running "${name}" && return 0
+    done
+    [[ -n "${UI_PREPARE_PID}" ]] && ! ui_preparation_runs && return 0
+    stamp
+    (( NOW_US < until )) || return 0
+    nap "$(( until - NOW_US < NAP_SLICE_US ? until - NOW_US : NAP_SLICE_US ))"
   done
-  # And the end of the web UI's preparation, after which it starts.
-  [[ -z "${UI_PREPARE_PID}" ]] || running+=("${UI_PREPARE_PID}")
-  sleep "${TICK_SECONDS}" &
-  SLEEP_PID=$!
-  wait -n "${SLEEP_PID}" "${running[@]}" 2>/dev/null
-  kill "${SLEEP_PID}" 2>/dev/null
-  wait "${SLEEP_PID}" 2>/dev/null
-  SLEEP_PID=""
+  return 0
 }
 
-# Notes when the stop was asked for (the first time only) and when it must be done by: the controller's wait, then the
-# longer of the relay-off's and the web UI's, which run at the same time (27 s with the defaults). The container's stop
-# timeout (Docker's grace period, at least 30 s) is longer.
+# Notes when the stop was asked for (the first time only, at the signal: a builtin, no fork) and when it must be done by:
+# the controller's wait, then the longer of the relay-off's and the web UI's (27 s with the defaults). The container's
+# stop timeout (Docker's grace period, at least 30 s) is longer.
 note_stop() {
   local after
   (( STOP_AT_US == 0 )) || return 0
   after=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
-  STOP_AT_US=$(now_us)
+  stamp
+  STOP_AT_US=${NOW_US}
   STOP_BY_US=$(( STOP_AT_US + (CONTROLLER_STOP_SECONDS + after) * 1000000 ))
 }
 
-# earlier <microseconds> <microseconds>: the earlier of the two.
-earlier() {
-  printf '%s' "$(( $1 < $2 ? $1 : $2 ))"
-}
-
 # seconds_until <microseconds> <at most>: the seconds from now to that time, to the millisecond, at most the second
-# number and at least 1 (a time for timeout).
+# number and at least 1 (a time for timeout), in SECONDS_LEFT.
 seconds_until() {
-  local us=$(( $1 - $(now_us) )) most=$(( $2 * 1000000 ))
+  local us most=$(( $2 * 1000000 ))
+  stamp
+  us=$(( $1 - NOW_US ))
   (( us <= most )) || us=${most}
   (( us >= 1000000 )) || us=1000000
-  printf '%d.%03d' "$(( us / 1000000 ))" "$(( us % 1000000 / 1000 ))"
+  printf -v SECONDS_LEFT '%d.%03d' "$(( us / 1000000 ))" "$(( us % 1000000 / 1000 ))"
 }
 
 # Sends $1 SIGTERM, if it runs; finish_stop waits for it until $2 (microseconds) and then kills it. $3 names it in the
-# log.
+# log. No fork (the state is written once the stop has freed the tasks).
 begin_stop() {
   local name=$1 deadline=$2 label=$3
+  stamp
   STOP_DEADLINE[${name}]=${deadline}
-  STOP_WAIT[${name}]=$(( (deadline - $(now_us) + 500000) / 1000000 ))
+  STOP_WAIT[${name}]=$(( (deadline - NOW_US + 500000) / 1000000 ))
   if ! is_running "${name}"; then
     STATE[${name}]=stopped
     return
   fi
   STATE[${name}]=stopping
-  write_state
   log "Stopping ${label} (SIGTERM, up to ${STOP_WAIT[${name}]}s)"
   kill -TERM "${PID[${name}]}" 2>/dev/null
 }
@@ -925,16 +1130,20 @@ begin_stop() {
 finish_stop() {
   local name=$1 label=$2 code
   [[ "${STATE[${name}]}" == stopping ]] || return 0
-  while is_running "${name}" && (( $(now_us) < STOP_DEADLINE[${name}] )); do
-    sleep 0.1
+  stamp
+  while is_running "${name}" && (( NOW_US < STOP_DEADLINE[${name}] )); do
+    nap "$(( STOP_DEADLINE[${name}] - NOW_US < NAP_SLICE_US ? STOP_DEADLINE[${name}] - NOW_US : NAP_SLICE_US ))"
+    stamp
   done
   if is_running "${name}"; then
     log "${label^} did not stop within ${STOP_WAIT[${name}]}s; killing it (SIGKILL)"
     kill -KILL "${PID[${name}]}" 2>/dev/null
   fi
-  if reap_within "${PID[${name}]}" "$(( $(now_us) + KILL_WAIT_US ))"; then
+  stamp
+  if reap_within "${PID[${name}]}" "$(( NOW_US + KILL_WAIT_US ))"; then
     code=${REAPED_CODE}
-    log "${label^} stopped ($(describe_exit "${code}"))"
+    describe_exit "${code}"
+    log "${label^} stopped (${EXIT_TEXT})"
   else
     code=""
     log "WARNING: ${label} (pid ${PID[${name}]}) has not ended 1s after SIGKILL (stuck in the kernel?); it can no longer" \
@@ -943,44 +1152,74 @@ finish_stop() {
   PID[${name}]=""
   LAST_EXIT_CODE[${name}]=${code}
   LAST_EXIT_REASON[${name}]="stopped with the container"
-  LAST_EXIT_AT[${name}]=$(now_iso)
+  iso_now
+  LAST_EXIT_AT[${name}]=${ISO_NOW}
   STATE[${name}]=stopped
 }
 
-# docker stop: the controller first (its shutdown stops the roof), then every relay off and verified while the web UI
-# stops. Every wait is cut to the time left until the stop's deadline (note_stop), counted from the signal: the
-# controller's ends early enough to leave the last relay-off its whole time, and the relay-off and the web UI get what is
-# left after that. Also run by on_exit, so it may run twice: what is already stopped is left as it is, and the relays are
-# turned off again.
+# docker stop, or any other end: with no fork until every process that holds tasks has ended, so that it works, and in
+# time, also at the container's process limit (#139 review F6). The web UI's preparation is killed (on_signal has
+# already done so). The controller (whose shutdown stops the roof) and the web UI are sent SIGTERM at once, and each is
+# killed (SIGKILL) when its own wait runs out: the web UI's after HVO_SUPERVISOR_UI_STOP_SECONDS, the controller's early
+# enough to leave the last relay-off its time before the stop's deadline (note_stop, counted from the signal). Only
+# then, with their tasks freed, does it start the last relay-off, with the time left, and write its state. Also run by
+# on_exit, so it may run twice: what is already stopped is left as it is, and the relays are turned off again.
 shutdown() {
-  local after
+  local relays_by stop_until
   STOP_REQUESTED=1
   note_stop
-  after=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
   SUPERVISOR_STATE=stopping
-  log "Stopping: the controller first, then the relays off while the web UI stops, all within" \
+  log "Stopping: the controller and the web UI, then the relays off, all within" \
     "$(( (STOP_BY_US - STOP_AT_US) / 1000000 ))s of the stop request"
   # The web UI's preparation, if it runs, is abandoned (on_signal has already killed it): nothing starts after it.
   if [[ -n "${UI_PREPARE_PID}" ]]; then
     stop_ui_preparation
-    reap_within "${UI_PREPARE_PID}" "$(( $(now_us) + KILL_WAIT_US ))" \
+    stamp
+    reap_within "${UI_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))" \
       || log "WARNING: the web UI's preparation (pid ${UI_PREPARE_PID}) has not ended 1s after SIGKILL"
     log "Abandoned the web UI's preparation: the web UI is not started"
     UI_PREPARE_PID=""
     STATE[ui]=stopped
   fi
-  # A relay-off still running (on_exit can come in the middle of one) ends first, within its own time.
+  # A relay-off still running (begun before the signal, or on_exit in the middle of one) ends first, within its time.
   [[ -z "${RELAYS_OFF_PID}" ]] || wait "${RELAYS_OFF_PID}" 2>/dev/null
-  begin_stop controller "$(earlier "$(( $(now_us) + CONTROLLER_STOP_SECONDS * 1000000 ))" "$(( STOP_BY_US - after * 1000000 ))")" \
-    "the controller"
-  finish_stop controller "the controller"
-  begin_stop ui "$(earlier "$(( $(now_us) + UI_STOP_SECONDS * 1000000 ))" "${STOP_BY_US}")" "the web UI"
-  de_energize_relays "the supervisor is stopping" "$(seconds_until "${STOP_BY_US}" "${RELAYS_OFF_SECONDS}")"
-  finish_stop ui "the web UI"
+  # Both stopped at once; the latest either may run is when the last relay-off must begin to have its whole time.
+  relays_by=$(( STOP_BY_US - RELAYS_OFF_SECONDS * 1000000 ))
+  stamp
+  stop_until=$(( NOW_US + CONTROLLER_STOP_SECONDS * 1000000 ))
+  begin_stop controller "$(( stop_until < relays_by ? stop_until : relays_by ))" "the controller"
+  stop_until=$(( NOW_US + UI_STOP_SECONDS * 1000000 ))
+  begin_stop ui "$(( stop_until < relays_by ? stop_until : relays_by ))" "the web UI"
+  # Each is killed at its own deadline: the earlier one first.
+  if (( STOP_DEADLINE[ui] <= STOP_DEADLINE[controller] )); then
+    finish_stop ui "the web UI"
+    finish_stop controller "the controller"
+  else
+    finish_stop controller "the controller"
+    finish_stop ui "the web UI"
+  fi
+  # Every process that holds tasks has ended, so there is room for the relay-off's process even at the container's
+  # process limit. Should something else hold the tasks, it waits for room while the stop allows: a fork without room
+  # would wait about 15 s and then end the supervisor, past the deadline.
+  stamp
+  stop_until=$(( STOP_BY_US - 1000000 ))
+  until tasks_free || (( NOW_US >= stop_until )); do
+    nap 50000
+    stamp
+  done
+  if tasks_free; then
+    seconds_until "${STOP_BY_US}" "${RELAYS_OFF_SECONDS}"
+    de_energize_relays "the supervisor is stopping" "${SECONDS_LEFT}"
+  else
+    log "WARNING: the relays could not be turned off at the stop: the container is still at its process limit" \
+      "(${TASKS_TEXT}) with the controller and the web UI ended. Until it starts again the drive may still be running:" \
+      "if the roof moves, use the independent stop (commissioning.md C1)."
+  fi
   SUPERVISOR_STATE=stopped
   write_state
   SHUTDOWN_DONE=1
-  log "Stopped, $(( ($(now_us) - STOP_AT_US) / 1000 )) ms after the stop request"
+  stamp
+  log "Stopped, $(( (NOW_US - STOP_AT_US) / 1000 )) ms after the stop request"
 }
 
 # shellcheck disable=SC2317 # called by the trap
@@ -989,7 +1228,6 @@ on_signal() {
   STOP_REQUESTED=1
   note_stop
   stop_ui_preparation
-  [[ -z "${SLEEP_PID}" ]] || kill "${SLEEP_PID}" 2>/dev/null
 }
 
 # The supervisor ends some other way: another signal, or an error in this script. Its processes would end with the
@@ -1012,8 +1250,10 @@ if [[ "${1:-}" == --prepare-ui ]]; then
   exit 0
 fi
 
-# The supervisor's own output and error, the container's log, for on_exit.
+# The supervisor's own output and error, the container's log, for on_exit; and NAP_FD, a pipe that never has data, for
+# nap's reads with a time limit (the supervisor's waits, without a fork). Opening it forks once, here, at the start.
 exec {LOG_OUT}>&1 {LOG_ERR}>&2
+exec {NAP_FD}<> <(:)
 trap on_signal TERM INT HUP QUIT
 trap on_exit EXIT
 prepare_run_dir
@@ -1021,8 +1261,8 @@ log "Starting the controller and the web UI (crash limit ${CRASH_LIMIT} within $
   "backoff at most ${BACKOFF_MAX_SECONDS}s; forced restarts ignored within ${FORCE_RESTART_MIN_SECONDS}s of a start;" \
   "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running; a stop ends within" \
   "$(( CONTROLLER_STOP_SECONDS + (RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS) ))s of" \
-  "its request: up to ${CONTROLLER_STOP_SECONDS}s for the controller, then up to ${RELAYS_OFF_SECONDS}s for the relays off," \
-  "with ${UI_STOP_SECONDS}s for the web UI at the same time)"
+  "its request: up to ${CONTROLLER_STOP_SECONDS}s for the controller, with ${UI_STOP_SECONDS}s for the web UI at the same" \
+  "time, then up to ${RELAYS_OFF_SECONDS}s for the relays off)"
 start_controller
 start_ui
 while (( ! STOP_REQUESTED )); do
