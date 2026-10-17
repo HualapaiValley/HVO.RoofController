@@ -1721,6 +1721,53 @@ scenario_c12() {
   assert_relays_off
   pass "a rollback with 2.5 CPUs and 4g brought back ${previous} with them${cgroup:+ (cgroup: ${cgroup})}; the next, given none, kept them for the version swapped back; the default given again brought back the first with 1 vCPU and 2g; relays off"
 
+  # A rollback on a host whose Docker cannot enforce the memory limit, as on a Pi whose firmware turned the memory
+  # controller off after an upgrade: a wrapper of the run's own in front of Docker makes the deploy script's docker info
+  # say so, and everything else is real Docker. The rollback is a recovery path, so it goes ahead with the limits Docker
+  # still enforces (the CPU and process limits) and warns, in its output and in the controller's log (#149). Then the
+  # default given again, on Docker as it is.
+  current_check="C12 step 6: a rollback on a host that cannot enforce the memory limit goes ahead and warns"
+  local real_docker no_memory="${work}/no-memory-cgroup"
+  real_docker=$(command -v docker)
+  mkdir -p "${no_memory}"
+  cat > "${no_memory}/docker" <<WRAPPER
+#!/usr/bin/env bash
+# Docker, except that the deploy script's docker info template reports MemoryLimit and SwapLimit false.
+if [[ " \$* " == *" info "* && "\$*" == *"{{.MemoryLimit}},"* ]]; then
+  "${real_docker}" "\$@" | awk -F, -v OFS=, 'NR == 1 { \$1 = "false"; \$4 = "false" } { print }'
+  exit "\${PIPESTATUS[0]}"
+fi
+exec "${real_docker}" "\$@"
+WRAPPER
+  chmod 0755 "${no_memory}/docker"
+  local swapped_limits rollback_start
+  rollback_start=$(now)
+  deploy "PATH=${no_memory}:${PATH}" -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback on a host that cannot enforce the memory limit was refused (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[rollback] WARNING: THE ROLLBACK GOES AHEAD, BUT DOCKER ON 127.0.0.1 CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them."
+  expect_deploy_log "[rollback] WARNING:   - docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit false"
+  if deploy_log_has "docker-cpu-quota-unsupported" || deploy_log_has "docker-pids-limit-unsupported"; then
+    fail "the rollback warned of a limit Docker enforces"
+  fi
+  expect_deploy_log "enforces only these limits, which the rollback gives: 1 CPU, no memory limit (Docker here cannot enforce one), at most 512 processes and threads"
+  expect_deploy_log "[rollback] The warning is in the controller's log too (docker logs ${controller})."
+  swapped_limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.PidsLimit}}' "${controller}")
+  # The version brought back had 2.5 CPUs and 4g: the CPU limit is given, the memory limit is left as it was.
+  [[ "$(container_id "${controller}")" == "${current_id}" && "${swapped_limits}" == "1000000000 4294967296 512" ]] \
+    || fail "the rollback gave the version it brought back ${swapped_limits}, not the CPU and process limits alone"
+  container_log_has "${controller}" "[rollback] WARNING: from deploy-roofcontroller-rpi.sh --rollback," "${rollback_start}" \
+    || fail "the warning is not in ${controller}'s log"
+  container_log_has "${controller}" "[rollback] WARNING:   - docker-memory-limit-unsupported:" "${rollback_start}" \
+    || fail "${controller}'s log does not name the memory limit"
+  container_log_has "${controller}" 'Append " cgroup_enable=memory" to the end of the single line in /boot/firmware/cmdline.txt' "${rollback_start}" \
+    || fail "${controller}'s log does not name the fix"
+  deploy CONTAINER_CPUS=1 CONTAINER_MEMORY=2g -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits, on Docker as it is, failed (exit ${DEPLOY_STATUS})"
+  ! deploy_log_has "WARNING: THE ROLLBACK GOES AHEAD" || fail "a rollback on Docker as it is warned of a limit"
+  [[ "$(container_id "${controller}")" == "${previous_id}" ]] || fail "the last rollback did not swap back"
+  assert_relays_off
+  pass "a rollback whose Docker reported no memory limit support went ahead in ${DEPLOY_SECONDS} s with 1 CPU and 512 processes (the memory limit left as it was), and warned in its output and in ${controller}'s log, naming the memory limit and the fix; the next, on Docker as it is, swapped back with no warning; relays off"
+
   # CommissioningCheck("C12", "3")
   current_check="C12 step 3: an operator key that is not configured"
   current_id=$(container_id "${controller}")
