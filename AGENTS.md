@@ -221,9 +221,12 @@ observatory's Pi.
   (`tests/deploy/deploy-script-tests.sh`) and the compose file (`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`) in
   step.
 - The controller's container runs read-only, with only the supervisor's capabilities (`CHOWN`, `KILL`, `SETGID`,
-  `SETUID`), `no-new-privileges` and a process limit (512 by default); never `--privileged`. A CPU or memory limit is
-  given only when set, at least 1 vCPU and 1 GiB: none by default until a follow-up (#138 item 6) makes the default
-  1 vCPU and 2 GiB. A capability or writable place is added only when a test on the emulator image shows it is needed.
+  `SETUID`), `no-new-privileges`, and a CPU, a memory and a process limit: by default 1 vCPU, 2 GiB (no swap) and 512,
+  at least 1 vCPU and 1 GiB, with no setting for no limit (#149); never `--privileged`. One set persists across upgrades
+  and rollbacks (the install record; the deploy script keeps the running controller's). A host whose Docker cannot
+  enforce them is refused before anything changes, with no override (`docker info`: `MemoryLimit`, `SwapLimit`,
+  `CPUCfsQuota`, `PidsLimit`). A capability or writable place is added only when a test on the emulator image shows it
+  is needed.
   Keep the [fail-safe record](docs/deployment.md#the-relays-when-the-controller-exits) true: the supervisor turns the
   relays off whenever the controller exits and holds it stopped until they are verified off; only a whole-container
   kill (or the Docker daemon dying) leaves them held.
