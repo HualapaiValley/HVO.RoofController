@@ -8,12 +8,15 @@
 #   that died during a move would leave the drive running. It does this as soon as the controller exits (a crash, a
 #   kill, a failed start, a requested restart), before each start, again and again while the controller is not running
 #   until it succeeds, and when it stops itself. It never turns a relay on.
-# - on docker stop (SIGTERM, also SIGINT, SIGHUP and SIGQUIT): stops the controller first and waits for it, because its
-#   shutdown stops the roof and verifies the relays off. It waits up to HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS, then turns
-#   the relays off (the controller may have been killed, or have failed to verify them) while the web UI stops, waiting
-#   up to HVO_SUPERVISOR_UI_STOP_SECONDS for it, and exits. The controller's wait and the longer of the other two stay
-#   below the container's stop timeout, so Docker never kills the controller first. Once a wait runs out, that process is
-#   killed (SIGKILL). Any other way this script ends (another signal, an error) stops the same way first (on_exit).
+# - on docker stop (SIGTERM, also SIGINT, SIGHUP and SIGQUIT): starts nothing more, and stops the controller first and
+#   waits for it, because its shutdown stops the roof and verifies the relays off. It waits up to
+#   HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS, then turns the relays off (the controller may have been killed, or have failed
+#   to verify them) while the web UI stops, waiting up to HVO_SUPERVISOR_UI_STOP_SECONDS for it, and exits. The whole
+#   stop is timed from the signal (note_stop): work already running when it came (a relay-off) counts against it, and
+#   each later wait is cut to what is left, so the stop ends within the controller's wait and the longer of the other two
+#   (27 s with the defaults), below the container's stop timeout: Docker never kills the controller first, and the last
+#   relay-off begins and ends in time. Once a wait runs out, that process is killed (SIGKILL). Any other way this script
+#   ends (another signal, an error) stops the same way first (on_exit).
 # - when the controller exits with 75 (a restart requested through POST System/Restart): starts it again at once.
 # - when the controller exits otherwise (a crash): starts it again after a backoff that doubles from 1 s (1, 2, 4, 8 s,
 #   ...), at most HVO_SUPERVISOR_BACKOFF_MAX_SECONDS. The HVO_SUPERVISOR_CRASH_LIMIT-th crash within
@@ -35,9 +38,10 @@
 # it for the tests): the HAT access the controller uses, without the controller's settings checks, so it works when the
 # controller cannot start. It must finish within HVO_SUPERVISOR_RELAYS_OFF_SECONDS or is killed.
 #
-# The kernel ends the process with the highest OOM score when the container (or the Pi) runs out of memory. The
-# supervisor must outlive the controller to turn the relays off, so it raises the web UI's oom_score_adj by 500 and the
-# controller's by 100 above its own (raising needs no capability): the kernel ends the web UI first, then the controller.
+# The kernel ends the process with the highest OOM score when the container (or the Pi) runs out of memory; the score
+# counts memory use and oom_score_adj. The supervisor must outlive the controller to turn the relays off, so it raises
+# the web UI's oom_score_adj by 500 and the controller's by 100 above its own (raising needs no capability): the kernel
+# favours ending them first. A preference, not a fixed order: a controller grown large enough can go before the web UI.
 #
 # The controller runs with the container's environment. The web UI runs as HVO_SUPERVISOR_UI_USER (the image's
 # unprivileged app user), with only the RoofWeb__* settings and a few general variables (PATH, TZ, the locale,
@@ -168,9 +172,16 @@ RELAYS_AT=""
 RELAYS_REASON=""
 RELAYS_FAILURES=0
 RELAYS_RETRY_DUE=0
-# When each process's wait for its stop ends (microseconds), from begin_stop.
+# When each process's wait for its stop ends (microseconds), from begin_stop, and how long that wait was, for the log.
 declare -A STOP_DEADLINE=([controller]=0 [ui]=0)
+declare -A STOP_WAIT=([controller]="" [ui]="")
 SHUTDOWN_DONE=0
+# The signals the traps have had, when the stop was asked for, and when it must be done by (microseconds: note_stop).
+SIGNALS=0
+STOP_AT_US=0
+STOP_BY_US=0
+# The relay-off helper while it runs.
+RELAYS_OFF_PID=""
 
 json_string_or_null() {
   if [[ -z "$1" ]]; then printf 'null'; else printf '"%s"' "$1"; fi
@@ -272,13 +283,30 @@ relays_retry_seconds() {
 }
 
 # Turns every relay on the HAT off and verifies the register by reading it back, with the controller's own program
-# (--relays-off: the HAT access the controller uses), within HVO_SUPERVISOR_RELAYS_OFF_SECONDS. Only while the controller
-# is not running: it would stop that controller's move. It never turns a relay on. $1 says why, for the log and the
-# state. Returns 1 when the relays could not be verified off; retry_relays_off then tries again.
+# (--relays-off: the HAT access the controller uses), within HVO_SUPERVISOR_RELAYS_OFF_SECONDS, or within $2 seconds for
+# the stop's own (shutdown). Only while the controller is not running: it would stop that controller's move. It never
+# turns a relay on. $1 says why, for the log and the state. Returns 1 when the relays could not be verified off;
+# retry_relays_off then tries again. Once a stop is asked for, only the stop's own runs.
 de_energize_relays() {
-  local reason=$1 code=0 started elapsed_ms why delay
+  local reason=$1 seconds=${2:-} code=0 started elapsed_ms why delay signals
+  if [[ -z "${seconds}" ]]; then
+    (( ! STOP_REQUESTED )) || return 1
+    seconds=${RELAYS_OFF_SECONDS}
+  fi
   started=$(now_us)
-  (cd "${APP_DIR}" && exec timeout -s KILL "${RELAYS_OFF_SECONDS}" "${RELAYS_OFF_EXEC[@]}") || code=$?
+  # In the background, so that a stop signal is handled at once (its trap notes when it came) while the helper runs on
+  # to its end, within its time.
+  (cd "${APP_DIR}" && exec timeout -s KILL "${seconds}" "${RELAYS_OFF_EXEC[@]}") &
+  RELAYS_OFF_PID=$!
+  while kill -0 "${RELAYS_OFF_PID}" 2>/dev/null; do
+    signals=${SIGNALS}
+    wait "${RELAYS_OFF_PID}"
+    # wait returns early only for a signal a trap handles; otherwise the helper has ended.
+    (( SIGNALS != signals )) || break
+  done
+  wait "${RELAYS_OFF_PID}"
+  code=$?
+  RELAYS_OFF_PID=""
   elapsed_ms=$(( ($(now_us) - started) / 1000 ))
   RELAYS_AT=$(now_iso)
   RELAYS_REASON=${reason}
@@ -295,7 +323,7 @@ de_energize_relays() {
   delay=$(relays_retry_seconds)
   RELAYS_RETRY_DUE=$(( $(now_us) + delay * 1000000 ))
   case ${code} in
-    124|137) why="did not finish within ${RELAYS_OFF_SECONDS}s and was killed" ;;
+    124|137) why="did not finish within ${seconds}s and was killed" ;;
     *) why="ended with $(describe_exit "${code}")" ;;
   esac
   log "WARNING: the relays could not be verified off (${reason}): turning them off ${why}, after ${elapsed_ms} ms." \
@@ -308,6 +336,7 @@ de_energize_relays() {
 # While the controller is not running (waiting to start again, or left stopped after a crash loop) and the relays are
 # not verified off: tries again, after a delay that doubles from 1 s (at most the backoff maximum).
 retry_relays_off() {
+  (( ! STOP_REQUESTED )) || return 0
   [[ "${RELAYS_STATE}" == unverified ]] || return 0
   [[ "${STATE[controller]}" == restarting || "${STATE[controller]}" == crash-loop ]] || return 0
   (( $(now_us) >= RELAYS_RETRY_DUE )) || return 0
@@ -328,10 +357,27 @@ raise_oom_score_adj() {
   return 0
 }
 
+# Whether the controller starts although the relays could not be verified off just before. This is the policy for that
+# case, and only here (the owner's decision is pending, #139). Now: it starts. The controller's initialization turns
+# every relay off and verifies the register before anything else, and if it cannot, it stays uninitialized, latches the
+# fault and refuses motion. The other choice, keeping the controller stopped until the supervisor has verified the relays
+# off, is this body instead:
+#   START_DUE[controller]=${RELAYS_RETRY_DUE}; STATE[controller]=restarting; write_state
+#   log "The controller is kept stopped until the relays are verified off; the supervisor tries again in ...s"; return 1
+# retry_relays_off already tries again while the controller waits to start, and tick starts it at START_DUE.
+start_with_unverified_relays() {
+  return 0
+}
+
 start_controller() {
+  # Nothing starts once a stop is asked for.
+  (( ! STOP_REQUESTED )) || return 1
   # Never with the relays as something else left them: at the supervisor's start (a container killed during a move),
   # or after a try that failed.
   [[ "${RELAYS_STATE}" == off ]] || de_energize_relays "before the controller starts"
+  # A stop asked for while the relays were turned off: nothing starts after it.
+  (( ! STOP_REQUESTED )) || return 1
+  [[ "${RELAYS_STATE}" == off ]] || start_with_unverified_relays || return 1
   (cd "${APP_DIR}" && raise_oom_score_adj "${CONTROLLER_OOM_SCORE_RAISE}" "the controller" && exec "${CONTROLLER_EXEC[@]}") &
   PID[controller]=$!
   STARTED_AT[controller]=$(now_us)
@@ -448,6 +494,7 @@ prepare_ui_data_protection() {
 }
 
 start_ui() {
+  (( ! STOP_REQUESTED )) || return 1
   local -a ui_env=("PATH=${PATH}" "TZ=${TZ:-UTC}")
   local entry name home
   # Only the web UI's settings and a few general variables; never the controller's keys or settings.
@@ -566,6 +613,7 @@ handle_exit() {
 }
 
 handle_force_restart_request() {
+  (( ! STOP_REQUESTED )) || return 0
   local running_us
   [[ -e "${FORCE_RESTART_REQUEST}" || -L "${FORCE_RESTART_REQUEST}" ]] || return 0
   rm -f "${FORCE_RESTART_REQUEST}"
@@ -587,11 +635,14 @@ handle_force_restart_request() {
     LAST_EXIT_CODE[controller]=137
     LAST_EXIT_AT[controller]=$(now_iso)
     PID[controller]=""
+    STATE[controller]=restarting
+    START_DUE[controller]=$(now_us)
     de_energize_relays "the controller was killed for a forced restart"
   fi
   LAST_EXIT_REASON[controller]="forced restart"
   # A deliberate restart: earlier crashes no longer count towards the crash loop.
   CRASHES[controller]=""
+  # Not when a stop was asked for meanwhile (start_controller checks).
   start_controller
 }
 
@@ -599,6 +650,8 @@ tick() {
   local name
   handle_force_restart_request
   for name in controller ui; do
+    # A stop asked for meanwhile (handle_exit turns the relays off, which takes time): the stop comes next.
+    (( ! STOP_REQUESTED )) || return 0
     case "${STATE[${name}]}" in
       running)
         is_running "${name}" || handle_exit "${name}" ;;
@@ -625,29 +678,57 @@ sleep_tick() {
   SLEEP_PID=""
 }
 
-# Sends $1 SIGTERM, if it runs, and notes when its wait of $2 seconds ends (finish_stop). $3 names it in the log.
+# Notes when the stop was asked for (the first time only) and when it must be done by: the controller's wait, then the
+# longer of the relay-off's and the web UI's, which run at the same time (27 s with the defaults). The container's stop
+# timeout (Docker's grace period, at least 30 s) is longer.
+note_stop() {
+  local after
+  (( STOP_AT_US == 0 )) || return 0
+  after=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
+  STOP_AT_US=$(now_us)
+  STOP_BY_US=$(( STOP_AT_US + (CONTROLLER_STOP_SECONDS + after) * 1000000 ))
+}
+
+# earlier <microseconds> <microseconds>: the earlier of the two.
+earlier() {
+  printf '%s' "$(( $1 < $2 ? $1 : $2 ))"
+}
+
+# seconds_until <microseconds> <at most>: the seconds from now to that time, to the millisecond, at most the second
+# number and at least 1 (a time for timeout).
+seconds_until() {
+  local us=$(( $1 - $(now_us) )) most=$(( $2 * 1000000 ))
+  (( us <= most )) || us=${most}
+  (( us >= 1000000 )) || us=1000000
+  printf '%d.%03d' "$(( us / 1000000 ))" "$(( us % 1000000 / 1000 ))"
+}
+
+# Sends $1 SIGTERM, if it runs; finish_stop waits for it until $2 (microseconds) and then kills it. $3 names it in the
+# log.
 begin_stop() {
-  local name=$1 seconds=$2 label=$3
-  STOP_DEADLINE[${name}]=$(( $(now_us) + seconds * 1000000 ))
+  local name=$1 deadline=$2 label=$3
+  STOP_DEADLINE[${name}]=${deadline}
+  STOP_WAIT[${name}]=$(( (deadline - $(now_us) + 500000) / 1000000 ))
   if ! is_running "${name}"; then
     STATE[${name}]=stopped
     return
   fi
   STATE[${name}]=stopping
   write_state
-  log "Stopping ${label} (SIGTERM, up to ${seconds}s)"
+  log "Stopping ${label} (SIGTERM, up to ${STOP_WAIT[${name}]}s)"
   kill -TERM "${PID[${name}]}" 2>/dev/null
 }
 
-# Waits for $1 until its wait from begin_stop ends, kills it (SIGKILL) if it still runs, and records how it ended.
+# Waits for $1 until the time begin_stop set, kills it (SIGKILL) if it still runs, and records how it ended. $2 names it
+# in the log.
 finish_stop() {
-  local name=$1 seconds=$2 label=$3 code
+  local name=$1 label=$2 code
   [[ "${STATE[${name}]}" == stopping ]] || return 0
   while is_running "${name}" && (( $(now_us) < STOP_DEADLINE[${name}] )); do
     sleep 0.1
   done
   if is_running "${name}"; then
-    log "${label^} did not stop within ${seconds}s; killing it (SIGKILL)"
+    log "${label^} did not stop within ${STOP_WAIT[${name}]}s; killing it (SIGKILL)"
     kill -KILL "${PID[${name}]}" 2>/dev/null
   fi
   wait "${PID[${name}]}" 2>/dev/null
@@ -660,30 +741,38 @@ finish_stop() {
   STATE[${name}]=stopped
 }
 
-stop_process() {
-  begin_stop "$@"
-  finish_stop "$@"
-}
-
 # docker stop: the controller first (its shutdown stops the roof), then every relay off and verified while the web UI
-# stops, so the relays wait no longer than the controller and the web UI's own wait overlaps them. Also run by on_exit,
-# so it may run twice: what is already stopped is left as it is, and the relays are turned off again.
+# stops. Every wait is cut to the time left until the stop's deadline (note_stop), counted from the signal: the
+# controller's ends early enough to leave the last relay-off its whole time, and the relay-off and the web UI get what is
+# left after that. Also run by on_exit, so it may run twice: what is already stopped is left as it is, and the relays are
+# turned off again.
 shutdown() {
+  local after
+  STOP_REQUESTED=1
+  note_stop
+  after=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
   SUPERVISOR_STATE=stopping
-  log "Stopping: the controller first, then the relays off while the web UI stops"
-  stop_process controller "${CONTROLLER_STOP_SECONDS}" "the controller"
-  begin_stop ui "${UI_STOP_SECONDS}" "the web UI"
-  de_energize_relays "the supervisor is stopping"
-  finish_stop ui "${UI_STOP_SECONDS}" "the web UI"
+  log "Stopping: the controller first, then the relays off while the web UI stops, all within" \
+    "$(( (STOP_BY_US - STOP_AT_US) / 1000000 ))s of the stop request"
+  # A relay-off still running (on_exit can come in the middle of one) ends first, within its own time.
+  [[ -z "${RELAYS_OFF_PID}" ]] || wait "${RELAYS_OFF_PID}" 2>/dev/null
+  begin_stop controller "$(earlier "$(( $(now_us) + CONTROLLER_STOP_SECONDS * 1000000 ))" "$(( STOP_BY_US - after * 1000000 ))")" \
+    "the controller"
+  finish_stop controller "the controller"
+  begin_stop ui "$(earlier "$(( $(now_us) + UI_STOP_SECONDS * 1000000 ))" "${STOP_BY_US}")" "the web UI"
+  de_energize_relays "the supervisor is stopping" "$(seconds_until "${STOP_BY_US}" "${RELAYS_OFF_SECONDS}")"
+  finish_stop ui "the web UI"
   SUPERVISOR_STATE=stopped
   write_state
   SHUTDOWN_DONE=1
-  log "Stopped"
+  log "Stopped, $(( ($(now_us) - STOP_AT_US) / 1000 )) ms after the stop request"
 }
 
 # shellcheck disable=SC2317 # called by the trap
 on_signal() {
+  SIGNALS=$((SIGNALS + 1))
   STOP_REQUESTED=1
+  note_stop
   [[ -z "${SLEEP_PID}" ]] || kill "${SLEEP_PID}" 2>/dev/null
 }
 
@@ -707,9 +796,10 @@ prepare_run_dir
 check_secrets_are_private
 log "Starting the controller and the web UI (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
   "backoff at most ${BACKOFF_MAX_SECONDS}s; forced restarts ignored within ${FORCE_RESTART_MIN_SECONDS}s of a start;" \
-  "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running;" \
-  "stop waits ${CONTROLLER_STOP_SECONDS}s for the controller, then up to ${RELAYS_OFF_SECONDS}s for the relays off, with" \
-  "${UI_STOP_SECONDS}s for the web UI at the same time)"
+  "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running; a stop ends within" \
+  "$(( CONTROLLER_STOP_SECONDS + (RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS) ))s of" \
+  "its request: up to ${CONTROLLER_STOP_SECONDS}s for the controller, then up to ${RELAYS_OFF_SECONDS}s for the relays off," \
+  "with ${UI_STOP_SECONDS}s for the web UI at the same time)"
 start_controller
 start_ui
 while (( ! STOP_REQUESTED )); do

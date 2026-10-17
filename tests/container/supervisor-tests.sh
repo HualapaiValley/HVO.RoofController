@@ -252,7 +252,7 @@ test_the_defaults_are_the_documented_ones() {
   SUPERVISOR_ENV=("${paths[@]}")
   start_supervisor
   wait_both_running || return
-  grep -qF "Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; stop waits 22s for the controller, then up to 5s for the relays off, with 2s for the web UI at the same time)" \
+  grep -qF "Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; a stop ends within 27s of its request: up to 22s for the controller, then up to 5s for the relays off, with 2s for the web UI at the same time)" \
     "${WORK}/supervisor.log" || fail_test "the defaults are not the documented ones: $(head -n 1 "${WORK}/supervisor.log")"
   expect_equal "state file settings" "$(state '[.crashLimit, .crashWindowSeconds, .forceRestartMinSeconds] | tojson')" \
     "[5,120,10]"
@@ -1088,7 +1088,7 @@ test_an_unexpected_end_before_the_start_turns_the_relays_off() {
   expect_equal "events" "$(controller_and_relay_events | paste -sd ',')" "relays-off run,relays-off done 0"
 }
 
-test_the_kernel_ends_the_web_ui_then_the_controller_before_the_supervisor() {
+test_the_web_ui_and_the_controller_get_a_higher_oom_score_adj_than_the_supervisor() {
   start_supervisor
   wait_both_running || return
   wait_until 5 "the web UI's oom_score_adj" test -s "${FAKE_DIR}/ui.oom" || return
@@ -1106,6 +1106,92 @@ test_the_kernel_ends_the_web_ui_then_the_controller_before_the_supervisor() {
   wait_both_running || return
   wait_until 5 "the web UI's oom_score_adj" test -s "${FAKE_DIR}/ui.oom" || return
   expect_equal "web UI oom_score_adj (its own user)" "$(cat "${FAKE_DIR}/ui.oom")" "$(( base + 500 > 1000 ? 1000 : base + 500 ))"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# A stop asked for while the supervisor is busy (#139 review F1): nothing starts after it, and the whole stop, the work
+# already running included, ends within Docker's grace period (STOP_TIMEOUT_SECONDS, at least 30 s).
+
+# relay_off_runs_at_least <n>: the relay-off helper has begun at least n times.
+relay_off_runs_at_least() {
+  (( $(grep -c '^relays-off run$' "${FAKE_DIR}/events.log") >= $1 ))
+}
+
+# stop_and_expect_it_within <seconds>: SIGTERM to the supervisor; it must exit 0 within that many seconds of the signal,
+# start no controller after it, and turn the relays off once more after it, beginning and ending in that time. Sets
+# STOP_SECONDS.
+stop_and_expect_it_within() {
+  local bound=$1 signalled=${EPOCHREALTIME} late_starts final_run final_done
+  kill -TERM "${SUPERVISOR_PID}"
+  wait_supervisor_exit 60
+  STOP_SECONDS=$(awk -v a="${signalled}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.3f", b - a }')
+  echo "    (the stop took ${STOP_SECONDS}s from SIGTERM)"
+  expect_equal "exit status" "${EXIT_STATUS}" 0
+  awk -v s="${STOP_SECONDS}" -v b="${bound}" 'BEGIN { exit !(s < b) }' \
+    || fail_test "the stop took ${STOP_SECONDS}s from SIGTERM, not within ${bound}s"
+  late_starts=$(awk -v t="${signalled}" '$1 > t && $2 == "controller" && $3 == "start"' "${FAKE_DIR}/times.log" | wc -l)
+  expect_equal "controllers started after SIGTERM" "${late_starts}" 0
+  final_run=$(awk -v t="${signalled}" '$1 > t && $2 == "relays-off" && $3 == "run" { print $1 }' "${FAKE_DIR}/times.log" | tail -n 1)
+  final_done=$(awk -v t="${final_run:-0}" '$1 > t && $2 == "relays-off" && $3 == "done" { print $1 }' "${FAKE_DIR}/times.log" | tail -n 1)
+  if [[ -z "${final_run}" ]]; then
+    fail_test "no relay-off began after SIGTERM"
+  elif ! grep -qF "(the supervisor is stopping)" "${WORK}/supervisor.log"; then
+    fail_test "the stop's own relay-off did not end before the supervisor exited"
+  else
+    awk -v t="${signalled}" -v r="${final_run}" -v d="${final_done}" -v b="${bound}" \
+      'BEGIN { exit !(r - t < b && (d == "" || d - t < b)) }' \
+      || fail_test "the stop's relay-off began at +$(awk -v t="${signalled}" -v r="${final_run}" 'BEGIN { printf "%.3f", r - t }')s and ended at +$(awk -v t="${signalled}" -v d="${final_done}" 'BEGIN { printf "%.3f", d - t }')s, not within ${bound}s"
+  fi
+}
+
+test_a_stop_during_the_first_relay_off_starts_nothing_and_ends_within_the_grace_period() {
+  # The default times; a relay-off that takes 4.5 s and fails, and a controller that would ignore SIGTERM.
+  echo 4.5 >"${FAKE_DIR}/relays-off.delay"
+  echo 1 >"${FAKE_DIR}/relays-off.exit-codes"
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=22 HVO_SUPERVISOR_UI_STOP_SECONDS=2 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=5
+  wait_until 5 "the first relay-off running" relay_off_runs_at_least 1 || return
+  sleep 0.5
+  stop_and_expect_it_within 30
+}
+
+test_a_stop_during_a_forced_restarts_relay_off_starts_nothing_and_ends_within_the_grace_period() {
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=22 HVO_SUPERVISOR_UI_STOP_SECONDS=2 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=5
+  wait_both_running || return
+  # From the forced restart on, each relay-off takes 4.5 s and fails.
+  echo 4.5 >"${FAKE_DIR}/relays-off.delay"
+  printf '%s\n' 0 1 >"${FAKE_DIR}/relays-off.exit-codes"
+  touch "${WORK}/run/control/force-restart-controller"
+  wait_until 5 "the forced restart's relay-off running" relay_off_runs_at_least 2 || return
+  sleep 0.5
+  stop_and_expect_it_within 30
+}
+
+test_the_whole_stop_fits_the_grace_period_with_a_hung_controller_and_a_slow_relay_off() {
+  # The worst case with the default times: the controller ignores SIGTERM for its whole 22 s, then the relay-off takes
+  # 4.5 s of its 5.
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=22 HVO_SUPERVISOR_UI_STOP_SECONDS=2 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=5
+  wait_both_running || return
+  echo 4.5 >"${FAKE_DIR}/relays-off.delay"
+  stop_and_expect_it_within 30
+  awk -v s="${STOP_SECONDS}" 'BEGIN { exit !(s >= 26 && s < 28) }' \
+    || fail_test "the stop took ${STOP_SECONDS}s, expected about 26.5s (22s for the controller, then 4.5s for the relays)"
+  grep -qF "did not stop within 22s; killing it" "${WORK}/supervisor.log" || fail_test "the controller was not given its 22s"
+}
+
+test_a_stop_counts_the_relay_off_already_running_against_its_time() {
+  # Times where a relay-off may take longer than the controller's wait: the stop must end within 2 + 8 = 10 s of the
+  # signal, so the stop's own relay-off gets only what is left after the one already running (about 4 s).
+  echo 7 >"${FAKE_DIR}/relays-off.delay"
+  echo 1 >"${FAKE_DIR}/relays-off.exit-codes"
+  start_supervisor HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=2 HVO_SUPERVISOR_UI_STOP_SECONDS=1 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=8
+  wait_until 5 "the first relay-off running" relay_off_runs_at_least 1 || return
+  sleep 1
+  stop_and_expect_it_within 10.5
+  grep -qE "WARNING: the relays could not be verified off \(the supervisor is stopping\): turning them off did not finish within [34]\.[0-9]+s" \
+    "${WORK}/supervisor.log" || fail_test "the stop's relay-off was not cut to the time left: $(grep 'supervisor is stopping' "${WORK}/supervisor.log")"
 }
 
 test_invalid_settings_are_refused() {
