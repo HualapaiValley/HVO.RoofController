@@ -57,7 +57,8 @@ services:
     ports:
       - "${HVO_DEV_ROOF_PORT:-5200}:8080"
       - "${HVO_DEV_WEB_PORT:-5288}:8088"
-    # docker stop: the supervisor stops the controller (up to 25 s), then the web UI (2 s).
+    # docker stop: the supervisor stops the controller (up to 22 s), then turns the relays off (5 s) while the web UI
+    # stops (2 s).
     stop_grace_period: 30s
     networks:
       - hvo-network

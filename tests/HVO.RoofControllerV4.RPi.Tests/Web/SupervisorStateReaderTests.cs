@@ -74,7 +74,27 @@ public sealed class SupervisorStateReaderTests
         var script = File.ReadAllText(Path.Combine(ControllerForcedRestartTests.RepositoryRoot(), "src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh"));
 
         script.Should().Contain($"FORCED_RESTART_OUTCOME={ForcedRestartRecord.Outcomes.Restarted}")
-            .And.Contain($"FORCED_RESTART_OUTCOME={ForcedRestartRecord.Outcomes.Ignored}");
+            .And.Contain($"FORCED_RESTART_OUTCOME={ForcedRestartRecord.Outcomes.Ignored}")
+            .And.Contain($"FORCED_RESTART_OUTCOME={ForcedRestartRecord.Outcomes.Held}")
+            .And.Contain($"STATE[controller]={SupervisedProcess.States.RelaysUnverified}");
+    }
+
+    [TestMethod]
+    public async Task Read_TheSample_GivesTheRelaysAsTheSupervisorKnowsThem()
+    {
+        using var directory = new HVO.RoofControllerV4.RPi.Tests.Security.TemporaryDirectory();
+        var path = directory.File("supervisor.json");
+        await File.WriteAllTextAsync(path, WebTestSupport.SupervisorStateSample);
+        var reader = new SupervisorStateReader(WebTestSupport.Monitor(new RoofWebOptions { SupervisorStatePath = path }));
+
+        var reading = await reader.ReadAsync();
+
+        reading.Snapshot!.Relays.Should().BeEquivalentTo(new SupervisorRelays
+        {
+            State = SupervisorRelays.States.Controller,
+            At = new DateTimeOffset(2026, 9, 29, 5, 45, 54, TimeSpan.Zero),
+            Reason = "the controller exited (exit code 1)",
+        });
     }
 
     [TestMethod]

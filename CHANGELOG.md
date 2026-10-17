@@ -30,8 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused, with no exception (also before
   Compose starts either process or its deployment check). The install
   record keeps them, and upgrade and rollback give them again. **No CPU or memory limit is given by default yet:** the
-  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up once the
-  supervisor de-energises the relays whenever the controller exits (#138), because a killed or crash-looping controller leaves the drive running (#129).
+  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up (#138
+  item 6).
 - State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
   `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
   the settings files). `upgrade` and `rollback` refuse (exit 3, nothing changed) a release that cannot read the stores
@@ -103,6 +103,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A `--plan` without `sudo` for the machine's roles checked your own record's release instead of the machine's: it
   refused a valid upgrade when your `hvo-roof` was newer, and skipped the check when you had no record. Each role's
   record is now checked (#131).
+- **A controller that dies no longer leaves the drive running.** The SM-I-010 holds its relays as last written, so a
+  controller crashed, killed or ended by the kernel during a move left the direction relay and the STOP permit
+  energized until it started again, and for good when it could not start (a crash loop, a settings file it refuses).
+  The container's supervisor now turns every relay off and verifies the register whenever the controller is not
+  running: as soon as it exits, before each start, again after a failed try while the controller is not running, and
+  when the supervisor stops or ends otherwise. It starts the controller only once a read-back shows every relay off:
+  when they cannot be verified off (the HAT does not answer, or a relay stays on), the controller is held stopped
+  (`relays-unverified`: a warning in the log, the health check failing, the web UI saying why) while the supervisor
+  tries again after 1, 2, 4, 8 and 16 s, then every 30 s. The web UI's preparation (its certificate and Stop key
+  copies, its keys directory, its environment) runs in the background within 10 s (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`), so a hung
+  filesystem can neither delay the relays nor a stop, and a stop abandons it and starts no web UI; a process that does
+  not end at SIGKILL is left after 1 s. It uses the controller's own HAT access (`--relays-off`),
+  never turns a relay on, and raises the web UI's and the controller's `oom_score_adj` above its own, so the kernel
+  favours ending them before it when memory runs out. On the x64
+  emulator rig the relays were off 0.10-0.17 s after a kill during travel (2.0-2.4 s before, when the restarted
+  controller turned them off). A whole container killed (`docker kill`) still leaves them held until it starts again.
+  The supervisor now waits 22 s (was 25 s) for the controller's shutdown, then up to 5 s for the relays, starts nothing
+  once a stop is asked for, and times the whole stop from the signal, so it ends within 27 s, inside Docker's 30 s
+  ([deployment.md](docs/deployment.md#the-relays-when-the-controller-exits), #138). That holds at the container's
+  process limit too, where a fork would wait about 15 s and then end the supervisor: the stop forks nothing until the
+  controller, the web UI and its preparation have ended (the web UI is now stopped at the same time as the controller),
+  and at the limit a relay-off outside a stop first kills the web UI to make room, while starts wait for room
+  ([deployment.md](docs/deployment.md#the-supervisor-at-the-process-limit)). Should something else hold the tasks
+  then (a task stuck in the kernel, `docker exec`), the stop still ends within 27 s, but its relay-off may begin late,
+  or not at all (logged).
 
 ### Security
 
@@ -112,10 +137,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`CHOWN`, `KILL`, `SETGID`, `SETUID`) and `no-new-privileges`, from the deploy script, the Compose profiles and so the
   installer. The supervisor's forced-restart directory is now root's, writable by the web UI's group. What a controller
   killed at its limits, or otherwise, leaves the relays and the drive in is recorded in
-  [deployment.md](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in): the relays stay held
-  until a restarted controller reaches its initialization and turns them off, or the roof reaches its limit. A
-  controller that cannot start again (a crash loop of starts that fail before the initialization) leaves them held, as
-  the supervisor writes nothing to the relays; that is #138 (#129).
+  [deployment.md](docs/deployment.md#the-relays-when-the-controller-exits) (#129): the supervisor now turns them off
+  whenever the controller exits (#138, under Fixed).
 
 ## [4.1.1] - 2026-10-15
 

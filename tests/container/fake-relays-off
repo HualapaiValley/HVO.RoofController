@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# A stand-in for the controller's --relays-off (the supervisor's relay-off helper), for supervisor-tests.sh. It is steered
+# by files in FAKE_DIR:
+#   relays-off.exit-codes  the exit code of each run, one a line (the first run takes the first line, and the last line
+#                          is used for every run after); 0, the relays verified off, when there is no file
+#   relays-off.delay       seconds to take before exiting, default 0
+# and writes:
+#   events.log             "relays-off run" and "relays-off done <code>", one line each, and "relays-off while the
+#                          controller runs" when a controller stand-in was still running at the start (it never may)
+#   times.log              the same lines, each preceded by the time it happened (EPOCHREALTIME)
+#   relays-off.args        its arguments, one per line
+#   relays-off.oom         its oom_score_adj
+#   relays-off.pid         its pid
+set -uo pipefail
+
+dir=${FAKE_DIR:?}
+event() {
+  printf '%s relays-off %s\n' "${EPOCHREALTIME}" "$*" >>"${dir}/times.log"
+  printf 'relays-off %s\n' "$*" >>"${dir}/events.log"
+}
+
+runs=$(grep -c '^relays-off run$' "${dir}/events.log" 2>/dev/null)
+runs=${runs:-0}
+printf '%s\n' "$$" >"${dir}/relays-off.pid"
+event run
+printf '%s\n' "$@" >"${dir}/relays-off.args"
+cat /proc/self/oom_score_adj >"${dir}/relays-off.oom" 2>/dev/null
+controller=$(cat "${dir}/controller.pid" 2>/dev/null)
+if [[ -n "${controller}" ]] && kill -0 "${controller}" 2>/dev/null \
+  && [[ "$(tr '\0' ' ' <"/proc/${controller}/cmdline" 2>/dev/null)" == *"/bin/controller"* ]]; then
+  event "while the controller runs"
+fi
+
+code=0
+if [[ -f "${dir}/relays-off.exit-codes" ]]; then
+  mapfile -t codes <"${dir}/relays-off.exit-codes"
+  if (( ${#codes[@]} > 0 )); then
+    code=${codes[$(( runs < ${#codes[@]} ? runs : ${#codes[@]} - 1 ))]}
+  fi
+fi
+sleep "$(cat "${dir}/relays-off.delay" 2>/dev/null || echo 0)"
+event "done ${code}"
+exit "${code}"

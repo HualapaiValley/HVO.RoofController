@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# A stand-in for env, for the supervisor tests of the web UI's environment (#139 review F5). The first `env -0` that does
+# not come from a controller or web UI stand-in (so the supervisor's own, or its preparation's) first does what FAKE_DIR
+# says:
+#   env.signal  sends SIGTERM to the supervisor (the leader of the test's session), then gives the environment at once
+#   env.delay   takes that many seconds first, as a stalled producer
+# It writes its pid to env.pid, and "env signal", "env stall" and "env done" to events.log (and, with times, to
+# times.log). Every call then runs the real env, found on PATH without this stand-in's directory.
+set -uo pipefail
+
+dir=${FAKE_DIR:-${RoofWeb__FakeDir:?}}
+PATH=${PATH//"$(dirname "$0"):"/}
+event() {
+  printf '%s env %s\n' "${EPOCHREALTIME}" "$*" >>"${dir}/times.log"
+  printf 'env %s\n' "$*" >>"${dir}/events.log"
+}
+# The leader of this process's session: the supervisor, which supervisor-tests.sh starts with setsid.
+session_leader() {
+  local stat
+  read -r stat <"/proc/$$/stat"
+  stat=${stat##*) }
+  read -r _ _ _ stat _ <<<"${stat}"
+  printf '%s' "${stat}"
+}
+
+parent=$(tr '\0' ' ' 2>/dev/null <"/proc/${PPID}/cmdline")
+if [[ $# -eq 1 && "$1" == -0 && ! -e "${dir}/env.used" && "${parent}" != */bin/controller* && "${parent}" != */bin/ui* ]]
+then
+  : >"${dir}/env.used"
+  printf '%s\n' "$$" >"${dir}/env.pid"
+  if [[ -f "${dir}/env.signal" ]]; then
+    leader=$(session_leader)
+    if [[ "$(tr '\0' ' ' 2>/dev/null <"/proc/${leader}/cmdline")" == *roof-supervisor* ]]; then
+      event signal
+      kill -TERM "${leader}"
+    fi
+  fi
+  if [[ -f "${dir}/env.delay" ]]; then
+    event stall
+    sleep "$(<"${dir}/env.delay")"
+  fi
+  event "done"
+fi
+exec env "$@"

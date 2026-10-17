@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.Extensions.Configuration;
@@ -27,9 +28,12 @@ internal static class RoofSettingsConfiguration
     /// override the shipped defaults, and the user secrets, environment, command line and secrets directory still
     /// override them. The paths are read from the configuration so far (usually the environment); a relative path is
     /// taken from <paramref name="contentRootPath"/>. Throws <see cref="RoofSettingsFileException"/> when a file cannot
-    /// be used.
+    /// be used, unless <paramref name="leftOut"/> is given (the relay-off helper only): such a file is then left out
+    /// alone and why is added there. These files hold only catalogue settings, and the HAT's are not among them, so
+    /// leaving one out never changes which HAT the configuration selects.
     /// </summary>
-    public static void AddRoofSettingsFiles(this IConfigurationBuilder configuration, string environmentName, string contentRootPath)
+    public static void AddRoofSettingsFiles(
+        this IConfigurationBuilder configuration, string environmentName, string contentRootPath, ICollection<string>? leftOut = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var root = configuration as IConfiguration
@@ -39,7 +43,14 @@ internal static class RoofSettingsConfiguration
         if (settingsPath is not null && secretsPath is not null
             && string.Equals(settingsPath, secretsPath, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         {
-            throw new RoofSettingsFileException($"{FilePathKey} and {SecretsFilePathKey} must name different files.");
+            var problem = $"{FilePathKey} and {SecretsFilePathKey} must name different files.";
+            if (leftOut is null)
+            {
+                throw new RoofSettingsFileException(problem);
+            }
+
+            leftOut.Add(problem);
+            return;
         }
 
         var sources = configuration.Sources;
@@ -53,8 +64,8 @@ internal static class RoofSettingsConfiguration
         }
 
         // Each insert rebuilds the providers, so the secrets file goes in first and the settings file below it.
-        sources.Insert(index + 1, new RoofSettingsFileSource(RoofSettingsFileKind.Secrets, secretsPath));
-        sources.Insert(index + 1, new RoofSettingsFileSource(RoofSettingsFileKind.Settings, settingsPath));
+        sources.Insert(index + 1, new RoofSettingsFileSource(RoofSettingsFileKind.Secrets, secretsPath, leftOut));
+        sources.Insert(index + 1, new RoofSettingsFileSource(RoofSettingsFileKind.Settings, settingsPath, leftOut));
     }
 
     /// <summary>Warns at start when the settings file sets settings this version no longer uses.</summary>

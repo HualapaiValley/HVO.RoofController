@@ -100,6 +100,14 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 - Shutdown: the host requests a verified stop. An unverified one is retried (all-off every 500 ms until verified,
   disposal or 15 s); the host's wait is bounded even if HAT I/O blocks, and disposal stops waiting for a lock held by
   blocked HAT I/O after 2 s, deferring its all-off stop until that call returns.
+- The container's supervisor turns every relay off and verifies the register whenever the controller is not running
+  (after each exit, before each start, after a failed try while it is not running, and when it stops), with the
+  controller's own `--relays-off`; it never turns a relay on and never runs while a controller does. The controller
+  starts only once a read-back has shown every relay off: until then it is held stopped (`relays-unverified`) and the
+  supervisor keeps trying (the owner's decision, #138). Nothing starts after a stop request, and the whole stop ends
+  within 27 s of the signal, also at the container's process limit: the supervisor forks only to start a process, and
+  only with room for it, and the stop forks nothing until the controller and the web UI have ended. A whole container
+  killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see
@@ -214,11 +222,11 @@ observatory's Pi.
   step.
 - The controller's container runs read-only, with only the supervisor's capabilities (`CHOWN`, `KILL`, `SETGID`,
   `SETUID`), `no-new-privileges` and a process limit (512 by default); never `--privileged`. A CPU or memory limit is
-  given only when set, at least 1 vCPU and 1 GiB: none by default until the supervisor de-energises the relays whenever
-  the controller exits (#138), and then the default becomes 1 vCPU and 2 GiB. A capability or writable place is added
-  only when a test on the emulator image shows it is needed. A killed controller leaves the relays held until a restart
-  reaches its initialization, and a crash loop leaves them held: keep the
-  [fail-safe record](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in) true.
+  given only when set, at least 1 vCPU and 1 GiB: none by default until a follow-up (#138 item 6) makes the default
+  1 vCPU and 2 GiB. A capability or writable place is added only when a test on the emulator image shows it is needed.
+  Keep the [fail-safe record](docs/deployment.md#the-relays-when-the-controller-exits) true: the supervisor turns the
+  relays off whenever the controller exits and holds it stopped until they are verified off; only a whole-container
+  kill (or the Docker daemon dying) leaves them held.
 - With HTTPS only port 8443 is published; plain HTTP on the LAN is an explicit opt-out (`ALLOW_INSECURE_HTTP=true`,
   compose profile `pi-lan-http`). HAT emulator mode is set only through `HAT_EMULATOR_ENDPOINT` with
   `ALLOW_EMULATED_HAT=true` ([docs/emulator.md](docs/emulator.md)).

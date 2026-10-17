@@ -83,7 +83,7 @@
 
 <section class="web-card web-forced-restart" aria-labelledby="forced-restart-title" data-testid="forced-restart">
     <h2 id="forced-restart-title">Forced restart</h2>
-    <p>For a controller that does not answer, so cannot restart itself. The supervisor kills it (as <code>docker kill</code> does) and starts it again.</p>
+    <p>For a controller that does not answer, so cannot restart itself. The supervisor kills it (as <code>docker kill</code> does), turns every relay off and starts it again once a read-back shows them off; until then the controller is held stopped.</p>
     <p class="web-status web-status--warning" data-testid="forced-restart-warning">@KillWarning</p>
     <p class="web-muted" data-testid="forced-restart-last">@DescribeLastForcedRestart()</p>
     <PageMessage Message="_forcedResult" TestId="forced-restart-result" />
@@ -115,7 +115,7 @@
     public const string ConfirmWord = "restart";
 
     /// <summary>What a kill means for the roof (commissioning.md C11), shown before a forced restart is asked for.</summary>
-    public const string KillWarning = "A kill does not stop the roof. The relays stay as they were until the new controller starts, which turns them all off first. If the roof is moving, use the stop control at the roof: the Stop here goes through the controller, which is not answering.";
+    public const string KillWarning = "A kill does not stop the roof by itself. Right after it the supervisor turns every relay off and verifies them, and it starts the controller again only once they are verified off. If the roof is moving, use the stop control at the roof: the Stop here goes through the controller, which is not answering.";
 
     private IReadOnlyList<(string Label, string Value)>? _information;
     private DateTimeOffset _readAt;
@@ -271,6 +271,11 @@
         return snapshot.LastForcedRestart switch
         {
             null => "No forced restart since the container started.",
+            // Held then; the controller's own state says whether it still is.
+            { Outcome: ForcedRestartRecord.Outcomes.Held } held when snapshot.Controller.State == SupervisedProcess.States.RelaysUnverified =>
+                $"The last forced restart, at {RoofStatusText.Time(held.At)}, did not start the controller again: the relays could not be verified off, so it is held stopped until they are.",
+            { Outcome: ForcedRestartRecord.Outcomes.Held } held =>
+                $"The last forced restart, at {RoofStatusText.Time(held.At)}, did not start the controller at once: the relays could not be verified off then, so it was held stopped. It is no longer held.",
             { Outcome: ForcedRestartRecord.Outcomes.Ignored } ignored => string.Create(
                 CultureInfo.InvariantCulture,
                 $"The last forced restart, at {RoofStatusText.Time(ignored.At)}, was ignored: the controller had started less than {snapshot.ForceRestartMinSeconds} s before."),

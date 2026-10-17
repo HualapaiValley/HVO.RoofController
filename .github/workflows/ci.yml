@@ -614,7 +614,9 @@ jobs:
   # (tests/container) and the compose profiles; with the build and release scripts' tests, and the docs' links.
   deploy-script:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # About 10 minutes: the deploy script's tests (5) and the supervisor's (3), whose stop tests run with its real
+    # 22/5/2 s times.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -768,8 +770,8 @@ jobs:
           # Every controller and deployment check has the deploy script's privileges and limits (x-hardening;
           # docs/deployment.md, "The container's privileges and limits"): a read-only root filesystem and its tmpfs
           # mounts, only the supervisor's capabilities, no-new-privileges, the process limit, no CPU or memory limit
-          # by default (until #138) and the ones given with no swap, and for a controller the volume for the web UI's
-          # keys.
+          # by default (until the follow-up, #138 item 6) and the ones given with no swap, and for a controller the
+          # volume for the web UI's keys.
           for limits in "default" "floor" "future" "given"; do
             for profile in pi pi-lan-http emulator; do
               if [[ "${limits}" == "given" ]]; then
@@ -777,7 +779,7 @@ jobs:
               elif [[ "${limits}" == "floor" ]]; then
                 config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=1g docker compose --profile "${profile}" config --format json)
               elif [[ "${limits}" == "future" ]]; then
-                # Still explicit until #138: this is the future 1 vCPU / 2 GiB default, not today's default.
+                # Still explicit until the follow-up (#138 item 6): the future 1 vCPU / 2 GiB default, not today's.
                 config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=2g docker compose --profile "${profile}" config --format json)
               else
                 config=$(docker compose --profile "${profile}" config --format json)
@@ -819,22 +821,24 @@ jobs:
             }
           done
           # The supervisor's default stop waits, from the script: the controller's must exceed the controller's own
-          # ShutdownTimeout (Program.cs), and both, with a second for the supervisor's tick and a 2 s margin, must fit in
-          # the containers' stop grace period and the deploy script's smallest stop timeout, or Docker kills the
-          # container before the web UI has stopped.
+          # ShutdownTimeout (Program.cs), and it, with the longer of the relay-off's and the web UI's (which run at the
+          # same time, after it), a second for the supervisor's tick and a 2 s margin, must fit in the containers' stop
+          # grace period and the deploy script's smallest stop timeout, or Docker kills the container before the
+          # supervisor has turned the relays off and stopped the web UI.
           controller_stop=$(sed -n 's/^CONTROLLER_STOP_SECONDS=\${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
           ui_stop=$(sed -n 's/^UI_STOP_SECONDS=\${HVO_SUPERVISOR_UI_STOP_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
+          relays_off=$(sed -n 's/^RELAYS_OFF_SECONDS=\${HVO_SUPERVISOR_RELAYS_OFF_SECONDS:-\([0-9]*\)}$/\1/p' container/roof-supervisor.sh)
           shutdown=$(sed -n 's/.*options\.ShutdownTimeout = TimeSpan\.FromSeconds(\([0-9]*\)).*/\1/p' Program.cs)
           deploy_stop=$(sed -n 's/^ *require_number STOP_TIMEOUT_SECONDS \([0-9]*\) .*/\1/p' deploy-roofcontroller-rpi.sh)
-          if [[ -z "${controller_stop}" || -z "${ui_stop}" || -z "${shutdown}" || -z "${deploy_stop}" ]]; then
-            echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::cannot read the stop times (controller ${controller_stop:-?} s, web UI ${ui_stop:-?} s, ShutdownTimeout ${shutdown:-?} s, deploy minimum ${deploy_stop:-?} s)"
+          if [[ -z "${controller_stop}" || -z "${ui_stop}" || -z "${relays_off}" || -z "${shutdown}" || -z "${deploy_stop}" ]]; then
+            echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::cannot read the stop times (controller ${controller_stop:-?} s, web UI ${ui_stop:-?} s, relays off ${relays_off:-?} s, ShutdownTimeout ${shutdown:-?} s, deploy minimum ${deploy_stop:-?} s)"
             exit 1
           fi
           if (( controller_stop <= shutdown )); then
             echo "::error file=src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh::the supervisor waits ${controller_stop} s for the controller, not more than its ShutdownTimeout (${shutdown} s)"
             exit 1
           fi
-          grace=$(( controller_stop + ui_stop + 1 + 2 ))
+          grace=$(( controller_stop + (relays_off > ui_stop ? relays_off : ui_stop) + 1 + 2 ))
           if (( deploy_stop < grace )); then
             echo "::error file=src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh::STOP_TIMEOUT_SECONDS may be ${deploy_stop} s, less than the supervisor's waits need (${grace} s)"
             exit 1

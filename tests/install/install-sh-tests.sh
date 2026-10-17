@@ -1136,8 +1136,8 @@ test_docker_20_10_is_new_enough() {
 }
 
 # The controller's container runs with a process limit, and a CPU or memory limit only when one is given (none by
-# default, until #138); Docker drops one it cannot enforce with only a warning (docs/deployment.md, "The container's
-# privileges and limits").
+# default, until the follow-up, #138 item 6); Docker drops one it cannot enforce with only a warning
+# (docs/deployment.md, "The container's privileges and limits").
 test_the_controllers_limits_are_checked_with_docker() {
   install_sh -- --roles controller,kiosk
 
