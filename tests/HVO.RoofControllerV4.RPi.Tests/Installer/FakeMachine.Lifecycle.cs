@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -51,6 +52,108 @@ internal sealed partial class FakeMachine
     /// of the installer's checks.
     /// </summary>
     public Action? BeforeStat { get; set; }
+
+    /// <summary>Each folder the installer synced to disk (InstallerMachine.SyncDirectory), in order, as a path on the machine.</summary>
+    public List<string> DirectorySyncs { get; } = [];
+
+    /// <summary>Why syncing a folder fails (an IOException's message); null for a sync that succeeds.</summary>
+    public string? DirectorySyncFailure { get; set; }
+
+    /// <summary>What happens as a folder is synced, before the sync: a test looks at the machine then.</summary>
+    public Action<string>? DuringDirectorySync { get; set; }
+
+    /// <summary>The errno F_FULLFSYNC fails with on a Mac (fcntl(2)) as the installer syncs a folder; null when it succeeds.</summary>
+    public int? FullFsyncError { get; set; }
+
+    /// <summary>Each libc call the installer made to sync a folder, in order: open, F_FULLFSYNC, fsync and close.</summary>
+    public List<string> SyncCalls { get; } = [];
+
+    // Each file whose durability is tracked (TrackDurability), by path on the machine: its bytes as its folder's last sync
+    // left them, or null when it was not there then.
+    private readonly Dictionary<string, byte[]?> _durable = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// From now on, the file at <paramref name="path"/> survives a power loss (<see cref="PowerLoss"/>) only as its folder's
+    /// last sync left it, as a rename into a folder does: as it is now, until the installer syncs that folder.
+    /// </summary>
+    public FakeMachine TrackDurability(string path)
+    {
+        _durable[path] = Exists(path) ? File.ReadAllBytes(OnDisk(path)) : null;
+        return this;
+    }
+
+    /// <summary>The tracked file's text as it would be after a power loss now; null when it would not be there.</summary>
+    public string? DurableText(string path) => _durable[path] is { } bytes ? Encoding.UTF8.GetString(bytes) : null;
+
+    /// <summary>
+    /// The machine loses power and starts again: each tracked file is as its folder's last sync left it, whatever was
+    /// renamed over it since. Docker's containers and every other file stay as they are, durable already.
+    /// </summary>
+    public void PowerLoss()
+    {
+        foreach (var (path, bytes) in _durable)
+        {
+            if (bytes is null)
+            {
+                File.Delete(OnDisk(path));
+            }
+            else
+            {
+                File.WriteAllBytes(OnDisk(path), bytes);
+            }
+        }
+    }
+
+    // InstallerMachine.SyncFolderOnDisk: kept, then failed as DirectorySyncFailure says, or the installer's own sync run
+    // over this machine's libc (SyncCalls).
+    private void SyncFolder(string onDisk)
+    {
+        var folder = onDisk[Root.TrimEnd('/').Length..];
+        DirectorySyncs.Add(folder);
+        DuringDirectorySync?.Invoke(folder);
+        Directory.Exists(onDisk).Should().BeTrue("the installer syncs a folder that is there");
+        if (DirectorySyncFailure is { } failure)
+        {
+            throw new IOException($"Could not sync the folder {onDisk} to disk (fsync: {failure}).");
+        }
+
+        InstallerMachine.SyncFolder(onDisk, Os == InstallerOs.MacOS, LibcFor(folder));
+    }
+
+    // libc's calls for syncing the folder, each kept in SyncCalls. The one that makes its tracked files durable as they
+    // are now is fsync on Linux, and F_FULLFSYNC on a Mac, which fails as FullFsyncError says: a Mac's fsync leaves them
+    // in the drive's cache, which a power loss loses. Linux has no F_FULLFSYNC (EINVAL).
+    private FolderSyncCalls LibcFor(string folder)
+    {
+        const int descriptor = 3;
+        var mac = Os == InstallerOs.MacOS;
+
+        int Call(string name, int? error, bool durable)
+        {
+            SyncCalls.Add(name);
+            if (error is { } errno)
+            {
+                Marshal.SetLastPInvokeError(errno);
+                return -1;
+            }
+
+            if (durable)
+            {
+                foreach (var path in _durable.Keys.Where(path => Path.GetDirectoryName(path) == folder).ToArray())
+                {
+                    _durable[path] = Exists(path) ? File.ReadAllBytes(OnDisk(path)) : null;
+                }
+            }
+
+            return 0;
+        }
+
+        return new(
+            (_, _) => Call("open", null, durable: false) == 0 ? descriptor : -1,
+            _ => Call("F_FULLFSYNC", mac ? FullFsyncError : 22, durable: mac),
+            _ => Call("fsync", null, durable: !mac),
+            _ => Call("close", null, durable: false));
+    }
 
     /// <summary>The same machine, with <paramref name="userName"/> running the installer without sudo.</summary>
     public FakeMachine AsPerson(string userName = "pi")
