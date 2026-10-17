@@ -11,8 +11,14 @@ fi
 
 REPO_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 GLOBAL_JSON="${REPO_DIR}/src/global.json"
-DOTNET_DIR="${HOME}/.dotnet"
-SDK_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${GLOBAL_JSON}" | head -n 1)"
+SDK_MINIMUM="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${GLOBAL_JSON}" | head -n 1)"
+
+# Product builds use this current patch; global.json keeps the dev-container minimum until
+# a fully versioned upstream dev-container image ships it.
+SDK_VERSION="$(sed -n 's#^FROM .*mcr\.microsoft\.com/dotnet/sdk:\([^@ ]*\)@sha256:.*#\1#p' \
+    "${REPO_DIR}/src/HVO.RoofControllerV4.RPi/Dockerfile" | head -n 1)"
+# An older exact minimum in a shared root would win global.json SDK selection.
+DOTNET_DIR="${HOME}/.dotnet/roof-sdk-${SDK_VERSION}"
 
 log() { echo "[session-start] $*" >&2; }
 
@@ -38,10 +44,10 @@ if [ "${#missing[@]}" -gt 0 ]; then
 	${SUDO} fc-cache -f >/dev/null 2>&1 || true
 fi
 
-# --- .NET SDK pinned by src/global.json ---------------------------------------------------
+# --- Current .NET SDK, satisfying src/global.json ---------------------------------------------------
 # rollForward "patch": any SDK in the pinned feature band at or above the pinned patch.
 sdk_satisfies_pin() {
-	local dotnet="$1" band="${SDK_VERSION%??}" min="${SDK_VERSION##*.}" v
+	local dotnet="$1" band="${SDK_MINIMUM%??}" min="${SDK_VERSION##*.}" v
 	[ -x "${dotnet}" ] || return 1
 	while read -r v _; do
 		case "${v}" in
@@ -61,7 +67,7 @@ install_with_dotnet_install() {
 		rm -f "${script}"
 		return 1
 	fi
-	bash "${script}" --jsonfile "${GLOBAL_JSON}" --install-dir "${DOTNET_DIR}" --no-path >/dev/null 2>&1
+	bash "${script}" --version "${SDK_VERSION}" --install-dir "${DOTNET_DIR}" --no-path >/dev/null 2>&1
 	local rc=$?
 	rm -f "${script}"
 	return ${rc}
@@ -101,14 +107,14 @@ else
 fi
 
 export DOTNET_ROOT="${DOTNET_DIR}"
-export PATH="${DOTNET_DIR}:${DOTNET_DIR}/tools:${PATH}"
+export PATH="${DOTNET_DIR}:${HOME}/.dotnet/tools:${PATH}"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 
 # Persist for the session's shell (matches the dev container's containerEnv and CI's env).
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
 	cat >>"${CLAUDE_ENV_FILE}" <<EOF
 export DOTNET_ROOT="${DOTNET_DIR}"
-export PATH="${DOTNET_DIR}:${DOTNET_DIR}/tools:\${PATH}"
+export PATH="${DOTNET_DIR}:${HOME}/.dotnet/tools:\${PATH}"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_NOLOGO=1
 export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1

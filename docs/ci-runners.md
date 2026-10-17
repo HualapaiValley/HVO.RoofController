@@ -25,22 +25,29 @@ All workflows:
 
 The controller's and the HAT emulator's Dockerfiles pin each base image
 (`mcr.microsoft.com/dotnet/sdk` and `mcr.microsoft.com/dotnet/aspnet`) by tag and by the digest
-of its multi-platform index, as in `sdk:10.0.401@sha256:...`, so a rebuild of the same commit
+of its multi-platform index, as in `sdk:<tag>@sha256:...`, so a rebuild of the same commit
 uses the same bases: a tag can be republished, a digest cannot. Section 2 of the
 [HVO install and release contract](https://github.com/HualapaiValley/HVO.SkyMonitor/blob/development/v1/docs/hvo-install-contract.md)
-asks for this.
+asks for this. The dev container follows the same tag and index-digest rule, using the fully
+versioned `2.3.2-10.0-noble` tag (image version, .NET line and Ubuntu variant). The disposable
+installer guest also pins its Ubuntu base by tag and multi-platform index digest.
 
 [`build/check-base-images.sh`](../build/check-base-images.sh), which `pi-image.yml` and
-`emulator-image.yml` run with `--registry`, checks that:
+`emulator-image.yml` and CI's "Check dev container SDK" step run with `--registry`, checks all
+four Dockerfiles and requires that:
 
 - every external `FROM` has a literal tag and a digest, exempting only `scratch` and
   references to earlier named stages in the same file (matched without regard to case);
 - bases are extracted from logical instructions, joining continuations with the initial
   `# escape=` directive (backslash or backtick), ignoring full comment and empty continuation
   lines, and keeping heredoc bodies out of the instruction stream;
-- the SDK's tag is the SDK `src/global.json` pins;
-- both Dockerfiles use the same SDK image and the same runtime image, tag and digest;
-- with `--registry`, every distinct external reference across both files is inspected once,
+- the product SDK's tag satisfies `src/global.json`: the exact version, or a newer patch in
+  the same feature band when `rollForward` is `patch`;
+- both product Dockerfiles use the same SDK image and the same runtime image, tag and digest;
+- every `dotnet-version` input in `.github/workflows/*.yml` equals the product SDK tag; inputs
+  use literal, single-line version scalars (unsupported input syntax fails closed); CI also
+  requires `dotnet --version` to equal that tag before building;
+- with `--registry`, every distinct external reference across all four files is inspected once,
   including bases beyond the required SDK and runtime; the response must be one schema-version-2
   Docker manifest list or OCI image index (checked by media type), holding `linux/amd64` and
   `linux/arm64` entries.
@@ -69,8 +76,14 @@ It checks base references, rather than validating every instruction's build-time
 
 Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml)) updates a tag and its digest
 together, in both Dockerfiles in one pull request, and proposes a new digest alone when Microsoft
-republishes a tag (for base OS fixes). A pull request that moves the SDK's tag must move
-`src/global.json` with it. To pin by hand, use the `Digest` that
+republishes a tag (for base OS fixes). A pull request that moves the SDK's tag must update
+`src/global.json` with it when the new tag leaves the allowed feature band.
+The dev-container image may lag the product SDK, so `src/global.json` can retain a compatible
+minimum with `rollForward: patch`. Raise that minimum only when the dev container includes it.
+Every product SDK bump must also move all workflow SDK inputs; the gate rejects any mismatch,
+including a later product-only patch. CI installs the product SDK in its own runner-temporary
+directory so an older exact minimum cannot take precedence. The cloud session hook also selects
+the product Dockerfile's SDK tag. To pin by hand, use the `Digest` that
 `docker buildx imagetools inspect mcr.microsoft.com/dotnet/aspnet:<tag>` prints: the index's,
 not a platform's.
 
