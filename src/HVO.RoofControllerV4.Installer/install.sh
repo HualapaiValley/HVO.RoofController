@@ -744,8 +744,8 @@ EOF
     if [ "${memory}" = true ] && [ "${swap}" != true ]; then
       note "Docker cannot keep the controller's container from swapping (docker info: SwapLimit ${swap:-?}): a memory limit, if given, still holds"
     fi
-    if [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus < 2)); then
-      note "This machine has ${cpus} CPU: a CPU limit for the controller is at least 2, so the installer refuses one here (--cpus)"
+    if [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus < 1)); then
+      note "This machine has ${cpus} CPU: a CPU limit for the controller is at least 1, so the installer refuses one here (--cpus)"
     fi
   }
 

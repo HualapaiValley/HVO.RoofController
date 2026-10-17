@@ -238,8 +238,8 @@ public static class RoleGuards
         {
             yield return string.Create(CultureInfo.InvariantCulture, $"The controller's limit of {resources.CpusText} CPUs is more than the {cpus} Docker reports here: ")
                 + (cpus >= ContainerResources.MinimumCpus
-                    ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from 2 to {cpus}, or leave it out for no CPU limit.")
-                    : "leave out controller.resources.cpus (--cpus) for no CPU limit (one is at least 2).");
+                    ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from {ContainerResources.MinimumCpus} to {cpus}, or leave it out for no CPU limit.")
+                    : "leave out controller.resources.cpus (--cpus) for no CPU limit (one is at least 1).");
         }
     }
 

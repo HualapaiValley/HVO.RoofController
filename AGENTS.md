@@ -213,8 +213,8 @@ observatory's Pi.
   the compose file (`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`) in step.
 - The controller's container runs read-only, with only the supervisor's capabilities (`CHOWN`, `KILL`, `SETGID`,
   `SETUID`), `no-new-privileges` and a process limit (512 by default); never `--privileged`. A CPU or memory limit is
-  given only when set, at least 2 CPUs and 4 GiB: none by default until the supervisor de-energises the relays whenever
-  the controller exits (#138), and then the default becomes 2 CPUs and 4 GiB. A capability or writable place is added
+  given only when set, at least 1 vCPU and 1 GiB: none by default until the supervisor de-energises the relays whenever
+  the controller exits (#138), and then the default becomes 1 vCPU and 2 GiB. A capability or writable place is added
   only when a test on the emulator image shows it is needed. A killed controller leaves the relays held until a restart
   reaches its initialization, and a crash loop leaves them held: keep the
   [fail-safe record](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in) true.

@@ -2337,7 +2337,7 @@ test_malformed_limits_are_refused_before_any_docker_call() {
       "CONTAINER_CPUS=two|CONTAINER_CPUS must be a number of CPUs such as 2 or 2.5 (at most two decimals), or empty for no CPU limit, got 'two'" \
       "CONTAINER_CPUS=2.555|got '2.555'" "CONTAINER_CPUS=-2|got '-2'" "CONTAINER_CPUS=2.|got '2.'" \
       "CONTAINER_CPUS=1e3|got '1e3'" "CONTAINER_CPUS=2000|got '2000'" \
-      "CONTAINER_MEMORY=4|CONTAINER_MEMORY must be a whole number of MiB or GiB such as 4096m or 4g, or empty for no memory limit, got '4'" \
+      "CONTAINER_MEMORY=4|CONTAINER_MEMORY must be a whole number of MiB or GiB such as 1024m or 1g, or empty for no memory limit, got '4'" \
       "CONTAINER_MEMORY=4gb|got '4gb'" "CONTAINER_MEMORY=4.5g|got '4.5g'" "CONTAINER_MEMORY=4t|got '4t'" \
       "CONTAINER_MEMORY=-4g|got '-4g'" "CONTAINER_MEMORY=4294967296|got '4294967296'" \
       "CONTAINER_PIDS_LIMIT=100|CONTAINER_PIDS_LIMIT must be a whole number from 256 to 32768, got '100'" \
@@ -2353,18 +2353,32 @@ test_malformed_limits_are_refused_before_any_docker_call() {
   assert_container roof-controller old true unless-stopped
 }
 
+test_roofcontroller_floor_is_accepted() {
+  local memory
+  for memory in 1g 1024m; do
+    setup
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=1 "CONTAINER_MEMORY=${memory}" FAKE_INFO_NCPU=1
+    assert_status 0
+    assert_confined "$(preflight_args)" 1 "${memory}" 512
+    assert_confined "$(controller_run_args)" 1 "${memory}" 512
+    teardown
+  done
+  setup
+}
+
 test_limits_below_the_minimum_are_refused_with_no_exception() {
   seed_container roof-controller current true 8443:8443
   seed_container roof-controller-previous old false 8443:8443
   local case setting expected mode
   # ALLOW_LIMITS_BELOW_MINIMUM (an acknowledgment an earlier draft had) changes nothing.
   for case in \
-      "CONTAINER_CPUS=1.99|CONTAINER_CPUS=1.99 is fewer than 2 CPUs, the minimum (the HVO install contract's" \
-      "CONTAINER_CPUS=1.5|CONTAINER_CPUS=1.5 is fewer than 2 CPUs" "CONTAINER_CPUS=1|CONTAINER_CPUS=1 is fewer than 2 CPUs" \
-      "CONTAINER_CPUS=0.5|CONTAINER_CPUS=0.5 is fewer than 2 CPUs" "CONTAINER_CPUS=0|CONTAINER_CPUS=0 is fewer than 2 CPUs" \
-      "CONTAINER_MEMORY=4095m|CONTAINER_MEMORY=4095m is less than 4g, the minimum (the HVO install contract's" \
-      "CONTAINER_MEMORY=3g|CONTAINER_MEMORY=3g is less than 4g" "CONTAINER_MEMORY=1g|CONTAINER_MEMORY=1g is less than 4g" \
-      "CONTAINER_MEMORY=512m|CONTAINER_MEMORY=512m is less than 4g" "CONTAINER_MEMORY=0g|CONTAINER_MEMORY=0g is less than 4g"; do
+      "CONTAINER_CPUS=0.99|CONTAINER_CPUS=0.99 is less than 1 vCPU, the minimum (RoofController's" \
+      "CONTAINER_CPUS=0.9|CONTAINER_CPUS=0.9 is less than 1 vCPU" "CONTAINER_CPUS=0.01|CONTAINER_CPUS=0.01 is less than 1 vCPU" \
+      "CONTAINER_CPUS=0.5|CONTAINER_CPUS=0.5 is less than 1 vCPU" "CONTAINER_CPUS=0|CONTAINER_CPUS=0 is less than 1 vCPU" \
+      "CONTAINER_MEMORY=1023m|CONTAINER_MEMORY=1023m is less than 1g, the minimum (RoofController's" \
+      "CONTAINER_MEMORY=1022m|CONTAINER_MEMORY=1022m is less than 1g" "CONTAINER_MEMORY=1m|CONTAINER_MEMORY=1m is less than 1g" \
+      "CONTAINER_MEMORY=512m|CONTAINER_MEMORY=512m is less than 1g" "CONTAINER_MEMORY=0g|CONTAINER_MEMORY=0g is less than 1g"; do
     setting=${case%%|*}
     expected=${case#*|}
     for mode in deploy rollback; do
@@ -2421,11 +2435,11 @@ test_a_cpu_limit_beyond_the_hosts_cpus_changes_nothing() {
   seed_container roof-controller old true 8443:8443
   deploy "${HTTPS_ENV[@]}" FAKE_INFO_NCPU=1 CONTAINER_CPUS=2
   assert_status 1
-  assert_output_contains "CONTAINER_CPUS=2 is more than the 1 CPUs Docker reports on pi.test: leave CONTAINER_CPUS empty for no CPU limit (one is at least 2). Nothing was changed."
+  assert_output_contains "CONTAINER_CPUS=2 is more than the 1 CPUs Docker reports on pi.test: give from 1 to 1, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
 
   deploy "${HTTPS_ENV[@]}" FAKE_INFO_NCPU=2 CONTAINER_CPUS=2.5
   assert_status 1
-  assert_output_contains "CONTAINER_CPUS=2.5 is more than the 2 CPUs Docker reports on pi.test: give from 2 to 2, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
+  assert_output_contains "CONTAINER_CPUS=2.5 is more than the 2 CPUs Docker reports on pi.test: give from 1 to 2, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
   [[ -z "$(docker_calls buildx)$(docker_calls run)$(docker_calls stop)" ]] || fail_test "a CPU limit beyond the host built, ran or stopped something"
   assert_container roof-controller old true unless-stopped
 }

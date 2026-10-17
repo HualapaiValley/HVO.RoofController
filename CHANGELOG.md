@@ -14,10 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Resource limits for the controller's container: at most 512 processes by default, and a CPU and a memory limit (no
   swap) only when given, with `hvo-roof-install`'s `controller.resources` answers or `--cpus`, `--memory` and
   `--pids-limit`, or the deploy script's `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`. A CPU limit
-  below 2 or a memory limit below 4 GiB, the HVO install contract's minimum, is refused, with no exception. The install
+  below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused, with no exception (also before
+  Compose starts either process or its deployment check). The install
   record keeps them, and upgrade and rollback give them again. **No CPU or memory limit is given by default yet:** the
-  contract's default of 2 CPUs and 4 GiB is turned on by a follow-up once the supervisor de-energises the relays
-  whenever the controller exits (#138), because a killed or crash-looping controller leaves the drive running (#129).
+  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up once the
+  supervisor de-energises the relays whenever the controller exits (#138), because a killed or crash-looping controller leaves the drive running (#129).
 
 ### Changed
 

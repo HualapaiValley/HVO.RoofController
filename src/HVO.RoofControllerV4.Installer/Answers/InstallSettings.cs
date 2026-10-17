@@ -193,18 +193,19 @@ public sealed record ControllerSettings
 /// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"). The process limit is always given.
 /// The CPU and memory limits are given only when set: none is by default until the supervisor de-energises the relays
 /// whenever the controller exits (#138), as a limit is one more way for the kernel to end the controller mid-motion. One
-/// that is set is at least the HVO install contract's minimum of 2 CPUs and 4 GiB; less is refused, with no exception.
-/// The container gets no swap beyond its memory.
+/// that is set is at least the RoofController floor of 1 vCPU and 1 GiB (owner decision on #129, 2026-10-16); less is
+/// refused, with no exception.
+/// The future default is 1 vCPU / 2 GiB, enabled by a follow-up after #138. The container gets no swap beyond its memory.
 /// </summary>
 public sealed partial record ContainerResources
 {
     public const int DefaultPidsLimit = 512;
 
-    /// <summary>The contract's minimum CPUs, for a CPU limit that is set.</summary>
-    public const decimal MinimumCpus = 2;
+    /// <summary>RoofController's minimum CPUs, for a CPU limit that is set.</summary>
+    public const decimal MinimumCpus = 1;
 
-    /// <summary>The contract's minimum memory, for a memory limit that is set: 4 GiB.</summary>
-    public const long MinimumMemoryBytes = 4L * 1024 * 1024 * 1024;
+    /// <summary>RoofController's minimum memory, for a memory limit that is set: 1 GiB.</summary>
+    public const long MinimumMemoryBytes = 1L * 1024 * 1024 * 1024;
 
     public const int MinimumPidsLimit = 256;
     public const int MaximumPidsLimit = 32768;
@@ -212,7 +213,7 @@ public sealed partial record ContainerResources
     /// <summary>CPUs, as <c>docker run --cpus</c> takes them (2, 2.5), with at most two decimals; none (the default) for no CPU limit.</summary>
     public decimal? Cpus { get; init; }
 
-    /// <summary>Memory, as a whole number of MiB or GiB (4096m, 4g); none (the default) for no memory limit.</summary>
+    /// <summary>Memory, as a whole number of MiB or GiB (1024m, 1g); none (the default) for no memory limit.</summary>
     public string? Memory { get; init; }
 
     /// <summary>The most processes and threads the container runs at once (<c>docker run --pids-limit</c>).</summary>
@@ -257,7 +258,7 @@ public sealed partial record ContainerResources
             }
             else if (cpus < MinimumCpus)
             {
-                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is fewer than 2 CPUs, the minimum (the HVO install contract's): give at least 2, or leave it out for no CPU limit.";
+                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1, or leave it out for no CPU limit.";
             }
         }
 
@@ -265,11 +266,11 @@ public sealed partial record ContainerResources
         {
             if (MemoryBytes is not { } memory)
             {
-                yield return $"The controller's memory (controller.resources.memory) must be a whole number of MiB or GiB, such as 4096m or 4g, not '{Memory}'.";
+                yield return $"The controller's memory (controller.resources.memory) must be a whole number of MiB or GiB, such as 1024m or 1g, not '{Memory}'.";
             }
             else if (memory < MinimumMemoryBytes)
             {
-                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 4g, the minimum (the HVO install contract's): give at least 4g, or leave it out for no memory limit.";
+                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g, or leave it out for no memory limit.";
             }
         }
 

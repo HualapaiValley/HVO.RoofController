@@ -762,10 +762,15 @@ jobs:
           # mounts, only the supervisor's capabilities, no-new-privileges, the process limit, no CPU or memory limit
           # by default (until #138) and the ones given with no swap, and for a controller the volume for the web UI's
           # keys.
-          for limits in "default" "given"; do
+          for limits in "default" "floor" "future" "given"; do
             for profile in pi pi-lan-http emulator; do
               if [[ "${limits}" == "given" ]]; then
                 config=$(HVO_ROOF_CPUS=2.5 HVO_ROOF_MEMORY=6g docker compose --profile "${profile}" config --format json)
+              elif [[ "${limits}" == "floor" ]]; then
+                config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=1g docker compose --profile "${profile}" config --format json)
+              elif [[ "${limits}" == "future" ]]; then
+                # Still explicit until #138: this is the future 1 vCPU / 2 GiB default, not today's default.
+                config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=2g docker compose --profile "${profile}" config --format json)
               else
                 config=$(docker compose --profile "${profile}" config --format json)
               fi
@@ -778,8 +783,14 @@ jobs:
                     and .security_opt == ["no-new-privileges"]
                     and (if $limits == "given"
                       then .cpus == 2.5 and .mem_limit == "6442450944" and .memswap_limit == .mem_limit
+                      elif $limits == "floor"
+                      then .cpus == 1 and .mem_limit == "1073741824" and .memswap_limit == .mem_limit
+                      elif $limits == "future"
+                      then .cpus == 1 and .mem_limit == "2147483648" and .memswap_limit == .mem_limit
                       else .cpus == null and .mem_limit == null and .memswap_limit == null end)
                     and .pids_limit == 512
+                    and .environment.HVO_ROOF_CPUS == (if $limits == "given" then "2.5" elif $limits == "default" then "" else "1" end)
+                    and .environment.HVO_ROOF_MEMORY == (if $limits == "given" then "6g" elif $limits == "floor" then "1g" elif $limits == "future" then "2g" else "" end)
                     and ((.command // [] | index("--validate-deployment")) != null
                       or ([.volumes[] | select(.type == "volume" and .target == "/var/lib/hvo-roof-web")] | length) == 1))' \
                 <<<"${config}" >/dev/null || {

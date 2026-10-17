@@ -203,10 +203,11 @@ nothing until every check has passed: then it installs Docker, or turns I2C on, 
   that is not synchronised.
 - **For the controller, a rig and the kiosk:** ghcr.io answers, and Docker Engine 20.10 or later runs. It notes a
   missing Compose v2, which the installer does not need.
-- **For the controller and a rig, on Linux:** Docker enforces memory, CPU and process limits (`docker info`), which the
-  controller's container runs with ([The controller's limits](#the-controllers-limits)). On a Pi it names the boot
-  setting to change. It notes a Docker that cannot limit swap, and a machine with fewer than 2 CPUs or less than 4 GiB,
-  the default limits: the installer checks the limits it is given.
+- **For the controller and a rig, on Linux:** Docker enforces process limits (`docker info`), which the
+  controller's container runs with ([The controller's limits](#the-controllers-limits)). CPU and memory enforcement
+  are advisory at bootstrap and required by the installer only when those limits are set. On a Pi it names the boot
+  setting to change. It notes a Docker that cannot limit swap, and a machine below the 1 vCPU floor; a memory cap
+  above host RAM only warns. The installer checks the limits it is given.
 - **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
 - **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
   install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
@@ -600,8 +601,8 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
-| `controller.resources.cpus` | A CPU limit for the controller container, at least `2`, such as `2` or `2.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) |
-| `controller.resources.memory` | A memory limit for it, at least `4g`: a whole number of MiB or GiB, such as `4096m` or `4g`; the container gets no swap beyond it | None: no memory limit, until #138 |
+| `controller.resources.cpus` | A CPU limit for the controller container, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) |
+| `controller.resources.memory` | A memory limit for it, at least `1g`: a whole number of MiB or GiB, such as `1024m` or `1g`; the container gets no swap beyond it | None: no memory limit, until #138 |
 | `controller.resources.pidsLimit` | The most processes and threads it runs at once, from 256 to 32768 | `512` |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
@@ -632,14 +633,14 @@ saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on i
 The controller's container (a rig's too) runs with at most 512 processes and threads, and, for now, with no CPU or
 memory limit. A limit is one more way for the kernel to end the controller, and a controller ended while the roof
 moves leaves the drive running until a restarted controller turns the relays off, or, when it cannot start again,
-until the roof reaches its limit. The HVO install contract's default of 2 CPUs and 4 GiB is turned on by a follow-up
+until the roof reaches its limit. RoofController's future default of 1 vCPU and 2 GiB is turned on by a follow-up
 once the supervisor de-energises the relays whenever the controller exits
 ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138);
 [deployment.md](deployment.md#the-containers-privileges-and-limits)). Until then, give a CPU or memory limit in the
 answers' `controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
 
 ```bash
-sudo hvo-roof-install --answers controller.json --cpus 2 --memory 4g --pids-limit 1024
+sudo hvo-roof-install --answers controller.json --cpus 1 --memory 2g --pids-limit 1024
 ```
 
 | Option | What it sets |
@@ -648,7 +649,7 @@ sudo hvo-roof-install --answers controller.json --cpus 2 --memory 4g --pids-limi
 | `--memory SIZE` | `controller.resources.memory` |
 | `--pids-limit N` | `controller.resources.pidsLimit` |
 
-A CPU limit below 2, or a memory limit below `4g`, the contract's minimum, is refused, with no exception: exit code 2
+A CPU limit below 1 vCPU, or a memory limit below `1g`, RoofController's floor, is refused, with no exception: exit code 2
 when the command line or an answers file gives it, 3 when the install record holds it (an `upgrade`). Leave it out for
 no limit. The install record keeps the limits, so `upgrade` and `rollback` give the container the same, and a run with
 other limits redeploys the controller with them (the plan says `redeployed with its limits: ...`); answers that leave a

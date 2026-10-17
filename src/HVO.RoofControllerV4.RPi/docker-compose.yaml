@@ -18,9 +18,10 @@
 # Every controller container, and each deployment check, has the deploy script's privileges and limits (x-hardening;
 # docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_PIDS_LIMIT (default 512) always, and a CPU and
 # a memory limit only when HVO_ROOF_CPUS and HVO_ROOF_MEMORY are set (none by default, until the supervisor de-energises
-# the relays whenever the controller exits, #138). One that is set must be at least 2 CPUs and 4g, the HVO install
-# contract's minimum. Compose checks neither that minimum nor that Docker enforces the limits; the deploy script and the
-# installer refuse both.
+# the relays whenever the controller exits, #138). One that is set must be at least 1 vCPU and 1g, RoofController's
+# floor (owner decision on #129, 2026-10-16). The supervisor checks that floor before starting either process or the
+# deployment check. Compose does not check Docker's cgroup support; check docker info first. The future default is
+# 1 vCPU / 2 GiB, enabled by a follow-up after #138.
 #
 # A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
 # container and image names and its own network, so it does not collide with either profile above:
@@ -46,7 +47,12 @@
 # running. Run the check on its own first (docs/deployment.md):
 #   docker compose --profile pi build && docker compose --profile pi run --rm roof-controller-check
 
+x-resource-environment: &resource-environment
+  HVO_ROOF_CPUS: ${HVO_ROOF_CPUS:-}
+  HVO_ROOF_MEMORY: ${HVO_ROOF_MEMORY:-}
+
 x-roof-environment: &roof-environment
+  <<: *resource-environment
   ASPNETCORE_ENVIRONMENT: Production
   HVO_FORCE_RASPBERRY_PI: "true"
   RoofControllerOptionsV4__IgnorePhysicalLimitSwitches: "false"
@@ -235,6 +241,7 @@ x-deployment-check: &deployment-check
 # explicitly (HatEmulator__AllowOutsideDevelopment): a deployment's configuration except for the HAT, HTTPS and the
 # cameras.
 x-emulated-environment: &emulated-environment
+  <<: *resource-environment
   ASPNETCORE_ENVIRONMENT: Production
   ASPNETCORE_URLS: "http://+:8080"
   # Plain HTTP, published on loopback only (a warning is logged at startup).

@@ -13,7 +13,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 /// <summary>
 /// The controller container's resource limits (#129; docs/deployment.md, "The container's privileges and limits"): 512
 /// processes, and no CPU or memory limit unless the answers or the command line give one (none by default until #138),
-/// refused below the HVO install contract's minimum of 2 CPUs and 4 GiB with no exception, checked against what Docker
+/// refused below the RoofController floor of 1 vCPU and 1 GiB with no exception, checked against what Docker
 /// enforces and the CPUs the machine has before anything changes (a memory limit above its memory only warns), kept in
 /// the install record, and given to the deploy script by every deploy, upgrade and rollback.
 /// </summary>
@@ -56,19 +56,16 @@ public sealed class InstallerResourceLimitsTests
     [DataRow("0", null, 512, "must be a number such as 2 or 2.5")]
     [DataRow("2.555", null, 512, "with at most two decimals, not 2.555")]
     [DataRow("1000", null, 512, "must be a number such as 2 or 2.5")]
-    [DataRow(null, "4", 512, "must be a whole number of MiB or GiB, such as 4096m or 4g, not '4'")]
+    [DataRow(null, "4", 512, "must be a whole number of MiB or GiB, such as 1024m or 1g, not '4'")]
     [DataRow(null, "4.5g", 512, "not '4.5g'")]
     [DataRow(null, "4gb", 512, "not '4gb'")]
     [DataRow(null, null, 255, "must be from 256 to 32768, not 255")]
     [DataRow(null, null, 32769, "must be from 256 to 32768, not 32769")]
-    [DataRow("1.99", null, 512, "The controller's CPU limit of 1.99 (controller.resources.cpus, or --cpus) is fewer than 2 CPUs, the minimum (the HVO install contract's): give at least 2, or leave it out for no CPU limit.")]
-    [DataRow("1.5", "4g", 512, "CPU limit of 1.5 (controller.resources.cpus, or --cpus) is fewer than 2 CPUs")]
-    [DataRow("1", null, 512, "CPU limit of 1 (controller.resources.cpus, or --cpus) is fewer than 2 CPUs")]
-    [DataRow("0.5", null, 512, "CPU limit of 0.5 (controller.resources.cpus, or --cpus) is fewer than 2 CPUs")]
-    [DataRow(null, "4095m", 512, "The controller's memory limit of 4095m (controller.resources.memory, or --memory) is less than 4g, the minimum (the HVO install contract's): give at least 4g, or leave it out for no memory limit.")]
-    [DataRow("2", "3g", 512, "memory limit of 3g (controller.resources.memory, or --memory) is less than 4g")]
-    [DataRow(null, "1g", 512, "memory limit of 1g (controller.resources.memory, or --memory) is less than 4g")]
-    [DataRow(null, "512m", 512, "memory limit of 512m (controller.resources.memory, or --memory) is less than 4g")]
+    [DataRow("0.99", null, 512, "The controller's CPU limit of 0.99 (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1, or leave it out for no CPU limit.")]
+    [DataRow("0.9", "2g", 512, "CPU limit of 0.9 (controller.resources.cpus, or --cpus) is less than 1 vCPU")]
+    [DataRow("0.5", null, 512, "CPU limit of 0.5 (controller.resources.cpus, or --cpus) is less than 1 vCPU")]
+    [DataRow(null, "1023m", 512, "The controller's memory limit of 1023m (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g, or leave it out for no memory limit.")]
+    [DataRow(null, "512m", 512, "memory limit of 512m (controller.resources.memory, or --memory) is less than 1g")]
     public void LimitsTheControllerIsNotGiven_AreProblems(string? cpus, string? memory, int pids, string problem)
     {
         new ContainerResources { Cpus = Cpus(cpus), Memory = memory, PidsLimit = pids }.Problems()
@@ -78,9 +75,9 @@ public sealed class InstallerResourceLimitsTests
     [TestMethod]
     public void TheMinimum_IsTaken()
     {
-        new ContainerResources { Cpus = 2, Memory = "4g" }.Problems().Should().BeEmpty();
-        new ContainerResources { Cpus = 2, Memory = "4096m" }.Problems().Should().BeEmpty();
-        new ContainerResources { Cpus = 2.01m }.Problems().Should().BeEmpty();
+        new ContainerResources { Cpus = 1, Memory = "1g" }.Problems().Should().BeEmpty();
+        new ContainerResources { Cpus = 1, Memory = "1024m" }.Problems().Should().BeEmpty();
+        new ContainerResources { Cpus = 1.01m }.Problems().Should().BeEmpty();
     }
 
     [TestMethod]
@@ -92,11 +89,11 @@ public sealed class InstallerResourceLimitsTests
             """);
         answers.Controller!.Resources.Should().Be(new ContainerResources { Cpus = 3.5m, Memory = "6144m", PidsLimit = 1024 });
 
-        var below = () => InstallAnswers.Parse("""{ "schema": 1, "roles": ["controller"], "controller": { "resources": { "memory": "2g" } } }""");
-        below.Should().Throw<InstallerUsageException>().WithMessage("*memory limit of 2g*is less than 4g, the minimum*");
+        var below = () => InstallAnswers.Parse("""{ "schema": 1, "roles": ["controller"], "controller": { "resources": { "memory": "1023m" } } }""");
+        below.Should().Throw<InstallerUsageException>().WithMessage("*memory limit of 1023m*is less than 1g, the minimum*");
 
         // An earlier draft's acknowledgment is not a member the installer knows: the file is refused, not taken below the minimum.
-        var acknowledged = () => InstallAnswers.Parse("""{ "schema": 1, "roles": ["controller"], "controller": { "resources": { "memory": "2g", "allowBelowMinimum": true } } }""");
+        var acknowledged = () => InstallAnswers.Parse("""{ "schema": 1, "roles": ["controller"], "controller": { "resources": { "memory": "1023m", "allowBelowMinimum": true } } }""");
         acknowledged.Should().Throw<InstallerUsageException>();
         var acknowledgedAtTheMinimum = () => InstallAnswers.Parse("""{ "schema": 1, "roles": ["controller"], "controller": { "resources": { "allowBelowMinimum": false } } }""");
         acknowledgedAtTheMinimum.Should().Throw<InstallerUsageException>();
@@ -114,6 +111,20 @@ public sealed class InstallerResourceLimitsTests
             """);
 
         record.ToAnswers().Controller!.Resources.Should().Be(new ContainerResources());
+    }
+
+    [TestMethod]
+    [DataRow("1g")]
+    [DataRow("1024m")]
+    public async Task TheRoofControllerFloor_IsAccepted_InAnswersAndFlags(string memory)
+    {
+        using var pi = new FakeMachine().WithPi();
+        pi.DockerInfo = "true,true,true,true,1,1073741824";
+        var answers = pi.WriteAnswers(Controller(new ContainerResources { Cpus = 1, Memory = memory }));
+        var run = await pi.RunAsync("--answers", answers, "--cpus", "1", "--memory", memory);
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Deploys.Should().ContainSingle().Which.Should().Contain(Limits("1", memory, "512"));
+        Record(pi).Controller!.Resources.Should().Be(new ContainerResources { Cpus = 1, Memory = memory });
     }
 
     [TestMethod]
@@ -219,10 +230,10 @@ public sealed class InstallerResourceLimitsTests
 
         foreach (var (option, value, problem) in new[]
         {
-            ("--cpus", "1.5", "CPU limit of 1.5 (controller.resources.cpus, or --cpus) is fewer than 2 CPUs, the minimum"),
-            ("--cpus", "0.5", "CPU limit of 0.5 (controller.resources.cpus, or --cpus) is fewer than 2 CPUs, the minimum"),
-            ("--memory", "3g", "memory limit of 3g (controller.resources.memory, or --memory) is less than 4g, the minimum"),
-            ("--memory", "512m", "memory limit of 512m (controller.resources.memory, or --memory) is less than 4g, the minimum")
+            ("--cpus", "0.9", "CPU limit of 0.9 (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum"),
+            ("--cpus", "0.5", "CPU limit of 0.5 (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum"),
+            ("--memory", "1023m", "memory limit of 1023m (controller.resources.memory, or --memory) is less than 1g, the minimum"),
+            ("--memory", "512m", "memory limit of 512m (controller.resources.memory, or --memory) is less than 1g, the minimum")
         })
         {
             var below = await pi.RunAsync("--answers", answers, option, value);
@@ -245,15 +256,15 @@ public sealed class InstallerResourceLimitsTests
         using var pi = new FakeMachine().WithPi();
         var answers = pi.WriteAnswers(Controller(new ContainerResources { Cpus = 2, Memory = "4g" }));
         (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
-        var record = pi.Read(InstallPaths.SystemRecord).Replace("\"memory\": \"4g\"", "\"memory\": \"3g\"", StringComparison.Ordinal);
-        record.Should().Contain("\"memory\": \"3g\"");
+        var record = pi.Read(InstallPaths.SystemRecord).Replace("\"memory\": \"4g\"", "\"memory\": \"1023m\"", StringComparison.Ordinal);
+        record.Should().Contain("\"memory\": \"1023m\"");
         pi.Write(InstallPaths.SystemRecord, record);
         pi.WithRelease(NewVersion, latest: true);
 
         var upgrade = await pi.RunAsync("upgrade");
 
         upgrade.ExitCode.Should().Be((int)InstallerExitCode.Refused, upgrade.ToString());
-        upgrade.Error.Should().Contain("memory limit of 3g (controller.resources.memory, or --memory) is less than 4g, the minimum");
+        upgrade.Error.Should().Contain("memory limit of 1023m (controller.resources.memory, or --memory) is less than 1g, the minimum");
         pi.Deploys.Should().ContainSingle();
     }
 
@@ -345,12 +356,12 @@ public sealed class InstallerResourceLimitsTests
 
         var cpus = await pi.RunAsync("--plan", "--answers", answers, "--cpus", "3");
         cpus.ExitCode.Should().Be((int)InstallerExitCode.Refused, cpus.ToString());
-        cpus.Error.Should().Contain("The controller's limit of 3 CPUs is more than the 2 Docker reports here: give controller.resources.cpus (or --cpus) from 2 to 2, or leave it out for no CPU limit.");
+        cpus.Error.Should().Contain("The controller's limit of 3 CPUs is more than the 2 Docker reports here: give controller.resources.cpus (or --cpus) from 1 to 2, or leave it out for no CPU limit.");
 
         pi.DockerInfo = "true,true,true,true,1,8589934592";
         cpus = await pi.RunAsync("--plan", "--answers", answers, "--cpus", "2");
         cpus.ExitCode.Should().Be((int)InstallerExitCode.Refused, cpus.ToString());
-        cpus.Error.Should().Contain("The controller's limit of 2 CPUs is more than the 1 Docker reports here: leave out controller.resources.cpus (--cpus) for no CPU limit (one is at least 2).");
+        cpus.Error.Should().Contain("The controller's limit of 2 CPUs is more than the 1 Docker reports here: give controller.resources.cpus (or --cpus) from 1 to 1, or leave it out for no CPU limit.");
 
         var none = await pi.RunAsync("--plan", "--answers", answers);
         none.ExitCode.Should().Be(0, "a machine with one CPU runs the controller with no CPU limit: " + none);

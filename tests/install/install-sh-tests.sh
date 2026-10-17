@@ -1114,8 +1114,8 @@ test_a_small_machine_or_no_swap_limit_is_only_noted() {
 
   assert_status 0
   assert_output_contains "note  Docker cannot keep the controller's container from swapping (docker info: SwapLimit false): a memory limit, if given, still holds"
-  assert_output_contains "note  This machine has 1 CPU: a CPU limit for the controller is at least 2, so the installer refuses one here (--cpus)"
-  # A memory limit is a cap, not a reservation: a machine with less memory than 4g is not noted.
+  assert_output_not_contains "so the installer refuses one here (--cpus)"
+  # A memory limit is a cap, not a reservation: a machine with less memory than a requested cap is not noted.
   assert_output_not_contains "MiB of memory"
 }
 

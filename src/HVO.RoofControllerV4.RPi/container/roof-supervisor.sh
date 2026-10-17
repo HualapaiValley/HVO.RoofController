@@ -92,6 +92,39 @@ require_whole_number() {
   fi
 }
 
+# Compose passes its explicit limits here as well as to Docker. Refuse a value below RoofController's floor before
+# any controller process (including --validate-deployment), filesystem setup or HAT access. Unset means no limit until
+# #138; a follow-up then enables the 1 vCPU / 2 GiB default. The deploy script validates its own inputs before Docker.
+check_compose_limits() {
+  local cpus=${HVO_ROOF_CPUS:-} memory=${HVO_ROOF_MEMORY:-} pattern fraction bytes
+  if [[ -n "${cpus}" ]]; then
+    pattern='^([0-9]{1,3})(\.([0-9]{1,2}))?$'
+    if [[ ! "${cpus}" =~ ${pattern} ]]; then
+      log "HVO_ROOF_CPUS must be a number of CPUs with at most two decimals, at least RoofController's floor of 1 vCPU."
+      exit 2
+    fi
+    fraction="${BASH_REMATCH[3]:-}00"
+    if (( 10#${BASH_REMATCH[1]} * 100 + 10#${fraction:0:2} < 100 )); then
+      log "HVO_ROOF_CPUS=${cpus} is below RoofController's floor of 1 vCPU."
+      exit 2
+    fi
+  fi
+  if [[ -n "${memory}" ]]; then
+    pattern='^([0-9]{1,6})([mMgG])$'
+    if [[ ! "${memory}" =~ ${pattern} ]]; then
+      log "HVO_ROOF_MEMORY must be a whole number of MiB or GiB (1024m or 1g), at least RoofController's floor of 1 GiB."
+      exit 2
+    fi
+    bytes=$(( 10#${BASH_REMATCH[1]} * 1048576 ))
+    [[ "${BASH_REMATCH[2]}" == [gG] ]] && bytes=$(( bytes * 1024 ))
+    if (( bytes < 1073741824 )); then
+      log "HVO_ROOF_MEMORY=${memory} is below RoofController's floor of 1 GiB."
+      exit 2
+    fi
+  fi
+}
+check_compose_limits
+
 # With arguments this is the deployment check (or another one-shot run of the controller): nothing is supervised.
 if (( $# > 0 )); then
   cd "${APP_DIR}" || exit 1

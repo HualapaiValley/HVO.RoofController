@@ -314,8 +314,8 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `REMOTE_CONNECT_TO` | (empty) | curl's `--connect-to` for the remote check, `HOST1:PORT1:HOST2:PORT2`. `::127.0.0.1:` checks `PI_HOST`'s name and certificate at this machine's loopback, for a name this machine cannot resolve, such as the Pi's own name when the script runs on the Pi. |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
 | `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them (use `HTTPS_HOST_PORT`, `HOST_PORT` and `WEB_HOST_PORT` for the ports), and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). The [container's privileges and limits](#the-containers-privileges-and-limits) are the script's too: `--privileged`, `--read-only`, `--tmpfs` (and `--mount type=tmpfs`), `--cap-add`, `--cap-drop`, `--security-opt`, `--cpus`, `--cpu-period`, `--cpu-quota`, `--cpu-rt-period`, `--cpu-rt-runtime`, `-m`/`--memory`, `--memory-swap`, `--kernel-memory`, `--oom-kill-disable` and `--pids-limit` are refused (use `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device` and a mount of the host's `/` or `/dev` are refused as well. |
-| `CONTAINER_CPUS` | (empty: no CPU limit) | A CPU limit for the container (`docker run --cpus`), at least 2, with at most two decimals. Fewer than 2 is refused, with no exception. Empty until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138): see [The container's privileges and limits](#the-containers-privileges-and-limits). |
-| `CONTAINER_MEMORY` | (empty: no memory limit) | A memory limit for the container, at least `4g`: a whole number of MiB or GiB (`4096m`, `4g`), with `--memory-swap` the same, so the container never swaps. Less than `4g` is refused, with no exception. Empty until #138, as for `CONTAINER_CPUS`. |
+| `CONTAINER_CPUS` | (empty: no CPU limit) | A CPU limit for the container (`docker run --cpus`), at least 1, with at most two decimals. Less than 1 is refused, with no exception. Empty until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138): see [The container's privileges and limits](#the-containers-privileges-and-limits). |
+| `CONTAINER_MEMORY` | (empty: no memory limit) | A memory limit for the container, at least `1g`: a whole number of MiB or GiB (`1024m`, `1g`), with `--memory-swap` the same, so the container never swaps. Less than `1g` is refused, with no exception. Empty until #138, as for `CONTAINER_CPUS`. |
 | `CONTAINER_PIDS_LIMIT` | `512` | The most processes and threads the container runs at once (`--pids-limit`), from 256 to 32768 |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 25 s for the controller's shutdown, then 2 s for the web UI ([Shutdown timing](#shutdown-timing)). |
 | `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
@@ -671,9 +671,10 @@ certificate, identity and settings
 directories must exist, and be root's; compose does not create them. Every controller and deployment check has the
 script's [privileges and limits](#the-containers-privileges-and-limits) (`x-hardening`), with the limits from
 `HVO_ROOF_PIDS_LIMIT` (default `512`), and a CPU and a memory limit only when `HVO_ROOF_CPUS` and `HVO_ROOF_MEMORY` (also
-the `memswap_limit`) are set: by default `0`, no limit, until #138. One that is set must be at least 2 CPUs and `4g`.
-Compose checks neither that minimum nor that Docker enforces them, as the script and the installer do: keep to it, and
-check `docker info` first.
+the `memswap_limit`) are set: unset by default, with no limit, until #138. One that is set must be at least 1 vCPU and `1g`.
+The supervisor refuses an explicit value below that floor (exit 2) before starting either process or the deployment
+check. Compose does not check Docker's cgroup support: check `docker info` first. An explicit `0` is refused; leave a
+CPU or memory setting unset for no limit.
 
 Each Pi profile first runs the [deployment check](#the-deployment-check) as a one-shot service with the same environment
 and mounts (`roof-controller-check` or `roof-controller-lan-http-check`), and the new controller starts only if it
@@ -948,8 +949,8 @@ with the narrowest privileges the supervisor and the HAT allow, and with a proce
 given only when they are set: none is by default until the supervisor de-energises the relays whenever the controller
 exits ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)). Each is one more way for the kernel to
 end or starve the controller, and a controller ended while the roof moves leaves the drive running
-([below](#what-a-killed-controller-leaves-the-relays-and-the-drive-in)). The HVO install contract's default of 2 CPUs and
-4 GiB (section 7) is turned on by a follow-up once #138 is merged.
+([below](#what-a-killed-controller-leaves-the-relays-and-the-drive-in)). RoofController's future default of 1 vCPU and
+2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up once #138 is merged.
 
 | | What the container gets | Why |
 |---|---|---|
@@ -957,8 +958,8 @@ end or starve the controller, and a controller ended while the roof moves leaves
 | Writable places | tmpfs: `/tmp` (64 MiB: .NET's diagnostics sockets), `/run/hvo-roof` (4 MiB: the [supervisor's](#the-containers-two-processes) state, control directory and the web UI's private copies) and `/root/.aspnet` (4 MiB: ASP.NET Core's key ring, which the controller uses for nothing that must outlive the container). A volume of the container's own at `/var/lib/hvo-roof-web`: the web UI's sign-in keys, so people stay signed in when the container restarts. And the mounts: the secrets, certificate, identity and settings directories. | These are every place the controller, the web UI, the supervisor and .NET write, found by running the container and listing its changes (`docker diff`). A replaced container's volume goes with it (`docker rm -v`). |
 | Capabilities | None (`--cap-drop ALL`) but `CHOWN`, `KILL`, `SETGID` and `SETUID` | The supervisor's: `CHOWN` to give the web UI its copies and directories, `SETUID` and `SETGID` to start it as the `app` user (`setpriv`), and `KILL` to signal it, a process of another user. Without `KILL` the supervisor cannot tell whether the web UI runs, and blocks waiting for it, so it no longer restarts a crashed controller; it is kept for that reason. The web UI runs with none. The HAT's devices need none: the controller opens them as root, their owner. |
 | Privilege escalation | `--security-opt no-new-privileges` | No process can gain privileges, through a setuid program or otherwise. |
-| CPU | None by default; `CONTAINER_CPUS` (`--cpus`), at least 2, when set | At least the HVO install contract's minimum (section 7), and its default once #138 is merged. |
-| Memory | None by default; `CONTAINER_MEMORY` (`--memory`), at least `4g`, with `--memory-swap` the same, when set | At least the contract's minimum, and its default once #138 is merged. No swap: a controller that runs out of memory is ended and started again (see below), rather than slowed down while the roof moves. |
+| CPU | None by default; `CONTAINER_CPUS` (`--cpus`), at least 1, when set | RoofController's 1 vCPU floor; the 1 vCPU default is enabled by a follow-up after #138 merges. |
+| Memory | None by default; `CONTAINER_MEMORY` (`--memory`), at least `1g`, with `--memory-swap` the same, when set | RoofController's 1 GiB floor; the 2 GiB default is enabled by a follow-up after #138 merges. No swap: a controller that runs out of memory is ended and started again (see below), rather than slowed down while the roof moves. |
 | Processes and threads | `CONTAINER_PIDS_LIMIT`, default 512 (`--pids-limit`) | Bounds a runaway that would take the Pi's processes. On the HAT emulator rig the container ran 44 tasks idle and at most 85 under 64 clients at once (API, web UI and camera streams), so 512 is about six times the most measured. |
 
 The privileges are not settings, and the limits have settings of their own: `EXTRA_DOCKER_ARGS` can change neither
@@ -972,9 +973,9 @@ which the controller needs ([commissioning.md, C11](commissioning.md#c11-contain
 
 **The limits.** `CONTAINER_PIDS_LIMIT` sets the process limit, and `CONTAINER_CPUS` and `CONTAINER_MEMORY` a CPU and a
 memory limit, from the installer's answers (`controller.resources`, [install.md](install.md#the-controllers-limits)) or
-by hand. Empty, the default, gives none. A CPU limit below 2, or a memory limit below `4g`, is below the contract's
-minimum and refused before any Docker call, with no exception; leave it empty for no limit. At `4g` the controller and
-its web UI have about twenty times what they use together (90 MiB idle, 220 MiB under the load above, on the emulator
+by hand. Empty, the default, gives none. A CPU limit below 1 vCPU, or a memory limit below `1g`, is below RoofController's
+floor and refused before any Docker call, with no exception; leave it empty for no limit. At the future `2g` default the controller and
+its web UI have about ten times what they use together (90 MiB idle, 220 MiB under the load above, on the emulator
 rig).
 
 **Docker must enforce them.** Docker drops a limit it cannot enforce with only a warning, and runs the container
@@ -999,7 +1000,7 @@ none of stays (the script says so), and so does one it was deployed with that th
 run without it. The installer records the limits and gives them on every deploy, upgrade and rollback.
 
 **What a CPU limit does.** It never ends a process. When the controller, the web UI and the supervisor together use
-more than the limit's CPU time in a 100 ms period (2 CPUs' worth at the minimum), the kernel holds them all until the
+more than the limit's CPU time in a 100 ms period (1 vCPU's worth at the floor), the kernel holds them all until the
 next period begins. On the x64 emulator rig with 2 CPUs that happened 7 times while the container started (57 ms in
 all), and twice more under the load above (117 ms in all); on the Pi's slower cores it may happen more. A busy web UI at
 the same time as a move could delay the controller's safety loops by up to the rest of a period.
@@ -1066,7 +1067,7 @@ What else follows:
   `docker kill`ed: a container ended by hand stays down, with the relays held, until it is started again.
 - A memory limit, when one is given, adds one more way for the kernel to kill a process: the container reaching
   `CONTAINER_MEMORY`. The kernel then ends the process in the container that uses the most memory, the controller or the
-  web UI (each a .NET process); the web UI is started again alone, the controller as above. At `4g` against the 90-220
+  web UI (each a .NET process); the web UI is started again alone, the controller as above. At the future `2g` default against the 90-220
   MiB the two use, only a runaway reaches it, but a runaway that reaches it again soon after each start is the crash loop
   above.
 - The process limit makes a new thread fail beyond `CONTAINER_PIDS_LIMIT`, which .NET reports as an

@@ -32,7 +32,7 @@ set -euo pipefail
 #   /tmp, /run/hvo-roof and /root/.aspnet, and a volume of the container's own for the web UI's sign-in keys), no Linux
 #   capabilities but CHOWN, KILL, SETGID and SETUID (the supervisor's, to run the web UI as its own user),
 #   no-new-privileges, and limits: CONTAINER_PIDS_LIMIT (default 512) always, and CONTAINER_CPUS and CONTAINER_MEMORY (no
-#   swap) only when they are set, at least 2 CPUs and 4g. They are not set by default until the supervisor de-energises
+#   swap) only when they are set, at least 1 vCPU and 1g. They are not set by default until the supervisor de-energises
 #   the relays whenever the controller exits (#138). Before anything changes, Docker on the Pi must report that it
 #   enforces the limits this run gives, and at least as many CPUs as a CPU limit (a memory limit above its memory is a
 #   cap, not a reservation: a warning says so); the new controller's container must then carry exactly them. The
@@ -130,11 +130,12 @@ PUBLISH_ADDRESS=${PUBLISH_ADDRESS:-}
 EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
 # The controller container's resource limits (docs/deployment.md, "The container's privileges and limits"), for the
 # pre-flight container too: the most processes and threads at once (256 to 32768), always; CPUs as `docker run --cpus`
-# takes them (2, 2.5) and memory as a whole number of MiB or GiB (4096m, 4g; the container gets no swap beyond it), each
+# takes them (2, 2.5) and memory as a whole number of MiB or GiB (1024m, 1g; the container gets no swap beyond it), each
 # only when set. Empty, the default, gives no CPU or memory limit: the kernel would end a controller that reached one
 # mid-motion, and until the supervisor de-energises the relays whenever the controller exits (#138) a killed controller
-# leaves the drive running. One that is set must be at least the HVO install contract's minimum of 2 CPUs and 4g; less
-# is refused. --rollback gives them to the version it brings back.
+# leaves the drive running. One that is set must be at least RoofController's floor of 1 vCPU and 1g; less
+# is refused. The future default is 1 vCPU / 2 GiB, enabled by a follow-up after #138. --rollback gives them to the
+# version it brings back.
 CONTAINER_CPUS=${CONTAINER_CPUS:-}
 CONTAINER_MEMORY=${CONTAINER_MEMORY:-}
 CONTAINER_PIDS_LIMIT=${CONTAINER_PIDS_LIMIT:-512}
@@ -295,7 +296,7 @@ esac
 
 # The limits, held for the checks in hundredths of a CPU (CPU_HUNDREDTHS) and in bytes (MEMORY_BYTES), 0 when not set,
 # and written back plainly (2.50 as 2.5, 4G as 4g). Docker counts CPUs in billionths, so two decimals are given to it
-# exactly. One that is set is never below the HVO install contract's minimum of 2 CPUs and 4g: there is no exception.
+# exactly. One that is set is never below RoofController's floor of 1 vCPU and 1g: there is no exception.
 require_number CONTAINER_PIDS_LIMIT 256 32768
 CPU_HUNDREDTHS=0
 if [[ -n "${CONTAINER_CPUS}" ]]; then
@@ -309,21 +310,21 @@ if [[ -n "${CONTAINER_CPUS}" ]]; then
     cpu_fraction=$(printf '%02d' $(( CPU_HUNDREDTHS % 100 )))
     CONTAINER_CPUS+=".${cpu_fraction%0}"
   fi
-  if (( CPU_HUNDREDTHS < 200 )); then
-    fail "CONTAINER_CPUS=${CONTAINER_CPUS} is fewer than 2 CPUs, the minimum (the HVO install contract's; docs/deployment.md, \"The container's privileges and limits\"): give at least 2, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
+  if (( CPU_HUNDREDTHS < 100 )); then
+    fail "CONTAINER_CPUS=${CONTAINER_CPUS} is less than 1 vCPU, the minimum (RoofController's; docs/deployment.md, \"The container's privileges and limits\"): give at least 1, or leave CONTAINER_CPUS empty for no CPU limit. Nothing was changed."
   fi
 fi
 MEMORY_BYTES=0
 if [[ -n "${CONTAINER_MEMORY}" ]]; then
   memory_pattern='^([0-9]{1,6})([mMgG])$'
   [[ "${CONTAINER_MEMORY}" =~ ${memory_pattern} ]] \
-    || fail "CONTAINER_MEMORY must be a whole number of MiB or GiB such as 4096m or 4g, or empty for no memory limit, got '${CONTAINER_MEMORY}'. Nothing was changed."
+    || fail "CONTAINER_MEMORY must be a whole number of MiB or GiB such as 1024m or 1g, or empty for no memory limit, got '${CONTAINER_MEMORY}'. Nothing was changed."
   case "${BASH_REMATCH[2]}" in
     m|M) CONTAINER_MEMORY="$(( 10#${BASH_REMATCH[1]} ))m" MEMORY_BYTES=$(( 10#${BASH_REMATCH[1]} * 1048576 )) ;;
     *) CONTAINER_MEMORY="$(( 10#${BASH_REMATCH[1]} ))g" MEMORY_BYTES=$(( 10#${BASH_REMATCH[1]} * 1073741824 )) ;;
   esac
-  if (( MEMORY_BYTES < 4 * 1073741824 )); then
-    fail "CONTAINER_MEMORY=${CONTAINER_MEMORY} is less than 4g, the minimum (the HVO install contract's; docs/deployment.md, \"The container's privileges and limits\"): give at least 4g, or leave CONTAINER_MEMORY empty for no memory limit. Nothing was changed."
+  if (( MEMORY_BYTES < 1073741824 )); then
+    fail "CONTAINER_MEMORY=${CONTAINER_MEMORY} is less than 1g, the minimum (RoofController's; docs/deployment.md, \"The container's privileges and limits\"): give at least 1g, or leave CONTAINER_MEMORY empty for no memory limit. Nothing was changed."
   fi
 fi
 # What the run gives (limit_args, for docker run and the rollback's docker update) and says it gives.
@@ -1080,8 +1081,8 @@ check_docker_limits() {
     [[ "${ncpu}" =~ ^[0-9]+$ ]] \
       || fail "Docker on ${PI_HOST} did not report its CPUs (docker info: NCPU '${ncpu}'), so CONTAINER_CPUS=${CONTAINER_CPUS} cannot be checked against them. Nothing was changed."
     if (( CPU_HUNDREDTHS > 10#${ncpu} * 100 )); then
-      cpu_range="give from 2 to ${ncpu}, or leave CONTAINER_CPUS empty for no CPU limit"
-      (( 10#${ncpu} >= 2 )) || cpu_range="leave CONTAINER_CPUS empty for no CPU limit (one is at least 2)"
+      cpu_range="give from 1 to ${ncpu}, or leave CONTAINER_CPUS empty for no CPU limit"
+      (( 10#${ncpu} >= 1 )) || cpu_range="leave CONTAINER_CPUS empty for no CPU limit (one is at least 1)"
       fail "CONTAINER_CPUS=${CONTAINER_CPUS} is more than the ${ncpu} CPUs Docker reports on ${PI_HOST}: ${cpu_range}. Nothing was changed."
     fi
   fi
