@@ -24,7 +24,10 @@ CURRENT_FAILED=false
 # Harness
 
 setup() {
-  WORK=$(mktemp -d)
+  if ! WORK=$(mktemp -d) || [[ ! -d "${WORK}" ]]; then
+    echo "cannot make a work directory" >&2
+    exit 1
+  fi
   # The web UI stand-in gets it as one of the web UI's settings: the supervisor passes it no other variable.
   export FAKE_DIR="${WORK}/fake" RoofWeb__FakeDir="${WORK}/fake"
   mkdir -p "${FAKE_DIR}" "${WORK}/bin" "${WORK}/app/web" "${WORK}/secrets"
@@ -58,7 +61,15 @@ teardown() {
     kill -KILL -- "-${SUPERVISOR_PID}" 2>/dev/null
     wait "${SUPERVISOR_PID}" 2>/dev/null
   fi
-  pkill -KILL -f "${WORK}/bin/" 2>/dev/null
+  # The stand-ins that timeout put in process groups of their own (the relay-off helper, the web UI's preparation), by
+  # the pids they wrote, and only while that pid is still one of this test's stand-ins.
+  local file pid
+  for file in "${FAKE_DIR}"/*.pid; do
+    [[ -f "${file}" ]] || continue
+    pid=$(<"${file}")
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    [[ "$(tr '\0' ' ' 2>/dev/null <"/proc/${pid}/cmdline")" == *"${WORK}/"* ]] && kill -KILL "${pid}" 2>/dev/null
+  done
   rm -rf "${WORK}"
 }
 
