@@ -614,7 +614,9 @@ jobs:
   # (tests/container) and the compose profiles; with the build and release scripts' tests, and the docs' links.
   deploy-script:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # About 10 minutes: the deploy script's tests (5) and the supervisor's (3), whose stop tests run with its real
+    # 22/5/2 s times.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
