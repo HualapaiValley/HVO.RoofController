@@ -118,8 +118,8 @@ controller or the camera. A stream ends when the person's session ends.
 ![The Health page: the controller is ready, the container's supervisor, and the controller's health checks](images/web/04-health-desktop.jpg)
 
 The top says whether the controller is running and ready, from the controller's readiness and the supervisor's state
-(for example a controller the supervisor left stopped after repeated crashes). The health checks are read with the
-person's session, and show how long they took.
+(for example a controller the supervisor left stopped after repeated crashes, or held stopped because the relays
+cannot be verified off). The health checks are read with the person's session, and show how long they took.
 
 ### Settings
 
@@ -170,8 +170,10 @@ once, as it is created; neither the page nor the controller shows it again.
   load a pending hand edit shows it, and needs confirming when it is safety-critical.
 - **Forced restart** is for a controller that does not answer, so cannot restart itself. The web UI asks the container's
   supervisor to kill the controller and start it again
-  ([The container's two processes](deployment.md#the-containers-two-processes)). A kill does not stop the roof: the page
-  says so, and to use the stop control at the roof if the roof is moving. To send it, type `restart`.
+  ([The container's two processes](deployment.md#the-containers-two-processes)). A kill does not stop the roof by
+  itself: the supervisor turns the relays off right after it, and starts the controller again only once they are
+  verified off (otherwise it holds it stopped, and the page says so). The page says to use the stop control at the roof
+  if the roof is moving. To send it, type `restart`.
 
 ## Stop
 

@@ -525,8 +525,8 @@ PI_HOST=test-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/test-pi.crt 
   must report `hatMode` `Physical` (or `Emulated` in emulator mode), or the deploy is rolled back.
 - The emulator must be reachable from the controller's container, here over the `hvo-emulator` network given in
   `EXTRA_DOCKER_ARGS`. The pre-flight check runs with the same options, so it fails if the network is missing. If
-  the emulator is not running, the new controller latches `RelayVerificationFailed`, fails readiness and is rolled
-  back.
+  the emulator is not running, the new container's supervisor cannot verify the relays off, so it holds the new
+  controller stopped ([below](#the-relays-when-the-controller-exits)); it fails readiness and is rolled back.
 - The script prints a warning before it changes anything, and the dry-run and the final report name the HAT the
   controller uses.
 
@@ -780,10 +780,11 @@ both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals t
 | Event | What the supervisor does |
 |-------|--------------------------|
 | `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Stops the controller first and waits up to 22 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), while it stops the web UI, waiting up to 2 s for it (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL). The whole stop is timed from the signal, work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script) stops the same way first. |
-| The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Turns the relays off, then starts it again at once. The web UI and the container keep running, and Docker's restart count does not change. |
-| The controller exits otherwise (a crash, a kill, a failed start) | Turns the relays off at once, then starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`). The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`), with the relays off, instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
+| The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Turns the relays off, then starts it again at once, once they are verified off. The web UI and the container keep running, and Docker's restart count does not change. |
+| The relays cannot be verified off (at the first start, before a restart, after a crash, on a forced restart) | Does not start the controller: holds it stopped (`relays-unverified`) and tries the relays again after 1, 2, 4, 8, 16 and then every 30 s, for as long as it takes, and starts it once a read-back shows every relay off ([below](#the-relays-when-the-controller-exits)). The web UI keeps running and says why; the health check fails. |
+| The controller exits otherwise (a crash, a kill, a failed start) | Turns the relays off at once, then starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`), once the relays are verified off. The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`), with the relays off, instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
 | The web UI exits | Starts only the web UI again, with the same backoff, and never gives up. The controller is not touched. |
-| A forced restart (`/run/hvo-roof/control/force-restart-controller` appears) | Kills the controller (SIGKILL), turns the relays off and starts it again at once, even from `crash-loop`. Earlier crashes stop counting. A request within 10 s of the controller's start (`HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS`) is ignored, so repeated requests cannot kill a controller that is still starting. |
+| A forced restart (`/run/hvo-roof/control/force-restart-controller` appears) | Kills the controller (SIGKILL), turns the relays off and starts it again at once, once they are verified off, even from `crash-loop` (otherwise it holds it stopped). Earlier crashes stop counting. A request within 10 s of the controller's start (`HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS`) is ignored, so repeated requests cannot kill a controller that is still starting. |
 
 The container's own restart policy (`unless-stopped`) now applies only when the supervisor itself exits: on
 `docker stop`, or at its start when a `HVO_SUPERVISOR_*` setting is invalid (exit code 2) or its run directory cannot be
@@ -804,7 +805,8 @@ docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller
 
 The web UI's control for it is on the System page, for admins only, after confirming what a kill means for the roof
 ([web.md](web.md#system)). The supervisor records what it did with the last request in its state
-(`lastForcedRestart`: `restarted`, or `ignored` within 10 s of a start).
+(`lastForcedRestart`: `restarted`; `held` when the relays could not be verified off, so the controller was not started
+again; or `ignored` within 10 s of a start).
 
 ### The relays when the controller exits
 
@@ -820,6 +822,25 @@ verifies the HAT's relay register by reading it back:
 - after a try that failed, again and again while the controller is not running (waiting to start again, or left
   stopped after a crash loop) until they verify, after 1, 2, 4 ... s (at most `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`);
 - when it stops, after the controller has stopped or been killed, and when it ends any other way it can catch.
+
+**The controller starts only once the relays are verified off.** The owner's decision (#138, 2026-10-17): "if the
+relays cannot be verified off, the controller stays stopped." When a relay-off fails before a start (the HAT does not
+answer, or the read-back still shows a relay on), the supervisor does not start the controller: it holds it stopped,
+and starts it only after a read-back has shown every relay off. That applies at its first start, before every restart,
+after a crash and on a forced restart. While it holds the controller:
+
+- it tries the relays again after 1, 2, 4, 8 and 16 s, then every 30 s (the delay doubles from 1 s to
+  `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`), for as long as it takes, each try within `HVO_SUPERVISOR_RELAYS_OFF_SECONDS`;
+- each failed try is a `WARNING` in its log, and so is the hold itself: `the controller is HELD STOPPED`;
+- `supervisor.json` reports the controller `relays-unverified` and the relays `unverified`, with the last try's reason,
+  and a forced restart's outcome is `held`; the container's health check fails
+  (`supervisor: controller relays-unverified, web UI running`); the web UI keeps running and says
+  `The controller is held stopped: the relays cannot be verified off`;
+- a stop request is honoured as always, within its 27 s, with a last relay-off;
+- a deploy treats the held controller as not ready, and rolls back when `READY_TIMEOUT_SECONDS` runs out.
+
+Until the relays are verified off, the drive may still be running: if the roof moves, use the independent stop
+(commissioning C1). This replaces the earlier behaviour, in which the controller was started anyway.
 
 It never turns a relay on, and never while a controller runs: it cannot start motion, or stop a move a running
 controller makes. It runs the controller's own program, `dotnet /app/HVO.RoofControllerV4.RPi.dll --relays-off`, which
@@ -839,7 +860,10 @@ everywhere, the read-back proves the HAT's register, not the relay contacts
 ```text
 [relays-off] Every relay is off on the HAT on I2C bus 1 at address 0x0E: the relay register reads back 0x00 (attempt 1, 45 ms).
 [supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 160 ms (the controller exited (killed by signal 9))
-[supervisor] WARNING: the relays could not be verified off (the controller exited (killed by signal 9)): turning them off ended with exit code 1, after 520 ms. The supervisor tries again in 1s while the controller is not running, and before it starts it. Until then the drive may still be running: if the roof moves, use the independent stop (commissioning.md C1).
+[supervisor] WARNING: the relays could not be verified off (the controller exited (killed by signal 9)): turning them off ended with exit code 1, after 520 ms. The supervisor tries again in 1s, and does not start the controller until they are verified off. Until then the drive may still be running: if the roof moves, use the independent stop (commissioning.md C1).
+[supervisor] WARNING: the controller is HELD STOPPED: the relays could not be verified off (before the controller starts), and it starts only once a read-back shows every relay off (#138). The supervisor tries again in 2s, the delay doubling to at most 30s, for as long as it takes. Until then the drive may still be running: if the roof moves, use the independent stop (commissioning.md C1).
+[supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 140 ms (trying again: the controller is held stopped until the relays are verified off)
+[supervisor] The relays are verified off: starting the controller, held stopped until now
 [supervisor] The controller is left stopped with the relays off (verified by read-back).
 ```
 
@@ -859,8 +883,9 @@ What it cannot cover:
 - **The supervisor itself killed with SIGKILL** (by hand inside the container, or by the kernel): `tini` and the
   container end with it, and Docker starts the container again (`unless-stopped`); its new supervisor turns the relays
   off before it starts the controller (0.42-0.44 s after the kill on the rig).
-- **A HAT that does not answer**: the relays cannot be verified off. The supervisor says so (a `WARNING`) and keeps
-  trying while the controller is not running; until then use the independent stop (commissioning C1).
+- **A HAT that does not answer**, or a relay the read-back still shows on: the relays cannot be verified off, so the
+  controller is held stopped (above). The supervisor says so (`WARNING`s) and keeps trying; until then use the
+  independent stop (commissioning C1).
 
 **Out of memory.** When the container reaches its memory limit, or the Pi runs out of memory, the kernel ends the
 process with the highest OOM score, which counts both its memory and its `oom_score_adj`. The supervisor raises the web
@@ -949,10 +974,10 @@ health check and the deploy script read it:
 ```
 
 Each process is `running`, `restarting` (waiting to start again), `crash-loop` (the controller only: left stopped),
-`stopping` or `stopped`. The last exit reason is `restart requested`, `crashed (exit code N)`,
+`relays-unverified` (the controller only: held stopped until the relays are verified off), `stopping` or `stopped`. The last exit reason is `restart requested`, `crashed (exit code N)`,
 `crashed (killed by signal N)`, `forced restart` or `stopped with the container`. `lastForcedRestart` is `null` until a
-forced restart is asked for; its outcome is `restarted` or `ignored` (within `forceRestartMinSeconds` of the
-controller's start). `relays` is the relays as the supervisor knows them: `controller` (the controller runs and drives
+forced restart is asked for; its outcome is `restarted`, `held` (the relays could not be verified off, so the controller
+was not started again) or `ignored` (within `forceRestartMinSeconds` of the controller's start). `relays` is the relays as the supervisor knows them: `controller` (the controller runs and drives
 them), `off` (turned off and verified since the controller last ran), `unverified` (the last try failed; it tries again)
 or `unknown` (not tried yet), with when and why they were last turned off.
 

@@ -39,9 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   energized until it started again, and for good when it could not start (a crash loop, a settings file it refuses).
   The container's supervisor now turns every relay off and verifies the register whenever the controller is not
   running: as soon as it exits, before each start, again after a failed try while the controller is not running, and
-  when the supervisor stops or ends otherwise. It uses the controller's own HAT access (`--relays-off`), never turns a
-  relay on, and raises the web UI's and the controller's `oom_score_adj` above its own, so the kernel favours ending
-  them before it when memory runs out. On the x64
+  when the supervisor stops or ends otherwise. It starts the controller only once a read-back shows every relay off:
+  when they cannot be verified off (the HAT does not answer, or a relay stays on), the controller is held stopped
+  (`relays-unverified`: a warning in the log, the health check failing, the web UI saying why) while the supervisor
+  tries again after 1, 2, 4, 8 and 16 s, then every 30 s. It uses the controller's own HAT access (`--relays-off`),
+  never turns a relay on, and raises the web UI's and the controller's `oom_score_adj` above its own, so the kernel
+  favours ending them before it when memory runs out. On the x64
   emulator rig the relays were off 0.10-0.17 s after a kill during travel (2.0-2.4 s before, when the restarted
   controller turned them off). A whole container killed (`docker kill`) still leaves them held until it starts again.
   The supervisor now waits 22 s (was 25 s) for the controller's shutdown, then up to 5 s for the relays, starts nothing
