@@ -12,10 +12,10 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 
 /// <summary>
 /// The controller container's resource limits (#129; docs/deployment.md, "The container's privileges and limits"): 512
-/// processes, and no CPU or memory limit unless the answers or the command line give one (none by default until #138),
-/// refused below the RoofController floor of 1 vCPU and 1 GiB with no exception, checked against what Docker
-/// enforces and the CPUs the machine has before anything changes (a memory limit above its memory only warns), kept in
-/// the install record, and given to the deploy script by every deploy, upgrade and rollback.
+/// processes, and no CPU or memory limit unless the answers or the command line give one (none by default until the
+/// follow-up, #138 item 6), refused below the RoofController floor of 1 vCPU and 1 GiB with no exception, checked
+/// against what Docker enforces and the CPUs the machine has before anything changes (a memory limit above its memory
+/// only warns), kept in the install record, and given to the deploy script by every deploy, upgrade and rollback.
 /// </summary>
 [TestClass]
 [UnsupportedOSPlatform("windows")]
@@ -206,7 +206,8 @@ public sealed class InstallerResourceLimitsTests
         var plan = await pi.RunAsync("--plan", "--answers", answers);
         plan.Output.Should().Contain("redeployed with its limits: no CPU or memory limit, at most 512 processes and threads");
 
-        // One that an earlier draft deployed with 2 CPUs and 4 GiB: redeployed without them, until #138.
+        // One that an earlier draft deployed with 2 CPUs and 4 GiB: redeployed without them, until the follow-up
+        // (#138 item 6).
         pi.WithContainer(MachineSurveyor.ControllerContainer, pi.Containers[MachineSurveyor.ControllerContainer] with { NanoCpus = 2_000_000_000, Memory = 4L * 1024 * 1024 * 1024, PidsLimit = 512, ReadOnly = true });
         plan = await pi.RunAsync("--plan", "--answers", answers);
         plan.Output.Should().Contain("redeployed with its limits: no CPU or memory limit, at most 512 processes and threads");

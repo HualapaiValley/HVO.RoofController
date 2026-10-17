@@ -720,7 +720,7 @@ EOF
   }
 
   # The controller's container runs with a process limit, and with a CPU and a memory limit only when the installer is
-  # given them (none by default, until the supervisor de-energises the relays whenever the controller exits; docs/
+  # given them (none by default, until a follow-up turns RoofController's default on, #138 item 6; docs/
   # deployment.md, "The container's privileges and limits"). Docker drops a limit it cannot enforce with only a warning:
   # Raspberry Pi OS boots with cgroup_disable=memory, for one. Here Docker must enforce the process limit; that it cannot
   # enforce a CPU or memory limit is a note, as the installer refuses one it is given then. False when it fails.

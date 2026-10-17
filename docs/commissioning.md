@@ -431,12 +431,13 @@ are verified off.
 - **The HAT's devices are root's on the Pi** (`/dev/i2c-1` and `/dev/gpiomem`: Raspberry Pi OS makes them `root:i2c`
   and `root:gpio`, mode `0660`). The setting that depends on it is the container's capabilities: without
   `CAP_DAC_OVERRIDE` the controller opens them as their owner ([deployment.md](deployment.md#the-containers-privileges-and-limits)).
-  The fail-safe result of a device that is not root's is a controller that cannot open the HAT, verify its relays off
-  or become ready, which the deploy script removes, restoring the one it replaced (C12 step 8).
+  The fail-safe result of a device that is not root's is a container that cannot open the HAT: the supervisor cannot
+  verify the relays off, so it holds the controller stopped, which never becomes ready, and the deploy script removes
+  it, restoring the one it replaced (C12 step 8).
 - **Docker gives the container at least 30 s to stop.** The supervisor waits up to 22 s for the controller's shutdown,
-  then up to 5 s to turn the relays off while the web UI gets 2 s, the whole stop within 27 s of the signal. The settings that depend on it are the deploy script's
-  `STOP_TIMEOUT_SECONDS`, Compose's `stop_grace_period` and the supervisor's `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS` and
-  `HVO_SUPERVISOR_RELAYS_OFF_SECONDS`. The fail-safe result of a shorter grace period is that Docker kills the container
+  then up to 5 s to turn the relays off while the web UI gets 2 s, the whole stop within 27 s of the signal. The settings
+  that depend on it are the deploy script's `STOP_TIMEOUT_SECONDS`, Compose's `stop_grace_period` and the supervisor's
+  `HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS` and `HVO_SUPERVISOR_RELAYS_OFF_SECONDS`. The fail-safe result of a shorter grace period is that Docker kills the container
   during the controller's shutdown or the supervisor's relay-off: the relays stay held until the container starts again
   and its supervisor turns them off.
 

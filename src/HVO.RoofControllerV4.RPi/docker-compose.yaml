@@ -17,11 +17,11 @@
 # processes"): the controller and the web UI. docker stop stops the controller first, so its shutdown stops the roof.
 # Every controller container, and each deployment check, has the deploy script's privileges and limits (x-hardening;
 # docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_PIDS_LIMIT (default 512) always, and a CPU and
-# a memory limit only when HVO_ROOF_CPUS and HVO_ROOF_MEMORY are set (none by default, until the supervisor de-energises
-# the relays whenever the controller exits, #138). One that is set must be at least 1 vCPU and 1g, RoofController's
+# a memory limit only when HVO_ROOF_CPUS and HVO_ROOF_MEMORY are set (none by default, until a follow-up turns
+# RoofController's default on, #138 item 6). One that is set must be at least 1 vCPU and 1g, RoofController's
 # floor (owner decision on #129, 2026-10-16). The supervisor checks that floor before starting either process or the
 # deployment check. Compose does not check Docker's cgroup support; check docker info first. The future default is
-# 1 vCPU / 2 GiB, enabled by a follow-up after #138.
+# 1 vCPU / 2 GiB, turned on by that follow-up.
 #
 # A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
 # container and image names and its own network, so it does not collide with either profile above:

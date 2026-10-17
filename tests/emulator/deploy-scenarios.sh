@@ -34,7 +34,7 @@
 #
 # The controller runs as the deploy script runs it (docs/deployment.md, "The container's privileges and limits"): a
 # read-only root filesystem, only the supervisor's capabilities and the default limits (512 processes, and no CPU or
-# memory limit until #138; c12 gives one to a rollback). Without CAP_DAC_OVERRIDE, root in
+# memory limit until the follow-up, #138 item 6; c12 gives one to a rollback). Without CAP_DAC_OVERRIDE, root in
 # the container reaches its mounts only where root owns them, as the installer and the deployment docs make them, so the
 # fixtures (secrets, certificate, identity and settings directories) are given to root with sudo -n.
 #

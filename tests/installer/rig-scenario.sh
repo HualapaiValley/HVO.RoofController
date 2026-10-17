@@ -363,8 +363,9 @@ runs() {
 }
 
 # confined <container> <all|limits>: the container has the installer's default limits (512 processes, and no CPU or
-# memory limit until #138), and with all, the deploy script's privileges (a read-only root filesystem, only the supervisor's
-# capabilities, no-new-privileges; docs/deployment.md, "The container's privileges and limits").
+# memory limit until the follow-up, #138 item 6), and with all, the deploy script's privileges (a read-only root
+# filesystem, only the supervisor's capabilities, no-new-privileges; docs/deployment.md, "The container's privileges
+# and limits").
 confined() {
   local config
   config=$(docker inspect --format '{{json .HostConfig}}' "$1") || fail "could not inspect $1"

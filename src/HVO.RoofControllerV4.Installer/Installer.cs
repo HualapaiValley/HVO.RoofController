@@ -58,7 +58,7 @@ public static class Installer
         var release = ReleaseOption("Read the release");
         var cpus = new Option<decimal?>("--cpus")
         {
-            Description = "A CPU limit for the controller container, at least 1 (none by default, until the supervisor de-energises the relays whenever the controller exits). Kept in the install record for upgrades and rollbacks.",
+            Description = "A CPU limit for the controller container, at least 1 (none by default, until a follow-up turns RoofController's default on: #138 item 6). Kept in the install record for upgrades and rollbacks.",
             HelpName = "CPUS"
         };
         var memory = new Option<string?>("--memory")

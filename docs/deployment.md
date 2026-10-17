@@ -314,8 +314,8 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `REMOTE_CONNECT_TO` | (empty) | curl's `--connect-to` for the remote check, `HOST1:PORT1:HOST2:PORT2`. `::127.0.0.1:` checks `PI_HOST`'s name and certificate at this machine's loopback, for a name this machine cannot resolve, such as the Pi's own name when the script runs on the Pi. |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
 | `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them (use `HTTPS_HOST_PORT`, `HOST_PORT` and `WEB_HOST_PORT` for the ports), and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). The [container's privileges and limits](#the-containers-privileges-and-limits) are the script's too: `--privileged`, `--read-only`, `--tmpfs` (and `--mount type=tmpfs`), `--cap-add`, `--cap-drop`, `--security-opt`, `--cpus`, `--cpu-period`, `--cpu-quota`, `--cpu-rt-period`, `--cpu-rt-runtime`, `-m`/`--memory`, `--memory-swap`, `--kernel-memory`, `--oom-kill-disable` and `--pids-limit` are refused (use `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device` and a mount of the host's `/` or `/dev` are refused as well. |
-| `CONTAINER_CPUS` | (empty: no CPU limit) | A CPU limit for the container (`docker run --cpus`), at least 1, with at most two decimals. Less than 1 is refused, with no exception. Empty until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138): see [The container's privileges and limits](#the-containers-privileges-and-limits). |
-| `CONTAINER_MEMORY` | (empty: no memory limit) | A memory limit for the container, at least `1g`: a whole number of MiB or GiB (`1024m`, `1g`), with `--memory-swap` the same, so the container never swaps. Less than `1g` is refused, with no exception. Empty until #138, as for `CONTAINER_CPUS`. |
+| `CONTAINER_CPUS` | (empty: no CPU limit) | A CPU limit for the container (`docker run --cpus`), at least 1, with at most two decimals. Less than 1 is refused, with no exception. Empty, for no limit, until a follow-up turns RoofController's default on ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6): see [The container's privileges and limits](#the-containers-privileges-and-limits). |
+| `CONTAINER_MEMORY` | (empty: no memory limit) | A memory limit for the container, at least `1g`: a whole number of MiB or GiB (`1024m`, `1g`), with `--memory-swap` the same, so the container never swaps. Less than `1g` is refused, with no exception. Empty until that follow-up, as for `CONTAINER_CPUS`. |
 | `CONTAINER_PIDS_LIMIT` | `512` | The most processes and threads the container runs at once (`--pids-limit`), from 256 to 32768 |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 22 s for the controller's shutdown, then up to 5 s to turn the relays off while the web UI gets 2 s ([Shutdown timing](#shutdown-timing)). |
 | `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
@@ -671,7 +671,8 @@ certificate, identity and settings
 directories must exist, and be root's; compose does not create them. Every controller and deployment check has the
 script's [privileges and limits](#the-containers-privileges-and-limits) (`x-hardening`), with the limits from
 `HVO_ROOF_PIDS_LIMIT` (default `512`), and a CPU and a memory limit only when `HVO_ROOF_CPUS` and `HVO_ROOF_MEMORY` (also
-the `memswap_limit`) are set: unset by default, with no limit, until #138. One that is set must be at least 1 vCPU and `1g`.
+the `memswap_limit`) are set: unset by default, with no limit, until a follow-up (#138 item 6). One that is set must be
+at least 1 vCPU and `1g`.
 The supervisor refuses an explicit value below that floor (exit 2) before starting either process or the deployment
 check. Compose does not check Docker's cgroup support: check `docker info` first. An explicit `0` is refused; leave a
 CPU or memory setting unset for no limit.
@@ -847,10 +848,26 @@ again; or `ignored` within 10 s of a start).
 
 ### The relays when the controller exits
 
-The SM-I-010 holds its relays as the controller last wrote them until the HAT loses power, so a controller that dies
-during a move (a crash, a kill, the kernel at a memory limit) would leave the direction relay and the STOP permit
-energized and the drive running. So whenever the controller is not running, the supervisor turns every relay off and
-verifies the HAT's relay register by reading it back:
+This is the container's fail-safe record for a controller that ends (#129, #138). It comes from the
+[hardware overview](projects/roof-controller-v4-rpi/hardware-overview.md), the controller's start and stop handling,
+the supervisor and the deploy script, and from the HAT emulator; nothing here was tested on the observatory's
+hardware.
+
+**Why it matters.** The SM-I-010 keeps its relays as the controller last wrote them over I²C. Nothing on the HAT turns
+them off when the process that writes them ends; they drop only when the HAT loses power (hardware overview, section
+8.4: "Pi/HAT power loss: relay drops out and STOP opens"). A process that is killed is not a power loss: the Pi, the
+Super Watchdog HAT and the SM-I-010 stay powered. So a controller that dies during a move (a crash, a kill, a forced
+restart, the kernel at a memory or process limit) leaves the direction relay (RLY1 or RLY2) and the STOP permit (RLY4)
+energized, and the VFD driving the roof, until something writes the register. That the HAT holds its relays is an
+installation assumption
+([commissioning.md, C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor));
+the emulated HAT holds them too. While the controller is dead, its own protections are gone with it: the limit inputs
+(IN1, IN2), the maximum-run watchdog, the operator lease, the drive-fault input (IN3) and the drive-running interlock
+(IN4). A graceful stop is different: `docker stop` gives the controller its shutdown, which stops the roof and verifies
+the relays off ([Shutdown timing](#shutdown-timing)).
+
+**The supervisor turns the relays off whenever the controller is not running**, and verifies the HAT's relay register
+by reading it back:
 
 - as soon as the controller has exited, whatever ended it (a crash, a kill, a failed start, a requested restart),
   before it decides when to start it again;
@@ -890,9 +907,7 @@ out alone and named in its log: those files hold only catalogue settings, and th
 anything else cannot be read (a shipped or environment settings file, the secrets directory), it cannot tell which HAT
 the controller uses, and it writes nothing and fails rather than guess. Each run must end within
 `HVO_SUPERVISOR_RELAYS_OFF_SECONDS` (5 s) or is killed. The
-[deployment check](#the-deployment-check) never turns the relays off: another controller may be driving the HAT. As
-everywhere, the read-back proves the HAT's register, not the relay contacts
-([commissioning.md C2](commissioning.md#c2-relay-register-versus-contacts)).
+[deployment check](#the-deployment-check) never turns the relays off: another controller may be driving the HAT.
 
 ```text
 [relays-off] Every relay is off on the HAT on I2C bus 1 at address 0x0E: the relay register reads back 0x00 (attempt 1, 45 ms).
@@ -905,25 +920,27 @@ everywhere, the read-back proves the HAT's register, not the relay contacts
 [supervisor] The controller is left stopped with the relays off (verified by read-back).
 ```
 
-On the x64 emulator rig the relays were off 0.10-0.17 s after the controller was killed during travel, and the
-emulated roof still 0.30-0.38 s after the kill, before the supervisor's backoff and the new start
+**Timing.** On the x64 emulator rig the relays were off 0.10-0.17 s after the controller was killed during travel, and
+the emulated roof still 0.30-0.38 s after the kill, before the supervisor's backoff and the new start
 ([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)
-step 6; `deploy-scenarios.sh supervisor` asserts 1 s and 2 s and records the times at each run). Before, the relays were
-held 2.0-2.4 s, until the restarted controller turned them off, and for good when it could not start. On the Pi, .NET
-starts more slowly: that is not measured.
+step 6; `deploy-scenarios.sh supervisor` asserts 1 s and 2 s and records the times at each run). Before, when only the
+restarted controller turned them off, they were held 2.0-2.4 s (the emulated roof, at 0.1 m/s, went on 0.23 m), and for
+good when the controller could not start again. On `docker stop` the whole stop, its last relay-off included, ends within
+27 s of the signal ([Shutdown timing](#shutdown-timing)).
 
-What it cannot cover:
+**What stops the roof while the controller is dead**, in the order it usually comes. The last three are what is left
+when the supervisor cannot turn the relays off (the whole container killed, a HAT that does not answer):
 
-- **The whole container killed** (`docker kill`, or the Docker daemon or the Pi failing): nothing in the container runs
-  to turn the relays off. They stay held until the container starts again, when its supervisor turns them off first; a
-  container killed by hand stays down. Stop the container with `docker stop`, as the deploy script, Compose and the
-  installer do.
-- **The supervisor itself killed with SIGKILL** (by hand inside the container, or by the kernel): `tini` and the
-  container end with it, and Docker starts the container again (`unless-stopped`); its new supervisor turns the relays
-  off before it starts the controller (0.42-0.44 s after the kill on the rig).
-- **A HAT that does not answer**, or a relay the read-back still shows on: the relays cannot be verified off, so the
-  controller is held stopped (above). The supervisor says so (`WARNING`s) and keeps trying; until then use the
-  independent stop (commissioning C1).
+1. **The supervisor's relay-off**, as soon as the controller has exited (above). The restarted controller's
+   initialization turns every relay off and verifies the register again before it does anything else
+   (`RoofControllerServiceV4.Initialize`, step 1).
+2. **The limit's run-circuit contact.** At the destination limit, the ME-8108's normally closed contact (terminals 1-2),
+   in series with that direction's run input (hardware overview, sections 8.1 and 8.2), removes the run command, and the
+   drive stops by its stop method (`P111`). The relay stays energized, with the run circuit open, until something turns
+   it off (commissioning C1 step 4, and its installation assumption).
+3. **The drive's own protection:** a VFD trip, such as the stall trip at the hard stop (commissioning C1).
+4. **The independent stop:** an E-stop that opens the STOP loop (`TB-1`) or removes the drive's power, without the Pi
+   (commissioning C1 step 1, an installation assumption).
 
 **Out of memory.** When the container reaches its memory limit, or the Pi runs out of memory, the kernel ends the
 process with the highest OOM score, which counts both its memory and its `oom_score_adj`. The supervisor raises the web
@@ -935,6 +952,48 @@ observed on the rig are in
 [commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)
 step 13. Its relay-off runs keep its own value. The raises count on the whole Pi too: when the Pi itself runs out of
 memory, the web UI and then the controller are favoured over the Pi's other processes with the same value.
+
+The container's limits ([The container's privileges and limits](#the-containers-privileges-and-limits)) are more ways
+for the kernel to end a process, each handled as any other exit. At a memory limit (`CONTAINER_MEMORY`, when one is
+given) it ends one as above: the web UI is started again alone, and the controller after its relays are turned off. At
+the future `2g` default against the 90-220 MiB the two use, only a runaway reaches it; one that reaches it again soon
+after each start ends in the crash loop, with the relays off. The process limit makes a new thread fail beyond
+`CONTAINER_PIDS_LIMIT`, which .NET reports as an `OutOfMemoryException` in the thread that asked: a crash. A CPU limit
+never ends a process; it only delays. The CPU and memory limits stay off by default until a follow-up turns them on
+([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6).
+
+What it cannot cover:
+
+- **The whole container killed** (`docker kill`), **the Docker daemon dying**, or the Pi hanging: nothing in the
+  container runs to turn the relays off. They stay held until the container starts again, when its supervisor turns them
+  off before it starts the controller; a container killed by hand stays down. Until then only the limit's run-circuit
+  contact, a drive trip or the independent stop stop the roof. Stop the container with `docker stop`, as the deploy
+  script, Compose and the installer do.
+- **The supervisor itself killed with SIGKILL** (by hand inside the container, or by the kernel): `tini` and the
+  container end with it, and Docker starts the container again (`unless-stopped`); its new supervisor turns the relays
+  off before it starts the controller (0.42-0.44 s after the kill on the rig).
+- **A HAT that does not answer**, or a relay the read-back still shows on: the relays cannot be verified off, so the
+  controller is held stopped (above). The supervisor says so (`WARNING`s) and keeps trying; until then use the
+  independent stop (commissioning C1).
+- **The read-back proves the HAT's register, not the relay contacts**: a welded contact passes it
+  ([commissioning.md C2](commissioning.md#c2-relay-register-versus-contacts)).
+- **The Pi's timings are not measured.** The relay-off times above, and the stop's, are from the x64 emulator rig. On the
+  Pi, .NET starts more slowly, so the relay-off helper takes longer within its 5 s; confirm it during commissioning
+  (C11 step 6, with the HAT emulator on a Pi-class machine, never the real roof).
+
+Recommendations, each separate from this change, and none of them a change to the drive or its wiring:
+
+1. **Keep the host's OOM killer off the container.** `EXTRA_DOCKER_ARGS="--oom-score-adj -500"` (allowed) makes the
+   kernel end other processes on the Pi before the controller's when the Pi itself runs out of memory. Trade-off:
+   another service on the Pi is ended first. On the emulator: check `/proc/<pid>/oom_score_adj` in the container. The
+   supervisor's raises are relative to its own value, so the web UI and the controller are still ended before it.
+2. **Drop the relays when the controller stops writing them.** A HAT, or HAT firmware, with a communications watchdog
+   that turns its relays off when they are not refreshed in time would close the window a whole-container kill leaves.
+   The SM-I-010 has no such feature that this repository documents. Trade-off: the controller must refresh within the
+   period, and a missed refresh stops a move. On the emulator: model the watchdog in the emulated HAT and kill the
+   controller during travel.
+3. **Confirm the independent stop.** An E-stop that opens `TB-1` without the Pi is already an installation assumption
+   (commissioning C1); it is the only stop while the controller is dead and the roof is short of its limit.
 
 ### The web UI's user and settings
 
@@ -1053,20 +1112,21 @@ the controller with them, in the supervisor's place, and exits with its exit cod
 
 The deploy script, the Compose profiles and so the installer run the controller's container (and the deployment check's)
 with the narrowest privileges the supervisor and the HAT allow, and with a process limit. A CPU and a memory limit are
-given only when they are set: none is by default until the supervisor de-energises the relays whenever the controller
-exits ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)). Each is one more way for the kernel to
-end or starve the controller, and a controller ended while the roof moves leaves the drive running
-([below](#what-a-killed-controller-leaves-the-relays-and-the-drive-in)). RoofController's future default of 1 vCPU and
-2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up once #138 is merged.
+given only when they are set: none is by default. Each is one more way for the kernel to end or starve the controller;
+a controller ended while the roof moves has its relays turned off by the supervisor at once, and is started again only
+once they are verified off ([The relays when the controller exits](#the-relays-when-the-controller-exits)).
+RoofController's default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up
+([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6), not here: until then the limits are
+opt-in.
 
 | | What the container gets | Why |
 |---|---|---|
 | Root filesystem | Read-only (`--read-only`) | Nothing in the container can change its programs or settings files. |
 | Writable places | tmpfs: `/tmp` (64 MiB: .NET's diagnostics sockets), `/run/hvo-roof` (4 MiB: the [supervisor's](#the-containers-two-processes) state, control directory and the web UI's private copies) and `/root/.aspnet` (4 MiB: ASP.NET Core's key ring, which the controller uses for nothing that must outlive the container). A volume of the container's own at `/var/lib/hvo-roof-web`: the web UI's sign-in keys, so people stay signed in when the container restarts. And the mounts: the secrets, certificate, identity and settings directories. | These are every place the controller, the web UI, the supervisor and .NET write, found by running the container and listing its changes (`docker diff`). A replaced container's volume goes with it (`docker rm -v`). |
-| Capabilities | None (`--cap-drop ALL`) but `CHOWN`, `KILL`, `SETGID` and `SETUID` | The supervisor's: `CHOWN` to give the web UI its copies and directories, `SETUID` and `SETGID` to start it as the `app` user (`setpriv`), and `KILL` to signal it, a process of another user. Without `KILL` the supervisor cannot tell whether the web UI runs, and blocks waiting for it, so it no longer restarts a crashed controller; it is kept for that reason. The web UI runs with none. The HAT's devices need none: the controller opens them as root, their owner. |
+| Capabilities | None (`--cap-drop ALL`) but `CHOWN`, `KILL`, `SETGID` and `SETUID` | The supervisor's: `CHOWN` to give the web UI its copies and directories, `SETUID` and `SETGID` to start it as the `app` user (`setpriv`), and `KILL` to signal it, a process of another user, and to end its preparation's processes, some of which run as that user. Without `KILL` the supervisor cannot tell whether the web UI runs, and blocks waiting for it, so it no longer restarts a crashed controller; it is kept for that reason. The web UI runs with none. The HAT's devices need none: the controller opens them as root, their owner. |
 | Privilege escalation | `--security-opt no-new-privileges` | No process can gain privileges, through a setuid program or otherwise. |
-| CPU | None by default; `CONTAINER_CPUS` (`--cpus`), at least 1, when set | RoofController's 1 vCPU floor; the 1 vCPU default is enabled by a follow-up after #138 merges. |
-| Memory | None by default; `CONTAINER_MEMORY` (`--memory`), at least `1g`, with `--memory-swap` the same, when set | RoofController's 1 GiB floor; the 2 GiB default is enabled by a follow-up after #138 merges. No swap: a controller that runs out of memory is ended and started again (see below), rather than slowed down while the roof moves. |
+| CPU | None by default; `CONTAINER_CPUS` (`--cpus`), at least 1, when set | RoofController's 1 vCPU floor; the 1 vCPU default is turned on by a follow-up (#138 item 6). |
+| Memory | None by default; `CONTAINER_MEMORY` (`--memory`), at least `1g`, with `--memory-swap` the same, when set | RoofController's 1 GiB floor; the 2 GiB default is turned on by a follow-up (#138 item 6). No swap: a controller that runs out of memory is ended, its relays turned off, and started again ([The relays when the controller exits](#the-relays-when-the-controller-exits)), rather than slowed down while the roof moves. |
 | Processes and threads | `CONTAINER_PIDS_LIMIT`, default 512 (`--pids-limit`) | Bounds a runaway that would take the Pi's processes. On the HAT emulator rig the container ran 44 tasks idle and at most 85 under 64 clients at once (API, web UI and camera streams), so 512 is about six times the most measured. |
 
 The privileges are not settings, and the limits have settings of their own: `EXTRA_DOCKER_ARGS` can change neither
@@ -1111,93 +1171,6 @@ more than the limit's CPU time in a 100 ms period (1 vCPU's worth at the floor),
 next period begins. On the x64 emulator rig with 2 CPUs that happened 7 times while the container started (57 ms in
 all), and twice more under the load above (117 ms in all); on the Pi's slower cores it may happen more. A busy web UI at
 the same time as a move could delay the controller's safety loops by up to the rest of a period.
-
-### What a killed controller leaves the relays and the drive in
-
-This is the fail-safe record the memory and CPU limits needed (#129); until the supervisor de-energises the relays
-whenever the controller exits ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)), it is why they
-are off by default. It comes from the
-[hardware overview](projects/roof-controller-v4-rpi/hardware-overview.md), the controller's start and stop handling,
-the supervisor and this script, and from the HAT emulator; nothing here was tested on the observatory's hardware.
-
-> **A killed controller does not de-energise the motor drive.** If the controller process is killed while the roof
-> moves (by the kernel at a memory limit, by a forced restart, by `docker kill`, or by a crash), the direction relay
-> (RLY1 or RLY2) and the STOP permissive (RLY4) stay energised, and the VFD keeps driving the roof, until a restarted
-> controller reaches its initialization and turns the relays off, the roof reaches its limit, the drive trips, or
-> someone uses the independent stop. A controller that cannot start again leaves them energised after that too: nothing
-> else turns them off ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138)).
-
-Why: the SM-I-010 keeps its relays as the controller last wrote them over I2C. Nothing on the HAT turns them off when
-the process that writes them ends; they drop only when the HAT loses power (hardware overview, section 8.4: "Pi/HAT
-power loss: relay drops out and STOP opens"). A process that is killed is not a power loss: the Pi, the Super Watchdog
-HAT and the SM-I-010 stay powered. That the HAT holds its relays is an installation assumption
-([commissioning.md, C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor));
-the emulated HAT holds them too. A graceful stop is different: `docker stop` gives the controller its shutdown, which
-stops the roof and verifies the relays off ([Shutdown timing](#shutdown-timing)).
-
-While the controller is dead, its own protections are gone with it: the limit inputs (IN1, IN2), the maximum-run
-watchdog, the operator lease, the drive-fault input (IN3) and the drive-running interlock (IN4). What stops the roof
-then, in the order it usually comes:
-
-1. **The restarted controller, if it gets as far as its initialization.** The [supervisor](#the-containers-two-processes)
-   starts the controller again after its backoff: 1 s after a first crash, then 2, 4 and 8 s after crashes within 120 s.
-   The controller's initialization turns every relay off and verifies the HAT's register before it does anything else
-   (`RoofControllerServiceV4.Initialize`, step 1); a start that fails before then (below) turns nothing off. On the x64
-   emulator rig the relays were held for 2.4 s after a SIGKILL during travel, and the emulated roof (0.1 m/s) went on
-   0.23 m; `deploy-scenarios.sh supervisor` records the time at each run (C11 step 6). On the Pi, .NET starts more
-   slowly: expect several seconds more. That is not measured on the Pi.
-2. **The limit's run-circuit contact.** At the destination limit, the ME-8108's normally closed contact (terminals 1-2),
-   in series with that direction's run input (hardware overview, sections 8.1 and 8.2), removes the run command, and the
-   drive stops by its stop method (`P111`). The relay stays energised until the controller starts again, with the run
-   circuit open (commissioning C1 step 4, and its installation assumption).
-3. **The drive's own protection:** a VFD trip, such as the stall trip at the hard stop (commissioning C1).
-4. **The independent stop:** an E-stop that opens the STOP loop (`TB-1`) or removes the drive's power, without the Pi
-   (commissioning C1 step 1, an installation assumption).
-
-What else follows:
-
-- **A controller that cannot start again leaves the drive energised.** The supervisor itself never writes the relays:
-  only a controller that reaches its initialization turns them off. A start can fail before that, and every start can:
-  the controller loads and validates its settings files and secrets before the host is built or the HAT is touched
-  (`Program.Main`), and a settings file it refuses ends it there with exit code 1; a start killed again before its
-  initialization (a memory limit reached at once, say) is the same. After five such crashes within 120 s the supervisor
-  leaves the controller stopped (`crash-loop`) and writes nothing to the relays either. So a controller killed during
-  travel whose restarts all fail before their initialization leaves RLY1 or RLY2 and RLY4 energised through the crash
-  loop and after it, until the roof reaches its limit, the drive trips, someone uses the independent stop, something
-  else writes the register, or the HAT loses power. The relays are off in `crash-loop` only when a start before it got
-  as far as its initialization, or when they were off before the crashes began. Closing this gap is
-  [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138), not yet done: the supervisor is to de-energise
-  and verify every relay whenever the controller exits, before each restart and in the crash-loop branch. The
-  container's CPU and memory limits stay off by default until it is merged.
-- If the supervisor or `tini` is killed, the container ends and every process in it with it. Docker starts it again
-  (`--restart unless-stopped`) and the new controller turns the relays off, unless it was `docker stop`ped or
-  `docker kill`ed: a container ended by hand stays down, with the relays held, until it is started again.
-- A memory limit, when one is given, adds one more way for the kernel to kill a process: the container reaching
-  `CONTAINER_MEMORY`. The kernel then ends the process in the container that uses the most memory, the controller or the
-  web UI (each a .NET process); the web UI is started again alone, the controller as above. At the future `2g` default against the 90-220
-  MiB the two use, only a runaway reaches it, but a runaway that reaches it again soon after each start is the crash loop
-  above.
-- The process limit makes a new thread fail beyond `CONTAINER_PIDS_LIMIT`, which .NET reports as an
-  `OutOfMemoryException` in the thread that asked: a crash, handled as above.
-- A CPU limit only delays (above).
-
-Recommendations, each separate from this change, and none of them a change to the drive or its wiring:
-
-1. **Make the web UI the kernel's first choice at the memory limit.** The supervisor could raise the web UI's
-   `oom_score_adj` (to 500, say) before it starts it, which needs no capability. A web UI that leaks would then be ended
-   and restarted, and the controller left running. Trade-off: none for the roof. On the emulator: hold memory in the web
-   UI's process, lower the container's limit with `docker update`, and check that the controller's process and the
-   relays are unchanged.
-2. **Keep the host's OOM killer off the container.** `EXTRA_DOCKER_ARGS="--oom-score-adj -500"` (allowed) makes the
-   kernel end other processes on the Pi before the controller's when the Pi itself runs out of memory. Trade-off:
-   another service on the Pi is ended first. On the emulator: check `/proc/<pid>/oom_score_adj` in the container.
-3. **Drop the relays when the controller stops writing them.** A HAT, or HAT firmware, with a communications watchdog
-   that turns its relays off when they are not refreshed in time would end the window between the kill and the restart.
-   The SM-I-010 has no such feature that this repository documents. Trade-off: the controller must refresh within the
-   period, and a missed refresh stops a move. On the emulator: model the watchdog in the emulated HAT and kill the
-   controller during travel.
-4. **Confirm the independent stop.** An E-stop that opens `TB-1` without the Pi is already an installation assumption
-   (commissioning C1); it is the only stop while the controller is dead and the roof is short of its limit.
 
 ## Health and readiness
 

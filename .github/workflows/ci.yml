@@ -768,8 +768,8 @@ jobs:
           # Every controller and deployment check has the deploy script's privileges and limits (x-hardening;
           # docs/deployment.md, "The container's privileges and limits"): a read-only root filesystem and its tmpfs
           # mounts, only the supervisor's capabilities, no-new-privileges, the process limit, no CPU or memory limit
-          # by default (until #138) and the ones given with no swap, and for a controller the volume for the web UI's
-          # keys.
+          # by default (until the follow-up, #138 item 6) and the ones given with no swap, and for a controller the
+          # volume for the web UI's keys.
           for limits in "default" "floor" "future" "given"; do
             for profile in pi pi-lan-http emulator; do
               if [[ "${limits}" == "given" ]]; then
@@ -777,7 +777,7 @@ jobs:
               elif [[ "${limits}" == "floor" ]]; then
                 config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=1g docker compose --profile "${profile}" config --format json)
               elif [[ "${limits}" == "future" ]]; then
-                # Still explicit until #138: this is the future 1 vCPU / 2 GiB default, not today's default.
+                # Still explicit until the follow-up (#138 item 6): the future 1 vCPU / 2 GiB default, not today's.
                 config=$(HVO_ROOF_CPUS=1 HVO_ROOF_MEMORY=2g docker compose --profile "${profile}" config --format json)
               else
                 config=$(docker compose --profile "${profile}" config --format json)

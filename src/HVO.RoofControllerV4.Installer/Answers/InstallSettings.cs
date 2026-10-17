@@ -78,8 +78,8 @@ public sealed record ControllerSettings
 
     /// <summary>
     /// The controller container's resource limits (docs/deployment.md, "The container's privileges and limits"): the
-    /// process limit, and a CPU and a memory limit only when given (none by default, until #138). Kept in the install
-    /// record, so an upgrade and a rollback give the container the same.
+    /// process limit, and a CPU and a memory limit only when given (none by default until a follow-up, #138 item 6).
+    /// Kept in the install record, so an upgrade and a rollback give the container the same.
     /// </summary>
     public ContainerResources Resources { get; init; } = new();
 
@@ -191,11 +191,11 @@ public sealed record ControllerSettings
 /// <summary>
 /// The controller container's resource limits, as the deploy script gives them (CONTAINER_CPUS, CONTAINER_MEMORY and
 /// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"). The process limit is always given.
-/// The CPU and memory limits are given only when set: none is by default until the supervisor de-energises the relays
-/// whenever the controller exits (#138), as a limit is one more way for the kernel to end the controller mid-motion. One
+/// The CPU and memory limits are given only when set: none is by default until a follow-up turns RoofController's
+/// default on (#138 item 6), as a limit is one more way for the kernel to end the controller mid-motion. One
 /// that is set is at least the RoofController floor of 1 vCPU and 1 GiB (owner decision on #129, 2026-10-16); less is
 /// refused, with no exception.
-/// The future default is 1 vCPU / 2 GiB, enabled by a follow-up after #138. The container gets no swap beyond its memory.
+/// The future default is 1 vCPU / 2 GiB, turned on by that follow-up. The container gets no swap beyond its memory.
 /// </summary>
 public sealed partial record ContainerResources
 {

@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused, with no exception (also before
   Compose starts either process or its deployment check). The install
   record keeps them, and upgrade and rollback give them again. **No CPU or memory limit is given by default yet:** the
-  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up once the
-  supervisor de-energises the relays whenever the controller exits (#138), because a killed or crash-looping controller leaves the drive running (#129).
+  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up (#138
+  item 6).
 - State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
   `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
   the settings files). `upgrade` and `rollback` refuse (exit 3, nothing changed) a release that cannot read the stores
@@ -116,10 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`CHOWN`, `KILL`, `SETGID`, `SETUID`) and `no-new-privileges`, from the deploy script, the Compose profiles and so the
   installer. The supervisor's forced-restart directory is now root's, writable by the web UI's group. What a controller
   killed at its limits, or otherwise, leaves the relays and the drive in is recorded in
-  [deployment.md](docs/deployment.md#what-a-killed-controller-leaves-the-relays-and-the-drive-in): the relays stay held
-  until a restarted controller reaches its initialization and turns them off, or the roof reaches its limit. A
-  controller that cannot start again (a crash loop of starts that fail before the initialization) leaves them held, as
-  the supervisor writes nothing to the relays; that is #138 (#129).
+  [deployment.md](docs/deployment.md#the-relays-when-the-controller-exits) (#129): the supervisor now turns them off
+  whenever the controller exits (#138, under Fixed).
 
 ## [4.1.1] - 2026-10-15
 

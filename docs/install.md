@@ -612,8 +612,8 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
-| `controller.resources.cpus` | A CPU limit for the controller container, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until [#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) |
-| `controller.resources.memory` | A memory limit for it, at least `1g`: a whole number of MiB or GiB, such as `1024m` or `1g`; the container gets no swap beyond it | None: no memory limit, until #138 |
+| `controller.resources.cpus` | A CPU limit for the controller container, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until a follow-up turns RoofController's default on ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6) |
+| `controller.resources.memory` | A memory limit for it, at least `1g`: a whole number of MiB or GiB, such as `1024m` or `1g`; the container gets no swap beyond it | None: no memory limit, until that follow-up |
 | `controller.resources.pidsLimit` | The most processes and threads it runs at once, from 256 to 32768 | `512` |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
@@ -642,11 +642,10 @@ saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on i
 ### The controller's limits
 
 The controller's container (a rig's too) runs with at most 512 processes and threads, and, for now, with no CPU or
-memory limit. A limit is one more way for the kernel to end the controller, and a controller ended while the roof
-moves leaves the drive running until a restarted controller turns the relays off, or, when it cannot start again,
-until the roof reaches its limit. RoofController's future default of 1 vCPU and 2 GiB is turned on by a follow-up
-once the supervisor de-energises the relays whenever the controller exits
-([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138);
+memory limit. A limit is one more way for the kernel to end the controller; the container's supervisor then turns the
+relays off at once, and starts the controller again only once they are verified off
+([deployment.md](deployment.md#the-relays-when-the-controller-exits)). RoofController's future default of 1 vCPU and
+2 GiB is turned on by a follow-up ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6;
 [deployment.md](deployment.md#the-containers-privileges-and-limits)). Until then, give a CPU or memory limit in the
 answers' `controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
 

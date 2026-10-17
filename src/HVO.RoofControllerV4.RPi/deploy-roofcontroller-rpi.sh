@@ -32,8 +32,8 @@ set -euo pipefail
 #   /tmp, /run/hvo-roof and /root/.aspnet, and a volume of the container's own for the web UI's sign-in keys), no Linux
 #   capabilities but CHOWN, KILL, SETGID and SETUID (the supervisor's, to run the web UI as its own user),
 #   no-new-privileges, and limits: CONTAINER_PIDS_LIMIT (default 512) always, and CONTAINER_CPUS and CONTAINER_MEMORY (no
-#   swap) only when they are set, at least 1 vCPU and 1g. They are not set by default until the supervisor de-energises
-#   the relays whenever the controller exits (#138). Before anything changes, Docker on the Pi must report that it
+#   swap) only when they are set, at least 1 vCPU and 1g. They are not set by default until a follow-up turns
+#   RoofController's default on (#138 item 6). Before anything changes, Docker on the Pi must report that it
 #   enforces the limits this run gives, and at least as many CPUs as a CPU limit (a memory limit above its memory is a
 #   cap, not a reservation: a warning says so); the new controller's container must then carry exactly them. The
 #   pre-flight container runs with the same. --rollback gives the version it brings back the same limits (docker
@@ -132,10 +132,9 @@ EXTRA_DOCKER_ARGS=${EXTRA_DOCKER_ARGS:-}
 # pre-flight container too: the most processes and threads at once (256 to 32768), always; CPUs as `docker run --cpus`
 # takes them (2, 2.5) and memory as a whole number of MiB or GiB (1024m, 1g; the container gets no swap beyond it), each
 # only when set. Empty, the default, gives no CPU or memory limit: the kernel would end a controller that reached one
-# mid-motion, and until the supervisor de-energises the relays whenever the controller exits (#138) a killed controller
-# leaves the drive running. One that is set must be at least RoofController's floor of 1 vCPU and 1g; less
-# is refused. The future default is 1 vCPU / 2 GiB, enabled by a follow-up after #138. --rollback gives them to the
-# version it brings back.
+# mid-motion (its supervisor then turns the relays off). One that is set must be at least RoofController's floor of
+# 1 vCPU and 1g; less is refused. The future default is 1 vCPU / 2 GiB, turned on by a follow-up (#138 item 6).
+# --rollback gives them to the version it brings back.
 CONTAINER_CPUS=${CONTAINER_CPUS:-}
 CONTAINER_MEMORY=${CONTAINER_MEMORY:-}
 CONTAINER_PIDS_LIMIT=${CONTAINER_PIDS_LIMIT:-512}
