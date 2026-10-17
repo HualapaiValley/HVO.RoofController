@@ -18,7 +18,7 @@ COMMIT="0123456789abcdef0123456789abcdef01234567"
 RELEASE_URL="https://github.com/HualapaiValley/HVO.RoofController/releases/download/v${VERSION}"
 PI_DESCRIPTION="Linux on aarch64, Debian GNU/Linux 12 (bookworm), Raspberry Pi 5 Model B Rev 1.0 (linux-arm64)"
 # The real commands install.sh and the fakes use; everything else on the PATH is a fake, or missing.
-REAL_TOOLS="cat tr awk sed grep tail head dirname mktemp rm cp chmod mkdir ln wc"
+REAL_TOOLS="cat tr awk sed grep tail head dirname mktemp rm rmdir cp chmod mkdir ln wc find"
 # The fakes (tests/install/fakes/fake-command, linked under each name).
 FAKES="uname sysctl sw_vers getconf ldd id sudo curl docker dpkg apt-get raspi-config timedatectl ss lsof df tar sha256sum shasum gh date"
 # A Mac with Apple silicon (also: make_mac).
@@ -59,6 +59,8 @@ setup() {
   mkdir -p "${FAKE_STATE_DIR}" "${WORK}/fakebin" "${WORK}/realbin" "${WORK}/tmp" "${WORK}/home" "${WORK}/docker" \
     "${WORK}/release" "${WORK}/root/etc" "${WORK}/root/proc/device-tree" "${WORK}/root/dev"
   : >"${FAKE_STATE_DIR}/calls.log"
+  # TMPDIR is a folder only this user can change, whatever the umask: install.sh downloads only into such a one.
+  chmod 0700 "${WORK}/tmp"
   local name
   for name in ${FAKES}; do
     ln -s "${TESTS_DIR}/fakes/fake-command" "${WORK}/fakebin/${name}"
@@ -485,7 +487,8 @@ test_the_controller_on_a_pi_is_downloaded_checked_and_started_as_root() {
   assert_output_not_contains "FAIL"
   assert_called "root docker version --format {{.Server.Version}}"
   assert_called "df -Pk ${WORK}/docker"
-  assert_called "gh attestation verify ${WORK}/tmp/hvo-roof-install."
+  # By TMPDIR's physical path (on macOS, its /var is a link to /private/var).
+  assert_called "gh attestation verify $(cd -P -- "${WORK}" && pwd)/tmp/hvo-roof-install."
   assert_called "--repo HualapaiValley/HVO.RoofController --signer-workflow HualapaiValley/HVO.RoofController/.github/workflows/release.yml --source-ref refs/tags/v${VERSION}"
   assert_installer "root=yes"
   assert_installer "terminal=no"
@@ -496,7 +499,7 @@ test_the_controller_on_a_pi_is_downloaded_checked_and_started_as_root() {
 
 test_the_download_is_removed_from_a_tmpdir_with_a_quote_in_its_name() {
   local tmpdir="${WORK}/it's here"
-  mkdir "${tmpdir}"
+  mkdir -m 0700 "${tmpdir}"
   install_sh TMPDIR="${tmpdir}" -- --roles rig
 
   assert_status 0
@@ -1337,7 +1340,7 @@ test_a_download_that_is_not_the_release_s_is_not_started() {
 }
 
 test_a_tmpdir_with_a_backslash_in_its_name_is_hashed() {
-  mkdir -p "${WORK}/back\\slash"
+  mkdir -m 0700 "${WORK}/back\\slash"
   install_sh TMPDIR="${WORK}/back\\slash" -- --roles rig
 
   assert_status 0
@@ -1448,6 +1451,45 @@ test_an_installer_that_names_no_commit_is_not_started() {
   assert_status 1
   assert_output_contains "says its version is '${VERSION}+local'"
   assert_installer_did_not_run
+}
+
+# install.sh downloads the installer, checks it and starts it as root from a folder of its own, made only in a TMPDIR
+# that, with every folder above it, is root's or yours and writable by no one else unless sticky: in any other, someone
+# else could change the installer once it is checked and before it runs as root. Nothing is made there at all.
+test_a_tmpdir_others_can_change_is_refused_and_nothing_is_made_in_it() {
+  local tmpdir
+  mkdir -p "${WORK}/shared/inner"
+  chmod 0777 "${WORK}/shared"
+  chmod 0700 "${WORK}/shared/inner"
+  for tmpdir in "${WORK}/shared" "${WORK}/shared/inner" "${WORK}/missing"; do
+    install_sh TMPDIR="${tmpdir}" -- --roles rig
+
+    assert_status 1
+    assert_output_contains "TMPDIR (${tmpdir}) is not a folder only you and root can change: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change the installer after it is checked and before it runs as root. Nothing was made in it."
+    assert_installer_did_not_run
+  done
+  [ -z "$(ls -A "${WORK}/shared/inner")" ] || fail_test "something was made in ${WORK}/shared/inner"
+  [ "$(ls -A "${WORK}/shared")" = inner ] || fail_test "something was made in ${WORK}/shared: $(ls -A "${WORK}/shared")"
+}
+
+test_a_sticky_tmpdir_as_tmp_is_and_a_link_to_a_private_one_are_used() {
+  local physical
+  physical=$(cd -P -- "${WORK}" && pwd)
+  mkdir "${WORK}/sticky"
+  chmod 1777 "${WORK}/sticky"
+  install_sh TMPDIR="${WORK}/sticky" -- --roles rig
+  assert_status 0
+  assert_output_contains "hvo-roof-install ran"
+  assert_called "gh attestation verify ${physical}/sticky/hvo-roof-install."
+  [ -z "$(ls -A "${WORK}/sticky")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${WORK}/sticky")"
+
+  mkdir -m 0700 "${WORK}/real"
+  ln -s "${WORK}/real" "${WORK}/link"
+  install_sh TMPDIR="${WORK}/link" -- --roles rig
+  assert_status 0
+  assert_output_contains "hvo-roof-install ran"
+  assert_called "gh attestation verify ${physical}/real/hvo-roof-install."
+  [ -z "$(ls -A "${WORK}/real")" ] || fail_test "the download was left in TMPDIR: $(ls -A "${WORK}/real")"
 }
 
 test_a_noexec_tmpdir_is_explained() {

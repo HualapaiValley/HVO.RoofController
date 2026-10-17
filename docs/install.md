@@ -218,7 +218,11 @@ change (Docker's engine does not answer once installed, or raspi-config can only
 last line names the change. For I2C from the next start, restart the Pi and run the script again.
 
 Then it downloads `hvo-roof-install-<platform>` and `SHA256SUMS` into a folder of its own in `TMPDIR`, which it removes
-afterwards. It refuses the installer unless:
+afterwards. It makes that folder, mode 0700, only in a `TMPDIR` (`/tmp` when it is not set) that no one but you and root
+can change: followed to its physical path, it and every folder above it, up to `/`, must be a real folder of yours or
+root's that no one else can write to unless it is sticky, as `/tmp` is. Otherwise it stops and makes nothing there,
+since someone else could change the installer between its check and its start as root. It removes only that folder,
+only while it is still the one made, and only the two files it put there. It refuses the installer unless:
 
 - its SHA-256 is the one `SHA256SUMS` lists;
 - its attestation, when `gh` is installed and signed in, says the release workflow built it from the release's tag;
@@ -1363,8 +1367,9 @@ Start with what was said: each check that fails, each refusal and each failed st
 | `FAIL  Docker is installed, and its engine did not answer …` | Start it: `sudo systemctl enable --now docker`, or open Docker Desktop. |
 | `FAIL  The controller drives the real HAT, on the observatory's Raspberry Pi, and this is not a Pi …` | The controller runs only on the observatory's Pi. To try it on another machine, choose a test rig (`--roles rig`). |
 | `… is yours, and never installed as root …` | Run it as yourself, without `sudo`: `hvo-roof` and the Mac app are installed for you. |
+| `TMPDIR (…) is not a folder only you and root can change: …` | Run it with `TMPDIR` unset, so it uses `/tmp`, or set `TMPDIR` to a folder of yours that no one else can write to: `mkdir -m 0700 ~/.cache/hvo-tmp`. |
 | `The installer's temporary folder … is not one only root can change: …` | Run it with `TMPDIR` unset, so it uses `/tmp` (`install.sh` does), or set `TMPDIR` to a folder that root owns and no one else can write to, such as one made with `sudo install -d -m 0700 /var/tmp/hvo-roof` ([Temporary files](#temporary-files)). |
-| `Programs cannot run from … (it is mounted noexec) …` | Give it a folder that programs can run from: `mkdir -p ~/.cache/hvo-tmp`, then put `TMPDIR=~/.cache/hvo-tmp` before `bash` in the command. |
+| `Programs cannot run from … (it is mounted noexec) …` | Give it a folder that programs can run from, and that only you can change: `mkdir -p -m 0700 ~/.cache/hvo-tmp`, then put `TMPDIR=~/.cache/hvo-tmp` before `bash` in the command. |
 | `… SHA-256 is …, and SHA256SUMS says …` | The download was not the release's: run it again. A proxy that changes downloads does this too. If it happens again, open an issue. |
 | `note  its attestation was not checked: gh …` | Only a note: the SHA-256 and the version were checked. To have the attestation checked too, install [gh](https://cli.github.com) and sign in (`gh auth login`). |
 
