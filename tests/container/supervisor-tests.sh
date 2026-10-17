@@ -1005,6 +1005,10 @@ test_relays_not_verified_are_tried_again_before_the_next_start() {
   wait_until 5 "the controller started again" started controller 2 || return
   expect_equal "events after the kill" "$(controller_and_relay_events | tail -n 5 | paste -sd ',')" \
     "relays-off run,relays-off done 1,relays-off run,relays-off done 0,controller start"
+  # The relay-off before the start verified them, so the controller was not held (the hold would also turn them off, but
+  # only on a later try, as a warning).
+  ! grep -qF "HELD STOPPED" "${WORK}/supervisor.log" \
+    || fail_test "the controller was held although the relay-off before its start verified the relays off"
   expect_relays_never_turned_off_under_a_running_controller
 }
 
@@ -1270,6 +1274,20 @@ test_a_stop_during_the_first_relay_off_starts_nothing_and_ends_within_the_grace_
   stop_and_expect_it_within 30
 }
 
+test_a_stop_during_a_first_relay_off_that_verifies_starts_nothing_and_ends_within_the_grace_period() {
+  # As above, but the relay-off verifies the relays off, so only the stop checks keep the controller from starting (the
+  # hold would not); and nothing of the web UI is started either, not even its preparation.
+  echo 4.5 >"${FAKE_DIR}/relays-off.delay"
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=22 HVO_SUPERVISOR_UI_STOP_SECONDS=2 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=5
+  wait_until 5 "the first relay-off running" relay_off_runs_at_least 1 || return
+  sleep 0.5
+  stop_and_expect_it_within 30
+  expect_equal "controller starts" "$(event_count controller start)" 0
+  ! grep -qF "Abandoned the web UI's preparation" "${WORK}/supervisor.log" \
+    || fail_test "the web UI's preparation was started after the stop"
+}
+
 test_a_stop_during_a_forced_restarts_relay_off_starts_nothing_and_ends_within_the_grace_period() {
   touch "${FAKE_DIR}/controller.ignore-term"
   start_supervisor HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=22 HVO_SUPERVISOR_UI_STOP_SECONDS=2 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=5
@@ -1281,6 +1299,20 @@ test_a_stop_during_a_forced_restarts_relay_off_starts_nothing_and_ends_within_th
   wait_until 5 "the forced restart's relay-off running" relay_off_runs_at_least 2 || return
   sleep 0.5
   stop_and_expect_it_within 30
+}
+
+test_a_stop_during_a_forced_restarts_relay_off_that_verifies_starts_nothing_and_ends_within_the_grace_period() {
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=22 HVO_SUPERVISOR_UI_STOP_SECONDS=2 HVO_SUPERVISOR_RELAYS_OFF_SECONDS=5
+  wait_both_running || return
+  # From the forced restart on, each relay-off takes 4.5 s and verifies the relays off: only the stop checks keep the
+  # controller from starting again.
+  echo 4.5 >"${FAKE_DIR}/relays-off.delay"
+  touch "${WORK}/run/control/force-restart-controller"
+  wait_until 5 "the forced restart's relay-off running" relay_off_runs_at_least 2 || return
+  sleep 0.5
+  stop_and_expect_it_within 30
+  expect_equal "controller starts" "$(event_count controller start)" 1
 }
 
 test_the_whole_stop_fits_the_grace_period_with_a_hung_controller_and_a_slow_relay_off() {
