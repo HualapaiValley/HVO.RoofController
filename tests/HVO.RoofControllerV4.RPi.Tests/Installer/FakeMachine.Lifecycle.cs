@@ -465,7 +465,7 @@ internal sealed partial class FakeMachine
     }
 
     // The image a container runs, as Inspect reports it: its ID, for one loaded from an offline archive.
-    private static string ImageOf(string name, FakeContainer container) => container.ImageId ?? ReferenceOf(name, container);
+    private static string ImageOf(string name, FakeContainer container) => container.RunAs ?? container.ImageId ?? ReferenceOf(name, container);
 
     // The ID Docker gives the image a container runs (Inspect's own Image): the loaded image's, or the pulled one's.
     private static string ImageIdOf(string name, FakeContainer container) => container.ImageId ?? PulledImageId(ReferenceOf(name, container));

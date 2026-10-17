@@ -56,6 +56,12 @@ internal sealed record FakeContainer
     /// </summary>
     public string? ImageId { get; init; }
 
+    /// <summary>
+    /// What its Config.Image shows when docker run was given neither the release's reference nor an image's ID (a tag
+    /// alone); null otherwise.
+    /// </summary>
+    public string? RunAs { get; init; }
+
     /// <summary>The one address its ports are published on; null for every address.</summary>
     public string? PublishAddress { get; init; }
 
