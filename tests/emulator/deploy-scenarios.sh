@@ -1252,7 +1252,7 @@ scenario_supervisor() {
   pass "with the controller hung during travel (relays ${held}), docker stop: the supervisor waited ${controller_stop_seconds} s, killed it and turned the relays off (verified); the container exited 0 in ${stop_seconds} s, within Docker's 30 s"
 
   # CommissioningCheck("C11", "13")
-  current_check="Supervisor: the kernel ends the web UI, then the controller, before the supervisor (C11 13)"
+  current_check="Supervisor: the web UI and the controller have a higher oom_score_adj than the supervisor (C11 13)"
   local supervisor_pid controller_pid ui_pid_now adj_supervisor adj_controller adj_ui score_supervisor score_controller score_ui
   supervisor_pid=$(supervised_pid supervisor)
   controller_pid=$(supervised_pid controller)
@@ -1270,7 +1270,7 @@ scenario_supervisor() {
   score_ui=$(proc_value "${ui_pid_now}" oom_score)
   (( score_supervisor < score_controller && score_controller < score_ui )) \
     || fail "oom_score: supervisor ${score_supervisor}, controller ${score_controller}, web UI ${score_ui}; the supervisor must be the lowest and the web UI the highest"
-  pass "oom_score_adj: supervisor ${adj_supervisor}, controller ${adj_controller}, web UI ${adj_ui}; oom_score: supervisor ${score_supervisor} < controller ${score_controller} < web UI ${score_ui}, so the kernel ends the web UI first and the supervisor last"
+  pass "oom_score_adj: supervisor ${adj_supervisor}, controller ${adj_controller}, web UI ${adj_ui}; oom_score: supervisor ${score_supervisor} < controller ${score_controller} < web UI ${score_ui} at that moment (a snapshot: memory use counts too), so the kernel favours ending the web UI, then the controller, before the supervisor"
 
   # CommissioningCheck("C11")
   current_check="Supervisor: the supervisor itself killed during travel"

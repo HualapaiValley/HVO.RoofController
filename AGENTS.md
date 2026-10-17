@@ -102,8 +102,9 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   blocked HAT I/O after 2 s, deferring its all-off stop until that call returns.
 - The container's supervisor turns every relay off and verifies the register whenever the controller is not running
   (after each exit, before each start, after a failed try while it is not running, and when it stops), with the
-  controller's own `--relays-off`; it never turns a relay on and never runs while a controller does. A whole container
-  killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
+  controller's own `--relays-off`; it never turns a relay on and never runs while a controller does. Nothing starts
+  after a stop request, and the whole stop ends within 27 s of the signal. A whole container killed is the gap it
+  cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see

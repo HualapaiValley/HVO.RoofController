@@ -779,7 +779,7 @@ both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals t
 
 | Event | What the supervisor does |
 |-------|--------------------------|
-| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Stops the controller first and waits up to 22 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), while it stops the web UI, waiting up to 2 s for it (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL). The controller's wait and the longer of the other two, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script) stops the same way first. |
+| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Stops the controller first and waits up to 22 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), while it stops the web UI, waiting up to 2 s for it (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL). The whole stop is timed from the signal, work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script) stops the same way first. |
 | The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Turns the relays off, then starts it again at once. The web UI and the container keep running, and Docker's restart count does not change. |
 | The controller exits otherwise (a crash, a kill, a failed start) | Turns the relays off at once, then starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`). The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`), with the relays off, instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
 | The web UI exits | Starts only the web UI again, with the same backoff, and never gives up. The controller is not touched. |
@@ -824,10 +824,14 @@ verifies the HAT's relay register by reading it back:
 It never turns a relay on, and never while a controller runs: it cannot start motion, or stop a move a running
 controller makes. It runs the controller's own program, `dotnet /app/HVO.RoofControllerV4.RPi.dll --relays-off`, which
 reaches the HAT as the controller does (the I²C bus, or the HAT emulator with the `HatEmulator` settings), writes the
-whole relay register to zero in one I²C transaction, and reads it back, up to three times. It does not check the
-controller's other settings, so a settings file the controller refuses does not stop it; settings that cannot be read at
-all leave the HAT's settings to the environment, the command line and the secrets directory, where the deploy script and
-Compose put them. Each run must end within `HVO_SUPERVISOR_RELAYS_OFF_SECONDS` (5 s) or is killed. The
+whole relay register to zero in one I²C transaction, and reads it back, up to three times. It reads the controller's
+configuration and environment with the controller's own host builder, so it addresses the HAT the controller does, but
+it does not check the controller's other settings: a settings file the controller refuses does not stop it. A settings
+file of the API's that cannot be used at all (the settings file or the managed secrets file, say not valid JSON) is left
+out alone and named in its log: those files hold only catalogue settings, and the HAT's are not among them. When
+anything else cannot be read (a shipped or environment settings file, the secrets directory), it cannot tell which HAT
+the controller uses, and it writes nothing and fails rather than guess. Each run must end within
+`HVO_SUPERVISOR_RELAYS_OFF_SECONDS` (5 s) or is killed. The
 [deployment check](#the-deployment-check) never turns the relays off: another controller may be driving the HAT. As
 everywhere, the read-back proves the HAT's register, not the relay contacts
 ([commissioning.md C2](commissioning.md#c2-relay-register-versus-contacts)).
@@ -859,12 +863,15 @@ What it cannot cover:
   trying while the controller is not running; until then use the independent stop (commissioning C1).
 
 **Out of memory.** When the container reaches its memory limit, or the Pi runs out of memory, the kernel ends the
-process with the highest OOM score. The supervisor raises the web UI's `oom_score_adj` by 500 and the controller's by
-100 above its own as it starts them (raising needs no capability), so the kernel ends the web UI first, then the
-controller, and the supervisor, which must outlive the controller to turn the relays off, last
-([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)
-step 13). Its relay-off runs keep its own value. The raises count on the whole Pi too: when the Pi itself runs out of
-memory, the kernel ends the web UI, and then the controller, before the Pi's other processes with the same value.
+process with the highest OOM score, which counts both its memory and its `oom_score_adj`. The supervisor raises the web
+UI's `oom_score_adj` by 500 and the controller's by 100 above its own as it starts them (raising needs no capability).
+That is preferential protection, not a fixed order: the kernel favours ending the web UI, then the controller, and
+the supervisor, a small shell that must outlive the controller to turn the relays off, is protected by both its low
+value and its size; but a controller that has grown large enough can still be ended before the web UI. The scores
+observed on the rig are in
+[commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)
+step 13. Its relay-off runs keep its own value. The raises count on the whole Pi too: when the Pi itself runs out of
+memory, the web UI and then the controller are favoured over the Pi's other processes with the same value.
 
 ### The web UI's user and settings
 
@@ -952,19 +959,19 @@ or `unknown` (not tried yet), with when and why they were last turned off.
 Its log lines, in `docker logs`, start with `[supervisor]`:
 
 ```text
-[supervisor] Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; stop waits 22s for the controller, then up to 5s for the relays off, with 2s for the web UI at the same time)
+[supervisor] Starting the controller and the web UI (crash limit 5 within 120s; backoff at most 30s; forced restarts ignored within 10s of a start; the relays turned off within 5s whenever the controller is not running; a stop ends within 27s of its request: up to 22s for the controller, then up to 5s for the relays off, with 2s for the web UI at the same time)
 [supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 160 ms (before the controller starts)
 [supervisor] Started the controller (pid 7, start 1)
 [supervisor] Started the web UI (pid 8, start 1)
 [supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 150 ms (the controller exited (exit code 75))
 [supervisor] The controller asked to be restarted (exit code 75); starting it again
-[supervisor] Stopping: the controller first, then the relays off while the web UI stops
+[supervisor] Stopping: the controller first, then the relays off while the web UI stops, all within 27s of the stop request
 [supervisor] Stopping the controller (SIGTERM, up to 22s)
 [supervisor] The controller stopped (exit code 0)
 [supervisor] Stopping the web UI (SIGTERM, up to 2s)
 [supervisor] The relays are off: every relay turned off and the HAT's register verified by read-back, 150 ms (the supervisor is stopping)
 [supervisor] The web UI stopped (exit code 0)
-[supervisor] Stopped
+[supervisor] Stopped, 4320 ms after the stop request
 ```
 
 With arguments, such as the [deployment check](#the-deployment-check)'s `--validate-deployment`, the image runs only
@@ -1047,12 +1054,17 @@ read `/health` with a Viewer key and expect Healthy.
 | Supervisor, the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`) | 22 s | The [supervisor](#the-containers-two-processes) passes SIGTERM to the controller first and waits this long for it, above the app's 20 s. Then it kills it (SIGKILL). |
 | Supervisor, the relays (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`) | 5 s | Once the controller has exited: the supervisor [turns the relays off](#the-relays-when-the-controller-exits) and verifies them, and kills the run that takes longer. |
 | Supervisor, the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`) | 2 s | At the same time as the relays: SIGTERM to the web UI, then SIGKILL. |
-| Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the controller's wait and the longer of the other two (27 s). Docker sends SIGKILL to everything in the container after this. |
+| Supervisor, the whole stop | 27 s from the signal | The controller's wait and the longer of the other two. The supervisor times the stop from the signal: nothing starts after it, a relay-off already running when it came runs on within its own 5 s and counts against the 27 s, and each later wait is cut to the time left, the controller's ending early enough to leave the last relay-off its whole 5 s. The stop's own work (logging, starting the helper) adds a few hundred milliseconds. |
+| Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the whole stop (27 s). Docker sends SIGKILL to everything in the container after this. |
 
-Keep each layer above the one inside it: the app's 20 s inside the supervisor's 22 s, and the supervisor's 22 s + 5 s
-inside Docker's 30 s. If the supervisor kills the controller, the controller cannot confirm that the relays are off, and
-the supervisor turns them off itself. If Docker kills the container first, nothing in it can: they stay as they were
-until the next start, whose supervisor turns them off first
+Keep each layer above the one inside it: the app's 20 s inside the supervisor's 22 s, and the supervisor's 27 s inside
+Docker's 30 s. The worst case is a controller that ignores SIGTERM for its whole 22 s and a relay-off that then takes most
+of its 5 s: 26.7 s from the signal in the supervisor's tests (4.5 s for the relay-off). A signal that comes while the
+relays are being turned off (before a start, or after a forced restart's kill) starts no controller after it, and the
+stop then takes at most that relay-off and the last one: 8.5-8.6 s in the tests with 4.5 s relay-offs. If the supervisor
+kills the controller, the controller cannot confirm that the relays are off, and the supervisor turns them off itself.
+If Docker kills the container first, nothing in it can: they stay as they were until the next start, whose supervisor
+turns them off first
 ([commissioning.md C11](commissioning.md#c11-container-stop-with-an-active-camera-stream-and-the-containers-supervisor)).
 
 ## After deploying: checks on the device
