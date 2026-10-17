@@ -35,7 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   release before cannot read, after the controller's verified Stop, saying plainly that the changes made to them since
   the upgrade are lost; the files it replaces are kept beside them. Without it, such a rollback is refused. Nothing is
   put back unless Docker says, just before each file, that the controller and the one kept for a rollback are both
-  stopped (or not there), and a store's file is removed only when the backup names it as not there (#130).
+  stopped (or not there), and a store's file is removed only when the backup names it as not there. The file kept
+  beside a store, the store put back (with its owner) or moved aside, and the stores' folders are on disk before the
+  controller before starts; a sync that fails stops the rollback before the swap (exit 1) (#130).
 
 ### Changed
 

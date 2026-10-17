@@ -120,6 +120,27 @@ internal static class StateContractGuard
             ? $"{Sentence(first)}. Replacing the controller is refused before anything changes; an old credential backup is never restored automatically."
             : null;
 
+    /// <summary>
+    /// Makes the stores' files here durable, each file and then its folder: what a rollback does before the deploy script
+    /// starts the controller before on them, whatever put them there (this run's steps, or a run before it that stopped),
+    /// so that a power loss after the swap cannot take back a store put back, or bring back one moved aside. Throws an
+    /// <see cref="IOException"/> when a sync fails.
+    /// </summary>
+    public static void MakeDurable(InstallerMachine machine, ControllerLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        var files = Files(layout).SelectMany(store => store.Files).ToArray();
+        foreach (var file in files.Where(machine.FileExists))
+        {
+            machine.SyncFile(file);
+        }
+
+        foreach (var folder in files.Select(file => Path.GetDirectoryName(file)!).Distinct(StringComparer.Ordinal).Where(machine.DirectoryExists))
+        {
+            machine.SyncDirectory(folder);
+        }
+    }
+
     /// <summary>"identity" or "settings": the word for a store's schemas in a message.</summary>
     private static string Noun(string store) => store == StateContract.Identity ? "identity" : store;
 

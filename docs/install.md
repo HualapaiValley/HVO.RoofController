@@ -1215,6 +1215,7 @@ run stops there (exit 1) and goes no further.
 | The install record, and an upgrade's mark (`upgradingFrom`) | the upgrade's first change after the mark, and the end of the run |
 | An upgrade's backup: the archive, `/var/backups/hvo-roof`, and `/var/backups` when the installer made it | the installer hands over, the record names it, and anything installed changes |
 | `backup`'s archive, `uninstall --purge --backup`'s too | `backup` says it is done, and the purge removes anything |
+| What `rollback --restore-backup` changes in a store's folder: the file kept beside the store, then the store put back (its content, mode and owner set on a file beside it before it is renamed over the store) or moved aside | the next of those changes, and the deploy script starting the controller before; every rollback syncs the stores' files and folders just before that |
 
 The rest of an install or upgrade (the controller's settings, keys and certificate, the programs) is written in one
 step each, but not synced: a power loss can bring back a file's earlier content, never part of one, and running the
@@ -1283,8 +1284,10 @@ With `--restore-backup`:
    before each file is written, Docker must say again that the controller and `roof-controller-previous` (which
    `--stop` leaves alone) are each stopped or not there, and that there is no `roof-controller-swap` (a rollback
    stopped halfway). One running, paused or restarting, or one Docker cannot answer for, stops the rollback there
-   (exit 1), with nothing put back: stop it once the roof is idle, then run the same command again. The file it
-   replaces is kept beside it, root's and `0600`, as
+   (exit 1), with nothing put back: stop it once the roof is idle, then run the same command again. Each change is on
+   disk before the next, and all of them, with the stores' files and folders, before the deploy script starts the
+   controller before ([Durability](#durability)); a sync that fails stops the rollback there (exit 1), nothing swapped.
+   The file it replaces is kept beside it, root's and `0600`, as
    `<file>.rolled-back-from-<version>-<UTC time>`; a file the backup's manifest says was not there (`absent`) is
    moved there. A file the backup neither holds nor names as not there (a link `backup` left out, or a backup from an
    installer before it named them) is never removed: the rollback is refused, with nothing changed. Nothing else in

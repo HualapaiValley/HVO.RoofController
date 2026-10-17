@@ -795,6 +795,132 @@ public sealed class InstallerStateContractTests
         Directory.EnumerateFiles(pi.OnDisk(ControllerLayout.System.Identity), "*.rolled-back-from-*").Should().BeEmpty();
     }
 
+    // #136 F8: what rollback --restore-backup changes in a store's folder (the file kept beside the store, the store put back
+    // with its owner, or moved aside) is durable before the deploy script starts the controller before on it, each change
+    // before the next; a sync that fails stops the rollback before the swap, and the run again makes the stores durable
+    // before its swap, even when it finds nothing left to put back.
+
+    private static readonly string IdentityFolder = Path.GetDirectoryName(ControllerLayout.System.IdentityFile)!;
+
+    private static readonly string KeptIdentity = $"{ControllerLayout.System.IdentityFile}.rolled-back-from-{NewVersion}-20261001T090000Z";
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_MakesTheFileKeptAndTheStorePutBackDurable_BeforeTheControllerBeforeStarts()
+    {
+        using var pi = await InstalledPiAsync();
+
+        // The controller's own user owns the store, as the backup then says: it is put back with that owner.
+        pi.Owners[IdentityFile] = "pi:pi";
+        pi.WithRelease(NewVersion, latest: true, stateContract: MovesToTwo);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+        pi.Write(IdentityFile, IdentityMoved);
+        pi.Owners[IdentityFile] = "root:root";
+        pi.TrackDurability(IdentityFile).TrackDurability(KeptIdentity);
+        (string? Store, string? Kept, string? Owner)? atSwap = null;
+        pi.DuringDeploy = () =>
+        {
+            if (pi.DeployOptions.LastOrDefault() == "--stop")
+            {
+                atSwap ??= (pi.DurableText(IdentityFile), pi.DurableText(KeptIdentity), pi.Owners.GetValueOrDefault(IdentityFile));
+            }
+        };
+        pi.DurabilityEvents.Clear();
+
+        var run = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        atSwap.Should().Be((IdentityBefore, IdentityMoved, "pi:pi"), "the store, its owner and the file kept beside it are on disk before the swap");
+        var staged = IdentityFile + ".restoring";
+        pi.DurabilityEvents.Should().ContainInOrder(
+            $"sync-file {KeptIdentity}", $"sync-folder {IdentityFolder}",
+            $"chown {staged}", $"sync-file {staged}", $"rename {staged} {IdentityFile}", $"sync-folder {IdentityFolder}");
+        pi.Exists(staged).Should().BeFalse();
+        pi.PowerLoss();
+        pi.Read(IdentityFile).Should().Be(IdentityBefore);
+        pi.Read(KeptIdentity).Should().Be(IdentityMoved);
+    }
+
+    [TestMethod]
+    public async Task ARollbackWithRestoreBackup_MakesAStoreMovedAsideDurablyGone_BeforeTheControllerBeforeStarts()
+    {
+        using var pi = await InstalledPiAsync();
+        File.Delete(pi.OnDisk(IdentityFile));
+        pi.WithRelease(NewVersion, latest: true, stateContract: MovesToTwo);
+        (await pi.RunAsync("upgrade")).ExitCode.Should().Be(0);
+        pi.InstallerVersion = NewVersion;
+        pi.Write(IdentityFile, IdentityMoved).TrackDurability(IdentityFile).TrackDurability(KeptIdentity);
+        (string? Store, string? Kept)? atSwap = null;
+        pi.DuringDeploy = () =>
+        {
+            if (pi.DeployOptions.LastOrDefault() == "--stop")
+            {
+                atSwap ??= (pi.DurableText(IdentityFile), pi.DurableText(KeptIdentity));
+            }
+        };
+
+        var run = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        atSwap.Should().Be(((string?)null, IdentityMoved), "the store 4.0.0 never saved is gone, and the one saved since kept, on disk, before the swap");
+    }
+
+    [TestMethod]
+    [DataRow("the file kept beside it")]
+    [DataRow("the folder, after the file kept beside it")]
+    [DataRow("the store staged")]
+    [DataRow("the folder, after the store's rename")]
+    [DataRow("the stores, before the swap")]
+    public async Task ARollbackWithRestoreBackup_ThatCannotMakeTheStoresDurable_StopsBeforeTheSwap_AndTheRunAgainFinishesDurably(string failing)
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        pi.Write(IdentityFile, IdentityMoved);
+        var record = pi.Read(InstallPaths.SystemRecord);
+        var deploys = pi.DeployOptions.Count;
+        var staged = IdentityFile + ".restoring";
+        var folderSyncs = 0;
+        var fail = true;
+        pi.DuringFileSync = path => pi.FileSyncFailure = fail && failing switch
+        {
+            "the file kept beside it" => path == KeptIdentity,
+            "the store staged" => path == staged,
+            "the stores, before the swap" => path == IdentityFile,
+            _ => false
+        } ? "Input/output error" : null;
+        pi.DuringDirectorySync = folder =>
+        {
+            folderSyncs += folder == IdentityFolder ? 1 : 0;
+            pi.DirectorySyncFailure = fail && folder == IdentityFolder && failing switch
+            {
+                "the folder, after the file kept beside it" => folderSyncs == 1,
+                "the folder, after the store's rename" => folderSyncs == 2,
+                _ => false
+            } ? "Input/output error" : null;
+        };
+
+        var stopped = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        stopped.ExitCode.Should().Be((int)InstallerExitCode.Failed, stopped.ToString());
+        stopped.Error.Should().Contain("Input/output error").And.Contain("Nothing was swapped; run the rollback again.");
+        pi.DeployOptions.Skip(deploys).Should().Equal(["--stop"], "the controller before is not started");
+        pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(controller => controller.Version == NewVersion && controller.State == "exited");
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+
+        // Run again, the disk answering: the stores are on disk, as the backup has them, before the swap, whether this run
+        // still has a store to put back or finds it put back already (and the rollback a swap).
+        fail = false;
+        pi.TrackDurabilityFromNothing(IdentityFile);
+        string? atSwap = null;
+        pi.DuringDeploy = () => atSwap ??= pi.DurableText(IdentityFile);
+
+        var again = await pi.RunAsync("rollback", "--restore-backup", "--yes");
+
+        again.ExitCode.Should().Be(0, again.ToString());
+        atSwap.Should().Be(IdentityBefore);
+        pi.DeployOptions.Skip(deploys).Should().Equal(["--stop", "--rollback"]);
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.0");
+    }
+
     // #136 F2: a store the backup cannot hold refuses the upgrade; a rollback removes a store only when the backup says
     // it was not there.
 

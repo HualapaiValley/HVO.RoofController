@@ -150,6 +150,18 @@ public sealed class ControllerRollbackStep(ControllerStep controller, IReadOnlyL
     {
         ArgumentNullException.ThrowIfNull(context);
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+
+        // The stores the controller before will read are on disk first, put back by the steps before or by a run before
+        // this one: a power loss after the swap must not take them back from under it.
+        try
+        {
+            StateContractGuard.MakeDurable(context.Machine, ControllerLayout.For(context.Machine));
+        }
+        catch (IOException error)
+        {
+            throw new InstallerException($"Before the controller before is started, the installer could not make sure that the stores here are on disk: {error.Message} Nothing was swapped; run the rollback again.", error);
+        }
+
         using var work = new DeployScript.WorkFolder(context.Machine);
         var environment = await controller.EnvironmentAsync(context, work, release.Controller.Reference, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await ControllerStep.RunScriptAsync(context, work, environment, cancellationToken, "--rollback").ConfigureAwait(false);
