@@ -3254,7 +3254,7 @@ test_the_refusal_quotes_the_cgroup_version_the_controllers_and_dockers_warnings(
 }
 
 test_a_host_that_enforces_every_limit_is_deployed_to() {
-  # As skymonitor01 reports once cgroup_enable=memory is on the kernel's command line; a warning that is not about the
+  # As a Pi reports once cgroup_enable=memory is on the kernel's command line; a warning that is not about the
   # limits changes nothing.
   seed_container roof-controller old true 8443:8443
   deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=true FAKE_INFO_SWAPLIMIT=true FAKE_INFO_CPUCFSQUOTA=true FAKE_INFO_PIDSLIMIT=true \

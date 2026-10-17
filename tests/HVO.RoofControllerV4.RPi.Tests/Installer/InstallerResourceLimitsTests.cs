@@ -24,8 +24,8 @@ public sealed class InstallerResourceLimitsTests
 {
     private const string NewVersion = "4.0.1";
 
-    // As github-runner-pi-01, a stock Raspberry Pi OS (Debian 13, kernel 6.18 rpi-2712), reports its Docker: the firmware
-    // adds cgroup_disable=memory to the kernel's command line.
+    // What a stock Raspberry Pi OS (a Pi 5 on Debian 13, kernel 6.18 rpi-2712) reports of its Docker: the firmware adds
+    // cgroup_disable=memory to the kernel's command line.
     private const string StockPiInfo = "false,true,true,false,4,8589934592,2,roofpi\nWARNING: No memory limit support\nWARNING: No swap limit support\nWARNING: bridge-nf-call-iptables is disabled";
 
     [TestMethod]

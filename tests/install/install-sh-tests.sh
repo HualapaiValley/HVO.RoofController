@@ -1152,7 +1152,7 @@ test_the_controllers_limits_are_checked_with_docker() {
 }
 
 test_a_stock_pi_whose_docker_cannot_limit_memory_is_refused_with_the_boot_setting_to_append() {
-  # As a stock Raspberry Pi OS reports it (github-runner-pi-01): the firmware's cgroup_disable=memory.
+  # As a stock Raspberry Pi OS reports it (a Pi 5 on Debian 13): the firmware's cgroup_disable=memory.
   mkdir -p "${WORK}/root/sys/fs/cgroup"
   printf 'cpuset cpu io pids\n' > "${WORK}/root/sys/fs/cgroup/cgroup.controllers"
   install_sh FAKE_DOCKER_LIMITS=false,true,true,false,4,8589934592,2 \

@@ -590,7 +590,7 @@ default_memory_bytes=2147483648
 # host has cgroup v1.
 MEMORY_TEXT="" MEMORY_PEAK=0 MEMORY_OOM_KILLS=0
 memory_report() {
-  local name=$1 cgroup peak max kills controller_pid ui_pid controller_hwm ui_hwm
+  local name=$1 cgroup peak max kills controller_pid ui_pid controller_hwm ui_hwm controller_text="?" ui_text="?"
   MEMORY_TEXT="" MEMORY_PEAK=0 MEMORY_OOM_KILLS=0
   docker exec "${name}" test -e /sys/fs/cgroup/cgroup.controllers || return 0
   cgroup=$(docker exec "${name}" sh -c 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.max; sed -n "s/^oom_kill //p" /sys/fs/cgroup/memory.events') \
@@ -607,7 +607,10 @@ memory_report() {
   if [[ "${max}" =~ ^[0-9]+$ ]]; then
     MEMORY_TEXT="container peak $(( peak / 1048576 )) MiB of its $(( max / 1048576 )) MiB limit ($(( (max - peak) / 1048576 )) MiB headroom, $(( max / (peak > 0 ? peak : 1) ))x)"
   fi
-  MEMORY_TEXT+="; peak resident: controller ${controller_hwm:+$(( controller_hwm / 1024 )) MiB}${controller_hwm:-?}, web UI ${ui_hwm:+$(( ui_hwm / 1024 )) MiB}${ui_hwm:-?}; OOM kills ${MEMORY_OOM_KILLS}"
+  [[ ! "${controller_hwm}" =~ ^[0-9]+$ ]] || controller_text="$(( controller_hwm / 1024 )) MiB"
+  [[ ! "${ui_hwm}" =~ ^[0-9]+$ ]] || ui_text="$(( ui_hwm / 1024 )) MiB"
+  # Resident memory counts the pages the two share (the .NET runtime's) in each.
+  MEMORY_TEXT+="; peak resident: controller ${controller_text}, web UI ${ui_text}; OOM kills ${MEMORY_OOM_KILLS}"
 }
 
 # memory_check <container> <what>: memory_report as a check of its own, with the container at the default memory limit
