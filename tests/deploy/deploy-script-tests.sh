@@ -107,6 +107,20 @@ print(" ".join(str(limits.get(key) or 0) for key in ("nano", "memory", "swap", "
 ' "$1" "${FAKE_STATE_DIR}/state.json"
 }
 
+# seed_desired_limits <cpus> <memory>: the desired-limits volume a deploy before left (roof-controller-limits).
+seed_desired_limits() {
+  jq --arg cpus "$1" --arg memory "$2" \
+    '.volumes["roof-controller-limits"] = {labels: {"io.hvo.roof.desired-cpus": $cpus, "io.hvo.roof.desired-memory": $memory}}' \
+    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+}
+
+# desired_limits: the desired CPUs and memory the volume holds ("none" when there is no volume).
+desired_limits() {
+  jq -r '.volumes["roof-controller-limits"].labels // null
+    | if . == null then "none" else "\(.["io.hvo.roof.desired-cpus"]) \(.["io.hvo.roof.desired-memory"])" end' \
+    "${FAKE_STATE_DIR}/state.json"
+}
+
 # build_command [NAME=value...] [-- script args...]: sets RUN_CMD to run the deploy script with the test environment
 # plus the given variables. The script runs in ${WORK} and records its PID in script.pid (for FAKE_SIGNAL_ON).
 build_command() {
@@ -3155,11 +3169,11 @@ test_a_host_that_cannot_enforce_a_limit_is_refused_with_nothing_changed() {
   seed_container roof-controller current true 8443:8443
   seed_container roof-controller-previous old false 8443:8443
   local case settings findings finding code mode codes
-  codes="docker-memory-limit-unsupported docker-cpu-quota-unsupported docker-pids-limit-unsupported"
+  codes="docker-memory-limit-unsupported docker-swap-limit-unsupported docker-cpu-quota-unsupported docker-pids-limit-unsupported"
   for case in \
       "FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false|docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit false, so Docker would run the controller without its memory limit (2g, and no swap beyond it)." \
       "FAKE_INFO_MEMORYLIMIT=false|docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit true" \
-      "FAKE_INFO_SWAPLIMIT=false|docker-memory-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false" \
+      "FAKE_INFO_SWAPLIMIT=false|docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false, so Docker would let the controller swap beyond its memory limit (2g)." \
       "FAKE_INFO_CPUCFSQUOTA=false|docker-cpu-quota-unsupported: docker info reports CPUCfsQuota false, so Docker would run the controller without its CPU limit (1)." \
       "FAKE_INFO_PIDSLIMIT=false|docker-pids-limit-unsupported: docker info reports PidsLimit false, so Docker would run the controller without its process limit (512)." \
       "FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false FAKE_INFO_CPUCFSQUOTA=false FAKE_INFO_PIDSLIMIT=false|docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit false;docker-cpu-quota-unsupported: docker info reports CPUCfsQuota false;docker-pids-limit-unsupported: docker info reports PidsLimit false" \
@@ -3207,6 +3221,7 @@ test_a_host_that_cannot_enforce_a_limit_is_refused_with_nothing_changed() {
 finding_of() {
   case "$1" in
     memory) echo "docker-memory-limit-unsupported:" ;;
+    swap) echo "docker-swap-limit-unsupported:" ;;
     cpu) echo "docker-cpu-quota-unsupported:" ;;
     pids) echo "docker-pids-limit-unsupported:" ;;
   esac
@@ -3225,7 +3240,7 @@ test_a_rollback_on_a_host_that_cannot_enforce_a_limit_goes_ahead_and_warns() {
   local case settings unenforced given code finding previous_id log args=()
   for case in \
       "FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false|memory|--cpus 1 --pids-limit 512" \
-      "FAKE_INFO_SWAPLIMIT=false|memory|--cpus 1 --pids-limit 512" \
+      "FAKE_INFO_SWAPLIMIT=false|swap|--cpus 1 --memory 2g --pids-limit 512" \
       "FAKE_INFO_CPUCFSQUOTA=false|cpu|--memory 2g --memory-swap 2g --pids-limit 512" \
       "FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false FAKE_INFO_CPUCFSQUOTA=false|memory cpu|--pids-limit 512" \
       "FAKE_INFO_PIDSLIMIT=false|pids|--cpus 1 --memory 2g --memory-swap 2g" \
@@ -3242,7 +3257,7 @@ test_a_rollback_on_a_host_that_cannot_enforce_a_limit_goes_ahead_and_warns() {
     assert_container roof-controller old true unless-stopped
     assert_container roof-controller-previous current false no
     assert_output_contains "[rollback] WARNING: THE ROLLBACK GOES AHEAD, BUT DOCKER ON pi.test CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:"
-    for code in memory cpu pids; do
+    for code in memory swap cpu pids; do
       finding=$(finding_of "${code}")
       if [[ " ${unenforced} " == *" ${code} "* ]]; then
         assert_output_contains "[rollback] WARNING:   - ${finding} docker info reports"
@@ -3251,7 +3266,7 @@ test_a_rollback_on_a_host_that_cannot_enforce_a_limit_goes_ahead_and_warns() {
       fi
     done
     assert_output_contains "[rollback] WARNING:   - docker-"
-    assert_output_contains "so the version the rollback brings back runs without its"
+    assert_output_contains "so the version the rollback brings back "
     assert_output_contains "[rollback] WARNING:   Docker's host: cgroup v2;"
     assert_output_contains "Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot the Pi with the roof idle"
     assert_output_not_contains "ERROR"
@@ -3278,6 +3293,105 @@ test_a_rollback_on_a_host_that_cannot_enforce_a_limit_goes_ahead_and_warns() {
     teardown
   done
   setup
+}
+
+# Memory and swap are separate controls (review ROOF-151-R1 F3): a rollback on a host that can limit memory but not swap
+# keeps the memory limit, and warns of the swap alone.
+test_a_rollback_on_a_host_without_swap_control_keeps_the_memory_limit() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  local previous_id
+  previous_id=$(container_field roof-controller-previous id)
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_SWAPLIMIT=false CONTAINER_MEMORY=3g -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  assert_output_contains "[rollback] WARNING:   - docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false, so the version the rollback brings back keeps its memory limit (3g) but may swap beyond it."
+  assert_output_not_contains "docker-memory-limit-unsupported"
+  assert_output_contains "enforces only these limits, which the rollback gives: 1 CPU, 3g of memory (swap beyond it not limited: Docker here cannot), at most 512 processes and threads"
+  docker_calls update | jq -e -s --arg id "${previous_id}" 'any(.[]; . == ["update", "--cpus", "1", "--memory", "3g", "--pids-limit", "512", $id])' >/dev/null \
+    || fail_test "the rollback did not keep the memory limit without a swap limit: $(docker_calls update)"
+  [[ "$(container_limits "${previous_id}" | cut -d' ' -f2)" == "3221225472" ]] \
+    || fail_test "the version brought back lost its memory limit: $(container_limits "${previous_id}")"
+  # A deploy on the same host is refused: install and upgrade stay strict.
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_SWAPLIMIT=false
+  assert_status 1
+  assert_output_contains "  - docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false, so Docker would let the controller swap beyond its memory limit (3g)."
+}
+
+# The desired limits persist whether or not the host could enforce them (review ROOF-151-R1 F2): an operator's setting,
+# a rollback on a host that cannot enforce the memory limit (the version brought back runs without it), then, once the
+# host is fixed, a deploy with nothing given applies the operator's setting, not the default.
+test_a_setting_persists_through_a_rollback_on_a_host_that_cannot_enforce_it_and_the_deploy_after_it() {
+  seed_container roof-controller old true 8443:8443
+  local old_id
+  old_id=$(container_field roof-controller id)
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=1.5 CONTAINER_MEMORY=6g
+  assert_status 0
+  [[ "$(desired_limits)" == "1.5 6g" ]] || fail_test "the deploy did not keep the desired limits: $(desired_limits)"
+
+  # The rollback, to the version deployed before the limits, on a host whose memory controller went away.
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false -- --rollback
+  assert_status 0
+  [[ "$(container_field roof-controller id)" == "${old_id}" ]] || fail_test "the rollback did not bring back the version before"
+  assert_output_contains "[deploy] The container's limits: 1.5 CPUs (kept from the last deploy), 6g of memory (kept from the last deploy)"
+  [[ "$(container_limits "${old_id}")" == "1500000000 0 0 512" ]] \
+    || fail_test "the version brought back has other limits than the ones Docker could enforce: $(container_limits "${old_id}")"
+  [[ "$(desired_limits)" == "1.5 6g" ]] || fail_test "the degraded rollback lost the desired limits: $(desired_limits)"
+
+  # The host fixed: a deploy given nothing applies the setting.
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  assert_output_contains "[deploy] The container's limits: 1.5 CPUs (kept from the last deploy), 6g of memory (kept from the last deploy)"
+  assert_output_not_contains "(the default)"
+  assert_confined "$(controller_run_args)" 1.5 6g 512
+  [[ "$(desired_limits)" == "1.5 6g" ]] || fail_test "the desired limits changed: $(desired_limits)"
+}
+
+test_the_desired_limits_are_what_the_last_deploy_or_rollback_gave() {
+  # A first deploy keeps the default; one given others keeps those; a dry run and --stop keep nothing.
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  [[ "$(desired_limits)" == "1 2g" ]] || fail_test "a first deploy kept $(desired_limits)"
+  assert_output_contains "[deploy] The desired limits are kept for the next deploy (volume roof-controller-limits): CPUs 1, memory 2g"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=4g -- --dry-run
+  assert_status 0
+  [[ "$(desired_limits)" == "1 2g" ]] || fail_test "a dry run changed the desired limits: $(desired_limits)"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g
+  assert_status 0
+  [[ "$(desired_limits)" == "2 4g" ]] || fail_test "the deploy kept $(desired_limits)"
+  deploy "${HTTPS_ENV[@]}" -- --stop
+  assert_status 0
+  [[ "$(desired_limits)" == "2 4g" ]] || fail_test "--stop changed the desired limits: $(desired_limits)"
+  # A deploy that fails and puts the old controller back keeps the desired limits as they were.
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=8g FAKE_NEW_READY=false
+  assert_status 1
+  [[ "$(desired_limits)" == "2 4g" ]] || fail_test "a failed deploy changed the desired limits: $(desired_limits)"
+}
+
+test_desired_limits_below_the_floor_or_unreadable_are_refused_with_nothing_changed() {
+  seed_container roof-controller current true 8443:8443
+  seed_desired_limits 1 512m
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 1
+  assert_output_contains "CONTAINER_MEMORY=512m (kept from the last deploy) is less than 1g, the minimum (RoofController's; docs/deployment.md, \"The container's privileges and limits\"): set CONTAINER_MEMORY to at least 1g. Nothing was changed."
+  assert_refused_unchanged "a deploy keeping 512m"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" "FAKE_FAIL=volume ls"
+  assert_status 1
+  assert_output_contains "Could not read the desired limits from Docker (volume roof-controller-limits; one not set keeps them). Nothing was changed; check the Docker context and retry."
+  assert_refused_unchanged "a deploy that could not read the desired limits"
+  assert_container roof-controller current true unless-stopped
+}
+
+test_desired_limits_that_cannot_be_kept_warn_and_the_deploy_goes_on() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=3g "FAKE_FAIL=volume create"
+  assert_status 0
+  assert_container roof-controller new true unless-stopped
+  assert_output_contains "[deploy] WARNING: could not keep the desired limits (1 CPUs, 3g of memory) in volume roof-controller-limits: the next deploy keeps the running controller's limits, or the default, unless CONTAINER_CPUS and CONTAINER_MEMORY are given."
 }
 
 test_a_rollbacks_dry_run_on_a_host_that_cannot_enforce_a_limit_warns_and_changes_nothing() {
@@ -3445,13 +3559,13 @@ test_limits_are_given_as_set_and_written_plainly() {
   deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2
   assert_status 0
   assert_confined "$(controller_run_args)" 2 5g 512
-  assert_output_contains "[deploy] The container's limits: 2 CPUs (given), 5g of memory (kept from roof-controller) and no swap, at most 512 processes and threads"
+  assert_output_contains "[deploy] The container's limits: 2 CPUs (given), 5g of memory (kept from the last deploy) and no swap, at most 512 processes and threads"
 
   : > "${FAKE_STATE_DIR}/calls.log"
   deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=4096m
   assert_status 0
   assert_confined "$(controller_run_args)" 2 4096m 512
-  assert_output_contains "[deploy] The container's limits: 2 CPUs (kept from roof-controller), 4096m of memory (given) and no swap, at most 512 processes and threads"
+  assert_output_contains "[deploy] The container's limits: 2 CPUs (kept from the last deploy), 4096m of memory (given) and no swap, at most 512 processes and threads"
 }
 
 # The limits persist as SkyMonitor's instance manifest keeps its own (#149): one not given keeps the running
@@ -3471,7 +3585,7 @@ test_an_override_persists_across_upgrades_and_rollbacks() {
   assert_status 0
   assert_confined "$(preflight_args)" 1.5 3g 512
   assert_confined "$(controller_run_args)" 1.5 3g 512
-  assert_output_contains "[deploy] The container's limits: 1.5 CPUs (kept from roof-controller), 3g of memory (kept from roof-controller) and no swap"
+  assert_output_contains "[deploy] The container's limits: 1.5 CPUs (kept from the last deploy), 3g of memory (kept from the last deploy) and no swap"
   second=$(container_field roof-controller id)
   [[ "$(container_field roof-controller-previous id)" == "${first}" ]] || fail_test "the first controller was not kept as the previous one"
 
@@ -3659,7 +3773,7 @@ test_a_memory_limit_beyond_the_hosts_memory_warns_and_is_kept() {
   # On a Pi with 2 GB, the 4g kept from the running controller: kept too, and said where it came from.
   deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMTOTAL=2012741632 CONTAINER_CPUS=1 CONTAINER_MEMORY=
   assert_status 0
-  assert_output_contains "WARNING: CONTAINER_MEMORY=4g (kept from roof-controller) is more than the 1919m of memory Docker reports on pi.test. It is kept"
+  assert_output_contains "WARNING: CONTAINER_MEMORY=4g (kept from the last deploy) is more than the 1919m of memory Docker reports on pi.test. It is kept"
 }
 
 test_a_limit_docker_drops_rolls_back() {

@@ -64,6 +64,8 @@ Other switches:
                                    FAKE_INFO_MEMORYLIMIT=false; an empty value is a field Docker does not report
   FAKE_INFO_WARNINGS=<w>[;<w>...]  the warnings `info --format '{{range .Warnings}}{{println .}}{{end}}'` lists (none by
                                    default)
+  `volume ls/inspect/rm/create`    the deploy script's desired-limits volume, kept in the state's "volumes" with its
+                                   labels (seed_desired_limits seeds one)
   FAKE_CONTAINER_LOG_FAIL=true     `exec -i <c> sh -c 'cat > /proc/1/fd/2'` (a line for the container's log, which the
                                    fake keeps in the container's "log") fails
   FAKE_CONTEXT_HOST=<endpoint>     what `context inspect --format '{{.Endpoints.docker.Host}}' <context>` reports
@@ -779,6 +781,38 @@ def main():
         out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: os.environ.get("FAKE_INFO_" + m.group(1).upper(), values[m.group(1)]), fmt),
             end="" if fmt.endswith("\n") else "\n")
         return
+    if command == "volume":
+        # The desired limits' volume (the deploy script's): ls --quiet --filter name=<text>, inspect --format with its
+        # labels, rm --force, and create --label k=v... <name>. Kept in the state's "volumes".
+        volumes = state.setdefault("volumes", {})
+        sub, rest = args[0], args[1:]
+        if sub == "ls":
+            text = rest[rest.index("--filter") + 1].removeprefix("name=") if "--filter" in rest else ""
+            for name in sorted(volumes):
+                if text in name:
+                    out(name)
+            return
+        if sub == "inspect":
+            fmt, name = rest[rest.index("--format") + 1], rest[-1]
+            if name not in volumes:
+                die(f"Error response from daemon: get {name}: no such volume")
+            labels = volumes[name].get("labels", {})
+            out(re.sub(r'\{\{index \.Labels "([^"]+)"\}\}', lambda m: labels.get(m.group(1), ""), fmt))
+            return
+        if sub == "rm":
+            name = rest[-1]
+            if name not in volumes and "--force" not in rest and "-f" not in rest:
+                die(f"Error response from daemon: get {name}: no such volume")
+            volumes.pop(name, None)
+            save(state)
+            return
+        if sub == "create":
+            labels = dict(value.split("=", 1) for value in option_values(rest, "--label"))
+            volumes[rest[-1]] = {"labels": labels}
+            save(state)
+            out(rest[-1])
+            return
+        die(f"fake docker: unexpected volume command {args}")
     if command == "context" and args[:1] == ["inspect"]:
         out(os.environ.get("FAKE_CONTEXT_HOST", "ssh://roof@pi.test"))
         return
