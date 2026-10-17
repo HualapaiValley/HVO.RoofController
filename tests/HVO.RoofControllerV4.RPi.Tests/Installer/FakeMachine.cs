@@ -323,7 +323,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory,
         RunProgramAsync = RunProgramAsync,
-        SyncFolderOnDisk = SyncFolder
+        SyncFolderOnDisk = SyncFolder,
+        SyncFileOnDisk = SyncFile,
+        RenameOnDisk = Rename
     };
 
     /// <summary>The kiosk's program in the fake release of <paramref name="version"/>: a script that says which it is.</summary>
@@ -898,6 +900,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         }
 
         Owners[path] = owner;
+        DurabilityEvents.Add($"chown {path}");
         return Answer(string.Empty);
     }
 

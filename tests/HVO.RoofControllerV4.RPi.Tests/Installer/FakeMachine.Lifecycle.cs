@@ -90,6 +90,25 @@ internal sealed partial class FakeMachine
     /// <summary>Each libc call the installer made to sync a folder, in order: open, F_FULLFSYNC, fsync and close.</summary>
     public List<string> SyncCalls { get; } = [];
 
+    /// <summary>Each file the installer synced to disk (InstallerMachine.SyncFile), in order, as a path on the machine.</summary>
+    public List<string> FileSyncs { get; } = [];
+
+    /// <summary>Why syncing a file fails (an IOException's message); null for a sync that succeeds.</summary>
+    public string? FileSyncFailure { get; set; }
+
+    /// <summary>What happens as a file is synced, before the sync: a test looks at the machine, or fails the sync, then.</summary>
+    public Action<string>? DuringFileSync { get; set; }
+
+    /// <summary>
+    /// What the installer did that durability depends on, in order: "sync-folder PATH", "sync-file PATH", "rename FROM TO"
+    /// (InstallerMachine.MoveFileDurably) and "chown PATH".
+    /// </summary>
+    public List<string> DurabilityEvents { get; } = [];
+
+    // Each folder whose durability is tracked (TrackFolderDurability), by path on the machine: whether it was there as the
+    // last sync of the folder above it left it.
+    private readonly Dictionary<string, bool> _durableFolders = new(StringComparer.Ordinal);
+
     // Each file whose durability is tracked (TrackDurability), by path on the machine: its bytes as its folder's last sync
     // left them, or null when it was not there then.
     private readonly Dictionary<string, byte[]?> _durable = new(StringComparer.Ordinal);
@@ -104,6 +123,35 @@ internal sealed partial class FakeMachine
         return this;
     }
 
+    /// <summary>
+    /// As <see cref="TrackDurability(string)"/>, but as if the file's folder had last been synced before the file was
+    /// there: one written, by a run before, that nothing has made durable since.
+    /// </summary>
+    public FakeMachine TrackDurabilityFromNothing(string path)
+    {
+        _durable[path] = null;
+        return this;
+    }
+
+    /// <summary>
+    /// From now on, the folder at <paramref name="path"/> survives a power loss only if the last sync of the folder above it
+    /// found it there (with <paramref name="durableNow"/>, as it is now; without, as if it had never been synced there). One
+    /// that does not is gone after <see cref="PowerLoss"/>, with all in it.
+    /// </summary>
+    public FakeMachine TrackFolderDurability(string path, bool durableNow = true)
+    {
+        _durableFolders[path] = durableNow && Directory.Exists(OnDisk(path));
+        return this;
+    }
+
+    /// <summary>
+    /// Whether the tracked file at <paramref name="path"/> would be there after a power loss now, as it is: its content as
+    /// its folder's last sync left it, and each tracked folder it is in there too.
+    /// </summary>
+    public bool SurvivesPowerLoss(string path)
+        => Exists(path) && _durable[path] is { } bytes && bytes.AsSpan().SequenceEqual(File.ReadAllBytes(OnDisk(path)))
+            && _durableFolders.Where(folder => path.StartsWith(folder.Key + "/", StringComparison.Ordinal)).All(folder => folder.Value);
+
     /// <summary>The tracked file's text as it would be after a power loss now; null when it would not be there.</summary>
     public string? DurableText(string path) => _durable[path] is { } bytes ? Encoding.UTF8.GetString(bytes) : null;
 
@@ -113,7 +161,15 @@ internal sealed partial class FakeMachine
     /// </summary>
     public void PowerLoss()
     {
-        foreach (var (path, bytes) in _durable)
+        foreach (var (folder, durable) in _durableFolders.OrderByDescending(entry => entry.Key.Length))
+        {
+            if (!durable && Directory.Exists(OnDisk(folder)))
+            {
+                Directory.Delete(OnDisk(folder), recursive: true);
+            }
+        }
+
+        foreach (var (path, bytes) in _durable.Where(entry => Directory.Exists(Path.GetDirectoryName(OnDisk(entry.Key)))))
         {
             if (bytes is null)
             {
@@ -132,6 +188,7 @@ internal sealed partial class FakeMachine
     {
         var folder = onDisk[Root.TrimEnd('/').Length..];
         DirectorySyncs.Add(folder);
+        DurabilityEvents.Add($"sync-folder {folder}");
         DuringDirectorySync?.Invoke(folder);
         Directory.Exists(onDisk).Should().BeTrue("the installer syncs a folder that is there");
         if (DirectorySyncFailure is { } failure)
@@ -140,6 +197,40 @@ internal sealed partial class FakeMachine
         }
 
         InstallerMachine.SyncFolder(onDisk, Os == InstallerOs.MacOS, LibcFor(folder));
+    }
+
+    // InstallerMachine.SyncFileOnDisk: kept, then failed as FileSyncFailure says, or the installer's own sync run over this
+    // machine's libc (SyncCalls), F_FULLFSYNC on a Mac. A file's sync makes no folder entry durable.
+    private void SyncFile(string onDisk)
+    {
+        var path = onDisk[Root.TrimEnd('/').Length..];
+        FileSyncs.Add(path);
+        DurabilityEvents.Add($"sync-file {path}");
+        DuringFileSync?.Invoke(path);
+        (File.Exists(onDisk) || Directory.Exists(onDisk)).Should().BeTrue("the installer syncs a file that is there");
+        if (FileSyncFailure is { } failure)
+        {
+            throw new IOException($"Could not sync the file {onDisk} to disk (fsync: {failure}).");
+        }
+
+        InstallerMachine.SyncFolder(onDisk, Os == InstallerOs.MacOS, LibcFor(path), "file");
+    }
+
+    // InstallerMachine.RenameOnDisk: the rename, with what this fake knows of the file (its owner) going with it.
+    private void Rename(string fromOnDisk, string toOnDisk, bool overwrite)
+    {
+        var root = Root.TrimEnd('/').Length;
+        var (from, to) = (fromOnDisk[root..], toOnDisk[root..]);
+        File.Move(fromOnDisk, toOnDisk, overwrite);
+        DurabilityEvents.Add($"rename {from} {to}");
+        if (Owners.Remove(from, out var owner))
+        {
+            Owners[to] = owner;
+        }
+        else
+        {
+            Owners.Remove(to);
+        }
     }
 
     // libc's calls for syncing the folder, each kept in SyncCalls. The one that makes its tracked files durable as they
@@ -163,7 +254,12 @@ internal sealed partial class FakeMachine
             {
                 foreach (var path in _durable.Keys.Where(path => Path.GetDirectoryName(path) == folder).ToArray())
                 {
-                    _durable[path] = Exists(path) ? File.ReadAllBytes(OnDisk(path)) : null;
+                    _durable[path] = File.Exists(OnDisk(path)) ? File.ReadAllBytes(OnDisk(path)) : null;
+                }
+
+                foreach (var path in _durableFolders.Keys.Where(path => Path.GetDirectoryName(path) == folder).ToArray())
+                {
+                    _durableFolders[path] = Directory.Exists(OnDisk(path));
                 }
             }
 
