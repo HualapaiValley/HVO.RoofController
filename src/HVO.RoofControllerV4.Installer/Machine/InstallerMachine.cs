@@ -68,6 +68,7 @@ public sealed class InstallerMachine
         DownloadTextAsync = DownloadTextAsync,
         DownloadToAsync = DownloadToAsync,
         FetchCaAsync = FetchCaAsync,
+        FreeSpaceOnDisk = FreeSpaceOnDisk,
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory,
         RunProgramAsync = RunProgramAsync
@@ -117,6 +118,15 @@ public sealed class InstallerMachine
 
     /// <summary>The folder for the installer's temporary files, as a path on this machine.</summary>
     public string TemporaryDirectory { get; init; } = Path.GetTempPath();
+
+    /// <summary>
+    /// The bytes free to the installer on the file system a folder is on, given where the folder is on disk; null when the
+    /// system does not say. <see cref="FreeSpace"/> calls it; a test fakes it.
+    /// </summary>
+    public Func<string, long?> FreeSpaceOnDisk { get; init; } = AvailableBytes;
+
+    /// <summary>The bytes free to the installer on the file system <paramref name="path"/> (a folder) is on, or null when the system does not say.</summary>
+    public long? FreeSpace(string path) => FreeSpaceOnDisk(OnDisk(path));
 
     /// <summary>
     /// Runs a program (a path on this machine) with the arguments and the variables added to the environment, on this
@@ -514,6 +524,18 @@ public sealed class InstallerMachine
             }
 
             await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static long? AvailableBytes(string onDisk)
+    {
+        try
+        {
+            return new DriveInfo(onDisk).AvailableFreeSpace;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
         }
     }
 

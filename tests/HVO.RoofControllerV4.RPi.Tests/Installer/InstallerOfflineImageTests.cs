@@ -6,6 +6,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Deployment;
+using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -162,7 +163,13 @@ public sealed class InstallerOfflineImageTests
 
         run.ExitCode.Should().Be(0, run.ToString());
         bench.Ran.Should().NotContain(command => command.Program == "docker" && command.Arguments.Count > 0 && command.Arguments[0] == "pull", "nothing is pulled");
-        bench.LoadedArchives.Should().Equal($"{folder}/{emulatorArchive}", $"{folder}/{controllerArchive}");
+        // The installer loads its own checked copy of the emulator's archive; the deploy script is given the controller's.
+        bench.LoadedArchives.Should().HaveCount(2);
+        bench.LoadedArchives[0].Should().StartWith($"{bench.TemporaryDirectory}/hvo-roof-install-").And.EndWith($"/{emulatorArchive}");
+        bench.LoadedArchives[1].Should().Be($"{folder}/{controllerArchive}");
+        bench.LoadedContents.Select(Convert.ToHexString).Should().Equal(
+            Convert.ToHexString(FakeMachine.OfflineArchiveContent(emulatorArchive)), Convert.ToHexString(FakeMachine.OfflineArchiveContent(controllerArchive)));
+        bench.Exists(Path.GetDirectoryName(bench.LoadedArchives[0])!).Should().BeFalse("the installer's copy goes once Docker has loaded it");
         var emulatorId = FakeMachine.ArchiveConfigDigest(emulatorArchive);
         bench.Ran.Should().Contain(command => command.Program == "docker" && command.Arguments.Count > 0 && command.Arguments[0] == "run"
             && command.Arguments[command.Arguments.Count - 1] == emulatorId
@@ -173,10 +180,12 @@ public sealed class InstallerOfflineImageTests
         {
             ["IMAGE_REF"] = ControllerReference,
             ["IMAGE_ARCHIVE"] = $"{folder}/{controllerArchive}",
+            ["IMAGE_ARCHIVE_SHA256"] = Sha256(FakeMachine.OfflineArchiveContent(controllerArchive)),
             ["BUILD_PLATFORM"] = "linux/amd64"
         });
+        bench.Deploys[0]["TMPDIR"].Should().StartWith($"{bench.TemporaryDirectory}/hvo-roof-install-", "the script's copy goes in the installer's own folder");
         bench.Containers[MachineSurveyor.ControllerContainer].ImageId.Should().Be(FakeMachine.ArchiveConfigDigest(controllerArchive));
-        bench.Read(InstallPaths.SystemLog).Should().Contain($"Loaded the HAT emulator's image from {folder}/{emulatorArchive}: the image {emulatorId}, release 4.0.0's {EmulatorReference}. Nothing was pulled.");
+        bench.Read(InstallPaths.SystemLog).Should().Contain($"Loaded the HAT emulator's image from {folder}/{emulatorArchive}, through a copy checked against release.json: the image {emulatorId}, release 4.0.0's {EmulatorReference}. Nothing was pulled.");
         bench.Downloaded.Should().BeEmpty("the release's files come from its folder");
         bench.Unexpected.Should().BeEmpty();
 
@@ -201,6 +210,7 @@ public sealed class InstallerOfflineImageTests
         {
             ["IMAGE_REF"] = ControllerReference,
             ["IMAGE_ARCHIVE"] = $"{folder}/{FakeMachine.OfflineArchiveName("roof-controller", "arm64")}",
+            ["IMAGE_ARCHIVE_SHA256"] = Sha256(FakeMachine.OfflineArchiveContent(FakeMachine.OfflineArchiveName("roof-controller", "arm64"))),
             ["BUILD_PLATFORM"] = "linux/arm64"
         });
         pi.LoadedArchives.Should().ContainSingle("the controller's image alone, which the deploy script loads");
@@ -272,6 +282,124 @@ public sealed class InstallerOfflineImageTests
         bench.LoadedArchives.Should().BeEmpty();
         bench.Containers.Should().NotContainKey(MachineSurveyor.HatEmulatorContainer);
         bench.Deploys.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(true, DisplayName = "replaced")]
+    [DataRow(false, DisplayName = "written over in place")]
+    public async Task TheEmulatorsArchive_ChangedOnceItIsChecked_IsNeverWhatDockerLoads(bool replaced)
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var folder = bench.ReleaseFolder();
+        var name = FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64");
+        var other = FakeMachine.OfflineArchiveContent(FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64", "6.6.6"));
+        UnixFileMode? copyMode = null, folderMode = null;
+
+        // Someone who can write to the release's folder changes the archive once the installer has checked it, just
+        // before Docker reads it.
+        bench.BeforeLoad = path =>
+        {
+            if (Path.GetFileName(path) != name || copyMode is not null)
+            {
+                return;
+            }
+
+            copyMode = bench.Mode(path);
+            folderMode = bench.Mode(Path.GetDirectoryName(path)!);
+            if (replaced)
+            {
+                File.WriteAllBytes(bench.OnDisk($"{folder}/{name}.new"), other);
+                File.Move(bench.OnDisk($"{folder}/{name}.new"), bench.OnDisk($"{folder}/{name}"), overwrite: true);
+            }
+            else
+            {
+                using var stream = new FileStream(bench.OnDisk($"{folder}/{name}"), FileMode.Open, FileAccess.Write);
+                stream.SetLength(0);
+                stream.Write(other);
+            }
+        };
+
+        var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder);
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        File.ReadAllBytes(bench.OnDisk($"{folder}/{name}")).Should().Equal(other, "the archive in the release's folder was changed before the load");
+        bench.LoadedArchives[0].Should().NotBe($"{folder}/{name}", "Docker reads the installer's copy, never the release's folder");
+        bench.LoadedContents[0].Should().Equal(FakeMachine.OfflineArchiveContent(name), "Docker loads the bytes checked against release.json");
+        copyMode.Should().Be(Modes.PrivateFile, "only root reads the copy");
+        folderMode.Should().Be(Modes.PrivateFolder, "only root opens the copy's folder");
+        bench.Exists(Path.GetDirectoryName(bench.LoadedArchives[0])!).Should().BeFalse("the copy goes once Docker has loaded it");
+        bench.Containers[MachineSurveyor.HatEmulatorContainer].ImageId.Should().Be(FakeMachine.ArchiveConfigDigest(name));
+    }
+
+    [TestMethod]
+    public async Task TheEmulatorsCopy_GoesWhenDockerCannotLoadIt()
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var folder = bench.ReleaseFolder();
+        string? copy = null;
+        bench.BeforeLoad = path =>
+        {
+            copy = path;
+            File.Delete(bench.OnDisk(path));
+        };
+
+        var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.ToString().Should().Contain($"Could not load the HAT emulator's image from {folder}/{FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64")}");
+        copy.Should().StartWith($"{bench.TemporaryDirectory}/hvo-roof-install-");
+        bench.Exists(Path.GetDirectoryName(copy)!).Should().BeFalse("the installer's folder, and any copy in it, goes whatever happens");
+        bench.Deploys.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TheControllersArchive_ChangedOnceTheInstallerChecksIt_IsRefusedByTheDeployScript()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var folder = pi.ReleaseFolder();
+        var name = FakeMachine.OfflineArchiveName("roof-controller", "arm64");
+        var released = FakeMachine.OfflineArchiveContent(name);
+        var other = released.ToArray();
+        other[0] ^= 1;
+        UnixFileMode? temporaryMode = null;
+
+        // Once the installer has checked the archive, and before the deploy script copies it, the archive changes: of the
+        // same size, so only its SHA-256 tells it from the release's.
+        pi.DuringDeploy = () =>
+        {
+            temporaryMode = pi.Mode(pi.Deploys[^1]["TMPDIR"]);
+            File.WriteAllBytes(pi.OnDisk($"{folder}/{name}"), other);
+        };
+
+        var run = await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }), "--release", folder);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.ToString().Should().Contain($"IMAGE_ARCHIVE {folder}/{name} is not the release's archive: its SHA-256 is {Sha256(other)}, and IMAGE_ARCHIVE_SHA256 (release.json's) is {Sha256(released)}.");
+        pi.Deploys.Should().ContainSingle().Which["IMAGE_ARCHIVE_SHA256"].Should().Be(Sha256(released));
+        temporaryMode.Should().Be(Modes.PrivateFolder, "the script's copy goes in a folder only root can open");
+        pi.Exists(pi.Deploys[0]["TMPDIR"]).Should().BeFalse("the installer's folder, and the script's copy in it, goes when the run ends");
+        pi.LoadedArchives.Should().BeEmpty("the deploy script loads nothing but the release's archive");
+        pi.Containers.Should().NotContainKey(MachineSurveyor.ControllerContainer);
+    }
+
+    [TestMethod]
+    public async Task NoRoomForTheCopyDockerLoads_IsRefusedBeforeAnythingChanges()
+    {
+        using var bench = new FakeMachine(architecture: Architecture.X64, hostName: "bench");
+        var folder = bench.ReleaseFolder();
+        var name = FakeMachine.OfflineArchiveName("roof-hat-emulator", "amd64");
+        bench.FreeSpace = FakeMachine.OfflineArchiveContent(name).Length + OfflineImages.CopyHeadroom - 1;
+
+        var run = await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.ToString().Should().Contain(
+            $"there is not room in {bench.TemporaryDirectory} for a private copy of {name}, which is what Docker loads, so that it reads only what was checked: it needs 17 MiB (the archive and 16 MiB more), and 16 MiB is free. Free some room there, then run the installer again");
+        bench.LoadedArchives.Should().BeEmpty();
+        bench.Deploys.Should().BeEmpty();
+
+        bench.FreeSpace = FakeMachine.OfflineArchiveContent(name).Length + OfflineImages.CopyHeadroom;
+        (await bench.RunAsync("--answers", bench.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Rig] }), "--release", folder)).ExitCode.Should().Be(0);
     }
 
     [TestMethod]
@@ -449,4 +577,6 @@ public sealed class InstallerOfflineImageTests
             throw;
         }
     }
+
+    private static string Sha256(byte[] content) => Convert.ToHexStringLower(SHA256.HashData(content));
 }

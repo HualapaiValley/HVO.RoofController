@@ -7,12 +7,23 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// <summary>
 /// A release's offline image archives (docs/install.md#the-release-it-installs). With the release read from a folder
 /// (<c>--release DIR</c>) that lists an archive of an image for this machine's platform, the image is loaded from it:
-/// the archive is checked against release.json, Docker loads it, the image it then holds must have one of the IDs the
-/// release gives it, and it runs by that ID, never pulled, with the release-image label naming its reference. A release
-/// from GitHub, or one from before offline archives, is pulled by its digest as before.
+/// the archive is copied into a folder only root can open and checked there against release.json, Docker loads that
+/// copy (never the file in the release's folder, which someone else might change once it is checked), the image it
+/// then holds must have one of the IDs the release gives it, and it runs by that ID, never pulled, with the
+/// release-image label naming its reference. The deploy script makes its copy of the controller's archive the same way,
+/// and checks it against the SHA-256 the installer gives it. A release from GitHub, or one from before offline
+/// archives, is pulled by its digest as before.
 /// </summary>
 public static class OfflineImages
 {
+    /// <summary>
+    /// The room a private copy of an archive must leave on its file system, beside the archive's own size, as the deploy
+    /// script's copy leaves: 16 MiB.
+    /// </summary>
+    internal const long CopyHeadroom = 16L * Mebibyte;
+
+    private const long Mebibyte = 1024 * 1024;
+
     /// <summary>
     /// The archive <paramref name="image"/> is loaded from on this machine: the release is read from a folder, and lists
     /// one for this machine's platform. Null when the image is pulled.
@@ -30,8 +41,8 @@ public static class OfflineImages
 
     /// <summary>
     /// Why <paramref name="image"/> (<paramref name="what"/>) cannot be loaded from its archive: the release's folder does
-    /// not hold the file, or holds one of another size. Null when it can, or when the image is pulled. Its SHA-256 is
-    /// checked when it is loaded.
+    /// not hold the file, or holds one of another size, or the installer's temporary folder has no room for the copy that
+    /// Docker loads. Null when it can, or when the image is pulled. Its SHA-256 is checked when it is loaded.
     /// </summary>
     public static async Task<string?> ProblemAsync(InstallContext context, ReleaseManifest release, ReleaseImage image, string what)
     {
@@ -51,14 +62,27 @@ public static class OfflineImages
         await using (stream.ConfigureAwait(false))
         {
             return stream.Length == archive.Size
-                ? null
+                ? NoRoom(context, archive)
                 : $"{folder}'s {archive.Name} is not release {release.Version}'s: it holds {stream.Length} bytes, and release.json says {archive.Size}. Download it again from {ReleaseManifest.PageUri(release.Version)}, then run the installer again";
         }
     }
 
+    // Why the installer's temporary folder, where the installer and the deploy script copy an archive before Docker loads
+    // it, has no room for that copy; null when it has, or when the system does not say (the copy then fails if it must).
+    private static string? NoRoom(InstallContext context, OfflineArchive archive)
+    {
+        var folder = context.Machine.TemporaryDirectory;
+        return context.Machine.FreeSpace(folder) is { } free && free < archive.Size + CopyHeadroom
+            ? $"there is not room in {folder} for a private copy of {archive.Name}, which is what Docker loads, so that it reads only what was checked: "
+                + $"it needs {(archive.Size + CopyHeadroom + Mebibyte - 1) / Mebibyte} MiB (the archive and 16 MiB more), and {free / Mebibyte} MiB is free. Free some room there, then run the installer again"
+            : null;
+    }
+
     /// <summary>
     /// The archive in the release's folder, once it is checked against release.json's size and SHA-256: what the deploy
-    /// script loads (IMAGE_ARCHIVE).
+    /// script is given (IMAGE_ARCHIVE). The script copies it into a folder of its own, checks that the copy has
+    /// release.json's SHA-256 (IMAGE_ARCHIVE_SHA256) and loads the copy, so a change to the file after this check is never
+    /// what Docker reads.
     /// </summary>
     public static Task<string> PathAsync(InstallContext context, ReleaseManifest release, OfflineArchive archive, DeployScript.WorkFolder work, CancellationToken cancellationToken)
     {
@@ -67,18 +91,29 @@ public static class OfflineImages
     }
 
     /// <summary>
-    /// <paramref name="image"/> (<paramref name="what"/>) loaded from <paramref name="archive"/>: checked against
-    /// release.json, loaded by Docker, and found by one of the IDs the release gives it (<see cref="ReleaseImage.LoadedIds"/>),
-    /// for the archive's platform. Returns that ID, which <c>docker run</c> runs with <see cref="RunOptions"/>.
+    /// <paramref name="image"/> (<paramref name="what"/>) loaded from <paramref name="archive"/>: copied from the release's
+    /// folder into one only the installer's user (root) can open, the copy checked against release.json as it is written
+    /// (<see cref="ReleaseFiles.CopyCheckedAsync"/>), that copy loaded by Docker, and the image found by one of the IDs the
+    /// release gives it (<see cref="ReleaseImage.LoadedIds"/>), for the archive's platform. The copy is deleted once the
+    /// load is done, whether it worked or not. Returns that ID, which <c>docker run</c> runs with <see cref="RunOptions"/>.
     /// </summary>
     public static async Task<string> LoadAsync(InstallContext context, ReleaseManifest release, ReleaseImage image, OfflineArchive archive, string what, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(release);
         ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(archive);
         using var work = new DeployScript.WorkFolder(context.Machine);
-        var path = await PathAsync(context, release, archive, work, cancellationToken).ConfigureAwait(false);
-        context.Progress?.Invoke($"Loading {archive.Name} ({archive.Size / (1024 * 1024)} MB)…");
-        var load = await context.Machine.Commands.RunAsync(new CommandLine("docker", "load", "-i", path) { Timeout = TimeSpan.FromMinutes(20) }, cancellationToken).ConfigureAwait(false);
+        var path = Path.Join(context.Release.FolderPath!, archive.Name);
+        if (NoRoom(context, archive) is { } noRoom)
+        {
+            throw new InstallerException($"{char.ToUpperInvariant(noRoom[0])}{noRoom[1..]}.");
+        }
+
+        var copy = Path.Join(work.Path, archive.Name);
+        await ReleaseFiles.CopyCheckedAsync(context, archive.Asset, path, copy, cancellationToken).ConfigureAwait(false);
+        context.Progress?.Invoke($"Loading {archive.Name} ({archive.Size / Mebibyte} MB)…");
+        var load = await context.Machine.Commands.RunAsync(new CommandLine("docker", "load", "-i", copy) { Timeout = TimeSpan.FromMinutes(20) }, cancellationToken).ConfigureAwait(false);
         if (!load.Succeeded)
         {
             throw new InstallerException($"Could not load {what} from {path}: {load.Reason}");
@@ -97,7 +132,7 @@ public static class OfflineImages
                 throw new InstallerException($"Docker loaded {path} as the image {id}, which is for {platform}, not {archive.Platform}: it is not release {release.Version}'s {what} for this machine.");
             }
 
-            context.Log.Write($"Loaded {what} from {path}: the image {id}, release {release.Version}'s {image.Reference}. Nothing was pulled.");
+            context.Log.Write($"Loaded {what} from {path}, through a copy checked against release.json: the image {id}, release {release.Version}'s {image.Reference}. Nothing was pulled.");
             return id;
         }
 

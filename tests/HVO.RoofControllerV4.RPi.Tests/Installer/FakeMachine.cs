@@ -322,6 +322,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         },
         ApiHandler = ApiHandler,
         TemporaryDirectory = TemporaryDirectory,
+        FreeSpaceOnDisk = _ => FreeSpace,
         RunProgramAsync = RunProgramAsync
     };
 
@@ -501,18 +502,33 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>The archives <c>docker load -i</c> read, by their paths on the machine, in order: the installer's and the deploy script's.</summary>
     public List<string> LoadedArchives { get; } = [];
 
+    /// <summary>What each of <see cref="LoadedArchives"/> held when Docker read it, in the same order.</summary>
+    public List<byte[]> LoadedContents { get; } = [];
+
+    /// <summary>
+    /// What happens just before Docker reads an archive it loads (given the path it reads), once the installer, or the
+    /// deploy script, has checked it: a test changes the archive in the release's folder here.
+    /// </summary>
+    public Action<string>? BeforeLoad { get; set; }
+
+    /// <summary>The bytes free in the machine's temporary folder; null when the system does not say.</summary>
+    public long? FreeSpace { get; set; }
+
     /// <summary>The images Docker holds once it has loaded an archive: each one's platform, by its ID.</summary>
     public Dictionary<string, string> LoadedImages { get; } = new(StringComparer.Ordinal);
 
-    // docker load -i <archive>: the image it holds, by the ID the image store gives it, for the archive's platform.
-    private CommandResult LoadArchive(string path)
+    // docker load -i <archive>: the image it holds, by the ID the image store gives it, for the archive's platform. Given
+    // the bytes (the deploy script's copy), it loads those, and reads nothing at the path.
+    private CommandResult LoadArchive(string path, byte[]? copy = null)
     {
-        if (!File.Exists(OnDisk(path)))
+        BeforeLoad?.Invoke(path);
+        if (copy is null && !File.Exists(OnDisk(path)))
         {
             return new CommandResult(1, string.Empty, $"open {path}: no such file or directory\n");
         }
 
         LoadedArchives.Add(path);
+        LoadedContents.Add(copy ?? File.ReadAllBytes(OnDisk(path)));
         var name = Path.GetFileName(path);
         var id = LoadedImageId(name);
         LoadedImages[id] = name.Contains("-linux-amd64.", StringComparison.Ordinal) ? "linux/amd64" : "linux/arm64";
@@ -1224,6 +1240,24 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             return new CommandResult(2, string.Empty, $"[deploy] ERROR: unknown option {options[0]}\n");
         }
 
+        // As the script copies an offline archive before anything else, checks that the copy has IMAGE_ARCHIVE_SHA256, and
+        // later loads that copy, not the file.
+        byte[]? copy = null;
+        if (environment.GetValueOrDefault("IMAGE_ARCHIVE") is { Length: > 0 } given)
+        {
+            if (!File.Exists(OnDisk(given)))
+            {
+                return new CommandResult(1, string.Empty, $"[deploy] ERROR: IMAGE_ARCHIVE '{given}' is not a file this script can read. Nothing was changed.\n");
+            }
+
+            copy = File.ReadAllBytes(OnDisk(given));
+            var sha256 = Convert.ToHexStringLower(SHA256.HashData(copy));
+            if (environment.GetValueOrDefault("IMAGE_ARCHIVE_SHA256") is { Length: > 0 } expected && sha256 != expected)
+            {
+                return new CommandResult(1, string.Empty, $"[deploy] ERROR: IMAGE_ARCHIVE {given} is not the release's archive: its SHA-256 is {sha256}, and IMAGE_ARCHIVE_SHA256 (release.json's) is {expected}. Nothing was changed.\n");
+            }
+        }
+
         // The controller it replaces is stopped and kept (an older one kept goes).
         if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var old))
         {
@@ -1236,7 +1270,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         string? loaded = null;
         if (environment.GetValueOrDefault("IMAGE_ARCHIVE") is { Length: > 0 } archive)
         {
-            if (LoadArchive(archive) is { Succeeded: false } failed)
+            if (LoadArchive(archive, copy) is { Succeeded: false } failed)
             {
                 return new CommandResult(1, string.Empty, $"[deploy] ERROR: Could not load {archive}: {failed.Error}");
             }

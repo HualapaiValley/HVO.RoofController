@@ -653,9 +653,10 @@ public sealed class ControllerStep(
         var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
         using var work = new DeployScript.WorkFolder(context.Machine);
 
-        // From a release's folder, the deploy script loads the image from its offline archive, checked here first.
-        var archive = OfflineImages.For(context, release.Controller) is { } offline
-            ? await OfflineImages.PathAsync(context, release, offline, work, cancellationToken).ConfigureAwait(false)
+        // From a release's folder, the deploy script loads the image from its offline archive, checked here first: it loads
+        // a copy of its own, which must have release.json's SHA-256 for the archive.
+        (string Path, string Sha256)? archive = OfflineImages.For(context, release.Controller) is { } offline
+            ? (await OfflineImages.PathAsync(context, release, offline, work, cancellationToken).ConfigureAwait(false), offline.Sha256)
             : null;
         var environment = await EnvironmentAsync(context, work, release.Controller.Reference, archive, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await RunScriptAsync(context, work, environment, cancellationToken).ConfigureAwait(false);
@@ -673,7 +674,9 @@ public sealed class ControllerStep(
     /// <summary>
     /// What the deploy script runs with for this controller: <paramref name="imageReference"/> (a release's image by
     /// digest; <c>--rollback</c> and <c>--stop</c> ignore it), <paramref name="imageArchive"/> (the release's offline
-    /// archive of that image, which the script loads in place of a pull; null to pull it), and <paramref name="keyFile"/>
+    /// archive of that image and its SHA-256 in release.json: the script copies it into a folder of its own inside
+    /// <paramref name="work"/>, checks that the copy has that SHA-256, and loads the copy in place of a pull; null to pull
+    /// it), and <paramref name="keyFile"/>
     /// for its verified Stop (the operator key's file when null). The settings, names and trust are the plan's, so every
     /// mode checks the controller the same way.
     /// </summary>
@@ -681,7 +684,7 @@ public sealed class ControllerStep(
         InstallContext context,
         DeployScript.WorkFolder work,
         string imageReference,
-        string? imageArchive,
+        (string Path, string Sha256)? imageArchive,
         string? keyFile,
         CancellationToken cancellationToken)
     {
@@ -700,7 +703,8 @@ public sealed class ControllerStep(
             ["REMOTE_CONNECT_TO"] = host == "localhost" ? string.Empty : "::127.0.0.1:",
             ["DOCKER_CONTEXT"] = dockerContext.Succeeded && dockerContext.Output.Trim() is { Length: > 0 } name ? name : "default",
             ["IMAGE_REF"] = imageReference,
-            ["IMAGE_ARCHIVE"] = imageArchive ?? string.Empty,
+            ["IMAGE_ARCHIVE"] = imageArchive?.Path ?? string.Empty,
+            ["IMAGE_ARCHIVE_SHA256"] = imageArchive?.Sha256 ?? string.Empty,
             ["BUILD_PLATFORM"] = Platform(context.Machine),
             ["CONTAINER_NAME"] = Target,
             ["HOST_PORT"] = Port(settings.HttpPort),
@@ -732,6 +736,13 @@ public sealed class ControllerStep(
             ["OPERATOR_KEY_FILE"] = keyFile ?? ApiKeyFiles.KeyFile(layout.Secrets, operatorKey.Index),
             ["ROOF_OPERATOR_API_KEY"] = string.Empty
         };
+        if (imageArchive is not null)
+        {
+            // The script's copy of the archive goes in TMPDIR: here, inside the installer's own folder, which only root can
+            // open and which goes when the run ends, even if the script could not remove its copy itself.
+            environment["TMPDIR"] = work.Path;
+        }
+
         if (settings.LinuxAuth is { Enabled: true })
         {
             environment["LINUX_AUTH_ENABLED"] = "true";
