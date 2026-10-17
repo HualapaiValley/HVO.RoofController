@@ -92,6 +92,31 @@ public sealed class RoofWebStatusTextTests
     }
 
     [TestMethod]
+    public void RelaysUnverified_SaysTheControllerIsHeldStopped_Why_AndWhatToDo()
+    {
+        // The owner's decision (#138): the supervisor does not start the controller until the relays are verified off.
+        var snapshot = WebStatuses.Controller(States.RelaysUnverified, 1, "crashed (killed by signal 9)", ExitAt) with
+        {
+            Relays = new SupervisorRelays
+            {
+                State = SupervisorRelays.States.Unverified,
+                At = ExitAt.AddSeconds(1),
+                Reason = "trying again: the controller is held stopped until the relays are verified off",
+            },
+        };
+
+        var view = RoofWebStatusText.DescribeController(WebStatuses.With(ControllerReadiness.Unreachable, snapshot, "Connection refused"));
+
+        view.Level.Should().Be(RoofWebStatusLevel.Bad);
+        view.Headline.Should().Be("The controller is held stopped: the relays cannot be verified off");
+        view.Details.Should().Equal(
+            "The supervisor could not verify every relay off, so it does not start the controller: it starts it only once a read-back shows every relay off. It keeps trying, with a delay that doubles to at most 30 s.",
+            "Last try: trying again: the controller is held stopped until the relays are verified off, at 2026-09-29 05:59:59 UTC.",
+            "Last exit: crashed (killed by signal 9), at 2026-09-29 05:59:58 UTC.",
+            "Until the relays are verified off, the drive may still be running: if the roof moves, use the independent stop. Find the cause (the HAT not answering, or a relay that stays on) in the container's log.");
+    }
+
+    [TestMethod]
     [DataRow(States.Starting, RoofWebStatusLevel.Busy, "The controller is starting")]
     [DataRow(States.Stopping, RoofWebStatusLevel.Busy, "The controller is stopping with the container")]
     [DataRow(States.Stopped, RoofWebStatusLevel.Bad, "The controller is stopped")]
@@ -106,7 +131,7 @@ public sealed class RoofWebStatusTextTests
     [TestMethod]
     public void NoWording_ClaimsTheRoofsPosition()
     {
-        var views = new[] { States.Running, States.Restarting, States.CrashLoop, States.Starting, States.Stopping, States.Stopped }
+        var views = new[] { States.Running, States.Restarting, States.CrashLoop, States.RelaysUnverified, States.Starting, States.Stopping, States.Stopped }
             .SelectMany(state => Enum.GetValues<ControllerReadiness>().Select(readiness =>
                 RoofWebStatusText.DescribeController(WebStatuses.With(readiness, WebStatuses.Controller(state, 5, "crashed (exit code 1)", ExitAt)))));
 

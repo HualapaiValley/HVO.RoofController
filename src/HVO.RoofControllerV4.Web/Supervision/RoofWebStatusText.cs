@@ -40,6 +40,18 @@ public static class RoofWebStatusText
                 details.Add("Find the cause in the container's log. A forced restart (an admin, on the System page; or docker exec roof-controller touch /run/hvo-roof/control/force-restart-controller), or a restart of the container, starts the controller again.");
                 return new RoofWebStatusView(RoofWebStatusLevel.Bad, "The controller is stopped after repeated crashes", details);
 
+            case SupervisedProcess.States.RelaysUnverified:
+                details.Insert(0, "The supervisor could not verify every relay off, so it does not start the controller: it starts it only once a read-back shows every relay off. It keeps trying, with a delay that doubles to at most 30 s.");
+                if (snapshot!.Relays is { Reason: { Length: > 0 } reason } relays)
+                {
+                    details.Insert(1, relays.At is { } at
+                        ? string.Create(CultureInfo.InvariantCulture, $"Last try: {reason}, at {at.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC.")
+                        : $"Last try: {reason}.");
+                }
+
+                details.Add("Until the relays are verified off, the drive may still be running: if the roof moves, use the independent stop. Find the cause (the HAT not answering, or a relay that stays on) in the container's log.");
+                return new RoofWebStatusView(RoofWebStatusLevel.Bad, "The controller is held stopped: the relays cannot be verified off", details);
+
             case SupervisedProcess.States.Restarting:
                 return new RoofWebStatusView(RoofWebStatusLevel.Busy, "The controller is restarting", details);
 

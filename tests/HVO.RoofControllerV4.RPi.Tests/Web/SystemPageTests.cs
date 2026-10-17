@@ -166,6 +166,21 @@ public sealed class SystemPageTests
     }
 
     [TestMethod]
+    public async Task AForcedRestart_TheSupervisorHeld_SaysTheControllerIsHeldStopped()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        File.WriteAllText(harness.SupervisorStatePath, WebTestSupport.SupervisorState(SupervisedProcess.States.RelaysUnverified)
+            .Replace("\"outcome\":\"ignored\"", $"\"outcome\":\"{ForcedRestartRecord.Outcomes.Held}\"", StringComparison.Ordinal));
+        await using var context = harness.Context(session, supervised: true);
+
+        var cut = Loaded(context);
+
+        cut.Find("[data-testid=forced-restart-last]").TextContent.Should().Be(
+            "The last forced restart, at 2026-09-29 05:45:58Z, did not start the controller again: the relays could not be verified off, so it is held stopped until they are.");
+    }
+
+    [TestMethod]
     public async Task AForcedRestart_WithoutTheSupervisor_IsSaidToBeImpossible()
     {
         using var harness = new WebAdminHarness();
