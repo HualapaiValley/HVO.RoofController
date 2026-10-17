@@ -433,6 +433,62 @@ class TheOfflineArchives(ReleaseTestCase):
         self.assertEqual(blobs, {f"blobs/sha256/{digest[7:]}" for digest in
                                  (image.digest, image.manifests["linux/arm64"]["digest"], image.configs["linux/arm64"]["digest"])})
 
+    def test_every_header_of_each_archive_is_a_plain_ustar_header(self):
+        # What the deploy script's archive_members accepts, and nothing more: each header "ustar\0" "00", summing to its
+        # checksum, a file (0) or a folder (5) with no link target, nothing past the name field's 100 bytes but the
+        # fields ustar has, then empty blocks to the end. A pax header (x, g) would be refused.
+        for archive in ARCHIVES:
+            self.assert_plain_ustar(self.out / archive)
+
+    def test_each_archive_is_plain_ustar_even_for_a_time_pax_would_keep_in_a_header_of_its_own(self):
+        # PAX_FORMAT keeps a time with a fraction of a second in a pax header; ustar holds whole seconds.
+        out = self.release.root / "fraction"
+        out.mkdir()
+        release_assets.offline_archives(self.release.controller_archive, "roof-controller", "ghcr.io/hualapaivalley/roof-controller",
+                                        "4.0.0", CONTROLLER_DIGEST, out, CREATED_SECONDS + 0.5)
+        for platform in ("amd64", "arm64"):
+            self.assert_plain_ustar(out / f"roof-controller-4.0.0-linux-{platform}.oci.tar")
+
+    def test_what_ustar_cannot_hold_is_refused_as_the_release_is_built(self):
+        # A time past ustar's 11 octal digits: PAX_FORMAT would write it in a pax header, which the deploy script refuses.
+        out = self.release.root / "late"
+        out.mkdir()
+        with self.assertRaisesRegex(release_assets.AssetError,
+                                    r"roof-controller-4\.0\.0-linux-amd64\.oci\.tar cannot be written as a plain ustar archive"):
+            release_assets.offline_archives(self.release.controller_archive, "roof-controller", "ghcr.io/hualapaivalley/roof-controller",
+                                            "4.0.0", CONTROLLER_DIGEST, out, 8 ** 11)
+        self.assertEqual(list(out.iterdir()), [], "no archive is left half written")
+        for name, accepted in (("blobs/sha256/" + "a" * 64, True), ("a" * 100, True), ("a" * 101, False),
+                               ("Blobs/sha256", False), ("blobs/sha256/x y", False), ("ünïcode", False)):
+            self.assertEqual(bool(release_assets.ARCHIVE_MEMBER_NAME.match(name)), accepted, name)
+
+    def assert_plain_ustar(self, path):
+        data = path.read_bytes()
+        self.assertEqual(len(data) % 512, 0, path.name)
+        offset, members = 0, []
+        while offset < len(data):
+            header = data[offset:offset + 512]
+            if header == bytes(512):
+                self.assertEqual(data[offset:], bytes(len(data) - offset), f"{path.name}: only empty blocks after the end")
+                self.assertGreaterEqual(len(data) - offset, 1024, f"{path.name}: two empty blocks end it")
+                break
+            where = f"{path.name} at {offset}"
+            self.assertEqual(header[257:265], b"ustar\x0000", where)
+            self.assertIn(header[156:157], (b"0", b"5"), where)
+            stored = int(header[148:156].replace(b"\x00", b" ").strip() or b"-1", 8)
+            self.assertEqual(stored, sum(header[:148]) + 8 * 32 + sum(header[156:]), where)
+            name = header[:100].rstrip(b"\x00")
+            self.assertNotIn(b"\x00", name, where)
+            self.assertRegex(name.decode("ascii"), release_assets.ARCHIVE_MEMBER_NAME, where)
+            self.assertEqual(header[157:257], bytes(100), f"{where}: no link target")
+            self.assertEqual(header[345:512], bytes(167), f"{where}: no name prefix, nothing past ustar's fields")
+            self.assertRegex(header[124:136], rb"^[0-7]{11}\x00$", where)
+            size = int(header[124:135], 8)
+            members.append((header[156:157], name.decode("ascii")))
+            offset += 512 + (size + 511) // 512 * 512
+        self.assertEqual(members[:5], [(b"0", "oci-layout"), (b"0", "index.json"), (b"0", "manifest.json"),
+                                       (b"5", "blobs/"), (b"5", "blobs/sha256/")], path.name)
+
     def test_the_archives_are_attested_with_the_other_assets(self):
         listed = {line.split("  ", 1)[1] for line in (self.out / "SHA256SUMS").read_text(encoding="utf-8").splitlines()}
         self.assertLessEqual(set(ARCHIVES), listed)

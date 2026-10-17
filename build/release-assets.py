@@ -66,6 +66,11 @@ IMAGES = (("controller", "roof-controller"), ("hatEmulator", "roof-hat-emulator"
 # The .NET runtime of a platform, for an offline archive's entry in assets.
 PLATFORM_RUNTIMES = {"linux/amd64": "linux-x64", "linux/arm64": "linux-arm64"}
 
+# A member's name in an offline archive, as the deploy script's check of the archive's own headers accepts it: a-z, 0-9,
+# ".", "-" and "/", in a ustar header's 100-byte name field alone (a folder's with its trailing /). The archives are
+# written as plain ustar (tarfile.USTAR_FORMAT), never with a pax header, which that check refuses.
+ARCHIVE_MEMBER_NAME = re.compile(r"^[a-z0-9./-]{1,100}$")
+
 # The media types of an image index and of an image manifest, OCI's and Docker's.
 INDEX_TYPES = {"application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"}
 MANIFEST_TYPES = {"application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"}
@@ -377,33 +382,45 @@ def offline_archives(source, image, repository, version, digest, out, mtime):
                                                              "org.opencontainers.image.ref.name": version}}]}
                 docker_json = [{"Config": f"blobs/sha256/{config['digest'][7:]}", "RepoTags": [name],
                                 "Layers": [f"blobs/sha256/{layer.get('digest', '')[7:]}" for layer in layers]}]
-                with tarfile.open(out / archive, "w", format=tarfile.PAX_FORMAT) as output:
-                    def add(path, size, data=None, directory=False):
-                        info = tarfile.TarInfo(path)
-                        info.type, info.mode = (tarfile.DIRTYPE, 0o755) if directory else (tarfile.REGTYPE, 0o644)
-                        info.size, info.mtime = size, mtime
-                        info.uid = info.gid = 0
-                        info.uname = info.gname = "root"
-                        output.addfile(info, data)
+                try:
+                    # Plain ustar, so tarfile refuses (ValueError) what only a pax header could hold, here as the release is
+                    # built: the deploy script refuses an archive with one, as it is loaded.
+                    with tarfile.open(out / archive, "w", format=tarfile.USTAR_FORMAT) as output:
+                        def add(path, size, data=None, directory=False):
+                            if not ARCHIVE_MEMBER_NAME.match(path + ("/" if directory else "")):
+                                raise AssetError(f"{archive}: {path} is not a member name the deploy script accepts in an offline "
+                                                 "archive (a-z, 0-9, '.', '-' and '/', at most 100 bytes).")
+                            info = tarfile.TarInfo(path)
+                            info.type, info.mode = (tarfile.DIRTYPE, 0o755) if directory else (tarfile.REGTYPE, 0o644)
+                            info.size, info.mtime = size, mtime
+                            info.uid = info.gid = 0
+                            info.uname = info.gname = "root"
+                            output.addfile(info, data)
 
-                    for path, data in (("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'),
-                                       ("index.json", json.dumps(index_json, separators=(",", ":")).encode()),
-                                       ("manifest.json", json.dumps(docker_json, separators=(",", ":")).encode())):
-                        add(path, len(data), io.BytesIO(data))
-                    add("blobs", 0, directory=True)
-                    add("blobs/sha256", 0, directory=True)
-                    for descriptor, data in ((entries[0], index_bytes), (entry, manifest_bytes), (config, config_bytes)):
-                        add(f"blobs/sha256/{descriptor['digest'][7:]}", len(data), io.BytesIO(data))
-                    copied = set()
-                    for number, layer in enumerate(layers, 1):
-                        what = f"layer {number} of the {platform} image"
-                        found = member(layer, what)
-                        if layer["digest"] in copied:
-                            continue
-                        copied.add(layer["digest"])
-                        checked = _Checked(tar.extractfile(found), layer, f"{source}: {what}")
-                        add(found.name, found.size, checked)
-                        checked.check()
+                        for path, data in (("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'),
+                                           ("index.json", json.dumps(index_json, separators=(",", ":")).encode()),
+                                           ("manifest.json", json.dumps(docker_json, separators=(",", ":")).encode())):
+                            add(path, len(data), io.BytesIO(data))
+                        add("blobs", 0, directory=True)
+                        add("blobs/sha256", 0, directory=True)
+                        for descriptor, data in ((entries[0], index_bytes), (entry, manifest_bytes), (config, config_bytes)):
+                            add(f"blobs/sha256/{descriptor['digest'][7:]}", len(data), io.BytesIO(data))
+                        copied = set()
+                        for number, layer in enumerate(layers, 1):
+                            what = f"layer {number} of the {platform} image"
+                            found = member(layer, what)
+                            if layer["digest"] in copied:
+                                continue
+                            copied.add(layer["digest"])
+                            checked = _Checked(tar.extractfile(found), layer, f"{source}: {what}")
+                            add(found.name, found.size, checked)
+                            checked.check()
+                except (ValueError, AssetError) as error:
+                    (out / archive).unlink(missing_ok=True)
+                    if isinstance(error, AssetError):
+                        raise
+                    raise AssetError(f"{archive} cannot be written as a plain ustar archive, the only kind the deploy script "
+                                     f"loads: {error}.") from error
                 archives.append({"name": archive, "platform": platform, "size": (out / archive).stat().st_size,
                                  "sha256": sha256(out / archive), "manifestDigest": entry["digest"],
                                  "configDigest": config["digest"]})
