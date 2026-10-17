@@ -675,6 +675,15 @@ internal static class BackupCommands
         host.Out.WriteLine();
         Put(machine, session.Log, changes);
         var owners = await GiveOwnersAsync(machine, session.Log, backup.Entries, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            MakeRestoredDurable(machine, backup.Entries);
+        }
+        catch (IOException error)
+        {
+            throw new InstallerException($"What the backup put back could not be made sure of on disk: {error.Message} The install that follows did not start.", error);
+        }
+
         var written = changes.Count(change => change.Change != StepChange.Unchanged);
         host.Out.WriteLine($"Put back {written} of the backup's {backup.Entries.Count} files and folders.");
         session.Log.Write($"Restored {written} files and folders from {path}.");
@@ -786,6 +795,32 @@ internal static class BackupCommands
 
             machine.WriteAtomically(entry.Path, entry.Content!, entry.FileMode);
             log.Write($"{(change == StepChange.Create ? "Wrote" : "Replaced")} {entry.Path} ({entry.Mode}).");
+        }
+    }
+
+    // What restore put back, on disk before the install that follows relies on it: each file and folder synced (its
+    // content, mode and owner), then each folder above them, up to /, once, the deepest first (the entries naming what was
+    // written, made or replaced).
+    private static void MakeRestoredDurable(InstallerMachine machine, IReadOnlyList<BackupEntry> entries)
+    {
+        var put = entries.Select(entry => entry.Path).Where(path => machine.FileExists(path) || machine.DirectoryExists(path)).ToList();
+        foreach (var path in put)
+        {
+            machine.SyncFile(path);
+        }
+
+        var folders = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var path in put)
+        {
+            for (var folder = Path.GetDirectoryName(path); folder is not null; folder = Path.GetDirectoryName(folder))
+            {
+                folders.Add(folder);
+            }
+        }
+
+        foreach (var folder in folders.OrderByDescending(folder => folder == "/" ? 0 : folder.Count(character => character == '/')).ThenBy(folder => folder, StringComparer.Ordinal))
+        {
+            machine.SyncDirectory(folder);
         }
     }
 

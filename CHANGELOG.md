@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `restore` now makes what it puts back durable (each file and folder with its owner, then the folders above them)
+  before the install that follows relies on it; a sync that fails stops it before that install (exit 1) (#130).
 - An upgrade that stopped part way (the new controller deployed, the kiosk's download failed) left the record saying
   the old release, so `upgrade` to that release, or an older installer's install, wizard or `--plan`, could deploy the
   older controller again without `rollback`. The record now says the new release from before the upgrade's first

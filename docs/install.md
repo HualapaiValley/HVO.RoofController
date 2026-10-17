@@ -1215,6 +1215,7 @@ run stops there (exit 1) and goes no further.
 | The install record, and an upgrade's mark (`upgradingFrom`) | the upgrade's first change after the mark, and the end of the run |
 | An upgrade's backup: the archive, `/var/backups/hvo-roof`, and `/var/backups` when the installer made it | the installer hands over, the record names it, and anything installed changes |
 | `backup`'s archive, `uninstall --purge --backup`'s too | `backup` says it is done, and the purge removes anything |
+| What `restore` puts back, with its owners, and the folders above it | the install that follows |
 | What `rollback --restore-backup` changes in a store's folder: the file kept beside the store, then the store put back (its content, mode and owner set on a file beside it before it is renamed over the store) or moved aside | the next of those changes, and the deploy script starting the controller before; every rollback syncs the stores' files and folders just before that |
 
 The rest of an install or upgrade (the controller's settings, keys and certificate, the programs) is written in one
