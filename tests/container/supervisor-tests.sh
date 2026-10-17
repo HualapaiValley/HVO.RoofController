@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh, the container's supervisor of the controller and
 # the web UI, and for healthcheck.sh, the container's health check. Both processes are stand-ins (fake-process.sh), and so
-# are the controller's --relays-off (fake-relays-off), curl (fake-curl) and, for the tests that give the web UI its own
-# user, setpriv (fake-setpriv), so no Docker, .NET, root or hardware is needed; the timings are shortened. They also check supervisor-state.sample.json, which the web
+# are the controller's --relays-off (fake-relays-off), curl (fake-curl), install where a test needs it (fake-install) and,
+# for the tests that give the web UI its own user, setpriv (fake-setpriv), so no Docker, .NET, root or hardware is needed; the timings are shortened. They also check supervisor-state.sample.json, which the web
 # UI's and the deploy script's tests read, against the supervisor's own output. The container scenarios
 # (tests/emulator/deploy-scenarios.sh, group supervisor) run the real image.
 # Requires bash 5, jq and setsid.
@@ -1282,10 +1282,91 @@ test_a_stop_counts_the_relay_off_already_running_against_its_time() {
     "${WORK}/supervisor.log" || fail_test "the stop's relay-off was not cut to the time left: $(grep 'supervisor is stopping' "${WORK}/supervisor.log")"
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# The web UI's preparation (#139 review F4): a process of its own, in the background, within its time, abandoned at a
+# stop, and never in the way of the relays.
+
+# start_supervisor_with_a_slow_ui_preparation <seconds> [NAME=value...]: start_supervisor, with a stand-in install
+# (fake-install) that takes that long to make the web UI's keys directory, as on a slow or hung filesystem.
+start_supervisor_with_a_slow_ui_preparation() {
+  echo "$1" >"${FAKE_DIR}/install.delay"
+  shift
+  mkdir -p "${WORK}/install-bin"
+  ln -sf "${TESTS_DIR}/fake-install" "${WORK}/install-bin/install"
+  start_supervisor "PATH=${WORK}/install-bin:${PATH}" "$@"
+}
+
+# The stand-in install has begun making the web UI's keys directory (and takes its time).
+ui_preparation_waits() {
+  grep -q '^install keys [0-9]' "${FAKE_DIR}/events.log"
+}
+
+# The preparation was abandoned: its stand-in install no longer runs, never got to its end, and no web UI was started.
+expect_the_ui_preparation_abandoned() {
+  local install
+  install=$(<"${FAKE_DIR}/install.pid")
+  ! kill -0 "${install}" 2>/dev/null || fail_test "the preparation's install (pid ${install}) still runs after the stop"
+  ! grep -q '^install keys done' "${FAKE_DIR}/events.log" || fail_test "the preparation went on to its end"
+  expect_equal "web UI starts" "$(event_count ui start)" 0
+  grep -qF "Abandoned the web UI's preparation: the web UI is not started" "${WORK}/supervisor.log" \
+    || fail_test "the abandoned preparation is not logged"
+}
+
+test_a_stop_during_the_web_uis_preparation_starts_no_web_ui() {
+  start_supervisor_with_a_slow_ui_preparation 2
+  wait_until 10 "the web UI's preparation making its keys directory" ui_preparation_waits || return
+  sleep 0.5
+  stop_and_expect_it_within 27
+  # Past the time the preparation would have taken.
+  sleep 2
+  expect_the_ui_preparation_abandoned
+}
+
+test_a_stop_during_a_stalled_web_ui_preparation_ends_with_the_relays_off_within_the_bound() {
+  # The default times; a preparation stalled for 31 s (beyond Docker's grace), with no time limit of its own here, and a
+  # controller that ignores SIGTERM, so that it takes its whole 22 s before the stop's relay-off.
+  touch "${FAKE_DIR}/controller.ignore-term"
+  start_supervisor_with_a_slow_ui_preparation 31 HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=22 HVO_SUPERVISOR_UI_STOP_SECONDS=2 \
+    HVO_SUPERVISOR_RELAYS_OFF_SECONDS=5 HVO_SUPERVISOR_UI_PREPARE_SECONDS=60
+  wait_until 10 "the web UI's preparation stalled" ui_preparation_waits || return
+  sleep 1
+  stop_and_expect_it_within 27
+  expect_the_ui_preparation_abandoned
+}
+
+test_a_controller_exit_during_a_slow_web_ui_preparation_turns_the_relays_off_at_once() {
+  start_supervisor_with_a_slow_ui_preparation 10 HVO_SUPERVISOR_UI_PREPARE_SECONDS=60
+  wait_until 10 "the web UI's preparation stalled" ui_preparation_waits || return
+  wait_until 5 "the controller running" state_is .controller.state running || return
+  local killed=${EPOCHREALTIME} relays_off
+  kill -KILL "$(pid_of controller)"
+  wait_until 3 "a relay-off after the controller's exit" relay_off_runs_at_least 2 || return
+  relays_off=$(event_times relays-off run | tail -n 1)
+  awk -v k="${killed}" -v r="${relays_off}" 'BEGIN { exit !(r - k < 1) }' \
+    || fail_test "the relays were turned off $(awk -v k="${killed}" -v r="${relays_off}" 'BEGIN { printf "%.3f", r - k }')s after the controller's exit"
+  wait_until 5 "the controller started again" started controller 2 || return
+  expect_equal "web UI starts while it is prepared" "$(event_count ui start)" 0
+}
+
+test_a_web_ui_preparation_that_outlasts_its_time_is_killed_and_prepared_again() {
+  start_supervisor_with_a_slow_ui_preparation 30 HVO_SUPERVISOR_UI_PREPARE_SECONDS=1
+  wait_until 10 "the web UI's preparation stalled" ui_preparation_waits || return
+  local install
+  install=$(<"${FAKE_DIR}/install.pid")
+  wait_until 5 "the preparation killed at the end of its time" grep -qF \
+    "WARNING: the web UI's preparation (its copies of the certificate and the Stop key, its keys directory) did not finish within 1s and was killed" \
+    "${WORK}/supervisor.log" || return
+  ! kill -0 "${install}" 2>/dev/null || fail_test "the stalled install (pid ${install}) still runs"
+  expect_equal "web UI starts" "$(event_count ui start)" 0
+  rm -f "${FAKE_DIR}/install.delay"
+  wait_until 10 "the web UI started once a preparation finished" started ui 1 || return
+  expect_equal "controller starts" "$(event_count controller start)" 1
+}
+
 test_invalid_settings_are_refused() {
   local setting
   for setting in HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS=abc HVO_SUPERVISOR_CRASH_LIMIT=0 HVO_SUPERVISOR_TICK_SECONDS=1s \
-      HVO_SUPERVISOR_RELAYS_OFF_SECONDS=0; do
+      HVO_SUPERVISOR_RELAYS_OFF_SECONDS=0 HVO_SUPERVISOR_UI_PREPARE_SECONDS=0; do
     env "${SUPERVISOR_ENV[@]}" "${setting}" "${SUPERVISOR}" >"${WORK}/supervisor.log" 2>&1
     local status=$?
     expect_equal "exit status for ${setting}" "${status}" 2

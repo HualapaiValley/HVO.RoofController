@@ -17,8 +17,10 @@
 #   stop is timed from the signal (note_stop): work already running when it came (a relay-off) counts against it, and
 #   each later wait is cut to what is left, so the stop ends within the controller's wait and the longer of the other two
 #   (27 s with the defaults), below the container's stop timeout: Docker never kills the controller first, and the last
-#   relay-off begins and ends in time. Once a wait runs out, that process is killed (SIGKILL). Any other way this script
-#   ends (another signal, an error) stops the same way first (on_exit).
+#   relay-off begins and ends in time. Once a wait runs out, that process is killed (SIGKILL), and given at most 1 s more
+#   to end: a process stuck in the kernel (a hung filesystem or bus) cannot run its own code again, and the stop goes on
+#   without it. A web UI preparation still running is abandoned at once (its processes are killed), and nothing starts
+#   after it. Any other way this script ends (another signal, an error) stops the same way first (on_exit).
 # - when the controller exits with 75 (a restart requested through POST System/Restart): starts it again at once.
 # - when the controller exits otherwise (a crash): starts it again after a backoff that doubles from 1 s (1, 2, 4, 8 s,
 #   ...), at most HVO_SUPERVISOR_BACKOFF_MAX_SECONDS. The HVO_SUPERVISOR_CRASH_LIMIT-th crash within
@@ -27,6 +29,12 @@
 #   controller's readiness) then fails, and the web UI says why.
 # - when the web UI exits: starts only the web UI again, with the same backoff, and never gives up. The controller is
 #   not touched.
+# - before each start of the web UI: prepares it (its copies of the certificate and the Stop key, its keys directory,
+#   and the check that it cannot read the controller's secrets) in a process of its own, in the background, which must
+#   finish within HVO_SUPERVISOR_UI_PREPARE_SECONDS or is killed (and tried again later, with the backoff). Nothing the
+#   preparation waits for (a slow or hung filesystem) holds up the supervisor: a controller that exits meanwhile has its
+#   relays turned off at once, a stop abandons the preparation, and the web UI starts only once it is done, when no stop
+#   has been asked for.
 # - on a forced restart: <run dir>/control/force-restart-controller appears (docker exec ... touch, or the web UI's
 #   ControllerForcedRestart) when the controller does not answer. The controller is killed (SIGKILL, as docker kill
 #   does), the relays are turned off, and it is started again at once, once they are verified off (otherwise it is
@@ -35,7 +43,8 @@
 #   controller that is still starting. supervisor.json records what was done with the last request (restarted, held
 #   or ignored).
 # - with arguments (the deployment check, --validate-deployment): runs only the controller with them, in its place. It
-#   never turns the relays off then: another controller may be driving the HAT.
+#   never turns the relays off then: another controller may be driving the HAT. (--prepare-ui is the supervisor's own:
+#   the web UI's preparation, which start_ui runs as a process of its own.)
 #
 # The relays are turned off by the controller's own program, with --relays-off (HVO_SUPERVISOR_RELAYS_OFF_EXEC replaces
 # it for the tests): the HAT access the controller uses, without the controller's settings checks, so it works when the
@@ -67,6 +76,10 @@ readonly DEFAULT_UI_DATA_DIR=/var/lib/hvo-roof-web
 # How far the controller's and the web UI's oom_score_adj are raised above the supervisor's (see raise_oom_score_adj).
 readonly CONTROLLER_OOM_SCORE_RAISE=100
 readonly UI_OOM_SCORE_RAISE=500
+# How long a process sent SIGKILL is waited for before the supervisor goes on without it (see reap_within).
+readonly KILL_WAIT_US=1000000
+# This script, which runs the web UI's preparation as a process of its own (start_ui).
+readonly SELF=${BASH_SOURCE[0]}
 
 APP_DIR=${HVO_SUPERVISOR_APP_DIR:-/app}
 RUN_DIR=${HVO_SUPERVISOR_RUN_DIR:-/run/hvo-roof}
@@ -80,6 +93,7 @@ CRASH_LIMIT=${HVO_SUPERVISOR_CRASH_LIMIT:-5}
 CRASH_WINDOW_SECONDS=${HVO_SUPERVISOR_CRASH_WINDOW_SECONDS:-120}
 BACKOFF_MAX_SECONDS=${HVO_SUPERVISOR_BACKOFF_MAX_SECONDS:-30}
 FORCE_RESTART_MIN_SECONDS=${HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS:-10}
+UI_PREPARE_SECONDS=${HVO_SUPERVISOR_UI_PREPARE_SECONDS:-10}
 TICK_SECONDS=${HVO_SUPERVISOR_TICK_SECONDS:-1}
 
 if [[ -n "${HVO_SUPERVISOR_CONTROLLER_EXEC:-}" ]]; then
@@ -125,7 +139,8 @@ require_whole_number() {
 }
 
 # With arguments this is the deployment check (or another one-shot run of the controller): nothing is supervised.
-if (( $# > 0 )); then
+# --prepare-ui is the web UI's preparation, run near the end of this script.
+if (( $# > 0 )) && [[ "$1" != --prepare-ui ]]; then
   cd "${APP_DIR}" || exit 1
   exec "${CONTROLLER_EXEC[@]}" "$@"
 fi
@@ -137,19 +152,23 @@ require_whole_number HVO_SUPERVISOR_CRASH_LIMIT "${CRASH_LIMIT}" 1
 require_whole_number HVO_SUPERVISOR_CRASH_WINDOW_SECONDS "${CRASH_WINDOW_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_BACKOFF_MAX_SECONDS "${BACKOFF_MAX_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS "${FORCE_RESTART_MIN_SECONDS}" 0
+require_whole_number HVO_SUPERVISOR_UI_PREPARE_SECONDS "${UI_PREPARE_SECONDS}" 1
 if [[ ! "${TICK_SECONDS}" =~ ^([0-9]+|[0-9]*\.[0-9]+)$ ]]; then
   log "HVO_SUPERVISOR_TICK_SECONDS must be a number of seconds such as 1 or 0.2, got '${TICK_SECONDS}'."
   exit 2
 fi
 
-# The web UI's group: its user's primary group.
+# The web UI's group (its user's primary group) and home. Looked up once, here, before anything is started.
 UI_GROUP=""
+UI_HOME=""
 if [[ -n "${UI_USER}" ]]; then
   UI_GROUP=$(id -gn "${UI_USER}" 2>/dev/null) || { log "HVO_SUPERVISOR_UI_USER names no user: '${UI_USER}'."; exit 2; }
+  UI_HOME=$(getent passwd "${UI_USER}" | cut -d: -f6)
 fi
 
-# The state of each process: running, restarting (waiting to start again), crash-loop (left stopped: controller only),
-# relays-unverified (held stopped until the relays are verified off: controller only), stopping or stopped.
+# The state of each process: starting (the web UI only, while it is prepared), running, restarting (waiting to start
+# again), crash-loop (left stopped: controller only), relays-unverified (held stopped until the relays are verified off:
+# controller only), stopping or stopped.
 declare -A STATE=([controller]=starting [ui]=starting)
 declare -A PID=([controller]="" [ui]="")
 # Microseconds since the epoch.
@@ -185,6 +204,12 @@ STOP_AT_US=0
 STOP_BY_US=0
 # The relay-off helper while it runs.
 RELAYS_OFF_PID=""
+# The web UI's preparation while it runs (start_ui): the pid of its timeout, which leads a process group of its own made
+# only of the preparation's processes, and the file the settings it prints are written to.
+UI_PREPARE_PID=""
+UI_SETTINGS_FILE="${RUN_DIR}/web-settings"
+# How the last process reap_within waited for ended (its exit status).
+REAPED_CODE=0
 
 json_string_or_null() {
   if [[ -z "$1" ]]; then printf 'null'; else printf '"%s"' "$1"; fi
@@ -271,6 +296,22 @@ check_secrets_are_private() {
 is_running() {
   local pid=${PID[$1]}
   [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+# reap_within <pid> <until, microseconds>: waits for that child to end (usually after SIGKILL), at most until the given
+# time, and sets REAPED_CODE to its exit status. Returns 1 if it still runs then: a process stuck in the kernel (on a hung
+# filesystem or bus) ends only when it leaves it, and can no longer run code of its own once it has been sent SIGKILL, so
+# the supervisor goes on without it. Each pause is waited for, so that a stop signal is handled at once.
+reap_within() {
+  local pid=$1 until=$2
+  while kill -0 "${pid}" 2>/dev/null && (( $(now_us) < until )); do
+    sleep 0.05 &
+    wait "$!"
+  done
+  kill -0 "${pid}" 2>/dev/null && return 1
+  wait "${pid}" 2>/dev/null
+  REAPED_CODE=$?
+  return 0
 }
 
 # 1, 2, 4, 8, ... seconds after the first, second, third ... failed try in a row to turn the relays off, at most the
@@ -512,10 +553,57 @@ prepare_ui_data_protection() {
   printf 'RoofWeb__DataProtectionPath=%s\n' "${path}"
 }
 
+# Starts the web UI, in two steps. First its preparation (check_secrets_are_private, prepare_ui_certificate,
+# prepare_ui_stop_key and prepare_ui_data_protection), which this script runs itself (--prepare-ui) as a process of its
+# own, in the background, under timeout: when HVO_SUPERVISOR_UI_PREPARE_SECONDS run out, timeout kills its process group,
+# which holds only the preparation's processes. The supervisor never waits for it, so nothing it waits for (a slow or hung
+# filesystem) holds up the relays, the controller or a stop: tick starts the web UI (launch_ui) once it has ended, and a
+# stop abandons it (stop_ui_preparation). The settings it prints (paths, no secret) go to a file only root can read.
 start_ui() {
   (( ! STOP_REQUESTED )) || return 1
+  (umask 077; exec timeout -s KILL "${UI_PREPARE_SECONDS}" "${BASH}" "${SELF}" --prepare-ui >"${UI_SETTINGS_FILE}") &
+  UI_PREPARE_PID=$!
+  STATE[ui]=starting
+  write_state
+}
+
+# The web UI's preparation runs.
+ui_preparation_runs() {
+  [[ -n "${UI_PREPARE_PID}" ]] && kill -0 "${UI_PREPARE_PID}" 2>/dev/null
+}
+
+# Abandons the web UI's preparation, if it runs (a stop): kills its process group, and the timeout that leads it (in
+# case it has not made the group yet). Never waits: also called from on_signal. shutdown then waits for it, at most 1 s.
+stop_ui_preparation() {
+  ui_preparation_runs || return 0
+  kill -KILL -- "-${UI_PREPARE_PID}" 2>/dev/null
+  kill -KILL "${UI_PREPARE_PID}" 2>/dev/null
+}
+
+# The web UI's preparation has ended: starts the web UI with the settings it printed. A preparation that failed (killed
+# when its time ran out) counts as a failed start: the web UI is prepared again later, with the backoff.
+launch_ui() {
   local -a ui_env=("PATH=${PATH}" "TZ=${TZ:-UTC}")
-  local entry name home
+  local entry name code why delay
+  wait "${UI_PREPARE_PID}" 2>/dev/null
+  code=$?
+  UI_PREPARE_PID=""
+  if (( code != 0 )); then
+    case ${code} in
+      124|137) why="did not finish within ${UI_PREPARE_SECONDS}s and was killed" ;;
+      *) why="ended with $(describe_exit "${code}")" ;;
+    esac
+    record_crash ui
+    delay=$(backoff_seconds ui)
+    START_DUE[ui]=$(( $(now_us) + delay * 1000000 ))
+    STATE[ui]=restarting
+    log "WARNING: the web UI's preparation (its copies of the certificate and the Stop key, its keys directory) ${why};" \
+      "the web UI was not started. Preparing it again in ${delay}s"
+    write_state
+    return 1
+  fi
+  # Nothing starts once a stop is asked for: checked again here, just before the web UI starts.
+  (( ! STOP_REQUESTED )) || return 1
   # Only the web UI's settings and a few general variables; never the controller's keys or settings.
   while IFS= read -r -d '' entry; do
     name=${entry%%=*}
@@ -526,12 +614,11 @@ start_ui() {
   done < <(env -0)
   while IFS= read -r entry; do
     [[ -n "${entry}" ]] && ui_env+=("${entry}")
-  done < <(prepare_ui_certificate; prepare_ui_stop_key; prepare_ui_data_protection)
+  done <"${UI_SETTINGS_FILE}"
   ui_env+=("RoofWeb__SupervisorStatePath=${STATE_FILE}" "RoofWeb__SupervisorControlPath=${CONTROL_DIR}")
 
   if [[ -n "${UI_USER}" ]]; then
-    home=$(getent passwd "${UI_USER}" | cut -d: -f6)
-    ui_env+=("HOME=${home:-/tmp}" "USER=${UI_USER}")
+    ui_env+=("HOME=${UI_HOME:-/tmp}" "USER=${UI_USER}")
     (cd "${APP_DIR}/web" && raise_oom_score_adj "${UI_OOM_SCORE_RAISE}" "the web UI" \
       && exec setpriv --reuid="${UI_USER}" --regid="${UI_GROUP}" --init-groups --no-new-privs \
       env -i "${ui_env[@]}" "${UI_EXEC[@]}") &
@@ -650,7 +737,9 @@ handle_force_restart_request() {
   if is_running controller; then
     log "Killing the controller (SIGKILL, pid ${PID[controller]})"
     kill -KILL "${PID[controller]}" 2>/dev/null
-    wait "${PID[controller]}" 2>/dev/null
+    reap_within "${PID[controller]}" "$(( $(now_us) + KILL_WAIT_US ))" \
+      || log "WARNING: the controller (pid ${PID[controller]}) has not ended 1s after SIGKILL (stuck in the kernel?); it" \
+        "can no longer run its own code, and the relays are turned off now"
     LAST_EXIT_CODE[controller]=137
     LAST_EXIT_AT[controller]=$(now_iso)
     PID[controller]=""
@@ -681,19 +770,25 @@ tick() {
         (( $(now_us) >= START_DUE[${name}] )) && start "${name}" ;;
       relays-unverified)
         (( $(now_us) >= RELAYS_RETRY_DUE )) && retry_held_controller ;;
+      starting)
+        # The web UI while it is prepared: started once its preparation has ended.
+        [[ "${name}" == ui && -n "${UI_PREPARE_PID}" ]] && ! ui_preparation_runs && launch_ui ;;
     esac
   done
   retry_relays_off
 }
 
 # Sleeps for a tick. A signal ends the sleep at once (the trap runs, then wait returns), and so does the exit of a running
-# process, so that the next tick turns the relays off as soon as the controller has exited.
+# process (or of the web UI's preparation), so that the next tick turns the relays off as soon as the controller has
+# exited.
 sleep_tick() {
   local name
   local -a running=()
   for name in controller ui; do
     [[ "${STATE[${name}]}" != running || -z "${PID[${name}]}" ]] || running+=("${PID[${name}]}")
   done
+  # And the end of the web UI's preparation, after which it starts.
+  [[ -z "${UI_PREPARE_PID}" ]] || running+=("${UI_PREPARE_PID}")
   sleep "${TICK_SECONDS}" &
   SLEEP_PID=$!
   wait -n "${SLEEP_PID}" "${running[@]}" 2>/dev/null
@@ -743,8 +838,8 @@ begin_stop() {
   kill -TERM "${PID[${name}]}" 2>/dev/null
 }
 
-# Waits for $1 until the time begin_stop set, kills it (SIGKILL) if it still runs, and records how it ended. $2 names it
-# in the log.
+# Waits for $1 until the time begin_stop set, kills it (SIGKILL) if it still runs, gives it at most 1 s more to end
+# (reap_within), and records how it ended. $2 names it in the log.
 finish_stop() {
   local name=$1 label=$2 code
   [[ "${STATE[${name}]}" == stopping ]] || return 0
@@ -755,9 +850,14 @@ finish_stop() {
     log "${label^} did not stop within ${STOP_WAIT[${name}]}s; killing it (SIGKILL)"
     kill -KILL "${PID[${name}]}" 2>/dev/null
   fi
-  wait "${PID[${name}]}" 2>/dev/null
-  code=$?
-  log "${label^} stopped ($(describe_exit "${code}"))"
+  if reap_within "${PID[${name}]}" "$(( $(now_us) + KILL_WAIT_US ))"; then
+    code=${REAPED_CODE}
+    log "${label^} stopped ($(describe_exit "${code}"))"
+  else
+    code=""
+    log "WARNING: ${label} (pid ${PID[${name}]}) has not ended 1s after SIGKILL (stuck in the kernel?); it can no longer" \
+      "run its own code, and the stop goes on without it"
+  fi
   PID[${name}]=""
   LAST_EXIT_CODE[${name}]=${code}
   LAST_EXIT_REASON[${name}]="stopped with the container"
@@ -778,6 +878,15 @@ shutdown() {
   SUPERVISOR_STATE=stopping
   log "Stopping: the controller first, then the relays off while the web UI stops, all within" \
     "$(( (STOP_BY_US - STOP_AT_US) / 1000000 ))s of the stop request"
+  # The web UI's preparation, if it runs, is abandoned (on_signal has already killed it): nothing starts after it.
+  if [[ -n "${UI_PREPARE_PID}" ]]; then
+    stop_ui_preparation
+    reap_within "${UI_PREPARE_PID}" "$(( $(now_us) + KILL_WAIT_US ))" \
+      || log "WARNING: the web UI's preparation (pid ${UI_PREPARE_PID}) has not ended 1s after SIGKILL"
+    log "Abandoned the web UI's preparation: the web UI is not started"
+    UI_PREPARE_PID=""
+    STATE[ui]=stopped
+  fi
   # A relay-off still running (on_exit can come in the middle of one) ends first, within its own time.
   [[ -z "${RELAYS_OFF_PID}" ]] || wait "${RELAYS_OFF_PID}" 2>/dev/null
   begin_stop controller "$(earlier "$(( $(now_us) + CONTROLLER_STOP_SECONDS * 1000000 ))" "$(( STOP_BY_US - after * 1000000 ))")" \
@@ -797,6 +906,7 @@ on_signal() {
   SIGNALS=$((SIGNALS + 1))
   STOP_REQUESTED=1
   note_stop
+  stop_ui_preparation
   [[ -z "${SLEEP_PID}" ]] || kill "${SLEEP_PID}" 2>/dev/null
 }
 
@@ -812,12 +922,21 @@ on_exit() {
   shutdown
 }
 
+# The web UI's preparation (start_ui runs this script with --prepare-ui, as a process of its own): prints the web UI's
+# settings for its copies and its keys directory, one a line, and ends.
+if [[ "${1:-}" == --prepare-ui ]]; then
+  check_secrets_are_private
+  prepare_ui_certificate
+  prepare_ui_stop_key
+  prepare_ui_data_protection
+  exit 0
+fi
+
 # The supervisor's own output and error, the container's log, for on_exit.
 exec {LOG_OUT}>&1 {LOG_ERR}>&2
 trap on_signal TERM INT HUP QUIT
 trap on_exit EXIT
 prepare_run_dir
-check_secrets_are_private
 log "Starting the controller and the web UI (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
   "backoff at most ${BACKOFF_MAX_SECONDS}s; forced restarts ignored within ${FORCE_RESTART_MIN_SECONDS}s of a start;" \
   "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running; a stop ends within" \
