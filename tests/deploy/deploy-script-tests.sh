@@ -38,6 +38,12 @@ teardown() {
   rm -rf "${WORK}"
 }
 
+# setup_fresh_state: a new, empty Docker for the next case of a test that runs several.
+setup_fresh_state() {
+  teardown
+  setup
+}
+
 # seed_container <name> <kind> <true|false|paused|restarting|created> [publish...]. paused and restarting count as
 # running (as in Docker), created as not running; each container gets a random 64-hex ID.
 seed_container() {
@@ -107,18 +113,53 @@ print(" ".join(str(limits.get(key) or 0) for key in ("nano", "memory", "swap", "
 ' "$1" "${FAKE_STATE_DIR}/state.json"
 }
 
-# seed_desired_limits <cpus> <memory>: the desired-limits volume a deploy before left (roof-controller-limits).
+# seed_desired_limits <cpus> <memory> [<generation> [<label>=<value>...]]: the desired-limits record a deploy before
+# left (roof-controller-limits-g<generation>, generation 1 by default), with both values set, written by a deploy for
+# the seeded roof-controller (or for no container there is); each <label>=<value> (io.hvo.roof.limits.<label>) changes
+# it by hand, and an empty value takes the label off.
 seed_desired_limits() {
-  jq --arg cpus "$1" --arg memory "$2" \
-    '.volumes["roof-controller-limits"] = {labels: {"io.hvo.roof.desired-cpus": $cpus, "io.hvo.roof.desired-memory": $memory}}' \
-    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+  local cpus=$1 memory=$2 generation=${3:-1} controller
+  shift 2
+  (( $# == 0 )) || shift
+  controller=$(jq -r '(.containers["roof-controller"].id // "0123456789abcdef") | .[0:12]' "${FAKE_STATE_DIR}/state.json")
+  python3 - "${FAKE_STATE_DIR}/state.json" "${cpus}" "${memory}" "${generation}" "${controller}" "$@" <<'PY'
+import json, sys
+path, cpus, memory, generation, controller, *changes = sys.argv[1:]
+with open(path) as f:
+    state = json.load(f)
+p = "io.hvo.roof.limits"
+labels = {p: "1", p + ".generation": generation, p + ".cpus": cpus, p + ".cpus-source": "set", p + ".memory": memory,
+          p + ".memory-source": "set", p + ".written-by": "deploy", p + ".written-at": "2026-10-17T00:00:00Z",
+          p + ".controller": controller}
+for change in changes:
+    label, value = change.split("=", 1)
+    key = p if label == "" else p + "." + label
+    if value:
+        labels[key] = value
+    else:
+        labels.pop(key, None)
+state.setdefault("volumes", {})["roof-controller-limits-g" + generation] = {"labels": labels}
+with open(path + ".tmp", "w") as f:
+    json.dump(state, f)
+PY
+  mv "${FAKE_STATE_DIR}/state.json.tmp" "${FAKE_STATE_DIR}/state.json"
 }
 
-# desired_limits: the desired CPUs and memory the volume holds ("none" when there is no volume).
+# desired_limits: the desired CPUs and memory the newest record holds ("none" when there is none); desired_record
+# <label>: one of its labels; desired_records: the names of every record volume (the earlier format's included).
 desired_limits() {
-  jq -r '.volumes["roof-controller-limits"].labels // null
-    | if . == null then "none" else "\(.["io.hvo.roof.desired-cpus"]) \(.["io.hvo.roof.desired-memory"])" end' \
+  jq -r '[.volumes // {} | to_entries[] | select(.key | test("^roof-controller-limits-g[1-9][0-9]*$"))]
+    | sort_by(.key | ltrimstr("roof-controller-limits-g") | tonumber) | last
+    | if . == null then "none" else "\(.value.labels["io.hvo.roof.limits.cpus"]) \(.value.labels["io.hvo.roof.limits.memory"])" end' \
     "${FAKE_STATE_DIR}/state.json"
+}
+desired_record() {
+  jq -r --arg label "io.hvo.roof.limits.$1" '[.volumes // {} | to_entries[] | select(.key | test("^roof-controller-limits-g[1-9][0-9]*$"))]
+    | sort_by(.key | ltrimstr("roof-controller-limits-g") | tonumber) | last | .value.labels[$label] // "none"' \
+    "${FAKE_STATE_DIR}/state.json"
+}
+desired_records() {
+  jq -r '[.volumes // {} | keys[] | select(startswith("roof-controller-limits"))] | join(" ")' "${FAKE_STATE_DIR}/state.json"
 }
 
 # build_command [NAME=value...] [-- script args...]: sets RUN_CMD to run the deploy script with the test environment
@@ -3160,6 +3201,8 @@ assert_refused_unchanged() {
   [[ -z "$(docker_calls buildx)$(docker_calls pull)$(docker_calls run)$(docker_calls stop)$(docker_calls rename)$(docker_calls update)" ]] \
     || fail_test "$1 built, pulled, ran, stopped, renamed or updated something"
   [[ "$(call_index '/Stop"')" == "0" ]] || fail_test "$1 requested a Stop"
+  [[ -z "$(docker_calls volume | jq -c 'select(.[1] != "ls" and .[1] != "inspect")')" ]] \
+    || fail_test "$1 created or removed a desired-limits record: $(docker_calls volume)"
 }
 
 # Docker drops a limit it cannot enforce with only a warning; RoofController refuses such a host for a deploy (#149, as
@@ -3319,16 +3362,20 @@ test_a_rollback_on_a_host_without_swap_control_keeps_the_memory_limit() {
   assert_output_contains "  - docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit false, so Docker would let the controller swap beyond its memory limit (3g)."
 }
 
-# The desired limits persist whether or not the host could enforce them (review ROOF-151-R1 F2): an operator's setting,
-# a rollback on a host that cannot enforce the memory limit (the version brought back runs without it), then, once the
-# host is fixed, a deploy with nothing given applies the operator's setting, not the default.
+# The desired limits persist whether or not the host could enforce them (reviews ROOF-151-R1 F2, R2 F5): an operator's
+# setting, a rollback on a host that cannot enforce the memory limit (the version brought back runs without it), then,
+# once the host is fixed, a deploy with nothing given applies the operator's setting, not the default.
 test_a_setting_persists_through_a_rollback_on_a_host_that_cannot_enforce_it_and_the_deploy_after_it() {
   seed_container roof-controller old true 8443:8443
-  local old_id
+  local old_id new_id
   old_id=$(container_field roof-controller id)
   deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=1.5 CONTAINER_MEMORY=6g
   assert_status 0
-  [[ "$(desired_limits)" == "1.5 6g" ]] || fail_test "the deploy did not keep the desired limits: $(desired_limits)"
+  new_id=$(container_field roof-controller id)
+  [[ "$(desired_limits)" == "1.5 6g" ]] || fail_test "the deploy did not record the desired limits: $(desired_limits)"
+  [[ "$(desired_records)" == "roof-controller-limits-g1" ]] || fail_test "the records are $(desired_records)"
+  [[ "$(desired_record controller)" == "${new_id:0:12}" && "$(desired_record written-by)" == "deploy" ]] \
+    || fail_test "the record does not say the deploy wrote it for ${new_id:0:12}: $(desired_record controller) $(desired_record written-by)"
 
   # The rollback, to the version deployed before the limits, on a host whose memory controller went away.
   deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false -- --rollback
@@ -3338,6 +3385,9 @@ test_a_setting_persists_through_a_rollback_on_a_host_that_cannot_enforce_it_and_
   [[ "$(container_limits "${old_id}")" == "1500000000 0 0 512" ]] \
     || fail_test "the version brought back has other limits than the ones Docker could enforce: $(container_limits "${old_id}")"
   [[ "$(desired_limits)" == "1.5 6g" ]] || fail_test "the degraded rollback lost the desired limits: $(desired_limits)"
+  [[ "$(desired_records)" == "roof-controller-limits-g2" ]] || fail_test "the records are $(desired_records)"
+  [[ "$(desired_record controller)" == "${old_id:0:12}" && "$(desired_record written-by)" == "rollback" ]] \
+    || fail_test "the record does not say the rollback wrote it for ${old_id:0:12}"
 
   # The host fixed: a deploy given nothing applies the setting.
   : > "${FAKE_STATE_DIR}/calls.log"
@@ -3345,53 +3395,241 @@ test_a_setting_persists_through_a_rollback_on_a_host_that_cannot_enforce_it_and_
   assert_status 0
   assert_output_contains "[deploy] The container's limits: 1.5 CPUs (kept from the last deploy), 6g of memory (kept from the last deploy)"
   assert_output_not_contains "(the default)"
+  assert_output_not_contains "WARNING: the desired limits' record"
   assert_confined "$(controller_run_args)" 1.5 6g 512
-  [[ "$(desired_limits)" == "1.5 6g" ]] || fail_test "the desired limits changed: $(desired_limits)"
+  [[ "$(desired_limits)" == "1.5 6g" && "$(desired_records)" == "roof-controller-limits-g3" ]] \
+    || fail_test "the desired limits changed: $(desired_limits) in $(desired_records)"
 }
 
 test_the_desired_limits_are_what_the_last_deploy_or_rollback_gave() {
-  # A first deploy keeps the default; one given others keeps those; a dry run and --stop keep nothing.
+  # A first deploy records the default as the default; one given others records those as set; a dry run and --stop
+  # record nothing.
   deploy "${HTTPS_ENV[@]}"
   assert_status 0
-  [[ "$(desired_limits)" == "1 2g" ]] || fail_test "a first deploy kept $(desired_limits)"
-  assert_output_contains "[deploy] The desired limits are kept for the next deploy (volume roof-controller-limits): CPUs 1, memory 2g"
+  [[ "$(desired_limits)" == "1 2g" ]] || fail_test "a first deploy recorded $(desired_limits)"
+  [[ "$(desired_record cpus-source) $(desired_record memory-source)" == "default default" ]] \
+    || fail_test "the default was not recorded as the default: $(desired_record cpus-source) $(desired_record memory-source)"
+  assert_output_contains "[deploy] The desired limits are recorded for the next deploy (roof-controller-limits-g1): CPUs 1 (default), memory 2g (default)"
   deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=4g -- --dry-run
   assert_status 0
-  [[ "$(desired_limits)" == "1 2g" ]] || fail_test "a dry run changed the desired limits: $(desired_limits)"
+  [[ "$(desired_limits)" == "1 2g" && "$(desired_records)" == "roof-controller-limits-g1" ]] \
+    || fail_test "a dry run changed the desired limits: $(desired_limits) in $(desired_records)"
   deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=4g
   assert_status 0
-  [[ "$(desired_limits)" == "2 4g" ]] || fail_test "the deploy kept $(desired_limits)"
+  [[ "$(desired_limits)" == "2 4g" && "$(desired_records)" == "roof-controller-limits-g2" ]] \
+    || fail_test "the deploy recorded $(desired_limits) in $(desired_records)"
+  assert_output_contains "[deploy] The desired limits are recorded for the next deploy (roof-controller-limits-g2): CPUs 2 (set), memory 4g (set)"
   deploy "${HTTPS_ENV[@]}" -- --stop
   assert_status 0
-  [[ "$(desired_limits)" == "2 4g" ]] || fail_test "--stop changed the desired limits: $(desired_limits)"
-  # A deploy that fails and puts the old controller back keeps the desired limits as they were.
+  [[ "$(desired_limits)" == "2 4g" && "$(desired_records)" == "roof-controller-limits-g2" ]] \
+    || fail_test "--stop changed the desired limits: $(desired_limits) in $(desired_records)"
+  # A deploy that fails and puts the old controller back leaves the record as it was.
   deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=8g FAKE_NEW_READY=false
   assert_status 1
-  [[ "$(desired_limits)" == "2 4g" ]] || fail_test "a failed deploy changed the desired limits: $(desired_limits)"
+  [[ "$(desired_limits)" == "2 4g" && "$(desired_records)" == "roof-controller-limits-g2" ]] \
+    || fail_test "a failed deploy changed the desired limits: $(desired_limits) in $(desired_records)"
 }
 
-test_desired_limits_below_the_floor_or_unreadable_are_refused_with_nothing_changed() {
+# A record that says the default gives RoofController's default, not the running controller's limit or the value it
+# holds.
+test_a_record_of_the_default_gives_the_default() {
   seed_container roof-controller current true 8443:8443
-  seed_desired_limits 1 512m
+  seed_limits roof-controller 2000000000 3221225472 3221225472 512
+  seed_desired_limits 2 4g 1 cpus-source=default memory-source=default
   deploy "${HTTPS_ENV[@]}"
-  assert_status 1
-  assert_output_contains "CONTAINER_MEMORY=512m (kept from the last deploy) is less than 1g, the minimum (RoofController's; docs/deployment.md, \"The container's privileges and limits\"): set CONTAINER_MEMORY to at least 1g. Nothing was changed."
-  assert_refused_unchanged "a deploy keeping 512m"
+  assert_status 0
+  assert_output_contains "[deploy] The container's limits: 1 CPU (the default), 2g of memory (the default) and no swap"
+  assert_confined "$(controller_run_args)" 1 2g 512
+}
+
+# Review ROOF-151-R2 F5 (1): an update that commits the new record but cannot remove the old one keeps the new one.
+test_an_update_whose_older_record_cannot_be_removed_keeps_the_new_one() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=2g
+  assert_status 0
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=6g "FAKE_FAIL=volume rm"
+  assert_status 0
+  assert_output_contains "[deploy] WARNING: could not remove the older records (roof-controller-limits-g1): they stay, and the newest, roof-controller-limits-g2, is the one the next deploy reads."
+  [[ "$(desired_records)" == "roof-controller-limits-g1 roof-controller-limits-g2" && "$(desired_limits)" == "1 6g" ]] \
+    || fail_test "the records are $(desired_records), the newest $(desired_limits)"
 
   : > "${FAKE_STATE_DIR}/calls.log"
-  deploy "${HTTPS_ENV[@]}" "FAKE_FAIL=volume ls"
-  assert_status 1
-  assert_output_contains "Could not read the desired limits from Docker (volume roof-controller-limits; one not set keeps them). Nothing was changed; check the Docker context and retry."
-  assert_refused_unchanged "a deploy that could not read the desired limits"
-  assert_container roof-controller current true unless-stopped
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  assert_output_contains "6g of memory (kept from the last deploy)"
+  assert_confined "$(controller_run_args)" 1 6g 512
+  [[ "$(desired_records)" == "roof-controller-limits-g3" && "$(desired_limits)" == "1 6g" ]] \
+    || fail_test "the next deploy did not tidy the records: $(desired_records), the newest $(desired_limits)"
 }
 
-test_desired_limits_that_cannot_be_kept_warn_and_the_deploy_goes_on() {
+# Review ROOF-151-R2 F5 (2): a record that cannot be written (a rollback's on a host that cannot enforce the memory
+# limit, so the version it brings back runs without it) leaves the last good one, 6g; the deploy after it, the host
+# fixed, applies 6g, and says the record is not the running controller's.
+test_a_record_that_cannot_be_written_leaves_the_last_good_one() {
   seed_container roof-controller old true 8443:8443
+  local old_id
+  old_id=$(container_field roof-controller id)
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=6g
+  assert_status 0
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false "FAKE_FAIL=volume create" -- --rollback
+  assert_status 0
+  [[ "$(container_field roof-controller id)" == "${old_id}" ]] || fail_test "the rollback did not bring back the version before"
+  assert_output_contains "[deploy] WARNING: could not record the desired limits (CPUs 1, memory 6g) as roof-controller-limits-g2: the last record, roof-controller-limits-g1 (CPUs 1, memory 6g), stays the desired one, and the next deploy keeps it unless CONTAINER_CPUS and CONTAINER_MEMORY are given."
+  [[ "$(desired_records)" == "roof-controller-limits-g1" && "$(desired_limits)" == "1 6g" ]] \
+    || fail_test "the failed write lost the last record: $(desired_records), $(desired_limits)"
+
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  assert_output_contains "[deploy] WARNING: the desired limits' record, roof-controller-limits-g1, was written for container"
+  assert_output_contains "not for the running roof-controller (${old_id:0:12}): a limit not given still takes the record's value, not the running controller's."
+  assert_confined "$(controller_run_args)" 1 6g 512
+
+  # A first deploy whose record cannot be written: there is none to fall back on, and it says so.
+  setup_fresh_state
   deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=3g "FAKE_FAIL=volume create"
   assert_status 0
   assert_container roof-controller new true unless-stopped
-  assert_output_contains "[deploy] WARNING: could not keep the desired limits (1 CPUs, 3g of memory) in volume roof-controller-limits: the next deploy keeps the running controller's limits, or the default, unless CONTAINER_CPUS and CONTAINER_MEMORY are given."
+  assert_output_contains "[deploy] WARNING: could not record the desired limits (CPUs 1, memory 3g) as roof-controller-limits-g1: there is no other record, so the next deploy keeps the running controller's limits, or the default, unless CONTAINER_CPUS and CONTAINER_MEMORY are given."
+  [[ "$(desired_records)" == "" ]] || fail_test "the records are $(desired_records)"
+}
+
+# Review ROOF-151-R2 F5: an update cut off (the script killed) before its record is committed leaves the last good one,
+# and one cut off after it, before the older ones go, leaves both; either way the next deploy applies 6g.
+test_an_interrupted_update_keeps_the_last_good_record() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=6g
+  assert_status 0
+
+  # Cut off at the create, which does not complete: a rollback on a host that cannot enforce the memory limit.
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false "FAKE_SIGNAL_ON=volume create" FAKE_SIGNAL=KILL \
+    "FAKE_FAIL=volume create" -- --rollback
+  assert_status 137
+  [[ "$(desired_records)" == "roof-controller-limits-g1" && "$(desired_limits)" == "1 6g" ]] \
+    || fail_test "the interrupted update lost the last record: $(desired_records), $(desired_limits)"
+  : > "${FAKE_STATE_DIR}/calls.log"
+  rm -f "${FAKE_STATE_DIR}/signals.sent" "${FAKE_STATE_DIR}/fail-counts.json"
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  assert_confined "$(controller_run_args)" 1 6g 512
+
+  # Cut off after the create, at the removal of the older record, which does not complete.
+  : > "${FAKE_STATE_DIR}/calls.log"
+  rm -f "${FAKE_STATE_DIR}/signals.sent" "${FAKE_STATE_DIR}/fail-counts.json"
+  deploy "${HTTPS_ENV[@]}" FAKE_INFO_MEMORYLIMIT=false FAKE_INFO_SWAPLIMIT=false "FAKE_SIGNAL_ON=volume rm" FAKE_SIGNAL=KILL \
+    "FAKE_FAIL=volume rm" -- --rollback
+  assert_status 137
+  [[ "$(desired_records)" == "roof-controller-limits-g2 roof-controller-limits-g3" && "$(desired_limits)" == "1 6g" ]] \
+    || fail_test "the interrupted update left $(desired_records), the newest $(desired_limits)"
+  : > "${FAKE_STATE_DIR}/calls.log"
+  rm -f "${FAKE_STATE_DIR}/signals.sent" "${FAKE_STATE_DIR}/fail-counts.json"
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  assert_output_not_contains "WARNING: the desired limits' record"
+  assert_confined "$(controller_run_args)" 1 6g 512
+  [[ "$(desired_records)" == "roof-controller-limits-g4" ]] || fail_test "the records are $(desired_records)"
+}
+
+# Every read validates the newest record whole (review ROOF-151-R2 F5): a corrupt or hand-edited one is never applied.
+# A deploy that needs a value from it is refused with nothing changed; one given both is warned and records its own.
+test_a_desired_limits_record_that_is_not_valid_is_never_applied() {
+  local case generation edit problem
+  for case in \
+      "1 1 memory=512m|its memory '512m' is less than 1g, the minimum" \
+      "1 1 cpus=0.5|its CPUs '0.5' are less than 1 vCPU, the minimum" \
+      "1 1 cpus=1.555|its CPUs '1.555' are not a number of CPUs with at most two decimals" \
+      "1 1 memory=2gb|its memory '2gb' is not a whole number of MiB or GiB" \
+      "1 1 memory=|its memory '' is not a whole number of MiB or GiB" \
+      "1 1 =2|its format (io.hvo.roof.limits) is '2', not 1" \
+      "1 1 =|its format (io.hvo.roof.limits) is '', not 1" \
+      "3 3 generation=2|its generation label '2' is not the 3 of its name" \
+      "1 1 cpus-source=operator|its sources 'operator' and 'set' are not set or default" \
+      "1 1 written-by=|it does not say which run wrote it, and for which container ('', " \
+      "1 1 controller=roof|it does not say which run wrote it, and for which container ('deploy', 'roof')"; do
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    read -r generation _ edit <<<"${case%%|*}"
+    problem=${case#*|}
+    seed_desired_limits 1 6g "${generation}" "${edit}"
+    deploy "${HTTPS_ENV[@]}"
+    assert_status 1
+    assert_output_contains "The newest desired-limits record, roof-controller-limits-g${generation}, is not valid: ${problem}"
+    assert_output_contains "It is not applied, and nothing was changed: give CONTAINER_CPUS and CONTAINER_MEMORY (the deploy then records them in its place), or remove it (docker volume rm roof-controller-limits-g${generation})."
+    assert_refused_unchanged "a deploy with the record ${edit}"
+  done
+
+  # One given only one of the two is refused too; the newest is never passed over for a valid older one.
+  setup_fresh_state
+  seed_container roof-controller current true 8443:8443
+  seed_desired_limits 2 6g 1
+  seed_desired_limits 1 512m 2
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2
+  assert_status 1
+  assert_output_contains "The newest desired-limits record, roof-controller-limits-g2, is not valid: its memory '512m' is less than 1g, the minimum."
+  assert_refused_unchanged "a deploy given only the CPUs"
+
+  # Given both, with the record not written: the invalid one stays, and the next deploy is still refused.
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=3g "FAKE_FAIL=volume create"
+  assert_status 0
+  assert_output_contains "[deploy] WARNING: could not record the desired limits (CPUs 2, memory 3g) as roof-controller-limits-g3: the newest record, roof-controller-limits-g2, is not valid, so the next deploy is refused unless CONTAINER_CPUS and CONTAINER_MEMORY are given."
+  rm -f "${FAKE_STATE_DIR}/fail-counts.json"
+
+  # Given both: a warning, and the deploy records its own in its place.
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_CPUS=2 CONTAINER_MEMORY=3g
+  assert_status 0
+  assert_output_contains "[deploy] WARNING: the newest desired-limits record, roof-controller-limits-g2, is not valid (its memory '512m' is less than 1g, the minimum): it is not applied, and this run records the limits it is given in its place."
+  assert_confined "$(controller_run_args)" 2 3g 512
+  [[ "$(desired_records)" == "roof-controller-limits-g3" && "$(desired_limits)" == "2 3g" ]] \
+    || fail_test "the records are $(desired_records), the newest $(desired_limits)"
+}
+
+# Volumes that are not records (another name, a generation that is not a number, the earlier format's <name>-limits of
+# this change's first version) are never read; the earlier format's goes with the next record written.
+test_volumes_that_are_not_desired_limits_records_are_not_read() {
+  seed_container roof-controller current true 8443:8443
+  jq '.volumes = {"roof-controller-limits": {labels: {"io.hvo.roof.desired-cpus": "4", "io.hvo.roof.desired-memory": "8g"}},
+                  "roof-controller-limits-gx": {labels: {"io.hvo.roof.limits": "1"}},
+                  "roof-controller-limits-g01": {labels: {"io.hvo.roof.limits": "1"}},
+                  "other-roof-controller-limits-g9": {labels: {"io.hvo.roof.limits": "1"}}}' \
+    "${FAKE_STATE_DIR}/state.json" > "${FAKE_STATE_DIR}/state.tmp" && mv "${FAKE_STATE_DIR}/state.tmp" "${FAKE_STATE_DIR}/state.json"
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  assert_output_contains "[deploy] The container's limits: 1 CPU (the default), 2g of memory (the default)"
+  [[ "$(jq -r '.volumes | keys | join(" ")' "${FAKE_STATE_DIR}/state.json")" \
+      == "other-roof-controller-limits-g9 roof-controller-limits-g01 roof-controller-limits-g1 roof-controller-limits-gx" ]] \
+    || fail_test "the volumes are $(jq -r '.volumes | keys | join(" ")' "${FAKE_STATE_DIR}/state.json")"
+}
+
+test_desired_limits_that_cannot_be_read_are_refused_with_nothing_changed() {
+  local call
+  for call in "volume ls" "volume inspect"; do
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    seed_desired_limits 2 4g
+    deploy "${HTTPS_ENV[@]}" "FAKE_FAIL=${call}"
+    assert_status 1
+    assert_output_contains "Could not read the desired limits' records from Docker (volumes roof-controller-limits-g<generation>; a limit not set keeps them). Nothing was changed; check the Docker context and retry."
+    assert_refused_unchanged "a deploy that could not read the desired limits (${call})"
+    assert_container roof-controller current true unless-stopped
+  done
+}
+
+# Another run that took the generation first (Docker answers a create for a name it has with that volume, as it is):
+# not this run's record, so it counts as not written.
+test_a_record_another_run_took_counts_as_not_written() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=6g
+  assert_status 0
+  seed_desired_limits 1 3g 2
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" CONTAINER_MEMORY=4g FAKE_VOLUME_HIDDEN=roof-controller-limits-g2
+  assert_status 0
+  assert_output_contains "[deploy] WARNING: roof-controller-limits-g2 is not this run's record (another run wrote it after this one read the records, or it cannot be read back): the desired limits (CPUs 1, memory 4g) are not recorded, no record is removed, and the next deploy reads the newest."
+  [[ "$(desired_records)" == "roof-controller-limits-g1 roof-controller-limits-g2" && "$(desired_limits)" == "1 3g" ]] \
+    || fail_test "the records are $(desired_records), the newest $(desired_limits)"
+  [[ -z "$(docker_calls volume | jq -c 'select(.[1] == "rm")')" ]] || fail_test "a record was removed: $(docker_calls volume)"
 }
 
 test_a_rollbacks_dry_run_on_a_host_that_cannot_enforce_a_limit_warns_and_changes_nothing() {

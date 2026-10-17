@@ -64,8 +64,9 @@ Other switches:
                                    FAKE_INFO_MEMORYLIMIT=false; an empty value is a field Docker does not report
   FAKE_INFO_WARNINGS=<w>[;<w>...]  the warnings `info --format '{{range .Warnings}}{{println .}}{{end}}'` lists (none by
                                    default)
-  `volume ls/inspect/rm/create`    the deploy script's desired-limits volume, kept in the state's "volumes" with its
-                                   labels (seed_desired_limits seeds one)
+  `volume ls/inspect/rm/create`    the deploy script's desired-limits records, volumes kept in the state's "volumes"
+                                   with their labels (seed_desired_limits seeds one)
+  FAKE_VOLUME_HIDDEN=<name>        `volume ls` does not list that volume (another run creates it after this one lists)
   FAKE_CONTAINER_LOG_FAIL=true     `exec -i <c> sh -c 'cat > /proc/1/fd/2'` (a line for the container's log, which the
                                    fake keeps in the container's "log") fails
   FAKE_CONTEXT_HOST=<endpoint>     what `context inspect --format '{{.Endpoints.docker.Host}}' <context>` reports
@@ -782,14 +783,16 @@ def main():
             end="" if fmt.endswith("\n") else "\n")
         return
     if command == "volume":
-        # The desired limits' volume (the deploy script's): ls --quiet --filter name=<text>, inspect --format with its
-        # labels, rm --force, and create --label k=v... <name>. Kept in the state's "volumes".
+        # The desired limits' records (the deploy script's volumes): ls --quiet --filter name=<text> (Docker's partial
+        # match), inspect --format with their labels, rm --force, and create --label k=v... <name>. Kept in the state's
+        # "volumes".
         volumes = state.setdefault("volumes", {})
         sub, rest = args[0], args[1:]
         if sub == "ls":
             text = rest[rest.index("--filter") + 1].removeprefix("name=") if "--filter" in rest else ""
+            hidden = os.environ.get("FAKE_VOLUME_HIDDEN", "")
             for name in sorted(volumes):
-                if text in name:
+                if text in name and name != hidden:
                     out(name)
             return
         if sub == "inspect":
@@ -807,8 +810,9 @@ def main():
             save(state)
             return
         if sub == "create":
+            # Docker answers a create for a name it has with that volume, as it is.
             labels = dict(value.split("=", 1) for value in option_values(rest, "--label"))
-            volumes[rest[-1]] = {"labels": labels}
+            volumes.setdefault(rest[-1], {"labels": labels})
             save(state)
             out(rest[-1])
             return

@@ -1103,55 +1103,162 @@ show_containers() {
 # The container's privileges and limits
 
 # The CPU and memory limits a deploy or a rollback gives are kept as the controller's desired limits, whether or not the
-# host could enforce them (a rollback on a host that cannot, #149; review ROOF-151-R1 F2): in the labels of a Docker
-# volume of their own, DESIRED_VOLUME, which nothing mounts. Docker keeps it across container replacements, the script
-# reaches it through any Docker context, and the installer's survey reads it. The controller's own HostConfig cannot
-# keep them there: after a rollback on a host without memory cgroups the version brought back has no memory limit, and
-# the next deploy would read the default instead of the operator's.
-DESIRED_VOLUME="${CONTAINER_NAME}-limits"
-DESIRED_CPUS_LABEL=io.hvo.roof.desired-cpus
-DESIRED_MEMORY_LABEL=io.hvo.roof.desired-memory
-DESIRED_PRESENT=false DESIRED_CPUS="" DESIRED_MEMORY=""
+# host could enforce them (#149; reviews ROOF-151-R1 F2 and R2 F5, F6): a record that the script, the installer and
+# install.sh read the same way, with the same precedence (a limit given, then the record's, then the running
+# controller's, then the default). Each record is a Docker volume of its own that nothing mounts, named
+# <name>-limits-g<generation>, with the values in its labels: the script reaches it through any Docker context and before
+# any image is built, and Docker keeps it across container replacements.
+# A volume's labels cannot change, so a record is never changed in place: an update creates the next generation, which
+# commits it (Docker creates a volume whole or not at all), and only then removes the older ones. A failed or interrupted
+# update therefore leaves the last good record; older generations that could not be removed stay beside the newest; and
+# the newest generation is always the one read, never an older one. Each record says which run wrote it (a deploy or a
+# rollback, the controller's container and the time), and whether each value was set (given, or kept) or is the default,
+# which follows RoofController's default. Every read validates the newest record whole (its format, its generation and
+# the floor): one that fails is never applied. A run that needs a value from it is refused, and one given both is warned
+# and records its own in its place. The installer's uninstall and purge remove every record, whether or not the
+# container is there. A <name>-limits volume of an earlier format (this change's first version, never released) is not
+# read; it goes with the next record written, or the uninstall.
+DESIRED_PREFIX="${CONTAINER_NAME}-limits-g"
+DESIRED_LEGACY="${CONTAINER_NAME}-limits"
+DESIRED_LABEL=io.hvo.roof.limits
+DESIRED_FORMAT="{{index .Labels \"${DESIRED_LABEL}\"}}|{{index .Labels \"${DESIRED_LABEL}.generation\"}}|{{index .Labels \"${DESIRED_LABEL}.cpus\"}}|{{index .Labels \"${DESIRED_LABEL}.cpus-source\"}}|{{index .Labels \"${DESIRED_LABEL}.memory\"}}|{{index .Labels \"${DESIRED_LABEL}.memory-source\"}}|{{index .Labels \"${DESIRED_LABEL}.written-by\"}}|{{index .Labels \"${DESIRED_LABEL}.written-at\"}}|{{index .Labels \"${DESIRED_LABEL}.controller\"}}"
+# What read_desired_limits finds: DESIRED_STATE none, valid or invalid (DESIRED_PROBLEM says why); the newest record
+# (DESIRED_NEWEST, its generation DESIRED_GENERATION), its values and sources, and who wrote it (DESIRED_WRITTEN, and the
+# controller's container, DESIRED_CONTROLLER); the highest generation there is (DESIRED_HIGHEST), and every record
+# volume, the earlier format's included (DESIRED_VOLUMES), which a write removes once the next record is committed.
+DESIRED_STATE=none DESIRED_PROBLEM="" DESIRED_NEWEST="" DESIRED_GENERATION=0 DESIRED_HIGHEST=0 DESIRED_WRITTEN=""
+DESIRED_CPUS="" DESIRED_CPUS_SOURCE="" DESIRED_MEMORY="" DESIRED_MEMORY_SOURCE="" DESIRED_CONTROLLER=""
+DESIRED_VOLUMES=()
 
-# read_desired_limits: DESIRED_PRESENT, DESIRED_CPUS and DESIRED_MEMORY from the volume (false and empty when there is
-# none, or it says none). Returns 1 when Docker cannot be asked.
-read_desired_limits() {
-  local names name labels
-  DESIRED_PRESENT=false DESIRED_CPUS="" DESIRED_MEMORY=""
-  names=$(dockerc volume ls --quiet --filter "name=${DESIRED_VOLUME}") || return 1
-  while IFS= read -r name; do
-    [[ "${name}" == "${DESIRED_VOLUME}" ]] || continue
-    labels=$(dockerc volume inspect --format "{{index .Labels \"${DESIRED_CPUS_LABEL}\"}},{{index .Labels \"${DESIRED_MEMORY_LABEL}\"}}" "${DESIRED_VOLUME}") \
-      || return 1
-    IFS=, read -r DESIRED_CPUS DESIRED_MEMORY <<<"${labels}"
-    [[ "${DESIRED_CPUS}" != "<no value>" ]] || DESIRED_CPUS=""
-    [[ "${DESIRED_MEMORY}" != "<no value>" ]] || DESIRED_MEMORY=""
-    DESIRED_PRESENT=true
-  done <<<"${names}"
+# desired_problem <cpus> <cpu source> <memory> <memory source>: why a record's values are not ones a deploy gives (the
+# format, the floor), or nothing.
+desired_problem() {
+  local cpus_pattern='^([0-9]{1,3})(\.([0-9]{1,2}))?$' memory_pattern='^([0-9]{1,6})([mMgG])$' fraction bytes
+  if [[ ! "$1" =~ ${cpus_pattern} ]]; then
+    echo "its CPUs '$1' are not a number of CPUs with at most two decimals"
+    return
+  fi
+  fraction="${BASH_REMATCH[3]}00"
+  if (( 10#${BASH_REMATCH[1]} * 100 + 10#${fraction:0:2} < 100 )); then
+    echo "its CPUs '$1' are less than 1 vCPU, the minimum"
+    return
+  fi
+  if [[ ! "$3" =~ ${memory_pattern} ]]; then
+    echo "its memory '$3' is not a whole number of MiB or GiB"
+    return
+  fi
+  bytes=$(( 10#${BASH_REMATCH[1]} * 1048576 ))
+  [[ "${BASH_REMATCH[2]}" != [gG] ]] || bytes=$(( bytes * 1024 ))
+  if (( bytes < 1073741824 )); then
+    echo "its memory '$3' is less than 1g, the minimum"
+    return
+  fi
+  case "$2:$4" in
+    set:set|set:default|default:set|default:default) ;;
+    *) echo "its sources '$2' and '$4' are not set or default" ;;
+  esac
 }
 
-# write_desired_limits: the limits this run gives (CONTAINER_CPUS and CONTAINER_MEMORY, enforced or not) as the desired
-# ones, once the controller runs. A volume's labels cannot be changed, so it is made again. One that cannot be written
-# is a warning: the next deploy then keeps the running controller's limits, or the default, unless they are given.
+# read_desired_limits: the records there are, and the newest one, read and validated (the variables above). Returns 1
+# when Docker cannot be asked.
+read_desired_limits() {
+  local names name generation fields schema label_generation by at
+  DESIRED_STATE=none DESIRED_PROBLEM="" DESIRED_NEWEST="" DESIRED_GENERATION=0 DESIRED_HIGHEST=0 DESIRED_WRITTEN=""
+  DESIRED_CPUS="" DESIRED_CPUS_SOURCE="" DESIRED_MEMORY="" DESIRED_MEMORY_SOURCE="" DESIRED_CONTROLLER=""
+  DESIRED_VOLUMES=()
+  names=$(dockerc volume ls --quiet --filter "name=${DESIRED_LEGACY}") || return 1
+  while IFS= read -r name; do
+    if [[ "${name}" == "${DESIRED_LEGACY}" ]]; then
+      DESIRED_VOLUMES+=("${name}")
+      continue
+    fi
+    [[ "${name}" == "${DESIRED_PREFIX}"* ]] || continue
+    generation=${name#"${DESIRED_PREFIX}"}
+    [[ "${generation}" =~ ^[1-9][0-9]{0,8}$ ]] || continue
+    DESIRED_VOLUMES+=("${name}")
+    if (( generation > DESIRED_HIGHEST )); then
+      DESIRED_HIGHEST=${generation}
+      DESIRED_NEWEST=${name}
+    fi
+  done <<<"${names}"
+  [[ -n "${DESIRED_NEWEST}" ]] || return 0
+  DESIRED_GENERATION=${DESIRED_HIGHEST}
+  fields=$(dockerc volume inspect --format "${DESIRED_FORMAT}" "${DESIRED_NEWEST}") || return 1
+  IFS='|' read -r schema label_generation DESIRED_CPUS DESIRED_CPUS_SOURCE DESIRED_MEMORY DESIRED_MEMORY_SOURCE by at \
+    DESIRED_CONTROLLER <<<"${fields}"
+  DESIRED_WRITTEN="written by a ${by:-?} at ${at:-?} for container ${DESIRED_CONTROLLER:-?}"
+  if [[ "${schema}" != "1" ]]; then
+    DESIRED_PROBLEM="its format (${DESIRED_LABEL}) is '${schema}', not 1"
+  elif [[ "${label_generation}" != "${DESIRED_GENERATION}" ]]; then
+    DESIRED_PROBLEM="its generation label '${label_generation}' is not the ${DESIRED_GENERATION} of its name"
+  elif [[ "${by}" != deploy && "${by}" != rollback ]] || [[ ! "${DESIRED_CONTROLLER}" =~ ^[0-9a-f]{12}$ ]]; then
+    DESIRED_PROBLEM="it does not say which run wrote it, and for which container ('${by}', '${DESIRED_CONTROLLER}')"
+  else
+    DESIRED_PROBLEM=$(desired_problem "${DESIRED_CPUS}" "${DESIRED_CPUS_SOURCE}" "${DESIRED_MEMORY}" "${DESIRED_MEMORY_SOURCE}")
+  fi
+  if [[ -n "${DESIRED_PROBLEM}" ]]; then
+    DESIRED_STATE=invalid
+  else
+    DESIRED_STATE=valid
+  fi
+}
+
+# desired_source <the source resolve_limits gave a limit>: set or default, as a record keeps it.
+desired_source() {
+  case "$1" in
+    "the default") echo default ;;
+    *) echo set ;;
+  esac
+}
+
+# write_desired_limits <deploy|rollback> <container>: the limits this run gives (CONTAINER_CPUS and CONTAINER_MEMORY,
+# enforced or not, and whether each was set or is the default) as the next record, once the controller runs and has
+# passed its checks (or the version a rollback brings back has started); then the older records go. A record that
+# cannot be created leaves the last good one, and is a warning; older ones that cannot be removed stay beside it. Docker
+# answers a create for a name it has with that volume, as it is, so the record is read back: one that is not this run's
+# (another run took the generation) counts as not created.
 write_desired_limits() {
-  if [[ "${DESIRED_PRESENT}" == "true" && "${DESIRED_CPUS}" == "${CONTAINER_CPUS}" && "${DESIRED_MEMORY}" == "${CONTAINER_MEMORY}" ]]; then
+  local by=$1 container=$2 next name old failed=() cpus_source memory_source at labels
+  cpus_source=$(desired_source "${CPUS_SOURCE}")
+  memory_source=$(desired_source "${MEMORY_SOURCE}")
+  next=$(( DESIRED_HIGHEST + 1 ))
+  name="${DESIRED_PREFIX}${next}"
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  labels="1|${next}|${CONTAINER_CPUS}|${cpus_source}|${CONTAINER_MEMORY}|${memory_source}|${by}|${at}|${container:0:12}"
+  if ! dockerc volume create --label "${DESIRED_LABEL}=1" --label "${DESIRED_LABEL}.generation=${next}" \
+      --label "${DESIRED_LABEL}.cpus=${CONTAINER_CPUS}" --label "${DESIRED_LABEL}.cpus-source=${cpus_source}" \
+      --label "${DESIRED_LABEL}.memory=${CONTAINER_MEMORY}" --label "${DESIRED_LABEL}.memory-source=${memory_source}" \
+      --label "${DESIRED_LABEL}.written-by=${by}" --label "${DESIRED_LABEL}.written-at=${at}" \
+      --label "${DESIRED_LABEL}.controller=${container:0:12}" "${name}" >/dev/null 2>&1; then
+    case "${DESIRED_STATE}" in
+      valid)
+        log_err "[deploy] WARNING: could not record the desired limits (CPUs ${CONTAINER_CPUS}, memory ${CONTAINER_MEMORY}) as ${name}: the last record, ${DESIRED_NEWEST} (CPUs ${DESIRED_CPUS}, memory ${DESIRED_MEMORY}), stays the desired one, and the next deploy keeps it unless CONTAINER_CPUS and CONTAINER_MEMORY are given." ;;
+      invalid)
+        log_err "[deploy] WARNING: could not record the desired limits (CPUs ${CONTAINER_CPUS}, memory ${CONTAINER_MEMORY}) as ${name}: the newest record, ${DESIRED_NEWEST}, is not valid, so the next deploy is refused unless CONTAINER_CPUS and CONTAINER_MEMORY are given." ;;
+      *)
+        log_err "[deploy] WARNING: could not record the desired limits (CPUs ${CONTAINER_CPUS}, memory ${CONTAINER_MEMORY}) as ${name}: there is no other record, so the next deploy keeps the running controller's limits, or the default, unless CONTAINER_CPUS and CONTAINER_MEMORY are given." ;;
+    esac
     return 0
   fi
-  if dockerc volume rm --force "${DESIRED_VOLUME}" >/dev/null 2>&1 \
-      && dockerc volume create --label "${DESIRED_CPUS_LABEL}=${CONTAINER_CPUS}" --label "${DESIRED_MEMORY_LABEL}=${CONTAINER_MEMORY}" \
-        "${DESIRED_VOLUME}" >/dev/null 2>&1; then
-    echo "[deploy] The desired limits are kept for the next deploy (volume ${DESIRED_VOLUME}): CPUs ${CONTAINER_CPUS}, memory ${CONTAINER_MEMORY}"
-  else
-    log_err "[deploy] WARNING: could not keep the desired limits (${CONTAINER_CPUS} CPUs, ${CONTAINER_MEMORY} of memory) in volume ${DESIRED_VOLUME}: the next deploy keeps the running controller's limits, or the default, unless CONTAINER_CPUS and CONTAINER_MEMORY are given."
+  if [[ "$(dockerc volume inspect --format "${DESIRED_FORMAT}" "${name}" 2>/dev/null)" != "${labels}" ]]; then
+    log_err "[deploy] WARNING: ${name} is not this run's record (another run wrote it after this one read the records, or it cannot be read back): the desired limits (CPUs ${CONTAINER_CPUS}, memory ${CONTAINER_MEMORY}) are not recorded, no record is removed, and the next deploy reads the newest."
+    return 0
+  fi
+  echo "[deploy] The desired limits are recorded for the next deploy (${name}): CPUs ${CONTAINER_CPUS} (${cpus_source}), memory ${CONTAINER_MEMORY} (${memory_source})"
+  for old in ${DESIRED_VOLUMES[@]+"${DESIRED_VOLUMES[@]}"}; do
+    dockerc volume rm --force "${old}" >/dev/null 2>&1 || failed+=("${old}")
+  done
+  if (( ${#failed[@]} > 0 )); then
+    log_err "[deploy] WARNING: could not remove the older records (${failed[*]}): they stay, and the newest, ${name}, is the one the next deploy reads."
   fi
 }
 
 # resolve_limits, once the containers' states are known and before anything changes: a CPU or memory limit not given
-# keeps its desired value (the last deploy's or rollback's, read_desired_limits), so that an override persists across
-# upgrades and rollbacks, a rollback on a host that could not enforce it included. Without one (a controller deployed
-# before them), it keeps the one the running controller (CONTAINER_NAME, in any state) has, or is RoofController's
-# default when it has none (a controller deployed before the limits) or there is no controller. A kept one is checked
-# against the floor too. Then what the run gives (limit_args, for docker run and
+# keeps its desired value (the newest record's, read_desired_limits), so that an override persists across upgrades and
+# rollbacks, a rollback on a host that could not enforce it included; a record that says the default gives the default.
+# Without a record (a controller deployed before them), it keeps the one the running controller (CONTAINER_NAME, in any
+# state) has, or is RoofController's default when it has none (a controller deployed before the limits) or there is no
+# controller. A kept one is checked against the floor too. Then what the run gives (limit_args, for docker run and
 # the rollback's docker update), says it gives (LIMITS_SUMMARY), and expects Docker to record (WANT_NANO, WANT_MEMORY
 # and WANT_SWAP).
 LIMITS_SUMMARY="" WANT_NANO=0 WANT_MEMORY=0 WANT_SWAP=0
@@ -1159,9 +1266,40 @@ limit_args=()
 resolve_limits() {
   local kept="kept from ${CONTAINER_NAME}" desired="kept from the last deploy" mib memory cpus_text
   read_desired_limits \
-    || fail "Could not read the desired limits from Docker (volume ${DESIRED_VOLUME}; one not set keeps them). Nothing was changed; check the Docker context and retry."
-  [[ -n "${CONTAINER_CPUS}" || -z "${DESIRED_CPUS}" ]] || set_cpus "${DESIRED_CPUS}" "${desired}" "set CONTAINER_CPUS to at least 1"
-  [[ -n "${CONTAINER_MEMORY}" || -z "${DESIRED_MEMORY}" ]] || set_memory "${DESIRED_MEMORY}" "${desired}" "set CONTAINER_MEMORY to at least 1g"
+    || fail "Could not read the desired limits' records from Docker (volumes ${DESIRED_PREFIX}<generation>; a limit not set keeps them). Nothing was changed; check the Docker context and retry."
+  if [[ "${DESIRED_STATE}" == "invalid" ]]; then
+    if [[ -z "${CONTAINER_CPUS}" || -z "${CONTAINER_MEMORY}" ]]; then
+      fail "The newest desired-limits record, ${DESIRED_NEWEST}, is not valid: ${DESIRED_PROBLEM}. It is not applied, and nothing was changed: give CONTAINER_CPUS and CONTAINER_MEMORY (the deploy then records them in its place), or remove it (docker volume rm ${DESIRED_NEWEST})."
+    fi
+    log_err "[deploy] WARNING: the newest desired-limits record, ${DESIRED_NEWEST}, is not valid (${DESIRED_PROBLEM}): it is not applied, and this run records the limits it is given in its place."
+  elif [[ "${DESIRED_STATE}" == "valid" ]]; then
+    echo "[deploy] The desired limits' record, ${DESIRED_NEWEST} (${DESIRED_WRITTEN}): CPUs ${DESIRED_CPUS} (${DESIRED_CPUS_SOURCE}), memory ${DESIRED_MEMORY} (${DESIRED_MEMORY_SOURCE})"
+    # One written for another container than the running controller is older than it (the record of the deploy that
+    # started it could not be written, or something other than this script replaced it): it still comes first, and
+    # says so.
+    if [[ -n "${CONTAINER_CPUS}" && -n "${CONTAINER_MEMORY}" ]]; then
+      :
+    elif [[ "${STATE}" == "missing" ]]; then
+      log_err "[deploy] WARNING: the desired limits' record, ${DESIRED_NEWEST}, was written for container ${DESIRED_CONTROLLER}, and there is no ${CONTAINER_NAME} now: a limit not given still takes its value."
+    elif [[ "${CURRENT_ID:0:12}" != "${DESIRED_CONTROLLER}" ]]; then
+      log_err "[deploy] WARNING: the desired limits' record, ${DESIRED_NEWEST}, was written for container ${DESIRED_CONTROLLER}, not for the running ${CONTAINER_NAME} (${CURRENT_ID:0:12}): a limit not given still takes the record's value, not the running controller's."
+    fi
+    # A value it records as set is kept; one it records as the default is the default, not the running controller's.
+    if [[ -z "${CONTAINER_CPUS}" ]]; then
+      if [[ "${DESIRED_CPUS_SOURCE}" == set ]]; then
+        set_cpus "${DESIRED_CPUS}" "${desired}" "set CONTAINER_CPUS to at least 1"
+      else
+        set_cpus "${DEFAULT_CONTAINER_CPUS}" "the default" "give at least 1"
+      fi
+    fi
+    if [[ -z "${CONTAINER_MEMORY}" ]]; then
+      if [[ "${DESIRED_MEMORY_SOURCE}" == set ]]; then
+        set_memory "${DESIRED_MEMORY}" "${desired}" "set CONTAINER_MEMORY to at least 1g"
+      else
+        set_memory "${DEFAULT_CONTAINER_MEMORY}" "the default" "give at least 1g"
+      fi
+    fi
+  fi
   if [[ ( -z "${CONTAINER_CPUS}" || -z "${CONTAINER_MEMORY}" ) && "${STATE}" != "missing" ]]; then
     read_confinement "${CURRENT_ID}" \
       || fail "Could not read the CPU and memory limits of ${CONTAINER_NAME} from Docker (one not set keeps the running controller's). Nothing was changed; check the Docker context and retry."
@@ -2683,7 +2821,7 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   # Started: whatever the checks say, it is left running (run --rollback again to swap back), with this run's limits.
   RESTORE_MODE=""
   LIMITS_RESTORE_ID=""
-  write_desired_limits
+  write_desired_limits rollback "${PREVIOUS_ID}"
   warn_in_container_log "${CONTAINER_NAME}"
 
   if ! verify_controller "${CONTAINER_NAME}"; then
@@ -2938,7 +3076,7 @@ verify_controller "${CONTAINER_NAME}" || abort_switch "${FAILURE}"
 # ends the script with an error while the new controller runs.
 trap '' HUP INT TERM PIPE
 RESTORE_MODE=""
-write_desired_limits
+write_desired_limits deploy "${NEW_CONTAINER_ID}"
 
 echo "[deploy] Container status" || true
 show_containers
