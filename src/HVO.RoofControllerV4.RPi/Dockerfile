@@ -2,23 +2,28 @@
 
 # Build context: the repository root (see /.dockerignore).
 #
-# Image pins:
+# Image pins (build/check-base-images.sh checks them; the "Pi image" and "Emulator image"
+# workflows run it and build linux/amd64 and linux/arm64):
+# - Each base image is pinned by tag and by digest (tag@sha256:...), so a rebuild of the same
+#   commit uses the same bases: a tag can be republished (Microsoft rebuilds its images for
+#   base OS fixes), a digest cannot. The digest is the image's multi-platform index, the
+#   "Digest" that docker buildx imagetools inspect <image>:<tag> prints, so that linux/amd64
+#   and linux/arm64 both resolve; never one platform's manifest. Dependabot updates the tag
+#   and the digest together, and proposes a new digest when a tag is republished.
 # - The SDK tag must satisfy src/global.json (10.0.401, rollForward: patch). A floating
 #   sdk:10.0 tag can move to a newer feature band, which global.json rejects. When the SDK pin
-#   changes, update src/global.json and this tag in the same change; the "Pi image" workflow
-#   checks that they agree and builds linux/arm64.
+#   changes, update src/global.json and this tag in the same change.
 # - The runtime tag pins an ASP.NET Core patch release. The app is framework-dependent, so
 #   it runs on the newest 10.0 patch installed in the image; keep this on the latest patch
-#   for security fixes (Dependabot proposes updates).
-# - Version tags are mutable. If immutable image provenance is required, append a reviewed
-#   digest (sdk:10.0.401@sha256:...) and update it deliberately.
+#   for security fixes.
+# - src/HVO.RoofControllerV4.Emulator/Dockerfile uses the same two images, tags and digests.
 
 # -------------------------
 # Build the application
 # -------------------------
 # The build stage runs on the builder's native platform and cross-compiles for the target,
 # so an arm64 image built on an x64 machine does not run the SDK under emulation.
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.401@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317 AS build
 ARG TARGETARCH
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
@@ -85,7 +90,7 @@ RUN dotnet publish "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
 # -------------------------
 # Runtime image
 # -------------------------
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.13 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13@sha256:d5633778c754e89a386882eddf8dbee6942447a8a4b8267c19cf1e1158d0b0ac AS runtime
 ARG HVO_FORCE_RASPBERRY_PI=false
 ARG HVO_CONTAINER_RPI_HINT=""
 WORKDIR /app
