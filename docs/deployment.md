@@ -314,8 +314,8 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `REMOTE_CONNECT_TO` | (empty) | curl's `--connect-to` for the remote check, `HOST1:PORT1:HOST2:PORT2`. `::127.0.0.1:` checks `PI_HOST`'s name and certificate at this machine's loopback, for a name this machine cannot resolve, such as the Pi's own name when the script runs on the Pi. |
 | `SKIP_REMOTE_CHECK` | `false` | Skips the remote check (a warning is printed). Use only when this machine cannot reach the Pi's published port. |
 | `EXTRA_DOCKER_ARGS` | (empty) | Extra `docker run` options, also applied to the pre-flight container. Split on spaces; quotes are not interpreted and nothing is glob-expanded. `--name`, `-d`/`--detach`, `--rm`, `--restart`, `--cidfile`, `-p`/`--publish` and `-P`/`--publish-all` are refused, since the script sets them (use `HTTPS_HOST_PORT`, `HOST_PORT` and `WEB_HOST_PORT` for the ports), and so are `--stop-timeout` and `--stop-signal`, which could cut the controller's shutdown stop short (use `STOP_TIMEOUT_SECONDS`). The [container's privileges and limits](#the-containers-privileges-and-limits) are the script's too: `--privileged`, `--read-only`, `--tmpfs` (and `--mount type=tmpfs`), `--cap-add`, `--cap-drop`, `--security-opt`, `--cpus`, `--cpu-period`, `--cpu-quota`, `--cpu-rt-period`, `--cpu-rt-runtime`, `-m`/`--memory`, `--memory-swap`, `--kernel-memory`, `--oom-kill-disable` and `--pids-limit` are refused (use `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`). `HatEmulator` settings are refused, given directly or in an `--env-file` (read on this machine, so it must be readable here). In HAT emulator mode, an I2C `--device` and a mount of the host's `/` or `/dev` are refused as well. |
-| `CONTAINER_CPUS` | (empty: the running controller's, else `1`) | The container's CPU limit (`docker run --cpus`), at least 1, with at most two decimals; more than RoofController's default of 1 is fine. Less than 1 is refused, with no exception, and there is no setting for no limit. Not set (or empty), it keeps the CPU limit the running controller has, so an override persists across upgrades and rollbacks; a controller without one, or none at all, gets the default: see [The container's privileges and limits](#the-containers-privileges-and-limits). |
-| `CONTAINER_MEMORY` | (empty: the running controller's, else `2g`) | The container's memory limit, at least `1g`: a whole number of MiB or GiB (`1024m`, `1g`), with `--memory-swap` the same, so the container never swaps. Less than `1g` is refused, with no exception. Not set, it is kept or the default (`2g`), as for `CONTAINER_CPUS`. |
+| `CONTAINER_CPUS` | (empty: the desired one, else the running controller's, else `1`) | The container's CPU limit (`docker run --cpus`), at least 1, with at most two decimals; more than RoofController's default of 1 is fine. Less than 1 is refused, with no exception, and there is no setting for no limit. Not set (or empty), it keeps the desired CPU limit, the one the last deploy or rollback gave whether or not the host could enforce it (kept in the volume `<name>-limits`), so an override persists across upgrades and rollbacks; without one, the running controller's; a controller without one, or none at all, gets the default: see [The container's privileges and limits](#the-containers-privileges-and-limits). |
+| `CONTAINER_MEMORY` | (empty: the desired one, else the running controller's, else `2g`) | The container's memory limit, at least `1g`: a whole number of MiB or GiB (`1024m`, `1g`), with `--memory-swap` the same, so the container never swaps. Less than `1g` is refused, with no exception. Not set, it is kept or the default (`2g`), as for `CONTAINER_CPUS`. |
 | `CONTAINER_PIDS_LIMIT` | `512` | The most processes and threads the container runs at once (`--pids-limit`), from 256 to 32768 |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 22 s for the controller's shutdown (and up to 2 s for the web UI's, at the same time), then up to 5 s to turn the relays off ([Shutdown timing](#shutdown-timing)). |
 | `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
@@ -353,7 +353,8 @@ anything.
      drive the HAT. Stop it and retry.
    - neither `<name>` nor `<name>-previous` was created by Docker Compose. The script replaces and restores only
      controllers it created; see [Moving between Compose and the deploy script](#moving-between-compose-and-the-deploy-script).
-   - the limits the run gives (the ones set, else the running controller's, else RoofController's default) are at least
+   - the limits the run gives (the ones set, else the desired ones, else the running controller's, else RoofController's
+     default) are at least
      its floor, and Docker on the Pi enforces them: one `docker info` reports memory limits with no swap beyond them
      (`MemoryLimit`, `SwapLimit`), CPU limits (`CPUCfsQuota`) and process limits (`PidsLimit`), and at least the CPUs
      of the CPU limit ([The container's privileges and limits](#the-containers-privileges-and-limits)). Otherwise the
@@ -1238,35 +1239,50 @@ which the controller needs ([commissioning.md, C11](commissioning.md#c11-contain
 
 **The limits.** `CONTAINER_PIDS_LIMIT`, `CONTAINER_CPUS` and `CONTAINER_MEMORY` set them, from the installer's answers
 and record (`controller.resources`, [install.md](install.md#the-controllers-limits)) or by hand. A CPU or memory limit
-not set (or empty) keeps the one the running controller (`CONTAINER_NAME`) has, so a value chosen once persists across
-upgrades and rollbacks, as SkyMonitor's instance manifest keeps its own; a controller without one (deployed before #149)
-or none at all gets the default. The script says where each came from:
+not set (or empty) keeps its **desired** value, so a value chosen once persists across upgrades and rollbacks, as
+SkyMonitor's instance manifest keeps its own. The desired values are the ones the last deploy or rollback gave, whether
+or not the host could enforce them (review ROOF-151-R1 F2). The script keeps them in the labels of a Docker volume of
+their own, `<name>-limits` (`roof-controller-limits`), which nothing mounts: Docker keeps it across container
+replacements, the script reaches it through any Docker context, and the installer's survey reads it. The controller's
+own `HostConfig` could not keep them: after a rollback on a host without memory cgroups, the version brought back has no
+memory limit, and the next deploy would have taken the default for the operator's value. Without that volume (a
+controller deployed before it), a limit not set keeps the one the running controller (`CONTAINER_NAME`) has, and a
+controller without one, or none at all, gets the default. The script says where each came from, and what it keeps:
 
 ```text
-[deploy] The container's limits: 1 CPU (the default), 3g of memory (kept from roof-controller) and no swap, at most 512 processes and threads
+[deploy] The container's limits: 1 CPU (the default), 3g of memory (kept from the last deploy) and no swap, at most 512 processes and threads
+[deploy] The desired limits are kept for the next deploy (volume roof-controller-limits): CPUs 1, memory 3g
 ```
+
+It writes them once the new controller runs and has passed its checks (or the version a rollback brings back has
+started): a deploy that fails and puts the old controller back leaves them as they were. One that cannot be written is a
+warning, and the next deploy then keeps the running controller's limits, or the default, unless they are given. The
+installer's uninstall removes the volume with the controller; `docker volume rm roof-controller-limits` forgets them by
+hand.
 
 To go back to the default, give it (`CONTAINER_MEMORY=2g`). The installer always gives all three: the recorded ones, and
 the default for one not recorded, so an upgrade moves those to its default. A CPU limit below 1 vCPU, or a memory limit
-below `1g`, is below RoofController's floor and refused before any Docker call, with no exception (one kept from the
-running controller, before anything changes); there is no setting for no limit. At the `2g` default the controller and
-its web UI have about 13 times their peak under load: the container's cgroup peaked at 154 MiB under 32 clients at once
-(the API, the web UI and camera streams) with a move, and at 69-84 MiB otherwise, with no process ended at the limit
-(`deploy-scenarios.sh`, on the x64 emulator rig; the Pi is not measured). Their own peak resident memory under that
-load, 177 MiB for the controller and 132 MiB for the web UI, counts the pages they share in each: about 6.6 times
-together.
+below `1g`, is below RoofController's floor and refused before any Docker call, with no exception (one kept, the desired
+or the running controller's, before anything changes); there is no setting for no limit. At the `2g` default the
+controller and its web UI have about 13 times their peak under load: the container's cgroup peaked at 154 MiB under 32
+clients at once (the API, the web UI and camera streams) with a move, and at 69-84 MiB otherwise, with no process ended
+at the limit (`deploy-scenarios.sh`, on the x64 emulator rig; the Pi is not measured). Their own peak resident memory
+under that load, 177 MiB for the controller and 132 MiB for the web UI, counts the pages they share in each: about 6.6
+times together.
 
-**Docker must enforce them.** Docker drops a limit it cannot enforce with only a warning, and runs the container
-without it. RoofController refuses such a host, as SkyMonitor does (#149; SkyMonitor #1285), on every install, upgrade
-and deploy, before it changes anything: SkyMonitor checks only when it installs, but RoofController gives its limits
-each time. A rollback, a recovery path, goes ahead instead, with a warning (below). One `docker info` must report `MemoryLimit` and `SwapLimit` (the memory limit, and no swap beyond it),
-`CPUCfsQuota` (Docker 29's template field; its JSON key is `CpuCfsQuota`) and `PidsLimit` as `true`; a field Docker
-does not report counts as `false`. Docker must also report at least the CPUs (`NCPU`) of the CPU limit. Otherwise the
-script lists every finding, with the cgroup version, the kernel's cgroup v2 controllers
-(`/sys/fs/cgroup/cgroup.controllers`, quoted when Docker runs on the machine the script runs on) and Docker's own
-warnings about limits, says how to fix it, and exits 1 with nothing changed. There is no override. `--dry-run` reports
-the same, and exits 1 too; `--stop` and `--verify-remote` give no limits and are not refused. The installer and
-`install.sh` refuse such a machine the same way before they change anything
+**Docker must enforce them.** Docker drops a limit it cannot enforce with only a warning, and runs the container without
+it. RoofController refuses such a host, as SkyMonitor does (#149; SkyMonitor #1285), on every install, upgrade and
+deploy, before it changes anything: SkyMonitor checks only when it installs, but RoofController gives its limits each
+time. A rollback, a recovery path, goes ahead instead, with a warning (below). One `docker info` must report
+`MemoryLimit` and `SwapLimit` (the memory limit, and no swap beyond it), `CPUCfsQuota` (Docker 29's template field; its
+JSON key is `CpuCfsQuota`) and `PidsLimit` as `true`; a field Docker does not report counts as `false`. Memory and swap
+are separate controls in Docker: `MemoryLimit` `false` is `docker-memory-limit-unsupported`, and `SwapLimit` `false`
+alone is `docker-swap-limit-unsupported` (the memory limit holds, but the container could swap beyond it). Docker must
+also report at least the CPUs (`NCPU`) of the CPU limit. Otherwise the script lists every finding, with the cgroup
+version, the kernel's cgroup v2 controllers (`/sys/fs/cgroup/cgroup.controllers`, quoted when Docker runs on the machine
+the script runs on) and Docker's own warnings about limits, says how to fix it, and exits 1 with nothing changed. There
+is no override. `--dry-run` reports the same, and exits 1 too; `--stop` and `--verify-remote` give no limits and are not
+refused. The installer and `install.sh` refuse such a machine the same way before they change anything
 ([install.md](install.md#the-controllers-limits)). On a stock Raspberry Pi OS, run on the Pi:
 
 ```text
@@ -1276,8 +1292,9 @@ the same, and exits 1 too; `--stop` and `--verify-remote` give no limits and are
 [deploy]   To fix it on a Raspberry Pi: its firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). Append " cgroup_enable=memory" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot the Pi with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. On another host, give the Docker daemon the memory, cpu and pids cgroup controllers. There is no override (docs/deployment.md, "The container's privileges and limits").
 ```
 
-The other findings are `docker-cpu-quota-unsupported` (`CPUCfsQuota`), `docker-pids-limit-unsupported` (`PidsLimit`),
-`docker-host-cpus-insufficient` and `docker-host-cpus-unreported` (`NCPU`).
+The other findings are `docker-swap-limit-unsupported` (`SwapLimit` alone), `docker-cpu-quota-unsupported`
+(`CPUCfsQuota`), `docker-pids-limit-unsupported` (`PidsLimit`), `docker-host-cpus-insufficient` and
+`docker-host-cpus-unreported` (`NCPU`).
 
 **The fix on a Raspberry Pi.** The Pi's firmware adds `cgroup_disable=memory` to the kernel's command line itself; it
 is not in `/boot/firmware/cmdline.txt`. A stock Raspberry Pi OS (Debian 13 with a 6.18 `rpt-rpi-2712` kernel, on a
@@ -1313,20 +1330,23 @@ log, so that the warning stays where the controller's own messages are:
 ```
 
 The script writes the warning into the controller's log by writing to the standard error of the container's first
-process (`tini`), which Docker's log keeps; if it cannot, it says so, and the rollback does not depend on it. A rollback's
-`--dry-run` gives the same warning and exits 0. Every other refusal still holds for a rollback: a limit below the floor
-(given, or kept from the running controller), a CPU limit Docker enforces beyond the CPUs it reports, a Docker that does
-not answer `docker info`, the idle check and the verified stop. The installer's `rollback` warns the same way, and
-refuses the same others. Once the host is fixed, deploy (or upgrade) again to give the controller all its limits.
+process (`tini`), which Docker's log keeps; if it cannot, it says so, and the rollback does not depend on it. On a host
+that can limit memory but not swap (`SwapLimit` `false` alone), the rollback keeps the memory limit and warns only that
+the swap beyond it is not limited (`docker-swap-limit-unsupported`). The desired limits stay the operator's through such
+a rollback: once the host is fixed, a deploy given none applies them. A rollback's `--dry-run` gives the same warning
+and exits 0. Every other refusal still holds for a rollback: a limit below the floor (given, or kept), a CPU limit
+Docker enforces beyond the CPUs it reports, a Docker that does not answer `docker info`, the idle check and the verified
+stop. The installer's `rollback`, and `install.sh rollback`, which starts it, warn the same way, and refuse the same
+others. Once the host is fixed, deploy (or upgrade) again to give the controller all its limits.
 
 **A rollback keeps them.** `--rollback` gives the version it brings back the run's limits with `docker update`
-([Rolling back](#rolling-back)): the ones set, else the ones the controller it replaces has, else the default (on a
-host that cannot enforce some, the ones it can). It does so only after every check that can refuse the rollback: the
-floor and the CPUs above, the idle check (`REQUIRE_IDLE_ROOF`) and the roof's verified stop. A rollback refused there leaves that version's limits as they were.
-If the rollback fails or is interrupted after the change but before the version it brings back has started, the script
-puts that version's limits back. Docker cannot take a CPU or memory limit off a container, though: one the version had
-none of stays (the script says so). The installer records the limits and gives them on every deploy, upgrade and
-rollback.
+([Rolling back](#rolling-back)): the ones set, else the desired ones, else the ones the controller it replaces has, else
+the default (on a host that cannot enforce some, the ones it can, and the desired ones stay as they are). It does so
+only after every check that can refuse the rollback: the floor and the CPUs above, the idle check (`REQUIRE_IDLE_ROOF`)
+and the roof's verified stop. A rollback refused there leaves that version's limits as they were. If the rollback fails
+or is interrupted after the change but before the version it brings back has started, the script puts that version's
+limits back. Docker cannot take a CPU or memory limit off a container, though: one the version had none of stays (the
+script says so). The installer records the limits and gives them on every deploy, upgrade and rollback.
 
 **What a CPU limit does.** It never ends a process. When the controller, the web UI and the supervisor together use
 more than the limit's CPU time in a 100 ms period (1 vCPU's worth at the floor), the kernel holds them all until the

@@ -223,14 +223,14 @@ observatory's Pi.
 - The controller's container runs read-only, with only the supervisor's capabilities (`CHOWN`, `KILL`, `SETGID`,
   `SETUID`), `no-new-privileges`, and a CPU, a memory and a process limit: by default 1 vCPU, 2 GiB (no swap) and 512,
   at least 1 vCPU and 1 GiB, with no setting for no limit (#149); never `--privileged`. One set persists across upgrades
-  and rollbacks (the install record; the deploy script keeps the running controller's). A host whose Docker cannot
-  enforce them is refused before anything changes, with no override (`docker info`: `MemoryLimit`, `SwapLimit`,
-  `CPUCfsQuota`, `PidsLimit`); a rollback, a recovery path, goes ahead there with the ones it can, and warns loudly in
-  its output and the controller's log. A capability or writable place is added only when a test on the emulator image shows it
-  is needed.
-  Keep the [fail-safe record](docs/deployment.md#the-relays-when-the-controller-exits) true: the supervisor turns the
-  relays off whenever the controller exits and holds it stopped until they are verified off; only a whole-container
-  kill (or the Docker daemon dying) leaves them held.
+  and rollbacks (the install record; the deploy script keeps them as the desired limits in a volume of their own,
+  `<name>-limits`, whether or not the host could enforce them). A host whose Docker cannot enforce them is refused
+  before anything changes, with no override (`docker info`: `MemoryLimit`, `SwapLimit`, `CPUCfsQuota`, `PidsLimit`); a
+  rollback, a recovery path, goes ahead there with the ones it can, and warns loudly in its output and the controller's
+  log. A capability or writable place is added only when a test on the emulator image shows it is needed. Keep the
+  [fail-safe record](docs/deployment.md#the-relays-when-the-controller-exits) true: the supervisor turns the relays off
+  whenever the controller exits and holds it stopped until they are verified off; only a whole-container kill (or the
+  Docker daemon dying) leaves them held.
 - With HTTPS only port 8443 is published; plain HTTP on the LAN is an explicit opt-out (`ALLOW_INSECURE_HTTP=true`,
   compose profile `pi-lan-http`). HAT emulator mode is set only through `HAT_EMULATOR_ENDPOINT` with
   `ALLOW_EMULATED_HAT=true` ([docs/emulator.md](docs/emulator.md)).

@@ -210,7 +210,9 @@ nothing until every check has passed: then it installs Docker, or turns I2C on, 
   controller's container always runs with ([The controller's limits](#the-controllers-limits)). Each one it does not
   fails the check, with the cgroup version, the kernel's cgroup v2 controllers and Docker's warnings, and the remedy: on
   a Pi, append ` cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt` and reboot. There is no
-  override. A memory limit above the machine's memory only warns; the installer checks the limits again.
+  override. `SwapLimit` `false` alone is a finding of its own (`docker-swap-limit-unsupported`). For `rollback`, a
+  recovery path, each one is a loud warning instead, and the installer's rollback starts (review ROOF-151-R1 F1); Docker
+  must still answer. A memory limit above the machine's memory only warns; the installer checks the limits again.
 - **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
 - **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
   install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
@@ -707,17 +709,28 @@ other limits redeploys the controller with them (the plan says `redeployed with 
 limit out redeploy it with the default, and so does an upgrade of a controller deployed before the default was on. The
 wizard asks nothing about them: it keeps what the record says, or what the command line gives.
 
-Before it changes anything, at an install and an upgrade alike, the installer checks that this machine's Docker
-enforces the limits, as the deploy script does again, and refuses (exit code 3) when one `docker info` does not report `MemoryLimit` and `SwapLimit`, `CPUCfsQuota` or `PidsLimit` as `true` (a field it does not report counts as
-`false`), or reports fewer CPUs than the CPU limit. The refusal lists every finding, with the cgroup version, the
-kernel's cgroup v2 controllers (`/sys/fs/cgroup/cgroup.controllers`, when Docker runs on this machine) and Docker's
-warnings about limits, and the remedy; there is no override. A stock Raspberry Pi OS is refused so: its firmware adds
-`cgroup_disable=memory` to the kernel's command line itself (it is not in `/boot/firmware/cmdline.txt`). Append
-` cgroup_enable=memory` to the end of that file's single line (on that line, not a new one: the later argument wins),
-reboot the Pi with the roof idle, and check that
-`docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'` prints `true` four times. A
-memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs, and one with 1 GB
-less than the default) is kept, with a warning: a limit is a cap, not a reservation.
+Before it changes anything, at an install and an upgrade alike, the installer checks that this machine's Docker enforces
+the limits, as the deploy script does again, and refuses (exit code 3) when one `docker info` does not report
+`MemoryLimit` and `SwapLimit`, `CPUCfsQuota` or `PidsLimit` as `true` (a field it does not report counts as `false`), or
+reports fewer CPUs than the CPU limit. The refusal lists every finding, with the cgroup version, the kernel's cgroup v2
+controllers (`/sys/fs/cgroup/cgroup.controllers`, when Docker runs on this machine) and Docker's warnings about limits,
+and the remedy; there is no override. A stock Raspberry Pi OS is refused so: its firmware adds `cgroup_disable=memory`
+to the kernel's command line itself (it is not in `/boot/firmware/cmdline.txt`). Append ` cgroup_enable=memory` to the
+end of that file's single line (on that line, not a new one: the later argument wins), reboot the Pi with the roof idle,
+and check that `docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'` prints `true`
+four times. A memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs, and one
+with 1 GB less than the default) is kept, with a warning: a limit is a cap, not a reservation.
+
+An upgrade to another release checks the recorded limits, and that Docker here enforces them, before it hands over:
+before the backup it takes and the release's installer it puts in place, so a refusal leaves the installed installer,
+the backups and the record as they were. A `restore` that installs checks the backup's limits the same way before it
+puts the first file back (review ROOF-151-R1 F4).
+
+The deploy script keeps the limits it was last given as the controller's desired limits, in a Docker volume of their
+own (`roof-controller-limits`; [deployment.md](deployment.md#the-containers-privileges-and-limits)). The installer
+gives it the ones its record holds; when the volume holds others, given to the script by hand, the installer warns
+(`Warning: The deploy script here was last given ...`) and gives its own. An uninstall removes the volume with the
+controller.
 
 A `rollback` is a recovery path, so a limit Docker cannot enforce does not refuse it (the owner's decision on #149):
 should a Pi lose its memory controller after an upgrade, the way back still works. It goes ahead, the deploy script
