@@ -1286,6 +1286,79 @@ test_a_rollback_still_needs_docker_to_answer() {
   assert_output_contains "FAIL  Docker did not say which limits it enforces (docker info), and the controller's container runs with a CPU, a memory and a process limit"
 }
 
+# The controller's CPU limit, resolved as the installer and the deploy script resolve it (review ROOF-151-R2 F5), is
+# held to the CPUs Docker reports: one given, then the answers' or the record's, then the newest desired-limits record's
+# (its CPUs when set, the default when it keeps the default), then the running controller's, then 1.
+RECORD_6G='1|3|3|set|6g|set|deploy|2026-10-17T00:00:00Z|0123456789ab'
+test_the_cpu_limit_is_resolved_as_the_installer_resolves_it_and_held_to_dockers_cpus() {
+  local case volumes nano arguments limit from
+  for case in \
+      "##--roles controller --cpus 3#3#given" \
+      "##--answers ANSWERS#2.5#given" \
+      "roof-controller-limits-g3 roof-controller-limits-g1 roof-controller-limits#4500000000#--roles controller#3#kept from the last deploy" \
+      "#4500000000#--roles controller#4.5#kept from roof-controller"; do
+    IFS='#' read -r volumes nano arguments limit from <<<"${case}"
+    teardown
+    setup
+    printf '{"roles":["controller"],"controller":{"resources":{"cpus":2.5}}}\n' >"${WORK}/answers.json"
+    # shellcheck disable=SC2086 # the arguments are words
+    install_sh FAKE_DOCKER_LIMITS=true,true,true,true,2,8589934592,2 "FAKE_DOCKER_VOLUMES=${volumes}" "FAKE_DOCKER_RECORD=${RECORD_6G}" \
+      "FAKE_CONTROLLER_NANOCPUS=${nano}" -- ${arguments//ANSWERS/${WORK}/answers.json}
+
+    assert_stopped_by_checks
+    assert_output_contains "FAIL  Docker reports 2 CPUs, fewer than the controller's CPU limit of ${limit} (${from}), which it would not start with"
+  done
+
+  # A record that keeps the default gives 1, not the running controller's 4.5; and enough CPUs pass.
+  teardown
+  setup
+  install_sh FAKE_DOCKER_LIMITS=true,true,true,true,2,8589934592,2 FAKE_CONTROLLER_NANOCPUS=4500000000 \
+    FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_RECORD=1|3|1|default|2g|default|deploy|t|0123456789ab" -- --roles controller
+  assert_status 0
+  assert_output_contains "ok    Docker enforces memory, CPU and process limits"
+  install_sh FAKE_DOCKER_LIMITS=true,true,true,true,4,8589934592,2 -- --roles controller --cpus 4
+  assert_status 0
+}
+
+test_a_desired_limits_record_that_is_not_valid_fails_unless_both_limits_are_given() {
+  local case record problem
+  for case in \
+      "1|3|3|set|512m|set|deploy|t|0123456789ab|its memory '512m' is less than 1g, the minimum" \
+      "1|3|0.5|set|2g|set|deploy|t|0123456789ab|its CPUs '0.5' are less than 1 vCPU, the minimum" \
+      "2|3|1|set|2g|set|deploy|t|0123456789ab|its format (io.hvo.roof.limits) is '2', not 1" \
+      "1|2|1|set|2g|set|deploy|t|0123456789ab|its generation label '2' is not the 3 of its name" \
+      "1|3|1|set|2g|operator|deploy|t|0123456789ab|its sources 'set' and 'operator' are not set or default" \
+      "1|3|1|set|2g|set||t|0123456789ab|it does not say which run wrote it, and for which container ('', '0123456789ab')"; do
+    record=${case%|*}
+    problem=${case##*|}
+    teardown
+    setup
+    install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_RECORD=${record}" -- --roles controller
+
+    assert_stopped_by_checks
+    assert_output_contains "FAIL  The newest desired-limits record, roof-controller-limits-g3, is not valid: ${problem}. It is not applied, and nothing was changed: give --cpus and --memory (the deploy then records them in its place), or remove it (docker volume rm roof-controller-limits-g3)."
+  done
+
+  teardown
+  setup
+  install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_RECORD=1|3|3|set|512m|set|deploy|t|0123456789ab" \
+    -- --roles controller --cpus 2 --memory 3g
+  assert_status 0
+  assert_output_contains "note  WARNING: The newest desired-limits record, roof-controller-limits-g3, is not valid: its memory '512m' is less than 1g, the minimum. It is not applied, and the deploy records the limits given in its place."
+
+  # Records that cannot be read fail too.
+  teardown
+  setup
+  install_sh FAKE_DOCKER_VOLUMES=fail -- --roles controller --cpus 2 --memory 3g
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  Could not read the desired limits' records from Docker (docker volume ls failed), and a limit not given keeps them. Nothing was changed: check Docker, then run this again."
+  teardown
+  setup
+  install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 FAKE_DOCKER_RECORD=fail -- --roles controller
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  Could not read the desired limits' record roof-controller-limits-g3 from Docker (docker volume inspect failed), and a limit not given keeps it. Nothing was changed: check Docker, then run this again."
+}
+
 test_roles_without_the_controller_do_not_check_the_limits() {
   record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
   install_sh FAKE_DOCKER_LIMITS=false,false,false,false,1,1,2 -- --roles kiosk

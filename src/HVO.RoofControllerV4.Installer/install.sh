@@ -785,6 +785,135 @@ EOF
   # one is a loud warning instead, with the same details and the remedy, and the installer's rollback and the deploy
   # script give the version it brings back the limits Docker can still enforce. Docker must still answer, and the CPU
   # check still holds for CPU limits Docker enforces. False when one fails.
+  # The controller's CPU and memory limits, resolved as the installer and the deploy script resolve them (review
+  # ROOF-151-R2 F5), for the CPU check (cpu_limit, in hundredths of a CPU, and cpu_limit_from): one given (--cpus and
+  # --memory, else the answers' or the install record's controller.resources), else the newest desired-limits record's
+  # (roof-controller-limits-g<generation>, read and validated whole as they read it: its value when it keeps it as set,
+  # the default when it keeps the default), else the running controller's, else RoofController's default (1 CPU). A
+  # record that cannot be read, or is not valid, is never applied: it fails here as the installer refuses it, unless
+  # both limits are given, when it is a warning. False when it fails.
+  local cpu_limit=100 cpu_limit_from="the default"
+  # cpu_hundredths <CPUs>: cpu_limit for a number of CPUs with at most two decimals; false for anything else.
+  cpu_hundredths() {
+    local fraction
+    [[ $1 =~ ^([0-9]{1,3})(\.([0-9]{1,2}))?$ ]] || return 1
+    fraction="${BASH_REMATCH[3]}00"
+    cpu_limit=$((10#${BASH_REMATCH[1]} * 100 + 10#${fraction:0:2}))
+  }
+  # cpus_text <hundredths>: the CPUs as the deploy script writes them (1, 1.5, 2.05).
+  cpus_text() {
+    if (($1 % 100 == 0)); then
+      printf '%d' $(($1 / 100))
+    elif (($1 % 10 == 0)); then
+      printf '%d.%d' $(($1 / 100)) $(($1 % 100 / 10))
+    else
+      printf '%d.%02d' $(($1 / 100)) $(($1 % 100))
+    fi
+  }
+  # desired_problem <schema> <generation label> <its name's> <cpus> <cpu source> <memory> <memory source> <written by>
+  # <controller>: why a record is not valid, in the deploy script's words, or nothing.
+  desired_problem() {
+    local bytes
+    if [ "$1" != 1 ]; then
+      echo "its format (io.hvo.roof.limits) is '$1', not 1"
+    elif [ "$2" != "$3" ]; then
+      echo "its generation label '$2' is not the $3 of its name"
+    elif { [ "$8" != deploy ] && [ "$8" != rollback ]; } || [[ ! $9 =~ ^[0-9a-f]{12}$ ]]; then
+      echo "it does not say which run wrote it, and for which container ('$8', '$9')"
+    elif ! cpu_hundredths "$4"; then
+      echo "its CPUs '$4' are not a number of CPUs with at most two decimals"
+    elif ((cpu_limit < 100)); then
+      echo "its CPUs '$4' are less than 1 vCPU, the minimum"
+    elif [[ ! $6 =~ ^([0-9]{1,6})([mMgG])$ ]]; then
+      echo "its memory '$6' is not a whole number of MiB or GiB"
+    else
+      bytes=$((10#${BASH_REMATCH[1]} * 1048576))
+      [[ ${BASH_REMATCH[2]} != [gG] ]] || bytes=$((bytes * 1024))
+      if ((bytes < 1073741824)); then
+        echo "its memory '$6' is less than 1g, the minimum"
+      elif { [ "$5" != set ] && [ "$5" != default ]; } || { [ "$7" != set ] && [ "$7" != default ]; }; then
+        echo "its sources '$5' and '$7' are not set or default"
+      fi
+    fi
+  }
+  resolve_limits() {
+    local index=0 given_cpus="" given_memory=false file="" text names name generation highest=0 newest="" fields
+    local schema label cpus cpus_source memory memory_source by controller problem="" nano both=false
+    local format='{{index .Labels "io.hvo.roof.limits"}}|{{index .Labels "io.hvo.roof.limits.generation"}}|{{index .Labels "io.hvo.roof.limits.cpus"}}|{{index .Labels "io.hvo.roof.limits.cpus-source"}}|{{index .Labels "io.hvo.roof.limits.memory"}}|{{index .Labels "io.hvo.roof.limits.memory-source"}}|{{index .Labels "io.hvo.roof.limits.written-by"}}|{{index .Labels "io.hvo.roof.limits.written-at"}}|{{index .Labels "io.hvo.roof.limits.controller"}}'
+    cpu_limit=100 cpu_limit_from="the default"
+    while ((index < ${#passed[@]})); do
+      case "${passed[index]}" in
+        --cpus) given_cpus=${passed[index + 1]:-} index=$((index + 1)) ;;
+        --cpus=*) given_cpus=${passed[index]#--cpus=} ;;
+        --memory | --memory=*) given_memory=true ;;
+      esac
+      index=$((index + 1))
+    done
+    if [ -n "${answers}" ]; then
+      file=${answers}
+    elif [ -e "${system_record}" ]; then
+      file=${system_record}
+    elif [ -e "${user_record}" ]; then
+      file=${user_record}
+    fi
+    if [ -n "${file}" ] && text=$(tr -d ' \t\r\n' <"${file}" 2>/dev/null); then
+      [ -n "${given_cpus}" ] || [[ ! ${text} =~ \"resources\":\{[^}]*\"cpus\":([0-9.]+) ]] || given_cpus=${BASH_REMATCH[1]}
+      [[ ! ${text} =~ \"resources\":\{[^}]*\"memory\":\"[^\"]+\" ]] || given_memory=true
+    fi
+    [ -z "${given_cpus}" ] || ! ${given_memory} || both=true
+    if [ -n "${given_cpus}" ]; then
+      # One that is not a number of CPUs is the installer's to refuse, with its own words.
+      cpu_hundredths "${given_cpus}" || cpu_limit=100
+      cpu_limit_from="given"
+    fi
+
+    if ! names=$(as_root docker volume ls --quiet --filter name=roof-controller-limits 2>/dev/null </dev/null); then
+      failed "Could not read the desired limits' records from Docker (docker volume ls failed), and a limit not given keeps them. Nothing was changed: check Docker, then run this again."
+      return 1
+    else
+      while IFS= read -r name; do
+        [[ ${name} == roof-controller-limits-g* ]] || continue
+        generation=${name#roof-controller-limits-g}
+        [[ ${generation} =~ ^[1-9][0-9]{0,8}$ ]] || continue
+        if ((generation > highest)); then
+          highest=${generation}
+          newest=${name}
+        fi
+      done <<<"${names}"
+      if [ -z "${newest}" ]; then
+        :
+      elif ! fields=$(as_root docker volume inspect --format "${format}" "${newest}" 2>/dev/null </dev/null); then
+        failed "Could not read the desired limits' record ${newest} from Docker (docker volume inspect failed), and a limit not given keeps it. Nothing was changed: check Docker, then run this again."
+        return 1
+      else
+        IFS='|' read -r schema label cpus cpus_source memory memory_source by _ controller <<<"${fields}"
+        problem=$(desired_problem "${schema}" "${label}" "${highest}" "${cpus}" "${cpus_source}" "${memory}" "${memory_source}" "${by}" "${controller}")
+        [ -z "${problem}" ] || problem="The newest desired-limits record, ${newest}, is not valid: ${problem}"
+      fi
+    fi
+    if [ -n "${problem}" ]; then
+      if ${both}; then
+        note "WARNING: ${problem}. It is not applied, and the deploy records the limits given in its place."
+        return 0
+      fi
+      failed "${problem}. It is not applied, and nothing was changed: give --cpus and --memory (the deploy then records them in its place), or remove it (docker volume rm ${newest:-<the record>})."
+      return 1
+    fi
+    [ -z "${given_cpus}" ] || return 0
+    if [ -n "${newest}" ]; then
+      if [ "${cpus_source}" = set ]; then
+        cpu_hundredths "${cpus}"
+        cpu_limit_from="kept from the last deploy"
+      fi
+      return 0
+    fi
+    if nano=$(as_root docker container inspect --format '{{.HostConfig.NanoCpus}}' roof-controller 2>/dev/null </dev/null) \
+        && [[ ${nano} =~ ^[0-9]+$ ]] && ((nano > 0 && nano % 10000000 == 0)); then
+      cpu_limit=$((nano / 10000000))
+      cpu_limit_from="kept from roof-controller"
+    fi
+  }
+
   check_docker_limits() {
     local info memory cpu pids swap cpus version line found=false host controllers="" rollback=false
     [ "${command}" != rollback ] || rollback=true
@@ -834,8 +963,9 @@ EOF
     else
       ok "Docker enforces memory, CPU and process limits"
     fi
-    if { ! ${rollback} || [ "${cpu}" = true ]; } && [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus < 1)); then
-      failed "Docker reports ${cpus} CPUs, and the controller's CPU limit is at least 1"
+    resolve_limits || return 1
+    if { ! ${rollback} || [ "${cpu}" = true ]; } && [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus * 100 < cpu_limit)); then
+      failed "Docker reports ${cpus} CPUs, fewer than the controller's CPU limit of $(cpus_text "${cpu_limit}") (${cpu_limit_from}), which it would not start with"
       return 1
     fi
   }
