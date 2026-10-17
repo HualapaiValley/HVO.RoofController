@@ -880,20 +880,23 @@ scenario_lifecycle() {
   plant_is '.relayRegister == 0' || fail "the relays are still energized after the container stopped: $(plant)"
   assert_relays_off
   container_log_has "${controller}" 'stopped: HostShutdown' "${start}" || fail "the controller's log has no HostShutdown stop"
-  # The supervisor stops the controller first and waits for it (its shutdown stops the roof), then the web UI.
-  local controller_stopping controller_stopped ui_stopping
+  # The supervisor sends SIGTERM to the controller and the web UI at once and waits for both (the controller's shutdown
+  # stops the roof): the web UI is told before the controller has stopped (#139 F6).
+  local controller_stopping controller_stopped ui_stopping ui_stopped
   controller_stopping=$(supervisor_log_line '[supervisor] Stopping the controller (SIGTERM' "${start}")
   controller_stopped=$(supervisor_log_line '[supervisor] The controller stopped (exit code 0)' "${start}")
   ui_stopping=$(supervisor_log_line '[supervisor] Stopping the web UI (SIGTERM' "${start}")
-  if [[ -z "${controller_stopping}" || -z "${controller_stopped}" || -z "${ui_stopping}" ]] \
-    || (( controller_stopping > controller_stopped || controller_stopped > ui_stopping )); then
-    fail "the supervisor did not stop the controller (exit code 0) before the web UI: lines ${controller_stopping:-none}, ${controller_stopped:-none}, ${ui_stopping:-none}"
+  ui_stopped=$(supervisor_log_line '[supervisor] The web UI stopped (' "${start}")
+  if [[ -z "${controller_stopping}" || -z "${controller_stopped}" || -z "${ui_stopping}" || -z "${ui_stopped}" ]] \
+    || (( controller_stopping > controller_stopped || ui_stopping > controller_stopped || ui_stopping > ui_stopped )); then
+    fail "the supervisor did not stop the controller (exit code 0) and the web UI at once: lines ${controller_stopping:-none}, ${ui_stopping:-none}, ${controller_stopped:-none}, ${ui_stopped:-none}"
   fi
-  # Then the supervisor turned the relays off itself, as it does whenever the controller has stopped.
+  # Then, once both had stopped, the supervisor turned the relays off itself, as it does whenever the controller has
+  # stopped.
   local relays_off
   relays_off=$(supervisor_log_line '(the supervisor is stopping)' "${start}")
-  if [[ -z "${relays_off}" ]] || (( relays_off < controller_stopped )); then
-    fail "the supervisor did not turn the relays off after the controller stopped (line ${relays_off:-none})"
+  if [[ -z "${relays_off}" ]] || (( relays_off < controller_stopped || relays_off < ui_stopped )); then
+    fail "the supervisor did not turn the relays off after the controller and the web UI stopped (line ${relays_off:-none})"
   fi
   container_log_lacks "${controller}" 'WARNING: the relays could not be verified off' "${start}" \
     || fail "the supervisor could not verify the relays off"
@@ -906,7 +909,7 @@ scenario_lifecycle() {
   awk -v t="${stream_seconds}" 'BEGIN { exit !(t < 5) }' || fail "the camera stream ended ${stream_seconds} s after docker stop"
   awk -v t="${stop_seconds}" 'BEGIN { exit !(t < 5) }' || fail "docker stop took ${stop_seconds} s with a camera stream open"
   wait_for "the emulated camera's stream closed" 5 camera_is '.openStreams == 0'
-  pass "the controller stopped the roof (relays off, HostShutdown) and exited 0 before the supervisor turned the relays off again and stopped the web UI; the container exited ${exit_code} in ${stop_seconds} s; the camera stream ended ${stream_seconds} s after docker stop"
+  pass "the supervisor stopped the controller and the web UI at once; the controller stopped the roof (relays off, HostShutdown) and exited 0, and the supervisor turned the relays off again once both had stopped; the container exited ${exit_code} in ${stop_seconds} s; the camera stream ended ${stream_seconds} s after docker stop"
 
   current_check="Lifecycle: restart after a stop"
   docker start "${controller}" >/dev/null
