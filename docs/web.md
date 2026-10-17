@@ -172,7 +172,8 @@ once, as it is created; neither the page nor the controller shows it again.
   supervisor to kill the controller and start it again
   ([The container's two processes](deployment.md#the-containers-two-processes)). A kill does not stop the roof by
   itself: the supervisor turns the relays off right after it, and starts the controller again only once they are
-  verified off (otherwise it holds it stopped, and the page says so). The page says to use the stop control at the roof
+  verified off (otherwise it holds it stopped, and the page says so; once the hold has ended, it says the restart was
+  held). The page says to use the stop control at the roof
   if the roof is moving. To send it, type `restart`.
 
 ## Stop

@@ -779,11 +779,12 @@ both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals t
 
 | Event | What the supervisor does |
 |-------|--------------------------|
-| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Stops the controller first and waits up to 22 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), while it stops the web UI, waiting up to 2 s for it (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL). The whole stop is timed from the signal, work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script) stops the same way first. |
+| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Stops the controller first and waits up to 22 s for it (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off. Then it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), while it stops the web UI, waiting up to 2 s for it (`HVO_SUPERVISOR_UI_STOP_SECONDS`), and exits. A process that is still running when its wait runs out is killed (SIGKILL), and given at most 1 s more to end: one stuck in the kernel (a hung filesystem or bus) can no longer run its own code, and the stop goes on without it. A [web UI preparation](#the-web-uis-user-and-settings) still running is abandoned at once (its processes are killed), and the web UI is not started. The whole stop is timed from the signal, work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script) stops the same way first. |
 | The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Turns the relays off, then starts it again at once, once they are verified off. The web UI and the container keep running, and Docker's restart count does not change. |
 | The relays cannot be verified off (at the first start, before a restart, after a crash, on a forced restart) | Does not start the controller: holds it stopped (`relays-unverified`) and tries the relays again after 1, 2, 4, 8, 16 and then every 30 s, for as long as it takes, and starts it once a read-back shows every relay off ([below](#the-relays-when-the-controller-exits)). The web UI keeps running and says why; the health check fails. |
 | The controller exits otherwise (a crash, a kill, a failed start) | Turns the relays off at once, then starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`), once the relays are verified off. The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`), with the relays off, instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
 | The web UI exits | Starts only the web UI again, with the same backoff, and never gives up. The controller is not touched. |
+| Before each start of the web UI | Prepares it ([below](#the-web-uis-user-and-settings): its copies of the certificate and the Stop key, its keys directory, and the check that it cannot read the secrets) in a process of its own, in the background, which must finish within 10 s (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`) or is killed and run again later, with the backoff. The web UI is `starting` meanwhile, and starts once the preparation has finished, unless a stop has been asked for. Nothing the preparation waits for (a slow or hung filesystem) holds up the supervisor: a controller that exits meanwhile has its relays turned off at once. |
 | A forced restart (`/run/hvo-roof/control/force-restart-controller` appears) | Kills the controller (SIGKILL), turns the relays off and starts it again at once, once they are verified off, even from `crash-loop` (otherwise it holds it stopped). Earlier crashes stop counting. A request within 10 s of the controller's start (`HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS`) is ignored, so repeated requests cannot kill a controller that is still starting. |
 
 The container's own restart policy (`unless-stopped`) now applies only when the supervisor itself exits: on
@@ -909,8 +910,8 @@ runs as the image's unprivileged `app` user, with a new environment that has onl
 
 So it never sees the controller's API keys, the Blue Iris credentials or any other setting, and the `app` user cannot
 read the secrets directory (keep it `root:root`, mode `0700`:
-[security.md](security.md#on-the-pi-docker-secrets-directory); the supervisor warns at start when `app` can read a file
-there). For HTTPS, the supervisor gives the web UI private copies (mode `0400`, owned by `app`, in a directory only
+[security.md](security.md#on-the-pi-docker-secrets-directory); the supervisor warns at each start of the web UI when
+`app` can read a file there). For HTTPS, the supervisor gives the web UI private copies (mode `0400`, owned by `app`, in a directory only
 root can write) of the certificate it serves and of that certificate's password:
 
 - by default the controller's certificate (`Kestrel__Certificates__Default__Path`) and the controller's certificate
@@ -922,6 +923,13 @@ root can write) of the certificate it serves and of that certificate's password:
 
 It takes them again at each start of the web UI, so a renewed certificate is used after a restart of the web UI or the
 container.
+
+The supervisor prepares all of this (the copies, the keys directory below, and the check of the secrets directory) before
+each start of the web UI, in a process of its own (`roof-supervisor --prepare-ui`) that runs in the background and must
+finish within `HVO_SUPERVISOR_UI_PREPARE_SECONDS` (10 s): one that takes longer, say on a hung filesystem, is killed
+with every process it started, logged as a `WARNING`, and run again later with the backoff. So a slow preparation never
+holds up the relays, the controller or a stop: a stop abandons it at once, and the web UI is started only after it, and
+not once a stop has been asked for.
 
 The web UI's own key for Stop ([web.md](web.md#stop)) is a file as well, `RoofWeb__StopKeyFile`, so the key never
 enters the web UI's environment. Point it at a Viewer key's file in the secrets directory, such as
@@ -974,7 +982,8 @@ health check and the deploy script read it:
  "ui":{"state":"running","pid":8,"starts":1,"recentCrashes":0,"lastExitCode":null,"lastExitReason":null,"lastExitAt":null}}
 ```
 
-Each process is `running`, `restarting` (waiting to start again), `crash-loop` (the controller only: left stopped),
+Each process is `starting` (not started yet; for the web UI, also while it is prepared), `running`, `restarting`
+(waiting to start again), `crash-loop` (the controller only: left stopped),
 `relays-unverified` (the controller only: held stopped until the relays are verified off), `stopping` or `stopped`. The last exit reason is `restart requested`, `crashed (exit code N)`,
 `crashed (killed by signal N)`, `forced restart` or `stopped with the container`. `lastForcedRestart` is `null` until a
 forced restart is asked for; its outcome is `restarted`, `held` (the relays could not be verified off, so the controller
@@ -1080,14 +1089,18 @@ read `/health` with a Viewer key and expect Healthy.
 | Supervisor, the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`) | 22 s | The [supervisor](#the-containers-two-processes) passes SIGTERM to the controller first and waits this long for it, above the app's 20 s. Then it kills it (SIGKILL). |
 | Supervisor, the relays (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`) | 5 s | Once the controller has exited: the supervisor [turns the relays off](#the-relays-when-the-controller-exits) and verifies them, and kills the run that takes longer. |
 | Supervisor, the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`) | 2 s | At the same time as the relays: SIGTERM to the web UI, then SIGKILL. |
-| Supervisor, the whole stop | 27 s from the signal | The controller's wait and the longer of the other two. The supervisor times the stop from the signal: nothing starts after it, a relay-off already running when it came runs on within its own 5 s and counts against the 27 s, and each later wait is cut to the time left, the controller's ending early enough to leave the last relay-off its whole 5 s. The stop's own work (logging, starting the helper) adds a few hundred milliseconds. |
+| Supervisor, after a SIGKILL | at most 1 s | A process killed when its wait ran out is given this long to end. One stuck in the kernel (a hung filesystem or bus) cannot run its own code again, so the stop goes on without it. |
+| Supervisor, the web UI's preparation (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`) | 10 s, not part of the stop | It runs in the background before each start of the web UI; a stop abandons it at once (its processes are killed), so it adds nothing to the stop. |
+| Supervisor, the whole stop | 27 s from the signal | The controller's wait and the longer of the other two. The supervisor times the stop from the signal: nothing starts after it, a relay-off already running when it came runs on within its own 5 s and counts against the 27 s, and each later wait is cut to the time left, the controller's ending early enough to leave the last relay-off at least 4 s of its 5 s (all 5 s unless the controller has to be killed and takes up to its 1 s to end), so the last relay-off begins and ends within the 27 s. Only a process that does not end at SIGKILL can make the supervisor itself exit up to 1 s later. The stop's own work (logging, starting the helper) adds a few hundred milliseconds. |
 | Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the whole stop (27 s). Docker sends SIGKILL to everything in the container after this. |
 
 Keep each layer above the one inside it: the app's 20 s inside the supervisor's 22 s, and the supervisor's 27 s inside
 Docker's 30 s. The worst case is a controller that ignores SIGTERM for its whole 22 s and a relay-off that then takes most
 of its 5 s: 26.7 s from the signal in the supervisor's tests (4.5 s for the relay-off). A signal that comes while the
 relays are being turned off (before a start, or after a forced restart's kill) starts no controller after it, and the
-stop then takes at most that relay-off and the last one: 8.5-8.6 s in the tests with 4.5 s relay-offs. If the supervisor
+stop then takes at most that relay-off and the last one: 8.5-8.6 s in the tests with 4.5 s relay-offs. A signal during
+the web UI's preparation abandons it: 0.2 s in the tests, and 22.0 s with a preparation stalled for 31 s and a
+controller that ignores SIGTERM (its 22 s, then the last relay-off). If the supervisor
 kills the controller, the controller cannot confirm that the relays are off, and the supervisor turns them off itself.
 If Docker kills the container first, nothing in it can: they stay as they were until the next start, whose supervisor
 turns them off first
