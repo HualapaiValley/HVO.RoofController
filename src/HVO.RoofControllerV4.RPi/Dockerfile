@@ -134,10 +134,14 @@ EXPOSE 8080 8088
 
 # The image's version, commit and source (OCI labels; build/check-image-labels.sh checks them). The source links a GHCR
 # package to its repository. After the last RUN, so that a new build time or commit invalidates no layer.
+# Its state contract: the schema it writes, and those it reads, of each store it keeps (docs/releasing.md, "State
+# contracts"), as build/release-assets.py writes it into release.json. io.hvo.roof.identity-schema, the newest identity
+# schema it reads, is what the deploy script checks before it restores or rolls back to this image.
 ARG ROOF_VERSION=""
 ARG ROOF_REVISION=""
 ARG ROOF_CREATED=""
 LABEL io.hvo.roof.identity-schema="3" \
+      io.hvo.roof.state-contracts="{\"identity\":{\"writes\":3,\"reads\":{\"min\":1,\"max\":3}},\"settings\":{\"writes\":1,\"reads\":{\"min\":1,\"max\":1}}}" \
       org.opencontainers.image.title="HVO Roof Controller" \
       org.opencontainers.image.description="The roll-off roof controller and its web UI: on a Raspberry Pi 5 with its HAT, or anywhere with the HAT emulator." \
       org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \

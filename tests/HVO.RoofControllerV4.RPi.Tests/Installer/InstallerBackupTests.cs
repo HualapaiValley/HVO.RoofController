@@ -246,6 +246,81 @@ public sealed class InstallerBackupTests
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
     }
 
+    // #136 F7: an archive backup writes is on disk (the archive, its folder and each folder made for it) when it says it is
+    // done, and before a purge removes anything.
+    [TestMethod]
+    public async Task ABackup_IsOnDisk_WhenItSaysItIsDone()
+    {
+        using var pi = await InstalledPiAsync();
+        var path = BackupCommands.DefaultPath("roofpi", FakeMachine.Today);
+        pi.TrackFolderDurability("/var/backups").TrackFolderDurability(BackupCommands.DefaultFolder).TrackDurability(path);
+
+        var run = await pi.RunAsync("backup");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain(path);
+        pi.SurvivesPowerLoss(path).Should().BeTrue();
+        pi.PowerLoss();
+        (await BackupCommands.ReadAsync(pi.Machine, path, CancellationToken.None)).Entries.Should().NotBeEmpty();
+    }
+
+    [TestMethod]
+    public async Task APurge_BacksUpDurably_BeforeItRemovesAnything()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.Folder("/srv/keep");
+        pi.TrackDurability(Kept);
+        bool? atStop = null;
+        pi.DuringDeploy = () => atStop ??= pi.SurvivesPowerLoss(Kept);
+
+        var purge = await pi.RunAsync("uninstall", "--purge", "--yes", "--backup", Kept, "--confirm", "roofpi");
+
+        purge.ExitCode.Should().Be(0, purge.ToString());
+        atStop.Should().BeTrue("the backup is on disk before the controller is stopped and the data removed");
+        pi.Exists("/var/lib/hvo-roof").Should().BeFalse();
+        pi.PowerLoss();
+        pi.Exists(Kept).Should().BeTrue();
+    }
+
+    // #136: what restore puts back (each file and folder, with its owner, and the folders above them) is on disk before the
+    // install that follows relies on it; a sync that fails stops the restore before that install.
+    [TestMethod]
+    public async Task ARestore_MakesWhatItPutsBackDurable_BeforeTheInstallThatFollows()
+    {
+        using var pi = await InstalledPiAsync();
+        await BackUpAndPurgeAsync(pi);
+
+        // A file put back is root's until restore gives it to its owner.
+        pi.Owners.Remove(KioskSteps.DeviceKeyFile);
+        pi.TrackFolderDurability("/var/lib/hvo-roof").TrackFolderDurability("/var/lib/hvo-roof/settings-secrets").TrackDurability(ManagedSecret);
+        bool? atDeploy = null;
+        pi.DuringDeploy = () => atDeploy ??= pi.SurvivesPowerLoss(ManagedSecret);
+        pi.DurabilityEvents.Clear();
+
+        var run = await RestoreAsync(pi, Kept);
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        atDeploy.Should().BeTrue("the secret put back, and the folders made for it, are on disk before the install deploys the controller");
+        pi.DurabilityEvents.Should().ContainInOrder($"chown {KioskSteps.DeviceKeyFile}", $"sync-file {KioskSteps.DeviceKeyFile}", "sync-folder /var/lib");
+        pi.PowerLoss();
+        pi.Exists(ManagedSecret).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task ARestore_ThatCannotMakeWhatItPutBackDurable_StopsBeforeTheInstall()
+    {
+        using var pi = await InstalledPiAsync();
+        await BackUpAndPurgeAsync(pi);
+        var deploys = pi.Deploys.Count;
+        pi.DuringDirectorySync = folder => pi.DirectorySyncFailure = folder == "/var/lib" ? "Input/output error" : null;
+
+        var run = await RestoreAsync(pi, Kept);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain("What the backup put back could not be made sure of on disk").And.Contain("Input/output error").And.Contain("The install that follows did not start.");
+        pi.Deploys.Should().HaveCount(deploys, "the install did not start");
+    }
+
     [TestMethod]
     public async Task ARestore_OverTheDataAnUninstallKept_NeedsReplace()
     {

@@ -270,8 +270,30 @@ public sealed class InstallerSession
             var resolved = await SetupUserEnrollment.ResolveAsync(Machine, settings, cancellationToken).ConfigureAwait(false);
             Answers = Answers with { Controller = Answers.Controller with { LinuxAuth = resolved } };
         }
-        return await PlanBuilder.Build(Machine, Survey, Answers).CheckAsync(Context, cancellationToken).ConfigureAwait(false);
+        return await PlanBuilder.Build(Machine, Survey, Answers, upgradeBackup: UpgradeBackup()).CheckAsync(Context, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// For an upgrade of the machine's controller on Linux (an older release recorded, and installed, or this release's
+    /// upgrade not finished), the backup of its stores the plan takes first, of the release the upgrade started from; null
+    /// otherwise.
+    /// </summary>
+    public UpgradeBackupStep? UpgradeBackup()
+    {
+        if (Machine.Os != InstallerOs.Linux || !Survey.IsRoot || UpgradeLine() is null || Survey.SystemRecord is not { } record
+            || !InstallRoles.RunsController(record.Roles))
+        {
+            return null;
+        }
+
+        return new UpgradeBackupStep(record.UpgradingFrom ?? record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version), HandedOverBackup);
+    }
+
+    /// <summary>
+    /// The backup the installer before this one took before it replaced itself and handed over (<c>upgrade</c>): its file
+    /// and SHA-256. <see cref="UpgradeBackup"/> then checks it is that backup, in place of taking another.
+    /// </summary>
+    public (string Path, string Sha256)? HandedOverBackup { get; set; }
 
     /// <summary>Installs <paramref name="plan"/>: each step checked again as it comes, and logged.</summary>
     public async Task ApplyAsync(CheckedPlan plan, Action<string>? progress = null, CancellationToken cancellationToken = default)
@@ -291,12 +313,29 @@ public sealed class InstallerSession
 
     // An upgrade, or a reinstall over an older release's data, says its release in each record it writes before its first
     // change, synced to disk: one that stops part way, or loses power, then leaves a record that no installer goes back
-    // from but rollback.
+    // from but rollback. The upgrade's backup comes first (PlanStep.OnlyCopies), so a backup refused leaves the record as
+    // it was; the machine's record then names that backup, made durable first, whichever run took it: a power loss must
+    // not leave a record naming a backup that is not there.
     private static void MarkUpgradeStarted(CheckedPlan plan, InstallContext context)
     {
+        var backup = plan.Steps.Select(step => step.Step).OfType<UpgradeBackupStep>().FirstOrDefault()?.Kept;
+        if (backup is not null)
+        {
+            try
+            {
+                BackupCommands.MakeDurable(context.Machine, backup);
+            }
+            catch (IOException error)
+            {
+                var message = $"Before its first change, the installer could not make sure that the backup {backup} is there after a power loss: {error.Message} Nothing else was changed.";
+                context.Log.Write($"Failed: {message}");
+                throw new InstallerException(message, error);
+            }
+        }
+
         foreach (var record in plan.Steps.Select(step => step.Step).OfType<RecordStep>())
         {
-            record.MarkUpgradeStarted(context);
+            record.MarkUpgradeStarted(context, backup);
         }
     }
 

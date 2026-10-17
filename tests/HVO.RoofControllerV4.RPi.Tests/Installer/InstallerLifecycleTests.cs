@@ -57,7 +57,14 @@ public sealed class InstallerLifecycleTests
         pi.Launches.Should().ContainSingle();
         pi.Launches[0].Path.Should().Be(pi.OnDisk(InstallPaths.SystemInstaller));
         pi.Launches[0].Arguments.Should().Equal("upgrade", "--version", NewVersion);
-        pi.Launches[0].Environment.Should().Equal(new Dictionary<string, string> { [LifecycleCommands.ContinuedVariable] = NewVersion });
+        // With the backup this installer took before it was replaced (#130), which the new one keeps in place of another.
+        var backup = Record(pi).UpgradeBackup!;
+        pi.Launches[0].Environment.Should().Equal(new Dictionary<string, string>
+        {
+            [LifecycleCommands.ContinuedVariable] = NewVersion,
+            [LifecycleCommands.UpgradeBackupVariable] = backup,
+            [LifecycleCommands.UpgradeBackupSha256Variable] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(pi.OnDisk(backup))))
+        });
         pi.Environment.Should().NotContainKey(LifecycleCommands.ContinuedVariable, "only the program it hands over to has it");
         pi.Read(InstallPaths.SystemInstaller).Should().Be(Encoding.UTF8.GetString(FakeMachine.InstallerProgram(NewVersion, "linux-arm64")));
 
@@ -441,9 +448,9 @@ public sealed class InstallerLifecycleTests
         var files = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
         IReadOnlyDictionary<string, string>? atSync = null;
         var deploysAtSync = -1;
-        pi.DuringDirectorySync = _ =>
+        pi.DuringDirectorySync = folder =>
         {
-            if (atSync is null)
+            if (atSync is null && folder == RecordFolder)
             {
                 atSync = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
                 deploysAtSync = pi.Deploys.Count;
@@ -455,8 +462,10 @@ public sealed class InstallerLifecycleTests
         var stopped = await pi.RunAsync("upgrade");
 
         stopped.ExitCode.Should().Be((int)InstallerExitCode.Failed, stopped.ToString());
-        pi.DirectorySyncs.Should().ContainSingle("the run stopped before its last step").Which.Should().Be(RecordFolder);
-        atSync.Should().Equal(files, "nothing but the record changed before its folder was synced");
+        pi.DirectorySyncs.Where(folder => folder == RecordFolder).Should().ContainSingle("the run stopped before its last step");
+        pi.DirectorySyncs.TakeWhile(folder => folder != RecordFolder).Should().Contain(BackupCommands.DefaultFolder, "the stores' backup is made durable first (#130)");
+        WithoutBackups(atSync!).Should().Equal(files, "nothing but the record changed before its folder was synced, but for the stores' backup");
+        atSync!.Keys.Should().Contain(path => path.StartsWith(BackupCommands.DefaultFolder + "/", StringComparison.Ordinal), "the stores are backed up before the mark (#130)");
         deploysAtSync.Should().Be(1, "only the install had deployed the controller");
         durableAtDeploy.Should().NotBeNull();
         InstallRecord.Parse(durableAtDeploy!).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0");
@@ -484,7 +493,10 @@ public sealed class InstallerLifecycleTests
         pi.TrackDurability(InstallPaths.SystemRecord);
         pi.WithRelease(NewVersion, latest: true);
         pi.InstallerVersion = NewVersion;
-        pi.DirectorySyncFailure = "Input/output error";
+
+        // The record's folder alone: the stores' backup (#130) is made durable before it.
+        var failing = true;
+        pi.DuringDirectorySync = folder => pi.DirectorySyncFailure = failing && folder == RecordFolder ? "Input/output error" : null;
         var files = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
 
         foreach (var attempt in new[] { "the first run", "a run with the unsynced mark in place" })
@@ -496,7 +508,7 @@ public sealed class InstallerLifecycleTests
                 .And.Contain("Input/output error")
                 .And.Contain("Nothing else was changed.");
             Record(pi).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0", attempt);
-            pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord).Should().Equal(files, attempt);
+            WithoutBackups(pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord)).Should().Equal(files, attempt);
             pi.Deploys.Should().ContainSingle("only the install deployed the controller");
             pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be("4.0.0");
         }
@@ -505,7 +517,7 @@ public sealed class InstallerLifecycleTests
         pi.PowerLoss();
         Record(pi).Should().Match<InstallRecord>(record => record.Version == "4.0.0" && record.UpgradingFrom == null, "the mark was never synced");
 
-        pi.DirectorySyncFailure = null;
+        failing = false;
         var synced = await pi.RunAsync("upgrade");
 
         synced.ExitCode.Should().Be(0, synced.ToString());
@@ -514,6 +526,11 @@ public sealed class InstallerLifecycleTests
             record => record.Version == NewVersion && record.PreviousVersion == "4.0.0" && record.UpgradingFrom == null);
         pi.Unexpected.Should().BeEmpty();
     }
+
+    // A snapshot without the backups folder: an upgrade backs up the stores (#130) before it marks its record (#131), and
+    // that copy is not a change to what is installed.
+    private static Dictionary<string, string> WithoutBackups(IReadOnlyDictionary<string, string> snapshot)
+        => snapshot.Where(entry => !entry.Key.StartsWith("/var/backups", StringComparison.Ordinal)).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
 
     // The machine's own sync (#131): the folder opened and synced, with fsync on Linux and F_FULLFSYNC on macOS. A folder
     // that cannot be opened is an IOException, which stops the run.
