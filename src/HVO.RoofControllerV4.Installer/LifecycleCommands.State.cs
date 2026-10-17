@@ -99,7 +99,19 @@ internal static partial class LifecycleCommands
 
         if (step.Kept is { } kept)
         {
-            // Read as the release's installer reads it, once: the SHA-256 handed over is of the archive checked here.
+            // Durable before this installer is replaced, whichever run took it; then read as the release's installer reads
+            // it, once: the SHA-256 handed over is of the archive checked here.
+            try
+            {
+                BackupCommands.MakeDurable(session.Machine, kept);
+            }
+            catch (IOException error)
+            {
+                var message = $"Before it hands over, the installer could not make sure that the backup {kept} is there after a power loss: {error.Message} Nothing else was changed.";
+                session.Log.Write($"Failed: {message}");
+                throw new InstallerException(message, error);
+            }
+
             environment[UpgradeBackupVariable] = kept;
             environment[UpgradeBackupSha256Variable] = (await BackupCommands.ReadAsync(session.Machine, kept, cancellationToken).ConfigureAwait(false)).Sha256;
         }

@@ -40,6 +40,9 @@ public sealed class InstallerStateContractTests
 
     private static readonly string IdentityFile = ControllerLayout.System.IdentityFile;
 
+    // The folder of the machine's record, which an upgrade syncs as it marks the record (#134).
+    private static readonly string RecordFolder = Path.GetDirectoryName(InstallPaths.SystemRecord)!;
+
     private const string IdentityBefore = """{"users":[{"name":"before-the-upgrade","role":"RoofAdmin"}],"apiKeys":[]}""";
 
     private const string IdentityOlder = """{"users":[{"name":"in-an-older-backup","role":"RoofAdmin"}],"apiKeys":[]}""";
@@ -246,16 +249,7 @@ public sealed class InstallerStateContractTests
     public async Task AnUpgradeRunAgain_AfterTheControllerWasReplaced_KeepsTheBackupFromBeforeIt()
     {
         using var pi = await UpgradedPiAsync(MovesToTwo);
-
-        // As if the first run stopped after the deploy script replaced the controller, before the record: the new
-        // controller has moved its store on since.
-        var record = JsonNode.Parse(pi.Read(InstallPaths.SystemRecord))!;
-        record["version"] = "4.0.0";
-        record.AsObject().Remove("previousVersion");
-        record.AsObject().Remove("upgradeBackup");
-        pi.Write(InstallPaths.SystemRecord, record.ToJsonString());
-        pi.Write(IdentityFile, IdentityMoved);
-        pi.RunsAt = new FixedClock(FakeMachine.Today.AddMinutes(5));
+        AsIfTheFirstRunStoppedAfterTheController(pi);
 
         var run = await pi.RunAsync("upgrade");
 
@@ -554,6 +548,157 @@ public sealed class InstallerStateContractTests
         Unchanged(pi, before);
         pi.Deploys.Should().HaveCount(deploys, "the controller is not replaced");
         pi.Exists(BackupCommands.DefaultFolder).Should().BeFalse("no backup is kept");
+    }
+
+    // #136 F7: the upgrade's backup is durable (the archive, its folder, and each folder the installer made for it) before
+    // the installer hands over, before the record names it, and before anything installed changes; a sync that fails stops
+    // the upgrade there, with nothing changed.
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AnUpgradesBackup_SurvivesAPowerLoss_AtEachPointBeforeAndAtTheFirstComponentChange(bool releasesOwnInstaller)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        if (releasesOwnInstaller)
+        {
+            pi.InstallerVersion = NewVersion;
+        }
+
+        // The run stops once the controller is replaced: the kiosk's download fails.
+        pi.FileDownloads.Remove(ReleaseManifest.DownloadUri(NewVersion, FakeMachine.KioskAssetName(NewVersion)).ToString());
+        pi.TrackFolderDurability("/var/backups").TrackFolderDurability(BackupCommands.DefaultFolder).TrackDurability(Backup).TrackDurability(InstallPaths.SystemRecord);
+        var points = new List<string>();
+        void At(string point) => points.Add($"{point}: {(pi.Exists(Backup) && pi.SurvivesPowerLoss(Backup) ? "survives" : "lost")}");
+        pi.Launch = (path, arguments, environment) =>
+        {
+            At("hand-over");
+            return pi.RunInstallerAsync(path, arguments, environment);
+        };
+        pi.DuringDirectorySync = folder =>
+        {
+            if (folder == RecordFolder && !points.Any(point => point.StartsWith("mark", StringComparison.Ordinal)))
+            {
+                At("mark");
+            }
+        };
+        pi.DuringDeploy = () =>
+        {
+            if (!points.Any(point => point.StartsWith("deploy", StringComparison.Ordinal)))
+            {
+                At("deploy");
+            }
+        };
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        points.Should().Equal(releasesOwnInstaller ? ["mark: survives", "deploy: survives"] : ["hand-over: survives", "mark: survives", "deploy: survives"]);
+        pi.Containers[MachineSurveyor.ControllerContainer].Version.Should().Be(NewVersion, "the controller was replaced before the run stopped");
+
+        pi.PowerLoss();
+
+        Record(pi).Should().Match<InstallRecord>(record => record.Version == NewVersion && record.UpgradingFrom == "4.0.0" && record.UpgradeBackup == Backup);
+        (await BackupCommands.ReadAsync(pi.Machine, Backup, CancellationToken.None)).Manifest.RecordVersion.Should().Be("4.0.0", "the backup the record names is there");
+    }
+
+    [TestMethod]
+    [DataRow("/var", "4.0.0")]
+    [DataRow("/var", NewVersion)]
+    [DataRow("/var/backups", "4.0.0")]
+    [DataRow("/var/backups", NewVersion)]
+    [DataRow(BackupCommands.DefaultFolder, "4.0.0")]
+    [DataRow(BackupCommands.DefaultFolder, NewVersion)]
+    [DataRow("the archive", "4.0.0")]
+    [DataRow("the archive", NewVersion)]
+    public async Task AnUpgradesBackup_ThatCannotBeMadeDurable_StopsTheUpgrade_WithNothingChanged(string failing, string installer)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.WithRelease(NewVersion, latest: true, stateContract: SchemaOne);
+        pi.InstallerVersion = installer;
+        if (failing is BackupCommands.DefaultFolder or "the archive")
+        {
+            // The backups' folder there already: the archive's own syncs are the ones that fail.
+            pi.Folder("/var/backups");
+            File.SetUnixFileMode(pi.OnDisk("/var/backups"), Modes.Folder);
+            pi.Folder(BackupCommands.DefaultFolder);
+            File.SetUnixFileMode(pi.OnDisk(BackupCommands.DefaultFolder), Modes.PrivateFolder);
+        }
+
+        var deploys = pi.Deploys.Count;
+        var before = State(pi);
+        if (failing == "the archive")
+        {
+            pi.DuringFileSync = path => pi.FileSyncFailure = path.EndsWith(".partial", StringComparison.Ordinal) ? "Input/output error" : null;
+        }
+        else
+        {
+            pi.DuringDirectorySync = folder => pi.DirectorySyncFailure = folder == failing ? "Input/output error" : null;
+        }
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain($"Could not sync the {(failing == "the archive" ? "file" : "folder")} ").And.Contain("Input/output error");
+        Unchanged(pi, before);
+        pi.Launches.Should().BeEmpty("the installer is not replaced");
+        pi.Deploys.Should().HaveCount(deploys, "the controller is not replaced");
+    }
+
+    [TestMethod]
+    public async Task ABackupAnEarlierRunKept_IsMadeDurable_BeforeTheRecordNamesIt()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        AsIfTheFirstRunStoppedAfterTheController(pi);
+
+        // Written by that run, but, for all this one knows, never made durable.
+        pi.TrackFolderDurability("/var/backups", durableNow: false).TrackFolderDurability(BackupCommands.DefaultFolder, durableNow: false).TrackDurabilityFromNothing(Backup);
+        bool? atMark = null;
+        pi.DuringDirectorySync = folder =>
+        {
+            if (folder == RecordFolder)
+            {
+                atMark ??= pi.SurvivesPowerLoss(Backup);
+            }
+        };
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        run.Output.Should().Contain($"taken before an earlier run of this upgrade: {Backup}");
+        atMark.Should().BeTrue("the backup is made durable before the record says the upgrade started, naming it");
+    }
+
+    [TestMethod]
+    public async Task ABackupAnEarlierRunKept_ThatCannotBeMadeDurable_StopsTheUpgradeBeforeTheMark()
+    {
+        using var pi = await UpgradedPiAsync(MovesToTwo);
+        AsIfTheFirstRunStoppedAfterTheController(pi);
+        var deploys = pi.Deploys.Count;
+        var before = State(pi);
+        pi.DuringDirectorySync = folder => pi.DirectorySyncFailure = folder == BackupCommands.DefaultFolder ? "Input/output error" : null;
+
+        var run = await pi.RunAsync("upgrade");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Failed, run.ToString());
+        run.Error.Should().Contain($"Before its first change, the installer could not make sure that the backup {Backup} is there after a power loss")
+            .And.Contain("Nothing else was changed.");
+        Unchanged(pi, before);
+        pi.Deploys.Should().HaveCount(deploys);
+    }
+
+    // As if the first run of the upgrade stopped after the deploy script replaced the controller, before the record: the
+    // new controller has moved its store on since. The next run keeps the backup from before it.
+    private static void AsIfTheFirstRunStoppedAfterTheController(FakeMachine pi)
+    {
+        var record = JsonNode.Parse(pi.Read(InstallPaths.SystemRecord))!;
+        record["version"] = "4.0.0";
+        record.AsObject().Remove("previousVersion");
+        record.AsObject().Remove("upgradeBackup");
+        pi.Write(InstallPaths.SystemRecord, record.ToJsonString());
+        pi.Write(IdentityFile, IdentityMoved);
+        pi.RunsAt = new FixedClock(FakeMachine.Today.AddMinutes(5));
     }
 
     // #136 F5: a store is put back only once Docker says both controller containers are stopped or not there (the one

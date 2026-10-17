@@ -113,7 +113,8 @@ internal static class BackupCommands
     /// <summary>
     /// Writes a backup to <paramref name="output"/> (a new file in <see cref="DefaultFolder"/> when null), and says what it
     /// holds: paths and counts, nothing from the files. It goes to a file beside the backup first, made 0600, renamed to
-    /// the backup once it is whole; a backup that fails leaves nothing.
+    /// the backup once it is whole, and made durable (the archive, then its folder, synced) before it returns; a backup that
+    /// fails leaves nothing.
     /// </summary>
     internal static async Task<string> WriteAsync(InstallerHost host, InstallerSession session, string? output, CancellationToken cancellationToken)
     {
@@ -225,8 +226,10 @@ internal static class BackupCommands
             }
 
             await ReadBackAsync(machine, partial, path, cancellationToken).ConfigureAwait(false);
+            // Durable before anything relies on it (an upgrade's record names it, a purge removes what it holds): the archive
+            // synced, renamed, then its folder synced. One whose new name cannot be made durable is taken away again.
             machine.SetMode(partial, Modes.PrivateFile);
-            machine.MoveFile(partial, path, overwrite: false);
+            machine.MoveFileDurably(partial, path);
         }
         finally
         {
@@ -450,7 +453,8 @@ internal static class BackupCommands
     }
 
     /// <summary>
-    /// Makes <see cref="DefaultFolder"/>, only root's, when it is not there (its parents 0755, root's); refuses one that is
+    /// Makes <see cref="DefaultFolder"/>, only root's, when it is not there (its parents 0755, root's), durably: each folder
+    /// made is synced, and the folder above it (<see cref="InstallerMachine.CreateDirectoryDurably"/>). Refuses one that is
     /// there but not trusted (<see cref="FolderProblemAsync"/>), and never repairs it: a folder someone else could change
     /// may hold their archive already.
     /// </summary>
@@ -464,10 +468,32 @@ internal static class BackupCommands
 
         if (!machine.DirectoryExists(DefaultFolder))
         {
-            machine.CreateDirectory(DefaultFolder, Modes.PrivateFolder);
+            machine.CreateDirectoryDurably(DefaultFolder, Modes.PrivateFolder);
             if (await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } made)
             {
                 throw new InstallerRefusedException($"{made}. Nothing was written.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Makes the backup at <paramref name="backup"/> durable before anything relies on it: the archive synced, then its
+    /// folder, and, for one in <see cref="DefaultFolder"/>, the folders above it whose entries the installer may have made
+    /// (<c>/var/backups</c>, then <c>/var</c>). What an upgrade does with the backup it keeps before it hands over and
+    /// before its record names it: the one it wrote is durable already, but one an earlier run kept, or the installer
+    /// before this one took, may not be. Throws an <see cref="IOException"/> when a sync fails.
+    /// </summary>
+    internal static void MakeDurable(InstallerMachine machine, string backup)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        machine.SyncFile(backup);
+        var folder = Path.GetDirectoryName(backup)!;
+        machine.SyncDirectory(folder);
+        if (folder == DefaultFolder)
+        {
+            for (var above = Path.GetDirectoryName(DefaultFolder)!; above != "/"; above = Path.GetDirectoryName(above)!)
+            {
+                machine.SyncDirectory(above);
             }
         }
     }

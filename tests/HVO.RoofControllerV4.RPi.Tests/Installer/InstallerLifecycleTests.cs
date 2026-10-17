@@ -448,9 +448,9 @@ public sealed class InstallerLifecycleTests
         var files = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
         IReadOnlyDictionary<string, string>? atSync = null;
         var deploysAtSync = -1;
-        pi.DuringDirectorySync = _ =>
+        pi.DuringDirectorySync = folder =>
         {
-            if (atSync is null)
+            if (atSync is null && folder == RecordFolder)
             {
                 atSync = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
                 deploysAtSync = pi.Deploys.Count;
@@ -462,7 +462,8 @@ public sealed class InstallerLifecycleTests
         var stopped = await pi.RunAsync("upgrade");
 
         stopped.ExitCode.Should().Be((int)InstallerExitCode.Failed, stopped.ToString());
-        pi.DirectorySyncs.Should().ContainSingle("the run stopped before its last step").Which.Should().Be(RecordFolder);
+        pi.DirectorySyncs.Where(folder => folder == RecordFolder).Should().ContainSingle("the run stopped before its last step");
+        pi.DirectorySyncs.TakeWhile(folder => folder != RecordFolder).Should().Contain(BackupCommands.DefaultFolder, "the stores' backup is made durable first (#130)");
         WithoutBackups(atSync!).Should().Equal(files, "nothing but the record changed before its folder was synced, but for the stores' backup");
         atSync!.Keys.Should().Contain(path => path.StartsWith(BackupCommands.DefaultFolder + "/", StringComparison.Ordinal), "the stores are backed up before the mark (#130)");
         deploysAtSync.Should().Be(1, "only the install had deployed the controller");
@@ -492,7 +493,10 @@ public sealed class InstallerLifecycleTests
         pi.TrackDurability(InstallPaths.SystemRecord);
         pi.WithRelease(NewVersion, latest: true);
         pi.InstallerVersion = NewVersion;
-        pi.DirectorySyncFailure = "Input/output error";
+
+        // The record's folder alone: the stores' backup (#130) is made durable before it.
+        var failing = true;
+        pi.DuringDirectorySync = folder => pi.DirectorySyncFailure = failing && folder == RecordFolder ? "Input/output error" : null;
         var files = pi.Snapshot(InstallPaths.SystemLog, InstallPaths.SystemRecord);
 
         foreach (var attempt in new[] { "the first run", "a run with the unsynced mark in place" })
@@ -513,7 +517,7 @@ public sealed class InstallerLifecycleTests
         pi.PowerLoss();
         Record(pi).Should().Match<InstallRecord>(record => record.Version == "4.0.0" && record.UpgradingFrom == null, "the mark was never synced");
 
-        pi.DirectorySyncFailure = null;
+        failing = false;
         var synced = await pi.RunAsync("upgrade");
 
         synced.ExitCode.Should().Be(0, synced.ToString());

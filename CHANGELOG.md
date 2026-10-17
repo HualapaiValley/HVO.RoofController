@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (exit 3) with nothing changed. Through an installer from 4.1.1 or earlier, which replaces itself before the new one
   takes the backup, the new installer stays in place and nothing else changes. The upgrade marks its record
   (`upgradingFrom`, #131) only once the backup is taken, and the mark names it, so a refused backup leaves the record
-  as it was. A backup's manifest names the stores' files that were not there (`absent`). Backups are written to and
+  as it was. The backup is on disk (the archive synced, then its folder and each folder made for it) before the
+  installer hands over, the record names it, or anything installed changes; a sync that fails stops the upgrade
+  (exit 1), the archive taken away again. A backup's manifest names the stores' files that were not there (`absent`). Backups are written to and
   read from `/var/backups/hvo-roof` only while it, and each folder above it, is root's alone and not a link: one that
   is not is refused (exit 3), never repaired (#130).
 - `rollback --restore-backup [FILE] [--yes]`: across a breaking state change, puts back from that backup the stores the

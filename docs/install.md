@@ -1077,9 +1077,11 @@ Each installer installs its own release, so the installer hands over to the new 
    when the new release makes a breaking state change, after which the release installed cannot read a store.
 3. As root on Linux, it backs up the controller's stores, as `backup` backs them up, to
    `/var/backups/hvo-roof/hvo-roof-<host>-<UTC time>-before-<version>.tar.gz` (root's, `0600`), in a folder only root
-   can change ([Backing up and restoring](#backing-up-and-restoring)). Handing over from the release after 4.1.1 on, a
-   backup that cannot be taken refuses the upgrade (exit 3) with nothing changed: the installer has not replaced
-   itself yet. An installer from 4.1.1 or earlier takes no backup: it replaces itself first (step 4), and the new
+   can change ([Backing up and restoring](#backing-up-and-restoring)). The backup is on disk before anything relies on
+   it: the archive is synced, then its folder, and each folder the installer made for it through the folder above it
+   ([Durability](#durability)). Handing over from the release after 4.1.1 on, a backup that cannot be taken refuses the
+   upgrade (exit 3) with nothing changed, and one that cannot be synced stops it (exit 1), the archive and any folder
+   made for it taken away again: the installer has not replaced itself yet. An installer from 4.1.1 or earlier takes no backup: it replaces itself first (step 4), and the new
    installer takes the backup as the first step of its install. On that path a backup that cannot be taken still
    refuses the upgrade (exit 3) before anything else changes, the record included, but the new release's installer
    stays in place, with the one before kept as `hvo-roof-install.previous`; once the cause is put right,
@@ -1097,10 +1099,11 @@ Each installer installs its own release, so the installer hands over to the new 
      upgrade before anything changes. An installer from before state contracts hands over none, and the new one takes
      the backup itself, first: one that cannot be taken stops the upgrade there (exit 3), the record and everything
      else as they were;
-   - then, before its first other change, it writes the record to say the new release already, with the one before it
-     (`previousVersion`) for a rollback, the backup (`upgradeBackup`), and `upgradingFrom`, which says the upgrade has
-     not finished. It syncs the record's folder to disk, so that a power loss does not take the record back; when that
-     fails, the upgrade stops there (exit 1), with nothing else changed;
+   - then, before its first other change, it makes sure the backup is on disk (whichever run took it), then writes the
+     record to say the new release already, with the one before it (`previousVersion`) for a rollback, the backup
+     (`upgradeBackup`), and `upgradingFrom`, which says the upgrade has not finished. It syncs the record's folder to
+     disk, so that a power loss does not take the record back, nor leave it naming a backup that is not there; when a
+     sync fails, the upgrade stops there (exit 1), with nothing else changed;
    - the controller, through the deploy script: a verified Stop of the roof, which must be idle, then the new
      controller, checked before the old one is let go and kept as `roof-controller-previous`;
    - a rig's HAT emulator, from the new release;
@@ -1200,6 +1203,23 @@ without sudo, which may not read the files, leaves them to the run as root ("whi
 - **`rollback`** refuses (exit 3, nothing changed) to go back to a release that cannot read a store as it is here, and
   says how to go on: [Rolling back](#rolling-back).
 
+### Durability
+
+What a later step relies on after a power loss is on disk before that step runs. Each file is synced (`fsync`; on a
+Mac `F_FULLFSYNC`, never `fsync` in its place) before the folder entry that names it, then the folder is synced after
+the rename or removal; each folder the installer makes is synced through the folder above it. When a sync fails, the
+run stops there (exit 1) and goes no further.
+
+| What | On disk before |
+|---|---|
+| The install record, and an upgrade's mark (`upgradingFrom`) | the upgrade's first change after the mark, and the end of the run |
+| An upgrade's backup: the archive, `/var/backups/hvo-roof`, and `/var/backups` when the installer made it | the installer hands over, the record names it, and anything installed changes |
+| `backup`'s archive, `uninstall --purge --backup`'s too | `backup` says it is done, and the purge removes anything |
+
+The rest of an install or upgrade (the controller's settings, keys and certificate, the programs) is written in one
+step each, but not synced: a power loss can bring back a file's earlier content, never part of one, and running the
+installer again puts it right, as after a step that failed.
+
 ## Rolling back
 
 `sudo hvo-roof-install rollback` goes back to the release installed before the last upgrade, the record's
@@ -1287,7 +1307,8 @@ before it changes anything: [State contracts](#state-contracts)):
 - `/etc/hvo-roof-kiosk` and `/opt/hvo-roof-kiosk/appsettings.Local.json`: the kiosk's device key and settings.
 
 The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,
-written whole or not at all. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
+written whole or not at all, and on disk (synced, with its folder and any folder made for it) before the backup says it
+is done. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
 SHA-256, the host and the release, and the files of the controller's stores that were not there (`absent`). `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
 only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs
 up or a purge removes, `/opt/hvo-roof-kiosk` included. Before it keeps the archive, it reads it back as a restore
