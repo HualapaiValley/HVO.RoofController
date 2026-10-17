@@ -631,6 +631,31 @@ test_the_web_uis_own_certificate_gets_its_own_password_file() {
   [[ ! -e "${WORK}/run/web/certificate-password" ]] || fail_test "a password copy is left from the first start"
 }
 
+test_the_web_uis_preparation_writes_its_files_private() {
+  # The web UI's environment file is root's alone (0600), and its copies its own (0400): the preparation is a new bash,
+  # to which the script's umask 022 must not apply (#139 review F7). A file left with a wider mode is replaced, not
+  # written into.
+  printf 'certificate bytes' >"${WORK}/certificate.pfx"
+  printf 'certificate-password-value' >"${WORK}/secrets/Kestrel__Certificates__Default__Password"
+  printf 'stop-key-value-for-the-web-ui' >"${WORK}/secrets/RoofControllerSecurity__ApiKeys__3__Key"
+  start_supervisor RoofWeb__Urls=https://+:8088 "Kestrel__Certificates__Default__Path=${WORK}/certificate.pfx" \
+    "RoofWeb__StopKeyFile=${WORK}/secrets/RoofControllerSecurity__ApiKeys__3__Key"
+  wait_both_running || return
+  expect_equal "the web UI's environment file" "$(stat -c '%a %U' "${WORK}/run/web-settings")" "600 $(id -un)"
+  # Every file the preparation writes under the run directory.
+  expect_equal "the preparation's files" \
+    "$(cd "${WORK}/run" && find web-settings web -type f -printf '%m %p\n' | sort | paste -sd ',')" \
+    "400 web/certificate-password,400 web/certificate.pfx,400 web/stop-key,600 web-settings"
+
+  # The file widened meanwhile: the next preparation (the web UI started again) makes it 0600 again.
+  chmod 0644 "${WORK}/run/web-settings"
+  kill -KILL "$(pid_of ui)"
+  wait_until 4 "the web UI started again" started ui 2 || return
+  expect_equal "the web UI's environment file, prepared again" "$(stat -c '%a %U' "${WORK}/run/web-settings")" \
+    "600 $(id -un)"
+  ui_env | grep -q '^RoofWeb__StopKeyFile=' || fail_test "the web UI started again without its prepared environment"
+}
+
 test_the_web_ui_gets_a_private_copy_of_its_stop_key() {
   # The Stop key is a Viewer key the controller reads from the secrets directory; the web UI cannot read that directory.
   local key="${WORK}/secrets/RoofControllerSecurity__ApiKeys__3__Key"

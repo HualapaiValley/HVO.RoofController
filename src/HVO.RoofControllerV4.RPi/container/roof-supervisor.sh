@@ -85,7 +85,8 @@
 # (atomically, except at the container's process limit: write_state) at each change.
 
 set -uo pipefail
-# The state file is readable by all (write_state), without a chmod, which would fork.
+# The state file is readable by all (write_state), without a chmod, which would fork. (The web UI's preparation, a new
+# bash, sets its own: owner-only.)
 umask 022
 
 readonly RESTART_EXIT_CODE=75
@@ -1245,7 +1246,13 @@ on_exit() {
 # The web UI's preparation (start_ui runs this script with --prepare-ui, as a process of its own): writes the web UI's
 # environment, with its copies and its keys directory, and ends.
 if [[ "${1:-}" == --prepare-ui ]]; then
+  # Owner-only (#139 review F7): this is a new bash, to which the script's umask 022 above would apply. The web UI's
+  # environment file is root's, mode 0600: one left by an earlier preparation is removed, and the new one created with
+  # noclobber (O_EXCL), so it is never readable by others, even for a moment, nor written through a link.
+  umask 077
   check_secrets_are_private
+  rm -f "${UI_SETTINGS_FILE}" || exit 1
+  set -o noclobber
   ui_environment >"${UI_SETTINGS_FILE}" || exit 1
   exit 0
 fi
