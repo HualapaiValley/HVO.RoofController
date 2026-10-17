@@ -12,8 +12,9 @@
 #              UI saying why, a forced restart through the web UI's control file, and the web UI killed while the roof
 #              moves (C11 steps 6-9); a kill during travel with a settings file the controller refuses, so its starts
 #              fail until the supervisor leaves it stopped, the relays off throughout (C11 10-11); docker stop with the
-#              controller hung during travel (C11 12); the kernel's order at the memory limit (C11 13); the supervisor
-#              itself killed during travel (C11); and the web UI's user, environment and keys directory.
+#              controller hung during travel (C11 12); the processes' OOM preference (C11 13); relays that cannot be
+#              verified off holding the controller stopped until they are (C11 14); the supervisor itself killed during
+#              travel (C11); and the web UI's user, environment and keys directory.
 #   c12        commissioning.md C12 with deploy-roofcontroller-rpi.sh: an idle deploy, a deploy while the roof moves,
 #              pre-flight failures, a remote-check failure that rolls back, --rollback twice, a Stop that cannot be
 #              verified, a new controller that never becomes ready, a new web UI that cannot start, and the relays off
@@ -1271,6 +1272,49 @@ scenario_supervisor() {
   (( score_supervisor < score_controller && score_controller < score_ui )) \
     || fail "oom_score: supervisor ${score_supervisor}, controller ${score_controller}, web UI ${score_ui}; the supervisor must be the lowest and the web UI the highest"
   pass "oom_score_adj: supervisor ${adj_supervisor}, controller ${adj_controller}, web UI ${adj_ui}; oom_score: supervisor ${score_supervisor} < controller ${score_controller} < web UI ${score_ui} at that moment (a snapshot: memory use counts too), so the kernel favours ending the web UI, then the controller, before the supervisor"
+
+  # CommissioningCheck("C11", "14")
+  current_check="Supervisor: relays that cannot be verified off hold the controller stopped until they are (C11 14)"
+  # The owner's decision (#138): "if the relays cannot be verified off, the controller stays stopped." The emulated HAT
+  # fails every relay write, so no relay-off can verify the relays off after the controller is killed during travel.
+  local held_health
+  close_roof
+  starts=$(supervised_value '.controller.starts')
+  start_travel Open
+  start=$(now)
+  emulator_post bus '{"failWrites": true}'
+  kill_supervised controller
+  wait_for "the supervisor to hold the controller stopped" 30 supervised_is '.controller.state == "relays-unverified"'
+  # It stays held while the tries go on (1, 2, 4 s ...), and never starts the controller.
+  sleep 8
+  supervised_is ".controller.state == \"relays-unverified\" and .controller.starts == ${starts} and .relays.state == \"unverified\"" \
+    || fail "the controller was started, or the hold not reported, with the relays not verified off: $(supervisor_state)"
+  plant_is '.relayRegister != 0' || fail "the relays are off although every relay write fails: $(plant)"
+  container_log_has "${controller}" '[supervisor] WARNING: the controller is HELD STOPPED: the relays could not be verified off' "${start}" \
+    || fail "the hold is not logged as a warning"
+  container_log_has "${controller}" '(trying again: the controller is held stopped until the relays are verified off)' "${start}" \
+    || fail "the tries while held are not logged"
+  held_health=$(docker exec "${controller}" /usr/local/bin/roof-healthcheck) && fail "the health check passes with the controller held: ${held_health}"
+  grep -qF 'supervisor: controller relays-unverified, web UI running' <<<"${held_health}" \
+    || fail "the health check does not report the hold: ${held_health}"
+  wait_for "the web UI to say the controller is held stopped" 15 \
+    web_page_has 'The controller is held stopped: the relays cannot be verified off'
+  # The HAT takes writes again: the next try verifies the relays off, and only then does the controller start.
+  emulator_post bus '{"failWrites": false}'
+  wait_for "the relays verified off" 60 plant_is '.relayRegister == 0'
+  wait_for "the controller started once the relays were verified off" 60 \
+    supervised_is ".controller.state == \"running\" and .controller.starts == $((starts + 1))"
+  local verified_line started_line
+  verified_line=$(supervisor_log_line '[supervisor] The relays are verified off: starting the controller, held stopped until now' "${start}")
+  started_line=$(supervisor_log_line ", start $((starts + 1)))" "${start}")
+  if [[ -z "${verified_line}" || -z "${started_line}" ]] || (( verified_line > started_line )); then
+    fail "the controller did not start only after the relays were verified off (lines ${verified_line:-none}, ${started_line:-none})"
+  fi
+  wait_for "the controller ready" 120 controller_ready
+  wait_for "the controller initialized" 60 roof_is '.isInitialized'
+  assert_relays_off
+  close_roof
+  pass "with relay writes failing after a kill during travel, the supervisor held the controller stopped (state relays-unverified, the health check failing, the web UI saying why) and kept trying; once writes worked it verified the relays off and only then started the controller"
 
   # CommissioningCheck("C11")
   current_check="Supervisor: the supervisor itself killed during travel"
