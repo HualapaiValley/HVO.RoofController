@@ -219,10 +219,12 @@ cat > "${WORK}/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
 [[ $# -eq 5 && "$1 $2 $3 $4" == "buildx imagetools inspect --raw" ]] || { echo "unexpected docker $*" >&2; exit 64; }
 [[ -z "${FAKE_DOCKER_CALLED:-}" ]] || touch "${FAKE_DOCKER_CALLED}"
+[[ -z "${FAKE_DOCKER_LOG:-}" ]] || printf '%s\n' "$5" >> "${FAKE_DOCKER_LOG}"
 [[ -z "${FAKE_DOCKER_FAIL:-}" ]] || { echo "${FAKE_DOCKER_FAIL}" >&2; exit 1; }
 case "$5" in
   */sdk:*) cat "${FAKE_SDK_INDEX}" ;;
-  *) cat "${FAKE_RUNTIME_INDEX}" ;;
+  */aspnet:*) cat "${FAKE_RUNTIME_INDEX}" ;;
+  *) cat "${FAKE_OTHER_INDEX:-${FAKE_RUNTIME_INDEX}}" ;;
 esac
 FAKE
 chmod +x "${WORK}/bin/docker"
@@ -262,6 +264,31 @@ check "a build image index without arm64" 1 "${RPI}:2: ${SDK_REF} is not an inde
   registry "${amd64}" "${all}"
 check "a registry that cannot be read" 1 "${SDK_REF} could not be read from its registry: unauthorized" \
   registry "${all}" "${all}" unauthorized
+# All external bases, in both files, are inspected once; only earlier stage aliases and scratch are exempt.
+TOOLS_REF="example/tools:1@$(digest tools)"
+r=$(repo third-base)
+printf 'FROM %s AS tools\n' "${TOOLS_REF}" >> "${r}/${RPI}"
+check "third external single-platform base" 1 "${RPI}:7: ${TOOLS_REF} is not an index holding linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_OTHER_INDEX="${single}" \
+  "${SCRIPT}" --registry "${r}"
+r=$(repo emulator-third-base)
+printf 'FROM %s AS tools\n' "${TOOLS_REF}" >> "${r}/${EMULATOR}"
+check "additional emulator base is inspected" 1 "${EMULATOR}:7: ${TOOLS_REF} is not an index holding linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_OTHER_INDEX="${single}" \
+  "${SCRIPT}" --registry "${r}"
+r=$(repo deduplicated-bases)
+printf 'FROM %s AS tools\nFROM %s AS moretools\n' "${TOOLS_REF}" "${TOOLS_REF}" >> "${r}/${RPI}"
+printf 'FROM %s AS tools\n' "${TOOLS_REF}" >> "${r}/${EMULATOR}"
+check "third external index accepted" 0 "${TOOLS_REF}: an index holding linux/amd64 linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_OTHER_INDEX="${all}" \
+  FAKE_DOCKER_LOG="${WORK}/registry-calls" "${SCRIPT}" --registry "${r}"
+check "each unique external base inspected once" 0 "" test "$(wc -l < "${WORK}/registry-calls")" -eq 3
+r=$(repo case-insensitive-stages)
+printf 'FROM RUNTIME AS Another\nFROM aNoThEr AS final-again\nFROM scratch AS Empty\nFROM EMPTY AS empty-again\n' >> "${r}/${RPI}"
+check "earlier stage names match case-insensitively" 0 "${RUNTIME_REF}: an index holding linux/amd64 linux/arm64" \
+  env PATH="${WORK}/bin:${PATH}" FAKE_SDK_INDEX="${all}" FAKE_RUNTIME_INDEX="${all}" FAKE_OTHER_INDEX="${single}" \
+  "${SCRIPT}" --registry "${r}"
+
 # The registry is read only when the files are right.
 check "files checked first" 1 "${RPI}:4: FROM ${RUNTIME}:10.0.13 is not pinned" \
   env PATH="${WORK}/bin:${PATH}" FAKE_DOCKER_CALLED="${WORK}/called" "${SCRIPT}" --registry "${WORK}/two-problems"

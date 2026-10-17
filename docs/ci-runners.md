@@ -33,14 +33,16 @@ asks for this.
 [`build/check-base-images.sh`](../build/check-base-images.sh), which `pi-image.yml` and
 `emulator-image.yml` run with `--registry`, checks that:
 
-- every external `FROM` has a literal tag and a digest;
+- every external `FROM` has a literal tag and a digest, exempting only `scratch` and
+  references to earlier named stages in the same file (matched without regard to case);
 - bases are extracted from logical instructions, joining continuations with the initial
   `# escape=` directive (backslash or backtick), ignoring full comment and empty continuation
   lines, and keeping heredoc bodies out of the instruction stream;
 - the SDK's tag is the SDK `src/global.json` pins;
 - both Dockerfiles use the same SDK image and the same runtime image, tag and digest;
-- with `--registry`, each digest is an index holding `linux/amd64` and `linux/arm64`, not one
-  platform's image.
+- with `--registry`, every distinct external reference across both files is inspected once,
+  including bases beyond the required SDK and runtime; each digest must be an index holding
+  `linux/amd64` and `linux/arm64`, not one platform's image.
 
 The checker needs Python 3 and jq (plus Docker Buildx for `--registry`). It accepts the standard
 Dockerfile frontend, with no syntax directive or `# syntax=docker/dockerfile:1`, and matches

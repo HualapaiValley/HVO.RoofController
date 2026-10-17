@@ -203,6 +203,9 @@ fi
 pinned='^([^@[:space:]]+):([A-Za-z0-9_][A-Za-z0-9_.-]{0,127})@sha256:[0-9a-f]{64}$'
 # The first build and runtime image seen, and where: the others must be the same.
 sdk_ref="" sdk_file="" sdk_line="" runtime_ref="" runtime_file="" runtime_line=""
+# Retain the first source location of every distinct external base, not just the two required .NET images.
+external_refs=() external_files=() external_lines=()
+external_seen=" "
 
 for dockerfile in "${DOCKERFILES[@]}"; do
   if [[ ! -f "${root}/${dockerfile}" ]]; then
@@ -217,7 +220,12 @@ for dockerfile in "${DOCKERFILES[@]}"; do
   while IFS=$'\t' read -r number ref stage; do
     [[ -n "${number}" ]] || continue
     # An earlier stage of this Dockerfile, or scratch, is not a base image to pin.
-    if [[ -n "${ref}" && "${stages}" != *" ${ref} "* ]]; then
+    folded_ref=$(printf '%s' "${ref}" | tr '[:upper:]' '[:lower:]')
+    if [[ -n "${ref}" && "${stages}" != *" ${folded_ref} "* ]]; then
+      if [[ "${external_seen}" != *" ${ref} "* ]]; then
+        external_refs+=("${ref}") external_files+=("${dockerfile}") external_lines+=("${number}")
+        external_seen+="${ref} "
+      fi
       image=${ref%%@*}
       [[ "${image##*/}" != *:* ]] || image=${image%:*}
       [[ "${image}" != "${SDK}" ]] || sdk_seen=1
@@ -242,7 +250,7 @@ for dockerfile in "${DOCKERFILES[@]}"; do
         fi
       fi
     fi
-    [[ -z "${stage}" ]] || stages+="${stage} "
+    [[ -z "${stage}" ]] || stages+="$(printf '%s' "${stage}" | tr '[:upper:]' '[:lower:]') "
   done <<<"${records}"
   [[ ${sdk_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${SDK} line."
   [[ ${runtime_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${RUNTIME} line."
@@ -251,12 +259,8 @@ done
 # Each digest must be the tag's index, not one platform's image: a single-platform image would be used for every
 # platform built.
 if [[ ${errors} -eq 0 && ${registry} -eq 1 ]]; then
-  for which in sdk runtime; do
-    if [[ "${which}" == sdk ]]; then
-      ref=${sdk_ref} file=${sdk_file} line=${sdk_line}
-    else
-      ref=${runtime_ref} file=${runtime_file} line=${runtime_line}
-    fi
+  for ((i = 0; i < ${#external_refs[@]}; i++)); do
+    ref=${external_refs[i]} file=${external_files[i]} line=${external_lines[i]}
     if ! raw=$(docker buildx imagetools inspect --raw "${ref}" 2>&1); then
       problem "${file}" "${line}" "${ref} could not be read from its registry: ${raw}"
       continue
