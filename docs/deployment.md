@@ -895,7 +895,7 @@ both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals t
 | The relays cannot be verified off (at the first start, before a restart, after a crash, on a forced restart) | Does not start the controller: holds it stopped (`relays-unverified`) and tries the relays again after 1, 2, 4, 8, 16 and then every 30 s, for as long as it takes, and starts it once a read-back shows every relay off ([below](#the-relays-when-the-controller-exits)). The web UI keeps running and says why; the health check fails. |
 | The controller exits otherwise (a crash, a kill, a failed start) | Turns the relays off at once, then starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`), once the relays are verified off. The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`), with the relays off, instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
 | The web UI exits | Starts only the web UI again, with the same backoff, and never gives up. The controller is not touched. |
-| Before each start of the web UI | Prepares it ([below](#the-web-uis-user-and-settings): its copies of the certificate and the Stop key, its keys directory, and the check that it cannot read the secrets) in a process of its own, in the background, which must finish within 10 s (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`) or is killed and run again later, with the backoff. The web UI is `starting` meanwhile, and starts once the preparation has finished, unless a stop has been asked for. Nothing the preparation waits for (a slow or hung filesystem) holds up the supervisor: a controller that exits meanwhile has its relays turned off at once. |
+| Before each start of the web UI | Prepares it ([below](#the-web-uis-user-and-settings): its copies of the certificate and the Stop key, its keys directory, the check that it cannot read the secrets, and its whole environment) in a process of its own, in the background, which must finish within 10 s (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`) or is killed and run again later, with the backoff. The web UI is `starting` meanwhile, and starts once the preparation has finished, unless a stop has been asked for. Nothing the preparation waits for (a slow or hung filesystem, a stalled environment) holds up the supervisor: a controller that exits meanwhile has its relays turned off at once. The last thing the supervisor does before it starts the web UI or the controller is to check for a stop, with nothing that can wait in between, and the new process checks again before it becomes either; the new web UI process reads its environment itself. |
 | A forced restart (`/run/hvo-roof/control/force-restart-controller` appears) | Kills the controller (SIGKILL), turns the relays off and starts it again at once, once they are verified off, even from `crash-loop` (otherwise it holds it stopped). Earlier crashes stop counting. A request within 10 s of the controller's start (`HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS`) is ignored, so repeated requests cannot kill a controller that is still starting. |
 
 The container's own restart policy (`unless-stopped`) now applies only when the supervisor itself exits: on
@@ -1095,9 +1095,10 @@ root can write) of the certificate it serves and of that certificate's password:
 It takes them again at each start of the web UI, so a renewed certificate is used after a restart of the web UI or the
 container.
 
-The supervisor prepares all of this (the copies, the keys directory below, and the check of the secrets directory) before
-each start of the web UI, in a process of its own (`roof-supervisor --prepare-ui`) that runs in the background and must
-finish within `HVO_SUPERVISOR_UI_PREPARE_SECONDS` (10 s): one that takes longer, say on a hung filesystem, is killed
+The supervisor prepares all of this (the copies, the keys directory below, the check of the secrets directory, and the
+web UI's whole environment, which it writes to a file only root can read and the new web UI process then reads itself)
+before each start of the web UI, in a process of its own (`roof-supervisor --prepare-ui`) that runs in the background
+and must finish within `HVO_SUPERVISOR_UI_PREPARE_SECONDS` (10 s): one that takes longer, say on a hung filesystem, is killed
 with every process it started, logged as a `WARNING`, and run again later with the backoff. So a slow preparation never
 holds up the relays, the controller or a stop: a stop abandons it at once, and the web UI is started only after it, and
 not once a stop has been asked for.
@@ -1336,7 +1337,9 @@ of its 5 s: 26.7 s from the signal in the supervisor's tests (4.5 s for the rela
 relays are being turned off (before a start, or after a forced restart's kill) starts no controller after it, and the
 stop then takes at most that relay-off and the last one: 8.5-8.6 s in the tests with 4.5 s relay-offs. A signal during
 the web UI's preparation abandons it: 0.2 s in the tests, and 22.0 s with a preparation stalled for 31 s and a
-controller that ignores SIGTERM (its 22 s, then the last relay-off). If the supervisor
+controller that ignores SIGTERM (its 22 s, then the last relay-off). A signal while the web UI's environment is gathered
+starts no web UI (0.26 s), and an environment that stalls, or a file of it that cannot be read, does not delay the stop
+(2.1 s and 0.2 s in the tests, with 2 s for the controller). If the supervisor
 kills the controller, the controller cannot confirm that the relays are off, and the supervisor turns them off itself.
 If Docker kills the container first, nothing in it can: they stay as they were until the next start, whose supervisor
 turns them off first

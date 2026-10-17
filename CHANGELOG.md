@@ -112,7 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   when they cannot be verified off (the HAT does not answer, or a relay stays on), the controller is held stopped
   (`relays-unverified`: a warning in the log, the health check failing, the web UI saying why) while the supervisor
   tries again after 1, 2, 4, 8 and 16 s, then every 30 s. The web UI's preparation (its certificate and Stop key
-  copies, its keys directory) runs in the background within 10 s (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`), so a hung
+  copies, its keys directory, its environment) runs in the background within 10 s (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`), so a hung
   filesystem can neither delay the relays nor a stop, and a stop abandons it and starts no web UI; a process that does
   not end at SIGKILL is left after 1 s. It uses the controller's own HAT access (`--relays-off`),
   never turns a relay on, and raises the web UI's and the controller's `oom_score_adj` above its own, so the kernel
