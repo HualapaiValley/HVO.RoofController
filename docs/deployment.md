@@ -1039,7 +1039,8 @@ swap, and 512 processes, which this section's handling of an exit made safe to t
 (`CONTAINER_MEMORY`) the kernel ends one as above: the web UI is started again alone, and the controller only once its
 relays are turned off and verified (held stopped until they are). At the `2g` default against the 69-154 MiB the
 container uses (its cgroup's peak in the container scenarios: 69-84 MiB in normal use, 154 MiB under 32 clients at once
-with a move), only a runaway reaches it; one that reaches it again soon after each start ends in the crash loop, with
+with a move; the controller's and the web UI's own peaks, 177 and 132 MiB, count the pages they share in each), only a
+runaway reaches it; one that reaches it again soon after each start ends in the crash loop, with
 the relays off. The process limit makes a new thread fail beyond `CONTAINER_PIDS_LIMIT`, which .NET reports as an
 `OutOfMemoryException` in the thread that asked: a crash. At that limit the supervisor itself forks nothing it cannot
 afford: a relay-off kills the web UI to make room, a start waits, and a stop frees the tasks before its relay-off
@@ -1244,7 +1245,9 @@ below `1g`, is below RoofController's floor and refused before any Docker call, 
 running controller, before anything changes); there is no setting for no limit. At the `2g` default the controller and
 its web UI have about 13 times their peak under load: the container's cgroup peaked at 154 MiB under 32 clients at once
 (the API, the web UI and camera streams) with a move, and at 69-84 MiB otherwise, with no process ended at the limit
-(`deploy-scenarios.sh`, on the x64 emulator rig; the Pi is not measured).
+(`deploy-scenarios.sh`, on the x64 emulator rig; the Pi is not measured). Their own peak resident memory under that
+load, 177 MiB for the controller and 132 MiB for the web UI, counts the pages they share in each: about 6.6 times
+together.
 
 **Docker must enforce them.** Docker drops a limit it cannot enforce with only a warning, and runs the container
 without it. RoofController refuses such a host, as SkyMonitor does (#149; SkyMonitor #1285), and on every deploy and
