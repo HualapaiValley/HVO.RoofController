@@ -33,11 +33,23 @@ asks for this.
 [`build/check-base-images.sh`](../build/check-base-images.sh), which `pi-image.yml` and
 `emulator-image.yml` run with `--registry`, checks that:
 
-- every `FROM` has a tag and a digest;
+- every external `FROM` has a literal tag and a digest;
+- bases are extracted from logical instructions, joining continuations with the initial
+  `# escape=` directive (backslash or backtick), ignoring full comment and empty continuation
+  lines, and keeping heredoc bodies out of the instruction stream;
 - the SDK's tag is the SDK `src/global.json` pins;
 - both Dockerfiles use the same SDK image and the same runtime image, tag and digest;
 - with `--registry`, each digest is an index holding `linux/amd64` and `linux/arm64`, not one
   platform's image.
+
+The checker needs Python 3 and jq (plus Docker Buildx for `--registry`). It accepts the standard
+Dockerfile frontend, with no syntax directive or `# syntax=docker/dockerfile:1`, and matches
+instruction keywords without regard to case. It handles unquoted leading flags such as
+`--platform=$BUILDPLATFORM`, and simple literal heredoc delimiters in `RUN`, `COPY` and `ADD`
+(including quoted delimiters, multiple bodies and `<<-` tab stripping). It fails closed with
+`file:line` on unsupported frontend or instruction syntax, quoted/escaped flags, image variables,
+ambiguous heredoc headers (including `ONBUILD` heredocs), or unfinished continuations/bodies.
+It checks base references, rather than validating every instruction's build-time semantics.
 
 Dependabot ([`.github/dependabot.yml`](../.github/dependabot.yml)) updates a tag and its digest
 together, in both Dockerfiles in one pull request, and proposes a new digest alone when Microsoft

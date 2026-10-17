@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Checks the base images of the controller's and the HAT emulator's Dockerfiles: every FROM names its image by tag and
+# Checks the base images of the controller's and the HAT emulator's Dockerfiles: every external FROM names its image by tag and
 # by the digest of its multi-platform index (image:tag@sha256:<digest>), so a rebuild of the same commit uses the same
 # bases; the SDK's tag is the SDK src/global.json pins; and the two Dockerfiles use the same SDK and the same ASP.NET
 # Core runtime, tag and digest. With --registry, it also reads each pinned digest from its registry, which must be an
-# index holding linux/amd64 and linux/arm64. Reports every problem it finds; in GitHub Actions, also as annotations.
+# index holding linux/amd64 and linux/arm64. Reports pin problems and fails closed on unsupported syntax, with file:line
+# diagnostics and, in GitHub Actions, annotations.
 #
 #   build/check-base-images.sh [--registry] [<repository root>]
 #
-# Needs jq, and docker buildx for --registry. Dependabot moves the tags and digests (.github/dependabot.yml).
+# Needs python3 and jq, and docker buildx for --registry. Dependabot moves the tags and digests (.github/dependabot.yml).
 set -euo pipefail
 
 SDK=mcr.microsoft.com/dotnet/sdk
@@ -35,6 +36,160 @@ problem() {
   errors=$((errors + 1))
 }
 
+# Extract FROM records only after parsing the whole file. A partial/ambiguous parse must never pass the pin gate.
+# This deliberately supports a bounded Dockerfile grammar, not arbitrary frontends or shell lexing. See BuildKit's
+# frontend/dockerfile/parser/{parser.go,directives.go,split_command.go} for continuation and heredoc boundaries.
+logical_froms() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '1\tpython3 is required to parse logical Dockerfile instructions\n'
+    return 1
+  fi
+  python3 - "$1" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+SPACE = " \t\v\f\r"
+COMMANDS = set("add arg cmd copy entrypoint env expose from healthcheck label maintainer onbuild run shell "
+               "stopsignal user volume workdir".split())
+DELIMITER = r"[A-Za-z_][A-Za-z0-9_.-]*"
+HEREDOC = re.compile(r"(?:[0-9]*)<<(-?)(?:({0})|'({0})'|\"({0})\")".format(DELIMITER))
+
+
+class Unsupported(Exception):
+    def __init__(self, line, message):
+        self.line, self.message = line, message
+
+
+def reject(line, message):
+    raise Unsupported(line, message)
+
+
+def flags_and_args(args, line, instruction):
+    # BuildKit consumes leading --words before parsing instruction arguments. Quotes and escapes in flags need
+    # its full lexer; refuse them rather than guessing which word is the base image or a heredoc declaration.
+    while args.startswith("--"):
+        parts = re.split(r"[ \t\v\f\r]+", args, maxsplit=1)
+        flag, args = parts[0], parts[1].lstrip(SPACE) if len(parts) == 2 else ""
+        if flag == "--":
+            break
+        if not re.fullmatch(r"--[A-Za-z][A-Za-z0-9-]*(?:=[^\s'\"\\`]+)?", flag):
+            reject(line, "unsupported " + instruction + " flag syntax (use unquoted --name=value)")
+        if instruction == "FROM" and "=" not in flag:
+            reject(line, "unsupported FROM flag syntax (use --name=value)")
+    return args
+
+
+def parse(path):
+    try:
+        data = Path(path).read_bytes().decode("utf-8-sig")
+    except (OSError, UnicodeError):
+        reject(1, "cannot read Dockerfile as UTF-8")
+    # Split on LF only: splitlines() would turn other whitespace into instruction boundaries.
+    lines = data.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    lines = [line.rstrip("\r") for line in lines]
+    escape, prologue, directives, records = "\\", True, set(), []
+    i = 0
+    while i < len(lines):
+        start = i + 1
+        text = lines[i].lstrip(SPACE)
+        i += 1
+        if text.startswith("#!"):
+            reject(start, "unsupported Dockerfile shebang/frontend syntax")
+        if prologue:
+            directive = re.fullmatch(r"#\s*([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+?)\s*", text)
+            if directive and directive[1].lower() in {"escape", "syntax", "check"}:
+                key, value = directive[1].lower(), directive[2]
+                if key in directives:
+                    reject(start, "duplicate " + key + " directive")
+                directives.add(key)
+                if key == "escape":
+                    if value not in {"\\", "`"}:
+                        reject(start, "unsupported escape directive (expected backslash or backtick)")
+                    escape = value
+                if key == "syntax" and value != "docker/dockerfile:1":
+                    reject(start, "unsupported syntax frontend (expected docker/dockerfile:1)")
+            else:
+                prologue = False
+        if not text or text.startswith("#"):
+            continue
+        logical = ""
+        while True:
+            # This matches BuildKit's rule: the final escape continues only if it is not itself preceded by one.
+            tail = text.rstrip(" \t")
+            continued = tail.endswith(escape) and (len(tail) == 1 or tail[-2] != escape)
+            logical += tail[:-1] if continued else text
+            if not continued:
+                break
+            while i < len(lines) and (not lines[i].strip(SPACE) or lines[i].lstrip(SPACE).startswith("#")):
+                i += 1
+            if i == len(lines):
+                reject(start, "unterminated line continuation")
+            text = lines[i]  # Continuation indentation is significant; never insert or remove whitespace here.
+            i += 1
+        if "\x00" in logical or any(c.isspace() and c not in SPACE for c in logical):
+            reject(start, "unsupported control character or non-ASCII instruction whitespace")
+        words = re.split(r"[ \t\v\f\r]+", logical.strip(SPACE), maxsplit=1)
+        command, args = words[0].lower(), words[1] if len(words) == 2 else ""
+        if command not in COMMANDS:
+            reject(start, "unsupported instruction " + words[0])
+        if command == "from":
+            args = flags_and_args(args, start, "FROM")
+            fields = re.split(r"[ \t\v\f\r]+", args.strip(SPACE))
+            if (len(fields) not in {1, 3} or not fields[0]
+                    or (len(fields) == 3 and (fields[1].lower() != "as"
+                        or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", fields[2])))):
+                reject(start, "unsupported FROM arguments (expected image [AS stage])")
+            if any(c in fields[0] for c in "'$\"\\` "):
+                reject(start, "unsupported FROM image syntax (use literal image references)")
+            records.append((start, fields[0], fields[2] if len(fields) == 3 else ""))
+        if command not in {"run", "copy", "add", "onbuild"} or "<<" not in args:
+            continue
+        if command == "onbuild":
+            reject(start, "unsupported heredoc header in ONBUILD")
+        args = flags_and_args(args, start, command.upper())
+        if args.startswith("["):
+            try:
+                array = json.loads(args)
+                if not isinstance(array, list) or any(not isinstance(item, str) for item in array):
+                    raise ValueError()
+            except ValueError:
+                reject(start, "unsupported JSON/heredoc syntax")
+            continue  # BuildKit never consumes heredoc bodies for JSON-form instructions.
+        docs = []
+        for word in re.split(r"[ \t\v\f\r]+", args):
+            if "<<" in word:
+                match = HEREDOC.fullmatch(word)
+                if not match:
+                    reject(start, "unsupported heredoc header (use simple literal delimiters)")
+                docs.append((match[1] == "-", next(name for name in match.groups()[1:] if name is not None)))
+            elif any(c in word for c in "'\"\\`$"):
+                reject(start, "unsupported heredoc header (quotes/escapes/expansion outside a delimiter)")
+        if not docs:
+            reject(start, "unsupported heredoc header")
+        for chomp, delimiter in docs:
+            while i < len(lines):
+                body = lines[i].lstrip("\t") if chomp else lines[i]
+                i += 1
+                if body == delimiter:
+                    break
+            else:
+                reject(start, "unterminated heredoc " + delimiter)
+    return records
+
+
+try:
+    for record in parse(sys.argv[1]):
+        print("\t".join(map(str, record)))
+except Unsupported as error:
+    print(str(error.line) + "\t" + error.message)
+    sys.exit(1)
+PY
+}
+
 pin=""
 if [[ ! -f "${root}/${GLOBAL_JSON}" ]]; then
   problem "${GLOBAL_JSON}" "" "was not found."
@@ -54,22 +209,13 @@ for dockerfile in "${DOCKERFILES[@]}"; do
     problem "${dockerfile}" "" "was not found."
     continue
   fi
-  stages=" scratch " number=0 sdk_seen=0 runtime_seen=0
-  while IFS= read -r text || [[ -n "${text}" ]]; do
-    number=$((number + 1))
-    [[ "${text}" =~ ^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+(.*)$ ]] || continue
-    read -r -a words <<<"${BASH_REMATCH[1]}"
-    ref="" stage=""
-    for ((i = 0; i < ${#words[@]}; i++)); do
-      if [[ -z "${ref}" && "${words[i]}" == --* ]]; then
-        continue
-      elif [[ -z "${ref}" ]]; then
-        ref=${words[i]}
-      elif [[ "${words[i]}" =~ ^[Aa][Ss]$ ]] && ((i + 1 < ${#words[@]})); then
-        stage=${words[i + 1]}
-        break
-      fi
-    done
+  if ! records=$(logical_froms "${root}/${dockerfile}"); then
+    problem "${dockerfile}" "${records%%$'\t'*}" "${records#*$'\t'}"
+    continue
+  fi
+  stages=" scratch " sdk_seen=0 runtime_seen=0
+  while IFS=$'\t' read -r number ref stage; do
+    [[ -n "${number}" ]] || continue
     # An earlier stage of this Dockerfile, or scratch, is not a base image to pin.
     if [[ -n "${ref}" && "${stages}" != *" ${ref} "* ]]; then
       image=${ref%%@*}
@@ -97,7 +243,7 @@ for dockerfile in "${DOCKERFILES[@]}"; do
       fi
     fi
     [[ -z "${stage}" ]] || stages+="${stage} "
-  done <"${root}/${dockerfile}"
+  done <<<"${records}"
   [[ ${sdk_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${SDK} line."
   [[ ${runtime_seen} -eq 1 ]] || problem "${dockerfile}" "" "has no FROM ${RUNTIME} line."
 done

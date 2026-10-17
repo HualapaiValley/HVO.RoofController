@@ -7,7 +7,7 @@
 set -uo pipefail
 
 TESTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-SCRIPT="${TESTS_DIR}/../../build/check-base-images.sh"
+SCRIPT=${BASE_IMAGE_CHECKER:-"${TESTS_DIR}/../../build/check-base-images.sh"}
 SDK=mcr.microsoft.com/dotnet/sdk
 RUNTIME=mcr.microsoft.com/dotnet/aspnet
 RPI=src/HVO.RoofControllerV4.RPi/Dockerfile
@@ -66,7 +66,7 @@ repo() {
 
 # ---- The files -------------------------------------------------------------------------------------------------------
 
-check "the repository's own Dockerfiles" 0 "and runtime image ${RUNTIME}:" "${SCRIPT}"
+check "the repository's own Dockerfiles" 0 "and runtime image ${RUNTIME}:" "${SCRIPT}" "${TESTS_DIR}/../.."
 
 r=$(repo good)
 check "pinned and matching" 0 \
@@ -137,6 +137,78 @@ r=$(repo no-emulator) && rm "${r}/${EMULATOR}"
 check "no emulator Dockerfile" 1 "${EMULATOR}: was not found" "${SCRIPT}" "${r}"
 check "too many arguments" 2 "build/check-base-images.sh [--registry] [<repository root>]" "${SCRIPT}" "${r}" extra
 check "unknown option" 2 "build/check-base-images.sh [--registry] [<repository root>]" "${SCRIPT}" --other
+
+# Logical instructions, preserving the first physical line for diagnostics. Each case catches a physical-line
+# parser accepting an unpinned base, rejecting heredoc/shell content, or silently accepting unsupported syntax.
+r=$(repo split-keyword)
+printf 'FR\\\nOM alpine:latest AS tools\n' >> "${r}/${RPI}"
+check "split FROM keyword" 1 "${RPI}:7: FROM alpine:latest is not pinned" "${SCRIPT}" "${r}"
+r=$(repo continued-image)
+printf 'FROM \\\n  alpine:latest AS tools\n' >> "${r}/${RPI}"
+check "continued FROM image" 1 "${RPI}:7: FROM alpine:latest is not pinned" "${SCRIPT}" "${r}"
+r=$(repo continued-comments)
+printf 'FR\\\n  # ignored comment, including its escape \\\n\nOM alpine:latest AS tools\n' >> "${r}/${RPI}"
+check "comments and empty continuation lines" 1 "${RPI}:7: FROM alpine:latest is not pinned" "${SCRIPT}" "${r}"
+r=$(repo backtick)
+{ printf '# escape=`\n'; dockerfile "${SDK_REF}" "${RUNTIME_REF}"; printf 'FR`\nOM alpine:latest AS tools\n'; } > "${r}/${RPI}"
+check "backtick escape directive" 1 "${RPI}:8: FROM alpine:latest is not pinned" "${SCRIPT}" "${r}"
+r=$(repo lowercase-split)
+printf 'fr\\\nom alpine:latest as tools\n' >> "${r}/${RPI}"
+check "lowercase logical from" 1 "${RPI}:7: FROM alpine:latest is not pinned" "${SCRIPT}" "${r}"
+r=$(repo heredoc-run)
+printf 'RUN <<EOF\nFROM alpine:latest AS text\nEOF\n' >> "${r}/${RPI}"
+check "RUN heredoc is not instructions" 0 "Build image ${SDK_REF}" "${SCRIPT}" "${r}"
+r=$(repo heredoc-copy)
+printf "COPY <<'EOF' /example\nFROM alpine:latest AS text\nEOF\n" >> "${r}/${RPI}"
+check "quoted COPY heredoc is not instructions" 0 "Build image ${SDK_REF}" "${SCRIPT}" "${r}"
+r=$(repo heredoc-tabs)
+printf 'ADD <<-"EOF" /example\n\tFROM alpine:latest AS text\n\tEOF\n' >> "${r}/${RPI}"
+check "tab-stripping ADD heredoc is not instructions" 0 "Build image ${SDK_REF}" "${SCRIPT}" "${r}"
+r=$(repo heredoc-multiple)
+printf "RUN cat <<ONE <<'TWO'\nFROM alpine:latest AS text\nONE\nFROM debian:latest AS more\nTWO\n" >> "${r}/${RPI}"
+check "multiple heredocs are not instructions" 0 "Build image ${SDK_REF}" "${SCRIPT}" "${r}"
+r=$(repo continued-run)
+printf 'RUN echo \\\nFROM alpine:latest AS text\n' >> "${r}/${RPI}"
+check "continued RUN is not FROM" 0 "Build image ${SDK_REF}" "${SCRIPT}" "${r}"
+r=$(repo heredoc-unterminated)
+printf 'RUN <<EOF\necho example\n' >> "${r}/${RPI}"
+check "unterminated heredoc fails closed" 1 "${RPI}:7: unterminated heredoc EOF" "${SCRIPT}" "${r}"
+r=$(repo heredoc-unsupported)
+# shellcheck disable=SC2016 # The fixture deliberately contains an unexpanded delimiter.
+printf 'RUN <<$EOF\necho example\n' >> "${r}/${RPI}"
+check "dynamic heredoc delimiter fails closed" 1 "${RPI}:7: unsupported heredoc header" "${SCRIPT}" "${r}"
+r=$(repo quoted-flags)
+printf 'FROM --platform="linux/amd64" %s AS tools\n' "${SDK_REF}" >> "${r}/${RPI}"
+check "quoted FROM flags fail closed" 1 "${RPI}:7: unsupported FROM flag syntax" "${SCRIPT}" "${r}"
+r=$(repo unknown-instruction)
+printf 'FROB example\n' >> "${r}/${RPI}"
+check "unknown instruction fails closed" 1 "${RPI}:7: unsupported instruction FROB" "${SCRIPT}" "${r}"
+r=$(repo invalid-escape)
+{ printf '# escape=~\n'; dockerfile "${SDK_REF}" "${RUNTIME_REF}"; } > "${r}/${RPI}"
+check "invalid escape directive fails closed" 1 "${RPI}:1: unsupported escape directive" "${SCRIPT}" "${r}"
+r=$(repo duplicate-escape)
+{ printf '# escape=\\\n# escape=`\n'; dockerfile "${SDK_REF}" "${RUNTIME_REF}"; } > "${r}/${RPI}"
+check "duplicate parser directive fails closed" 1 "${RPI}:2: duplicate escape directive" "${SCRIPT}" "${r}"
+r=$(repo custom-frontend)
+{ printf '# syntax=example/frontend:1\n'; dockerfile "${SDK_REF}" "${RUNTIME_REF}"; } > "${r}/${RPI}"
+check "custom frontend fails closed" 1 "${RPI}:1: unsupported syntax frontend" "${SCRIPT}" "${r}"
+r=$(repo malformed-from)
+printf 'FROM %s AS tools ignored\n' "${SDK_REF}" >> "${r}/${RPI}"
+check "malformed FROM fails closed" 1 "${RPI}:7: unsupported FROM arguments" "${SCRIPT}" "${r}"
+r=$(repo dangling-continuation)
+printf 'RUN true \\\n' >> "${r}/${RPI}"
+check "dangling continuation fails closed" 1 "${RPI}:7: unterminated line continuation" "${SCRIPT}" "${r}"
+r=$(repo late-escape)
+printf '# escape=`\nFR\\\nOM alpine:latest AS tools\n' >> "${r}/${RPI}"
+check "late escape comment does not change parsing" 1 "${RPI}:8: FROM alpine:latest is not pinned" "${SCRIPT}" "${r}"
+
+r=$(repo variable-base)
+# shellcheck disable=SC2016 # FROM image variables are intentionally unsupported.
+printf 'FROM ${BASE}:latest@%s AS tools\n' "$(digest tools)" >> "${r}/${RPI}"
+check "variable image fails closed" 1 "${RPI}:7: unsupported FROM image syntax" "${SCRIPT}" "${r}"
+r=$(repo shebang-frontend)
+{ printf '#!/example/frontend\n'; dockerfile "${SDK_REF}" "${RUNTIME_REF}"; } > "${r}/${RPI}"
+check "shebang frontend fails closed" 1 "${RPI}:1: unsupported Dockerfile shebang/frontend syntax" "${SCRIPT}" "${r}"
 
 # ---- --registry ------------------------------------------------------------------------------------------------------
 
