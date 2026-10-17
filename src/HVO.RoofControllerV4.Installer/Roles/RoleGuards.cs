@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
@@ -204,43 +205,97 @@ public static class RoleGuards
     }
 
     /// <summary>
+    /// How to let Docker enforce the controller's limits, as the deploy script says it: on a Raspberry Pi the firmware
+    /// adds cgroup_disable=memory to the kernel's command line itself, so cgroup_enable=memory goes at the end of
+    /// cmdline.txt's single line, where the later argument wins.
+    /// </summary>
+    public const string ContainerLimitRemedy =
+        "To fix it on a Raspberry Pi: its firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). "
+        + "Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), "
+        + "reboot the Pi with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. "
+        + "On another machine, give the Docker daemon the memory, cpu and pids cgroup controllers. "
+        + "There is no override (docs/deployment.md, \"The container's privileges and limits\").";
+
+    /// <summary>
     /// Why Docker here cannot give the controller its limits (docs/deployment.md, "The container's privileges and
-    /// limits"): it does not say it enforces the ones the controller is given (the process limit always, a CPU or memory
-    /// limit when one is set; it would drop one with only a warning), or the machine has fewer CPUs than a CPU limit. A
-    /// memory limit above the machine's memory is only a warning (<see cref="ContainerLimitWarnings"/>). The deploy script
-    /// checks the same before it changes anything.
+    /// limits"), which the deploy script refuses the same way before it changes anything (#149; as SkyMonitor's host
+    /// prerequisites, #1285). Docker must say it enforces the memory limit with no swap beyond it (MemoryLimit and
+    /// SwapLimit), the CPU quota (CPUCfsQuota) and the process limit (PidsLimit), since the controller always runs with
+    /// all three: Docker would drop one it cannot enforce with only a warning. One it does not report counts as
+    /// unsupported, and there is no override. The machine must also have the CPUs of the CPU limit. Every finding comes
+    /// in one problem, with the cgroup version, the kernel's cgroup v2 controllers when Docker runs here, Docker's
+    /// warnings about limits, and the remedy. A memory limit above the machine's memory is only a warning
+    /// (<see cref="ContainerLimitWarnings"/>).
     /// </summary>
     public static IEnumerable<string> ContainerLimitProblems(DockerLimits? docker, ContainerResources resources)
     {
         ArgumentNullException.ThrowIfNull(resources);
         if (docker is null)
         {
-            yield return "Docker did not say which limits it enforces (docker info), and the controller runs with a process limit: check that docker info works, then run the installer again.";
+            yield return "Docker did not say which limits it enforces (docker info), and the controller runs with a CPU, a memory and a process limit: check that docker info works, then run the installer again.";
             yield break;
         }
 
-        var missing = new[] { ("memory", docker.Memory, resources.Memory is not null), ("CPU", docker.Cpu, resources.Cpus is not null), ("process", docker.Pids, true) }
-            .Where(limit => limit.Item3 && limit.Item2 != true)
-            .Select(limit => limit.Item1)
-            .ToArray();
-        if (missing.Length > 0)
+        static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
+        var findings = new List<string>();
+        if (docker.Memory != true || docker.Swap != true)
         {
-            static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
-            var guidance = missing.Contains("memory")
-                ? "On Raspberry Pi OS, add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot, or leave out controller.resources.memory (--memory) for no memory limit; "
-                    + "elsewhere, give the Docker daemon the memory, cpu and pids cgroup controllers."
-                : "Give the Docker daemon the memory, cpu and pids cgroup controllers.";
-            yield return $"Docker here does not enforce {string.Join(", ", missing)} limits (docker info: MemoryLimit {Flag(docker.Memory)}, CPUCfsQuota {Flag(docker.Cpu)}, PidsLimit {Flag(docker.Pids)}), "
-                + $"so the controller would run without them. {guidance} Then run the installer again (docs/deployment.md, \"The container's privileges and limits\").";
+            findings.Add($"docker-memory-limit-unsupported: docker info reports MemoryLimit {Flag(docker.Memory)} and SwapLimit {Flag(docker.Swap)}, so Docker would run the controller without its memory limit ({resources.MemoryOrDefault}, and no swap beyond it).");
         }
 
-        if (resources.Cpus is { } limit && docker.Cpus is { } cpus && limit > cpus)
+        if (docker.Cpu != true)
         {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's limit of {resources.CpusText} CPUs is more than the {cpus} Docker reports here: ")
-                + (cpus >= ContainerResources.MinimumCpus
-                    ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from {ContainerResources.MinimumCpus} to {cpus}, or leave it out for no CPU limit.")
-                    : "leave out controller.resources.cpus (--cpus) for no CPU limit (one is at least 1).");
+            findings.Add($"docker-cpu-quota-unsupported: docker info reports CPUCfsQuota {Flag(docker.Cpu)}, so Docker would run the controller without its CPU limit ({resources.CpusText}).");
         }
+
+        if (docker.Pids != true)
+        {
+            findings.Add(string.Create(CultureInfo.InvariantCulture, $"docker-pids-limit-unsupported: docker info reports PidsLimit {Flag(docker.Pids)}, so Docker would run the controller without its process limit ({resources.PidsLimit})."));
+        }
+
+        var capabilities = findings.Count > 0;
+        if (docker.Cpus is not { } cpus)
+        {
+            findings.Add($"docker-host-cpus-unreported: docker info does not report the CPUs (NCPU), so the CPU limit of {resources.CpusText} cannot be checked against them.");
+        }
+        else if (resources.CpusOrDefault > cpus)
+        {
+            findings.Add(string.Create(CultureInfo.InvariantCulture, $"docker-host-cpus-insufficient: docker info reports {cpus} CPUs, fewer than the CPU limit of {resources.CpusText}: ")
+                + (cpus >= ContainerResources.MinimumCpus
+                    ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from {ContainerResources.MinimumCpus} to {cpus}.")
+                    : "the CPU limit is at least 1."));
+        }
+
+        if (findings.Count == 0)
+        {
+            yield break;
+        }
+
+        var problem = new StringBuilder($"Docker here cannot give the controller its limits ({resources.Describe()}), so the install is refused. Every finding:");
+        foreach (var finding in findings)
+        {
+            problem.Append(Environment.NewLine).Append("  - ").Append(finding);
+        }
+
+        if (capabilities)
+        {
+            var host = new StringBuilder(docker.CgroupVersion is { } version ? $"cgroup v{version}" : "cgroup version not reported");
+            host.Append(docker.CgroupControllers is { } controllers
+                ? $"; {MachineSurveyor.CgroupControllersFile}: \"{controllers}\""
+                : $"; {MachineSurveyor.CgroupControllersFile} on Docker's machine lists the kernel's cgroup v2 controllers (Docker needs memory, cpu and pids)");
+            foreach (var warning in docker.Warnings.Where(warning =>
+                         warning.Contains("limit", StringComparison.OrdinalIgnoreCase)
+                         || warning.Contains("cfs", StringComparison.OrdinalIgnoreCase)
+                         || warning.Contains("cgroup", StringComparison.OrdinalIgnoreCase)))
+            {
+                host.Append($"; Docker warns \"{warning}\"");
+            }
+
+            problem.Append(Environment.NewLine).Append("  Docker's host: ").Append(host).Append('.');
+            problem.Append(Environment.NewLine).Append("  ").Append(ContainerLimitRemedy).Append(" Then run the installer again.");
+        }
+
+        yield return problem.ToString();
     }
 
     /// <summary>
@@ -252,7 +307,7 @@ public static class RoleGuards
         ArgumentNullException.ThrowIfNull(resources);
         if (resources.MemoryBytes is { } limit && docker?.MemoryBytes is { } memory && limit > memory)
         {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's memory limit of {resources.Memory} is more than the {memory / (1024 * 1024)}m Docker reports here. It is kept: a memory limit is a cap, not a reservation, so the machine runs out of memory before the container reaches it.");
+            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's memory limit of {resources.MemoryOrDefault}{(resources.Memory is null ? " (the default)" : string.Empty)} is more than the {memory / (1024 * 1024)}m Docker reports here. It is kept: a memory limit is a cap, not a reservation, so the machine runs out of memory before the container reaches it.");
         }
     }
 

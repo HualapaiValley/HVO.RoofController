@@ -157,32 +157,67 @@ public sealed record DockerSurvey
 }
 
 /// <summary>
-/// What <c>docker info</c> says about the limits Docker enforces on a container (MemoryLimit, CPUCfsQuota, PidsLimit and
-/// SwapLimit) and about the machine (NCPU, MemTotal); null for what it did not say. Docker drops a limit it cannot
-/// enforce with only a warning, so the installer checks these before it deploys the controller with its limits.
+/// What one <c>docker info</c> says about the limits Docker enforces on a container (MemoryLimit, CPUCfsQuota, PidsLimit
+/// and SwapLimit), about the machine (NCPU, MemTotal), its cgroup version, the host name Docker gives its machine, and
+/// Docker's own warnings; null for what it did not say. Docker drops a limit it cannot enforce with only a warning, so
+/// the installer refuses such a machine before it deploys the controller with its limits, as the deploy script does.
+/// <see cref="CgroupControllers"/> is the kernel's cgroup v2 controllers (/sys/fs/cgroup/cgroup.controllers), read by
+/// the survey only when Docker runs on this machine.
 /// </summary>
 public sealed record DockerLimits(bool? Memory, bool? Cpu, bool? Pids, bool? Swap, int? Cpus, long? MemoryBytes)
 {
-    /// <summary>The <c>docker info --format</c> template that reads them, comma-separated so an empty field keeps its place.</summary>
-    public const string Format = "{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}";
+    /// <summary>
+    /// The <c>docker info --format</c> template that reads them: the fields comma-separated on the first line, so an empty
+    /// field keeps its place, then Docker's warnings, one a line. Docker 29's field is CPUCfsQuota (its JSON key CpuCfsQuota).
+    /// </summary>
+    public const string Format = "{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}},{{.Name}}\n{{range .Warnings}}{{println .}}{{end}}";
+
+    /// <summary>The cgroup version Docker reports (CgroupVersion), such as 2.</summary>
+    public string? CgroupVersion { get; init; }
+
+    /// <summary>The host name Docker gives the machine it runs on (Name).</summary>
+    public string? HostName { get; init; }
+
+    /// <summary>Docker's warnings (Warnings), such as "WARNING: No memory limit support".</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>The kernel's cgroup v2 controllers, when Docker runs on this machine and the file could be read.</summary>
+    public string? CgroupControllers { get; init; }
+
+    /// <summary>The same answer: the warnings compared one by one, not as the same list.</summary>
+    public bool Equals(DockerLimits? other)
+        => other is not null
+            && (Memory, Cpu, Pids, Swap, Cpus, MemoryBytes, CgroupVersion, HostName, CgroupControllers)
+                == (other.Memory, other.Cpu, other.Pids, other.Swap, other.Cpus, other.MemoryBytes, other.CgroupVersion, other.HostName, other.CgroupControllers)
+            && Warnings.SequenceEqual(other.Warnings);
+
+    public override int GetHashCode()
+        => HashCode.Combine(HashCode.Combine(Memory, Cpu, Pids, Swap, Cpus, MemoryBytes), CgroupVersion, HostName, CgroupControllers, Warnings.Count);
 
     /// <summary>The answer to <see cref="Format"/>; null when it is not one.</summary>
     public static DockerLimits? Parse(string output)
     {
-        var fields = (output ?? string.Empty).Trim().Split(',');
-        if (fields.Length != 6)
+        var lines = (output ?? string.Empty).Replace("\r", string.Empty, StringComparison.Ordinal).Split('\n');
+        var fields = lines[0].Trim().Split(',');
+        if (fields.Length != 8)
         {
             return null;
         }
 
         static bool? Flag(string value) => bool.TryParse(value, out var flag) ? flag : null;
+        static string? Text(string value) => value.Trim() is { Length: > 0 } text && text != "<no value>" ? text : null;
         return new DockerLimits(
             Flag(fields[0]),
             Flag(fields[1]),
             Flag(fields[2]),
             Flag(fields[3]),
             int.TryParse(fields[4], NumberStyles.None, CultureInfo.InvariantCulture, out var cpus) ? cpus : null,
-            long.TryParse(fields[5], NumberStyles.None, CultureInfo.InvariantCulture, out var memory) ? memory : null);
+            long.TryParse(fields[5], NumberStyles.None, CultureInfo.InvariantCulture, out var memory) ? memory : null)
+        {
+            CgroupVersion = Text(fields[6]),
+            HostName = Text(fields[7]),
+            Warnings = [.. lines.Skip(1).Select(line => line.Trim()).Where(line => line.Length > 0)]
+        };
     }
 }
 

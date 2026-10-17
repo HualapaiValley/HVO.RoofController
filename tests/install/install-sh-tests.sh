@@ -1135,67 +1135,97 @@ test_docker_20_10_is_new_enough() {
   assert_output_contains "ok    Docker 20.10.24, with Compose 2.29.7"
 }
 
-# The controller's container runs with a process limit, and a CPU or memory limit only when one is given (none by
-# default, until the follow-up, #138 item 6); Docker drops one it cannot enforce with only a warning
-# (docs/deployment.md, "The container's privileges and limits").
+# The controller's container always runs with a CPU, a memory and a process limit (RoofController's default of 1 vCPU
+# and 2g, or the ones given); Docker drops one it cannot enforce with only a warning, so a machine whose Docker cannot
+# enforce them is refused (#149; docs/deployment.md, "The container's privileges and limits").
+LIMITS_FORMAT='{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}}'
+PI_REMEDY="note  To fix it: this Pi's firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. There is no override."
+
 test_the_controllers_limits_are_checked_with_docker() {
   install_sh -- --roles controller,kiosk
 
   assert_status 0
-  assert_called "root docker info --format {{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}"
-  assert_output_contains "ok    Docker enforces process limits"
-  assert_output_not_contains "note  Docker does not enforce"
-  assert_output_not_contains "note  Docker cannot keep"
-  assert_output_not_contains "note  This machine has"
+  assert_called "root docker info --format ${LIMITS_FORMAT}"
+  assert_output_contains "ok    Docker enforces memory, CPU and process limits"
+  assert_output_not_contains "docker-"
+  assert_output_not_contains "To fix it"
 }
 
-test_a_pi_whose_docker_cannot_limit_memory_is_noted_with_the_boot_setting_to_change() {
-  # Raspberry Pi OS's default: the controller runs without a memory limit, so the install goes ahead.
-  install_sh FAKE_DOCKER_LIMITS=false,true,true,false,4,8589934592 -- --roles controller
-
-  assert_status 0
-  assert_output_contains "ok    Docker enforces process limits"
-  assert_output_contains "note  Docker does not enforce memory limits (docker info: MemoryLimit false, CPUCfsQuota true): the controller runs without CPU and memory limits by default, and the installer refuses one it is given here (--cpus, --memory). To give one, add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot first"
-  assert_output_not_contains "note  Docker cannot keep"
-}
-
-test_a_rig_whose_docker_cannot_limit_cpu_is_noted() {
-  not_a_pi
-  install_sh FAKE_MACHINE=x86_64 FAKE_DOCKER_LIMITS=true,false,true,true,8,17179869184 -- --roles rig
-
-  assert_status 0
-  assert_output_contains "note  Docker does not enforce CPU limits (docker info: MemoryLimit true, CPUCfsQuota false): the controller runs without CPU and memory limits by default, and the installer refuses one it is given here (--cpus, --memory). To give one, give the Docker daemon the memory and cpu cgroup controllers first"
-}
-
-test_a_rig_whose_docker_cannot_limit_processes_fails() {
-  not_a_pi
-  install_sh FAKE_MACHINE=x86_64 FAKE_DOCKER_LIMITS=true,false,,true,8,17179869184 -- --roles rig
+test_a_stock_pi_whose_docker_cannot_limit_memory_is_refused_with_the_boot_setting_to_append() {
+  # As a stock Raspberry Pi OS reports it (github-runner-pi-01): the firmware's cgroup_disable=memory.
+  mkdir -p "${WORK}/root/sys/fs/cgroup"
+  printf 'cpuset cpu io pids\n' > "${WORK}/root/sys/fs/cgroup/cgroup.controllers"
+  install_sh FAKE_DOCKER_LIMITS=false,true,true,false,4,8589934592,2 \
+    "FAKE_DOCKER_WARNINGS=WARNING: No memory limit support;WARNING: No swap limit support;WARNING: bridge-nf-call-iptables is disabled" \
+    -- --roles controller
 
   assert_stopped_by_checks
-  assert_output_contains "FAIL  Docker does not enforce process limits (docker info: PidsLimit ?), and the controller's container runs with one: give the Docker daemon the pids cgroup controller, then run this again."
+  assert_output_contains "FAIL  docker-memory-limit-unsupported: Docker reports MemoryLimit false and SwapLimit false, so it would run the controller without its memory limit (and no swap beyond it)"
+  assert_output_not_contains "docker-cpu-quota-unsupported"
+  assert_output_not_contains "docker-pids-limit-unsupported"
+  assert_output_contains "note  Docker's host: cgroup v2; /sys/fs/cgroup/cgroup.controllers: \"cpuset cpu io pids\"; Docker warns \"WARNING: No memory limit support\"; Docker warns \"WARNING: No swap limit support\""
+  assert_output_not_contains "bridge-nf-call-iptables"
+  assert_output_contains "${PI_REMEDY}"
+  assert_output_not_contains "change cgroup_disable=memory"
 }
 
-test_a_small_machine_or_no_swap_limit_is_only_noted() {
-  install_sh FAKE_DOCKER_LIMITS=true,true,true,false,1,4045848576 -- --roles controller
+test_docker_that_cannot_limit_swap_alone_is_refused_as_the_memory_limit() {
+  install_sh FAKE_DOCKER_LIMITS=true,true,true,false,4,8589934592,2 -- --roles controller
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  docker-memory-limit-unsupported: Docker reports MemoryLimit true and SwapLimit false"
+}
+
+test_a_rig_whose_docker_cannot_limit_cpu_is_refused() {
+  not_a_pi
+  install_sh FAKE_MACHINE=x86_64 FAKE_DOCKER_LIMITS=true,false,true,true,8,17179869184,2 -- --roles rig
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  docker-cpu-quota-unsupported: Docker reports CPUCfsQuota false, so it would run the controller without its CPU limit"
+  assert_output_not_contains "docker-memory-limit-unsupported"
+  assert_output_contains "note  To fix it: give the Docker daemon the memory, cpu and pids cgroup controllers"
+  assert_output_not_contains "cmdline.txt"
+}
+
+test_a_rig_whose_docker_cannot_limit_processes_or_does_not_say_is_refused() {
+  not_a_pi
+  install_sh FAKE_MACHINE=x86_64 FAKE_DOCKER_LIMITS=true,true,,true,8,17179869184, -- --roles rig
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  docker-pids-limit-unsupported: Docker reports PidsLimit not reported, so it would run the controller without its process limit"
+  assert_output_contains "note  Docker's host: cgroup version not reported"
+}
+
+test_docker_that_cannot_enforce_any_limit_has_every_finding() {
+  install_sh FAKE_DOCKER_LIMITS=false,false,false,false,4,8589934592,2 -- --roles controller
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  docker-memory-limit-unsupported: Docker reports MemoryLimit false and SwapLimit false"
+  assert_output_contains "FAIL  docker-cpu-quota-unsupported: Docker reports CPUCfsQuota false"
+  assert_output_contains "FAIL  docker-pids-limit-unsupported: Docker reports PidsLimit false"
+  assert_output_contains "${PI_REMEDY}"
+}
+
+test_a_small_machine_that_enforces_the_limits_passes() {
+  # A memory limit is a cap, not a reservation: a machine with less memory than the default is not refused here.
+  install_sh FAKE_DOCKER_LIMITS=true,true,true,true,1,1012741632,2 -- --roles controller
 
   assert_status 0
-  assert_output_contains "note  Docker cannot keep the controller's container from swapping (docker info: SwapLimit false): a memory limit, if given, still holds"
-  assert_output_not_contains "so the installer refuses one here (--cpus)"
-  # A memory limit is a cap, not a reservation: a machine with less memory than a requested cap is not noted.
+  assert_output_contains "ok    Docker enforces memory, CPU and process limits"
   assert_output_not_contains "MiB of memory"
 }
 
 test_the_limits_are_checked_once_docker_is_installed() {
   without docker
-  install_sh FAKE_DOCKER_LIMITS=true,true,false,true,4,8589934592 -- --roles controller --install-docker
+  install_sh FAKE_DOCKER_LIMITS=true,true,false,true,4,8589934592,2 -- --roles controller --install-docker
 
   assert_stopped_after "Docker was installed"
-  assert_output_contains "FAIL  Docker does not enforce process limits"
+  assert_output_contains "FAIL  docker-pids-limit-unsupported: Docker reports PidsLimit false"
 }
 
 test_roles_without_the_controller_do_not_check_the_limits() {
   record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
-  install_sh FAKE_DOCKER_LIMITS=false,false,false,false,1,1 -- --roles kiosk
+  install_sh FAKE_DOCKER_LIMITS=false,false,false,false,1,1,2 -- --roles kiosk
 
   assert_status 0
   assert_not_called "docker info --format {{.MemoryLimit}}"

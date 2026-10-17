@@ -58,12 +58,12 @@ public static class Installer
         var release = ReleaseOption("Read the release");
         var cpus = new Option<decimal?>("--cpus")
         {
-            Description = "A CPU limit for the controller container, at least 1 (none by default, until a follow-up turns RoofController's default on: #138 item 6). Kept in the install record for upgrades and rollbacks.",
+            Description = "The controller container's CPU limit, at least 1 (1 by default). Kept in the install record for upgrades and rollbacks.",
             HelpName = "CPUS"
         };
         var memory = new Option<string?>("--memory")
         {
-            Description = "A memory limit for the controller container in MiB or GiB, at least 1024m or 1g (none by default, as for --cpus). The container gets no swap beyond it.",
+            Description = "The controller container's memory limit in MiB or GiB, at least 1024m or 1g (2g by default), kept as --cpus is. The container gets no swap beyond it.",
             HelpName = "SIZE"
         };
         var pidsLimit = new Option<int?>("--pids-limit")

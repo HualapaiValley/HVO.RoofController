@@ -30,6 +30,9 @@ public static partial class MachineSurveyor
     /// <summary>Where the kernel lists the display outputs.</summary>
     public const string DrmFolder = "/sys/class/drm";
 
+    /// <summary>The kernel's cgroup v2 controllers, which Docker needs memory, cpu and pids among.</summary>
+    public const string CgroupControllersFile = "/sys/fs/cgroup/cgroup.controllers";
+
     /// <summary>A desktop's login screen (lightdm on Raspberry Pi OS with a desktop).</summary>
     public const string DisplayManagerUnit = "display-manager.service";
 
@@ -244,12 +247,36 @@ public static partial class MachineSurveyor
 
         var compose = await machine.Commands.RunAsync(new CommandLine("docker", "compose", "version", "--short"), cancellationToken).ConfigureAwait(false);
         var limits = await machine.Commands.RunAsync(new CommandLine("docker", "info", "--format", DockerLimits.Format), cancellationToken).ConfigureAwait(false);
+        var parsed = limits.Succeeded ? DockerLimits.Parse(limits.Output) : null;
+
+        // This machine's cgroup v2 controllers are Docker's host's only when Docker runs here: it names this machine.
+        if (parsed is { HostName: { } host } && string.Equals(host, machine.HostName, StringComparison.Ordinal)
+            && ReadCgroupControllers(machine) is { } controllers)
+        {
+            parsed = parsed with { CgroupControllers = controllers };
+        }
+
         return new DockerSurvey
         {
             Version = server.Output.Trim(),
             ComposeVersion = compose.Succeeded ? compose.Output.Trim() : null,
-            Limits = limits.Succeeded ? DockerLimits.Parse(limits.Output) : null
+            Limits = parsed
         };
+    }
+
+    /// <summary>The kernel's cgroup v2 controllers (at most 512 characters), or null when they cannot be read.</summary>
+    private static string? ReadCgroupControllers(InstallerMachine machine)
+    {
+        try
+        {
+            return machine.ReadText(CgroupControllersFile)?.Trim() is { } controllers
+                ? controllers.Length <= 512 ? controllers : controllers[..512]
+                : null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

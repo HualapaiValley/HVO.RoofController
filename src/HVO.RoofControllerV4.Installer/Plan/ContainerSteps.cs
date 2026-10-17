@@ -475,7 +475,7 @@ public sealed class ControllerStep(
 
         // Its limits and privileges are the deploy script's (docs/deployment.md, "The container's privileges and limits").
         var resources = settings.Resources;
-        if (container.NanoCpus != resources.NanoCpus || container.MemoryBytes != (resources.MemoryBytes ?? 0) || container.PidsLimit != resources.PidsLimit)
+        if (container.NanoCpus != resources.NanoCpus || container.MemoryBytes != resources.MemoryBytes || container.PidsLimit != resources.PidsLimit)
         {
             return $"redeployed with its limits: {resources.Describe()}";
         }
@@ -744,10 +744,11 @@ public sealed class ControllerStep(
             // The script's Stop refuses a roof that moves, or that its Status cannot show idle, before it replaces the controller.
             ["REQUIRE_IDLE_ROOF"] = "true",
 
-            // The container's limits, from the answers or the record: --rollback gives them to the version it brings back.
-            // Empty is no CPU or memory limit (the default, until a follow-up: #138 item 6).
-            ["CONTAINER_CPUS"] = settings.Resources.CpusText ?? string.Empty,
-            ["CONTAINER_MEMORY"] = settings.Resources.Memory ?? string.Empty,
+            // The container's limits, from the answers or the record, RoofController's default for one not set, always
+            // given: the script never keeps the running controller's in place of the record's. --rollback gives them to
+            // the version it brings back.
+            ["CONTAINER_CPUS"] = settings.Resources.CpusText,
+            ["CONTAINER_MEMORY"] = settings.Resources.MemoryOrDefault,
             ["CONTAINER_PIDS_LIMIT"] = settings.Resources.PidsLimit.ToString(CultureInfo.InvariantCulture),
 
             // The key for the Stop and Status checks, as a file only root reads; never the key itself.

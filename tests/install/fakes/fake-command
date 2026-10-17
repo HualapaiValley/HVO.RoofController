@@ -194,9 +194,11 @@ print(email.utils.formatdate(time.time() + int(sys.argv[1]), usegmt=True))' "${F
         printf '%s\n' "${FAKE_COMPOSE:-2.29.7}"
         ;;
       "info --format {{.DockerRootDir}}") printf '%s\n' "${FAKE_DOCKER_ROOT}" ;;
-      # The limits it enforces and the machine (MemoryLimit, CPUCfsQuota, PidsLimit, SwapLimit, NCPU, MemTotal).
-      "info --format {{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}")
-        printf '%s\n' "${FAKE_DOCKER_LIMITS:-true,true,true,true,4,8589934592}"
+      # The limits it enforces and the machine (MemoryLimit, CPUCfsQuota, PidsLimit, SwapLimit, NCPU, MemTotal,
+      # CgroupVersion), then its warnings (FAKE_DOCKER_WARNINGS, separated by ';'), one a line.
+      "info --format {{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}}"*)
+        printf '%s\n' "${FAKE_DOCKER_LIMITS:-true,true,true,true,4,8589934592,2}"
+        [ -z "${FAKE_DOCKER_WARNINGS:-}" ] || printf '%s\n' "${FAKE_DOCKER_WARNINGS}" | tr ';' '\n'
         ;;
       *)
         echo "fake docker: unexpected: $*" >&2

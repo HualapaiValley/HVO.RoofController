@@ -323,6 +323,17 @@ internal static partial class LifecycleCommands
             throw new InstallerUsageException("--yes goes with --restore-backup.");
         }
 
+        // The deploy script's --rollback gives the version it brings back the recorded limits, so Docker here must be able
+        // to enforce them, as for an install or an upgrade (#149): refused, with every finding, before anything changes.
+        if (InstallRoles.RunsController(record.Roles))
+        {
+            var limits = RoleGuards.ContainerLimitProblems(session.Survey.Docker.Limits, (record.ToAnswers().Controller ?? new ControllerSettings()).Normalised().Resources).ToArray();
+            if (limits.Length > 0)
+            {
+                throw new InstallerRefusedException(string.Join(Environment.NewLine, limits));
+            }
+        }
+
         host.Out.WriteLine(record.UpgradingFrom is { } started
             ? $"The upgrade from {started} to {record.Version} did not finish here; going back to {previous}, the release before."
             : $"{record.Version} is installed here; going back to {previous}, the release before.");

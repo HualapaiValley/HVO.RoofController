@@ -77,11 +77,11 @@ internal sealed record FakeContainer
     /// <summary>When it last started; null for one that says it never has.</summary>
     public DateTimeOffset? StartedAt { get; init; }
 
-    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus): by default none (0), the installer's default.</summary>
-    public long NanoCpus { get; init; }
+    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus): by default the installer's default of 1 vCPU; 0 for none.</summary>
+    public long NanoCpus { get; init; } = 1_000_000_000;
 
-    /// <summary>Its memory limit, and as much with swap (HostConfig.Memory, MemorySwap): by default none (0).</summary>
-    public long Memory { get; init; }
+    /// <summary>Its memory limit, and as much with swap (HostConfig.Memory, MemorySwap): by default the installer's 2 GiB; 0 for none.</summary>
+    public long Memory { get; init; } = 2L * 1024 * 1024 * 1024;
 
     /// <summary>Its process limit (HostConfig.PidsLimit): by default 512; null for none.</summary>
     public long? PidsLimit { get; init; } = 512;
@@ -180,9 +180,10 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
     /// <summary>
     /// What <c>docker info</c> says of the limits Docker enforces and the machine (<see cref="DockerLimits.Format"/>):
-    /// memory, CPU, process and swap limits, 4 CPUs and 8 GiB by default; null fails the command.
+    /// memory, CPU, process and swap limits, 4 CPUs and 8 GiB, cgroup v2 and a Docker host named docker-host by default,
+    /// then any warnings, one a line; null fails the command.
     /// </summary>
-    public string? DockerInfo { get; set; } = "true,true,true,true,4,8589934592";
+    public string? DockerInfo { get; set; } = "true,true,true,true,4,8589934592,2,docker-host";
 
     /// <summary>What docker says when it cannot answer (not running, not allowed).</summary>
     public string? DockerError { get; set; }
@@ -1395,8 +1396,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
     }
 
-    // A container with the limits the deploy script was given: CONTAINER_CPUS, CONTAINER_MEMORY and CONTAINER_PIDS_LIMIT. An
-    // empty CPU or memory limit leaves the container's own, as docker update does (a new container has none).
+    // A container with the limits the deploy script was given: CONTAINER_CPUS, CONTAINER_MEMORY and CONTAINER_PIDS_LIMIT,
+    // which the installer always gives. An empty CPU or memory limit leaves the container's own.
     private static FakeContainer WithLimits(FakeContainer container, IReadOnlyDictionary<string, string> environment)
     {
         var cpus = environment["CONTAINER_CPUS"];

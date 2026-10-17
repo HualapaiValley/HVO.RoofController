@@ -773,33 +773,56 @@ EOF
     fi
   }
 
-  # The controller's container runs with a process limit, and with a CPU and a memory limit only when the installer is
-  # given them (none by default, until a follow-up turns RoofController's default on, #138 item 6; docs/
-  # deployment.md, "The container's privileges and limits"). Docker drops a limit it cannot enforce with only a warning:
-  # Raspberry Pi OS boots with cgroup_disable=memory, for one. Here Docker must enforce the process limit; that it cannot
-  # enforce a CPU or memory limit is a note, as the installer refuses one it is given then. False when it fails.
+  # The controller's container always runs with a CPU, a memory (with no swap beyond it) and a process limit:
+  # RoofController's default of 1 vCPU and 2g, or the ones given (docs/deployment.md, "The container's privileges and
+  # limits"). Docker drops a limit it cannot enforce with only a warning: a Raspberry Pi's firmware adds
+  # cgroup_disable=memory to the kernel's command line, for one. So one docker info here must report MemoryLimit,
+  # SwapLimit, CPUCfsQuota and PidsLimit true (one it does not report counts as false), and at least a CPU: the installer
+  # and the deploy script refuse the machine otherwise (#149, as SkyMonitor #1285), with no override. Each finding
+  # fails, with the cgroup version, the kernel's cgroup v2 controllers, Docker's warnings about limits, and the remedy.
+  # False when one fails.
   check_docker_limits() {
-    local info memory cpu pids swap cpus missing=""
-    if ! info=$(as_root docker info --format '{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}' 2>/dev/null </dev/null); then
-      failed "Docker did not say which limits it enforces (docker info), and the controller's container runs with a process limit: check that docker info works, then run this again."
+    local info memory cpu pids swap cpus version line found=false host controllers=""
+    if ! info=$(as_root docker info --format $'{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}}\n{{range .Warnings}}{{println .}}{{end}}' 2>/dev/null </dev/null); then
+      failed "Docker did not say which limits it enforces (docker info), and the controller's container runs with a CPU, a memory and a process limit: check that docker info works, then run this again."
       return 1
     fi
-    IFS=, read -r memory cpu pids swap cpus _ <<<"${info}"
+    IFS=, read -r memory cpu pids swap cpus _ version <<<"${info%%$'\n'*}"
+    if [ "${memory}" != true ] || [ "${swap}" != true ]; then
+      failed "docker-memory-limit-unsupported: Docker reports MemoryLimit ${memory:-not reported} and SwapLimit ${swap:-not reported}, so it would run the controller without its memory limit (and no swap beyond it)"
+      found=true
+    fi
+    if [ "${cpu}" != true ]; then
+      failed "docker-cpu-quota-unsupported: Docker reports CPUCfsQuota ${cpu:-not reported}, so it would run the controller without its CPU limit"
+      found=true
+    fi
     if [ "${pids}" != true ]; then
-      failed "Docker does not enforce process limits (docker info: PidsLimit ${pids:-?}), and the controller's container runs with one: give the Docker daemon the pids cgroup controller, then run this again."
+      failed "docker-pids-limit-unsupported: Docker reports PidsLimit ${pids:-not reported}, so it would run the controller without its process limit"
+      found=true
+    fi
+    if ${found}; then
+      if [[ ${version} =~ ^[0-9]+$ ]]; then host="cgroup v${version}"; else host="cgroup version not reported"; fi
+      if [ -r "${root}/sys/fs/cgroup/cgroup.controllers" ] \
+          && controllers=$(head -c 512 "${root}/sys/fs/cgroup/cgroup.controllers" 2>/dev/null); then
+        host="${host}; /sys/fs/cgroup/cgroup.controllers: \"${controllers//[[:cntrl:]]/ }\""
+      fi
+      while IFS= read -r line; do
+        case "${line}" in
+          *[Ll][Ii][Mm][Ii][Tt]*|*[Cc][Ff][Ss]*|*[Cc][Gg][Rr][Oo][Uu][Pp]*) host="${host}; Docker warns \"${line//[[:cntrl:]]/ }\"" ;;
+        esac
+      done < <(tail -n +2 <<<"${info}")
+      note "Docker's host: ${host}"
+      if [ -n "${pi_model}" ]; then
+        note "To fix it: this Pi's firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), reboot with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. There is no override."
+      else
+        note "To fix it: give the Docker daemon the memory, cpu and pids cgroup controllers, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. There is no override."
+      fi
       return 1
     fi
-    ok "Docker enforces process limits"
-    [ "${memory}" = true ] || missing="memory"
-    [ "${cpu}" = true ] || missing="${missing:+${missing} and }CPU"
-    if [ -n "${missing}" ]; then
-      note "Docker does not enforce ${missing} limits (docker info: MemoryLimit ${memory:-?}, CPUCfsQuota ${cpu:-?}): the controller runs without CPU and memory limits by default, and the installer refuses one it is given here (--cpus, --memory). To give one, $([ -n "${pi_model}" ] && [ "${memory}" != true ] && printf 'add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot' || printf 'give the Docker daemon the memory and cpu cgroup controllers') first"
-    fi
-    if [ "${memory}" = true ] && [ "${swap}" != true ]; then
-      note "Docker cannot keep the controller's container from swapping (docker info: SwapLimit ${swap:-?}): a memory limit, if given, still holds"
-    fi
+    ok "Docker enforces memory, CPU and process limits"
     if [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus < 1)); then
-      note "This machine has ${cpus} CPU: a CPU limit for the controller is at least 1, so the installer refuses one here (--cpus)"
+      failed "Docker reports ${cpus} CPUs, and the controller's CPU limit is at least 1"
+      return 1
     fi
   }
 
