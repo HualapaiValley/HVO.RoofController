@@ -1169,11 +1169,13 @@ test_a_stock_pi_whose_docker_cannot_limit_memory_is_refused_with_the_boot_settin
   assert_output_not_contains "change cgroup_disable=memory"
 }
 
-test_docker_that_cannot_limit_swap_alone_is_refused_as_the_memory_limit() {
+test_docker_that_cannot_limit_swap_alone_is_refused_with_a_finding_of_its_own() {
+  # Memory and swap are separate controls: the memory limit holds, but the container could swap beyond it.
   install_sh FAKE_DOCKER_LIMITS=true,true,true,false,4,8589934592,2 -- --roles controller
 
   assert_stopped_by_checks
-  assert_output_contains "FAIL  docker-memory-limit-unsupported: Docker reports MemoryLimit true and SwapLimit false"
+  assert_output_contains "FAIL  docker-swap-limit-unsupported: Docker reports MemoryLimit true and SwapLimit false, so it would let the controller swap beyond its memory limit"
+  assert_output_not_contains "docker-memory-limit-unsupported"
 }
 
 test_a_rig_whose_docker_cannot_limit_cpu_is_refused() {
@@ -1221,6 +1223,67 @@ test_the_limits_are_checked_once_docker_is_installed() {
 
   assert_stopped_after "Docker was installed"
   assert_output_contains "FAIL  docker-pids-limit-unsupported: Docker reports PidsLimit false"
+}
+
+# A rollback is a recovery path (the owner's decision on #149, review ROOF-151-R1 F1): on each shape of a host whose
+# Docker cannot enforce a limit, the bootstrap launches the installer's rollback, with a loud warning of each limit and
+# the fix; an install or an upgrade there is refused.
+ROLLBACK_SHAPES=(
+  "false,true,true,false,4,8589934592,2|docker-memory-limit-unsupported"
+  "true,true,true,false,4,8589934592,2|docker-swap-limit-unsupported"
+  "true,false,true,true,4,8589934592,2|docker-cpu-quota-unsupported"
+  "false,false,true,false,4,8589934592,2|docker-memory-limit-unsupported docker-cpu-quota-unsupported"
+  "true,true,false,true,4,8589934592,2|docker-pids-limit-unsupported"
+  "false,false,false,false,4,8589934592,2|docker-memory-limit-unsupported docker-cpu-quota-unsupported docker-pids-limit-unsupported"
+)
+
+test_a_rollback_on_a_host_that_cannot_enforce_a_limit_launches_the_installer_with_a_loud_warning() {
+  local shape limits codes code
+  for shape in "${ROLLBACK_SHAPES[@]}"; do
+    IFS='|' read -r limits codes <<<"${shape}"
+    teardown
+    setup
+    record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
+    install_sh "FAKE_DOCKER_LIMITS=${limits}" -- --from "${WORK}/release" rollback
+
+    assert_status 0
+    assert_installer "args=[rollback]"
+    assert_output_contains "note  WARNING: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install or an upgrade is refused here until this is fixed:"
+    for code in docker-memory-limit-unsupported docker-swap-limit-unsupported docker-cpu-quota-unsupported docker-pids-limit-unsupported; do
+      if [[ " ${codes} " == *" ${code} "* ]]; then
+        assert_output_contains "note  WARNING: ${code}: Docker reports"
+      else
+        assert_output_not_contains "${code}"
+      fi
+    done
+    assert_output_contains "${PI_REMEDY}"
+    assert_output_not_contains "FAIL"
+  done
+}
+
+test_an_upgrade_on_a_host_that_cannot_enforce_a_limit_is_still_refused() {
+  local shape limits codes code
+  for shape in "${ROLLBACK_SHAPES[@]}"; do
+    IFS='|' read -r limits codes <<<"${shape}"
+    teardown
+    setup
+    record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
+    install_sh "FAKE_DOCKER_LIMITS=${limits}" -- upgrade
+
+    assert_stopped_by_checks
+    for code in ${codes}; do
+      assert_output_contains "FAIL  ${code}: Docker reports"
+    done
+    assert_output_not_contains "THE ROLLBACK GOES AHEAD"
+  done
+}
+
+test_a_rollback_still_needs_docker_to_answer() {
+  record "${WORK}/root/etc/hvo-roof/install.json" controller,kiosk
+  install_sh FAKE_DOCKER_LIMITS=fail -- --from "${WORK}/release" rollback
+
+  assert_stopped_by_checks
+  assert_output_contains "FAIL  Docker did not say which limits it enforces (docker info), and the controller's container runs with a CPU, a memory and a process limit"
 }
 
 test_roles_without_the_controller_do_not_check_the_limits() {

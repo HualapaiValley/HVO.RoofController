@@ -780,24 +780,37 @@ EOF
   # SwapLimit, CPUCfsQuota and PidsLimit true (one it does not report counts as false), and at least a CPU: the installer
   # and the deploy script refuse the machine otherwise (#149, as SkyMonitor #1285), with no override. Each finding
   # fails, with the cgroup version, the kernel's cgroup v2 controllers, Docker's warnings about limits, and the remedy.
-  # False when one fails.
+  # Memory and swap are separate controls: SwapLimit false alone is a finding of its own.
+  # A rollback is a recovery path (the owner's decision on #149): a limit Docker cannot enforce does not stop it. Each
+  # one is a loud warning instead, with the same details and the remedy, and the installer's rollback and the deploy
+  # script give the version it brings back the limits Docker can still enforce. Docker must still answer, and the CPU
+  # check still holds for CPU limits Docker enforces. False when one fails.
   check_docker_limits() {
-    local info memory cpu pids swap cpus version line found=false host controllers=""
+    local info memory cpu pids swap cpus version line found=false host controllers="" rollback=false
+    [ "${command}" != rollback ] || rollback=true
+    # A limit Docker cannot enforce: a failure, or for a rollback a warning.
+    limit_finding() { if ${rollback}; then note "WARNING: $*"; else failed "$*"; fi; }
     if ! info=$(as_root docker info --format $'{{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}}\n{{range .Warnings}}{{println .}}{{end}}' 2>/dev/null </dev/null); then
       failed "Docker did not say which limits it enforces (docker info), and the controller's container runs with a CPU, a memory and a process limit: check that docker info works, then run this again."
       return 1
     fi
     IFS=, read -r memory cpu pids swap cpus _ version <<<"${info%%$'\n'*}"
-    if [ "${memory}" != true ] || [ "${swap}" != true ]; then
-      failed "docker-memory-limit-unsupported: Docker reports MemoryLimit ${memory:-not reported} and SwapLimit ${swap:-not reported}, so it would run the controller without its memory limit (and no swap beyond it)"
+    if ${rollback} && { [ "${memory}" != true ] || [ "${swap}" != true ] || [ "${cpu}" != true ] || [ "${pids}" != true ]; }; then
+      note "WARNING: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. A rollback is a recovery path, so it is not refused (#149); an install or an upgrade is refused here until this is fixed:"
+    fi
+    if [ "${memory}" != true ]; then
+      limit_finding "docker-memory-limit-unsupported: Docker reports MemoryLimit ${memory:-not reported} and SwapLimit ${swap:-not reported}, so it would run the controller without its memory limit (and no swap beyond it)"
+      found=true
+    elif [ "${swap}" != true ]; then
+      limit_finding "docker-swap-limit-unsupported: Docker reports MemoryLimit true and SwapLimit ${swap:-not reported}, so it would let the controller swap beyond its memory limit"
       found=true
     fi
     if [ "${cpu}" != true ]; then
-      failed "docker-cpu-quota-unsupported: Docker reports CPUCfsQuota ${cpu:-not reported}, so it would run the controller without its CPU limit"
+      limit_finding "docker-cpu-quota-unsupported: Docker reports CPUCfsQuota ${cpu:-not reported}, so it would run the controller without its CPU limit"
       found=true
     fi
     if [ "${pids}" != true ]; then
-      failed "docker-pids-limit-unsupported: Docker reports PidsLimit ${pids:-not reported}, so it would run the controller without its process limit"
+      limit_finding "docker-pids-limit-unsupported: Docker reports PidsLimit ${pids:-not reported}, so it would run the controller without its process limit"
       found=true
     fi
     if ${found}; then
@@ -817,10 +830,11 @@ EOF
       else
         note "To fix it: give the Docker daemon the memory, cpu and pids cgroup controllers, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. There is no override."
       fi
-      return 1
+      ${rollback} || return 1
+    else
+      ok "Docker enforces memory, CPU and process limits"
     fi
-    ok "Docker enforces memory, CPU and process limits"
-    if [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus < 1)); then
+    if { ! ${rollback} || [ "${cpu}" = true ]; } && [[ ${cpus} =~ ^[0-9]+$ ]] && ((cpus < 1)); then
       failed "Docker reports ${cpus} CPUs, and the controller's CPU limit is at least 1"
       return 1
     fi

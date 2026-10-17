@@ -195,8 +195,10 @@ print(email.utils.formatdate(time.time() + int(sys.argv[1]), usegmt=True))' "${F
         ;;
       "info --format {{.DockerRootDir}}") printf '%s\n' "${FAKE_DOCKER_ROOT}" ;;
       # The limits it enforces and the machine (MemoryLimit, CPUCfsQuota, PidsLimit, SwapLimit, NCPU, MemTotal,
-      # CgroupVersion), then its warnings (FAKE_DOCKER_WARNINGS, separated by ';'), one a line.
+      # CgroupVersion), then its warnings (FAKE_DOCKER_WARNINGS, separated by ';'), one a line; FAKE_DOCKER_LIMITS=fail
+      # fails it, as a daemon that does not answer.
       "info --format {{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}}"*)
+        [ "${FAKE_DOCKER_LIMITS:-}" != fail ] || { echo "Error response from daemon: info failed" >&2; exit 1; }
         printf '%s\n' "${FAKE_DOCKER_LIMITS:-true,true,true,true,4,8589934592,2}"
         [ -z "${FAKE_DOCKER_WARNINGS:-}" ] || printf '%s\n' "${FAKE_DOCKER_WARNINGS}" | tr ';' '\n'
         ;;
