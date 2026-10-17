@@ -21,17 +21,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An upgrade that stopped part way (the new controller deployed, the kiosk's download failed) left the record saying
+  the old release, so `upgrade` to that release, or an older installer's install, wizard or `--plan`, could deploy the
+  older controller again without `rollback`. The record now says the new release from before the upgrade's first
+  change, marked `upgradingFrom` until it finishes, and its folder is synced to disk before that change, so a power
+  loss does not take it back (on a Mac with `F_FULLFSYNC`, never `fsync` in its place, so the record's folder must be
+  on a file system that supports it, as APFS on the Mac's own drive does); an upgrade that cannot sync it stops
+  (exit 1) with nothing else changed. `upgrade` again
+  finishes it, `rollback` goes back one release (with that release's files only), and anything older is refused
+  (exit 3), by older installers too. Until it is finished or rolled back, another release is refused as well (exit 3),
+  so that `rollback` still goes back to the controller the deploy script kept (#131).
+- A `--plan` without `sudo` for the machine's roles checked your own record's release instead of the machine's: it
+  refused a valid upgrade when your `hvo-roof` was newer, and skipped the check when you had no record. Each role's
+  record is now checked (#131).
 - **A controller that dies no longer leaves the drive running.** The SM-I-010 holds its relays as last written, so a
   controller crashed, killed or ended by the kernel during a move left the direction relay and the STOP permit
   energized until it started again, and for good when it could not start (a crash loop, a settings file it refuses).
   The container's supervisor now turns every relay off and verifies the register whenever the controller is not
   running: as soon as it exits, before each start, again after a failed try while the controller is not running, and
-  when the supervisor stops or ends otherwise. It uses the controller's own HAT access (`--relays-off`), never turns a relay on,
-  and makes the kernel end the web UI and then the controller before itself when memory runs out. On the x64 emulator
-  rig the relays were off 0.10-0.17 s after a kill during travel (2.0-2.4 s before, when the restarted controller turned
-  them off). A whole container killed (`docker kill`) still leaves them held until it starts again. The supervisor now
-  waits 22 s (was 25 s) for the controller's shutdown, then up to 5 s for the relays, so a stop still fits Docker's
-  30 s ([deployment.md](docs/deployment.md#the-relays-when-the-controller-exits), #138).
+  when the supervisor stops or ends otherwise. It uses the controller's own HAT access (`--relays-off`), never turns a
+  relay on, and makes the kernel end the web UI and then the controller before itself when memory runs out. On the x64
+  emulator rig the relays were off 0.10-0.17 s after a kill during travel (2.0-2.4 s before, when the restarted
+  controller turned them off). A whole container killed (`docker kill`) still leaves them held until it starts again.
+  The supervisor now waits 22 s (was 25 s) for the controller's shutdown, then up to 5 s for the relays, so a stop
+  still fits Docker's 30 s ([deployment.md](docs/deployment.md#the-relays-when-the-controller-exits), #138).
 
 ### Security
 
