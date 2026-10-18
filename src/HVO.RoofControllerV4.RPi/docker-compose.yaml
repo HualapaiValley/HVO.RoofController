@@ -19,10 +19,11 @@
 # docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_PIDS_LIMIT (default 512), HVO_ROOF_CPUS
 # (default 1) and HVO_ROOF_MEMORY (default 2g, with no swap beyond it), always: RoofController's default (owner decision
 # on #149). One that is set must be at least 1 vCPU and 1g, RoofController's floor; there is no setting for no limit.
-# The supervisor checks that floor before starting either process or the deployment check. Compose keeps no record of
-# the values: set them again for each `up`. Unlike the deploy script and the installer, which refuse a host whose Docker
-# cannot enforce the limits, Compose does not check: Docker drops a limit it cannot enforce with only a warning (a
-# Raspberry Pi's firmware turns the memory controller off). Check first that
+# The supervisor checks that floor before a deployment check and verifies its own cgroup v2 CPU, memory, zero-swap
+# and PID limits before either application starts. A refusal keeps relay-off/read-back retries alive until verified
+# off, then exits 2; cgroup v1 or unverifiable limits are refused. Compose keeps no record of the values: set them again
+# for each `up`. Docker can drop an unenforced limit with only a warning (a Raspberry Pi's firmware turns the memory
+# controller off), so retain the host precheck before starting Compose. Check first that
 #   docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'
 # prints true four times.
 #
