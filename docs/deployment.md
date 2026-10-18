@@ -1270,12 +1270,19 @@ update leaves the last good record:
 The script writes it once the new controller runs and has passed its checks (or the version a rollback brings back has
 started): a deploy that fails and puts the old controller back leaves the record as it was.
 
-Every read validates the newest record whole: its format, its generation (the label against the name), the run and the
-container it names, the floor, and the sources. One that fails is never applied, and an older one is never read in its
-place. A deploy that needs a value from it is refused before anything changes; one given both limits warns, and
-records its own in its place. A record written for another container than the running controller still comes first,
-with a warning that says so: the record of the deploy that started it could not be written, or something other than
-the script replaced it. The script says where each limit came from, and what it records:
+Every read validates the newest record whole (reviews ROOF-151-R3 F8 and F10). Each label is read on its own, as JSON on
+a line of its own (`{{json (index .Labels "…")}}`), so no value can pass for another or hold more of the record. Each
+must be plain: at most 40 letters, digits, `.`, `:`, `_` or `-`, so a space, a newline, a control character, a
+delimiter, a quote or a character outside ASCII refuses it. Then each label's whole value must be the one form the
+script writes: the format `1`; the generation of its name; `deploy` or `rollback`; a UTC time such as
+`2026-10-17T18:04:11Z`; 12 lower-case hex digits for the container; the CPUs as `1`, `1.5` or `2.05`, at least 1; the
+memory as `1024m` or `2g`, at least `1g` (no leading zero, no upper case, no other unit); and `set` or `default`.
+Nothing is trimmed or normalised first. The script, `install.sh` and the installer give the same reason for each, held
+to one table of cases (`tests/deploy/desired-limits-records.json`). A record that fails is never applied, and an older
+one is never read in its place. A deploy that needs a value from it is refused before anything changes; one given both
+limits warns, and records its own in its place. A record written for another container than the running controller still
+comes first, with a warning that says so: the record of the deploy that started it could not be written, or something
+other than the script replaced it. The script says where each limit came from, and what it records:
 
 ```text
 [deploy] The desired limits' record, roof-controller-limits-g3 (written by a deploy at 2026-10-17T18:04:11Z for container 4f1c2a9b7d3e): CPUs 1 (default), memory 3g (set)
@@ -1284,8 +1291,12 @@ the script replaced it. The script says where each limit came from, and what it 
 ```
 
 The installer reads the same records, resolves the limits the same way, and gives the script only the limits given. It
-warns when one given differs from the record's, and the one given comes first. Its uninstall and purge remove every
-record, whether or not the controller's container is there (review ROOF-151-R2 F6). A run that cannot remove one fails
+warns when one given differs from the record's, and the one given comes first. The uninstall and the purge of an install
+record that owns the controller remove every record, whether or not the controller's container is there (reviews
+ROOF-151-R2 F6, R3 F9 and F11). Owning it means the controller or rig role, or the controller settings the record keeps
+after an uninstall, so a purge later still owns them; a client-only uninstall (a person's `hvo-roof`) leaves another
+install's records alone. One that cannot list the records (Docker does not answer) is blocked before anything is
+removed, the install record included, so it can be run again once Docker answers. A run that cannot remove one fails
 before the install record says it is uninstalled, so running it again removes it. A reinstall therefore starts from the
 default. By hand, `docker volume rm` on the records forgets them. A `<name>-limits` volume of the earlier format (this
 change's first version, never released) is not read: it goes with the next record written, or with the uninstall.

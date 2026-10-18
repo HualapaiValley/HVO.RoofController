@@ -742,9 +742,13 @@ when that record was written for another container than the running controller. 
 applied: a run that needs a limit from it is refused (exit code 3), and one given both limits warns. `install.sh`
 resolves the CPU limit it checks the same way, and fails on a record that is not valid as the installer refuses it.
 `rollback` and `rollback --plan` say these warnings before anything changes, and the rollback logs them (review
-ROOF-151-R2 F7; a plan writes no log). `uninstall` and `uninstall --purge` remove every record, whether or not the
-controller's container is there (review ROOF-151-R2 F6); one that cannot remove a record fails before the install record
-says it is uninstalled, so running it again removes it, and a reinstall starts from the default.
+ROOF-151-R2 F7; a plan writes no log). `uninstall` and `uninstall --purge` of a record that owns the controller (its
+controller or rig role, or the controller settings it keeps after an uninstall) remove every record, whether or not the
+controller's container is there (reviews ROOF-151-R2 F6, R3 F9); uninstalling only a client leaves another install's
+records alone. One that cannot list the records, because Docker does not answer, is refused before it removes anything,
+the install record included (review ROOF-151-R3 F11): start Docker and run it again. One that cannot remove a record
+fails before the install record says it is uninstalled, so running it again removes it, and a reinstall starts from the
+default.
 
 A `rollback` is a recovery path, so a limit Docker cannot enforce does not refuse it (the owner's decision on #149):
 should a Pi lose its memory controller after an upgrade, the way back still works. It goes ahead, the deploy script
