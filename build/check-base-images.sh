@@ -34,10 +34,28 @@ errors=0
 # problem <file> <line, or empty> <message>
 problem() {
   local file=$1 line=$2 message=$3
-  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-    echo "::error file=${file}${line:+,line=${line}}::${message}"
-  fi
-  echo "check-base-images.sh: ${file}${line:+:${line}}: ${message}" >&2
+  # Repository text can reach both streams: the runner also reads stderr for workflow commands.
+  python3 - "${file}" "${line}" "${message}" "${GITHUB_ACTIONS:-}" <<'PYDIAGNOSTIC'
+import sys
+file, line, message, actions = sys.argv[1:]
+
+
+def controls(text, keep_newlines=False):
+    return "".join(f"\\u{ord(char):04x}" if (ord(char) < 32 or 127 <= ord(char) < 160)
+                   and not (keep_newlines and char in "\r\n") else char for char in text)
+
+
+def workflow(text, property=False):
+    text = controls(text, keep_newlines=True).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return text.replace(":", "%3A").replace(",", "%2C") if property else text
+
+
+if actions == "true":
+    location = workflow(file, property=True) + (",line=" + workflow(line, property=True) if line else "")
+    print(f"::error file={location}::{workflow(message)}")
+location = controls(file) + (":" + controls(line) if line else "")
+print(f"check-base-images.sh: {location}: {controls(message)}", file=sys.stderr)
+PYDIAGNOSTIC
   errors=$((errors + 1))
 }
 
@@ -222,9 +240,16 @@ pin="" roll_forward=""
 if [[ ! -f "${root}/${GLOBAL_JSON}" ]]; then
   problem "${GLOBAL_JSON}" "" "was not found."
 else
-  pin=$(jq -r '.sdk.version // ""' "${root}/${GLOBAL_JSON}" 2>/dev/null) || pin=""
+  # Validate before command substitution can strip trailing newlines, or any message can echo repository text.
+  sdk_number='(0|[1-9][0-9]*)'
+  sdk_prerelease='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+  sdk_version="\\A${sdk_number}\\.${sdk_number}\\.${sdk_number}(-${sdk_prerelease}(\\.${sdk_prerelease})*)?\\z"
+  if ! pin=$(jq -ers --arg format "${sdk_version}" 'select(length == 1) | .[0].sdk.version |
+      select(type == "string") | select(test($format))' "${root}/${GLOBAL_JSON}" 2>/dev/null); then
+    pin=""
+    problem "${GLOBAL_JSON}" "" "sdk.version must be a JSON string in MAJOR.MINOR.PATCH form with an optional prerelease."
+  fi
   roll_forward=$(jq -r '.sdk.rollForward // "patch"' "${root}/${GLOBAL_JSON}" 2>/dev/null) || roll_forward=""
-  [[ -n "${pin}" ]] || problem "${GLOBAL_JSON}" "" "has no sdk.version."
 fi
 
 # Exact matches always work; a later patch must stay in the same feature band and be explicitly allowed.
