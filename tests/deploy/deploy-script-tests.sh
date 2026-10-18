@@ -719,7 +719,7 @@ test_schema_container_label_cannot_spoof_immutable_image_capability() {
   seed_label roof-controller io.hvo.roof.identity-schema 2
   deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false FAKE_IDENTITY_DOCUMENT='{"schemaVersion":2}'
   assert_old_not_restarted_for_schema
-  docker_calls image | jq -es 'any(.[]; .[1] == "inspect" and .[3] == "{{index .Config.Labels \"io.hvo.roof.identity-schema\"}}" and (.[4] | test("^sha256:[0-9a-f]{64}$")))' >/dev/null \
+  docker_calls image | jq -es 'any(.[]; .[1] == "inspect" and .[3] == "{{json (index .Config.Labels \"io.hvo.roof.identity-schema\")}}" and (.[4] | test("^sha256:[0-9a-f]{64}$")))' >/dev/null \
     || fail_test "capability was not inspected from an immutable image ID"
 }
 
@@ -3557,9 +3557,9 @@ test_a_desired_limits_record_that_is_not_valid_is_never_applied() {
   for case in \
       "1 1 memory=512m|its memory '512m' is less than 1g, the minimum" \
       "1 1 cpus=0.5|its CPUs '0.5' are less than 1 vCPU, the minimum" \
-      "1 1 cpus=1.555|its CPUs '1.555' are not a number of CPUs with at most two decimals" \
-      "1 1 memory=2gb|its memory '2gb' is not a whole number of MiB or GiB" \
-      "1 1 memory=|its memory '' is not a whole number of MiB or GiB" \
+      "1 1 cpus=1.555|its CPUs '1.555' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)" \
+      "1 1 memory=2gb|its memory '2gb' is not a memory limit as the deploy script writes one (such as 1024m or 2g)" \
+      "1 1 memory=|its memory '' is not a memory limit as the deploy script writes one (such as 1024m or 2g)" \
       "1 1 =2|its format (io.hvo.roof.limits) is '2', not 1" \
       "1 1 =|its format (io.hvo.roof.limits) is '', not 1" \
       "3 3 generation=2|its generation label '2' is not the 3 of its name" \
@@ -3603,6 +3603,133 @@ test_a_desired_limits_record_that_is_not_valid_is_never_applied() {
   assert_confined "$(controller_run_args)" 2 3g 512
   [[ "$(desired_records)" == "roof-controller-limits-g3" && "$(desired_limits)" == "2 3g" ]] \
     || fail_test "the records are $(desired_records), the newest $(desired_limits)"
+}
+
+# seed_desired_limits_labels <labels JSON file>: the record roof-controller-limits-g3 with exactly these labels (values may
+# hold any character: newlines, delimiters, control characters).
+seed_desired_limits_labels() {
+  python3 - "${FAKE_STATE_DIR}/state.json" "$1" <<'PY'
+import json, sys
+path, labels_file = sys.argv[1:]
+with open(path) as f:
+    state = json.load(f)
+with open(labels_file, encoding="utf-8") as f:
+    labels = json.load(f)
+state.setdefault("volumes", {})["roof-controller-limits-g3"] = {"labels": labels}
+with open(path + ".tmp", "w") as f:
+    json.dump(state, f)
+PY
+  mv "${FAKE_STATE_DIR}/state.json.tmp" "${FAKE_STATE_DIR}/state.json"
+}
+
+# Every reader of the desired-limits records agrees, on one table (reviews ROOF-151-R3 F8, F10): the deploy script here,
+# install.sh and the installer read tests/deploy/desired-limits-records.json. Each label is read on its own, as JSON, and
+# its whole value checked; a record that is not one is refused with nothing changed.
+test_every_reader_agrees_on_the_desired_limits_records_the_deploy_script() {
+  local cases count index name problem cpus memory cpus_text
+  cases=$(mktemp -d)
+  count=$(python3 - "${TESTS_DIR}/desired-limits-records.json" "${cases}" <<'PY'
+import json, sys
+table, folder = sys.argv[1:]
+with open(table, encoding="utf-8") as f:
+    document = json.load(f)
+for index, case in enumerate(document["cases"]):
+    with open(f"{folder}/{index}.labels", "w", encoding="utf-8") as f:
+        json.dump(case["labels"], f)
+    for key in ("name", "problem", "cpus", "memory"):
+        with open(f"{folder}/{index}.{key}", "w", encoding="utf-8") as f:
+            f.write(case.get(key) or "")
+print(len(document["cases"]))
+PY
+)
+  for (( index = 0; index < count; index++ )); do
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    seed_desired_limits_labels "${cases}/${index}.labels"
+    problem=$(cat "${cases}/${index}.problem")
+    deploy "${HTTPS_ENV[@]}" FAKE_INFO_NCPU=1000 -- --dry-run
+    name=$(cat "${cases}/${index}.name")
+    if [[ -z "${problem}" ]]; then
+      cpus=$(cat "${cases}/${index}.cpus")
+      memory=$(cat "${cases}/${index}.memory")
+      if [[ "${cpus}" == 1 ]]; then cpus_text="1 CPU"; else cpus_text="${cpus} CPUs"; fi
+      if [[ "${STATUS}" != 0 || "${OUTPUT}" != *"[deploy] The container's limits: ${cpus_text} ("* \
+          || "${OUTPUT}" != *"), ${memory} of memory ("* ]]; then
+        fail_test "case '${name}': the valid record was not applied (exit ${STATUS})"
+      fi
+    else
+      if [[ "${STATUS}" != 1 \
+          || "${OUTPUT}" != *"The newest desired-limits record, roof-controller-limits-g3, is not valid: ${problem}. It is not applied, and nothing was changed"* ]]; then
+        fail_test "case '${name}': not refused with '${problem}' (exit ${STATUS})"
+      fi
+      assert_refused_unchanged "case '${name}'"
+    fi
+  done
+  rm -rf "${cases}"
+}
+
+# Review ROOF-151-R3 F8, as the reviewer gave it: a CPU label holding a whole valid-looking record and a newline, with the
+# record's own memory 512m. Refused, by a deploy and its dry run, with nothing changed.
+test_a_record_forged_inside_one_label_is_refused_with_nothing_changed() {
+  local mode
+  for mode in dry-run deploy; do
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    printf '%s\n' '{"io.hvo.roof.limits": "1", "io.hvo.roof.limits.generation": "3",
+      "io.hvo.roof.limits.cpus": "1|set|6g|set|deploy|2026-10-17T00:00:00Z|0123456789ab\n",
+      "io.hvo.roof.limits.cpus-source": "set", "io.hvo.roof.limits.memory": "512m", "io.hvo.roof.limits.memory-source": "set",
+      "io.hvo.roof.limits.written-by": "deploy", "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+      "io.hvo.roof.limits.controller": "0123456789ab"}' > "${WORK}/forged.json"
+    seed_desired_limits_labels "${WORK}/forged.json"
+    if [[ "${mode}" == dry-run ]]; then
+      deploy "${HTTPS_ENV[@]}" -- --dry-run
+    else
+      deploy "${HTTPS_ENV[@]}"
+    fi
+    assert_status 1
+    assert_output_contains "The newest desired-limits record, roof-controller-limits-g3, is not valid: its label io.hvo.roof.limits.cpus is not plain: at most 40 letters, digits, '.', ':', '_' or '-'. It is not applied, and nothing was changed"
+    assert_output_not_contains "6g of memory"
+    assert_refused_unchanged "a ${mode} with a forged record"
+    assert_container roof-controller current true unless-stopped
+  done
+}
+
+# The same class elsewhere (review ROOF-151-R3 F8's sweep): Docker output that one value could forge more of, read as
+# lines. The previous container's environment: an entry whose value holds lines that look like the emulator's settings
+# does not make the version brought back an emulator's.
+test_an_environment_value_holding_lines_does_not_forge_the_emulator_settings() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_env roof-controller-previous $'NOTE=x\nHatEmulator__Enabled=true\nHatEmulator__Host=hat-emulator\nHatEmulator__Port=5291'
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 0
+  assert_output_not_contains "deployed for the HAT emulator"
+  assert_output_contains "HAT: hatMode Physical."
+  assert_container roof-controller old true unless-stopped
+}
+
+# The web UI's scheme, from the version brought back's RoofWeb__Urls: a value holding a line with another is not it.
+test_an_environment_value_holding_lines_does_not_forge_the_web_uis_scheme() {
+  seed_container roof-controller current true 8443:8443 8088:8088
+  seed_container roof-controller-previous old false 8443:8443 8088:8088
+  seed_env roof-controller-previous RoofWeb__Urls=https://+:8088 $'NOTE=x\nRoofWeb__Urls=http://+:8088'
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 0
+  assert_output_contains "[verify] Web UI live inside the container (https)"
+  assert_output_not_contains "(http)"
+}
+
+# The identity-schema label of an image: only exactly 1, 2 or 3 (or none); one with a newline after it is not one.
+test_schema_capability_with_a_newline_blocks_recovery() { schema_unknown_auto_recovery FAKE_OLD_IDENTITY_CAPABILITY=$'2\n'; }
+
+# The Compose project label: one that is only spaces is still a label Compose's tools made, so the container is refused.
+test_a_compose_project_label_of_spaces_is_still_composes() {
+  seed_container roof-controller current true 8443:8443
+  seed_label roof-controller com.docker.compose.project "   "
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 1
+  assert_output_contains "roof-controller was created by Docker Compose (project"
+  assert_refused_unchanged "a deploy over a container with a Compose project label of spaces"
 }
 
 # Volumes that are not records (another name, a generation that is not a number, the earlier format's <name>-limits of

@@ -5,8 +5,11 @@ Keeps containers in $FAKE_STATE_DIR/state.json (keyed by name, each with a 64-he
 (as JSON) to $FAKE_STATE_DIR/calls.log. Commands take a container name or an ID prefix, as docker does. A container's
 docker state is "running" or "exited" from its "running" flag, or its optional "state" (paused, restarting, created);
 stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex>|id=<prefix> and Go-style --format
-({{.Label "<key>"}} reads the container's optional "labels", as a Compose-created container has).
-`inspect` supports two --format templates: '{{range .Config.Env}}{{println .}}{{end}}', the --env/-e values the
+({{.Label "<key>"}} reads the container's optional "labels", as a Compose-created container has, and
+{{json (.Label "<key>")}} the same as JSON). A template's {{json ...}} writes JSON as Docker's does (Go's encoding/json,
+without HTML escapes), {{println}} a newline.
+`inspect` supports these --format templates: '{{range .Config.Env}}{{println .}}{{end}}' (and the same with each value
+as JSON, '{{range .Config.Env}}{{json .}}{{println}}{{end}}'), the --env/-e values the
 container was run with (its "options"), and '{{.State.Status}} {{.RestartCount}}', its docker state and optional
 "restart_count". Starting a stopped container resets the count to 0, as docker start does; starting a running or
 restarting one changes nothing, and starting a paused one fails. The deploy script's HostConfig template reports the
@@ -255,6 +258,21 @@ def host_config(c):
         json.dumps(option_values(options, "--security-opt") or None, separators=(",", ":"))])
 
 
+def go_json(value):
+    """A value as Docker's template function json writes it (Go's encoding/json, HTML characters not escaped)."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
+def render_labels(fmt, labels):
+    """A template's {{index .Labels "k"}} (the value as it is) and {{json (index .Labels "k")}} (JSON) of the labels."""
+    fmt = re.sub(r'\{\{json \(index \.(?:Config\.)?Labels "([^"]+)"\)\}\}', lambda m: go_json(labels.get(m.group(1), "")), fmt)
+    fmt = re.sub(r'\{\{index \.(?:Config\.)?Labels "([^"]+)"\}\}', lambda m: labels.get(m.group(1), ""), fmt)
+    return fmt.replace("{{println}}", "\n")
+
+
+ENV_FORMATS = ("{{json .Config.Env}}", "{{range .Config.Env}}{{println .}}{{end}}", "{{range .Config.Env}}{{json .}}{{println}}{{end}}")
+
+
 def inspect(state, args):
     fmt, refs, i = None, [], 0
     while i < len(args):
@@ -263,7 +281,7 @@ def inspect(state, args):
         else:
             refs.append(args[i])
             i += 1
-    if fmt not in ("{{json .Config.Env}}", "{{range .Config.Env}}{{println .}}{{end}}", "{{.State.Status}} {{.RestartCount}}", "{{.Image}}", "{{.HostConfig.RestartPolicy.Name}}", HOST_CONFIG_FORMAT):
+    if fmt not in (*ENV_FORMATS, "{{.State.Status}} {{.RestartCount}}", "{{.Image}}", "{{.HostConfig.RestartPolicy.Name}}", HOST_CONFIG_FORMAT):
         die(f"fake docker: unsupported inspect format: {fmt}")
     for ref in refs:
         _, c = container(state, ref)
@@ -286,6 +304,8 @@ def inspect(state, args):
                 values.append("RoofControllerSecurity__Identity__StorePath=/var/lib/hvo-roof/identity/identity.json")
             if fmt == "{{json .Config.Env}}":
                 out(json.dumps(values))
+            elif fmt == "{{range .Config.Env}}{{json .}}{{println}}{{end}}":
+                out("".join(f"{go_json(e)}\n" for e in values))
             else:
                 out("".join(f"{e}\n" for e in values))
 
@@ -295,6 +315,8 @@ IMAGE_FORMATS = {
     "{{.Os}}/{{.Architecture}}": "platform",
     '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} '
     '{{index .Labels "org.opencontainers.image.revision"}}{{end}}': "labels",
+    '{{with .Config}}{{json (index .Labels "org.opencontainers.image.version")}}{{println}}'
+    '{{json (index .Labels "org.opencontainers.image.revision")}}{{end}}': "json-labels",
     "{{.Id}}": "id",
 }
 
@@ -391,14 +413,15 @@ def image_inspect(state, args):
         else:
             refs.append(args[i])
             i += 1
-    if fmt == '{{index .Config.Labels "io.hvo.roof.identity-schema"}}':
+    if fmt in ('{{index .Config.Labels "io.hvo.roof.identity-schema"}}', '{{json (index .Config.Labels "io.hvo.roof.identity-schema")}}'):
         for ref in refs:
             matches = [c for c in state["containers"].values()
                        if ref == "sha256:" + hashlib.sha256(c["kind"].encode()).hexdigest()]
             if not matches:
                 die("Unknown immutable image ID")
             c = matches[0]
-            out(os.environ.get("FAKE_" + c["kind"].upper() + "_IDENTITY_CAPABILITY", ""))
+            value = os.environ.get("FAKE_" + c["kind"].upper() + "_IDENTITY_CAPABILITY", "")
+            out(render_labels(fmt, {"io.hvo.roof.identity-schema": value}))
         return
     field = IMAGE_FORMATS.get(fmt)
     if field is None:
@@ -413,7 +436,7 @@ def image_inspect(state, args):
                     f"wanted {platform}, actual: {image['platform']}")
             # The image's own record (its digests) is still there; the platform's fields are empty.
             if field != "digests":
-                out({"platform": "/", "labels": ""}[field])
+                out({"platform": "/", "labels": "", "json-labels": '""\n""'}[field])
                 continue
         if field == "digests":
             out("".join(f"{d}\n" for d in image["repo_digests"]))
@@ -421,6 +444,8 @@ def image_inspect(state, args):
             out(platform or image["platform"])
         elif field == "id":
             out(image.get("id", ref))
+        elif field == "json-labels":
+            out(f"{go_json(image['version'])}\n{go_json(image['revision'])}")
         else:
             out(f"{image['version']} {image['revision']}")
 
@@ -685,7 +710,8 @@ def ps(state, args):
                     return c.get("labels", {}).get(m.group(2), "")
                 return fields[m.group(1)]
 
-            out(re.sub(r'\{\{\.(\w+)(?: "([^"]*)")?\}\}', field, fmt))
+            line = re.sub(r'\{\{json \(\.Label "([^"]*)"\)\}\}', lambda m: go_json(c.get("labels", {}).get(m.group(1), "")), fmt)
+            out(re.sub(r'\{\{\.(\w+)(?: "([^"]*)")?\}\}', field, line))
 
 
 def run(state, args, image):
@@ -813,7 +839,7 @@ def main():
             if name not in volumes:
                 die(f"Error response from daemon: get {name}: no such volume")
             labels = volumes[name].get("labels", {})
-            out(re.sub(r'\{\{index \.Labels "([^"]+)"\}\}', lambda m: labels.get(m.group(1), ""), fmt))
+            out(render_labels(fmt, labels))
             return
         if sub == "rm":
             name = rest[-1]

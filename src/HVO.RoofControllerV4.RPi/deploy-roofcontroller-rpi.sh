@@ -649,6 +649,12 @@ name_filter() {
   printf 'name=^/%s$' "${1//./\\.}"
 }
 
+# Docker output that one value could forge more of is read as JSON, one string a line (review ROOF-151-R3 F8): a value
+# holding a newline, a delimiter or a control character cannot pass for another. A string that holds no escape (no
+# control character, quote or backslash) is plain, and its text is between the quotes.
+PLAIN_JSON_STRING='^"[^"\\]*"$'
+ENV_FORMAT='{{range .Config.Env}}{{json .}}{{println}}{{end}}'
+
 # lookup_container <docker ps filter>: sets CSTATE (running | stopped | missing), CID (full ID), CNAME and CPROJECT (the
 # Docker Compose project that created it, or empty) for the one container matching the filter. Returns 1 when Docker cannot be asked or the answer is ambiguous; callers must then
 # stop, because treating an unknown container as missing could start a second controller next to it or remove it while
@@ -657,8 +663,10 @@ name_filter() {
 lookup_container() {
   local lines state
   CSTATE="" CID="" CNAME="" CPROJECT=""
+  # The Compose project label as JSON (review ROOF-151-R3 F8): one line, whatever it holds, and present even when it is
+  # only spaces.
   lines=$(dockerc ps -a --no-trunc --filter "$1" \
-    --format '{{.State}} {{.ID}} {{.Names}} {{.Label "com.docker.compose.project"}}') || return 1
+    --format '{{.State}} {{.ID}} {{.Names}} {{json (.Label "com.docker.compose.project")}}') || return 1
   if [[ -z "${lines}" ]]; then
     CSTATE=missing
     return 0
@@ -666,6 +674,11 @@ lookup_container() {
   [[ "${lines}" != *$'\n'* ]] || return 1
   read -r state CID CNAME CPROJECT <<<"${lines}"
   [[ -n "${CID}" ]] || return 1
+  # None is "" (or null); a plain one is its text; one holding an escape is kept as JSON, which names it safely.
+  case "${CPROJECT}" in
+    '""'|null|"") CPROJECT="" ;;
+    *) [[ ! "${CPROJECT}" =~ ${PLAIN_JSON_STRING} ]] || CPROJECT=${CPROJECT:1:${#CPROJECT}-2} ;;
+  esac
   case "${state}" in
     exited|created|dead) CSTATE=stopped ;;
     *) CSTATE=running ;;
@@ -678,17 +691,21 @@ container_state() {
 }
 
 # Sets PREVIOUS_EMULATOR to the emulator's host:port when the stopped previous version was deployed in HAT emulator mode,
-# otherwise to empty; returns 1 when Docker cannot be asked. Reads the keys this script sets (EXTRA_DOCKER_ARGS cannot set
-# them); the last one wins, as in .NET.
+# otherwise to empty; returns 1 when Docker cannot be asked, 2 when a HatEmulator setting is not plain (it cannot be told
+# from another). Reads the keys this script sets (EXTRA_DOCKER_ARGS cannot set them); the last one wins, as in .NET. Each
+# entry is one JSON string, so a value holding lines that look like these settings is not one of them.
 read_previous_hat() {
-  local env line enabled="" host="" port=""
+  local env line value enabled="" host="" port=""
   PREVIOUS_EMULATOR=""
-  env=$(dockerc inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${PREVIOUS_ID}") || return 1
+  env=$(dockerc inspect --format "${ENV_FORMAT}" "${PREVIOUS_ID}") || return 1
   while IFS= read -r line; do
-    case "${line}" in
-      HatEmulator__Enabled=*) enabled=${line#*=} ;;
-      HatEmulator__Host=*) host=${line#*=} ;;
-      HatEmulator__Port=*) port=${line#*=} ;;
+    [[ "${line}" == '"HatEmulator__'* ]] || continue
+    [[ "${line}" =~ ${PLAIN_JSON_STRING} ]] || return 2
+    value=${line:1:${#line}-2}
+    case "${value}" in
+      HatEmulator__Enabled=*) enabled=${value#*=} ;;
+      HatEmulator__Host=*) host=${value#*=} ;;
+      HatEmulator__Port=*) port=${value#*=} ;;
     esac
   done <<<"${env}"
   [[ "${enabled}" != "true" ]] || PREVIOUS_EMULATOR="${host}:${port}"
@@ -925,12 +942,15 @@ wait_ready() {
 
 # The web UI's scheme in container $1 (http or https), from the first of its URLs (RoofWeb__Urls, the last one given,
 # as in .NET). Returns 1 when the container has no web UI: a version from before the web UI, whose image does not set
-# RoofWeb__Urls; or 2 when Docker cannot be asked.
+# RoofWeb__Urls; or 2 when Docker cannot be asked, or its RoofWeb__Urls is not plain. Each entry is one JSON string.
 web_ui_scheme() {
   local env line urls=""
-  env=$(dockerc inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1") || return 2
+  env=$(dockerc inspect --format "${ENV_FORMAT}" "$1") || return 2
   while IFS= read -r line; do
-    [[ "${line}" != RoofWeb__Urls=* ]] || urls=${line#*=}
+    [[ "${line}" == '"RoofWeb__Urls='* ]] || continue
+    [[ "${line}" =~ ${PLAIN_JSON_STRING} ]] || return 2
+    urls=${line:1:${#line}-2}
+    urls=${urls#*=}
   done <<<"${env}"
   [[ -n "${urls}" ]] || return 1
   printf '%s\n' "${urls%%://*}"
@@ -1125,7 +1145,20 @@ show_containers() {
 DESIRED_PREFIX="${CONTAINER_NAME}-limits-g"
 DESIRED_LEGACY="${CONTAINER_NAME}-limits"
 DESIRED_LABEL=io.hvo.roof.limits
-DESIRED_FORMAT="{{index .Labels \"${DESIRED_LABEL}\"}}|{{index .Labels \"${DESIRED_LABEL}.generation\"}}|{{index .Labels \"${DESIRED_LABEL}.cpus\"}}|{{index .Labels \"${DESIRED_LABEL}.cpus-source\"}}|{{index .Labels \"${DESIRED_LABEL}.memory\"}}|{{index .Labels \"${DESIRED_LABEL}.memory-source\"}}|{{index .Labels \"${DESIRED_LABEL}.written-by\"}}|{{index .Labels \"${DESIRED_LABEL}.written-at\"}}|{{index .Labels \"${DESIRED_LABEL}.controller\"}}"
+# The record's labels, in the order every reader reads and checks them (this script, install.sh and the installer, held
+# to one table: tests/deploy/desired-limits-records.json). docker volume inspect writes each as JSON on a line of its
+# own, so no label's value can pass for another's, or for more of the record (review ROOF-151-R3 F8).
+DESIRED_LABELS=("${DESIRED_LABEL}" "${DESIRED_LABEL}.generation" "${DESIRED_LABEL}.cpus" "${DESIRED_LABEL}.cpus-source"
+  "${DESIRED_LABEL}.memory" "${DESIRED_LABEL}.memory-source" "${DESIRED_LABEL}.written-by" "${DESIRED_LABEL}.written-at"
+  "${DESIRED_LABEL}.controller")
+DESIRED_FORMAT=""
+for desired_label in "${DESIRED_LABELS[@]}"; do
+  DESIRED_FORMAT+="${DESIRED_FORMAT:+$'\n'}{{json (index .Labels \"${desired_label}\")}}"
+done
+# A label's JSON as a record holds it: at most 40 letters, digits, '.', ':', '_' or '-', spelt out rather than as ranges,
+# which some locales stretch beyond ASCII. Anything else (a space, a control character, a newline, a delimiter, a quote,
+# a backslash, a character outside ASCII) is not a record's.
+DESIRED_PLAIN='^"[0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:_-]{0,40}"$'
 # What read_desired_limits finds: DESIRED_STATE none, valid or invalid (DESIRED_PROBLEM says why); the newest record
 # (DESIRED_NEWEST, its generation DESIRED_GENERATION), its values and sources, and who wrote it (DESIRED_WRITTEN, and the
 # controller's container, DESIRED_CONTROLLER); the highest generation there is (DESIRED_HIGHEST), and every record
@@ -1134,39 +1167,39 @@ DESIRED_STATE=none DESIRED_PROBLEM="" DESIRED_NEWEST="" DESIRED_GENERATION=0 DES
 DESIRED_CPUS="" DESIRED_CPUS_SOURCE="" DESIRED_MEMORY="" DESIRED_MEMORY_SOURCE="" DESIRED_CONTROLLER=""
 DESIRED_VOLUMES=()
 
-# desired_problem <cpus> <cpu source> <memory> <memory source>: why a record's values are not ones a deploy gives (the
-# format, the floor), or nothing.
+# desired_problem <format> <generation> <cpus> <cpu source> <memory> <memory source> <written by> <written at>
+# <controller>: why a record's labels, each its whole value, are not the ones a deploy writes (nothing before or after,
+# no other spelling: no leading zero, no trailing zero in the CPUs, the unit in lower case), or nothing. install.sh and
+# the installer give the same reasons, in the same order.
 desired_problem() {
-  local cpus_pattern='^([0-9]{1,3})(\.([0-9]{1,2}))?$' memory_pattern='^([0-9]{1,6})([mMgG])$' fraction bytes
-  if [[ ! "$1" =~ ${cpus_pattern} ]]; then
-    echo "its CPUs '$1' are not a number of CPUs with at most two decimals"
-    return
+  local cpus='^(0|[123456789][0123456789]{0,2})(\.[0123456789]?[123456789])?$'
+  local memory='^([123456789][0123456789]{0,5})([mg])$' controller='^[0123456789abcdef]{12}$'
+  local time='^[0123456789]{4}-[0123456789]{2}-[0123456789]{2}T[0123456789]{2}:[0123456789]{2}:[0123456789]{2}Z$'
+  if [[ "$1" != 1 ]]; then
+    echo "its format (${DESIRED_LABEL}) is '$1', not 1"
+  elif [[ "$2" != "${DESIRED_GENERATION}" ]]; then
+    echo "its generation label '$2' is not the ${DESIRED_GENERATION} of its name"
+  elif [[ "$7" != deploy && "$7" != rollback ]] || [[ ! "$9" =~ ${controller} ]]; then
+    echo "it does not say which run wrote it, and for which container ('$7', '$9')"
+  elif [[ ! "$8" =~ ${time} ]]; then
+    echo "its time '$8' is not a UTC time such as 2026-10-17T18:04:11Z"
+  elif [[ ! "$3" =~ ${cpus} ]]; then
+    echo "its CPUs '$3' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+  elif [[ "$3" == 0* ]]; then
+    echo "its CPUs '$3' are less than 1 vCPU, the minimum"
+  elif [[ ! "$5" =~ ${memory} ]]; then
+    echo "its memory '$5' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+  elif [[ "${BASH_REMATCH[2]}" == m ]] && (( 10#${BASH_REMATCH[1]} < 1024 )); then
+    echo "its memory '$5' is less than 1g, the minimum"
+  elif [[ "$4" != set && "$4" != default ]] || [[ "$6" != set && "$6" != default ]]; then
+    echo "its sources '$4' and '$6' are not set or default"
   fi
-  fraction="${BASH_REMATCH[3]}00"
-  if (( 10#${BASH_REMATCH[1]} * 100 + 10#${fraction:0:2} < 100 )); then
-    echo "its CPUs '$1' are less than 1 vCPU, the minimum"
-    return
-  fi
-  if [[ ! "$3" =~ ${memory_pattern} ]]; then
-    echo "its memory '$3' is not a whole number of MiB or GiB"
-    return
-  fi
-  bytes=$(( 10#${BASH_REMATCH[1]} * 1048576 ))
-  [[ "${BASH_REMATCH[2]}" != [gG] ]] || bytes=$(( bytes * 1024 ))
-  if (( bytes < 1073741824 )); then
-    echo "its memory '$3' is less than 1g, the minimum"
-    return
-  fi
-  case "$2:$4" in
-    set:set|set:default|default:set|default:default) ;;
-    *) echo "its sources '$2' and '$4' are not set or default" ;;
-  esac
 }
 
 # read_desired_limits: the records there are, and the newest one, read and validated (the variables above). Returns 1
 # when Docker cannot be asked.
 read_desired_limits() {
-  local names name generation fields schema label_generation by at
+  local names name generation fields line index values=()
   DESIRED_STATE=none DESIRED_PROBLEM="" DESIRED_NEWEST="" DESIRED_GENERATION=0 DESIRED_HIGHEST=0 DESIRED_WRITTEN=""
   DESIRED_CPUS="" DESIRED_CPUS_SOURCE="" DESIRED_MEMORY="" DESIRED_MEMORY_SOURCE="" DESIRED_CONTROLLER=""
   DESIRED_VOLUMES=()
@@ -1178,7 +1211,7 @@ read_desired_limits() {
     fi
     [[ "${name}" == "${DESIRED_PREFIX}"* ]] || continue
     generation=${name#"${DESIRED_PREFIX}"}
-    [[ "${generation}" =~ ^[1-9][0-9]{0,8}$ ]] || continue
+    [[ "${generation}" =~ ^[123456789][0123456789]{0,8}$ ]] || continue
     DESIRED_VOLUMES+=("${name}")
     if (( generation > DESIRED_HIGHEST )); then
       DESIRED_HIGHEST=${generation}
@@ -1188,17 +1221,26 @@ read_desired_limits() {
   [[ -n "${DESIRED_NEWEST}" ]] || return 0
   DESIRED_GENERATION=${DESIRED_HIGHEST}
   fields=$(dockerc volume inspect --format "${DESIRED_FORMAT}" "${DESIRED_NEWEST}") || return 1
-  IFS='|' read -r schema label_generation DESIRED_CPUS DESIRED_CPUS_SOURCE DESIRED_MEMORY DESIRED_MEMORY_SOURCE by at \
-    DESIRED_CONTROLLER <<<"${fields}"
-  DESIRED_WRITTEN="written by a ${by:-?} at ${at:-?} for container ${DESIRED_CONTROLLER:-?}"
-  if [[ "${schema}" != "1" ]]; then
-    DESIRED_PROBLEM="its format (${DESIRED_LABEL}) is '${schema}', not 1"
-  elif [[ "${label_generation}" != "${DESIRED_GENERATION}" ]]; then
-    DESIRED_PROBLEM="its generation label '${label_generation}' is not the ${DESIRED_GENERATION} of its name"
-  elif [[ "${by}" != deploy && "${by}" != rollback ]] || [[ ! "${DESIRED_CONTROLLER}" =~ ^[0-9a-f]{12}$ ]]; then
-    DESIRED_PROBLEM="it does not say which run wrote it, and for which container ('${by}', '${DESIRED_CONTROLLER}')"
+  # Each label is one JSON string on a line of its own; each must be plain, and is then checked whole.
+  while IFS= read -r line; do
+    values+=("${line}")
+  done <<<"${fields}"
+  if (( ${#values[@]} != ${#DESIRED_LABELS[@]} )); then
+    DESIRED_PROBLEM="its labels could not be read as one JSON string each"
   else
-    DESIRED_PROBLEM=$(desired_problem "${DESIRED_CPUS}" "${DESIRED_CPUS_SOURCE}" "${DESIRED_MEMORY}" "${DESIRED_MEMORY_SOURCE}")
+    for (( index = 0; index < ${#values[@]}; index++ )); do
+      if [[ ! "${values[index]}" =~ ${DESIRED_PLAIN} ]]; then
+        DESIRED_PROBLEM="its label ${DESIRED_LABELS[index]} is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+        break
+      fi
+      values[index]=${values[index]:1:${#values[index]}-2}
+    done
+  fi
+  if [[ -z "${DESIRED_PROBLEM}" ]]; then
+    DESIRED_CPUS=${values[2]} DESIRED_CPUS_SOURCE=${values[3]} DESIRED_MEMORY=${values[4]} DESIRED_MEMORY_SOURCE=${values[5]}
+    DESIRED_CONTROLLER=${values[8]}
+    DESIRED_WRITTEN="written by a ${values[6]:-?} at ${values[7]:-?} for container ${DESIRED_CONTROLLER:-?}"
+    DESIRED_PROBLEM=$(desired_problem "${values[@]}")
   fi
   if [[ -n "${DESIRED_PROBLEM}" ]]; then
     DESIRED_STATE=invalid
@@ -1228,7 +1270,9 @@ write_desired_limits() {
   next=$(( DESIRED_HIGHEST + 1 ))
   name="${DESIRED_PREFIX}${next}"
   at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  labels="1|${next}|${CONTAINER_CPUS}|${cpus_source}|${CONTAINER_MEMORY}|${memory_source}|${by}|${at}|${container:0:12}"
+  # As docker volume inspect writes the record back: each label as JSON (each plain) on a line of its own.
+  labels=$(printf '"%s"\n' 1 "${next}" "${CONTAINER_CPUS}" "${cpus_source}" "${CONTAINER_MEMORY}" "${memory_source}" "${by}" \
+    "${at}" "${container:0:12}")
   if ! dockerc volume create --label "${DESIRED_LABEL}=1" --label "${DESIRED_LABEL}.generation=${next}" \
       --label "${DESIRED_LABEL}.cpus=${CONTAINER_CPUS}" --label "${DESIRED_LABEL}.cpus-source=${cpus_source}" \
       --label "${DESIRED_LABEL}.memory=${CONTAINER_MEMORY}" --label "${DESIRED_LABEL}.memory-source=${memory_source}" \
@@ -2278,10 +2322,14 @@ check_loaded_image() {
   [[ "${platform}" != "/" ]] || platform=""
   [[ "${platform}" == "${BUILD_PLATFORM}" ]] \
     || fail "The image ${loaded} from ${IMAGE_ARCHIVE} is not for ${BUILD_PLATFORM} (Docker reports '${platform:-no image for that platform}'). The running controller was not touched."
+  # Each label as JSON on a line of its own; one that is not plain is not shown.
   labels=$(dockerc image inspect ${inspect_platform_args[@]+"${inspect_platform_args[@]}"} \
-      --format '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} {{index .Labels "org.opencontainers.image.revision"}}{{end}}' \
+      --format '{{with .Config}}{{json (index .Labels "org.opencontainers.image.version")}}{{println}}{{json (index .Labels "org.opencontainers.image.revision")}}{{end}}' \
       "${loaded}" 2>/dev/null) || labels=""
-  read -r version revision <<<"${labels}" || true
+  version="" revision=""
+  { IFS= read -r version; IFS= read -r revision; } <<<"${labels}" || true
+  if [[ "${version}" =~ ${PLAIN_JSON_STRING} ]]; then version=${version:1:${#version}-2}; else version=""; fi
+  if [[ "${revision}" =~ ${PLAIN_JSON_STRING} ]]; then revision=${revision:1:${#revision}-2}; else revision=""; fi
   echo "[load] ${IMAGE_DIGEST} for ${platform}, image ${loaded}: version ${version:-unknown}${revision:+, commit ${revision:0:12}}"
   DEPLOY_IMAGE=${loaded}
   image_platform_args=(--platform "${BUILD_PLATFORM}" --pull never --label "${RELEASE_IMAGE_LABEL}=${IMAGE_REF}")
@@ -2367,10 +2415,11 @@ identity_schema_compatible() {
   fi
   image=$(dockerc inspect --format '{{.Image}}' "${target}" 2>/dev/null) || return 1
   [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
-  capability=$(dockerc image inspect --format '{{index .Config.Labels "io.hvo.roof.identity-schema"}}' "${image}" 2>/dev/null) || return 1
+  # As JSON: exactly 1, 2 or 3 (or none), with nothing before or after (review ROOF-151-R3 F8).
+  capability=$(dockerc image inspect --format '{{json (index .Config.Labels "io.hvo.roof.identity-schema")}}' "${image}" 2>/dev/null) || return 1
   case "${capability}" in
-    ""|"<no value>") capability=1 ;;
-    1|2|3) ;;
+    '""'|null) capability=1 ;;
+    '"1"'|'"2"'|'"3"') capability=${capability:1:1} ;;
     *) SCHEMA_FAILURE="the target image declares an unsupported identity schema"; return 1 ;;
   esac
   env=$(dockerc inspect --format '{{json .Config.Env}}' "${target}" 2>/dev/null) || return 1
@@ -2757,8 +2806,13 @@ if [[ "${ROLLBACK}" == "true" ]]; then
 
   # The HAT the previous version was deployed for, known before anything is stopped. The hatMode check once it runs
   # stays the backstop, for a HatEmulator setting from elsewhere (the secrets directory).
-  read_previous_hat \
-    || fail "Could not read the environment of ${PREVIOUS_CONTAINER_NAME} from Docker. Nothing was changed; check the Docker context and retry."
+  hat_read=0
+  read_previous_hat || hat_read=$?
+  case "${hat_read}" in
+    0) ;;
+    2) fail "${PREVIOUS_CONTAINER_NAME} has a HatEmulator setting holding a control character, a quote or a backslash, which cannot be told from another: this script does not roll back to it. Nothing was changed." ;;
+    *) fail "Could not read the environment of ${PREVIOUS_CONTAINER_NAME} from Docker. Nothing was changed; check the Docker context and retry." ;;
+  esac
   if [[ -n "${PREVIOUS_EMULATOR}" ]]; then
     [[ "${ALLOW_EMULATED_HAT}" == "true" ]] \
       || fail "${PREVIOUS_CONTAINER_NAME} was deployed for the HAT emulator at ${PREVIOUS_EMULATOR}, not the physical HAT, and does not operate the roof. Nothing was changed. To roll back to it on a test rig, set ALLOW_EMULATED_HAT=true."
