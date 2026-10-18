@@ -15,6 +15,8 @@
 #              controller hung during travel (C11 12); the processes' OOM preference (C11 13); relays that cannot be
 #              verified off holding the controller stopped until they are (C11 14); the supervisor itself killed during
 #              travel (C11); and the web UI's user, environment and keys directory.
+#   limits     Expected CPU, memory, zero swap and PID limits verified against the supervisor's own cgroup (#152),
+#              with both applications refused but retained energized emulator registers verified off (C11 step 15).
 #   c12        commissioning.md C12 with deploy-roofcontroller-rpi.sh: an idle deploy, a deploy while the roof moves,
 #              pre-flight failures, a remote-check failure that rolls back, --rollback twice, a Stop that cannot be
 #              verified, a new controller that never becomes ready, a new web UI that cannot start, and the relays off
@@ -50,7 +52,7 @@
 # start while a roof-controller container, or this run's emulator container or network, exists. Only a run that got
 # past that check removes them on exit; the images stay (the build cache).
 #
-#   tests/emulator/deploy-scenarios.sh [lifecycle] [supervisor] [c12] [migration] [pull]   (all five by default, in that order)
+#   tests/emulator/deploy-scenarios.sh [lifecycle] [supervisor] [limits] [c12] [migration] [pull]   (all six by default, in that order)
 #
 # Settings (environment): SCN_HTTPS_PORT (the controller's published HTTPS port, default 18443), SCN_WEB_PORT (the web
 # UI's published HTTPS port, default 18088), SCN_EMULATOR_PORT (the emulator's control API on loopback, default 15390),
@@ -2314,14 +2316,22 @@ scenario_pull() {
   pass "deployed ${offline_digest:0:19}... from its offline archive in ${offline_seconds} s with the registry gone, run by its ID ${loaded_id:0:19}... with the release-image label; an archive of another image changed nothing; --rollback swapped to the pulled version and back; relays 0 throughout"
 }
 
+# Resource-limit regressions are kept separately to avoid expanding the supervisor lifecycle scenario.
+# shellcheck source=tests/emulator/supervisor-limits-scenarios.sh
+source "${repo_root}/tests/emulator/supervisor-limits-scenarios.sh"
+scenario_limits() {
+  # CommissioningCheck("C11", "15")
+  run_limits_scenarios
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 
 scenarios=("$@")
-(( ${#scenarios[@]} > 0 )) || scenarios=(lifecycle supervisor c12 migration pull)
+(( ${#scenarios[@]} > 0 )) || scenarios=(lifecycle supervisor limits c12 migration pull)
 for scenario in "${scenarios[@]}"; do
   case "${scenario}" in
-    lifecycle|supervisor|c12|migration|pull) ;;
-    *) echo "Unknown scenario: ${scenario} (lifecycle, supervisor, c12, migration or pull)" >&2; exit 2 ;;
+    lifecycle|supervisor|limits|c12|migration|pull) ;;
+    *) echo "Unknown scenario: ${scenario} (lifecycle, supervisor, limits, c12, migration or pull)" >&2; exit 2 ;;
   esac
 done
 
