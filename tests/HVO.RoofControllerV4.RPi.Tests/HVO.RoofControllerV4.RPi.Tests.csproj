@@ -36,6 +36,8 @@
 
   <ItemGroup>
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+    <AssemblyMetadata Include="C14BuildSdkVersion" Value="$(NETCoreSdkVersion)" />
+    <AssemblyMetadata Include="C14BuildConfiguration" Value="$(Configuration)" />
   </ItemGroup>
 
   <ItemGroup>
