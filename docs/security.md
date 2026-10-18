@@ -70,7 +70,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin (not a PIN session) | 200, 204 | 401, 403 (`CredentialNotAllowed`), 404, 503 |
 | `GET  /openapi/v4.json`                                  | Admin (API key or session) outside Development | 200 | 401, 403 |
 | `GET  /health`                                           | Viewer (API key or session) | 200, or 503 (with the JSON body) when Unhealthy | 401 |
-| `GET  /health/live`, `GET /health/ready`                 | anonymous         | 200 / 503 | none |
+| `GET /health/live`, `GET /health/ready`, `GET /health/available`                 | anonymous         | 200 / 503 | none |
 | `GET  /ca.crt`                                           | anonymous         | 200 `application/x-x509-ca-cert`: the PEM of the self-signed CA at the top of the served certificate's chain, never a key | 404 when the certificate has no CA with it; 403 (`https_required`) over plain HTTP from another host |
 | `/hubs/roof` (SignalR status hub, with `/hubs/roof/negotiate`) | Viewer (API key or session) | status messages ([Status hub](#status-hub)) | 401, 403 (`https_required`) |
 
@@ -695,7 +695,7 @@ neither. When both are empty, no `Authorization` header is sent. An empty `BaseU
 
 | Setting | Default | Effect |
 |---------|---------|--------|
-| `RoofControllerSecurity:RequireHttps` | `true` outside Development | Plain-HTTP requests from non-loopback clients get 403 `https_required` instead of being served. There is no redirect, because a redirect would already have exposed the key. Loopback requests are exempt, as are `/health/live` and `/health/ready`. Setting `false` in Production logs a warning. |
+| `RoofControllerSecurity:RequireHttps` | `true` outside Development | Plain-HTTP requests from non-loopback clients get 403 `https_required` instead of being served. There is no redirect, because a redirect would already have exposed the key. Loopback requests are exempt, as are `/health/live`, `/health/ready` and `/health/available`. Setting `false` in Production logs a warning. |
 | `RoofControllerSecurity:AllowAnonymousStop` | `false` | Lets unauthenticated callers use `POST .../Stop`. Logs a warning. |
 | `AllowedHosts` | `*` | Set it to the controller's host names (for example `roof-pi;roof-pi.local;localhost`) to refuse DNS-rebinding requests. The list must include `localhost`: the container health check and the deploy script's in-container calls use it, and the [deployment check](deployment.md#the-deployment-check) refuses a list without it. Production logs a warning while it is `*`. |
 
@@ -708,14 +708,14 @@ HSTS is sent only when an HTTPS endpoint is configured.
 
 `/health` reports the served certificate as `https_certificate`: Unhealthy when it cannot be read or has expired,
 Degraded within 30 days of expiry, Healthy otherwise or when there is no HTTPS listener. Like `identity_store`, it is not
-a hardware check, so readiness and deploys do not fail on it. The installer renews the certificate
+a hardware check, so operational readiness does not fail on it; deployment availability does. The installer renews the certificate
 ([install.md](install.md#renewing)).
 
 Plain HTTP is a choice the installer asks you to confirm by typing `http`: over it, API keys, passwords and session tokens
 cross the network readable. An unattended install gives it as `httpConfirmation` in its answers file; the wizard never
 saves it, so each machine is confirmed on its own ([install.md](install.md#answers-files)).
 
-Because `/health/ready` is exempt, readiness passes even when every remote API request would get 403. The deployment
+Because `/health/available` and `/health/ready` are exempt, a probe can pass even when every remote API request would get 403. The deployment
 check (`--validate-deployment`, run first by the deploy script and by both Pi compose profiles, `pi` and
 `pi-lan-http`; the test-rig `emulator` profile does not run it) therefore fails when
 `RequireHttps` is in effect without an HTTPS listener, or with a certificate that cannot be loaded. See

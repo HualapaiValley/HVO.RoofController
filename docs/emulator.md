@@ -79,8 +79,9 @@ A controller in emulator mode cannot be mistaken for the roof:
 | Startup log | Warnings from `HVO.RoofControllerV4.RPi.HatEmulation` and `RoofControllerServiceV4` naming the endpoint. The HAT library's own `Mode: Physical I²C` line is expected: the library takes its hardware path, and only the register accesses go to the emulator. |
 | Telemetry | Resource attributes `hvo.roof.hat.mode=emulated` and `hvo.roof.hat.emulator.endpoint` |
 
-`/health/ready` still answers 200 while Degraded, so container health checks and the deploy script work against a
-test rig.
+`/health/ready` still answers 200 while Degraded. Docker and deployment use `/health/available`, which also permits
+a safely stopped, classified plant fault while requiring healthy fresh I/O. Operational health still fails for a latch
+([deployment health](deployment.md#health-and-readiness)).
 
 ## Emulator mode outside Development
 
@@ -244,8 +245,9 @@ key, both generated for the run.
 | `migration` | [Moving between Compose and the deploy script](deployment.md#moving-between-compose-and-the-deploy-script): the `pi` profile on the emulator (a Compose override maps no devices and points the controller at the emulator), the script refusing its container, the move to the script, `docker compose up` failing on the name while the script's controller runs, and the move back to the Compose version. The deploy script's `--verify-remote` checks each Compose controller from this machine under a Docker context that does not exist, so any Docker call would fail. A key the controller does not know gets 401. A person added on the Compose controller, their session, and a setting changed through the API (saved to `appsettings.Local.json`, mode 644) carry over to the script's controller and back. Both controllers report the two log levels as changeable through the API, from the shipped defaults, since the image sets no log level in its environment. The Compose controller runs with the default limits, given to Docker and to its supervisor. |
 
 ```bash
-tests/emulator/deploy-scenarios.sh                      # all five
-tests/emulator/deploy-scenarios.sh c12                  # one
+tests/emulator/deploy-scenarios.sh                      # all six (plant_fault first)
+tests/emulator/deploy-scenarios.sh plant_fault          # first install and upgrade with drive power off
+tests/emulator/deploy-scenarios.sh c12                  # deployment gates and rollback
 SCN_RESULTS_DIR=out tests/emulator/deploy-scenarios.sh  # also writes out/deploy-scenarios.md, with the timings
 ```
 

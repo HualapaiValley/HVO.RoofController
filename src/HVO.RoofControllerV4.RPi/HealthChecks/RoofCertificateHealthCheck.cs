@@ -11,7 +11,7 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks;
 /// <summary>
 /// Reports the certificate the controller serves: Unhealthy when it cannot be read or has expired (clients refuse it),
 /// Degraded within 30 days of its expiry, otherwise Healthy (also when no certificate file is configured). Not tagged
-/// "hardware", so it never fails the readiness probe or a deploy.
+/// "hardware", so it never fails operational readiness; it does participate in deployment availability.
 /// </summary>
 internal sealed class RoofCertificateHealthCheck : IHealthCheck
 {

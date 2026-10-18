@@ -389,7 +389,7 @@ test_a_crash_loop_leaves_the_controller_stopped_and_the_web_ui_up() {
   run_healthcheck
   expect_equal "health check status" "${STATUS}" 1
   expect_equal "health check output" "${OUTPUT}" \
-    "controller: NOT READY (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running"
+    "controller: NOT AVAILABLE (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running"
   # And docker stop still stops the web UI.
   stop_supervisor
   expect_equal "supervisor exit status" "${STOP_STATUS}" 0
@@ -1747,8 +1747,8 @@ test_health_is_the_controllers_readiness_with_the_web_ui_alongside() {
   run_healthcheck
   expect_equal "status" "${STATUS}" 0
   expect_equal "output" "${OUTPUT}" \
-    "controller: ready; web UI: live; supervisor: controller running, web UI running"
-  grep -qF "http://localhost:8080/health/ready" "${FAKE_DIR}/curl.log" || fail_test "the controller's readiness was not asked"
+    "controller: available; web UI: live; supervisor: controller running, web UI running"
+  grep -qF "http://localhost:8080/health/available" "${FAKE_DIR}/curl.log" || fail_test "the controller's readiness was not asked"
   grep -qF "http://localhost:8088/health/live" "${FAKE_DIR}/curl.log" || fail_test "the web UI's liveness was not asked"
 }
 
@@ -1758,11 +1758,11 @@ test_health_fails_when_the_controller_is_not_ready_even_with_the_web_ui_live() {
   run_healthcheck
   expect_equal "status" "${STATUS}" 1
   expect_equal "output" "${OUTPUT}" \
-    "controller: NOT READY (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running"
+    "controller: NOT AVAILABLE (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running"
   echo 503 >"${FAKE_DIR}/curl-8080.code"
   run_healthcheck
   expect_equal "status (503)" "${STATUS}" 1
-  [[ "${OUTPUT}" == "controller: NOT READY (HTTP 503);"* ]] || fail_test "output: ${OUTPUT}"
+  [[ "${OUTPUT}" == "controller: NOT AVAILABLE (HTTP 503);"* ]] || fail_test "output: ${OUTPUT}"
 }
 
 test_health_stays_healthy_when_only_the_web_ui_is_down() {
@@ -1771,7 +1771,7 @@ test_health_stays_healthy_when_only_the_web_ui_is_down() {
   run_healthcheck
   expect_equal "status" "${STATUS}" 0
   expect_equal "output" "${OUTPUT}" \
-    "controller: ready; web UI: DOWN (HTTP 000); supervisor: controller running, web UI restarting"
+    "controller: available; web UI: DOWN (HTTP 000); supervisor: controller running, web UI restarting"
 }
 
 test_health_checks_the_web_ui_on_its_own_https_port() {
@@ -1779,7 +1779,7 @@ test_health_checks_the_web_ui_on_its_own_https_port() {
   echo 200 >"${FAKE_DIR}/curl-9443.code"
   run_healthcheck "RoofWeb__Urls=https://+:9443;http://localhost:9080"
   expect_equal "status" "${STATUS}" 0
-  expect_equal "output" "${OUTPUT}" "controller: ready; web UI: live; supervisor: controller unknown, web UI unknown"
+  expect_equal "output" "${OUTPUT}" "controller: available; web UI: live; supervisor: controller unknown, web UI unknown"
   grep -F "https://localhost:9443/health/live" "${FAKE_DIR}/curl.log" | grep -q -- "-sk" \
     || fail_test "the web UI's HTTPS liveness was not asked on loopback without certificate checks"
 }
@@ -1796,7 +1796,7 @@ test_health_asks_both_at_once() {
   run_healthcheck
   seconds=$(awk -v a="${started}" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.3f", b - a }')
   expect_equal "status" "${STATUS}" 0
-  expect_equal "output" "${OUTPUT}" "controller: ready; web UI: live; supervisor: controller running, web UI running"
+  expect_equal "output" "${OUTPUT}" "controller: available; web UI: live; supervisor: controller running, web UI running"
   awk -v s="${seconds}" 'BEGIN { exit !(s >= 2 && s < 3.5) }' || fail_test "the check took ${seconds}s, expected 2-3.5s"
 }
 

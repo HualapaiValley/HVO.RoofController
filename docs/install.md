@@ -101,7 +101,9 @@ controller on the observatory's Pi:
   without the Pi ([C1](commissioning.md#c1-independent-hardware-stop-path)), hold it open until the install is done.
   Leave the drive powered: the controller reads a drive with no power as a drive fault (IN3 low,
   [hardware overview](projects/roof-controller-v4-rpi/hardware-overview.md#93-vfd-healthyfault-input---in3)) and
-  latches it, and the deploy then fails its readiness check.
+  latches `DriveFault`. The install now keeps the safely stopped controller and warns, so you can inspect and
+  recover it remotely. Restore the drive, check the cause and settings, then explicitly `ClearFault` before motion;
+  installation never clears the latch. See [Health and readiness](deployment.md#health-and-readiness).
 - **Commission it** before you first open the roof from the new controller: go through the
   [commissioning checks](commissioning.md) and the installation assumptions they depend on.
 

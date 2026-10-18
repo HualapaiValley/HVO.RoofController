@@ -110,6 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Deploys and first installs keep a safely stopped controller with a classified drive or limit fault, with a warning
+  naming the fault and requiring repair and explicit `ClearFault`, instead of removing it or rolling back. Docker
+  uses software availability; operational `/health` and `/health/ready` still fail on latched faults. Input/relay,
+  initialization, authentication, HAT-mode, TLS and web checks remain strict; older images retain strict readiness (#94).
+
 - `restore` now makes what it puts back durable (each file and folder with its owner, then the folders above them)
   before the install that follows relies on it; a sync that fails stops it before that install (exit 1) (#130).
 - An upgrade that stopped part way (the new controller deployed, the kiosk's download failed) left the record saying

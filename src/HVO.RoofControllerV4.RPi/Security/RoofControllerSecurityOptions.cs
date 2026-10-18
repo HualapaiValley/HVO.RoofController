@@ -28,7 +28,7 @@ public sealed class RoofControllerSecurityOptions
 
     /// <summary>
     /// When true, requests that are not HTTPS are refused with 403 (<c>https_required</c>), except loopback
-    /// connections and the anonymous <c>/health/live</c> and <c>/health/ready</c> probes. When unset, the default is
+    /// connections and the anonymous <c>/health/live</c>, <c>/health/ready</c> and <c>/health/available</c> probes. When unset, the default is
     /// true outside the Development environment.
     /// </summary>
     public bool? RequireHttps { get; set; }
