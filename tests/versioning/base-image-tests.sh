@@ -83,6 +83,23 @@ check "pinned and matching" 0 \
   "Build image ${SDK_REF} (src/global.json: 10.0.402) and runtime image ${RUNTIME_REF}, in ${RPI} ${EMULATOR} ${DEV} ${GUEST}" \
   "${SCRIPT}" "${r}"
 
+# #155 F2: python3 must fail once at startup with a fixed stderr diagnostic.
+mkdir -p "${WORK}/without-python"
+missing_python() {
+  local status output
+  PATH="${WORK}/without-python" GITHUB_ACTIONS="$1" "${BASH}" "${SCRIPT}" "$2" \
+    > "${WORK}/missing-python.stdout" 2> "${WORK}/missing-python.stderr"
+  status=$?
+  output=$(<"${WORK}/missing-python.stderr")
+  printf '%s\n' "${output}"
+  [[ ! -s "${WORK}/missing-python.stdout" && "${output}" == 'check-base-images.sh: python3 is required.' ]] || return 99
+  return "${status}"
+}
+for mode in false true; do
+  check "python3 is required at startup (${mode})" 1 'check-base-images.sh: python3 is required.' \
+    missing_python "${mode}" "${r}"
+done
+
 # F1: a Dependabot-shaped product-only bump must fail until every workflow follows it.
 r=$(repo ci-sdk-drift)
 for file in "${RPI}" "${EMULATOR}"; do
@@ -165,18 +182,92 @@ r=$(repo multiple-global-json)
 printf '{"sdk":{"version":"10.0.402"}}\n{"sdk":{"version":"10.0.403"}}\n' > "${r}/src/global.json"
 check "multiple JSON documents are refused" 1 "${invalid_sdk}" "${SCRIPT}" "${r}"
 
+# #155 item 4: no object may hold a duplicate key, even outside sdk or with escaped spelling.
+for document in \
+  '{"sdk":{"version":"10.0.100","version":"10.0.402","rollForward":"patch"}}' \
+  '{"sdk":{"version":"10.0.402","version":"10.0.100","rollForward":"patch"}}' \
+  '{"sdk":{"version":"10.0.100"},"sdk":{"version":"10.0.402"}}' \
+  '{"sdk":{"version":"10.0.402","rollForward":"disable","rollForward":"patch"}}' \
+  '{"sdk":{"version":"10.0.402"},"other":1,"other":2}' \
+  '{"sdk":{"version":"10.0.402"},"other":[{"nested":1,"nested":2}]}' \
+  '{"sdk":{"version":"10.0.100","ver\u0073ion":"10.0.402"}}'; do
+  r=$(repo "duplicate-global-key-${PASSED}-${FAILED}")
+  printf '%s\n' "${document}" > "${r}/src/global.json"
+  for mode in false true; do
+    check "duplicate global.json key is refused (${mode})" 1 'src/global.json: duplicate JSON keys are not allowed.' \
+      env GITHUB_ACTIONS="${mode}" "${SCRIPT}" "${r}"
+  done
+done
+# jq accepts a UTF-8 BOM and large numbers; neither may bypass duplicate-key detection.
+for kind in bom large-number; do
+  r=$(repo "duplicate-global-${kind}")
+  python3 - "${r}/src/global.json" "${kind}" <<'PYDUPLICATE'
+import sys
+from pathlib import Path
+path, kind = Path(sys.argv[1]), sys.argv[2]
+prefix = '\ufeff' if kind == 'bom' else ''
+number = ',"large":' + '9' * 5000 if kind == 'large-number' else ''
+path.write_text(prefix + '{"sdk":{"version":"10.0.402"}' + number + ',"other":1,"other":2}')
+PYDUPLICATE
+  for mode in false true; do
+    check "duplicate keys with ${kind} are refused (${mode})" 1 'src/global.json: duplicate JSON keys are not allowed.' \
+      env GITHUB_ACTIONS="${mode}" "${SCRIPT}" "${r}"
+  done
+done
+r=$(repo separate-global-keys)
+printf '%s\n' '{"sdk":{"version":"10.0.402"},"a":{"key":1},"b":{"key":2}}' > "${r}/src/global.json"
+for mode in false true; do
+  check "equal keys in separate objects are allowed (${mode})" 0 "Build image ${SDK_REF}" \
+    env GITHUB_ACTIONS="${mode}" "${SCRIPT}" "${r}"
+done
+
 # Check both output streams: plain stderr is also read for workflow commands by the runner.
 safe_diagnostics() {
-  local output status
+  local expected_annotations=$1
+  shift
+  local output status line annotations=0 unexpected=0
   output=$("$@" 2>&1)
   status=$?
-  if [[ "${output}" == *$'\033'* || "${output}" == *$'\r'* || "${output}" == *$'\n::warning::'* ]]; then
+  while IFS= read -r line; do
+    line=${line#"${line%%[! ]*}"}
+    if [[ "${line}" == ::* ]]; then
+      annotations=$((annotations + 1))
+      [[ "${line}" == '::error file='* ]] || unexpected=1
+    fi
+  done <<<"${output}"
+  if [[ "${output}" == *$'\033'* || "${output}" == *$'\r'* || ${unexpected} -ne 0 \
+    || ${annotations} -ne ${expected_annotations} ]]; then
     printf 'unsafe diagnostic output\n'
     return 99
   fi
   printf '%s\n' "${output}"
   return "${status}"
 }
+# #155 F3: exercise the assertion itself, including commands after leading spaces.
+diagnostic_fixture() {
+  printf '%s\n' "$1"
+  return 1
+}
+annotation='::error file=src/global.json::fixed diagnostic'
+for prefix in '' ' ' '    '; do
+  for command in '::warning::synthetic' '::error::synthetic' '::add-mask::synthetic'; do
+    check "unexpected workflow command ${prefix}${command}" 99 'unsafe diagnostic output' \
+      safe_diagnostics 1 diagnostic_fixture "${annotation}"$'\n'"${prefix}${command}"
+  done
+done
+check "missing expected annotation is unsafe" 99 'unsafe diagnostic output' \
+  safe_diagnostics 1 diagnostic_fixture 'fixed stderr diagnostic'
+check "extra error-file annotation is unsafe" 99 'unsafe diagnostic output' \
+  safe_diagnostics 1 diagnostic_fixture "${annotation}"$'\n'"${annotation}"
+check "two expected annotations cannot become one" 99 'unsafe diagnostic output' \
+  safe_diagnostics 2 diagnostic_fixture "${annotation}"
+check "terminal diagnostics need no annotations" 1 'fixed stderr diagnostic' \
+  safe_diagnostics 0 diagnostic_fixture 'fixed stderr diagnostic'
+check "one expected error-file annotation is safe" 1 "${annotation}" \
+  safe_diagnostics 1 diagnostic_fixture "${annotation}"
+check "two expected error-file annotations are safe" 1 "${annotation}" \
+  safe_diagnostics 2 diagnostic_fixture "${annotation}"$'\n'"${annotation}"
+
 r=$(repo injected-sdk)
 python3 - "${r}/src/global.json" <<'PYSDK'
 import json
@@ -185,11 +276,39 @@ from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({"sdk": {"version": "10.0.402\n::warning::synthetic\x1b[31m"}}))
 PYSDK
 check "SDK workflow-command and ANSI injection is refused safely" 1 "${invalid_sdk}" \
-  safe_diagnostics env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
+  safe_diagnostics 1 env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
 
 # A valid prerelease pin reaches the ordinary compatibility check, rather than the malformed-input rejection.
 r=$(repo prerelease-pin "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF}" 10.0.402-preview.1)
 check "valid SDK prerelease is accepted as input" 1 "does not satisfy src/global.json (10.0.402-preview.1" "${SCRIPT}" "${r}"
+
+# #155 item 5: match the whole JSON value against the documented, case-sensitive policies.
+# https://learn.microsoft.com/en-us/dotnet/core/tools/global-json#rollforward
+invalid_roll_forward='sdk.rollForward must be one of patch, feature, minor, major, latestPatch, latestFeature, latestMinor, latestMajor or disable.'
+for value in 'null' 'false' 'true' '100' '[]' '{}' '""' '"Patch"' '"latestpatch"' \
+  '" patch"' '"patch "' '"patch\n"' '"patch\t"' '"patch\r"' '"patch\u0000"' \
+  '"feature\n"' '"patch\n ::warning::synthetic"' '"unsupported"'; do
+  r=$(repo "invalid-policy-${PASSED}-${FAILED}")
+  printf '{"sdk":{"version":"10.0.402","rollForward":%s}}\n' "${value}" > "${r}/src/global.json"
+  for mode in false true; do
+    check "invalid rollForward JSON ${value} (${mode})" 1 "${invalid_roll_forward}" \
+      env GITHUB_ACTIONS="${mode}" "${SCRIPT}" "${r}"
+  done
+done
+for policy in patch feature minor major latestPatch latestFeature latestMinor latestMajor disable; do
+  r=$(repo "valid-policy-${policy}")
+  printf '{"sdk":{"version":"10.0.402","rollForward":"%s"}}\n' "${policy}" > "${r}/src/global.json"
+  for mode in false true; do
+    check "documented rollForward ${policy} allows the exact SDK (${mode})" 0 "Build image ${SDK_REF}" \
+      env GITHUB_ACTIONS="${mode}" "${SCRIPT}" "${r}"
+  done
+done
+r=$(repo default-policy)
+printf '{"sdk":{"version":"10.0.402"}}\n' > "${r}/src/global.json"
+for mode in false true; do
+  check "missing rollForward keeps the patch default (${mode})" 0 "Build image ${SDK_REF}" \
+    env GITHUB_ACTIONS="${mode}" "${SCRIPT}" "${r}"
+done
 
 # rollForward is also repository text in a diagnostic; preserve annotation boundaries and terminal safety.
 r=$(repo injected-policy "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF}" 10.0.403)
@@ -202,8 +321,15 @@ data = json.loads(path.read_text())
 data["sdk"]["rollForward"] = "patch%\r\n::warning::synthetic\x1b[31m"
 path.write_text(json.dumps(data))
 PYPOLICY
-check "annotation data escapes percent CR LF and ANSI" 1 'rollForward: patch%25%0D%0A::warning::synthetic\u001b[31m' \
-  safe_diagnostics env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
+check "invalid rollForward injection is refused safely" 1 "${invalid_roll_forward}" \
+  safe_diagnostics 1 env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
+
+# A valid rollForward mismatch still produces exactly the two product Dockerfile annotations.
+r=$(repo policy-mismatch "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF}" 10.0.403)
+sed 's/"patch"/"disable"/' "${r}/src/global.json" > "${r}/src/global.json.tmp"
+mv "${r}/src/global.json.tmp" "${r}/src/global.json"
+check "rollForward mismatch has exactly two error-file annotations" 1 'rollForward: disable' \
+  safe_diagnostics 2 env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
 
 r=$(repo workflow-property)
 mv "${r}/.github/workflows/ci.yml" "${r}/.github/workflows/ci%:,injected.yml"
@@ -211,6 +337,28 @@ sed 's/10.0.402/10.0.403/' "${r}/.github/workflows/ci%:,injected.yml" > "${r}/.g
 mv "${r}/.github/workflows/tmp" "${r}/.github/workflows/ci%:,injected.yml"
 check "workflow filename annotation property is escaped" 1 '::error file=.github/workflows/ci%25%3A%2Cinjected.yml,line=6::' \
   env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
+
+# #155 F1: workflow paths must not cross the newline/TAB record boundaries.
+workflow_path_rejection() {
+  local output status
+  output=$(safe_diagnostics "$@")
+  status=$?
+  printf '%s\n' "${output}"
+  [[ "${output}" != *raw-source-sentinel* ]] || return 99
+  return "${status}"
+}
+for name in $'bad\nraw-source-sentinel.yml' $'bad\traw-source-sentinel.yml' \
+  $'a\n  ::warning::raw-source-sentinel\t9\tmsg.yml'; do
+  r=$(repo "workflow-control-${PASSED}-${FAILED}")
+  printf "dotnet-version: '10.0.403'\n" > "${r}/.github/workflows/${name}"
+  for mode in false true; do
+    expected_annotations=0
+    [[ "${mode}" != true ]] || expected_annotations=1
+    check "workflow control characters are refused (${mode})" 1 \
+      '.github/workflows:1: workflow paths must not contain control characters' \
+      workflow_path_rejection "${expected_annotations}" env GITHUB_ACTIONS="${mode}" "${SCRIPT}" "${r}"
+  done
+done
 
 # global.json can keep the dev container's minimum while product builds use a later patched SDK.
 PATCH_REF="${SDK}:10.0.403@$(digest sdk-next-patch)"

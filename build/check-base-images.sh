@@ -12,6 +12,11 @@
 # Needs python3 and jq, and docker buildx for --registry. Dependabot moves the tags and digests (.github/dependabot.yml).
 set -euo pipefail
 
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'check-base-images.sh: python3 is required.\n' >&2
+  exit 1
+fi
+
 SDK=mcr.microsoft.com/dotnet/sdk
 RUNTIME=mcr.microsoft.com/dotnet/aspnet
 DEV_IMAGE=mcr.microsoft.com/devcontainers/dotnet
@@ -63,10 +68,6 @@ PYDIAGNOSTIC
 # This deliberately supports a bounded Dockerfile grammar, not arbitrary frontends or shell lexing. See BuildKit's
 # frontend/dockerfile/parser/{parser.go,directives.go,split_command.go} for continuation and heredoc boundaries.
 logical_froms() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    printf '1\tpython3 is required to parse logical Dockerfile instructions\n'
-    return 1
-  fi
   python3 - "$1" <<'PY'
 import json
 import re
@@ -239,6 +240,35 @@ PY
 pin="" roll_forward=""
 if [[ ! -f "${root}/${GLOBAL_JSON}" ]]; then
   problem "${GLOBAL_JSON}" "" "was not found."
+elif ! python3 - "${root}/${GLOBAL_JSON}" <<'PYKEYS'
+import json
+import sys
+
+
+class DuplicateKey(Exception):
+    pass
+
+
+def unique_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateKey
+        result[key] = value
+    return result
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8-sig") as source:
+        json.load(source, object_pairs_hook=unique_keys, parse_int=str, parse_float=str)
+except DuplicateKey:
+    sys.exit(1)
+except (OSError, ValueError):
+    # Leave malformed JSON to the existing SDK validation below.
+    pass
+PYKEYS
+then
+  problem "${GLOBAL_JSON}" "" "duplicate JSON keys are not allowed."
 else
   # Validate before command substitution can strip trailing newlines, or any message can echo repository text.
   sdk_number='(0|[1-9][0-9]*)'
@@ -249,7 +279,15 @@ else
     pin=""
     problem "${GLOBAL_JSON}" "" "sdk.version must be a JSON string in MAJOR.MINOR.PATCH form with an optional prerelease."
   fi
-  roll_forward=$(jq -r '.sdk.rollForward // "patch"' "${root}/${GLOBAL_JSON}" 2>/dev/null) || roll_forward=""
+  # Validate the original JSON string before shell command substitution can trim trailing newlines.
+  # https://learn.microsoft.com/en-us/dotnet/core/tools/global-json#rollforward
+  roll_forward_format='\A(patch|feature|minor|major|latestPatch|latestFeature|latestMinor|latestMajor|disable)\z'
+  if [[ -n "${pin}" ]] && ! roll_forward=$(jq -er --arg format "${roll_forward_format}" \
+      '.sdk | if has("rollForward") then .rollForward else "patch" end |
+       select(type == "string") | select(test($format))' "${root}/${GLOBAL_JSON}" 2>/dev/null); then
+    pin="" roll_forward=""
+    problem "${GLOBAL_JSON}" "" "sdk.rollForward must be one of patch, feature, minor, major, latestPatch, latestFeature, latestMinor, latestMajor or disable."
+  fi
 fi
 
 # Exact matches always work; a later patch must stay in the same feature band and be explicitly allowed.
@@ -347,6 +385,9 @@ marker = re.compile(r"(?<![A-Za-z0-9_-])" + key + r"\s*:")
 count = 0
 for path in sorted((root / ".github/workflows").glob("*.yml")):
     relative = path.relative_to(root).as_posix()
+    if any(ord(char) < 32 or 127 <= ord(char) < 160 for char in relative):
+        print(".github/workflows\t1\tworkflow paths must not contain control characters")
+        continue
     try:
         lines = path.read_text().splitlines()
     except (OSError, UnicodeError):
