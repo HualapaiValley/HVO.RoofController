@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.Hubs;
 using HVO.RoofControllerV4.RPi.Tests.Security;
@@ -746,14 +748,81 @@ public sealed class IdentityApiTests
 
     // ---- Audit and secrets ----------------------------------------------------------------------------------------
 
+    private static string AuditPinForVersion(string publicVersion)
+    {
+        // Choose before any credential operation, from immutable public metadata only. Looking at the final logs
+        // could choose around a real leak. The whole log must still pass the unchanged substring assertion.
+        var first = int.Parse(TestSecrets.Pin, CultureInfo.InvariantCulture);
+        for (var offset = 0; offset < 10_000; offset++)
+        {
+            var candidate = ((first + offset) % 10_000).ToString("D4", CultureInfo.InvariantCulture);
+            if (RoofIdentityContract.IsValidPin(candidate) && !publicVersion.Contains(candidate, StringComparison.Ordinal))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException("No valid audit PIN is absent from the public version.");
+    }
+
+    private static string PublicVersionContainingUsualPin()
+        => $"4.1.1-ci.123+{new string('a', 18)}{TestSecrets.Pin}{new string('b', 18)}";
+
+    [TestMethod]
+    public void TheAuditPin_AvoidsTheUsualFixtureInAPublicRevision()
+    {
+        var publicVersion = PublicVersionContainingUsualPin();
+
+        var auditPin = AuditPinForVersion(publicVersion);
+
+        // Boolean assertions keep PIN values out of failure diagnostics.
+        Assert.IsTrue(publicVersion.Contains(TestSecrets.Pin, StringComparison.Ordinal));
+        Assert.IsFalse(string.Equals(auditPin, TestSecrets.Pin, StringComparison.Ordinal));
+        Assert.AreEqual(4, auditPin.Length);
+        Assert.IsTrue(auditPin.All(char.IsAsciiDigit));
+        Assert.IsTrue(RoofIdentityContract.IsValidPin(auditPin));
+        Assert.IsFalse(publicVersion.Contains(auditPin, StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void TheAuditSecretCheck_AcceptsTheWholeLogWithACollidingPublicRevision()
+    {
+        var publicVersion = PublicVersionContainingUsualPin();
+        var auditPin = AuditPinForVersion(publicVersion);
+        using var logs = new RecordingLoggerProvider();
+        var logger = logs.CreateLogger("audit-fixture-regression");
+        logger.LogInformation("HVO Roof Controller {Version} is starting.", publicVersion);
+        logger.LogInformation("AUDIT test-admin for alice added olive (RoofOperator; password: True, PIN: True)");
+
+        LogAssertions.ContainsNone(logs.Entries.Select(entry => entry.Message), auditPin);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void TheAuditSecretCheck_RejectsTheSelectedPin_IncludingInAStartupVersion(bool leakInStartupVersion)
+    {
+        var publicVersion = PublicVersionContainingUsualPin();
+        var auditPin = AuditPinForVersion(publicVersion);
+        using var logs = new RecordingLoggerProvider();
+        var logger = logs.CreateLogger("audit-fixture-regression");
+        logger.LogInformation("HVO Roof Controller {Version} is starting.",
+            leakInStartupVersion ? $"{publicVersion}{auditPin}" : publicVersion);
+        logger.LogInformation("AUDIT test-admin added olive; PIN: {Pin}", leakInStartupVersion ? "(set)" : auditPin);
+
+        Assert.ThrowsExactly<AssertFailedException>(
+            () => LogAssertions.ContainsNone(logs.Entries.Select(entry => entry.Message), auditPin));
+    }
+
     [TestMethod]
     public async Task TheAuditLog_NamesWhoActed_AndNoSecretIsLogged()
     {
+        var auditPin = AuditPinForVersion(RoofProductVersion.Of(typeof(Program).Assembly));
         using var logs = new RecordingLoggerProvider();
         using var host = CreateHost(logs: logs);
         using var admin = host.CreateApiClient(TestApiKeys.Admin);
         admin.DefaultRequestHeaders.Add(RoofIdentityContract.OnBehalfOfHeaderName, "alice");
-        await admin.PostAsJsonAsync($"{Identity}/Users", new RoofUserCreateRequest { Name = "olive", Role = "RoofOperator", Password = TestSecrets.Password, Pin = TestSecrets.Pin });
+        await admin.PostAsJsonAsync($"{Identity}/Users", new RoofUserCreateRequest { Name = "olive", Role = "RoofOperator", Password = TestSecrets.Password, Pin = auditPin });
         var key = await ApiJson.ReadAsync<RoofApiKeySecretResponse>(
             await admin.PostAsJsonAsync($"{Identity}/ApiKeys", new RoofApiKeyCreateRequest { Name = "ci", Role = "RoofOperator" }));
         var session = await SignInAsync(host, "olive");
@@ -761,7 +830,7 @@ public sealed class IdentityApiTests
         await olive.PostAsync($"{Roof}/Open", content: null);
         using var kiosk = host.CreateApiClient(KioskKey);
         var pin = await ApiJson.ReadAsync<RoofSessionResponse>(
-            await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin }));
+            await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = auditPin }));
         using var pinClient = Bearer(host, pin.Token);
         await pinClient.PostAsync($"{Roof}/Stop", content: null);
         await olive.PostAsJsonAsync($"{Auth}/Password", new RoofPasswordChangeRequest { CurrentPassword = TestSecrets.Password, NewPassword = "test-password-not-real-04" });
@@ -776,7 +845,7 @@ public sealed class IdentityApiTests
         messages.Should().Contain(m => m.Contains("SECURITY sign-in for olive", StringComparison.Ordinal));
         LogAssertions.ContainsNone(
             messages,
-            TestSecrets.Password, TestSecrets.Pin, TestSecrets.OtherPassword, "test-password-not-real-04",
+            TestSecrets.Password, auditPin, TestSecrets.OtherPassword, "test-password-not-real-04",
             session.Token, pin.Token, key.Secret, TestApiKeys.Admin, KioskKey);
     }
 
