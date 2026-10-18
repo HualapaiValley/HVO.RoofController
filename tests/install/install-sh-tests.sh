@@ -1286,10 +1286,16 @@ test_a_rollback_still_needs_docker_to_answer() {
   assert_output_contains "FAIL  Docker did not say which limits it enforces (docker info), and the controller's container runs with a CPU, a memory and a process limit"
 }
 
+# record_labels <cpus> <cpu source> <memory> <memory source>: a desired-limits record's labels (roof-controller-limits-g3,
+# written by a deploy), as JSON, for FAKE_DOCKER_LABELS.
+record_labels() {
+  printf '{"io.hvo.roof.limits":"1","io.hvo.roof.limits.generation":"3","io.hvo.roof.limits.cpus":"%s","io.hvo.roof.limits.cpus-source":"%s","io.hvo.roof.limits.memory":"%s","io.hvo.roof.limits.memory-source":"%s","io.hvo.roof.limits.written-by":"deploy","io.hvo.roof.limits.written-at":"2026-10-17T00:00:00Z","io.hvo.roof.limits.controller":"0123456789ab"}' \
+    "$1" "$2" "$3" "$4"
+}
+
 # The controller's CPU limit, resolved as the installer and the deploy script resolve it (review ROOF-151-R2 F5), is
 # held to the CPUs Docker reports: one given, then the answers' or the record's, then the newest desired-limits record's
 # (its CPUs when set, the default when it keeps the default), then the running controller's, then 1.
-RECORD_6G='1|3|3|set|6g|set|deploy|2026-10-17T00:00:00Z|0123456789ab'
 test_the_cpu_limit_is_resolved_as_the_installer_resolves_it_and_held_to_dockers_cpus() {
   local case volumes nano arguments limit from
   for case in \
@@ -1302,8 +1308,8 @@ test_the_cpu_limit_is_resolved_as_the_installer_resolves_it_and_held_to_dockers_
     setup
     printf '{"roles":["controller"],"controller":{"resources":{"cpus":2.5}}}\n' >"${WORK}/answers.json"
     # shellcheck disable=SC2086 # the arguments are words
-    install_sh FAKE_DOCKER_LIMITS=true,true,true,true,2,8589934592,2 "FAKE_DOCKER_VOLUMES=${volumes}" "FAKE_DOCKER_RECORD=${RECORD_6G}" \
-      "FAKE_CONTROLLER_NANOCPUS=${nano}" -- ${arguments//ANSWERS/${WORK}/answers.json}
+    install_sh FAKE_DOCKER_LIMITS=true,true,true,true,2,8589934592,2 "FAKE_DOCKER_VOLUMES=${volumes}" \
+      "FAKE_DOCKER_LABELS=$(record_labels 3 set 6g set)" "FAKE_CONTROLLER_NANOCPUS=${nano}" -- ${arguments//ANSWERS/${WORK}/answers.json}
 
     assert_stopped_by_checks
     assert_output_contains "FAIL  Docker reports 2 CPUs, fewer than the controller's CPU limit of ${limit} (${from}), which it would not start with"
@@ -1313,40 +1319,48 @@ test_the_cpu_limit_is_resolved_as_the_installer_resolves_it_and_held_to_dockers_
   teardown
   setup
   install_sh FAKE_DOCKER_LIMITS=true,true,true,true,2,8589934592,2 FAKE_CONTROLLER_NANOCPUS=4500000000 \
-    FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_RECORD=1|3|1|default|2g|default|deploy|t|0123456789ab" -- --roles controller
+    FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_LABELS=$(record_labels 1 default 2g default)" -- --roles controller
   assert_status 0
   assert_output_contains "ok    Docker enforces memory, CPU and process limits"
   install_sh FAKE_DOCKER_LIMITS=true,true,true,true,4,8589934592,2 -- --roles controller --cpus 4
   assert_status 0
 }
 
-test_a_desired_limits_record_that_is_not_valid_fails_unless_both_limits_are_given() {
-  local case record problem
-  for case in \
-      "1|3|3|set|512m|set|deploy|t|0123456789ab|its memory '512m' is less than 1g, the minimum" \
-      "1|3|0.5|set|2g|set|deploy|t|0123456789ab|its CPUs '0.5' are less than 1 vCPU, the minimum" \
-      "2|3|1|set|2g|set|deploy|t|0123456789ab|its format (io.hvo.roof.limits) is '2', not 1" \
-      "1|2|1|set|2g|set|deploy|t|0123456789ab|its generation label '2' is not the 3 of its name" \
-      "1|3|1|set|2g|operator|deploy|t|0123456789ab|its sources 'set' and 'operator' are not set or default" \
-      "1|3|1|set|2g|set||t|0123456789ab|it does not say which run wrote it, and for which container ('', '0123456789ab')"; do
-    record=${case%|*}
-    problem=${case##*|}
+# Every reader of the desired-limits records agrees, on one table (reviews ROOF-151-R3 F8, F10): install.sh here, the
+# deploy script and the installer read tests/deploy/desired-limits-records.json. Each label is read on its own, as
+# JSON, and its whole value checked; a record that is not one fails the check, and nothing is downloaded.
+test_every_reader_agrees_on_the_desired_limits_records_install_sh() {
+  local count index labels name problem
+  count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["cases"]))' "${TESTS_DIR}/../deploy/desired-limits-records.json")
+  for (( index = 0; index < count; index++ )); do
+    labels=$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["cases"][int(sys.argv[2])]["labels"]))' \
+      "${TESTS_DIR}/../deploy/desired-limits-records.json" "${index}")
+    name=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cases"][int(sys.argv[2])]["name"])' \
+      "${TESTS_DIR}/../deploy/desired-limits-records.json" "${index}")
+    problem=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cases"][int(sys.argv[2])]["problem"] or "")' \
+      "${TESTS_DIR}/../deploy/desired-limits-records.json" "${index}")
     teardown
     setup
-    install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_RECORD=${record}" -- --roles controller
-
-    assert_stopped_by_checks
-    assert_output_contains "FAIL  The newest desired-limits record, roof-controller-limits-g3, is not valid: ${problem}. It is not applied, and nothing was changed: give --cpus and --memory (the deploy then records them in its place), or remove it (docker volume rm roof-controller-limits-g3)."
+    install_sh FAKE_DOCKER_LIMITS=true,true,true,true,1000,8589934592,2 FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 \
+      "FAKE_DOCKER_LABELS=${labels}" -- --roles controller
+    if [[ -z "${problem}" ]]; then
+      [[ "${STATUS}" == 0 && "${OUTPUT}" != *"desired-limits record"* ]] \
+        || fail_test "case '${name}': the valid record failed the check (exit ${STATUS})"
+    else
+      [[ "${STATUS}" == 1 && "${OUTPUT}" == *"FAIL  The newest desired-limits record, roof-controller-limits-g3, is not valid: ${problem}. It is not applied, and nothing was changed: give --cpus and --memory (the deploy then records them in its place), or remove it (docker volume rm roof-controller-limits-g3)."* ]] \
+        || fail_test "case '${name}': not failed with '${problem}' (exit ${STATUS})"
+      assert_stopped_by_checks
+    fi
   done
+}
 
-  teardown
-  setup
-  install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_RECORD=1|3|3|set|512m|set|deploy|t|0123456789ab" \
+test_a_desired_limits_record_that_is_not_valid_is_a_warning_when_both_limits_are_given() {
+  install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 "FAKE_DOCKER_LABELS=$(record_labels 3 set 512m set)" \
     -- --roles controller --cpus 2 --memory 3g
   assert_status 0
   assert_output_contains "note  WARNING: The newest desired-limits record, roof-controller-limits-g3, is not valid: its memory '512m' is less than 1g, the minimum. It is not applied, and the deploy records the limits given in its place."
 
-  # Records that cannot be read fail too.
+  # Records that cannot be read fail, limits given or not.
   teardown
   setup
   install_sh FAKE_DOCKER_VOLUMES=fail -- --roles controller --cpus 2 --memory 3g
@@ -1354,7 +1368,7 @@ test_a_desired_limits_record_that_is_not_valid_fails_unless_both_limits_are_give
   assert_output_contains "FAIL  Could not read the desired limits' records from Docker (docker volume ls failed), and a limit not given keeps them. Nothing was changed: check Docker, then run this again."
   teardown
   setup
-  install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 FAKE_DOCKER_RECORD=fail -- --roles controller
+  install_sh FAKE_DOCKER_VOLUMES=roof-controller-limits-g3 FAKE_DOCKER_LABELS=fail -- --roles controller
   assert_stopped_by_checks
   assert_output_contains "FAIL  Could not read the desired limits' record roof-controller-limits-g3 from Docker (docker volume inspect failed), and a limit not given keeps it. Nothing was changed: check Docker, then run this again."
 }

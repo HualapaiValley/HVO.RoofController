@@ -810,36 +810,48 @@ EOF
       printf '%d.%02d' $(($1 / 100)) $(($1 % 100))
     fi
   }
-  # desired_problem <schema> <generation label> <its name's> <cpus> <cpu source> <memory> <memory source> <written by>
-  # <controller>: why a record is not valid, in the deploy script's words, or nothing.
+  # The record's labels, in the order every reader reads and checks them (the deploy script, the installer and this, held
+  # to one table: tests/deploy/desired-limits-records.json). docker volume inspect writes each as JSON on a line of its
+  # own, so no label's value can pass for another's, or for more of the record (review ROOF-151-R3 F8). A label's JSON
+  # must be plain: at most 40 letters, digits, '.', ':', '_' or '-', spelt out rather than as ranges, which some locales
+  # stretch beyond ASCII.
+  local desired_labels=(io.hvo.roof.limits io.hvo.roof.limits.generation io.hvo.roof.limits.cpus
+    io.hvo.roof.limits.cpus-source io.hvo.roof.limits.memory io.hvo.roof.limits.memory-source io.hvo.roof.limits.written-by
+    io.hvo.roof.limits.written-at io.hvo.roof.limits.controller)
+  local desired_plain='^"[0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:_-]{0,40}"$'
+  # desired_problem <its name's generation> <format> <generation> <cpus> <cpu source> <memory> <memory source>
+  # <written by> <written at> <controller>: why a record's labels, each its whole value, are not the ones a deploy writes,
+  # or nothing; in the deploy script's words and order.
   desired_problem() {
-    local bytes
-    if [ "$1" != 1 ]; then
-      echo "its format (io.hvo.roof.limits) is '$1', not 1"
-    elif [ "$2" != "$3" ]; then
-      echo "its generation label '$2' is not the $3 of its name"
-    elif { [ "$8" != deploy ] && [ "$8" != rollback ]; } || [[ ! $9 =~ ^[0-9a-f]{12}$ ]]; then
-      echo "it does not say which run wrote it, and for which container ('$8', '$9')"
-    elif ! cpu_hundredths "$4"; then
-      echo "its CPUs '$4' are not a number of CPUs with at most two decimals"
-    elif ((cpu_limit < 100)); then
+    local cpus='^(0|[123456789][0123456789]{0,2})(\.[0123456789]?[123456789])?$'
+    local memory='^([123456789][0123456789]{0,5})([mg])$' controller='^[0123456789abcdef]{12}$'
+    local time='^[0123456789]{4}-[0123456789]{2}-[0123456789]{2}T[0123456789]{2}:[0123456789]{2}:[0123456789]{2}Z$'
+    if [ "$2" != 1 ]; then
+      echo "its format (io.hvo.roof.limits) is '$2', not 1"
+    elif [ "$3" != "$1" ]; then
+      echo "its generation label '$3' is not the $1 of its name"
+    elif { [ "$8" != deploy ] && [ "$8" != rollback ]; } || [[ ! ${10} =~ ${controller} ]]; then
+      echo "it does not say which run wrote it, and for which container ('$8', '${10}')"
+    elif [[ ! $9 =~ ${time} ]]; then
+      echo "its time '$9' is not a UTC time such as 2026-10-17T18:04:11Z"
+    elif [[ ! $4 =~ ${cpus} ]]; then
+      echo "its CPUs '$4' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    elif [[ $4 == 0* ]]; then
       echo "its CPUs '$4' are less than 1 vCPU, the minimum"
-    elif [[ ! $6 =~ ^([0-9]{1,6})([mMgG])$ ]]; then
-      echo "its memory '$6' is not a whole number of MiB or GiB"
-    else
-      bytes=$((10#${BASH_REMATCH[1]} * 1048576))
-      [[ ${BASH_REMATCH[2]} != [gG] ]] || bytes=$((bytes * 1024))
-      if ((bytes < 1073741824)); then
-        echo "its memory '$6' is less than 1g, the minimum"
-      elif { [ "$5" != set ] && [ "$5" != default ]; } || { [ "$7" != set ] && [ "$7" != default ]; }; then
-        echo "its sources '$5' and '$7' are not set or default"
-      fi
+    elif [[ ! $6 =~ ${memory} ]]; then
+      echo "its memory '$6' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    elif [ "${BASH_REMATCH[2]}" = m ] && ((10#${BASH_REMATCH[1]} < 1024)); then
+      echo "its memory '$6' is less than 1g, the minimum"
+    elif { [ "$5" != set ] && [ "$5" != default ]; } || { [ "$7" != set ] && [ "$7" != default ]; }; then
+      echo "its sources '$5' and '$7' are not set or default"
     fi
   }
   resolve_limits() {
     local index=0 given_cpus="" given_memory=false file="" text names name generation highest=0 newest="" fields
-    local schema label cpus cpus_source memory memory_source by controller problem="" nano both=false
-    local format='{{index .Labels "io.hvo.roof.limits"}}|{{index .Labels "io.hvo.roof.limits.generation"}}|{{index .Labels "io.hvo.roof.limits.cpus"}}|{{index .Labels "io.hvo.roof.limits.cpus-source"}}|{{index .Labels "io.hvo.roof.limits.memory"}}|{{index .Labels "io.hvo.roof.limits.memory-source"}}|{{index .Labels "io.hvo.roof.limits.written-by"}}|{{index .Labels "io.hvo.roof.limits.written-at"}}|{{index .Labels "io.hvo.roof.limits.controller"}}'
+    local cpus="" cpus_source="" problem="" nano both=false format="" label line values=()
+    for label in "${desired_labels[@]}"; do
+      format+="${format:+$'\n'}{{json (index .Labels \"${label}\")}}"
+    done
     cpu_limit=100 cpu_limit_from="the default"
     while ((index < ${#passed[@]})); do
       case "${passed[index]}" in
@@ -886,8 +898,25 @@ EOF
         failed "Could not read the desired limits' record ${newest} from Docker (docker volume inspect failed), and a limit not given keeps it. Nothing was changed: check Docker, then run this again."
         return 1
       else
-        IFS='|' read -r schema label cpus cpus_source memory memory_source by _ controller <<<"${fields}"
-        problem=$(desired_problem "${schema}" "${label}" "${highest}" "${cpus}" "${cpus_source}" "${memory}" "${memory_source}" "${by}" "${controller}")
+        # Each label is one JSON string on a line of its own; each must be plain, and is then checked whole.
+        while IFS= read -r line; do
+          values+=("${line}")
+        done <<<"${fields}"
+        if ((${#values[@]} != ${#desired_labels[@]})); then
+          problem="its labels could not be read as one JSON string each"
+        else
+          for ((index = 0; index < ${#values[@]}; index++)); do
+            if [[ ! ${values[index]} =~ ${desired_plain} ]]; then
+              problem="its label ${desired_labels[index]} is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+              break
+            fi
+            values[index]=${values[index]:1:${#values[index]}-2}
+          done
+        fi
+        if [ -z "${problem}" ]; then
+          cpus=${values[2]} cpus_source=${values[3]}
+          problem=$(desired_problem "${highest}" "${values[@]}")
+        fi
         [ -z "${problem}" ] || problem="The newest desired-limits record, ${newest}, is not valid: ${problem}"
       fi
     fi
