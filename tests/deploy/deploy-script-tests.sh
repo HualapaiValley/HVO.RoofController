@@ -3716,7 +3716,7 @@ test_a_rollback_restores_a_version_whose_unused_emulator_settings_are_not_plain(
   local settings
   for settings in "HatEmulator__Enabled=false|HatEmulator__Host=old\\unused" \
       'HatEmulator__Note=operator "note"' \
-      'HatEmulator__Enabled=true|HatEmulator__Host=hat-emulator|HatEmulator__Enabled=false|HatEmulator__Port=x"y'; do
+      'HatEmulator__Enabled=false|HatEmulator__Port=x"y'; do
     setup_fresh_state
     seed_container roof-controller current true 8443:8443
     seed_container roof-controller-previous old false 8443:8443
@@ -3768,8 +3768,43 @@ test_a_rollback_reads_the_emulator_setting_in_any_case_as_the_controller_does() 
   deploy "${HTTPS_ENV[@]}" -- --rollback
   assert_status 1
   assert_output_contains "roof-controller-previous was deployed for the HAT emulator at hat-emulator:5291, not the physical HAT, and does not operate the roof. Nothing was changed."
+  [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls update)$(docker_calls start)" ]] \
+    || fail_test "the refused rollback changed a container: $(cat "${FAKE_STATE_DIR}/calls.log")"
   assert_container roof-controller current true unless-stopped
   assert_container roof-controller-previous old false
+}
+
+# Review ROOF-151-R5: the rollback does not reproduce .NET's configuration parser. Emulator settings it would read that
+# are ambiguous or unusual are refused, before anything changes, naming the setting, for the operator to fix: an Enabled
+# that is given but empty or only spaces; a recognized key given more than once (in any case, '__' or ':'), even with
+# the same value; and a value it uses holding a character outside ASCII (spaces outside ASCII around it included).
+test_a_rollback_refuses_ambiguous_or_unusual_emulator_settings() {
+  local case settings message
+  for case in \
+      "HatEmulator__Enabled=#its HatEmulator:Enabled is given, but empty" \
+      "HatEmulator__Enabled=   #its HatEmulator:Enabled is given, but empty" \
+      "HatEmulator__Enabled=true|hatemulator__enabled=false#its HatEmulator:Enabled is given more than once (keys are read in any case, with __ as :), which is ambiguous" \
+      "HatEmulator__Enabled=false|HatEmulator__Enabled=false#its HatEmulator:Enabled is given more than once (keys are read in any case, with __ as :), which is ambiguous" \
+      "HatEmulator__Enabled=false|HatEmulator__Host=a|HATEMULATOR:HOST=a#its HatEmulator:Host is given more than once (keys are read in any case, with __ as :), which is ambiguous" \
+      $'HatEmulator__Enabled=\302\240false#its HatEmulator:Enabled holds a character outside ASCII' \
+      $'HatEmulator__Enabled=true|HatEmulator__Host=hat\342\200\220emulator|HatEmulator__Port=5291#its HatEmulator:Host holds a character outside ASCII' \
+      $'HatEmulator__Enabled=true|HatEmulator__Host=hat-emulator|HatEmulator__Port=5291\302\240#its HatEmulator:Port holds a character outside ASCII'; do
+    settings=${case%%#*}
+    message=${case#*#}
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    local entries=()
+    IFS='|' read -r -a entries <<<"${settings}"
+    seed_env roof-controller-previous "${entries[@]}"
+    deploy "${HTTPS_ENV[@]}" ALLOW_EMULATED_HAT=true -- --rollback
+    assert_status 1
+    assert_output_contains "roof-controller-previous cannot be rolled back to: ${message}. Nothing was changed."
+    [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls update)$(docker_calls start)" ]] \
+      || fail_test "the refused rollback changed a container: $(cat "${FAKE_STATE_DIR}/calls.log")"
+    assert_container roof-controller current true unless-stopped
+    assert_container roof-controller-previous old false
+  done
 }
 
 # The web UI's scheme, from the version brought back's RoofWeb__Urls: a value holding a line with another is not it.

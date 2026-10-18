@@ -689,7 +689,11 @@ and the script exits non-zero.
 
 The restored version's HAT is checked twice. Before anything is stopped, the script reads the environment
 `<name>-previous` was deployed with: a version deployed for the HAT emulator is refused, with nothing changed, unless
-`ALLOW_EMULATED_HAT=true` (a test rig). With the flag, a warning names the emulator, and so does a readiness failure.
+`ALLOW_EMULATED_HAT=true` (a test rig). It reads only `HatEmulator:Enabled` and, with it on, `Host` and `Port` (keys in
+any case, `__` for `:`), and ignores the rest. Emulator settings it would read ambiguously or unusually are refused,
+with nothing changed and the setting named, for the operator to fix: a key given more than once, an `Enabled` given
+but empty, or a value it uses that holds an escape or a character outside ASCII. With the flag, a warning names the
+emulator, and so does a readiness failure.
 Once the restored version runs, the checks include the `hatMode` it reports. `Physical` is accepted, and so is a Status
 without `hatMode` (a version from before HAT emulator mode) that reports `isUsingPhysicalHardware` `true`. With `false`,
 such a version ran on the register simulation, as it did without an I2C bus, and the check fails. `Emulated` is

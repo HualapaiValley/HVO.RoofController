@@ -691,17 +691,20 @@ container_state() {
 }
 
 # Sets PREVIOUS_EMULATOR to the emulator's host:port when the stopped previous version was deployed in HAT emulator mode,
-# otherwise to empty; returns 1 when Docker cannot be asked, 2 when a setting it uses cannot be read (HAT_PROBLEM says
-# why). Read as the controller reads its environment (review ROOF-151-R4 F12): keys in any case, '__' for ':', the last
-# one given wins; HatEmulator:Enabled as .NET reads a bool (true or false in any case, spaces around it; not set or empty
-# is off); with it on, Host and Port, 127.0.0.1 and 5291 when not set. Only those are used: an unrelated key, and Host
-# and Port while the emulator is off, are ignored whatever they hold, as the controller ignores them. A value it uses
-# must be plain. Each entry is one JSON string, framed by Docker's encoder, which escapes only control characters, quotes
-# and backslashes, and never '=': its key is the text before its first '=', and a value holding lines is one entry, never
-# more settings. Keys are compared in the C locale.
+# otherwise to empty; returns 1 when Docker cannot be asked, 2 when the settings it reads cannot be read with certainty
+# (HAT_PROBLEM says which). The keys are matched as the controller matches them (review ROOF-151-R4 F12): in any case,
+# '__' for ':', compared in the C locale; HatEmulator:Enabled true or false in any case, ASCII spaces around it; with it
+# on, Host and Port, 127.0.0.1 and 5291 when not set. Only those are used: an unrelated key, and Host and Port while the
+# emulator is off, are ignored whatever they hold, as the controller ignores them. This is not .NET's configuration
+# parser, so what it would read ambiguously or unusually is refused for the operator to fix (review ROOF-151-R5): a
+# recognised key given more than once, even with the same value; an Enabled given but empty; a value it uses that is not
+# plain, holds a character outside ASCII (spaces outside ASCII included), or is an Enabled that is not true or false.
+# Each entry is one JSON string, framed by Docker's encoder, which escapes only control characters, quotes and
+# backslashes, and never '=': its key is the text before its first '=', and a value holding lines is one entry, never
+# more settings.
 HAT_PROBLEM=""
 read_previous_hat() {
-  local env line key name value enabled="" host="" port=""
+  local env line key name value enabled="" host="" port="" seen=" " setting
   PREVIOUS_EMULATOR="" HAT_PROBLEM=""
   env=$(dockerc inspect --format "${ENV_FORMAT}" "${PREVIOUS_ID}") || return 1
   while IFS= read -r line; do
@@ -715,34 +718,48 @@ read_previous_hat() {
     value=${line#*=}
     value=${value%\"}
     case "${name}" in
-      hatemulator:enabled) enabled=${value} ;;
-      hatemulator:host) host=${value} ;;
-      hatemulator:port) port=${value} ;;
+      hatemulator:enabled) setting=Enabled enabled=${value} ;;
+      hatemulator:host) setting=Host host=${value} ;;
+      hatemulator:port) setting=Port port=${value} ;;
+      *) continue ;;
     esac
+    if [[ "${seen}" == *" ${setting} "* ]]; then
+      HAT_PROBLEM="its HatEmulator:${setting} is given more than once (keys are read in any case, with __ as :), which is ambiguous"
+      return 2
+    fi
+    seen+="${setting} "
   done <<<"${env}"
-  if [[ "${enabled}" == *\\* ]]; then
-    HAT_PROBLEM="its HatEmulator:Enabled holds a control character, a quote or a backslash"
-    return 2
-  fi
+  [[ "${seen}" == *" Enabled "* ]] || return 0
+  hat_value_problem Enabled "${enabled}" || return 2
   enabled=$(printf '%s' "${enabled}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
   enabled=${enabled#"${enabled%%[! ]*}"}
   enabled=${enabled%"${enabled##*[! ]}"}
   case "${enabled}" in
-    ""|false) return 0 ;;
+    "")
+      HAT_PROBLEM="its HatEmulator:Enabled is given, but empty"
+      return 2 ;;
+    false) return 0 ;;
     true) ;;
     *)
       HAT_PROBLEM="its HatEmulator:Enabled is '${enabled}', which the controller cannot read as true or false"
       return 2 ;;
   esac
-  if [[ "${host}" == *\\* ]]; then
-    HAT_PROBLEM="its HatEmulator:Host holds a control character, a quote or a backslash"
-    return 2
-  fi
-  if [[ "${port}" == *\\* ]]; then
-    HAT_PROBLEM="its HatEmulator:Port holds a control character, a quote or a backslash"
-    return 2
-  fi
+  hat_value_problem Host "${host}" || return 2
+  hat_value_problem Port "${port}" || return 2
   PREVIOUS_EMULATOR="${host:-127.0.0.1}:${port:-5291}"
+}
+
+# hat_value_problem <setting> <value as Docker framed it>: false, with HAT_PROBLEM, when a value the rollback uses is not
+# plain (it holds an escape) or holds a byte outside printable ASCII (a character outside ASCII, a space outside ASCII).
+hat_value_problem() {
+  if [[ "$2" == *\\* ]]; then
+    HAT_PROBLEM="its HatEmulator:$1 holds a control character, a quote or a backslash"
+    return 1
+  fi
+  if [[ -n "$(printf '%s' "$2" | LC_ALL=C tr -d ' -~')" ]]; then
+    HAT_PROBLEM="its HatEmulator:$1 holds a character outside ASCII"
+    return 1
+  fi
 }
 
 # Sets STATE/CURRENT_ID and PREVIOUS_STATE/PREVIOUS_ID, or stops the script (nothing has been changed when it runs).
