@@ -37,6 +37,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Scenarios;
 /// <c>soak-samples.csv</c>, and <c>soak-log.txt</c> with every Warning or above and the latest log entries) go to
 /// <c>HVO_SOAK_RESULTS_DIR</c>, or the test results, and are written before the checks fail the test. The resources are
 /// the test process's, which runs the emulator and the controller: a leak in either fails the soak.
+/// Supplementary memory diagnostics are flushed during the run; see <see cref="C14MemoryDiagnostics"/> and C14's
+/// commissioning documentation for their interpretation. They do not participate in the checks.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -84,6 +86,8 @@ public sealed class C14SoakScenarios
         var warmUp = TimeSpan.FromTicks(Math.Min(TimeSpan.FromHours(1).Ticks, duration.Ticks / 4));
         var sampleEvery = Clamp(duration / 60, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(60));
         var cameraEvery = Clamp(duration / 30, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2));
+        var results = ResultsDirectory();
+        using var diagnostics = new C14MemoryDiagnostics(results, TestContext.AddResultFile);
 
         using var counters = new RoofMeterCounters();
         await using var collector = OtlpCollectorStub.Start(CollectorBehavior.BlackHole);
@@ -115,12 +119,12 @@ public sealed class C14SoakScenarios
                 await CycleAsync(rig, operatorClient, run);
                 if (clock.Elapsed >= nextSample)
                 {
-                    run.Samples.Add(await SampleAsync(rig, viewer, anonymous, collector, run, clock.Elapsed));
+                    run.Samples.Add(await SampleAsync(rig, viewer, anonymous, collector, run, clock.Elapsed, diagnostics));
                     nextSample = clock.Elapsed + sampleEvery;
                 }
             }
 
-            run.Samples.Add(await SampleAsync(rig, viewer, anonymous, collector, run, clock.Elapsed));
+            run.Samples.Add(await SampleAsync(rig, viewer, anonymous, collector, run, clock.Elapsed, diagnostics, final: true));
         }
         catch (Exception exception)
         {
@@ -133,7 +137,7 @@ public sealed class C14SoakScenarios
         await WaitForCameraStreamsToCloseAsync(rig);
 
         var checks = Evaluate(run, rig, counters, limitEventsAtStart, safetyStopsAtStart, collector, cycleFailure);
-        var results = WriteResults(run, checks, counters, rig);
+        WriteResults(run, checks, counters, rig, results);
         TestContext.WriteLine(File.ReadAllText(Path.Combine(results, "soak-summary.md")));
 
         checks.Where(c => !c.Passed).Should().BeEmpty("every C14 criterion must hold (results in {0})", results);
@@ -268,7 +272,8 @@ public sealed class C14SoakScenarios
     }
 
     private static async Task<Sample> SampleAsync(
-        EmulatedRoofRig rig, HttpClient viewer, HttpClient anonymous, OtlpCollectorStub collector, SoakRun run, TimeSpan at)
+        EmulatedRoofRig rig, HttpClient viewer, HttpClient anonymous, OtlpCollectorStub collector, SoakRun run, TimeSpan at,
+        C14MemoryDiagnostics diagnostics, bool final = false)
     {
         using var ready = await anonymous.GetAsync("/health/ready");
         using var response = await viewer.GetAsync($"{Scenario.RoofApi}/Status");
@@ -278,7 +283,7 @@ public sealed class C14SoakScenarios
 
         var managed = GC.GetTotalMemory(forceFullCollection: true);
         using var process = Process.GetCurrentProcess();
-        return new Sample(
+        var sample = new Sample(
             At: at,
             Cycles: run.Cycles,
             ManagedBytes: managed,
@@ -297,6 +302,8 @@ public sealed class C14SoakScenarios
             Violations: rig.Plant.Violations,
             LogEntries: rig.Logs.Count,
             HeldCollectorConnections: collector.Held);
+        diagnostics.Append(at, run.WarmUp, sample, final);
+        return sample;
     }
 
     private static List<Check> Evaluate(
@@ -474,13 +481,17 @@ public sealed class C14SoakScenarios
                 e => $"{e.limit} {e.state}",
                 e => counters.Total("roof.controller.limit.switch.events", ("roof.limit.switch", e.limit), ("roof.limit.state", e.state)));
 
-    private string WriteResults(SoakRun run, IReadOnlyList<Check> checks, RoofMeterCounters counters, EmulatedRoofRig rig)
+    private string ResultsDirectory()
     {
         var directory = Environment.GetEnvironmentVariable(ResultsVariable) is { Length: > 0 } configured
             ? configured
             : Path.Combine(TestContext.TestRunResultsDirectory ?? Path.GetTempPath(), "soak");
         Directory.CreateDirectory(directory);
+        return directory;
+    }
 
+    private void WriteResults(SoakRun run, IReadOnlyList<Check> checks, RoofMeterCounters counters, EmulatedRoofRig rig, string directory)
+    {
         var timing = new (string Name, RoofMeterCounters.Distribution Values)[]
         {
             ("Full travel, opening", counters.Values("roof.controller.travel.duration", ("roof.direction", "opening"), FullTravel, FromLimit)),
@@ -551,8 +562,6 @@ public sealed class C14SoakScenarios
         {
             TestContext.AddResultFile(Path.Combine(directory, file));
         }
-
-        return directory;
     }
 
     private static TimeSpan SoakDuration()
