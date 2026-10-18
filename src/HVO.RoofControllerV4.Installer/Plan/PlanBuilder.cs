@@ -396,9 +396,12 @@ public static class PlanBuilder
             }
         }
 
-        // The controller's desired-limits records go whether or not its container is there (review ROOF-151-R2 F6): also
-        // when a run before removed the container and stopped, or for a purge after an uninstall that left some.
-        if (survey.Docker.IsUsable && (InstallRoles.RunsController(roles) || survey.Docker.DesiredLimitVolumes.Count > 0))
+        // The controller's desired-limits records go when this record owns the controller (reviews ROOF-151-R2 F6, R3 F9
+        // and F11): its controller or rig role, or the controller settings it keeps after an uninstall, so also for a
+        // purge after it. Whether or not the controller's container is there, whether or not Docker answers, and however
+        // many records are found: a run that cannot list them is blocked before anything is removed, the record with it.
+        // Another install's records (a person's hvo-roof uninstalled beside a controller installed apart) stay.
+        if (InstallRoles.RunsController(roles) || record.Controller is not null)
         {
             steps.Add(new DesiredLimitsRemovalStep());
         }

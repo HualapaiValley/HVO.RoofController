@@ -986,7 +986,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 return Answer(removed);
             }),
             "docker" when arguments is ["volume", "inspect", "--format", DesiredLimits.Format, var volume] => Docker(() => Volumes.TryGetValue(volume, out var labels)
-                ? Answer(VolumeLabels().Replace(DesiredLimits.Format, match => labels.GetValueOrDefault(match.Groups[1].Value, string.Empty)))
+                ? Answer(RenderLabels(DesiredLimits.Format, labels))
                 : new CommandResult(1, string.Empty, $"Error response from daemon: get {volume}: no such volume\n")),
             "docker" when arguments is ["compose", "version", "--short"] => Docker(() => ComposeVersion is null
                 ? new CommandResult(1, string.Empty, "docker: 'compose' is not a docker command.\n")
@@ -1564,8 +1564,24 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             PidsLimit = long.Parse(environment["CONTAINER_PIDS_LIMIT"], System.Globalization.CultureInfo.InvariantCulture)
         };
 
+    /// <summary>
+    /// A <c>docker volume inspect --format</c> template of <paramref name="labels"/>, as Docker renders it: <c>{{index
+    /// .Labels "k"}}</c> as the value is, <c>{{json (index .Labels "k")}}</c> as JSON (control characters, quotes and
+    /// backslashes escaped).
+    /// </summary>
+    internal static string RenderLabels(string format, IReadOnlyDictionary<string, string> labels)
+    {
+        var json = JsonLabels().Replace(format, match => JsonSerializer.Serialize(
+            labels.GetValueOrDefault(match.Groups[1].Value, string.Empty),
+            new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        return VolumeLabels().Replace(json, match => labels.GetValueOrDefault(match.Groups[1].Value, string.Empty));
+    }
+
     [System.Text.RegularExpressions.GeneratedRegex("\\{\\{index \\.Labels \"([^\"]+)\"\\}\\}")]
     private static partial System.Text.RegularExpressions.Regex VolumeLabels();
+
+    [System.Text.RegularExpressions.GeneratedRegex("\\{\\{json \\(index \\.Labels \"([^\"]+)\"\\)\\}\\}")]
+    private static partial System.Text.RegularExpressions.Regex JsonLabels();
 
     private string Inspect(string name, FakeContainer container)
     {

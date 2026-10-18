@@ -258,8 +258,21 @@ public sealed partial record DesiredLimits
     /// <summary>The label that marks a record, with its format (1); its fields are labels under it.</summary>
     public const string Label = "io.hvo.roof.limits";
 
-    /// <summary>The <c>docker volume inspect --format</c> template that reads a record: its labels, '|'-separated.</summary>
-    public const string Format = "{{index .Labels \"io.hvo.roof.limits\"}}|{{index .Labels \"io.hvo.roof.limits.generation\"}}|{{index .Labels \"io.hvo.roof.limits.cpus\"}}|{{index .Labels \"io.hvo.roof.limits.cpus-source\"}}|{{index .Labels \"io.hvo.roof.limits.memory\"}}|{{index .Labels \"io.hvo.roof.limits.memory-source\"}}|{{index .Labels \"io.hvo.roof.limits.written-by\"}}|{{index .Labels \"io.hvo.roof.limits.written-at\"}}|{{index .Labels \"io.hvo.roof.limits.controller\"}}";
+    /// <summary>
+    /// The record's labels, in the order every reader reads and checks them (the deploy script, install.sh and the
+    /// installer, held to one table: tests/deploy/desired-limits-records.json).
+    /// </summary>
+    public static readonly IReadOnlyList<string> Labels =
+    [
+        Label, $"{Label}.generation", $"{Label}.cpus", $"{Label}.cpus-source", $"{Label}.memory", $"{Label}.memory-source",
+        $"{Label}.written-by", $"{Label}.written-at", $"{Label}.controller"
+    ];
+
+    /// <summary>
+    /// The <c>docker volume inspect --format</c> template that reads a record: each label as JSON on a line of its own, so
+    /// no label's value can pass for another's, or for more of the record (review ROOF-151-R3 F8).
+    /// </summary>
+    public const string Format = "{{json (index .Labels \"io.hvo.roof.limits\")}}\n{{json (index .Labels \"io.hvo.roof.limits.generation\")}}\n{{json (index .Labels \"io.hvo.roof.limits.cpus\")}}\n{{json (index .Labels \"io.hvo.roof.limits.cpus-source\")}}\n{{json (index .Labels \"io.hvo.roof.limits.memory\")}}\n{{json (index .Labels \"io.hvo.roof.limits.memory-source\")}}\n{{json (index .Labels \"io.hvo.roof.limits.written-by\")}}\n{{json (index .Labels \"io.hvo.roof.limits.written-at\")}}\n{{json (index .Labels \"io.hvo.roof.limits.controller\")}}";
 
     /// <summary>A value the record keeps as set (given, or kept), not RoofController's default.</summary>
     public const string Set = "set";
@@ -335,78 +348,125 @@ public sealed partial record DesiredLimits
         return (volumes, newest, highest);
     }
 
-    /// <summary>The record <paramref name="volume"/>, generation <paramref name="generation"/>, from its answer to <see cref="Format"/>, validated.</summary>
+    /// <summary>
+    /// The record <paramref name="volume"/>, generation <paramref name="generation"/>, from its answer to <see cref="Format"/>,
+    /// validated as the deploy script and install.sh validate it: each line one plain JSON string (at most 40 letters,
+    /// digits, '.', ':', '_' or '-'), then each label's whole raw value against the one form the deploy script writes, with
+    /// nothing normalised first (review ROOF-151-R3 F10).
+    /// </summary>
     public static DesiredLimits Parse(string volume, int generation, string output)
     {
-        // As the script's read: a field past the last goes with the last.
-        var fields = (output ?? string.Empty).TrimEnd('\r', '\n').Split('|', 9);
-        string? Field(int index) => index < fields.Length && fields[index] is { Length: > 0 } text && text != "<no value>" ? text : null;
+        var lines = (output ?? string.Empty).TrimEnd('\n').Split('\n');
+        var values = new string[Labels.Count];
+        string? problem = null;
+        if (lines.Length != Labels.Count)
+        {
+            problem = "its labels could not be read as one JSON string each";
+        }
+        else
+        {
+            for (var index = 0; index < lines.Length; index++)
+            {
+                if (!PlainPattern().IsMatch(lines[index]))
+                {
+                    problem = $"its label {Labels[index]} is not plain: at most 40 letters, digits, '.', ':', '_' or '-'";
+                    break;
+                }
+
+                values[index] = lines[index][1..^1];
+            }
+        }
+
+        if (problem is not null)
+        {
+            return new DesiredLimits { Volume = volume, Generation = generation, Problem = problem };
+        }
+
         var record = new DesiredLimits
         {
             Volume = volume,
             Generation = generation,
-            Cpus = Field(2),
-            CpusSource = Field(3),
-            Memory = Field(4),
-            MemorySource = Field(5),
-            WrittenBy = Field(6),
-            WrittenAt = Field(7),
-            Controller = Field(8)
+            Cpus = Value(values[2]),
+            CpusSource = Value(values[3]),
+            Memory = Value(values[4]),
+            MemorySource = Value(values[5]),
+            WrittenBy = Value(values[6]),
+            WrittenAt = Value(values[7]),
+            Controller = Value(values[8])
         };
-        return record with { Problem = ProblemOf(record, Field(0), Field(1)) };
+        return record with { Problem = ProblemOf(generation, values) };
     }
 
-    // As the deploy script validates a record (read_desired_limits, desired_problem), in the same words.
-    private static string? ProblemOf(DesiredLimits record, string? schema, string? generation)
+    private static string? Value(string value) => value.Length > 0 ? value : null;
+
+    // As the deploy script validates a record (desired_problem), in the same words and order, each label's whole value.
+    private static string? ProblemOf(int generation, string[] values)
     {
+        var (schema, label, cpus, cpusSource, memory, memorySource, by, at, controller) =
+            (values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8]);
         if (schema != "1")
         {
             return $"its format ({Label}) is '{schema}', not 1";
         }
 
-        if (generation != record.Generation.ToString(CultureInfo.InvariantCulture))
+        if (label != generation.ToString(CultureInfo.InvariantCulture))
         {
-            return $"its generation label '{generation}' is not the {record.Generation} of its name";
+            return $"its generation label '{label}' is not the {generation} of its name";
         }
 
-        if (record.WrittenBy is not ("deploy" or "rollback") || record.Controller is null || !ControllerPattern().IsMatch(record.Controller))
+        if (by is not ("deploy" or "rollback") || !ControllerPattern().IsMatch(controller))
         {
-            return $"it does not say which run wrote it, and for which container ('{record.WrittenBy}', '{record.Controller}')";
+            return $"it does not say which run wrote it, and for which container ('{by}', '{controller}')";
         }
 
-        if (CpusPattern().Match(record.Cpus ?? string.Empty) is not { Success: true } cpus)
+        if (!TimePattern().IsMatch(at))
         {
-            return $"its CPUs '{record.Cpus}' are not a number of CPUs with at most two decimals";
+            return $"its time '{at}' is not a UTC time such as 2026-10-17T18:04:11Z";
         }
 
-        if (decimal.Parse(record.Cpus!, NumberStyles.Number, CultureInfo.InvariantCulture) < ContainerResources.MinimumCpus)
+        if (!CpusPattern().IsMatch(cpus))
         {
-            return $"its CPUs '{record.Cpus}' are less than 1 vCPU, the minimum";
+            return $"its CPUs '{cpus}' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)";
         }
 
-        if (new ContainerResources { Memory = record.Memory ?? string.Empty }.Normalised() is not { Memory: not null, MemoryBytes: { } bytes })
+        if (cpus.StartsWith('0'))
         {
-            return $"its memory '{record.Memory}' is not a whole number of MiB or GiB";
+            return $"its CPUs '{cpus}' are less than 1 vCPU, the minimum";
         }
 
-        if (bytes < ContainerResources.MinimumMemoryBytes)
+        if (MemoryPattern().Match(memory) is not { Success: true } match)
         {
-            return $"its memory '{record.Memory}' is less than 1g, the minimum";
+            return $"its memory '{memory}' is not a memory limit as the deploy script writes one (such as 1024m or 2g)";
         }
 
-        return record.CpusSource is Set or Default && record.MemorySource is Set or Default
+        if (match.Groups[2].Value == "m" && int.Parse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture) < 1024)
+        {
+            return $"its memory '{memory}' is less than 1g, the minimum";
+        }
+
+        return cpusSource is Set or Default && memorySource is Set or Default
             ? null
-            : $"its sources '{record.CpusSource}' and '{record.MemorySource}' are not set or default";
+            : $"its sources '{cpusSource}' and '{memorySource}' are not set or default";
     }
 
-    [GeneratedRegex("^[1-9][0-9]{0,8}$")]
-    private static partial Regex GenerationPattern();
+    // Whole values (\A and \z, not ^ and $, which allow a newline at the end), with each set of characters spelt out.
+    [GeneratedRegex("\\A\"[0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:_-]{0,40}\"\\z")]
+    private static partial Regex PlainPattern();
 
-    [GeneratedRegex("^[0-9a-f]{12}$")]
+    [GeneratedRegex("\\A[0123456789abcdef]{12}\\z")]
     private static partial Regex ControllerPattern();
 
-    [GeneratedRegex(@"^([0-9]{1,3})(\.([0-9]{1,2}))?$")]
+    [GeneratedRegex("\\A[0123456789]{4}-[0123456789]{2}-[0123456789]{2}T[0123456789]{2}:[0123456789]{2}:[0123456789]{2}Z\\z")]
+    private static partial Regex TimePattern();
+
+    [GeneratedRegex("\\A(0|[123456789][0123456789]{0,2})(\\.[0123456789]?[123456789])?\\z")]
     private static partial Regex CpusPattern();
+
+    [GeneratedRegex("\\A([123456789][0123456789]{0,5})([mg])\\z")]
+    private static partial Regex MemoryPattern();
+
+    [GeneratedRegex("\\A[123456789][0123456789]{0,8}\\z")]
+    private static partial Regex GenerationPattern();
 }
 
 /// <summary>Who made a container.</summary>

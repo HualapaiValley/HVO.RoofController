@@ -414,8 +414,8 @@ public sealed class InstallerResourceLimitsTests
     [TestMethod]
     [DataRow("memory", "512m", "its memory '512m' is less than 1g, the minimum")]
     [DataRow("cpus", "0.5", "its CPUs '0.5' are less than 1 vCPU, the minimum")]
-    [DataRow("cpus", "1.555", "its CPUs '1.555' are not a number of CPUs with at most two decimals")]
-    [DataRow("memory", "2gb", "its memory '2gb' is not a whole number of MiB or GiB")]
+    [DataRow("cpus", "1.555", "its CPUs '1.555' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)")]
+    [DataRow("memory", "2gb", "its memory '2gb' is not a memory limit as the deploy script writes one (such as 1024m or 2g)")]
     [DataRow("", "2", "its format (io.hvo.roof.limits) is '2', not 1")]
     [DataRow("generation", "7", "its generation label '7' is not the 2 of its name")]
     [DataRow("memory-source", "operator", "its sources 'set' and 'operator' are not set or default")]
@@ -479,17 +479,124 @@ public sealed class InstallerResourceLimitsTests
         (newest, generation).Should().Be(("roof-controller-limits-g10", 10));
         DesiredLimits.Records("roof-controller", []).Newest.Should().BeNull();
 
-        var record = DesiredLimits.Parse("roof-controller-limits-g10", 10, "1|10|1.5|set|6g|default|rollback|2026-10-17T01:02:03Z|0123456789ab\n");
+        // Each label is read as JSON on a line of its own (the whole table is EveryReader_AgreesOnTheDesiredLimitsRecords).
+        static string Output(params string[] values) => string.Concat(values.Select(value => System.Text.Json.JsonSerializer.Serialize(value) + "\n"));
+        var record = DesiredLimits.Parse("roof-controller-limits-g10", 10, Output("1", "10", "1.5", "set", "6g", "default", "rollback", "2026-10-17T01:02:03Z", "0123456789ab"));
         record.IsValid.Should().BeTrue(record.Problem);
         (record.Cpus, record.CpusSource, record.Memory, record.MemorySource, record.WrittenBy, record.Controller)
             .Should().Be(("1.5", "set", "6g", "default", "rollback", "0123456789ab"));
         record.Written.Should().Be("written by a rollback at 2026-10-17T01:02:03Z for container 0123456789ab");
-        DesiredLimits.Parse("roof-controller-limits-g1", 1, "|||||||||").Problem.Should().Be("its format (io.hvo.roof.limits) is '', not 1");
-        DesiredLimits.Parse("roof-controller-limits-g1", 1, "<no value>|<no value>").Problem.Should().Be("its format (io.hvo.roof.limits) is '', not 1");
-        DesiredLimits.Parse("roof-controller-limits-g1", 1, "1|1|1|set|1G|set|deploy|t|0123456789ab|extra").Problem
-            .Should().Be("it does not say which run wrote it, and for which container ('deploy', '0123456789ab|extra')", "a field past the last goes with the last, as the script reads it");
-        DesiredLimits.Parse("roof-controller-limits-g1", 1, "1|1|1|set|1G|set|deploy|t|0123456789ab").IsValid.Should().BeTrue("1G is 1 GiB, the minimum");
-        DesiredLimits.Parse("roof-controller-limits-g1", 1, "1|1|1|set|1023m|set|deploy|t|0123456789ab").Problem.Should().Be("its memory '1023m' is less than 1g, the minimum");
+        DesiredLimits.Format.Split('\n').Should().Equal(DesiredLimits.Labels.Select(label => $"{{{{json (index .Labels \"{label}\")}}}}"));
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, "").Problem.Should().Be("its labels could not be read as one JSON string each");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, Output("1", "1", "1", "set")).Problem.Should().Be("its labels could not be read as one JSON string each");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, "1\n1\n1\nset\n1g\nset\ndeploy\n2026-10-17T00:00:00Z\n0123456789ab\n").Problem
+            .Should().Be("its label io.hvo.roof.limits is not plain: at most 40 letters, digits, '.', ':', '_' or '-'", "each line is a JSON string");
+        DesiredLimits.Parse("roof-controller-limits-g1", 1, Output("1", "1", "1", "set", "1g", "set", "deploy", "2026-10-17T00:00:00Z", "0123456789ab")).IsValid.Should().BeTrue("1g is 1 GiB, the minimum");
+    }
+
+    [TestMethod]
+    public void EveryReader_AgreesOnTheDesiredLimitsRecords_TheInstallers()
+    {
+        // Reviews ROOF-151-R3 F8 and F10: one table, which the deploy script's tests and install.sh's read too. Each label
+        // is read on its own, as JSON, and its whole raw value checked, before anything normalises it.
+        var path = Path.Combine(Versioning.ProductVersionTests.RepositoryRoot(), "tests", "deploy", "desired-limits-records.json");
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var volume = document.RootElement.GetProperty("volume").GetString()!;
+        var generation = document.RootElement.GetProperty("generation").GetInt32();
+        var cases = document.RootElement.GetProperty("cases").EnumerateArray().ToArray();
+        cases.Should().HaveCountGreaterThan(50);
+        using var scope = new FluentAssertions.Execution.AssertionScope();
+        foreach (var entry in cases)
+        {
+            var name = entry.GetProperty("name").GetString()!;
+            var labels = entry.GetProperty("labels").EnumerateObject().ToDictionary(label => label.Name, label => label.Value.GetString()!);
+            var problem = entry.GetProperty("problem").ValueKind == System.Text.Json.JsonValueKind.Null ? null : entry.GetProperty("problem").GetString();
+            var record = DesiredLimits.Parse(volume, generation, FakeMachine.RenderLabels(DesiredLimits.Format, labels) + "\n");
+            record.Problem.Should().Be(problem, name);
+            if (problem is null)
+            {
+                (record.Cpus, record.Memory).Should().Be((entry.GetProperty("cpus").GetString(), entry.GetProperty("memory").GetString()), name);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ARecordForgedInsideOneLabel_IsRefused_AndNothingChanges()
+    {
+        // Review ROOF-151-R3 F8, as the installer reads it: a CPU label holding a whole valid-looking record and a newline.
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources()));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        pi.SeedDesiredLimits("1", "512m", 5, null, ("cpus", "1|set|6g|set|deploy|2026-10-17T00:00:00Z|0123456789ab\n"));
+        var deploys = pi.Deploys.Count;
+
+        var refused = await pi.RunAsync("--answers", answers);
+
+        refused.ExitCode.Should().Be((int)InstallerExitCode.Refused, refused.ToString());
+        refused.Error.Should().Contain("The newest desired-limits record, roof-controller-limits-g5, is not valid: its label io.hvo.roof.limits.cpus is not plain: at most 40 letters, digits, '.', ':', '_' or '-'.");
+        pi.Deploys.Should().HaveCount(deploys);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task UninstallingOnlyAClient_LeavesAnotherInstallsControllerRecords(bool purge)
+    {
+        // Review ROOF-151-R3 F9: a person's hvo-roof, uninstalled, with Docker's records of a controller installed apart.
+        using var pi = new FakeMachine(root: false).WithPi();
+        pi.WithContainer(MachineSurveyor.ControllerContainer, new FakeContainer { Memory = 6L << 30 });
+        pi.SeedDesiredLimits("1", "6g", 4);
+        pi.Write(InstallPaths.UserRecord(pi.Machine), new InstallRecord { Scope = InstallScope.User, Roles = [InstallRole.Cli], Version = "4.0.0", InstallerVersion = "4.0.0" }.ToJson());
+
+        var plan = PlanBuilder.BuildUninstall(pi.Machine, await MachineSurveyor.SurveyAsync(pi.Machine), InstallRecord.Parse(pi.Read(InstallPaths.UserRecord(pi.Machine))), purge);
+        plan.Steps.OfType<DesiredLimitsRemovalStep>().Should().BeEmpty("the person's record owns no controller");
+
+        var run = purge
+            ? await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi")
+            : await pi.RunAsync("uninstall", "--yes");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.DesiredLimitRecords.Should().Equal("roof-controller-limits-g4");
+        pi.Containers.Should().ContainKey(MachineSurveyor.ControllerContainer);
+    }
+
+    [TestMethod]
+    [DataRow("docker-down")]
+    [DataRow("list-fails")]
+    public async Task APurgeAfterAnUninstall_ThatCannotListTheRecords_IsBlocked_AndKeepsTheInstallRecord(string failure)
+    {
+        // Review ROOF-151-R3 F11: the record keeps the controller's settings after an uninstall, so the purge still owns
+        // the controller's records; one that cannot list them removes nothing, so that it can be run again.
+        using var pi = new FakeMachine().WithPi();
+        var answers = pi.WriteAnswers(Controller(new ContainerResources { Memory = "6g" }));
+        (await pi.RunAsync("--answers", answers)).ExitCode.Should().Be(0);
+        (await pi.RunAsync("uninstall", "--yes")).ExitCode.Should().Be(0);
+        Record(pi).Roles.Should().BeEmpty();
+        Record(pi).Controller.Should().NotBeNull("the uninstall keeps the controller's settings");
+        pi.SeedDesiredLimits("1", "6g", 7);
+        if (failure == "docker-down")
+        {
+            pi.DockerError = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
+        }
+        else
+        {
+            pi.VolumeListFails = true;
+        }
+
+        var purge = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+
+        purge.ExitCode.Should().NotBe(0, purge.ToString());
+        (purge.Output + purge.Error).Should().Contain("volumes roof-controller-limits-g<generation>");
+        pi.Exists(InstallPaths.SystemRecord).Should().BeTrue("the install record stays, so the purge can be run again");
+        pi.DesiredLimitRecords.Should().Equal("roof-controller-limits-g7");
+
+        // Once Docker answers, the purge runs again and removes them.
+        pi.DockerError = null;
+        pi.VolumeListFails = false;
+        var again = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+        again.ExitCode.Should().Be(0, again.ToString());
+        pi.DesiredLimitRecords.Should().BeEmpty();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeFalse();
     }
 
     [TestMethod]
