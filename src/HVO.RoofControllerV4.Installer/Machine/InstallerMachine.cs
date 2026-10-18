@@ -74,7 +74,8 @@ public sealed class InstallerMachine
         RunProgramAsync = RunProgramAsync,
         SyncFolderOnDisk = SyncFolderOnDisk,
         SyncFileOnDisk = SyncFileOnDisk,
-        RenameOnDisk = RenameOnDisk
+        RenameOnDisk = RenameOnDisk,
+        OpenReadOnDisk = OpenReadOnDisk
     };
 
     /// <summary>
@@ -96,6 +97,13 @@ public sealed class InstallerMachine
     /// <see cref="MoveFileDurably"/> renames with. A test fakes it, so that what it knows of the file (its owner) follows it.
     /// </summary>
     public Action<string, string, bool> RenameOnDisk { get; init; } = File.Move;
+
+    /// <summary>
+    /// Opens a file for reading, given where it is on disk. <see cref="OpenRead"/> calls it; a test can change an
+    /// untrusted source just before a consumer opens its verified copy.
+    /// </summary>
+    public Func<string, Stream> OpenReadOnDisk { get; init; } = onDisk =>
+        new FileStream(onDisk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
 
     /// <summary>
     /// True when something on this machine accepts connections on the TCP port: it answers on the loopback address
@@ -711,7 +719,7 @@ public sealed class InstallerMachine
     {
         try
         {
-            return new FileStream(OnDisk(path), FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+            return OpenReadOnDisk(OnDisk(path));
         }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
         {
