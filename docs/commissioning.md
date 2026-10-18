@@ -493,6 +493,7 @@ register every 0.1 s.
 | 9 | A new version whose web UI cannot start (a setting out of range) passes the pre-flight, which runs only the controller, and its controller becomes ready. Its web UI exits at each start, so the script rolls back, and the previous controller and its web UI are running again. | `deploy-scenarios.sh c12` |
 | 10 | Throughout steps 3-9, every relay-register sample is 0 and the emulator records no violation. In step 7 the samples end before `ClearFault`, whose pulse energizes RLY3. | `deploy-scenarios.sh c12` |
 | 11 | A released image, an index of two platforms as a release publishes it, pulled by the index's digest (`IMAGE_REF`) from a registry ([deployment](deployment.md#deploying-a-released-image)). The script pulls it for the Pi's platform, checks its platform, digest and version label, and deploys it with no build. The old controller is kept as `roof-controller-previous`, and the relays stay off. A reference without a digest, a digest the registry does not hold and an image with nothing for the Pi's platform are each refused before the running controller is touched. `--rollback` swaps back and forth, and ignores `IMAGE_REF`. With no registry, a release's offline archive (`IMAGE_ARCHIVE`) is checked against the digest, loaded, and run by its image's ID, and an archive of another image is refused before anything is touched ([deployment](deployment.md#without-ghcrio)). | `deploy-scenarios.sh pull` |
+| 12 | First install and upgrade with the emulated drive unpowered keep the controller with a `DriveFault` warning, verified all-off relays and motion refused. Docker availability passes while operational readiness stays 503; restoring power leaves the latch until explicit `ClearFault`. The handoff then waits in plant time for the drive's documented two-second power-up lockout (C4), with the drive stopped and untripped. Failed/stale I/O, unverified relays, TLS/authentication and HAT-mode failures still fail deployment (unit and script regressions). | `deploy-scenarios.sh plant_fault`, `DeploymentAvailabilityScenarios.AnUnpoweredDrive_AtFirstStartOrUpgrade_KeepsSoftwareAvailable_UntilExplicitRecovery` |
 | — | The move from the Compose `pi` profile to the deploy script and back ([deployment](deployment.md#moving-between-compose-and-the-deploy-script)). The script refuses a Compose container, and Compose refuses while the script's container exists. `--verify-remote` checks each Compose controller from the deploying machine, with no Docker context: an authenticated Status and a verified Stop at the published URL. It rejects a key the controller does not know. | `deploy-scenarios.sh migration` |
 
 **Installation assumptions**
@@ -548,6 +549,44 @@ the warm-up. Only the nightly soak checks that resources stay flat. It runs for 
 `soak-summary.md` (the invariant table and the motion timings), `soak-summary.json`, `soak-samples.csv` and
 `soak-log.txt` (every Warning or above, and the latest 1,000 log entries). The soak's host writes no console log: the
 test framework keeps a test's console output in memory, which grows the heap the soak measures.
+
+For the memory investigation in [#159](https://github.com/HualapaiValley/HVO.RoofController/issues/159), every C14 run
+also writes contributor diagnostics to the same results directory. These do not change any check below:
+
+- `soak-environment.json` records the executing runtime and CoreLib versions, process/OS architecture, GC mode,
+  processor count, and the SDK version and configuration that built the tests. The build SDK and executing runtime
+  are separate facts; a different SDK is a possible confounder, not evidence of a cause. No environment or command
+  line dump is collected.
+- `soak-memory.jsonl` appends and flushes each `sample` record to disk during the run, before mapping snapshots.
+  `originalSample` repeats the original resource/health observation; its managed bytes still come from
+  `GC.GetTotalMemory(forceFullCollection: true)`, followed by the original working-set and other observations in
+  their original order. Additional diagnostics are taken afterward, without another forced collection. GC fields
+  include committed bytes, heap size, fragmentation, the most recent collection's index/generation and flags,
+  per-generation before/after sizes and fragmentation (0/1/2, LOH, POH), collection counts and cumulative allocated
+  bytes. Global JIT counters record compiled IL bytes, method count and compilation time; IL bytes are not the size
+  of generated machine code. Diagnostic allocations and I/O also belong to the measured test process.
+- On Linux, each sample includes selected `/proc/self/smaps_rollup` fields in `linuxRollup.bytes`: RSS, PSS,
+  anonymous/file/shared PSS, anonymous pages, clean/dirty shared/private pages, swap and anonymous huge pages.
+  Kernel `kB` values are converted using 1024 bytes per kB. Missing or malformed fields remain `null`, with a
+  `partial` status; unsupported or inaccessible proc data reports `unavailable` and an exception type, without
+  publishing paths from exception messages. A measured zero remains zero.
+- `soak-smaps-first.txt`, `soak-smaps-settled.txt` and `soak-smaps-final.txt` stream the full per-mapping metadata at
+  the first sample, first sample after the warm-up, and normal final sample. No process memory contents are read.
+  Pathnames and arbitrary mapping names are replaced with categories (anonymous, managed image, known runtime
+  library, shared library, file). Each attempt has a `smaps` record in the JSONL file, joined by `sampleIndex`, with
+  its phase and availability. A failed copy removes its partial file. An interrupted run keeps completed, flushed
+  rows and snapshots even if it never reaches the existing end-of-run summaries. The files are test attachments
+  and are included in the workflow's existing results upload.
+
+Interpret these as observations of the **whole test process**, including controller, emulator, camera, exporter and
+harness. GC commitment is backing store rather than resident pages; working set minus GC committed bytes is not a
+native-memory measurement. Anonymous resident pages include managed GC pages as well as other allocations, and PSS
+weights shared pages. The proc and managed observations are sequential rather than atomic. Compare their series
+and mapping categories before attributing growth. A short run verifies diagnostics and invariants; it does not
+assess the nightly growth criteria or establish a leak. See the primary references for
+[GC commitment](https://learn.microsoft.com/dotnet/api/system.gcmemoryinfo.totalcommittedbytes),
+[JIT counters](https://learn.microsoft.com/dotnet/api/system.runtime.jitinfo) and
+[Linux proc mappings](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
 
 | Step | Checked | Scenario |
 |---|---|---|

@@ -10,7 +10,7 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks;
 /// <summary>
 /// Reports the identity store: Unhealthy when its file could not be read (sign-in and identity management are refused;
 /// configured API keys, Stop and the roof keep working), Degraded when it is kept in memory only, otherwise Healthy.
-/// Not tagged "hardware", so it never fails the readiness probe or a deploy.
+/// Not tagged "hardware", so it never fails operational readiness; it does participate in deployment availability.
 /// </summary>
 internal sealed class RoofIdentityStoreHealthCheck : IHealthCheck
 {

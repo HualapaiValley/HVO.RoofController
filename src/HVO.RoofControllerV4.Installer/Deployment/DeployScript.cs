@@ -75,7 +75,18 @@ public static class DeployScript
 
                 // The script has its own limits: the pull, the pre-flight check, the Stop, the new controller's start.
                 Timeout = null,
-                OnOutputLine = line => context.Progress?.Invoke(context.Log.Redact(line))
+                OnOutputLine = line =>
+                {
+                    var redacted = context.Log.Redact(line);
+                    // The command log keeps only its tail. Preserve deployment warnings even when later progress
+                    // would push them out, including when no progress display is attached.
+                    if (redacted.Contains("WARNING:", StringComparison.Ordinal))
+                    {
+                        context.Log.Write(redacted);
+                    }
+
+                    context.Progress?.Invoke(redacted);
+                }
             },
             cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded)

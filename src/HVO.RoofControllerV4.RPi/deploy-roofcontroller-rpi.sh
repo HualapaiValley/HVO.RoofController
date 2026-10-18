@@ -961,7 +961,7 @@ supervised_process() {
 # first start as the one expected, not as a restart.
 wait_ready() {
   local name=$1 deadline=$((SECONDS + READY_TIMEOUT_SECONDS)) state raw restarts first_restarts="" supervised starts
-  local first_starts="" expected_starts
+  local first_starts="" expected_starts probe_code
   while (( SECONDS < deadline )); do
     # If Docker cannot be asked, keep polling until the deadline.
     state=$(container_state "${name}") || state=unknown
@@ -983,7 +983,13 @@ wait_ready() {
         return 2
       fi
     fi
-    if dockerc exec "${name}" curl -fsS --max-time 5 http://localhost:8080/health/ready >/dev/null 2>&1; then
+    probe_code=$(dockerc exec "${name}" curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://localhost:8080/health/available 2>/dev/null) || probe_code=000
+    if [[ "${probe_code}" == "200" ]]; then
+      return 0
+    fi
+    # Older images (including rollback targets) have no availability probe. Only a 404 permits the old, strict
+    # readiness check: a 503, a connection failure or an authentication failure must never fall back to liveness.
+    if [[ "${probe_code}" == "404" ]] && dockerc exec "${name}" curl -fsS --max-time 5 http://localhost:8080/health/ready >/dev/null 2>&1; then
       return 0
     fi
     sleep "${POLL_INTERVAL_SECONDS}"
@@ -1086,7 +1092,8 @@ check_hat_mode() {
 # from this machine. Sets FAILURE and returns 1 on the first check that fails.
 verify_controller() {
   local name=$1 response http_status ready=0 web_scheme web=0
-  echo "[verify] Waiting up to ${READY_TIMEOUT_SECONDS}s for ${name} to report /health/ready"
+  PLANT_FAULT_WARNING=""
+  echo "[verify] Waiting up to ${READY_TIMEOUT_SECONDS}s for ${name} to report /health/available (older images: /health/ready)"
   EXIT_DETAIL=""
   wait_ready "${name}" || ready=$?
   if (( ready == 2 )); then
@@ -1108,6 +1115,7 @@ verify_controller() {
     return 1
   fi
   check_hat_mode "${name}" "$(sed '$d' <<<"${response}")" || return 1
+  check_deployment_fault "${response}" || return 1
   echo "[verify] Ready; authenticated Status inside the container: HTTP 200, hatMode ${VERIFIED_HAT_MODE}"
 
   # The web UI, in a version that has one (a rollback can restore a version from before it).
@@ -1131,6 +1139,7 @@ verify_controller() {
 
   if [[ "${SKIP_REMOTE_CHECK}" == "true" ]]; then
     log_err "[verify] WARNING: SKIP_REMOTE_CHECK=true: ${REMOTE_BASE_URL} was not checked from this machine. Check it from a client before relying on remote control."
+    [[ -z "${PLANT_FAULT_WARNING}" ]] || log_err "${PLANT_FAULT_WARNING}"
     return 0
   fi
 
@@ -1142,6 +1151,31 @@ verify_controller() {
     fi
     echo "[verify] Web UI live at ${REMOTE_WEB_URL}: OK"
   fi
+  [[ -z "${PLANT_FAULT_WARNING}" ]] || log_err "${PLANT_FAULT_WARNING}"
+}
+
+# The availability probe alone does not authorize a fault warning: independently confirm the authenticated snapshot
+# names a classified plant latch and is safely stopped. Never print LastError or arbitrary response text here.
+check_deployment_fault() {
+  local response=$1 body fault parsed state mask motion
+  body=$(sed '$d' <<<"${response}")
+  if command -v jq >/dev/null 2>&1; then
+    fault=$(jq -r 'if .isFaultLatched == true then (.latchedFaultReason // "Unknown") else "none" end' <<<"${body}") || return 1
+  else
+    fault=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("latchedFaultReason") or "Unknown" if d.get("isFaultLatched") is True else "none")' <<<"${body}") || return 1
+  fi
+  [[ "${fault}" != "none" ]] || return 0
+  case "${fault}" in
+    DriveFault|ContradictoryLimitInputs|StartLimitReasserted|DepartureLimitNotReleased|DriveNotRunning) ;;
+    *) FAILURE="the authenticated Status reports an unclassified safety latch; deployment refused"; return 1 ;;
+  esac
+  parsed=$(parse_status <<<"${body}") || return 1
+  IFS=$'\t' read -r state mask motion _ <<<"${parsed}"
+  if [[ "${state}" != "Verified" || "${mask}" != "0" || "${motion}" != "None" ]]; then
+    FAILURE="the authenticated Status reports a plant fault without verified all-off relays and no commanded motion"
+    return 1
+  fi
+  PLANT_FAULT_WARNING="[verify] WARNING: PLANT FAULT ${fault}: keeping the controller available with motion refused. Repair the cause, check settings/wiring (especially a fault first seen after upgrading), then explicitly ClearFault. This deploy never clears faults. /health and /health/ready remain Unhealthy."
 }
 
 # An authenticated Status, then a verified Stop, from this machine at the published URL. With check_hat=true the

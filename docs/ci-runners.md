@@ -14,6 +14,11 @@ commissioning scenarios, the Pi image build and the HAT emulator image. The form
 | `release-latest.yml` | GitHub-hosted `ubuntu-latest` | a release published, manual | Gives the newest final release's images the `latest` tag |
 | `emulator-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the emulator or controller image inputs, weekly, manual | Check the [base image pins](#base-images), build the HAT emulator image for `linux/amd64` and `linux/arm64`, and open and close the emulated roof through the containerized controller (`tests/emulator/compose-smoke-test.sh`); no hardware, nothing pushed or deployed |
 
+The C14 results upload also keeps the flushed memory-diagnostic JSONL stream, runtime/build metadata and sanitized
+Linux mapping snapshots, including partial-run evidence when the job times out. The existing summaries are still
+written at the end of a completed run. File formats and interpretation are described in
+[C14 commissioning](commissioning.md#c14-rv-6-soak); diagnostics do not change its pass criteria.
+
 All workflows:
 
 - declare `permissions: contents: read`;

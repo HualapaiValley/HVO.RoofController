@@ -32,6 +32,7 @@ public sealed class SecurityHostingTests
     [
         "GET /health/live",
         "GET /health/ready",
+        "GET /health/available",
         // The CA that issued the controller's certificate (its certificate only), which a client trusts before it has a key.
         "GET /ca.crt",
         // How the roof is driven (emulator, simulation, limit switches ignored), so a sign-in page can warn of it.

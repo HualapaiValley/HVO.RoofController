@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # The container's health check (the image's HEALTHCHECK and the Compose health checks). Healthy exactly when the
-# controller reports ready (/health/ready). The web UI's liveness and the supervisor's view of both processes are
+# controller reports available (/health/available), including a safely stopped, classified plant fault. Operational
+# faults still fail /health/ready. The web UI's liveness and the supervisor's view of both processes are
 # printed on the same line (docker inspect shows the output of the last checks), but they never change the result: a
 # web UI failure never hides the controller's state, and a web UI that is down does not make the container unhealthy.
 # The two requests run at once, so the check takes at most 4 s: within the Compose files' 5 s timeout (the image's is
 # 10 s), even when both hang.
 set -uo pipefail
 
-CONTROLLER_URL=${HVO_HEALTH_CONTROLLER_URL:-http://localhost:8080/health/ready}
+CONTROLLER_URL=${HVO_HEALTH_CONTROLLER_URL:-http://localhost:8080/health/available}
 STATE_FILE="${HVO_SUPERVISOR_RUN_DIR:-/run/hvo-roof}/supervisor.json"
 
 # The web UI's liveness URL on loopback, from the first of its URLs (RoofWeb__Urls, default http://+:8088).
@@ -43,9 +44,9 @@ ui_code=$(cat <&3)
 exec 3<&-
 
 if [[ "${controller_code}" == 200 ]]; then
-  controller="ready"
+  controller="available"
 else
-  controller="NOT READY (HTTP ${controller_code:-000})"
+  controller="NOT AVAILABLE (HTTP ${controller_code:-000})"
 fi
 if [[ "${ui_code}" == 200 ]]; then
   ui="live"

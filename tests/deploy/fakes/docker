@@ -617,6 +617,10 @@ def exec_curl(state, ref, curl_args, stdin_text):
     url = curl_args[-1]
     method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"
 
+    if url.endswith("/health/available"):
+        # Default to an older image so the existing compatibility suite still exercises /health/ready.
+        out(behaviour(kind, "AVAILABLE_CODE", "404"), end="")
+        return
     if url.endswith("/health/ready"):
         # A controller the supervisor has not started yet (the first-start views' first read) is not ready.
         if behaviour(kind, "SUPERVISOR", "").startswith("first-start") and c.get("supervised_controller_reads", 0) < 2:
@@ -633,6 +637,11 @@ def exec_curl(state, ref, curl_args, stdin_text):
         code = behaviour(kind, "STATUS_CODE", "200")
         motion = behaviour(kind, "MOTION", "None")
         body = dict(VERIFIED, commandedMotion=motion, isMoving=motion != "None")
+        fault = behaviour(kind, "FAULT", "")
+        if fault:
+            body.update(isFaultLatched=True, latchedFaultReason=fault, status="Error")
+        if behaviour(kind, "STATUS_RELAYS", "verified") != "verified":
+            body.update(UNVERIFIED)
         out(json.dumps(with_hat_mode(c, body)) + "\n" + code, end="")
     elif url.endswith("/Stop") and method == "POST":
         stop = behaviour(kind, "STOP", "verified")

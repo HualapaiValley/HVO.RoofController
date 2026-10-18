@@ -21,6 +21,8 @@
 #              pre-flight failures, a remote-check failure that rolls back, --rollback twice, a Stop that cannot be
 #              verified, a new controller that never becomes ready, a new web UI that cannot start, and the relays off
 #              throughout.
+#   plant_fault First install and upgrade with an unpowered drive: keep the controller, warn, refuse motion until
+#              recovery and explicit ClearFault. Runs first by default, before a controller exists (C12 step 12).
 #   migration  A controller moved from the Compose `pi` profile to the deploy script and back to the Compose version,
 #              following "Moving between Compose and the deploy script" in docs/deployment.md, and the refusals that
 #              keep the two from managing the same controller. The script's --verify-remote checks each Compose
@@ -52,7 +54,8 @@
 # start while a roof-controller container, or this run's emulator container or network, exists. Only a run that got
 # past that check removes them on exit; the images stay (the build cache).
 #
-#   tests/emulator/deploy-scenarios.sh [lifecycle] [supervisor] [limits] [c12] [migration] [pull]   (all six by default, in that order)
+#   tests/emulator/deploy-scenarios.sh [plant_fault] [lifecycle] [supervisor] [limits] [c12] [migration] [pull]
+#   (all seven by default, in that order)
 #
 # Settings (environment): SCN_HTTPS_PORT (the controller's published HTTPS port, default 18443), SCN_WEB_PORT (the web
 # UI's published HTTPS port, default 18088), SCN_EMULATOR_PORT (the emulator's control API on loopback, default 15390),
@@ -477,6 +480,18 @@ emulator_post() {
 
 plant_is() {
   plant | jq -e "$1" >/dev/null
+}
+
+# drive_powerup_complete <plant elapsed sampled after power-on>: C4's SMVector start lockout lasts 2 s (SV01J p.27).
+# Healthy IN3 and a successful ClearFault do not establish that it has elapsed. Use the plant's clock, including its
+# time scale, and require a powered, stopped, untripped drive before handing it to a scenario that may start motion.
+drive_powerup_complete() {
+  plant | jq -e --arg powered_at "$1" '
+    def seconds:
+      capture("^(?:(?<d>[0-9]+)\\.)?(?<h>[0-9]{2}):(?<m>[0-9]{2}):(?<s>[0-9]+(?:\\.[0-9]+)?)$")
+      | (((.d // "0") | tonumber) * 86400 + (.h | tonumber) * 3600 + (.m | tonumber) * 60 + (.s | tonumber));
+    .drivePowered and .driveMode == "Stopped" and .driveTrip == "None"
+      and ((.elapsed | seconds) >= (($powered_at | seconds) + 2))' >/dev/null
 }
 
 roof_is() {
@@ -1271,7 +1286,7 @@ scenario_supervisor() {
   health_status=0
   health=$(docker exec "${controller}" /usr/local/bin/roof-healthcheck) || health_status=$?
   (( health_status != 0 )) || fail "the health check passes with the controller stopped: ${health}"
-  grep -qF 'controller: NOT READY' <<<"${health}" || fail "the health check does not report the controller not ready: ${health}"
+  grep -qF 'controller: NOT AVAILABLE' <<<"${health}" || fail "the health check does not report the controller not ready: ${health}"
   grep -qF 'supervisor: controller crash-loop, web UI running' <<<"${health}" \
     || fail "the health check does not report the crash loop: ${health}"
   container_running "${controller}" || fail "the container stopped"
@@ -1587,6 +1602,56 @@ expect_keys_link_refused() {
 
 # ---------------------------------------------------------------------------------------------------------------------
 # c12
+
+scenario_plant_fault() {
+  # CommissioningCheck("C12", "12")
+  current_check="C12 step 12: first install and upgrade with an unpowered drive"
+  [[ -z "$(container_id "${controller}")" ]] || fail "plant_fault must run before any controller is deployed"
+  emulator_post drive/power '{"powered":false}'
+  start_relay_monitor
+  local stage command response powered_at old_id=""
+  for stage in first-install upgrade; do
+    deploy
+    (( DEPLOY_STATUS == 0 )) || fail "${stage} with drive power off failed (exit ${DEPLOY_STATUS})"
+    expect_deploy_log "WARNING: PLANT FAULT DriveFault"
+    expect_deploy_log "explicitly ClearFault"
+    expect_deploy_log "Deployment complete and verified"
+    container_running "${controller}" || fail "${stage} removed the faulted controller"
+    if [[ -n "${old_id}" ]]; then
+      [[ "$(container_id "${previous}")" == "${old_id}" ]] || fail "upgrade did not keep the previous controller"
+      container_stopped "${previous}" || fail "previous controller still running"
+    fi
+    roof_is '.isFaultLatched and .latchedFaultReason == "DriveFault" and .commandedMotion == "None"' \
+      || fail "${stage} did not keep the drive fault latched and stopped"
+    local code
+    code=$(curl -sS --max-time 5 --cacert "${work}/ca.pem" -o /dev/null -w '%{http_code}' "${roof}/health/available")
+    [[ "${code}" == 200 ]] || fail "availability returned ${code}"
+    code=$(curl -sS --max-time 5 --cacert "${work}/ca.pem" -o /dev/null -w '%{http_code}' "${roof}/health/ready")
+    [[ "${code}" == 503 ]] || fail "operational readiness returned ${code}"
+    docker exec "${controller}" /usr/local/bin/roof-healthcheck >/dev/null || fail "Docker health refused the plant fault"
+    # ClearFault deliberately pulses RLY3 even when the active input ultimately refuses the clear. Keep that explicit
+    # operator action after the deployment all-off sampling; the in-process scenario covers refusal while unpowered.
+    for command in Open Close; do
+      response=$(roof_call POST "${command}")
+      [[ "$(tail -n 1 <<<"${response}")" == 409 ]] || fail "${command} accepted while drive unpowered"
+    done
+    old_id=$(container_id "${controller}")
+  done
+  relays_stayed_off
+  assert_relays_off
+  emulator_post drive/power '{"powered":true}'
+  powered_at=$(plant | jq -er '.elapsed')
+  wait_for "drive power recovery" 15 roof_is '.isDriveFaultActive == false'
+  roof_is '.isFaultLatched' || fail "drive recovery automatically cleared the latch"
+  response=$(roof_call POST Open)
+  [[ "$(tail -n 1 <<<"${response}")" == 409 ]] || fail "motion accepted before explicit ClearFault"
+  roof_post ClearFault >/dev/null
+  wait_for "operational readiness after explicit ClearFault" 15 controller_ready
+  wait_for "the drive's 2 s power-up start lockout to elapse" 15 drive_powerup_complete "${powered_at}"
+  assert_relays_off
+  no_violations
+  pass "first install and upgrade kept the stopped controller with DriveFault warnings; Docker healthy, operational health 503, no motion before recovery and explicit ClearFault; relays 0 in ${RELAY_SAMPLES} samples; drive stopped after its 2 s power-up start lockout"
+}
 
 scenario_c12() {
   ensure_deployed
@@ -2327,11 +2392,11 @@ scenario_limits() {
 # ---------------------------------------------------------------------------------------------------------------------
 
 scenarios=("$@")
-(( ${#scenarios[@]} > 0 )) || scenarios=(lifecycle supervisor limits c12 migration pull)
+(( ${#scenarios[@]} > 0 )) || scenarios=(plant_fault lifecycle supervisor limits c12 migration pull)
 for scenario in "${scenarios[@]}"; do
   case "${scenario}" in
-    lifecycle|supervisor|limits|c12|migration|pull) ;;
-    *) echo "Unknown scenario: ${scenario} (lifecycle, supervisor, limits, c12, migration or pull)" >&2; exit 2 ;;
+    plant_fault|lifecycle|supervisor|limits|c12|migration|pull) ;;
+    *) echo "Unknown scenario: ${scenario} (plant_fault, lifecycle, supervisor, limits, c12, migration or pull)" >&2; exit 2 ;;
   esac
 done
 

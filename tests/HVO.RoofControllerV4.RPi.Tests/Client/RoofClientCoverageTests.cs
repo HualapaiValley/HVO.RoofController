@@ -28,6 +28,7 @@ public sealed class RoofClientCoverageTests
         ["GET /scalar/favicon.svg"] = ApiDocs,
         ["GET /scalar/scalar.aspnetcore.js"] = ApiDocs,
         ["GET /scalar/scalar.js"] = ApiDocs,
+        ["* /health/available"] = "software availability is polled by deployment and Docker; UI clients use operational health instead",
         ["GET /ca.crt"] = "fetched by RoofCertificateAuthority.FetchAsync over a connection of its own, which trusts nothing yet and sends no key or session (RoofCertificateAuthorityTests)"
     };
 

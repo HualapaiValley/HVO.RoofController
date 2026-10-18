@@ -846,11 +846,14 @@ public sealed class RoofControllerApiTests
         response.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
         var report = await ApiJson.ReadElementAsync(response);
         Assert.AreEqual(JsonValueKind.Array, report.GetProperty("checks").ValueKind);
+        report.GetProperty("checks").EnumerateArray().Should().NotContain(check => check.GetProperty("name").GetString() == "roof_availability",
+            "deployment availability must not change the detailed operational health report");
     }
 
     [TestMethod]
     [DataRow("/health/live")]
     [DataRow("/health/ready")]
+    [DataRow("/health/available")]
     public async Task HealthProbes_AreAnonymous(string path)
     {
         using var client = _host.CreateApiClient();
