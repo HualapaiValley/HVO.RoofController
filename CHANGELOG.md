@@ -116,6 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The installer installs and unpacks every offline release asset from a private copy checked as it is written,
+  including `hvo-roof`, the installer, the Linux authentication worker, the kiosk tarball and the Mac app zip.
+  Replacing or modifying the source after verification cannot change the bytes used (#145).
 - `restore` now makes what it puts back durable (each file and folder with its owner, then the folders above them)
   before the install that follows relies on it; a sync that fails stops it before that install (exit 1) (#130).
 - An upgrade that stopped part way (the new controller deployed, the kiosk's download failed) left the record saying

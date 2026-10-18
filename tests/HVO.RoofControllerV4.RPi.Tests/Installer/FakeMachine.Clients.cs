@@ -273,6 +273,7 @@ internal sealed partial class FakeMachine
 
     private CommandResult Unzip(string zip, string into)
     {
+        BeforeRead?.Invoke(zip);
         if (!File.Exists(OnDisk(zip)) || !Directory.Exists(OnDisk(into)))
         {
             return new CommandResult(1, string.Empty, $"ditto: {zip}: No such file or directory\n");
