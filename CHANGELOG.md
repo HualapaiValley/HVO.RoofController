@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   2 GiB and 512 processes (#149, under Changed), set with `hvo-roof-install`'s `controller.resources` answers or
   `--cpus`, `--memory` and `--pids-limit`, or the deploy script's `CONTAINER_CPUS`, `CONTAINER_MEMORY` and
   `CONTAINER_PIDS_LIMIT`. A CPU limit below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused,
-  with no exception (also before Compose starts either process or its deployment check). The install record keeps
+  with no exception (also checked for Compose starts and its deployment check). The install record keeps
   them, and upgrade and rollback give them again (#129).
 - State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
   `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
@@ -59,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   controller before starts; a sync that fails stops the rollback before the swap (exit 1) (#130).
 
 ### Changed
+
+- Compose starts verify the supervisor's own cgroup v2 CPU quota, memory, zero swap and PID limits against the
+  configured expectations. Missing, unlimited, unreadable, malformed or different limits, cgroup v1 and unverifiable
+  placement refuse both applications (exit 2). The supervisor still turns every relay off and verifies the register,
+  retrying failures while both applications stay stopped; Stop remains bounded. One-shot deployment checks never
+  touch the HAT, and the deploy script's degraded rollback recovery remains available (#152).
 
 - `install.sh --from DIR` no longer checks that ghcr.io answers: it checks that `DIR` holds the release's offline
   image archives for this machine instead (#127).

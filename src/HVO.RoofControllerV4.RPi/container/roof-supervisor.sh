@@ -119,6 +119,8 @@ BACKOFF_MAX_SECONDS=${HVO_SUPERVISOR_BACKOFF_MAX_SECONDS:-30}
 FORCE_RESTART_MIN_SECONDS=${HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS:-10}
 UI_PREPARE_SECONDS=${HVO_SUPERVISOR_UI_PREPARE_SECONDS:-10}
 TICK_SECONDS=${HVO_SUPERVISOR_TICK_SECONDS:-1}
+# /proc/self supplies this process's cgroup membership and mounts; replace only for fake-cgroup tests.
+PROC_DIR=${HVO_SUPERVISOR_PROC_DIR:-/proc/self}
 # The container's cgroup, with its process limit (pids.max) and the tasks in it (pids.current): see tasks_free.
 PIDS_DIR=${HVO_SUPERVISOR_PIDS_DIR:-/sys/fs/cgroup}
 
@@ -167,43 +169,176 @@ require_whole_number() {
   fi
 }
 
-# Compose passes its limits here as well as to Docker: by default RoofController's 1 vCPU and 2g, or the ones set.
-# Refuse a value below RoofController's floor of 1 vCPU and 1g before any controller process (including
-# --validate-deployment), filesystem setup or HAT access. Unset (a container the deploy script runs, which validates
-# its own inputs before Docker and refuses a host that cannot enforce them) leaves nothing to check here.
+# Compose passes the expected limits as well as giving them to Docker. Syntax and the floor also apply to one-shot
+# checks, which must never touch the HAT. For a supervised start, any refusal goes through refuse_limits below, after
+# the stop traps are installed: a previous whole-container kill may have left the relay register energized.
 check_compose_limits() {
-  local cpus=${HVO_ROOF_CPUS:-} memory=${HVO_ROOF_MEMORY:-} pattern fraction bytes
+  local cpus=${HVO_ROOF_CPUS:-} memory=${HVO_ROOF_MEMORY:-} pids=${HVO_ROOF_PIDS_LIMIT:-} pattern fraction
+  EXPECTED_CPU=0 EXPECTED_MEMORY=0 EXPECTED_PIDS=0
   if [[ -n "${cpus}" ]]; then
     pattern='^([0-9]{1,3})(\.([0-9]{1,2}))?$'
     if [[ ! "${cpus}" =~ ${pattern} ]]; then
       log "HVO_ROOF_CPUS must be a number of CPUs with at most two decimals, at least RoofController's floor of 1 vCPU."
-      exit 2
+      return 1
     fi
     fraction="${BASH_REMATCH[3]:-}00"
-    if (( 10#${BASH_REMATCH[1]} * 100 + 10#${fraction:0:2} < 100 )); then
-      log "HVO_ROOF_CPUS=${cpus} is below RoofController's floor of 1 vCPU."
-      exit 2
+    EXPECTED_CPU=$(( 10#${BASH_REMATCH[1]} * 100 + 10#${fraction:0:2} ))
+    if (( EXPECTED_CPU < 100 )); then
+      log "HVO_ROOF_CPUS is below RoofController's floor of 1 vCPU."
+      return 1
     fi
   fi
   if [[ -n "${memory}" ]]; then
     pattern='^([0-9]{1,6})([mMgG])$'
     if [[ ! "${memory}" =~ ${pattern} ]]; then
       log "HVO_ROOF_MEMORY must be a whole number of MiB or GiB (1024m or 1g), at least RoofController's floor of 1 GiB."
-      exit 2
+      return 1
     fi
-    bytes=$(( 10#${BASH_REMATCH[1]} * 1048576 ))
-    [[ "${BASH_REMATCH[2]}" == [gG] ]] && bytes=$(( bytes * 1024 ))
-    if (( bytes < 1073741824 )); then
-      log "HVO_ROOF_MEMORY=${memory} is below RoofController's floor of 1 GiB."
-      exit 2
+    EXPECTED_MEMORY=$(( 10#${BASH_REMATCH[1]} * 1048576 ))
+    [[ "${BASH_REMATCH[2]}" == [gG] ]] && EXPECTED_MEMORY=$(( EXPECTED_MEMORY * 1024 ))
+    if (( EXPECTED_MEMORY < 1073741824 )); then
+      log "HVO_ROOF_MEMORY is below RoofController's floor of 1 GiB."
+      return 1
     fi
   fi
+  if [[ -n "${pids}" ]]; then
+    if [[ ! "${pids}" =~ ^[0-9]{1,5}$ ]] || (( 10#${pids} < 256 || 10#${pids} > 32768 )); then
+      log "HVO_ROOF_PIDS_LIMIT must be a whole number from 256 to 32768, as for the deploy script."
+      return 1
+    fi
+    EXPECTED_PIDS=$(( 10#${pids} ))
+  fi
 }
-check_compose_limits
+
+# Decode mountinfo's escaped path characters without a subprocess (or interpreting any other backslash escapes).
+mount_path() {
+  MOUNT_PATH=${1//\\040/ }
+  MOUNT_PATH=${MOUNT_PATH//\\011/$'\t'}
+  MOUNT_PATH=${MOUNT_PATH//\\012/$'\n'}
+  MOUNT_PATH=${MOUNT_PATH//\\134/\\}
+}
+
+# Resolve the supervisor's own unified cgroup, rather than assuming that /sys/fs/cgroup is its root. This covers
+# private cgroup namespaces, host cgroup namespaces and mounts rooted below the hierarchy's root. A candidate must
+# contain this process in cgroup.procs, so a namespace-relative membership cannot select an unrelated mount root.
+# v1/hybrid or an inaccessible/ambiguous hierarchy is unverifiable and is refused when expectations are configured.
+find_own_cgroup() {
+  local hierarchy controllers path membership="" line root mount relative candidate member found
+  local -a fields=()
+  CGROUP_DIR=""
+  [[ -f "${PROC_DIR}/cgroup" && -r "${PROC_DIR}/cgroup" && -f "${PROC_DIR}/mountinfo" && -r "${PROC_DIR}/mountinfo" ]] || return 1
+  while IFS=: read -r hierarchy controllers path; do
+    [[ "${hierarchy}" == 0 && -z "${controllers}" && "${path}" == /* ]] || continue
+    [[ -z "${membership}" ]] || return 1
+    membership=${path}
+  done <"${PROC_DIR}/cgroup"
+  [[ -n "${membership}" && "/${membership}/" != *'/../'* && "/${membership}/" != *'/./'* ]] || return 1
+  while IFS= read -r line; do
+    [[ "${line}" == *' - cgroup2 '* ]] || continue
+    read -r -a fields <<<"${line}"
+    (( ${#fields[@]} >= 10 )) || continue
+    mount_path "${fields[3]}"; root=${MOUNT_PATH}
+    mount_path "${fields[4]}"; mount=${MOUNT_PATH}
+    [[ "${root}" == /* && "${mount}" == /* ]] || continue
+    if [[ "${root}" == / ]]; then
+      relative=${membership}
+    elif [[ "${membership}" == "${root}" ]]; then
+      relative=/
+    elif [[ "${membership}" == "${root}/"* ]]; then
+      relative=${membership#"${root}"}
+    else
+      # In a private namespace membership is relative to its root, while mountinfo can name the host's root.
+      relative=${membership}
+    fi
+    candidate=${mount%/}${relative%/}
+    [[ -f "${candidate}/cgroup.procs" && -r "${candidate}/cgroup.procs" ]] || continue
+    found=0
+    while read -r member; do
+      [[ "${member}" != "$$" ]] || { found=1; break; }
+    done <"${candidate}/cgroup.procs"
+    (( found )) || continue
+    [[ -z "${CGROUP_DIR}" || "${CGROUP_DIR}" == "${candidate}" ]] || return 1
+    CGROUP_DIR=${candidate}
+  done <"${PROC_DIR}/mountinfo"
+  [[ -n "${CGROUP_DIR}" ]]
+}
+
+# Kernel cgroup scalar files are regular, readable, single-line files. Refuse other objects (a FIFO must never hold
+# up SIGTERM), extra lines and oversized/malformed numbers before arithmetic. Keep all reads and comparisons builtin.
+read_cgroup_limit() {
+  local file=$1 extra
+  CGROUP_VALUE=""
+  [[ -f "${file}" && -r "${file}" ]] || return 1
+  { IFS= read -r CGROUP_VALUE && ! IFS= read -r extra; } 2>/dev/null <"${file}" || return 1
+  [[ -n "${CGROUP_VALUE}" && ${#CGROUP_VALUE} -le 64 ]]
+}
+
+cgroup_number() {
+  [[ "$1" =~ ^(0|[1-9][0-9]{0,14})$ ]]
+}
+
+check_effective_limits() {
+  local quota period extra file expected
+  # The deploy script intentionally does not set these expectations, including on a degraded recovery rollback (#149).
+  (( EXPECTED_CPU || EXPECTED_MEMORY || EXPECTED_PIDS )) || return 0
+  if ! find_own_cgroup; then
+    log "Cannot verify this supervisor's own cgroup v2; cgroup v1 and unverifiable cgroup placement are refused."
+    return 1
+  fi
+  # Use the resolved directory for task headroom too (the explicit test override remains available).
+  [[ -n "${HVO_SUPERVISOR_PIDS_DIR:-}" ]] || PIDS_DIR=${CGROUP_DIR}
+  if (( EXPECTED_CPU )); then
+    if ! read_cgroup_limit "${CGROUP_DIR}/cpu.max"; then
+      log "cpu.max is missing, unreadable or malformed."
+      return 1
+    fi
+    read -r quota period extra <<<"${CGROUP_VALUE}"
+    if ! cgroup_number "${quota}" || ! cgroup_number "${period}" || [[ -n "${extra}" ]] \
+      || (( period < 1000 || period > 1000000 || quota > 1000000000 || quota * 100 != EXPECTED_CPU * period )); then
+      log "cpu.max does not enforce HVO_ROOF_CPUS (quota/period must equal the configured CPU limit)."
+      return 1
+    fi
+  fi
+  for file in memory.max memory.swap.max pids.max; do
+    case ${file} in
+      memory.max) (( EXPECTED_MEMORY )) || continue; expected=${EXPECTED_MEMORY} ;;
+      memory.swap.max) (( EXPECTED_MEMORY )) || continue; expected=0 ;;
+      pids.max) (( EXPECTED_PIDS )) || continue; expected=${EXPECTED_PIDS} ;;
+    esac
+    if ! read_cgroup_limit "${CGROUP_DIR}/${file}" || ! cgroup_number "${CGROUP_VALUE}" \
+      || (( CGROUP_VALUE != expected )); then
+      log "${file} is missing, unreadable, malformed, unlimited or differs from the configured limit (memory requires zero swap)."
+      return 1
+    fi
+  done
+  log "Verified this supervisor's cgroup v2 CPU, memory, zero-swap and process limits against the configured expectations."
+}
+
+# Refuse both applications, but keep the relay-off fail-safe alive until read-back proves off. Exiting immediately
+# could abandon retained energized registers after a whole-container kill. A stop during these retries still uses the
+# normal bounded shutdown; even if the HAT never answers, nothing starts and the refusal exits 2.
+refuse_limits() {
+  log "The controller and web UI will not start: configured resource limits cannot be verified."
+  log 'To fix memory cgroups on a Raspberry Pi, append " cgroup_enable=memory" to the single line in /boot/firmware/cmdline.txt and reboot with the roof idle. On another host enable the cpu, memory and pids cgroup v2 controllers; recreate the container with the configured limits. See docs/deployment.md.'
+  STATE[controller]=relays-unverified
+  STATE[ui]=stopped
+  de_energize_relays "resource limits refused: neither application may start"
+  while (( ! STOP_REQUESTED )) && [[ "${RELAYS_STATE}" != off ]]; do
+    stamp
+    if (( NOW_US >= RELAYS_RETRY_DUE )); then
+      de_energize_relays "resource limits refused: retrying until the relays are verified off"
+    else
+      nap "${NAP_SLICE_US}"
+    fi
+  done
+  shutdown
+  exit 2
+}
 
 # With arguments this is the deployment check (or another one-shot run of the controller): nothing is supervised.
 # --prepare-ui is the web UI's preparation, run near the end of this script.
 if (( $# > 0 )) && [[ "$1" != --prepare-ui ]]; then
+  check_compose_limits || exit 2
   cd "${APP_DIR}" || exit 1
   exec "${CONTROLLER_EXEC[@]}" "$@"
 fi
@@ -1265,6 +1400,9 @@ exec {NAP_FD}<> <(:)
 trap on_signal TERM INT HUP QUIT
 trap on_exit EXIT
 prepare_run_dir
+if ! check_compose_limits || ! check_effective_limits; then
+  refuse_limits
+fi
 log "Starting the controller and the web UI (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
   "backoff at most ${BACKOFF_MAX_SECONDS}s; forced restarts ignored within ${FORCE_RESTART_MIN_SECONDS}s of a start;" \
   "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running; a stop ends within" \

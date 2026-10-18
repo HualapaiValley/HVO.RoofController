@@ -762,11 +762,36 @@ script's [privileges and limits](#the-containers-privileges-and-limits) (`x-hard
 `HVO_ROOF_PIDS_LIMIT` (default `512`), `HVO_ROOF_CPUS` (default `1`) and `HVO_ROOF_MEMORY` (default `2g`, also the
 `memswap_limit`): RoofController's default when one is unset or empty. One that is set must be at least 1 vCPU and `1g`;
 there is no setting for no limit, and an explicit `0` is refused.
-The supervisor refuses a value below that floor (exit 2) before starting either process or the deployment check.
-Compose keeps no record of the values (set them again for each `up`), and, unlike the deploy script and the installer,
-it does not refuse a Pi whose Docker cannot enforce the limits: Docker drops such a limit with only a warning. Check
-first that `docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'` prints `true` four
-times, and apply the [remedy](#the-containers-privileges-and-limits) if it does not.
+The supervisor checks the floor and PID range (256-32768) for both supervised starts and one-shot deployment checks.
+For a supervised start it also verifies the **actual kernel limits** before starting either application (#152):
+`cpu.max`'s quota/period must equal `HVO_ROOF_CPUS`, `memory.max` must equal `HVO_ROOF_MEMORY` in bytes,
+`memory.swap.max` must be `0`, and `pids.max` must equal `HVO_ROOF_PIDS_LIMIT`. An unlimited, missing, unreadable,
+malformed or different value is refused, including one below the requested value. Equivalent CPU periods and memory
+units are accepted. Compose passes all three expectations to the supervisor, including the defaults.
+
+The supervisor resolves its own unified cgroup using `/proc/self/cgroup` and `/proc/self/mountinfo`, then confirms
+its PID in `cgroup.procs`. This works with Docker's private cgroup namespace, `--cgroupns=host`, and a mount rooted
+below the hierarchy root. **Cgroup v1, an inaccessible hierarchy or ambiguous membership is refused when an
+expectation is configured**; use a verifiable cgroup v2 host. The check verifies this cgroup's kernel settings, not
+capacity reserved on the host: CPU scheduling and limits of ancestors outside the container's namespace can still
+reduce available resources. It does not change the host or any cgroup setting.
+
+A refusal logs the limit and remedy (on a Pi, append ` cgroup_enable=memory` to the single line in
+`/boot/firmware/cmdline.txt`, then reboot with the roof idle). It blocks **both the controller and the web UI**,
+but first turns every relay off and verifies the HAT register by read-back: a whole-container kill could have left
+it energized. If verification fails, both applications stay stopped and the supervisor keeps retrying with the normal
+backoff, rather than exiting and abandoning retained registers. Once verified off it exits **2**. A stop signal during
+refusal still runs the normal bounded shutdown and exits 2, even when verification keeps failing; the warning then
+reports the unverified state. No application starts during refusal or after a stop request.
+
+The one-shot `--validate-deployment` checks syntax and floors only; it never reads the effective cgroup limits or
+touches the HAT, because another controller may be driving it. The supervised start always checks the actual limits.
+Containers the deploy script creates intentionally leave all three `HVO_ROOF_*` expectations unset: the deploy script
+checks Docker's enforcement itself, and its degraded **rollback recovery exception** remains available (#149).
+An unset or empty individual expectation has no check; setting memory also requires zero swap. Do not remove
+Compose's expectations to bypass a refusal. Compose keeps no record of the values; set them again for each `up`.
+Check first that `docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'` prints `true`
+four times and apply the [remedy](#the-containers-privileges-and-limits) if it does not.
 
 Each Pi profile first runs the [deployment check](#the-deployment-check) as a one-shot service with the same environment
 and mounts (`roof-controller-check` or `roof-controller-lan-http-check`), and the new controller starts only if it
@@ -1406,7 +1431,8 @@ process cannot start, and bash, which runs the [supervisor](#the-containers-two-
 about 15 s and then ends the script: the supervisor would end late, a stop's signal would wait for it, and the relays
 would be left as they are. So once it has begun, the supervisor forks only to start a process (the controller, the web
 UI, its preparation, the relay-off helper), to replace its state file or to remove a forced restart's request, and only
-when its cgroup (`/sys/fs/cgroup`'s `pids.max` and `pids.current`, read without a fork) shows room: at least 40 tasks
+when its cgroup (`pids.max` and `pids.current`, read without a fork; resolved from process membership for
+configured Compose expectations) shows room: at least 40 tasks
 free, as the relay-off helper, a .NET program, used up to 24 when measured. Everything else it does (its time, its
 waits, the text of its log and state) uses bash's builtins. Without a limit (`pids.max` of `max`), or without the files,
 nothing is held back. At the limit:
@@ -1428,7 +1454,8 @@ What is left: a task that SIGKILL cannot end (stuck in the kernel), or tasks of 
 until 1 s before its deadline (26 s with the defaults). Room by then starts the last relay-off late, with only the time
 left before the deadline (at least 1 s, which a .NET start may not be enough for); none leaves the relays as they are,
 with a `WARNING`, rather than fork without room. Either way the stop ends by 27 s. A limit the supervisor cannot see in
-its own cgroup is not held back for (a cgroup v1 host, `--cgroupns=host`, or the Pi's own `pid_max` or thread limit),
+its own cgroup is not held back for (an unconfigured container using cgroup v1 or `--cgroupns=host`, or the Pi's
+own `pid_max` or thread limit),
 though the stop still forks nothing before its processes have ended; and a burst that takes the last 40 tasks between
 the check and the fork makes that fork wait as before.
 
