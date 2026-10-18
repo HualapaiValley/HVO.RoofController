@@ -671,7 +671,7 @@ public sealed class ControllerStep(
         // From a release's folder, the deploy script loads the image from its offline archive, checked here first: it loads
         // a copy of its own, which must have release.json's SHA-256 for the archive.
         (string Path, string Sha256)? archive = OfflineImages.For(context, release.Controller) is { } offline
-            ? (await OfflineImages.PathAsync(context, release, offline, work, cancellationToken).ConfigureAwait(false), offline.Sha256)
+            ? (await OfflineImages.PathAsync(context, offline, cancellationToken).ConfigureAwait(false), offline.Sha256)
             : null;
         var environment = await EnvironmentAsync(context, work, release.Controller.Reference, archive, _deployKeyFile, cancellationToken).ConfigureAwait(false);
         await RunScriptAsync(context, work, environment, cancellationToken).ConfigureAwait(false);

@@ -84,10 +84,21 @@ public static class OfflineImages
     /// release.json's SHA-256 (IMAGE_ARCHIVE_SHA256) and loads the copy, so a change to the file after this check is never
     /// what Docker reads.
     /// </summary>
-    public static Task<string> PathAsync(InstallContext context, ReleaseManifest release, OfflineArchive archive, DeployScript.WorkFolder work, CancellationToken cancellationToken)
+    public static async Task<string> PathAsync(InstallContext context, OfflineArchive archive, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(archive);
-        return ReleaseFiles.GetAsync(context, release, archive.Asset, work, cancellationToken);
+        var folder = context.Release.FolderPath!;
+        var path = Path.Join(folder, archive.Name);
+        if (!context.Machine.FileExists(path))
+        {
+            throw new InstallerException($"There is no {archive.Name} in {folder}: download it with the release's other files from {ReleaseManifest.ReleasesUrl}.");
+        }
+
+        // The script receives the original path and the expected digest. It makes and verifies its own private copy;
+        // an installer copy here would needlessly require space for two full controller archives at the same time.
+        await ReleaseFiles.CheckAsync(context, archive.Asset, path, cancellationToken).ConfigureAwait(false);
+        return path;
     }
 
     /// <summary>
