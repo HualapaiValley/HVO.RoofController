@@ -43,6 +43,9 @@ public sealed class InstallerBackupTests
         using var pi = await InstalledPiAsync();
         pi.Write(ControllerLayout.System.IdentityFile, "{\"schemaVersion\":3,\"kioskCredential\":{\"state\":\"pending\"}}");
         pi.Write(KioskCommissioningClaimStep.ClaimFile, "fixture-claimed");
+        // Match the production claim, rather than inheriting the test process's umask (#142).
+        File.SetUnixFileMode(pi.OnDisk(KioskCommissioningClaimStep.ClaimDirectory), Modes.PrivateFolder);
+        File.SetUnixFileMode(pi.OnDisk(KioskCommissioningClaimStep.ClaimFile), Modes.PrivateFile);
         await BackUpAndPurgeAsync(pi);
         pi.Exists(KioskCommissioningClaimStep.ClaimFile).Should().BeTrue();
         var before = pi.Snapshot(InstallPaths.SystemLog);

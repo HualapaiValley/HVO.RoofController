@@ -153,6 +153,65 @@ r=$(repo other-sdk-pin "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF
 check "global.json moved alone" 1 "${EMULATOR}:2: the build image ${SDK}:10.0.402 does not satisfy src/global.json (10.0.403, rollForward: patch)" \
   "${SCRIPT}" "${r}"
 
+# #143: reject JSON types and malformed versions before any diagnostic can echo them.
+invalid_sdk='sdk.version must be a JSON string in MAJOR.MINOR.PATCH form with an optional prerelease'
+for value in 'null' 'true' '100402' '[]' '{}' '""' '"10.0"' '"10.0.402.1"' '"v10.0.402"' \
+  '"10.0.402+build"' '"01.0.402"' '"10.0.402-"' '"10.0.402-preview..1"' '"10.0.402-01"' '"10.0.402\n"'; do
+  r=$(repo "invalid-sdk-${PASSED}-${FAILED}")
+  printf '{"sdk":{"version":%s}}\n' "${value}" > "${r}/src/global.json"
+  check "invalid SDK JSON ${value}" 1 "${invalid_sdk}" "${SCRIPT}" "${r}"
+done
+r=$(repo multiple-global-json)
+printf '{"sdk":{"version":"10.0.402"}}\n{"sdk":{"version":"10.0.403"}}\n' > "${r}/src/global.json"
+check "multiple JSON documents are refused" 1 "${invalid_sdk}" "${SCRIPT}" "${r}"
+
+# Check both output streams: plain stderr is also read for workflow commands by the runner.
+safe_diagnostics() {
+  local output status
+  output=$("$@" 2>&1)
+  status=$?
+  if [[ "${output}" == *$'\033'* || "${output}" == *$'\r'* || "${output}" == *$'\n::warning::'* ]]; then
+    printf 'unsafe diagnostic output\n'
+    return 99
+  fi
+  printf '%s\n' "${output}"
+  return "${status}"
+}
+r=$(repo injected-sdk)
+python3 - "${r}/src/global.json" <<'PYSDK'
+import json
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({"sdk": {"version": "10.0.402\n::warning::synthetic\x1b[31m"}}))
+PYSDK
+check "SDK workflow-command and ANSI injection is refused safely" 1 "${invalid_sdk}" \
+  safe_diagnostics env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
+
+# A valid prerelease pin reaches the ordinary compatibility check, rather than the malformed-input rejection.
+r=$(repo prerelease-pin "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF}" 10.0.402-preview.1)
+check "valid SDK prerelease is accepted as input" 1 "does not satisfy src/global.json (10.0.402-preview.1" "${SCRIPT}" "${r}"
+
+# rollForward is also repository text in a diagnostic; preserve annotation boundaries and terminal safety.
+r=$(repo injected-policy "${SDK_REF}" "${RUNTIME_REF}" "${SDK_REF}" "${RUNTIME_REF}" 10.0.403)
+python3 - "${r}/src/global.json" <<'PYPOLICY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["sdk"]["rollForward"] = "patch%\r\n::warning::synthetic\x1b[31m"
+path.write_text(json.dumps(data))
+PYPOLICY
+check "annotation data escapes percent CR LF and ANSI" 1 'rollForward: patch%25%0D%0A::warning::synthetic\u001b[31m' \
+  safe_diagnostics env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
+
+r=$(repo workflow-property)
+mv "${r}/.github/workflows/ci.yml" "${r}/.github/workflows/ci%:,injected.yml"
+sed 's/10.0.402/10.0.403/' "${r}/.github/workflows/ci%:,injected.yml" > "${r}/.github/workflows/tmp"
+mv "${r}/.github/workflows/tmp" "${r}/.github/workflows/ci%:,injected.yml"
+check "workflow filename annotation property is escaped" 1 '::error file=.github/workflows/ci%25%3A%2Cinjected.yml,line=6::' \
+  env GITHUB_ACTIONS=true "${SCRIPT}" "${r}"
+
 # global.json can keep the dev container's minimum while product builds use a later patched SDK.
 PATCH_REF="${SDK}:10.0.403@$(digest sdk-next-patch)"
 r=$(repo sdk-patch "${PATCH_REF}" "${RUNTIME_REF}" "${PATCH_REF}" "${RUNTIME_REF}")
@@ -203,7 +262,7 @@ check "annotations in GitHub Actions" 1 \
 r=$(repo no-global-json) && rm "${r}/src/global.json"
 check "no global.json" 1 "src/global.json: was not found" "${SCRIPT}" "${r}"
 r=$(repo no-sdk-version) && printf '{ "msbuild-sdks": {} }\n' > "${r}/src/global.json"
-check "no SDK in global.json" 1 "src/global.json: has no sdk.version" "${SCRIPT}" "${r}"
+check "no SDK in global.json" 1 "src/global.json: ${invalid_sdk}" "${SCRIPT}" "${r}"
 r=$(repo no-emulator) && rm "${r}/${EMULATOR}"
 check "no emulator Dockerfile" 1 "${EMULATOR}: was not found" "${SCRIPT}" "${r}"
 check "too many arguments" 2 "build/check-base-images.sh [--registry] [<repository root>]" "${SCRIPT}" "${r}" extra

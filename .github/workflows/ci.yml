@@ -131,6 +131,14 @@ jobs:
           --results-directory TestResults
           -- RunConfiguration.TreatNoTestsAsError=true
 
+      # #142: this fixture must establish the production claim's modes even when new folders are group-writable.
+      - name: Test pending-commissioning backup under umask 0002
+        run: |
+          umask 0002
+          dotnet test "$TEST_PROJECT" --no-build -c Debug -v minimal \
+            --filter "FullyQualifiedName~InstallerBackupTests.PendingCommissioningBackupIsNeverRestoredAndPurgeKeepsClaim" \
+            -- RunConfiguration.TreatNoTestsAsError=true
+
       - name: Verify coverage report is not empty
         run: |
           shopt -s globstar nullglob
