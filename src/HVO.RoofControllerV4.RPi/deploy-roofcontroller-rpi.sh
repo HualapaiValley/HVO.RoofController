@@ -691,24 +691,58 @@ container_state() {
 }
 
 # Sets PREVIOUS_EMULATOR to the emulator's host:port when the stopped previous version was deployed in HAT emulator mode,
-# otherwise to empty; returns 1 when Docker cannot be asked, 2 when a HatEmulator setting is not plain (it cannot be told
-# from another). Reads the keys this script sets (EXTRA_DOCKER_ARGS cannot set them); the last one wins, as in .NET. Each
-# entry is one JSON string, so a value holding lines that look like these settings is not one of them.
+# otherwise to empty; returns 1 when Docker cannot be asked, 2 when a setting it uses cannot be read (HAT_PROBLEM says
+# why). Read as the controller reads its environment (review ROOF-151-R4 F12): keys in any case, '__' for ':', the last
+# one given wins; HatEmulator:Enabled as .NET reads a bool (true or false in any case, spaces around it; not set or empty
+# is off); with it on, Host and Port, 127.0.0.1 and 5291 when not set. Only those are used: an unrelated key, and Host
+# and Port while the emulator is off, are ignored whatever they hold, as the controller ignores them. A value it uses
+# must be plain. Each entry is one JSON string, framed by Docker's encoder, which escapes only control characters, quotes
+# and backslashes, and never '=': its key is the text before its first '=', and a value holding lines is one entry, never
+# more settings. Keys are compared in the C locale.
+HAT_PROBLEM=""
 read_previous_hat() {
-  local env line value enabled="" host="" port=""
-  PREVIOUS_EMULATOR=""
+  local env line key name value enabled="" host="" port=""
+  PREVIOUS_EMULATOR="" HAT_PROBLEM=""
   env=$(dockerc inspect --format "${ENV_FORMAT}" "${PREVIOUS_ID}") || return 1
   while IFS= read -r line; do
-    [[ "${line}" == '"HatEmulator__'* ]] || continue
-    [[ "${line}" =~ ${PLAIN_JSON_STRING} ]] || return 2
-    value=${line:1:${#line}-2}
-    case "${value}" in
-      HatEmulator__Enabled=*) enabled=${value#*=} ;;
-      HatEmulator__Host=*) host=${value#*=} ;;
-      HatEmulator__Port=*) port=${value#*=} ;;
+    [[ "${line}" == '"'*'"' && "${line}" == *=* ]] || continue
+    key=${line:1}
+    key=${key%%=*}
+    # A key holding an escape (a control character, a quote or a backslash) is none of these; nor one not starting so.
+    [[ "${key}" == [Hh]* && "${key}" != *\\* ]] || continue
+    name=$(printf '%s' "${key//__/:}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+    # The value as Docker framed it: still JSON, so one holding an escape still shows it.
+    value=${line#*=}
+    value=${value%\"}
+    case "${name}" in
+      hatemulator:enabled) enabled=${value} ;;
+      hatemulator:host) host=${value} ;;
+      hatemulator:port) port=${value} ;;
     esac
   done <<<"${env}"
-  [[ "${enabled}" != "true" ]] || PREVIOUS_EMULATOR="${host}:${port}"
+  if [[ "${enabled}" == *\\* ]]; then
+    HAT_PROBLEM="its HatEmulator:Enabled holds a control character, a quote or a backslash"
+    return 2
+  fi
+  enabled=$(printf '%s' "${enabled}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  enabled=${enabled#"${enabled%%[! ]*}"}
+  enabled=${enabled%"${enabled##*[! ]}"}
+  case "${enabled}" in
+    ""|false) return 0 ;;
+    true) ;;
+    *)
+      HAT_PROBLEM="its HatEmulator:Enabled is '${enabled}', which the controller cannot read as true or false"
+      return 2 ;;
+  esac
+  if [[ "${host}" == *\\* ]]; then
+    HAT_PROBLEM="its HatEmulator:Host holds a control character, a quote or a backslash"
+    return 2
+  fi
+  if [[ "${port}" == *\\* ]]; then
+    HAT_PROBLEM="its HatEmulator:Port holds a control character, a quote or a backslash"
+    return 2
+  fi
+  PREVIOUS_EMULATOR="${host:-127.0.0.1}:${port:-5291}"
 }
 
 # Sets STATE/CURRENT_ID and PREVIOUS_STATE/PREVIOUS_ID, or stops the script (nothing has been changed when it runs).
@@ -2810,7 +2844,7 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   read_previous_hat || hat_read=$?
   case "${hat_read}" in
     0) ;;
-    2) fail "${PREVIOUS_CONTAINER_NAME} has a HatEmulator setting holding a control character, a quote or a backslash, which cannot be told from another: this script does not roll back to it. Nothing was changed." ;;
+    2) fail "${PREVIOUS_CONTAINER_NAME} cannot be rolled back to: ${HAT_PROBLEM}. Nothing was changed." ;;
     *) fail "Could not read the environment of ${PREVIOUS_CONTAINER_NAME} from Docker. Nothing was changed; check the Docker context and retry." ;;
   esac
   if [[ -n "${PREVIOUS_EMULATOR}" ]]; then

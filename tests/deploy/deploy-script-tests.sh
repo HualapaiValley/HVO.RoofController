@@ -3708,6 +3708,70 @@ test_an_environment_value_holding_lines_does_not_forge_the_emulator_settings() {
   assert_container roof-controller old true unless-stopped
 }
 
+# Review ROOF-151-R4 F12: the rollback reads the HatEmulator settings as the controller does (keys in any case, '__' for
+# ':', the last one given wins, Enabled as .NET reads a bool), and refuses only a value it uses that is not plain. With
+# the emulator off, Host and Port are not used, and an unrelated key never is: whatever they hold, the version brought
+# back is restored.
+test_a_rollback_restores_a_version_whose_unused_emulator_settings_are_not_plain() {
+  local settings
+  for settings in "HatEmulator__Enabled=false|HatEmulator__Host=old\\unused" \
+      'HatEmulator__Note=operator "note"' \
+      'HatEmulator__Enabled=true|HatEmulator__Host=hat-emulator|HatEmulator__Enabled=false|HatEmulator__Port=x"y'; do
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    local entries=()
+    IFS='|' read -r -a entries <<<"${settings}"
+    seed_env roof-controller-previous "${entries[@]}"
+    deploy "${HTTPS_ENV[@]}" -- --rollback
+    assert_status 0
+    assert_output_not_contains "HatEmulator"
+    assert_output_not_contains "deployed for the HAT emulator"
+    assert_output_contains "HAT: hatMode Physical."
+    assert_container roof-controller old true unless-stopped
+  done
+}
+
+# The settings it uses: with the emulator on (in any case, as .NET reads it), a Host or Port that is not plain refuses the
+# rollback with nothing changed, even with ALLOW_EMULATED_HAT; and so does an Enabled the controller cannot read.
+test_a_rollback_refuses_emulator_settings_it_uses_that_are_not_plain() {
+  local case settings message
+  for case in \
+      "HatEmulator__Enabled=true|HatEmulator__Host=hat\\emulator|HatEmulator__Port=5291#its HatEmulator:Host holds a control character, a quote or a backslash" \
+      "HatEmulator__Enabled=TRUE|HatEmulator__Host=hat-emulator|HatEmulator__Port=52\"91#its HatEmulator:Port holds a control character, a quote or a backslash" \
+      "HatEmulator__Enabled=tr\\ue|HatEmulator__Host=hat-emulator#its HatEmulator:Enabled holds a control character, a quote or a backslash" \
+      "HatEmulator__Enabled=yes|HatEmulator__Host=hat-emulator#its HatEmulator:Enabled is 'yes', which the controller cannot read as true or false"; do
+    settings=${case%%#*}
+    message=${case#*#}
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    local entries=()
+    IFS='|' read -r -a entries <<<"${settings}"
+    seed_env roof-controller-previous "${entries[@]}"
+    deploy "${HTTPS_ENV[@]}" ALLOW_EMULATED_HAT=true -- --rollback
+    assert_status 1
+    assert_output_contains "roof-controller-previous cannot be rolled back to: ${message}. Nothing was changed."
+    [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls update)$(docker_calls start)" ]] \
+      || fail_test "the refused rollback changed a container: $(cat "${FAKE_STATE_DIR}/calls.log")"
+    assert_container roof-controller current true unless-stopped
+    assert_container roof-controller-previous old false
+  done
+}
+
+# Enabled read as the controller reads it: a key in another case, and TRUE, still make the version brought back an
+# emulator's, so the rollback needs the flag; the last one given wins.
+test_a_rollback_reads_the_emulator_setting_in_any_case_as_the_controller_does() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_env roof-controller-previous hatemulator__enabled=TRUE HATEMULATOR__HOST=hat-emulator HatEmulator__Port=5291
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 1
+  assert_output_contains "roof-controller-previous was deployed for the HAT emulator at hat-emulator:5291, not the physical HAT, and does not operate the roof. Nothing was changed."
+  assert_container roof-controller current true unless-stopped
+  assert_container roof-controller-previous old false
+}
+
 # The web UI's scheme, from the version brought back's RoofWeb__Urls: a value holding a line with another is not it.
 test_an_environment_value_holding_lines_does_not_forge_the_web_uis_scheme() {
   seed_container roof-controller current true 8443:8443 8088:8088
