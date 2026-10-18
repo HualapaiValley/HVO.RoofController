@@ -390,14 +390,14 @@ loaded() {
   [[ "$(docker inspect --format '{{.Config.Image}}' "$1")" == sha256:* ]] || fail "$1 does not run an image loaded from an offline archive"
 }
 
-# confined <container> <all|limits>: the container has the installer's default limits (512 processes, and no CPU or
-# memory limit until the follow-up, #138 item 6), and with all, the deploy script's privileges (a read-only root
+# confined <container> <all|limits>: the container has the installer's default limits (1 vCPU, 2g with no swap and 512
+# processes, #149), and with all, the deploy script's privileges (a read-only root
 # filesystem, only the supervisor's capabilities, no-new-privileges; docs/deployment.md, "The container's privileges
 # and limits").
 confined() {
   local config
   config=$(docker inspect --format '{{json .HostConfig}}' "$1") || fail "could not inspect $1"
-  jq -e --arg what "$2" '.NanoCpus == 0 and .Memory == 0 and .MemorySwap == 0 and .PidsLimit == 512
+  jq -e --arg what "$2" '.NanoCpus == 1000000000 and .Memory == 2147483648 and .MemorySwap == 2147483648 and .PidsLimit == 512
     and ($what == "limits" or (.ReadonlyRootfs == true and .CapDrop == ["ALL"]
       and ([.CapAdd[] | ltrimstr("CAP_")] == ["CHOWN", "KILL", "SETGID", "SETUID"])
       and (.SecurityOpt | index("no-new-privileges") != null)))' <<<"${config}" >/dev/null \
@@ -1349,6 +1349,10 @@ scenario_restore() {
   for volume in ${volumes}; do
     ! docker volume inspect "${volume}" >/dev/null 2>&1 || fail "the volume ${volume} of a removed controller is left"
   done
+  # And the deploy script's desired-limits records, which the uninstall removes (#149; review ROOF-151-R2 F6).
+  local records
+  records=$(docker volume ls --quiet --filter "name=${controller}-limits" | grep -E "^${controller}-limits(-g[0-9]+)?\$" || true)
+  [[ -z "${records}" ]] || fail "the desired limits' records are left: ${records//$'\n'/ }"
   relays_still
   pass "the containers (with their volumes), the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
 
@@ -1564,7 +1568,7 @@ scenario_rollback() {
   # The release before runs with the recorded limits (the deploy script's docker update), and the privileges its own
   # deploy script gave it.
   confined "${controller}" limits
-  expect_output rollback "[rollback] Giving ${controller}-previous the limits: no CPU or memory limit, at most 512 processes and threads"
+  expect_output rollback "[rollback] Giving ${controller}-previous the limits: 1 CPU, 2g of memory and no swap, at most 512 processes and threads"
   wait_for "the controller" 60 ready
   sign_in
   emulated_status

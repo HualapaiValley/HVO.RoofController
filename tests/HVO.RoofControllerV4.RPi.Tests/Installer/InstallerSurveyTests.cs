@@ -30,7 +30,7 @@ public sealed class InstallerSurveyTests
         {
             Version = "27.3.1",
             ComposeVersion = "2.29.7",
-            Limits = new DockerLimits(Memory: true, Cpu: true, Pids: true, Swap: true, Cpus: 4, MemoryBytes: 8L * 1024 * 1024 * 1024)
+            Limits = new DockerLimits(Memory: true, Cpu: true, Pids: true, Swap: true, Cpus: 4, MemoryBytes: 8L * 1024 * 1024 * 1024) { CgroupVersion = "2", HostName = "docker-host" }
         });
         survey.SystemRecord.Should().BeNull();
         survey.HasSystemConfiguration.Should().BeFalse();
@@ -65,6 +65,7 @@ public sealed class InstallerSurveyTests
         survey.Controller.Should().BeEquivalentTo(new ContainerSurvey
         {
             Name = MachineSurveyor.ControllerContainer,
+            Id = bench.Containers[MachineSurveyor.ControllerContainer].Id,
             Image = $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}",
             ImageId = FakeMachine.PulledImageId($"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}"),
             State = "running",

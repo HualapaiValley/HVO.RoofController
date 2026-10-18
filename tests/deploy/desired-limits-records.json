@@ -1,0 +1,976 @@
+{
+  "description": "The desired-limits records every reader of them must agree on (reviews ROOF-151-R3 F8, F10): the deploy script (tests/deploy/deploy-script-tests.sh), install.sh (tests/install/install-sh-tests.sh) and the installer (InstallerResourceLimitsTests). Each case is the labels of the volume roof-controller-limits-g3, and the problem every reader gives (null for a valid record, with the CPUs and memory it holds).",
+  "volume": "roof-controller-limits-g3",
+  "generation": 3,
+  "cases": [
+    {
+      "name": "valid: the base record",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "1.5",
+      "memory": "6g"
+    },
+    {
+      "name": "valid: memory in MiB at the floor",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "1024m",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "1.5",
+      "memory": "1024m"
+    },
+    {
+      "name": "valid: memory at the floor in GiB",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "1g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "1.5",
+      "memory": "1g"
+    },
+    {
+      "name": "valid: one CPU",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "1",
+      "memory": "6g"
+    },
+    {
+      "name": "valid: CPUs with two decimals",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "2.05",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "2.05",
+      "memory": "6g"
+    },
+    {
+      "name": "valid: the most CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "999.99",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "999.99",
+      "memory": "6g"
+    },
+    {
+      "name": "valid: written by a rollback",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "rollback",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "1.5",
+      "memory": "6g"
+    },
+    {
+      "name": "valid: both the default",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1",
+        "io.hvo.roof.limits.cpus-source": "default",
+        "io.hvo.roof.limits.memory": "2g",
+        "io.hvo.roof.limits.memory-source": "default",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": null,
+      "cpus": "1",
+      "memory": "2g"
+    },
+    {
+      "name": "trailing space in the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "2g ",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "leading space in the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": " 2g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a tab before the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "\t2g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a newline after the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "2g\n",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a carriage return after the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g\r",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a NUL after the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g\u0000",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "an escape sequence after the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g\u001b[0m",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a full-width digit in the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "\uff16g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a quote in the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g\"",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a backslash in the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g\\",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a very long memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "11111111111111111111111111111111111111111",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.memory is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a forged record in the CPUs, the memory below the floor (review ROOF-151-R3 F8)",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1|set|6g|set|deploy|2026-10-17T00:00:00Z|0123456789ab\n",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "512m",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.cpus is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a comma in the CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1,5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.cpus is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a plus sign in the CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "+1",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.cpus is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a space in the time",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17 00:00:00",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.written-at is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a newline after the container",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab\n"
+      },
+      "problem": "its label io.hvo.roof.limits.controller is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a newline after the format",
+      "labels": {
+        "io.hvo.roof.limits": "1\n",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a space after the generation",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3 ",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.generation is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a NUL in the CPU source",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set\u0000",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.cpus-source is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a semicolon in the writer",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy;rm",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its label io.hvo.roof.limits.written-by is not plain: at most 40 letters, digits, '.', ':', '_' or '-'"
+    },
+    {
+      "name": "a leading zero in the format",
+      "labels": {
+        "io.hvo.roof.limits": "01",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its format (io.hvo.roof.limits) is '01', not 1"
+    },
+    {
+      "name": "no format",
+      "labels": {
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its format (io.hvo.roof.limits) is '', not 1"
+    },
+    {
+      "name": "another format",
+      "labels": {
+        "io.hvo.roof.limits": "2",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its format (io.hvo.roof.limits) is '2', not 1"
+    },
+    {
+      "name": "a leading zero in the generation",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "03",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its generation label '03' is not the 3 of its name"
+    },
+    {
+      "name": "no generation",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its generation label '' is not the 3 of its name"
+    },
+    {
+      "name": "a writer in capitals",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "Deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "it does not say which run wrote it, and for which container ('Deploy', '0123456789ab')"
+    },
+    {
+      "name": "no writer",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "it does not say which run wrote it, and for which container ('', '0123456789ab')"
+    },
+    {
+      "name": "a container in capitals",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789AB"
+      },
+      "problem": "it does not say which run wrote it, and for which container ('deploy', '0123456789AB')"
+    },
+    {
+      "name": "a container one character short",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789a"
+      },
+      "problem": "it does not say which run wrote it, and for which container ('deploy', '0123456789a')"
+    },
+    {
+      "name": "a time that is not one",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "yesterday",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its time 'yesterday' is not a UTC time such as 2026-10-17T18:04:11Z"
+    },
+    {
+      "name": "no time",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its time '' is not a UTC time such as 2026-10-17T18:04:11Z"
+    },
+    {
+      "name": "a time with a fraction of a second",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00.5Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its time '2026-10-17T00:00:00.5Z' is not a UTC time such as 2026-10-17T18:04:11Z"
+    },
+    {
+      "name": "a trailing zero in the CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.50",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '1.50' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "a leading zero in the CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "01",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '01' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "a point with no decimals",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '1.' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "decimals with no units",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": ".5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '.5' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "an exponent in the CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1e0",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '1e0' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "three decimals",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.555",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '1.555' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "four digits of CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1000",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '1000' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "no CPUs",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '' are not a number of CPUs as the deploy script writes one (such as 1, 1.5 or 2.05)"
+    },
+    {
+      "name": "half a CPU",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "0.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '0.5' are less than 1 vCPU, the minimum"
+    },
+    {
+      "name": "no CPU",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "0",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its CPUs '0' are less than 1 vCPU, the minimum"
+    },
+    {
+      "name": "the memory in capitals",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "2G",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '2G' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "a leading zero in the memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "02g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '02g' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "gb for the unit",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "2gb",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '2gb' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "a fraction of a GiB",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "2.5g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '2.5g' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "no unit",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "2048",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '2048' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "KiB for the unit",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "2k",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '2k' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "seven digits of memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "1000000g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '1000000g' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "no memory",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "no memory at all",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "0g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '0g' is not a memory limit as the deploy script writes one (such as 1024m or 2g)"
+    },
+    {
+      "name": "memory just below the floor",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "1023m",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '1023m' is less than 1g, the minimum"
+    },
+    {
+      "name": "half a GiB",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "512m",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its memory '512m' is less than 1g, the minimum"
+    },
+    {
+      "name": "a source in capitals",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "Set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its sources 'Set' and 'set' are not set or default"
+    },
+    {
+      "name": "another source",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.cpus-source": "set",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "operator",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its sources 'set' and 'operator' are not set or default"
+    },
+    {
+      "name": "no CPU source",
+      "labels": {
+        "io.hvo.roof.limits": "1",
+        "io.hvo.roof.limits.generation": "3",
+        "io.hvo.roof.limits.cpus": "1.5",
+        "io.hvo.roof.limits.memory": "6g",
+        "io.hvo.roof.limits.memory-source": "set",
+        "io.hvo.roof.limits.written-by": "deploy",
+        "io.hvo.roof.limits.written-at": "2026-10-17T00:00:00Z",
+        "io.hvo.roof.limits.controller": "0123456789ab"
+      },
+      "problem": "its sources '' and 'set' are not set or default"
+    }
+  ]
+}

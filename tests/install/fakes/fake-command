@@ -194,9 +194,36 @@ print(email.utils.formatdate(time.time() + int(sys.argv[1]), usegmt=True))' "${F
         printf '%s\n' "${FAKE_COMPOSE:-2.29.7}"
         ;;
       "info --format {{.DockerRootDir}}") printf '%s\n' "${FAKE_DOCKER_ROOT}" ;;
-      # The limits it enforces and the machine (MemoryLimit, CPUCfsQuota, PidsLimit, SwapLimit, NCPU, MemTotal).
-      "info --format {{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}}")
-        printf '%s\n' "${FAKE_DOCKER_LIMITS:-true,true,true,true,4,8589934592}"
+      # The limits it enforces and the machine (MemoryLimit, CPUCfsQuota, PidsLimit, SwapLimit, NCPU, MemTotal,
+      # CgroupVersion), then its warnings (FAKE_DOCKER_WARNINGS, separated by ';'), one a line; FAKE_DOCKER_LIMITS=fail
+      # fails it, as a daemon that does not answer.
+      "info --format {{.MemoryLimit}},{{.CPUCfsQuota}},{{.PidsLimit}},{{.SwapLimit}},{{.NCPU}},{{.MemTotal}},{{.CgroupVersion}}"*)
+        [ "${FAKE_DOCKER_LIMITS:-}" != fail ] || { echo "Error response from daemon: info failed" >&2; exit 1; }
+        printf '%s\n' "${FAKE_DOCKER_LIMITS:-true,true,true,true,4,8589934592,2}"
+        [ -z "${FAKE_DOCKER_WARNINGS:-}" ] || printf '%s\n' "${FAKE_DOCKER_WARNINGS}" | tr ';' '\n'
+        ;;
+      # The controller's desired-limits records: FAKE_DOCKER_VOLUMES (names, separated by spaces; fail fails the list),
+      # and the newest one's labels (FAKE_DOCKER_LABELS, a JSON object; fail fails the inspect), which its --format
+      # template renders as Docker does: {{index .Labels "k"}} as the value is, {{json (index .Labels "k")}} as JSON.
+      "volume ls --quiet --filter name=roof-controller-limits")
+        [ "${FAKE_DOCKER_VOLUMES:-}" != fail ] || { echo "Error response from daemon: volume ls failed" >&2; exit 1; }
+        [ -z "${FAKE_DOCKER_VOLUMES:-}" ] || printf '%s\n' "${FAKE_DOCKER_VOLUMES}" | tr ' ' '\n'
+        ;;
+      "volume inspect --format "*)
+        [ "${FAKE_DOCKER_LABELS:-fail}" != fail ] || { echo "Error response from daemon: get ${*: -1}: no such volume" >&2; exit 1; }
+        FAKE_TEMPLATE=$4 "${FAKE_PYTHON}" -c '
+import json, os, re, sys
+labels = json.loads(os.environ["FAKE_DOCKER_LABELS"])
+def as_json(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+text = re.sub(r"\{\{json \(index \.Labels \"([^\"]+)\"\)\}\}", lambda m: as_json(labels.get(m.group(1), "")), os.environ["FAKE_TEMPLATE"])
+text = re.sub(r"\{\{index \.Labels \"([^\"]+)\"\}\}", lambda m: labels.get(m.group(1), ""), text)
+sys.stdout.write(text + "\n")'
+        ;;
+      # The running controller's CPU limit (FAKE_CONTROLLER_NANOCPUS); none, no such container.
+      "container inspect --format {{.HostConfig.NanoCpus}} roof-controller")
+        [ -n "${FAKE_CONTROLLER_NANOCPUS:-}" ] || { echo "Error response from daemon: No such container: roof-controller" >&2; exit 1; }
+        printf '%s\n' "${FAKE_CONTROLLER_NANOCPUS}"
         ;;
       *)
         echo "fake docker: unexpected: $*" >&2

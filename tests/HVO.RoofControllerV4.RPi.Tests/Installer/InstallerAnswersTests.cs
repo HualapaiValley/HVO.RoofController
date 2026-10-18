@@ -53,7 +53,7 @@ public sealed class InstallerAnswersTests
         root.GetProperty("controller").EnumerateObject().Select(member => member.Name).Should().Equal(
             ["connection", "httpsPort", "httpPort", "webPort", "hostNames", "domains", "rig", "resources"], "only the choices are saved, not what follows from them");
         root.GetProperty("controller").GetProperty("resources").EnumerateObject().Select(member => $"{member.Name}={member.Value.GetRawText()}").Should().Equal(
-            ["pidsLimit=512"], "the container's limits are saved, the default process limit included; no CPU or memory limit (the default) is none");
+            ["pidsLimit=512"], "the container's limits are saved, the default process limit included; a CPU or memory limit not set (the default) is none, so it follows the default");
         root.GetProperty("controller").GetProperty("httpsPort").GetInt32().Should().Be(8443);
         root.GetProperty("macApp").GetProperty("folder").GetString().Should().Be("/Applications");
         root.GetProperty("client").EnumerateObject().Select(member => member.Name).Should().Equal(

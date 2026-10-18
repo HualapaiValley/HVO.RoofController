@@ -413,6 +413,7 @@ are verified off.
 | 14 | The relays cannot be verified off: the emulated HAT fails every relay write when the controller is killed during travel. As the owner decided (#138, 2026-10-17: "if the relays cannot be verified off, the controller stays stopped"), the supervisor holds the controller stopped (`relays-unverified`), keeps trying with a delay that doubles to 30 s, logs each failed try and the hold as warnings, and the health check and the web UI say why. Once writes work, it verifies the relays off and only then starts the controller. (The supervisor's tests add the first start, a forced restart and a stop while held.) | `deploy-scenarios.sh supervisor` |
 | — | In process, without the container's supervisor, a crash during travel leaves the relays held. The restarted controller turns them off; if the crash outlasts the travel, the open limit's contact stops the drive first. A whole container killed (`docker kill`) leaves them held as well, nothing in it running, and stays down until it is started again, when its supervisor turns them off before the controller starts. | `LifecycleScenarios.ACrash_DuringTravel_LeavesTheRelaysHeld_AndTheRestartedControllerTurnsThemOff`, `LifecycleScenarios.ACrash_ThatOutlastsTheTravel_LeavesTheOpenLimitToStopTheDrive_AndTheRestartedControllerReportsOpen`, `deploy-scenarios.sh lifecycle` |
 | — | The supervisor itself is killed during travel (SIGKILL, as the kernel would end it): the container ends with it, Docker starts it again, and its new supervisor turns the relays off before it starts the controller. | `deploy-scenarios.sh supervisor` |
+| — | The container runs with the default limits, which the kernel enforces in its cgroup: 1 vCPU (`cpu.max` `100000 100000`), `2g` with no swap (`memory.max`, `memory.swap.max` `0`) and 512 processes. Under 32 clients at once for 30 s (the API, the web UI's page and two camera streams) with a move, the controller and the web UI stay well inside the memory limit, and no process is ended at it (`memory.events` `oom_kill 0`); each group reports its peak ([deployment.md](deployment.md#the-containers-privileges-and-limits)). | `deploy-scenarios.sh supervisor` |
 | — | The web UI runs as the image's unprivileged `app` user with only its own `RoofWeb__*` settings: none of the controller's settings are in its environment, and it cannot read the controller's secrets directory. For HTTPS it holds a copy of the certificate it serves and of that certificate's password, by default the controller's ([deployment.md](deployment.md#the-web-uis-user-and-settings)). | `deploy-scenarios.sh supervisor` |
 
 **Installation assumptions**
@@ -420,14 +421,26 @@ are verified off.
 - **The HAT holds its relays when the controller process dies**, until something writes the register. The emulated HAT
   holds them, as the #29 plant assumes. The settings that depend on it are the deploy script's `docker stop -t 30`, the
   host's shutdown timeout, the supervisor's relay-off (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), and the container's limits
-  (its process limit, and a memory limit when one is given): the kernel ending the controller at one of them is such a
+  (its process limit, and its memory limit, `2g` by default): the kernel ending the controller at one of them is such a
   death ([deployment.md](deployment.md#the-relays-when-the-controller-exits)). In the container the supervisor turns
   the relays off and verifies them as soon as the controller has died (steps 6 and 10-12), and does not start the
   controller until they are verified off (step 14). The fail-safe result where it cannot (the whole container killed,
   the Docker daemon dying, or a HAT that does not answer) is that the roof keeps moving until the limit's run-circuit
-  contact stops it (C1 step 4), or the independent stop (C1 step 1) is used. The container's CPU and memory limits stay
-  off by default until a follow-up turns them on
-  ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6).
+  contact stops it (C1 step 4), or the independent stop (C1 step 1) is used. The container's CPU and memory limits are
+  on by default (1 vCPU and `2g`, #149), now that the supervisor handles such a death; the next assumption covers
+  Docker enforcing them.
+- **Docker on the Pi enforces the container's limits**: `docker info` reports `MemoryLimit`, `SwapLimit`,
+  `CPUCfsQuota` and `PidsLimit` as `true`. The settings that depend on it are the limits (`CONTAINER_CPUS`,
+  `CONTAINER_MEMORY`, `CONTAINER_PIDS_LIMIT`, the installer's `controller.resources`): Docker would drop one it cannot
+  enforce with only a warning. A stock Raspberry Pi OS does not enforce the memory limit, as its firmware adds
+  `cgroup_disable=memory` to the kernel's command line; append ` cgroup_enable=memory` to the single line in
+  `/boot/firmware/cmdline.txt` and reboot the Pi with the roof idle
+  ([deployment.md](deployment.md#the-containers-privileges-and-limits)). The fail-safe result of a Pi that does not is
+  a refused install, upgrade or deploy: the deploy script, the installer and `install.sh` refuse it before anything
+  changes, with every finding and no override (`tests/deploy/deploy-script-tests.sh`, `InstallerResourceLimitsTests`,
+  `tests/install/install-sh-tests.sh`), and the controller already running keeps running as it is. A rollback, a
+  recovery path, goes ahead instead, with the limits Docker can still enforce and a loud warning, in its output and in
+  the controller's log, of each one it cannot (the owner's decision on #149; C12 step 6).
 - **The HAT's devices are root's on the Pi** (`/dev/i2c-1` and `/dev/gpiomem`: Raspberry Pi OS makes them `root:i2c`
   and `root:gpio`, mode `0660`). The setting that depends on it is the container's capabilities: without
   `CAP_DAC_OVERRIDE` the controller opens them as their owner ([deployment.md](deployment.md#the-containers-privileges-and-limits)).
@@ -470,7 +483,7 @@ register every 0.1 s.
 | 3 | An operator key that is not configured fails the pre-flight, and the running controller is untouched | `deploy-scenarios.sh c12` |
 | 4 | A renamed certificate file, a wrong certificate password and no `RoofOperator` key each fail the pre-flight, and the running controller is untouched | `deploy-scenarios.sh c12` |
 | 5 | `ALLOWED_HOSTS=localhost` passes the pre-flight but fails the remote check. The script rolls back: the previous controller is running and ready under `roof-controller`, and the exit status is non-zero. The rollback time is in the results. | `deploy-scenarios.sh c12` |
-| 6 | `--rollback` twice: the versions swap and swap back, and each is verified from the deploying machine | `deploy-scenarios.sh c12` |
+| 6 | `--rollback` twice: the versions swap and swap back, and each is verified from the deploying machine. A rollback the idle check refuses leaves the version it would bring back as it was, its limits included. A rollback given limits (2.5 CPUs, `4g`) gives them to the version it brings back; the next, given none, keeps them for the version it swaps back (an override persists, #149); the default given again (1 vCPU, `2g`) is applied in its turn. A rollback whose `docker info` reports no memory limit support (the run's own wrapper in front of real Docker) goes ahead with the CPU and process limits alone, and warns in its output and in the controller's log (`docker logs`), naming the memory limit and the fix. | `deploy-scenarios.sh c12` |
 | 7 | Relay-register reads fail, so the Stop cannot be verified. The deploy aborts before it stops or replaces the controller, and the controller latches `RelayVerificationFailed` until `ClearFault`. | `deploy-scenarios.sh c12` |
 | 8 | A new controller that cannot reach the HAT passes the pre-flight but never becomes ready. After `READY_TIMEOUT_SECONDS` the script rolls back, and the previous controller is running and ready again. | `deploy-scenarios.sh c12` |
 | 9 | A new version whose web UI cannot start (a setting out of range) passes the pre-flight, which runs only the controller, and its controller becomes ready. Its web UI exits at each start, so the script rolls back, and the previous controller and its web UI are running again. | `deploy-scenarios.sh c12` |

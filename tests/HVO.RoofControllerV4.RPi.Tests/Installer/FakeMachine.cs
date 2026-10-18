@@ -23,6 +23,9 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 [UnsupportedOSPlatform("windows")]
 internal sealed record FakeContainer
 {
+    /// <summary>Its container ID: 64 hexadecimal characters, new for each container (a copy with <c>with</c> keeps it).</summary>
+    public string Id { get; init; } = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+
     public bool Emulated { get; init; }
 
     public string State { get; init; } = "running";
@@ -77,11 +80,11 @@ internal sealed record FakeContainer
     /// <summary>When it last started; null for one that says it never has.</summary>
     public DateTimeOffset? StartedAt { get; init; }
 
-    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus): by default none (0), the installer's default.</summary>
-    public long NanoCpus { get; init; }
+    /// <summary>Its CPU limit as Docker counts it (HostConfig.NanoCpus): by default the installer's default of 1 vCPU; 0 for none.</summary>
+    public long NanoCpus { get; init; } = 1_000_000_000;
 
-    /// <summary>Its memory limit, and as much with swap (HostConfig.Memory, MemorySwap): by default none (0).</summary>
-    public long Memory { get; init; }
+    /// <summary>Its memory limit, and as much with swap (HostConfig.Memory, MemorySwap): by default the installer's 2 GiB; 0 for none.</summary>
+    public long Memory { get; init; } = 2L * 1024 * 1024 * 1024;
 
     /// <summary>Its process limit (HostConfig.PidsLimit): by default 512; null for none.</summary>
     public long? PidsLimit { get; init; } = 512;
@@ -180,9 +183,78 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
     /// <summary>
     /// What <c>docker info</c> says of the limits Docker enforces and the machine (<see cref="DockerLimits.Format"/>):
-    /// memory, CPU, process and swap limits, 4 CPUs and 8 GiB by default; null fails the command.
+    /// memory, CPU, process and swap limits, 4 CPUs and 8 GiB, cgroup v2 and a Docker host named docker-host by default,
+    /// then any warnings, one a line; null fails the command.
     /// </summary>
-    public string? DockerInfo { get; set; } = "true,true,true,true,4,8589934592";
+    public string? DockerInfo { get; set; } = "true,true,true,true,4,8589934592,2,docker-host";
+
+    /// <summary>
+    /// Docker's volumes, by name, with their labels: the deploy script's desired-limits records (<see cref="DesiredLimits"/>)
+    /// among them. A deploy or a rollback resolves the limits as the script does and writes the next record, then removes
+    /// the older ones (<see cref="WriteDesiredLimits"/>).
+    /// </summary>
+    public SortedDictionary<string, Dictionary<string, string>> Volumes { get; } = new(StringComparer.Ordinal);
+
+    /// <summary><c>docker volume ls</c> fails.</summary>
+    public bool VolumeListFails { get; set; }
+
+    /// <summary>The volumes <c>docker volume rm</c> cannot remove.</summary>
+    public HashSet<string> VolumeRemoveFails { get; } = [];
+
+    /// <summary>
+    /// A desired-limits record as the deploy script writes it: generation <paramref name="generation"/>, written by a
+    /// deploy for <paramref name="controller"/> (by default the controller's container here, or a container no longer
+    /// here); <paramref name="labels"/> changes a label (under io.hvo.roof.limits; "" for the format's), or with null takes it off.
+    /// </summary>
+    public void SeedDesiredLimits(string cpus, string memory, int generation = 1, string? controller = null, params (string Label, string? Value)[] labels)
+    {
+        var record = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [DesiredLimits.Label] = "1",
+            [DesiredLimits.Label + ".generation"] = generation.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [DesiredLimits.Label + ".cpus"] = cpus,
+            [DesiredLimits.Label + ".cpus-source"] = DesiredLimits.Set,
+            [DesiredLimits.Label + ".memory"] = memory,
+            [DesiredLimits.Label + ".memory-source"] = DesiredLimits.Set,
+            [DesiredLimits.Label + ".written-by"] = "deploy",
+            [DesiredLimits.Label + ".written-at"] = "2026-10-17T00:00:00Z",
+            [DesiredLimits.Label + ".controller"] = controller
+                ?? (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var running) ? running.Id[..12] : "0123456789ab")
+        };
+        foreach (var (label, value) in labels)
+        {
+            var key = label.Length == 0 ? DesiredLimits.Label : $"{DesiredLimits.Label}.{label}";
+            if (value is null)
+            {
+                record.Remove(key);
+            }
+            else
+            {
+                record[key] = value;
+            }
+        }
+
+        Volumes[DesiredLimits.Prefix(MachineSurveyor.ControllerContainer) + generation.ToString(System.Globalization.CultureInfo.InvariantCulture)] = record;
+    }
+
+    /// <summary>The desired-limits record volumes here, oldest generation first (the earlier format's first of all).</summary>
+    public IReadOnlyList<string> DesiredLimitRecords
+        => [.. Volumes.Keys.Where(name => name.StartsWith(DesiredLimits.LegacyVolume(MachineSurveyor.ControllerContainer), StringComparison.Ordinal))
+            .OrderBy(GenerationOf)];
+
+    /// <summary>The newest desired-limits record's labels; null when there is none.</summary>
+    public IReadOnlyDictionary<string, string>? NewestDesiredLimits
+        => DesiredLimitRecords.Where(name => GenerationOf(name) > 0).Select(name => Volumes[name]).LastOrDefault();
+
+    /// <summary>The newest desired-limits record's CPUs and memory ("cpus,memory"); null when there is none.</summary>
+    public string? DesiredLimitsRecord
+        => NewestDesiredLimits is { } labels ? $"{labels.GetValueOrDefault(DesiredLimits.Label + ".cpus")},{labels.GetValueOrDefault(DesiredLimits.Label + ".memory")}" : null;
+
+    private static int GenerationOf(string volume)
+        => volume.StartsWith(DesiredLimits.Prefix(MachineSurveyor.ControllerContainer), StringComparison.Ordinal)
+            && int.TryParse(volume[DesiredLimits.Prefix(MachineSurveyor.ControllerContainer).Length..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var generation)
+                ? generation
+                : 0;
 
     /// <summary>What docker says when it cannot answer (not running, not allowed).</summary>
     public string? DockerError { get; set; }
@@ -898,6 +970,24 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             "docker" when arguments is ["info", "--format", DockerLimits.Format] => Docker(() => DockerInfo is null
                 ? new CommandResult(1, string.Empty, "Error response from daemon: info failed\n")
                 : Answer(DockerInfo)),
+            // Docker's name filter matches part of a name.
+            "docker" when arguments is ["volume", "ls", "--quiet", "--filter", var filter] && filter.StartsWith("name=", StringComparison.Ordinal)
+                => Docker(() => VolumeListFails
+                    ? new CommandResult(1, string.Empty, "Error response from daemon: volume ls failed\n")
+                    : new CommandResult(0, string.Concat(Volumes.Keys.Where(name => name.Contains(filter[5..], StringComparison.Ordinal)).Select(name => name + "\n")), string.Empty)),
+            "docker" when arguments is ["volume", "rm", "--force", var removed] => Docker(() =>
+            {
+                if (VolumeRemoveFails.Contains(removed))
+                {
+                    return new CommandResult(1, string.Empty, $"Error response from daemon: remove {removed}: volume is in use\n");
+                }
+
+                Volumes.Remove(removed);
+                return Answer(removed);
+            }),
+            "docker" when arguments is ["volume", "inspect", "--format", DesiredLimits.Format, var volume] => Docker(() => Volumes.TryGetValue(volume, out var labels)
+                ? Answer(RenderLabels(DesiredLimits.Format, labels))
+                : new CommandResult(1, string.Empty, $"Error response from daemon: get {volume}: no such volume\n")),
             "docker" when arguments is ["compose", "version", "--short"] => Docker(() => ComposeVersion is null
                 ? new CommandResult(1, string.Empty, "docker: 'compose' is not a docker command.\n")
                 : Answer(ComposeVersion)),
@@ -1277,6 +1367,13 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             return new CommandResult(0, "[deploy] The controller is not running: nothing to stop\n", string.Empty);
         }
 
+        // As the script resolves the limits, before it changes anything.
+        var (limits, refused) = ScriptLimits(environment);
+        if (refused is not null)
+        {
+            return new CommandResult(1, string.Empty, $"[deploy] ERROR: {refused}\n");
+        }
+
         if (options is ["--rollback"])
         {
             // As the script's --rollback: the one kept put back, the one it replaces kept in its turn.
@@ -1295,9 +1392,10 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             }
 
             // It runs with the limits the script was given (docker update), and keeps its own privileges.
-            Containers[MachineSurveyor.ControllerContainer] = WithLimits(previous, environment) with { State = "running", StartedAt = DateTimeOffset.UtcNow };
+            Containers[MachineSurveyor.ControllerContainer] = WithLimits(previous, limits, environment) with { State = "running", StartedAt = DateTimeOffset.UtcNow };
             ControllerKeys.Clear();
             ControllerKeys.UnionWith(ApiKeyValues());
+            WriteDesiredLimits(limits, "rollback", previous.Id);
             return new CommandResult(0, "[deploy] Rolled back\n", string.Empty);
         }
 
@@ -1361,7 +1459,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         }
 
         var https = environment["HTTPS_CERT_DIR"].Length > 0;
-        Containers[MachineSurveyor.ControllerContainer] = WithLimits(new FakeContainer(), environment) with
+        Containers[MachineSurveyor.ControllerContainer] = WithLimits(new FakeContainer(), limits, environment) with
         {
             ReadOnly = true,
             Emulated = environment["HAT_EMULATOR_ENDPOINT"].Length > 0,
@@ -1392,24 +1490,98 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         {
             ServedCertificates[apiPort] = served;
         }
+        WriteDesiredLimits(limits, "deploy", Containers[MachineSurveyor.ControllerContainer].Id);
         return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
     }
 
-    // A container with the limits the deploy script was given: CONTAINER_CPUS, CONTAINER_MEMORY and CONTAINER_PIDS_LIMIT. An
-    // empty CPU or memory limit leaves the container's own, as docker update does (a new container has none).
-    private static FakeContainer WithLimits(FakeContainer container, IReadOnlyDictionary<string, string> environment)
+    /// <summary>The limits the fake deploy script resolved, and whether each was set or is the default, as it records them.</summary>
+    internal sealed record ScriptResolvedLimits(string Cpus, string CpusSource, string Memory, string MemorySource);
+
+    // As the deploy script's resolve_limits, written here apart from the installer's own (ResolvedResources): CONTAINER_CPUS
+    // and CONTAINER_MEMORY when given, then the newest desired-limits record's (its value when set, the default when it
+    // keeps the default), then the running controller's, then the default. A newest record that is not one (its format
+    // or values) refuses a run that needs a value from it.
+    private (ScriptResolvedLimits Limits, string? Refused) ScriptLimits(IReadOnlyDictionary<string, string> environment)
     {
-        var cpus = environment["CONTAINER_CPUS"];
-        var memory = environment["CONTAINER_MEMORY"];
-        return container with
+        var cpus = environment["CONTAINER_CPUS"] is { Length: > 0 } givenCpus ? (givenCpus, DesiredLimits.Set) : ((string, string)?)null;
+        var memory = environment["CONTAINER_MEMORY"] is { Length: > 0 } givenMemory ? (givenMemory, DesiredLimits.Set) : ((string, string)?)null;
+        if (NewestDesiredLimits is { } record && (cpus is null || memory is null))
         {
-            NanoCpus = cpus.Length == 0 ? container.NanoCpus : (long)(decimal.Parse(cpus, System.Globalization.CultureInfo.InvariantCulture) * 1_000_000_000m),
-            Memory = memory.Length == 0
-                ? container.Memory
-                : long.Parse(memory[..^1], System.Globalization.CultureInfo.InvariantCulture) * (memory[^1] == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024),
+            string Label(string name) => record.GetValueOrDefault($"{DesiredLimits.Label}.{name}", string.Empty);
+            var valid = record.GetValueOrDefault(DesiredLimits.Label) == "1"
+                && decimal.TryParse(Label("cpus"), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var recordCpus) && recordCpus >= 1
+                && Label("memory") is { Length: > 1 } recordMemory && recordMemory[^1] is 'g' or 'm'
+                && long.TryParse(recordMemory[..^1], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number)
+                && number * (recordMemory[^1] == 'g' ? 1024 : 1) >= 1024
+                && Label("cpus-source") is DesiredLimits.Set or DesiredLimits.Default && Label("memory-source") is DesiredLimits.Set or DesiredLimits.Default;
+            if (!valid)
+            {
+                return (new ScriptResolvedLimits("", "", "", ""), "The newest desired-limits record is not valid. It is not applied, and nothing was changed.");
+            }
+
+            cpus ??= Label("cpus-source") == DesiredLimits.Set ? (Label("cpus"), DesiredLimits.Set) : ("1", DesiredLimits.Default);
+            memory ??= Label("memory-source") == DesiredLimits.Set ? (Label("memory"), DesiredLimits.Set) : ("2g", DesiredLimits.Default);
+        }
+
+        if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var running))
+        {
+            if (cpus is null && running.NanoCpus > 0)
+            {
+                cpus = ((running.NanoCpus / 1_000_000_000m).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture), DesiredLimits.Set);
+            }
+
+            if (memory is null && running.Memory > 0)
+            {
+                var mib = running.Memory / (1024 * 1024);
+                memory = (mib % 1024 == 0 ? $"{mib / 1024}g" : $"{mib}m", DesiredLimits.Set);
+            }
+        }
+
+        var (resolvedCpus, cpusSource) = cpus ?? ("1", DesiredLimits.Default);
+        var (resolvedMemory, memorySource) = memory ?? ("2g", DesiredLimits.Default);
+        return (new ScriptResolvedLimits(resolvedCpus, cpusSource, resolvedMemory.ToLowerInvariant(), memorySource), null);
+    }
+
+    // As the script records them once the controller runs (or the rollback has started the one before): the next
+    // generation, then the older records (the earlier format's too) removed; one it cannot remove stays.
+    private void WriteDesiredLimits(ScriptResolvedLimits limits, string by, string container)
+    {
+        var next = DesiredLimitRecords.Select(GenerationOf).DefaultIfEmpty(0).Max() + 1;
+        var older = DesiredLimitRecords.ToArray();
+        SeedDesiredLimits(limits.Cpus, limits.Memory, next, container[..12], ("cpus-source", limits.CpusSource), ("memory-source", limits.MemorySource), ("written-by", by));
+        foreach (var volume in older.Where(volume => !VolumeRemoveFails.Contains(volume)))
+        {
+            Volumes.Remove(volume);
+        }
+    }
+
+    // A container with the limits the deploy script resolved, and the process limit it was given (CONTAINER_PIDS_LIMIT).
+    private static FakeContainer WithLimits(FakeContainer container, ScriptResolvedLimits limits, IReadOnlyDictionary<string, string> environment)
+        => container with
+        {
+            NanoCpus = (long)(decimal.Parse(limits.Cpus, System.Globalization.CultureInfo.InvariantCulture) * 1_000_000_000m),
+            Memory = long.Parse(limits.Memory[..^1], System.Globalization.CultureInfo.InvariantCulture) * (limits.Memory[^1] == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024),
             PidsLimit = long.Parse(environment["CONTAINER_PIDS_LIMIT"], System.Globalization.CultureInfo.InvariantCulture)
         };
+
+    /// <summary>
+    /// A <c>docker volume inspect --format</c> template of <paramref name="labels"/>, as Docker renders it: <c>{{index
+    /// .Labels "k"}}</c> as the value is, <c>{{json (index .Labels "k")}}</c> as JSON (control characters, quotes and
+    /// backslashes escaped).
+    /// </summary>
+    internal static string RenderLabels(string format, IReadOnlyDictionary<string, string> labels)
+    {
+        var json = JsonLabels().Replace(format, match => JsonSerializer.Serialize(
+            labels.GetValueOrDefault(match.Groups[1].Value, string.Empty),
+            new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        return VolumeLabels().Replace(json, match => labels.GetValueOrDefault(match.Groups[1].Value, string.Empty));
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex("\\{\\{index \\.Labels \"([^\"]+)\"\\}\\}")]
+    private static partial System.Text.RegularExpressions.Regex VolumeLabels();
+
+    [System.Text.RegularExpressions.GeneratedRegex("\\{\\{json \\(index \\.Labels \"([^\"]+)\"\\)\\}\\}")]
+    private static partial System.Text.RegularExpressions.Regex JsonLabels();
 
     private string Inspect(string name, FakeContainer container)
     {
@@ -1477,6 +1649,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         {
             new
             {
+                container.Id,
                 Name = "/" + name,
                 Image = ImageIdOf(name, container),
                 Config = new { Image = image, Labels = labels, Env = environment },
