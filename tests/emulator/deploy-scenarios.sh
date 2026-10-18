@@ -479,6 +479,18 @@ plant_is() {
   plant | jq -e "$1" >/dev/null
 }
 
+# drive_powerup_complete <plant elapsed sampled after power-on>: C4's SMVector start lockout lasts 2 s (SV01J p.27).
+# Healthy IN3 and a successful ClearFault do not establish that it has elapsed. Use the plant's clock, including its
+# time scale, and require a powered, stopped, untripped drive before handing it to a scenario that may start motion.
+drive_powerup_complete() {
+  plant | jq -e --arg powered_at "$1" '
+    def seconds:
+      capture("^(?:(?<d>[0-9]+)\\.)?(?<h>[0-9]{2}):(?<m>[0-9]{2}):(?<s>[0-9]+(?:\\.[0-9]+)?)$")
+      | (((.d // "0") | tonumber) * 86400 + (.h | tonumber) * 3600 + (.m | tonumber) * 60 + (.s | tonumber));
+    .drivePowered and .driveMode == "Stopped" and .driveTrip == "None"
+      and ((.elapsed | seconds) >= (($powered_at | seconds) + 2))' >/dev/null
+}
+
 roof_is() {
   roof_get Status | jq -e "$1" >/dev/null
 }
@@ -1594,7 +1606,7 @@ scenario_plant_fault() {
   [[ -z "$(container_id "${controller}")" ]] || fail "plant_fault must run before any controller is deployed"
   emulator_post drive/power '{"powered":false}'
   start_relay_monitor
-  local stage command response old_id=""
+  local stage command response powered_at old_id=""
   for stage in first-install upgrade; do
     deploy
     (( DEPLOY_STATUS == 0 )) || fail "${stage} with drive power off failed (exit ${DEPLOY_STATUS})"
@@ -1625,15 +1637,17 @@ scenario_plant_fault() {
   relays_stayed_off
   assert_relays_off
   emulator_post drive/power '{"powered":true}'
+  powered_at=$(plant | jq -er '.elapsed')
   wait_for "drive power recovery" 15 roof_is '.isDriveFaultActive == false'
   roof_is '.isFaultLatched' || fail "drive recovery automatically cleared the latch"
   response=$(roof_call POST Open)
   [[ "$(tail -n 1 <<<"${response}")" == 409 ]] || fail "motion accepted before explicit ClearFault"
   roof_post ClearFault >/dev/null
   wait_for "operational readiness after explicit ClearFault" 15 controller_ready
+  wait_for "the drive's 2 s power-up start lockout to elapse" 15 drive_powerup_complete "${powered_at}"
   assert_relays_off
   no_violations
-  pass "first install and upgrade kept the stopped controller with DriveFault warnings; Docker healthy, operational health 503, no motion before recovery and explicit ClearFault; relays 0 in ${RELAY_SAMPLES} samples"
+  pass "first install and upgrade kept the stopped controller with DriveFault warnings; Docker healthy, operational health 503, no motion before recovery and explicit ClearFault; relays 0 in ${RELAY_SAMPLES} samples; drive stopped after its 2 s power-up start lockout"
 }
 
 scenario_c12() {
