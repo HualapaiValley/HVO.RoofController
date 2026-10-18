@@ -15,9 +15,10 @@ public static class ReleaseFiles
     }
 
     /// <summary>
-    /// The release's <paramref name="asset"/> on this machine: from the release's folder (<c>--release DIR</c>), or
-    /// downloaded into <paramref name="work"/>; checked either way against release.json's size and SHA-256, so a file
-    /// that differs is never used.
+    /// The release's <paramref name="asset"/> in <paramref name="work"/>, a folder only the installer's user can open:
+    /// copied from the release's folder (<c>--release DIR</c>) and checked as it is written, or downloaded there and
+    /// checked against release.json's size and SHA-256. Only this private file is used afterwards, never an offline
+    /// source someone could replace or write over after verification. The work folder owns its lifetime.
     /// </summary>
     public static async Task<string> GetAsync(InstallContext context, ReleaseManifest release, ReleaseAsset asset, DeployScript.WorkFolder work, CancellationToken cancellationToken)
     {
@@ -25,18 +26,19 @@ public static class ReleaseFiles
         ArgumentNullException.ThrowIfNull(release);
         ArgumentNullException.ThrowIfNull(asset);
         ArgumentNullException.ThrowIfNull(work);
-        string path;
+        var path = Path.Join(work.Path, asset.Name);
         if (context.Release.FolderPath is { } folder)
         {
-            path = Path.Join(folder, asset.Name);
-            if (!context.Machine.FileExists(path))
+            var source = Path.Join(folder, asset.Name);
+            if (!context.Machine.FileExists(source))
             {
                 throw new InstallerException($"There is no {asset.Name} in {folder}: download it with the release's other files from {ReleaseManifest.ReleasesUrl}.");
             }
+
+            await CopyCheckedAsync(context, asset, source, path, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            path = Path.Join(work.Path, asset.Name);
             var uri = ReleaseManifest.DownloadUri(release.Version, asset.Name);
             context.Progress?.Invoke($"Downloading {asset.Name} ({asset.Size / (1024 * 1024)} MB)…");
             try
@@ -50,8 +52,17 @@ public static class ReleaseFiles
                     $"The installer could not download {asset.Name} from {uri}: {error.Message} "
                     + $"Download the release's files from {ReleaseManifest.ReleasesUrl} on a machine that can, and give their folder: --release DIR.");
             }
+
+            await CheckAsync(context, asset, path, cancellationToken).ConfigureAwait(false);
         }
 
+        return path;
+    }
+
+    // A private download, or the controller archive that the deploy script will copy and check again as it writes:
+    // checking a source here alone never makes it safe to reopen from a folder others can change.
+    internal static async Task CheckAsync(InstallContext context, ReleaseAsset asset, string path, CancellationToken cancellationToken)
+    {
         var stream = context.Machine.OpenRead(path) ?? throw new InstallerException($"{path} is not there.");
         await using (stream.ConfigureAwait(false))
         {
@@ -61,8 +72,6 @@ public static class ReleaseFiles
                 throw new InstallerException($"{path} is not the release's {asset.Name}: its size or SHA-256 differs from {ReleaseManifest.FileName}'s.");
             }
         }
-
-        return path;
     }
 
     /// <summary>

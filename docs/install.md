@@ -311,6 +311,14 @@ Each installer installs its own release: `--version` names it. It reads that rel
 which names the controller's and the HAT emulator's images on GHCR, each by its digest. Docker pulls those images by
 their digests, and no others: the deploy script deploys the controller's image only when Docker reports that digest.
 
+When fetching release files (`hvo-roof`, the installer itself, the Linux authentication worker, the kiosk's tarball
+and the Mac app's zip), the installer uses only files in a private temporary folder. Downloads are checked there against
+`release.json`'s size and SHA-256. From an offline folder, each file is copied there and checked as the copy is
+written; only that copy is installed or unpacked, even if the source is replaced or written over after verification.
+The temporary file has mode 0600 in a folder with mode 0700, owned by the installer's user (root for a machine
+install, yourself for a user install), and is removed when the step ends, including on failure. Leave room in
+`TMPDIR` for a copy of the largest asset being installed, alongside the space needed for staging the installed files.
+
 For a machine that cannot reach GitHub or ghcr.io, download the release's files from its page on a machine that can,
 into one folder, and give the folder: `--release DIR`, or `install.sh --from DIR`. `gh release download v4.0.0 --repo
 HualapaiValley/HVO.RoofController --dir DIR` downloads them all; for the Pi alone, `release.json`, `SHA256SUMS`,
@@ -876,8 +884,9 @@ controller when it cannot read the roof's status, as well as when the roof moves
 
 ### Temporary files
 
-The installer keeps what it uses during a run (its copies of a release's image archives, the deploy script, the files
-it gives the script) in folders of its own, `hvo-roof-install-<random>` with mode 0700, each deleted when its step ends.
+The installer keeps what it uses during a run (its verified release files and image archives, the deploy script, the
+files it gives the script) in folders of its own, `hvo-roof-install-<random>` with mode 0700, each deleted when its step
+ends.
 It makes them only in a temporary folder (`TMPDIR`, `/tmp` when it is not set) that no one but root can change: that
 folder, followed to its physical path, and every folder above it, up to `/`, must be a real folder (not a link) of
 root's (or, for `hvo-roof` and the Mac app, which you install as yourself, of yours or root's) that no one else can

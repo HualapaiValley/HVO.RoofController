@@ -27,6 +27,29 @@ public sealed class InstallerLinuxAuthTests
     };
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task TheWorker_ChangedAfterVerification_IsNeverWhatIsInstalledOrStarted(bool replaced)
+    {
+        using var fixture = await Fixture.Create(offline: true);
+        var folder = fixture.Context.Release.FolderPath!;
+        var asset = (await fixture.Context.ReleaseAsync(default)).Assets.Single(asset => asset.Kind == "linux-auth");
+        var expected = fixture.Pi.Machine.ReadBytes(Path.Join(folder, asset.Name))!;
+        var change = InstallerVerifiedFileTests.ChangeBeforeUse(fixture.Pi, folder, asset.Name,
+            Encoding.UTF8.GetBytes("unverified worker"), replaced);
+        var step = new LinuxAuthStep(Settings);
+
+        await step.ApplyAsync(fixture.Context, new StepCheck(StepChange.Create), default);
+
+        change.AssertUsedPrivateCopy();
+        fixture.Pi.Machine.ReadBytes(LinuxAuthStep.Program).Should().Equal(expected);
+        fixture.Pi.Mode(LinuxAuthStep.Program).Should().Be(Modes.Program);
+        fixture.Runner.Active.Should().BeTrue();
+        (await step.CheckAsync(fixture.Context, default)).Change.Should().Be(StepChange.Unchanged,
+            "the ownership record describes the verified worker and its installed configuration");
+    }
+
+    [TestMethod]
     public async Task OptIn_IsAbsentFromLegacyPlan_AndValidatesNamesAndRoles()
     {
         using var machine = new FakeMachine().WithPi();
@@ -216,7 +239,7 @@ public sealed class InstallerLinuxAuthTests
         public Runner Runner { get; } = runner;
         public InstallContext Context { get; } = context;
         public void Dispose() => Pi.Dispose();
-        public static async Task<Fixture> Create()
+        public static async Task<Fixture> Create(bool offline = false)
         {
             var pi = new FakeMachine();
             // The development user's umask may make redirected test directories group-writable.
@@ -231,9 +254,17 @@ public sealed class InstallerLinuxAuthTests
                 ["size"] = bytes.Length, ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(bytes)) });
             pi.Downloads[ReleaseManifest.DownloadUri("4.0.0").ToString()] = release.ToJsonString();
             pi.FileDownloads[ReleaseManifest.DownloadUri("4.0.0", name).ToString()] = bytes;
+            var source = ReleaseSource.GitHub();
+            if (offline)
+            {
+                var folder = pi.ReleaseFolder();
+                pi.Write(Path.Join(folder, ReleaseManifest.FileName), release.ToJsonString());
+                File.WriteAllBytes(pi.OnDisk(Path.Join(folder, name)), bytes);
+                source = ReleaseSource.Folder(folder);
+            }
             var runner = new Runner(pi);
             var context = new InstallContext { Machine = pi.Machine.WithCommands(runner), Log = InstallLog.None,
-                Survey = await MachineSurveyor.SurveyAsync(pi.Machine), Answers = new(), Version = "4.0.0" };
+                Survey = await MachineSurveyor.SurveyAsync(pi.Machine), Answers = new(), Version = "4.0.0", Release = source };
             return new(pi, runner, context);
         }
     }
