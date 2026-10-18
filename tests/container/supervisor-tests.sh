@@ -104,7 +104,7 @@ run_test() {
 start_supervisor() {
   local -a env_options=()
   [[ "${1:-}" != --default-signal=* ]] || { env_options=("$1"); shift; }
-  setsid env "${env_options[@]}" "${SUPERVISOR_ENV[@]}" "$@" "${SUPERVISOR}" >"${WORK}/supervisor.log" 2>&1 &
+  setsid env "${env_options[@]}" "${SUPERVISOR_ENV[@]}" "$@" "${SUPERVISOR_COMMAND:-${SUPERVISOR}}" >"${WORK}/supervisor.log" 2>&1 &
   SUPERVISOR_PID=$!
 }
 
@@ -1809,6 +1809,9 @@ if (( BASH_VERSINFO[0] < 5 )); then
   echo "supervisor-tests: bash 5 or later is required (the supervisor uses EPOCHREALTIME)" >&2
   exit 2
 fi
+
+# shellcheck source=tests/container/supervisor-cgroup-tests.sh
+source "${TESTS_DIR}/supervisor-cgroup-tests.sh"
 
 tests=()
 if (( $# > 0 )); then

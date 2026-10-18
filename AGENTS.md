@@ -231,7 +231,11 @@ observatory's Pi.
   controller's, the default). A host whose Docker cannot enforce them is refused before anything changes, with no
   override (`docker info`: `MemoryLimit`, `SwapLimit`, `CPUCfsQuota`, `PidsLimit`); a rollback, a recovery path, goes
   ahead there with the ones it can, and warns loudly in its output and the controller's log. A capability or writable
-  place is added only when a test on the emulator image shows it is needed. Keep the
+  place is added only when a test on the emulator image shows it is needed. Compose passes expected CPU, memory and
+  PID limits to the supervisor, which verifies its own cgroup v2 before either application starts (#152); v1 or
+  unverifiable limits refuse both applications, with relay-off/read-back and retries kept alive until verified off
+  (then exit 2), and bounded shutdown on a stop. One-shot checks never touch the HAT. Deploy-created containers leave
+  the expectations unset to preserve degraded rollback recovery. Keep the
   [fail-safe record](docs/deployment.md#the-relays-when-the-controller-exits) true: the supervisor turns the relays off
   whenever the controller exits and holds it stopped until they are verified off; only a whole-container kill (or the
   Docker daemon dying) leaves them held.
