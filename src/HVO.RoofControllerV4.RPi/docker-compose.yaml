@@ -53,6 +53,7 @@
 x-resource-environment: &resource-environment
   HVO_ROOF_CPUS: ${HVO_ROOF_CPUS:-1}
   HVO_ROOF_MEMORY: ${HVO_ROOF_MEMORY:-2g}
+  HVO_ROOF_PIDS_LIMIT: ${HVO_ROOF_PIDS_LIMIT:-512}
 
 x-roof-environment: &roof-environment
   <<: *resource-environment
