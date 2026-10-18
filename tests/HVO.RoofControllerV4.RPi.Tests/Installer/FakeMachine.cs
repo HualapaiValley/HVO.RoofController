@@ -383,6 +383,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What the HAT emulator's health check says once it is started.</summary>
     public string EmulatorHealth { get; set; } = "healthy";
 
+    /// <summary>Runs just before an installer read opens a file, with its path on the fake machine.</summary>
+    public Action<string>? BeforeRead { get; set; }
+
     public InstallerMachine Machine => new()
     {
         Root = Root,
@@ -431,7 +434,12 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         RunProgramAsync = RunProgramAsync,
         SyncFolderOnDisk = SyncFolder,
         SyncFileOnDisk = SyncFile,
-        RenameOnDisk = Rename
+        RenameOnDisk = Rename,
+        OpenReadOnDisk = onDisk =>
+        {
+            BeforeRead?.Invoke("/" + Path.GetRelativePath(Root, onDisk));
+            return new FileStream(onDisk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+        }
     };
 
     /// <summary>The kiosk's program in the fake release of <paramref name="version"/>: a script that says which it is.</summary>
