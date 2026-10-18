@@ -96,7 +96,7 @@ public static class RoofSecurityStartup
                 {
                     logger.LogWarning(
                         "HTTPS is required but the server is not listening on HTTPS ({Addresses}). Remote clients will receive 403 " +
-                        "https_required; only loopback and /health/live, /health/ready work. Configure a Kestrel certificate " +
+                        "https_required; only loopback and /health/live, /health/ready, /health/available work. Configure a Kestrel certificate " +
                         "(docs/deployment.md) or, on a trusted network only, set RoofControllerSecurity__RequireHttps=false.",
                         string.Join(", ", addresses));
                 }

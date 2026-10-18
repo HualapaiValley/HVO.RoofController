@@ -150,7 +150,7 @@ LABEL io.hvo.roof.identity-schema="3" \
       org.opencontainers.image.revision="${ROOF_REVISION}" \
       org.opencontainers.image.created="${ROOF_CREATED}"
 
-# Healthy exactly when the controller reports ready (anonymous endpoint; loopback is exempt from RequireHttps). The web
+# Healthy exactly when the controller reports available (anonymous /health/available; loopback is exempt from RequireHttps). The web
 # UI's liveness and the supervisor's view are printed alongside and never change the result.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD ["/usr/local/bin/roof-healthcheck"]

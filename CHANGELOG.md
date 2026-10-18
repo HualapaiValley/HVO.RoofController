@@ -116,6 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Deploys and first installs keep a safely stopped controller with a classified drive or limit fault, with a warning
+  naming the fault and requiring repair and explicit `ClearFault`, instead of removing it or rolling back. Docker
+  uses software availability; operational `/health` and `/health/ready` still fail on latched faults. Input/relay,
+  initialization, authentication, HAT-mode, TLS and web checks remain strict; older images retain strict readiness (#94).
+
 - The installer installs and unpacks every offline release asset from a private copy checked as it is written,
   including `hvo-roof`, the installer, the Linux authentication worker, the kiosk tarball and the Mac app zip.
   Replacing or modifying the source after verification cannot change the bytes used (#145).

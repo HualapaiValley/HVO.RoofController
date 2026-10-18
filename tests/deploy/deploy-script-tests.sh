@@ -780,6 +780,98 @@ test_schema_copied_symlink_is_never_followed() {
   assert_old_not_restarted_for_schema
 }
 
+test_a_classified_plant_fault_keeps_the_first_install_and_the_upgrade_with_a_warning() {
+  local upgrading
+  for upgrading in false true; do
+    setup_fresh_state
+    if [[ "${upgrading}" == true ]]; then
+      seed_container roof-controller current true 8443:8443
+    fi
+    deploy "${HTTPS_ENV[@]}" FAKE_NEW_AVAILABLE_CODE=200 FAKE_NEW_READY=false FAKE_NEW_FAULT=DriveFault
+    assert_status 0
+    assert_container roof-controller new true
+    assert_output_contains "WARNING: PLANT FAULT DriveFault: keeping the controller available with motion refused"
+    assert_output_contains "explicitly ClearFault"
+    assert_output_contains "Deployment complete and verified"
+    [[ "$(call_index '/ClearFault')" == 0 ]] || fail_test "the deploy cleared a safety latch"
+    [[ "$(call_index '/Open')" == 0 && "$(call_index '/Close')" == 0 ]] || fail_test "the deploy commanded motion"
+    [[ "$(call_index 'http://localhost:8080/health/ready')" == 0 ]] || fail_test "modern availability fell back to operational health"
+    if [[ "${upgrading}" == true ]]; then
+      assert_container roof-controller-previous current false
+    else
+      assert_container roof-controller-previous missing false
+    fi
+  done
+}
+
+test_availability_failures_never_fall_back_to_ready() {
+  local code
+  for code in 503 401 000; do
+    setup_fresh_state
+    deploy "${HTTPS_ENV[@]}" "FAKE_NEW_AVAILABLE_CODE=${code}" FAKE_NEW_READY=true
+    assert_status 1
+    assert_container roof-controller missing false
+    [[ "$(call_index 'http://localhost:8080/health/ready')" == 0 ]] || fail_test "availability ${code} fell back to ready"
+  done
+}
+
+test_plant_faults_never_bypass_tls_auth_hat_web_or_stop_verification() {
+  local setting
+  for setting in FAKE_REMOTE_STATUS_CODE=401 FAKE_CERT_NAMES=wrong.test FAKE_NEW_HAT_MODE=Simulation FAKE_NEW_WEB_LIVE=false FAKE_REMOTE_STOP=unverified FAKE_NEW_STATUS_RELAYS=unverified; do
+    setup_fresh_state
+    deploy "${HTTPS_ENV[@]}" FAKE_NEW_AVAILABLE_CODE=200 FAKE_NEW_FAULT=DriveFault "${setting}"
+    assert_status 1
+    assert_container roof-controller missing false
+    assert_output_not_contains "WARNING: PLANT FAULT"
+  done
+}
+
+test_an_unclassified_or_moving_latch_is_refused_even_if_availability_claims_success() {
+  local setting
+  for setting in FAKE_NEW_FAULT=RelayVerificationFailed FAKE_NEW_FAULT=InputReadFailure FAKE_NEW_FAULT=Unexpected FAKE_NEW_MOTION=Opening; do
+    setup_fresh_state
+    deploy "${HTTPS_ENV[@]}" FAKE_NEW_AVAILABLE_CODE=200 FAKE_NEW_FAULT=DriveFault "${setting}"
+    assert_status 1
+    assert_container roof-controller missing false
+  done
+}
+
+test_an_old_image_without_availability_still_requires_operational_readiness() {
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_AVAILABLE_CODE=404 FAKE_NEW_READY=false FAKE_NEW_FAULT=DriveFault
+  assert_status 1
+  assert_container roof-controller missing false
+  [[ "$(call_index 'http://localhost:8080/health/ready')" != 0 ]] || fail_test "old readiness was not checked"
+}
+
+test_rollback_uses_availability_when_supported_and_old_readiness_only_when_absent() {
+  local code
+  for code in 200 404; do
+    setup_fresh_state
+    seed_container roof-controller current true 8443:8443
+    seed_container roof-controller-previous old false 8443:8443
+    deploy "${HTTPS_ENV[@]}" "FAKE_OLD_AVAILABLE_CODE=${code}" FAKE_OLD_READY=false FAKE_OLD_FAULT=DriveFault -- --rollback
+    assert_container roof-controller old true
+    assert_container roof-controller-previous current false
+    if [[ "${code}" == 200 ]]; then
+      assert_status 0
+      assert_output_contains "WARNING: PLANT FAULT DriveFault"
+    else
+      assert_status 1
+      assert_output_contains "did not become ready within 1s. It is left running"
+      assert_output_not_contains "WARNING: PLANT FAULT"
+    fi
+  done
+}
+
+test_plant_fault_warning_also_works_with_the_python_status_reader() {
+  # shellcheck disable=SC2016 # the function is the script's environment, expanded there
+  local no_jq='BASH_FUNC_command%%=() { if [ "$1" = -v ] && [ "$2" = jq ]; then return 1; fi; builtin command "$@"; }'
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_AVAILABLE_CODE=200 FAKE_NEW_FAULT=DriveFault "${no_jq}"
+  assert_status 0
+  assert_container roof-controller new true
+  assert_output_contains "WARNING: PLANT FAULT DriveFault"
+}
+
 test_new_controller_never_ready_rolls_back_to_previous() {
   seed_container roof-controller old true 8080:8080
   deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false

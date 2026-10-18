@@ -523,7 +523,7 @@ public static partial class DeploymentValidator
         {
             problems.Add(
                 $"RoofControllerSecurity:RequireHttps is in effect but no HTTPS listener is configured: Kestrel would listen on {listeners} " +
-                "only, so every remote request would get 403 https_required while /health/ready still passes. Kestrel takes its listeners " +
+                "only, so every remote request would get 403 https_required while /health/available still passes. Kestrel takes its listeners " +
                 "from Kestrel:Endpoints when any is set, otherwise from ASPNETCORE_URLS, otherwise from ASPNETCORE_HTTP_PORTS and " +
                 "ASPNETCORE_HTTPS_PORTS. Configure an HTTPS listener with a certificate (docs/deployment.md) or, on an isolated LAN only, " +
                 "set RoofControllerSecurity__RequireHttps=false.");
@@ -849,7 +849,7 @@ public static partial class DeploymentValidator
     /// <summary>
     /// AllowedHosts as host filtering applies it: split on ';' without trimming, any entry "*", "[::]" or "0.0.0.0"
     /// (or none at all) allows every host, and other entries must match the Host header's name exactly, ignoring case.
-    /// The container health check requests http://localhost:8080/health/ready.
+    /// The container health check requests http://localhost:8080/health/available.
     /// </summary>
     private static void ValidateAllowedHosts(IConfiguration configuration, IHostEnvironment environment, List<string> problems, List<string> warnings)
     {
@@ -868,7 +868,7 @@ public static partial class DeploymentValidator
         {
             problems.Add(
                 "AllowedHosts does not include localhost, so host filtering would answer 400 to the container health check " +
-                "(http://localhost:8080/health/ready), the container would never become healthy and the deployment would be rolled " +
+                "(http://localhost:8080/health/available), the container would never become healthy and the deployment would be rolled " +
                 "back. Add localhost to the ';'-separated list; entries must match exactly (no spaces or ports), and a *.domain " +
                 "wildcard does not cover localhost.");
         }

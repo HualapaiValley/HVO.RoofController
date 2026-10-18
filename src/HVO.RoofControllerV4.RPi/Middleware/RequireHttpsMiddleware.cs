@@ -15,7 +15,7 @@ namespace HVO.RoofControllerV4.RPi.Middleware;
 /// <see cref="RoofControllerSecurityOptions.RequireHttps"/> is in effect (default: true outside Development). This is
 /// deliberately not a redirect: a redirect would already have sent the API key or session token in clear text.
 /// Exempt: loopback connections (the Docker healthcheck and the deploy script's in-container Stop) and the anonymous
-/// <c>/health/live</c> and <c>/health/ready</c> probes.
+/// <c>/health/live</c>, <c>/health/ready</c> and <c>/health/available</c> probes.
 /// </summary>
 public sealed class RequireHttpsMiddleware
 {
@@ -24,6 +24,7 @@ public sealed class RequireHttpsMiddleware
 
     private static readonly PathString LivePath = new("/health/live");
     private static readonly PathString ReadyPath = new("/health/ready");
+    private static readonly PathString AvailablePath = new("/health/available");
 
     private readonly RequestDelegate _next;
     private readonly IOptionsMonitor<RoofControllerSecurityOptions> _options;
@@ -104,5 +105,6 @@ public sealed class RequireHttpsMiddleware
     }
 
     private static bool IsExemptPath(PathString path)
-        => path.Equals(LivePath, StringComparison.OrdinalIgnoreCase) || path.Equals(ReadyPath, StringComparison.OrdinalIgnoreCase);
+        => path.Equals(LivePath, StringComparison.OrdinalIgnoreCase) || path.Equals(ReadyPath, StringComparison.OrdinalIgnoreCase)
+            || path.Equals(AvailablePath, StringComparison.OrdinalIgnoreCase);
 }

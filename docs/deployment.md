@@ -48,7 +48,7 @@ Outside Development, the controller refuses plain-HTTP requests from other machi
 does not redirect them. Two exceptions remain on plain HTTP:
 
 - loopback clients, which covers the Docker healthcheck and the deploy script's in-container calls
-- the anonymous `/health/live` and `/health/ready` probes
+- the anonymous `/health/live`, `/health/ready` and `/health/available` probes
 
 Give Kestrel a PFX certificate whose subject alternative names include every name and IP clients use (for example
 `roof-pi`, `roof-pi.local`, `192.168.x.y`).
@@ -319,7 +319,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `CONTAINER_PIDS_LIMIT` | `512` | The most processes and threads the container runs at once (`--pids-limit`), from 256 to 32768 |
 | `STOP_TIMEOUT_SECONDS` | `30` | Graceful-stop window, used for both `docker stop -t` and `--stop-timeout`. Keep it at 30 or more: the container's supervisor waits up to 22 s for the controller's shutdown (and up to 2 s for the web UI's, at the same time), then up to 5 s to turn the relays off ([Shutdown timing](#shutdown-timing)). |
 | `REQUIRE_IDLE_ROOF` | `false` | `true` or `false`. `true` replaces a running controller only while its roof is idle: before the verified stop, an authenticated `GET Status` inside the container must return 200 with `isMoving` `false` and `commandedMotion` `None`. Otherwise the deploy, or `--rollback`, stops with nothing changed. The [installer](install.md) sets it to `true`. |
-| `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/ready` |
+| `READY_TIMEOUT_SECONDS` | `120` | How long to wait for `/health/available` (older images: `/health/ready`) |
 | `POLL_INTERVAL_SECONDS` | `3` | Readiness poll interval |
 | `ROOF_OPERATOR_API_KEY` / `OPERATOR_KEY_FILE` | / `~/.config/hvo-roof/operator.key` | Key for the Stop and Status checks |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://192.168.1.238:4318` | The [OTLP collector](telemetry.md#export). An empty value turns export off. |
@@ -402,8 +402,12 @@ anything.
    In HTTPS mode only `HTTPS_HOST_PORT` and `WEB_HOST_PORT` are published; plain HTTP listens on loopback inside the
    container, for the health check, the web UI's calls to the controller and the script's `docker exec` calls.
 7. **Verifies the new controller:**
-   - `/health/ready` within `READY_TIMEOUT_SECONDS` (from inside the container). A new controller that exits before
-     it is ready fails this check at once, without waiting for the timeout: whether its container stopped or Docker
+   - `/health/available` within `READY_TIMEOUT_SECONDS` (from inside the container), including fresh input and
+     relay-register reads, initialization, identity-store and certificate checks. A safely stopped, classified plant
+     latch is retained with a prominent warning naming the fault and requiring repair and explicit `ClearFault`.
+     A fault first seen after upgrading is retained too: check the settings and wiring before clearing it.
+     Images without this endpoint (HTTP 404 only) use their original strict `/health/ready` instead. A new
+     controller that exits before it is ready fails this check at once, without waiting for the timeout: whether its container stopped or Docker
      restarted it (`--restart unless-stopped` restarts a container that exits), or the container's supervisor is
      starting it again or has left it stopped after repeated crashes (its `supervisor.json` says so). One that was
      restarted before the first check is caught when it exits again.
@@ -1461,23 +1465,25 @@ the check and the fork makes that fork wait as before.
 
 ## Health and readiness
 
-Three health checks run:
+Four health checks are registered:
 
-- `roof_controller`: the roof and the HAT. It is the only check tagged `hardware`, so the only one readiness and
-  deploys wait for.
+- `roof_controller`: operational roof and HAT health, tagged `hardware` for `/health/ready`.
+- `roof_availability`: the same I/O and lifecycle checks, with the safely stopped plant-fault exception below, tagged
+  `availability` for deployment and Docker.
 - `identity_store`: the file of people, sessions and managed keys ([The identity store](security.md#the-identity-store)).
 - `https_certificate`: the certificate the controller serves. Unhealthy when it cannot be read or has expired, Degraded
   within 30 days of its expiry, and Healthy otherwise, or when no certificate file is configured. Its data holds the
   certificate's subject, expiry, days left and SHA-256 fingerprint, and those of the CA that issued it.
 
-`identity_store` and `https_certificate` show only in `/health`, so they never fail readiness or a deploy. The
-endpoints:
+`identity_store` and `https_certificate` participate in `/health` and `/health/available`; operational readiness
+continues to check only the roof/HAT. The endpoints:
 
 | Endpoint | Access | Answers |
 |----------|--------|---------|
 | `/health/live` | anonymous | 200 whenever the process answers. No check runs. |
-| `/health/ready` | anonymous, status text only | `roof_controller` only: 200 for Healthy or Degraded, 503 for Unhealthy. The container's health check and the deploy script's readiness wait use it, from inside the container. |
-| `/health` | Viewer key or a person's session | Every check, each with its description and data (for `roof_controller`: `HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 when any check is Unhealthy. |
+| `/health/ready` | anonymous, status text only | `roof_controller` only: 200 for Healthy or Degraded, 503 for Unhealthy. Plant faults remain Unhealthy here for monitoring. |
+| `/health/available` | anonymous, status text only | `roof_availability` plus the security checks: 200 for Healthy or Degraded, 503 for Unhealthy. Used by deployment and Docker. |
+| `/health` | Viewer key or a person's session | The operational roof and security checks, each with its description and data (for `roof_controller`: `HardwareMode`, `IgnorePhysicalLimitSwitches`, `HatEmulatorEndpoint` and more). 503 when any check is Unhealthy. |
 
 `roof_controller` reports the first of these that applies:
 
@@ -1487,6 +1493,23 @@ endpoints:
 - **Degraded:** the status is unknown; the physical limit switches are ignored; the HAT is the emulator; there is no
   I²C bus (the register simulation); digital input polling is off.
 - **Healthy:** none of the above.
+
+Deployment availability accepts only these latched plant faults: `DriveFault`, `DriveNotRunning`,
+`ContradictoryLimitInputs`, `StartLimitReasserted` and `DepartureLimitNotReleased`. They are Degraded only with the
+controller initialized and running, healthy fresh input and relay reads, a verified register mask of 0, no motion
+and no ClearFault pulse in progress. `Status.Error` alone, every unclassified latch (including input/relay failures),
+unreachable HAT, stale reads and unverified registers still fail. Healthy motion passes availability; the separate
+authenticated Stop gate still requires HTTP 200, `Verified`, mask 0 and `commandedMotion = None`.
+
+A first install or upgrade with an accepted plant fault keeps the new controller and prints `WARNING: PLANT FAULT`
+with its reason, including in the installer's progress and log. A fault seen only after an upgrade also keeps the
+controller: investigate settings and wiring (especially `FaultInputActiveHigh`) before explicitly `ClearFault` after
+repairing the cause. Neither deployment nor plant recovery clears the latch. `/health` and `/health/ready` keep
+reporting Unhealthy until it is cleared. This preserves remote diagnosis and recovery without admitting motion.
+
+On an older image, including a rollback target, only HTTP 404 from `/health/available` permits falling back to its
+original strict `/health/ready`. Such an image can still fail verification for a plant latch. A 503, 401, timeout or
+connection failure never enables the fallback. The image's own older Docker health check is unchanged.
 
 What each deployment should report:
 
@@ -1498,13 +1521,13 @@ What each deployment should report:
 | No I²C bus and emulator mode off (a development machine) | Degraded, "simulation mode" | 200 | `hatMode` `Simulation`. Not a deployment: the deploy script and `--verify-remote` refuse it. |
 
 The container's health check, `/usr/local/bin/roof-healthcheck` (the image's `HEALTHCHECK` and the Compose health
-checks), is healthy exactly when the controller's `/health/ready` answers 200. It also reports the web UI's
+checks), is healthy exactly when the controller's `/health/available` answers 200. It also reports the web UI's
 `/health/live` (port 8088) and the [supervisor's](#the-containers-two-processes) view of both processes on the same
 line, which `docker inspect` shows:
 
 ```text
-controller: ready; web UI: live; supervisor: controller running, web UI running
-controller: NOT READY (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running
+controller: available; web UI: live; supervisor: controller running, web UI running
+controller: NOT AVAILABLE (HTTP 000); web UI: live; supervisor: controller crash-loop, web UI running
 ```
 
 The web UI never changes the result: a web UI that is down does not make the container unhealthy, and it never hides
@@ -1514,8 +1537,8 @@ the controller's state. Read the output with
 The web UI has its own anonymous `/health/live` on its port, which answers 200 whenever the web UI runs. It says
 nothing about the controller: the web UI's pages show the controller's readiness and the supervisor's state.
 
-Readiness does not prove that the controller is usable remotely. `/health/ready` needs no key and is exempt from
-`RequireHttps`, and the deploy script polls it inside the container. The port, the certificate, `AllowedHosts` and a
+Availability does not prove that the controller is usable remotely. `/health/available` needs no key and is exempt
+from `RequireHttps`, and the deploy script polls it inside the container. The port, the certificate, `AllowedHosts` and a
 key the controller accepts are proven only by the authenticated remote check: step 7 of the script, or
 `--verify-remote` for Compose. That the key can operate the roof is checked only by a deploy's pre-flight, not by
 `--rollback` or `--verify-remote`.
@@ -1569,7 +1592,7 @@ is read from this machine:
 # Container healthy and listening
 docker ps --filter name=roof-controller
 docker logs --tail 50 roof-controller      # look for "N API key(s) configured" and no Critical/Error security lines
-docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' roof-controller   # controller: ready; web UI: live; ...
+docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' roof-controller   # controller: available; web UI: live; ...
 docker exec roof-controller cat /run/hvo-roof/supervisor.json   # both processes running, no recent crashes
 
 # Loopback API call from inside the container (key on stdin, never on the command line)

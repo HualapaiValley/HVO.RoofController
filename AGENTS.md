@@ -215,9 +215,11 @@ observatory's Pi.
 - `src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh` deploys the controller, built from source, pulled from
   GHCR or loaded from a release's offline image archive (`IMAGE_ARCHIVE`): it runs the image's `--validate-deployment`
   check first, requires a verified Stop before replacing the container, verifies the new one, and restores a preserved
-  controller after a failure only when its image supports the current identity-store schema. An incompatible or
-  unreadable store leaves that controller stopped with restart policy `no`; preserve the identity data and repair
-  forward with a compatible release ([docs/deployment.md](docs/deployment.md)). Keep the script, its tests
+  controller after a failure only when its image supports the current identity-store schema. Deployment and Docker
+  use `/health/available`: classified plant latches with healthy I/O and verified all-off relays keep the controller
+  with a warning; `/health` and `/health/ready` still fail, and only explicit `ClearFault` clears the latch.
+  An incompatible or unreadable store leaves that controller stopped with restart policy `no`; preserve the identity
+  data and repair forward with a compatible release ([docs/deployment.md](docs/deployment.md)). Keep the script, its tests
   (`tests/deploy/deploy-script-tests.sh`) and the compose file (`src/HVO.RoofControllerV4.RPi/docker-compose.yaml`) in
   step.
 - The controller's container runs read-only, with only the supervisor's capabilities (`CHOWN`, `KILL`, `SETGID`,

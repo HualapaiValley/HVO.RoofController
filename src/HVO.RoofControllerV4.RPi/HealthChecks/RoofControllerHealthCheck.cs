@@ -22,17 +22,29 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
         private readonly ILogger<RoofControllerHealthCheck> _logger;
         private readonly RoofControllerOptionsV4 _startupOptions;
         private readonly RoofHatConnection? _hatConnection;
+        private readonly bool _availabilityOnly;
 
         public RoofControllerHealthCheck(
             IRoofControllerServiceV4 roofController,
             ILogger<RoofControllerHealthCheck> logger,
             IOptions<RoofControllerOptionsV4> options,
             RoofHatConnection? hatConnection = null)
+            : this(roofController, logger, options, hatConnection, availabilityOnly: false)
+        {
+        }
+
+        protected RoofControllerHealthCheck(
+            IRoofControllerServiceV4 roofController,
+            ILogger<RoofControllerHealthCheck> logger,
+            IOptions<RoofControllerOptionsV4> options,
+            RoofHatConnection? hatConnection,
+            bool availabilityOnly)
         {
             _roofController = roofController;
             _logger = logger;
             _startupOptions = options.Value;
             _hatConnection = hatConnection;
+            _availabilityOnly = availabilityOnly;
         }
 
         public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
@@ -94,12 +106,21 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                     return Unhealthy("Roof controller is not initialized" + onEmulator, data);
                 }
 
-                if (snapshot.RelayRegisterState == RoofRelayRegisterState.Unverified)
+                if (snapshot.RelayRegisterState == RoofRelayRegisterState.Unverified
+                    || (_availabilityOnly && (snapshot.RelayRegisterState != RoofRelayRegisterState.Verified || snapshot.RelayRegisterMask is null)))
                 {
                     return Unhealthy("Roof controller relay register state is unverified" + onEmulator, data);
                 }
 
-                if (snapshot.IsFaultLatched)
+                // Only the availability probe may accept a classified plant fault. It still requires current,
+                // healthy I/O and a verified all-off register; Error alone never establishes software availability.
+                var stoppedPlantFault = _availabilityOnly && snapshot.IsFaultLatched
+                    && IsPlantFault(snapshot.LatchedFaultReason)
+                    && !snapshot.IsMoving && snapshot.CommandedMotion == RoofMotionDirection.None
+                    && snapshot.RelayRegisterState == RoofRelayRegisterState.Verified
+                    && snapshot.RelayRegisterMask == 0 && !snapshot.IsClearFaultInProgress;
+
+                if (snapshot.IsFaultLatched && !stoppedPlantFault)
                 {
                     return Unhealthy($"Roof controller safety fault is latched ({snapshot.LatchedFaultReason}){onEmulator}", data);
                 }
@@ -114,9 +135,14 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                     return Unhealthy("Roof controller relay register reads are failing or stale" + onEmulator, data);
                 }
 
-                if (snapshot.Status == RoofControllerStatus.Error)
+                if (snapshot.Status == RoofControllerStatus.Error && !stoppedPlantFault)
                 {
                     return Unhealthy("Roof controller is in error state" + onEmulator, data);
+                }
+
+                if (stoppedPlantFault)
+                {
+                    return Degraded($"Controller available, stopped with plant fault {snapshot.LatchedFaultReason}; repair the cause and explicitly ClearFault{onEmulator}", data);
                 }
 
                 if (snapshot.Status == RoofControllerStatus.Unknown)
@@ -157,6 +183,12 @@ namespace HVO.RoofControllerV4.RPi.HealthChecks
                 return Task.FromResult(HealthCheckResult.Unhealthy("Error checking roof controller health", ex));
             }
         }
+
+        // Deliberately closed list: hardware/read failures and new or unknown fault reasons fail availability.
+        private static bool IsPlantFault(RoofControllerStopReason? reason) => reason is
+            RoofControllerStopReason.DriveFault or RoofControllerStopReason.ContradictoryLimitInputs or
+            RoofControllerStopReason.StartLimitReasserted or RoofControllerStopReason.DepartureLimitNotReleased or
+            RoofControllerStopReason.DriveNotRunning;
 
         // Physical, Emulated or Simulation. A snapshot without the HAT mode (Unknown) falls back to the hardware flag.
         private static string HardwareMode(RoofStatusResponse snapshot) => snapshot.HatMode switch

@@ -377,6 +377,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>What happens while the deploy script runs (a Ctrl-C, say), before it finishes.</summary>
     public Action? DuringDeploy { get; set; }
 
+    /// <summary>A successful deploy's warning, forwarded as the real command runner forwards stderr.</summary>
+    public string? DeployWarning { get; set; }
+
     /// <summary>For each run of the deploy script, in order: whether the installer could have stopped it part-way.</summary>
     public List<bool> DeploysCancellable { get; } = [];
 
@@ -1499,7 +1502,13 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             ServedCertificates[apiPort] = served;
         }
         WriteDesiredLimits(limits, "deploy", Containers[MachineSurveyor.ControllerContainer].Id);
-        return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", string.Empty);
+        if (DeployWarning is { } warning)
+        {
+            command.OnOutputLine?.Invoke(warning);
+        }
+        // More than the command log's 40-line tail: the streamed warning must survive later output.
+        var error = DeployWarning is { } text ? text + "\n" + string.Concat(Enumerable.Repeat("[verify] later progress\n", 45)) : string.Empty;
+        return new CommandResult(0, "[deploy] Pre-flight passed\n[deploy] Deployed\n", error);
     }
 
     /// <summary>The limits the fake deploy script resolved, and whether each was set or is the default, as it records them.</summary>

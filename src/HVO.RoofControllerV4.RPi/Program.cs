@@ -263,11 +263,13 @@ public class Program
         // The MapHealthChecks middleware below provides all necessary endpoints:
         // - /health (detailed health information)
         // - /health/ready (readiness probes for load balancers)  
-        // - /health/live (liveness probes for container orchestration)
+        // - /health/live (process liveness)
+        // - /health/available (software/I/O availability for Docker and deploy)
         // Do NOT create duplicate HealthController - use the built-in functionality
         services.AddSingleton<RoofServerCertificate>();
         services.AddHealthChecks()
             .AddCheck<RoofControllerHealthCheck>("roof_controller", tags: ["roof", "hardware"])
+            .AddCheck<RoofControllerAvailabilityCheck>("roof_availability", tags: ["availability"])
             .AddCheck<RoofIdentityStoreHealthCheck>("identity_store", tags: ["security"])
             .AddCheck<RoofCertificateHealthCheck>("https_certificate", tags: ["security"]);
 
@@ -427,7 +429,7 @@ public class Program
         }
 
         // No UseHttpsRedirection: API clients must not silently follow a redirect with their key. Plain-HTTP requests
-        // from other hosts get 403 https_required instead (loopback and /health/live|ready are exempt).
+        // from other hosts get 403 https_required instead (loopback and /health/live|ready|available are exempt).
         app.UseMiddleware<RequireHttpsMiddleware>();
 
         app.UseRouting();
@@ -459,6 +461,7 @@ public class Program
         // monitors still see failures; clients must read the JSON body on 503 as well.
         app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
         {
+            Predicate = check => !check.Tags.Contains("availability"),
             ResponseWriter = async (context, report) =>
             {
                 context.Response.ContentType = "application/json";
@@ -482,10 +485,17 @@ public class Program
             }
         }).RequireAuthorization(apiViewer);
 
-        // Readiness probe (anonymous, status text only): hardware-tagged checks. Used by the Docker HEALTHCHECK and deploy.
+        // Operational readiness remains unhealthy for every safety latch.
         app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
         {
             Predicate = check => check.Tags.Contains("hardware")
+        }).AllowAnonymous();
+
+        // Software availability: a safely stopped, classified plant fault is Degraded (HTTP 200). Security checks
+        // still apply. No details are exposed anonymously; the deploy reads the fault through authenticated Status.
+        app.MapHealthChecks("/health/available", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+        {
+            Predicate = check => check.Tags.Contains("availability") || check.Tags.Contains("security")
         }).AllowAnonymous();
 
         // Liveness probe (anonymous): healthy whenever the process answers.
