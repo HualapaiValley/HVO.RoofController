@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoofController · terminal UI concept</title>
+  <style>
+    /* Cell-based design study for Terminal.Gui, using the source and keyboard
+       contract in origin/main. All data and commands are local simulations.
+       Every terminal mark occupies an integer character cell: no graphics,
+       variable-width text, gradients, shadows or rounded app panels. */
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: transparent; }
+    .tui-preview { color: #c1cbda; font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; }
+    .tui-tools { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; padding: 0 0 16px; }
+    .tui-tools label { display: grid; gap: 5px; color: var(--muted-foreground, #98a7bb); font-size: 12px; }
+    .tui-tools select { min-height: 40px; padding: 7px 30px 7px 10px; border: 1px solid var(--border, #253244); border-radius: 5px; color: var(--foreground, #f7f9fc); background: var(--card, #0d1420); font: 13px ui-sans-serif,system-ui,sans-serif; }
+    .tui-tools .tui-ascii { display: flex; align-items: center; min-height: 40px; gap: 7px; }
+    .tui-tools input { width: 17px; height: 17px; accent-color: #2563eb; }
+    .tui-frame { position: relative; width: 100%; overflow: hidden; border-radius: var(--radius, 10px); }
+    .terminal-window {
+      --t-bg: #05070d; --t-panel: #0d1420; --t-raised: #111c2a;
+      --t-text: #f7f9fc; --t-muted: #98a7bb; --t-border: #3a4a60;
+      --t-blue: #58a6ff; --t-primary: #2563eb; --t-green: #8fe49c;
+      --t-red: #ff9b95; --t-red-bg: #291b25; --t-amber: #e6bd62; --t-amber-bg: #302919;
+      position: absolute; top: 0; left: 0; width: 824px; transform-origin: left top;
+      color: var(--t-text); background: var(--t-bg); overflow: hidden;
+      font-family: "DejaVu Sans Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+      font-variant-ligatures: none; font-size: 16.667px; line-height: 22px;
+    }
+    .terminal-window.ansi {
+      /* Illustrative xterm-like palette. Actual 16-color hues belong to the terminal. */
+      --t-bg: #000000; --t-panel: #000000; --t-raised: #000000;
+      --t-text: #ffffff; --t-muted: #c0c0c0; --t-border: #808080;
+      --t-blue: #55ffff; --t-primary: #000080; --t-green: #55ff55;
+      --t-red: #ff5555; --t-red-bg: #800000; --t-amber: #ffff55; --t-amber-bg: #808000;
+    }
+    .terminal-window.mono {
+      --t-bg: #101010; --t-panel: #101010; --t-raised: #101010;
+      --t-text: #eeeeee; --t-muted: #eeeeee; --t-border: #eeeeee;
+      --t-blue: #eeeeee; --t-primary: #eeeeee; --t-green: #eeeeee;
+      --t-red: #eeeeee; --t-red-bg: #eeeeee; --t-amber: #eeeeee; --t-amber-bg: #eeeeee;
+    }
+    .terminal-chrome { display: flex; align-items: center; justify-content: space-between; gap: 20px; height: 32px; padding: 0 14px; background: var(--t-panel); color: var(--t-muted); font: 12px ui-monospace,monospace; border-bottom: 1px solid var(--t-border); }
+    .term-screen { position: relative; margin: 12px; width: 800px; height: 528px; }
+    .term-cells { position: absolute; inset: 0; }
+    .term-row { display: flex; height: 22px; }
+    .term-run { display: flex; height: 22px; background: var(--cell-bg, var(--t-bg)); }
+    .term-cell { display: inline-block; width: 10px; height: 22px; flex: 0 0 10px; text-align: center; white-space: pre; }
+    .term-cell, .term-action { color: var(--cell-fg, var(--t-text)); background: var(--cell-bg, var(--t-bg)); }
+    .term-cell { background: transparent; }
+    .term-cell.is-box { font-size: 19.25px; overflow: hidden; }
+    .fg-text { --cell-fg: var(--t-text); }
+    .fg-muted { --cell-fg: var(--t-muted); }
+    .fg-border { --cell-fg: var(--t-border); }
+    .fg-blue { --cell-fg: var(--t-blue); }
+    .fg-green { --cell-fg: var(--t-green); }
+    .fg-red { --cell-fg: var(--t-red); }
+    .fg-amber { --cell-fg: var(--t-amber); }
+    .bg-base { --cell-bg: var(--t-bg); }
+    .bg-panel { --cell-bg: var(--t-panel); }
+    .bg-raised { --cell-bg: var(--t-raised); }
+    .bg-selected { --cell-bg: var(--t-primary); --cell-fg: #ffffff; }
+    .bg-red { --cell-bg: var(--t-red-bg); }
+    .bg-warning { --cell-bg: var(--t-amber-bg); }
+    .is-bold { font-weight: bold; }
+    .is-dim { opacity: .6; }
+    .term-action { position: absolute; height: 22px; padding: 0; margin: 0; border: 0; border-radius: 0; font: inherit; letter-spacing: 0; line-height: 22px; white-space: pre; cursor: pointer; }
+    .term-action:disabled { cursor: not-allowed; }
+    .term-action:focus-visible { outline: 1px solid var(--t-blue); outline-offset: 0; text-decoration: underline; }
+    .terminal-window.ansi .bg-red { --cell-fg: #ffffff; }
+    .terminal-window.mono :is(.bg-selected,.bg-red,.bg-warning) { --cell-fg: #101010; font-weight: bold; }
+    .tui-caption { color: var(--muted-foreground, #98a7bb); margin: 12px 0 0; font-size: 12px; }
+    .tui-caption strong { color: var(--foreground, #c1cbda); font-weight: 500; }
+    .tui-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    @media (pointer: coarse) { .tui-tools select, .tui-tools .tui-ascii { min-height: 44px; } }
+  </style>
+</head>
+<body>
+<div class="tui-preview" id="tui-preview">
+  <div class="tui-tools" aria-label="Terminal prototype controls">
+    <label for="tui-size">Terminal size<select id="tui-size"><option value="80x24">80 × 24 · compact</option><option value="120x32">120 × 32 · expanded</option></select></label>
+    <label for="tui-color">Terminal colors<select id="tui-color"><option value="truecolor">HVO Dark · true color</option><option value="ansi">ANSI 16 · sample palette</option><option value="mono">NO_COLOR · monochrome</option></select></label>
+    <label for="tui-state">Sample state<select id="tui-state"><option value="closed">Closed</option><option value="opening">Opening</option><option value="fault">Fault</option><option value="stale">Stale</option><option value="offline">Offline</option><option value="viewer">Viewer session</option></select></label>
+    <label class="tui-ascii" for="tui-ascii"><input id="tui-ascii" type="checkbox">ASCII borders</label>
+  </div>
+  <div class="tui-frame" id="tui-frame">
+    <div class="terminal-window" id="terminal-window">
+      <div class="terminal-chrome"><span>hvo-roof ui · design prototype</span><span id="tui-dimensions">80 columns × 24 rows</span></div>
+      <div class="term-screen" id="term-screen" role="region" aria-label="Interactive terminal UI prototype"><div class="term-cells" id="term-cells" aria-hidden="true"></div><div id="term-actions"></div><pre class="tui-sr" id="term-text"></pre></div>
+    </div>
+  </div>
+  <p class="tui-caption"><strong>Try the terminal buttons or F1–F5 and F9.</strong> Tab moves focus; Enter selects; Esc closes a prompt. Local simulation. All terminal content occupies fixed character cells.</p>
+  <p class="tui-sr" id="tui-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
+</div>
+<script>
+(() => {
+  'use strict';
+  const get = id => document.getElementById(id);
+  const CW = 10, CH = 22;
+  let cols = 80, rows = 24, state = 'closed', page = 1, viewer = false;
+  let ascii = false, prompt = false, ended = false, unconfirmedQuit = false;
+  let timer = null, stopResult = 'Stop is always available. No unlock or fresh sign-in required.';
+  let stopError = false, message = '', drawWarnings = [];
+  let buffer = [], buttons = [];
+  let history = [
+    ['20:41:08','Closed limit reached. Motor stopped.'],
+    ['20:40:44','Close command accepted.'],
+    ['20:38:18','Signed in: demo-admin (Admin).'],
+    ['20:38:13','Relay register read-back verified.'],
+    ['20:38:12','Safety inputs healthy.'],
+    ['20:38:11','Live status feed connected.'],
+    ['20:38:10','Controller initialized.'],
+    ['20:38:09','Terminal session started.']
+  ];
+  const moving = () => state === 'opening' || state === 'closing';
+  const stale = () => state === 'stale' || state === 'offline';
+  function announce(text) { get('tui-announcement').textContent = text; }
+  function log(text) {
+    history.unshift([new Date().toLocaleTimeString('en-GB',{hour12:false}),text]);
+    history = history.slice(0,10);
+  }
+  function clearTimer() { clearTimeout(timer); timer = null; }
+  function fill(x,y,w,h,bg) {
+    for(let r=y;r<y+h;r++) for(let c=x;c<x+w;c++) if(buffer[r]?.[c]) buffer[r][c].bg=bg;
+  }
+  function write(x,y,text,fg='text',bold=false) {
+    const chars=Array.from(String(text));
+    if(y<0 || y>=rows || x<0 || x+chars.length>cols) { drawWarnings.push({x,y,text}); return; }
+    chars.forEach((ch,i)=>Object.assign(buffer[y][x+i],{ch,fg,bold}));
+  }
+  function wrap(text,width) {
+    const lines=[]; let line='';
+    String(text).split(/\s+/).forEach(word=>{
+      if(line && line.length+word.length+1>width) { lines.push(line); line=word; }
+      else line += (line ? ' ' : '') + word;
+    });
+    if(line) lines.push(line); return lines;
+  }
+  function textLines(x,y,text,width,fg='text',maxLines=2) {
+    const lines=wrap(text,width);
+    if(lines.length>maxLines) drawWarnings.push({reason:'too many wrapped lines',text,maxLines});
+    lines.slice(0,maxLines).forEach((line,i)=>write(x,y+i,line,fg));
+  }
+  function rule(x,y,width,title='') {
+    const h=ascii ? '-' : '─';
+    write(x,y,h.repeat(width),'border');
+    if(title) write(x+1,y,' '+title+' ','muted',true);
+  }
+  function box(x,y,w,h,title) {
+    fill(x,y,w,h,'panel');
+    const c=ascii ? ['+','+','+','+','-','|'] : ['┌','┐','└','┘','─','│'];
+    write(x,y,c[0]+c[4].repeat(w-2)+c[1],'border');
+    write(x,y+h-1,c[2]+c[4].repeat(w-2)+c[3],'border');
+    for(let r=y+1;r<y+h-1;r++) { write(x,r,c[5],'border'); write(x+w-1,r,c[5],'border'); }
+    write(x+2,y,' '+title+' ','blue',true);
+  }
+  function field(x,y,label,value,fg='text',offset=14) {
+    write(x,y,label,'muted'); write(x+offset,y,value,fg,value===value.toUpperCase() && value.length>2);
+  }
+  function button(id,label,x,y,enabled,run,fg='text',bg='raised') {
+    if(x+label.length>cols) { drawWarnings.push({reason:'button exceeds columns',id}); return; }
+    if(!enabled && bg==='selected') bg='raised';
+    fill(x,y,label.length,1,bg); write(x,y,label,enabled ? fg : 'muted',enabled);
+    buttons.push({id,label,x,y,enabled,run,fg,bg});
+  }
+  function common() {
+    fill(0,0,cols,1,'panel');
+    write(1,0,'HVO ROOF CONTROLLER','text',true);
+    const badge=state==='offline' ? '[OFFLINE]' : stale() ? '[STALE]' : '[LIVE]';
+    const identity=viewer ? 'Viewer' : 'Admin (demo)';
+    const header=badge+'  '+identity;
+    write(cols-header.length-1,0,header,stale() ? 'amber' : 'green',true);
+    write(1,1,'Controller: sample roof-controller','muted');
+    write(cols-16,1,'SIMULATED DATA','muted');
+    if(state==='fault') { fill(1,2,cols-2,1,'red'); write(2,2,'[FAULT] Motion timeout latched. Open and Close are blocked.','red',true); }
+    else if(stale()) { fill(1,2,cols-2,1,'warning'); write(2,2,state==='offline' ? '[OFFLINE] Controller unreachable. Last known state only.' : '[STALE] Status not current. Values below are LAST KNOWN.','amber',true); }
+    button('stop','[ F9 STOP ROOF ]',1,rows-4,true,stop,'red','red');
+    write(1,rows-3,'Always available','muted');
+    textLines(20,rows-4,stopResult,cols-21,stopError ? 'red' : 'muted',2);
+    fill(0,rows-2,cols,1,'panel');
+    const names=['Roof','Settings','People','System','Setup']; let x=1;
+    names.forEach((name,index)=>{
+      const label=' F'+(index+1)+' '+name+' ';
+      button('page-'+(index+1),label,x,rows-2,!prompt,()=>changePage(index+1),'text',page===index+1 ? 'selected' : 'panel'); x+=label.length+1;
+    });
+    button('quit',' F10 Quit ',cols-11,rows-2,!prompt,quit,'muted','panel');
+    write(1,rows-1,'Tab move  Enter select  Esc close prompt','muted');
+    const size=cols+'x'+rows; write(cols-size.length-1,rows-1,size,'muted');
+  }
+  function roofPage() {
+    const leftW=Math.floor((cols-5)/2), rightX=leftW+3, rightW=cols-rightX-1;
+    box(1,3,leftW,9,stale() ? 'ROOF / LAST KNOWN' : 'ROOF STATE'); box(rightX,3,rightW,9,'CONTROLLER READINGS');
+    const position={closed:'CLOSED',open:'OPEN',opening:'OPENING',closing:'CLOSING',stopped:'BETWEEN LIMITS',fault:'FAULT',stale:'CLOSED',offline:'CLOSED'}[state];
+    const direction=moving() ? (state==='opening' ? 'Opening' : 'Closing') : 'None';
+    const fields=[['Position',position,state==='fault' ? 'red' : stale() ? 'amber' : moving() ? 'blue' : 'text'],['Commanded',direction],['Movement',stale() ? 'Unknown' : moving() ? 'In progress' : 'Idle'],['Watchdog',stale() ? 'Unknown' : moving() ? 'Monitoring' : 'Inactive'],['Lease',stale() ? 'Unknown' : moving() ? 'Renewing' : 'Not held'],['Last stop',state==='fault' ? 'Timeout' : state==='stopped' ? 'Operator' : 'Limit reached'],['Snapshot',stale() ? 'Last known' : 'Live sample']];
+    fields.forEach(([label,value,fg],i)=>field(3,4+i,label,value,fg || 'text',13));
+    [['Open limit',state==='open' ? 'Active' : 'Inactive'],['Closed limit',state==='closed' || stale() ? 'Active' : 'Inactive'],['Drive running',stale() ? 'Unknown' : moving() ? 'Yes' : 'No'],['Drive fault',stale() ? 'Unknown' : 'Clear'],['Inputs',stale() ? 'Unknown' : 'Healthy'],['Relays',stale() ? 'Unknown' : 'Verified'],['Status feed',state==='offline' ? 'Unreachable' : stale() ? 'STALE' : 'LIVE']].forEach(([label,value],i)=>field(rightX+2,4+i,label,value,!stale() && ['Active','Healthy','Verified','LIVE'].includes(value) ? 'green' : stale() && i===6 ? 'amber' : 'text',15));
+    const note=state==='fault' ? 'Inspect the roof before clearing the fault.' : stale() ? 'Open and Close need live status. F9 still attempts Stop.' : viewer ? 'Viewer session: motion commands require the Operator role.' : moving() ? 'Lease renewing. Stop before reversing direction.' : 'Ready. Limit inputs and relay read-back are healthy.';
+    write(2,12,note,state==='fault' ? 'red' : stale() ? 'amber' : 'muted');
+    write(2,13,message || (state==='closed' ? 'Close disabled: the roof is already closed.' : state==='open' ? 'Open disabled: the roof is already open.' : ''),'muted');
+    const locked=viewer || stale() || moving() || state==='fault'; let x=2;
+    [['open','[ Open roof ]',!locked && state!=='open',()=>move('opening'),'text','selected'],['close','[ Close roof ]',!locked && state!=='closed',()=>move('closing'),'text','raised'],['clear','[ Clear fault ]',!viewer && state==='fault',clearFault,'text','raised'],['refresh','[ Refresh ]',true,refresh,'blue','raised']].forEach(([id,label,enabled,run,fg,bg])=>{button(id,label,x,15,enabled,run,fg,bg);x+=label.length+2;});
+    rule(1,17,cols-2,'RECENT NOTICES');
+    history.slice(0,rows-22).forEach(([at,text],index)=>{write(2,18+index,at,'muted');write(12,18+index,text,'text');});
+  }
+  function settingsPage() {
+    box(1,3,20,10,'GROUPS'); box(23,3,cols-24,10,'ROOF / SETTINGS');
+    ['Roof','Hardware','Operator lease','Camera','Security'].forEach((name,i)=>{if(!i)fill(3,5+i,16,1,'selected');write(3,5+i,name,'text',!i);});
+    const x=25;
+    write(x,4,'SETTING','muted');write(x+30,4,'VALUE','muted');
+    fill(x,6,cols-x-3,1,'selected'); write(x,6,'Watchdog timeout','text',true);write(x+30,6,'60 s','text',true);
+    write(x,7,'Limit debounce','text');write(x+30,7,'25 ms');
+    write(x,8,'Physical limit switches','text');write(x+30,8,'Enabled');
+    write(2,14,viewer ? 'Read only: changing settings requires Admin.' : 'Safety-critical changes require review and confirmation.','muted');
+    button('change','[ Change ]',2,15,!viewer,()=>{prompt=true;render();},'text','selected');
+    button('reload','[ Reload ]',15,15,true,()=>{message='Sample settings reloaded.';announce(message);render();},'blue');
+    textLines(2,17,message || 'Watchdog timeout: the maximum permitted duration of a roof motion.',cols-4,'muted',2);
+  }
+  function peoplePage() {
+    box(1,3,cols-2,12,'PEOPLE / ACCOUNTS');
+    if(viewer) { write(3,5,'Admin role required to view people, API keys and sessions.','amber'); return; }
+    write(3,5,'ACCOUNT','muted');write(28,5,'ROLE','muted');write(48,5,'STATUS','muted');
+    fill(3,7,cols-6,1,'selected');write(3,7,'demo-admin','text',true);write(28,7,'Admin');write(48,7,'Active');
+    write(3,8,'demo-operator');write(28,8,'Operator');write(48,8,'Active');
+    write(3,9,'demo-viewer');write(28,9,'Viewer');write(48,9,'Active');
+    write(3,12,'Sample accounts. No credentials are displayed.','muted');
+    textLines(2,17,'Account, key and session management retain the existing role checks.',cols-4,'muted',2);
+  }
+  function systemPage() {
+    const w=Math.floor((cols-5)/2), x=w+3;
+    box(1,3,w,10,'CLIENT'); box(x,3,cols-x-1,10,'CONTROLLER');
+    field(3,5,'Application','hvo-roof', 'text',13); field(3,6,'Build','Design preview','text',13);
+    field(3,8,'Session',viewer ? 'Viewer' : 'Admin','text',13); field(3,9,'Transport','Simulated','muted',13);
+    [['Health',stale() ? 'Unavailable' : state==='fault' ? 'Degraded' : 'Healthy'],['Readiness',stale() ? 'Unavailable' : state==='fault' ? 'Not ready' : 'Ready'],['Build',stale() ? 'Unavailable' : 'Sample build'],['Inputs',stale() ? 'Unknown' : 'Healthy'],['Relay check',stale() ? 'Unknown' : 'Verified']].forEach(([label,value],i)=>field(x+2,5+i,label,value,!stale() && ['Ready','Healthy','Verified'].includes(value) ? 'green' : 'text',13));
+    write(2,14,stale() ? 'Local client information remains available. Controller data is not current.' : 'Client and controller versions are shown separately.','muted');
+    button('sys-refresh','[ Refresh ]',2,15,true,refresh,'blue','raised');
+    button('readiness','[ Readiness ]',16,15,true,()=>{message=stale() ? 'Readiness unavailable: controller unreachable.' : 'Sample readiness: Ready.';announce(message);render();},'text');
+    button('restart','[ Restart ]',32,15,!viewer && !stale(),()=>{prompt=true;render();},'text');
+    textLines(2,17,message || 'Detailed diagnostics stay on System; the Roof page stays focused.',cols-4,'muted',2);
+  }
+  function setupPage() {
+    box(1,3,cols-2,11,'SETUP / CONNECTION');
+    field(3,5,'Controller','Sample controller (no network connection)','text',15);
+    field(3,7,'Account',viewer ? 'demo-viewer' : 'demo-admin','text',15);
+    field(3,8,'Role',viewer ? 'Viewer' : 'Admin','text',15);
+    write(3,10,'Passwords, API keys and session tokens are never shown.','muted');
+    write(3,11,'Authentication remains an existing native TUI workflow.','muted');
+    button('check','[ Check ]',2,15,true,refresh,'blue','raised');
+    textLines(2,17,message || 'This prototype illustrates the screen; it does not sign in or save credentials.',cols-4,'muted',2);
+  }
+  function drawPrompt() {
+    const w=Math.min(66,cols-8), x=Math.floor((cols-w)/2), y=5;
+    buttons=buttons.filter(b=>b.id==='stop'||b.y>=rows-2).map(b=>b.id==='stop' ? b : {...b,enabled:false});
+    box(x,y,w,12,page===4 ? 'RESTART / REVIEW' : 'SETTING / REVIEW');
+    write(x+3,y+2,page===4 ? 'Restart controller?' : 'Watchdog timeout: 60 s','text',true);
+    textLines(x+3,y+4,'A safety-critical change needs explicit confirmation in the native TUI.',w-6,'muted',2);
+    textLines(x+3,y+7,'Design preview only. No request will be sent.',w-6,'blue',2);
+    button('apply-demo','[ Apply demo ]',x+3,y+10,true,()=>{prompt=false;message='Simulation only: no change was sent.';announce(message);render();},'text','selected');
+    button('cancel','[ Cancel ]',x+21,y+10,true,()=>{prompt=false;render();},'text');
+  }
+  function render() {
+    const focusId=document.activeElement?.dataset.action;
+    drawWarnings=[]; buttons=[];
+    buffer=Array.from({length:rows},()=>Array.from({length:cols},()=>({ch:' ',fg:'text',bg:'base',bold:false})));
+    if(ended) {
+      write(1,1,'hvo-roof ui','muted');write(1,3,'Terminal preview session ended.','text',true);
+      textLines(1,5,stopError ? stopResult : 'No connection was made and no hardware commands were sent.',cols-2,'muted',2);
+      button('relaunch','[ Relaunch preview ]',1,8,true,()=>{ended=false;message='';stopError=false;state='closed';viewer=false;page=1;render();},'text','selected');
+    } else { common(); [roofPage,settingsPage,peoplePage,systemPage,setupPage][page-1](); if(prompt)drawPrompt(); }
+    const grid=document.createDocumentFragment();
+    buffer.forEach(line=>{
+      const row=document.createElement('div');row.className='term-row';
+      let run=null, previousBg=null;
+      line.forEach(cell=>{
+        if(cell.bg!==previousBg){run=document.createElement('span');run.className='term-run bg-'+cell.bg;row.append(run);previousBg=cell.bg;}
+        const span=document.createElement('span');span.className='term-cell fg-'+cell.fg+' bg-'+cell.bg+(cell.bold?' is-bold':'')+('┌┐└┘─│'.includes(cell.ch)?' is-box':'');span.textContent=cell.ch;run.append(span);
+      });grid.append(row);
+    });get('term-cells').replaceChildren(grid);
+    const actions=document.createDocumentFragment();
+    buttons.forEach(b=>{
+      const item=document.createElement('button');item.type='button';item.textContent=b.label;
+      item.className='term-action fg-'+(b.enabled?b.fg:'muted')+' bg-'+b.bg+(b.enabled?' is-bold':' is-dim');
+      item.dataset.action=b.id;item.setAttribute('aria-label',b.label.replace(/[\[\]]/g,'').trim());
+      item.disabled=!b.enabled;item.style.left=b.x*CW+'px';item.style.top=b.y*CH+'px';item.style.width=b.label.length*CW+'px';
+      item.addEventListener('click',b.run);actions.append(item);
+    });get('term-actions').replaceChildren(actions);
+    get('term-text').textContent=buffer.map(line=>line.map(cell=>cell.ch).join('')).join('\n');
+    if(focusId) get('term-actions').querySelector('[data-action="'+focusId+'"]:not(:disabled)')?.focus({preventScroll:true});
+    get('terminal-window').dataset.page=String(page);get('terminal-window').dataset.state=state;
+    get('terminal-window').dataset.ended=String(ended);
+    window.terminalConceptAudit={cols,rows,drawWarnings,cellCount:rows*cols,buttonBounds:buttons.map(b=>({id:b.id,x:b.x,y:b.y,width:b.label.length,enabled:b.enabled}))};
+    fit();
+  }
+  function fit() {
+    const width=cols*CW+24,height=rows*CH+56,scale=get('tui-frame').getBoundingClientRect().width/width;
+    get('terminal-window').style.width=width+'px';get('terminal-window').style.transform='scale('+scale+')';
+    get('term-screen').style.width=cols*CW+'px';get('term-screen').style.height=rows*CH+'px';
+    get('tui-frame').style.height=height*scale+'px';get('tui-dimensions').textContent=cols+' columns × '+rows+' rows';
+  }
+  function changePage(next) { if(prompt || ended)return;page=next;message='';render();announce(['Roof','Settings','People','System','Setup'][page-1]+' page'); }
+  function move(direction) {
+    if(viewer || stale() || moving() || state==='fault')return;
+    clearTimer();state=direction;message='';unconfirmedQuit=false;stopError=false;
+    stopResult='F9 sends Stop directly; this interface is renewing the motion lease.';
+    log(direction==='opening'?'Open accepted. Operator lease active.':'Close accepted. Operator lease active.');render();announce('Roof '+direction);
+    timer=setTimeout(()=>{state=direction==='opening'?'open':'closed';log(state==='open'?'Open limit reached. Motor stopped.':'Closed limit reached. Motor stopped.');render();timer=null;},6500);
+  }
+  function stop() {
+    clearTimer();
+    if(state==='offline') {stopResult='Stop failed: controller unreachable. Use the stop control at the roof.';stopError=true;}
+    else {if(moving())state='stopped';stopResult='Stop acknowledged. Relay register verified de-energized.';stopError=false;}
+    log(stopError?'Stop delivery unconfirmed.':'Stop acknowledged. Relays verified off.');render();announce(stopResult);
+  }
+  function clearFault() {if(state!=='fault'||viewer)return;state='stopped';message='Fault cleared. Motor remains stopped.';log(message);render();announce(message);}
+  function refresh() {message=stale()?'Single-read preview: status remains last known.':'Sample status refreshed.';render();announce(message);}
+  function quit() {
+    if(ended)return;
+    if(moving())stop();
+    if((stopError || state==='offline') && !unconfirmedQuit) {stop();unconfirmedQuit=true;message='Stop unconfirmed. F10 again quits; F9 retries Stop.';render();announce(message);return;}
+    clearTimer();prompt=false;ended=true;render();announce('Terminal preview session ended');
+  }
+  get('tui-size').addEventListener('change',event=>{[cols,rows]=event.target.value.split('x').map(Number);render();});
+  get('tui-color').addEventListener('change',event=>{get('terminal-window').className='terminal-window '+(event.target.value==='truecolor'?'':event.target.value);});
+  get('tui-ascii').addEventListener('change',event=>{ascii=event.target.checked;render();});
+  get('tui-state').addEventListener('change',event=>{
+    clearTimer();viewer=event.target.value==='viewer';state=viewer?'closed':event.target.value;ended=false;prompt=false;message='';stopError=false;unconfirmedQuit=false;
+    stopResult='Stop is always available. No unlock or fresh sign-in required.';
+    if(state==='opening'){state='closed';move('opening');return;}log('Preview state: '+event.target.value+'.');render();
+  });
+  document.addEventListener('keydown',event=>{
+    if(event.altKey || event.ctrlKey || event.metaKey)return;
+    if(event.key==='F9'&&!ended){event.preventDefault();stop();return;}
+    if(event.key==='Escape'&&prompt){event.preventDefault();prompt=false;render();return;}
+    if(prompt)return;
+    if(/^F[1-5]$/.test(event.key)&&!ended){event.preventDefault();changePage(Number(event.key.slice(1)));}
+    if(event.key==='F10'&&!ended){event.preventDefault();quit();}
+  });
+  new ResizeObserver(fit).observe(get('tui-frame'));render();
+})();
+</script>
+</body>
+</html>

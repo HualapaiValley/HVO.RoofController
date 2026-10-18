@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoofController · Avalonia touchscreen concept</title>
+  <style>
+    /* Design study for the native Avalonia views in origin/main:
+       KioskShell, KioskRoofPage and KioskMetrics. No controller API is called.
+       A 1280 x 800 design canvas represents the assumed 1920 x 1200 panel.
+       72 design pixels become 108 panel pixels (about 12 mm on a 10-inch 16:10 display).
+       The 1280 x 720 preview checks the shorter aspect ratio; it is not display calibration. */
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: transparent; }
+    .kiosk-preview { width: 100%; aspect-ratio: 8 / 5; position: relative; overflow: hidden; border-radius: var(--radius, 12px); background: #05070d; }
+    .kiosk {
+      --k-bg: #05070d; --k-panel: #0d1420; --k-raised: #111c2a; --k-soft: #0a111b;
+      --k-border: #253244; --k-border-strong: #3a4a60; --k-text: #f7f9fc;
+      --k-muted: #98a7bb; --k-muted-strong: #c1cbda; --k-blue: #58a6ff;
+      --k-primary: #2563eb; --k-blue-soft: rgba(47,129,247,.14);
+      --k-green: #8fe49c; --k-green-soft: rgba(63,185,80,.12);
+      --k-amber: #e6bd62; --k-amber-soft: rgba(210,153,34,.12);
+      --k-red: #ff9b95; --k-red-soft: rgba(248,81,73,.12);
+      position: absolute; left: 0; top: 0; width: 1280px; height: 800px;
+      transform-origin: left top; transform: scale(var(--preview-scale, 1));
+      display: grid; grid-template-rows: 104px 68px minmax(0,1fr) 88px;
+      color: var(--k-text); background: var(--k-bg); color-scheme: dark;
+      font: 16px/1.4 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .kiosk :is(h1,h2,h3,p,dl,dd) { margin: 0; }
+    .kiosk button, .kiosk select { font: inherit; touch-action: manipulation; }
+    .kiosk button { cursor: pointer; }
+    .kiosk :is(button,select):focus-visible { outline: 3px solid var(--k-blue); outline-offset: 4px; }
+    .kiosk button:disabled { opacity: .42; cursor: not-allowed; }
+    .kiosk [hidden] { display: none !important; }
+    .k-icon { width: 24px; height: 24px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .k-symbols { position: absolute; width: 0; height: 0; overflow: hidden; }
+    .k-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 24px; background: var(--k-soft); border-bottom: 1px solid var(--k-border); }
+    .k-brand { display: flex; align-items: center; gap: 13px; }
+    .k-brand .k-icon { width: 36px; height: 36px; color: var(--k-blue); stroke-width: 1.3; }
+    .k-brand h1 { font-size: 24px; font-weight: 600; letter-spacing: -.035em; }
+    .k-brand p { color: var(--k-muted); font-size: 13px; margin-top: 3px; }
+    .k-header-right { display: flex; align-items: center; gap: 16px; }
+    .k-chip { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; font-size: 13px; font-weight: 550; border: 1px solid var(--k-border); border-radius: 20px; background: var(--k-raised); color: var(--k-muted-strong); white-space: nowrap; }
+    .k-chip.live { color: var(--k-green); border-color: rgba(63,185,80,.3); background: var(--k-green-soft); }
+    .k-chip.warning { color: var(--k-amber); border-color: rgba(210,153,34,.3); background: var(--k-amber-soft); }
+    .k-chip.danger { color: var(--k-red); border-color: rgba(248,81,73,.3); background: var(--k-red-soft); }
+    .k-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+    .k-operator { color: var(--k-muted-strong); font-size: 15px; }
+    .k-button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-width: 72px; min-height: 72px; padding: 12px 20px; border: 1px solid var(--k-border-strong); border-radius: 7px; background: var(--k-raised); color: var(--k-text); font-weight: 550 !important; }
+    .k-button:hover:enabled { border-color: var(--k-blue); background: #142235; }
+    .k-lock { min-width: 118px; }
+    .k-banner { display: flex; align-items: center; gap: 12px; margin: 12px 24px 0; padding: 10px 16px; border: 1px solid var(--k-border); border-radius: 6px; background: var(--k-panel); color: var(--k-muted-strong); font-size: 14px; }
+    .k-banner .k-icon { width: 22px; height: 22px; color: var(--k-green); }
+    .k-banner[data-tone="warning"] { color: var(--k-amber); border-color: rgba(210,153,34,.35); background: var(--k-amber-soft); }
+    .k-banner[data-tone="danger"] { color: var(--k-red); border-color: rgba(248,81,73,.35); background: var(--k-red-soft); }
+    .k-banner[data-tone]:not([data-tone="normal"]) .k-icon { color: currentColor; }
+    .k-main { position: relative; min-height: 0; display: grid; grid-template-columns: minmax(0,1.18fr) minmax(0,1fr) 252px; gap: 18px; padding: 20px 24px; }
+    .k-panel { min-width: 0; min-height: 0; border: 1px solid var(--k-border); border-radius: 8px; background: var(--k-panel); }
+    .k-left { display: grid; grid-template-rows: 196px minmax(0,1fr); min-height: 0; gap: 18px; }
+    .k-position { padding: 20px 22px; display: flex; flex-direction: column; justify-content: space-between; }
+    .k-eyebrow { color: var(--k-muted); font-size: 12px; letter-spacing: .09em; text-transform: uppercase; }
+    .k-position-value { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .k-position-value strong { font-size: 49px; line-height: 1.05; letter-spacing: -.045em; font-weight: 600; }
+    .k-position-value .k-icon { width: 46px; height: 46px; color: var(--k-blue); stroke-width: 1.2; }
+    .k-position-bottom { display: flex; justify-content: space-between; align-items: end; gap: 12px; }
+    .k-position-bottom dt { color: var(--k-muted); font-size: 12px; }
+    .k-position-bottom dd { font-size: 18px; font-weight: 500; margin-top: 2px; }
+    .k-position-bottom p { max-width: 55%; color: var(--k-muted); font-size: 12px; text-align: right; }
+    .k-sensors { display: flex; flex-direction: column; }
+    .k-panel-title { display: flex; align-items: center; gap: 9px; min-height: 52px; padding: 12px 20px; border-bottom: 1px solid var(--k-border); }
+    .k-panel-title h2 { font-size: 16px; font-weight: 550; }
+    .k-panel-title .k-icon { width: 19px; height: 19px; color: var(--k-muted); }
+    .k-facts { display: grid; flex: 1; min-height: 0; grid-template-columns: 1fr 1fr; grid-template-rows: repeat(3,minmax(0,1fr)); padding: 0 20px; gap: 0 20px; }
+    .k-facts > div { display: flex; justify-content: center; flex-direction: column; border-bottom: 1px solid var(--k-border); min-height: 0; }
+    .k-facts > div:nth-last-child(-n+2) { border-bottom: 0; }
+    .k-facts dt { font-size: 12px; color: var(--k-muted); }
+    .k-facts dd { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 16px; font-weight: 500; }
+    .k-positive { color: var(--k-green); }
+    .k-controls { display: grid; grid-template-rows: 52px minmax(0,1fr); }
+    .k-controls-body { display: grid; grid-template-rows: minmax(84px,1fr) minmax(84px,1fr) 72px 40px; padding: 18px; gap: 12px; min-height: 0; }
+    .k-command { justify-content: flex-start; padding: 14px 22px; gap: 18px; }
+    .k-command .k-icon { width: 32px; height: 32px; }
+    .k-command strong { display: block; font-size: 27px; font-weight: 550; letter-spacing: -.025em; }
+    .k-command small { display: block; font-size: 13px; margin-top: 4px; opacity: .85; font-weight: 400; }
+    .k-command.primary { background: var(--k-primary); border-color: var(--k-primary); }
+    .k-command.primary:hover:enabled { background: #1d4ed8; }
+    .k-command.secondary { border-color: var(--k-border-strong); background: var(--k-raised); }
+    .k-controls-hint { color: var(--k-muted); font-size: 12px; display: flex; gap: 8px; align-items: center; }
+    .k-controls-hint .k-icon { width: 16px; height: 16px; }
+    .k-clear { font-size: 16px !important; }
+    .k-controls-body[data-locked="true"] { grid-template-rows: minmax(0,1fr); }
+    .k-locked { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 20px; text-align: center; padding: 10px; }
+    .k-locked .k-icon { width: 42px; height: 42px; color: var(--k-muted); }
+    .k-locked h3 { font-size: 24px; font-weight: 550; }
+    .k-locked p { color: var(--k-muted); font-size: 15px; }
+    .k-stop-panel { grid-column: 3; display: grid; grid-template-rows: auto minmax(0,1fr) 82px; padding: 18px; gap: 18px; border-color: rgba(248,81,73,.3); background: var(--k-panel); }
+    .k-stop-label { color: var(--k-red); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; text-align: center; }
+    .k-stop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 21px; background: var(--k-red-soft); color: var(--k-red); border-color: rgba(248,81,73,.45); }
+    .k-stop:hover:enabled { background: rgba(248,81,73,.2); border-color: var(--k-red); }
+    .k-stop .k-icon { width: 44px; height: 44px; stroke-width: 2; }
+    .k-stop strong { font-size: 38px; font-weight: 650; letter-spacing: -.03em; line-height: 1.08; }
+    .k-stop-answer { color: var(--k-muted-strong); font-size: 15px; text-align: center; align-self: center; }
+    .k-stop-answer[data-error="true"] { color: var(--k-red); }
+    .k-footer { min-width: 0; display: flex; align-items: center; gap: 14px; padding: 8px 24px; background: var(--k-soft); border-top: 1px solid var(--k-border); }
+    .k-latest { min-width: 0; flex: 1; }
+    .k-latest small { display: block; font-size: 11px; letter-spacing: .07em; color: var(--k-muted); text-transform: uppercase; }
+    .k-latest p { font-size: 14px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--k-muted-strong); }
+    .k-demo-label { color: var(--k-muted); font-size: 11px; text-align: right; max-width: 140px; }
+    .k-drawer { position: absolute; z-index: 3; top: 20px; bottom: 20px; left: 24px; right: 294px; min-height: 0; padding: 22px; display: grid; grid-template-rows: 72px minmax(0,1fr); gap: 16px; background: var(--k-panel); border: 1px solid var(--k-border-strong); border-radius: 8px; }
+    .k-drawer-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .k-drawer-header h2 { font-size: 25px; font-weight: 550; letter-spacing: -.025em; }
+    .k-drawer-header p { color: var(--k-muted); font-size: 13px; margin-top: 4px; }
+    .k-event-list { list-style: none; display: grid; grid-template-rows: repeat(5,minmax(0,1fr)); padding: 0; margin: 0; min-height: 0; }
+    .k-event-list li { display: grid; grid-template-columns: 9px minmax(0,1fr) auto; gap: 12px; align-items: center; border-top: 1px solid var(--k-border); }
+    .k-event-list p { color: var(--k-muted-strong); font-size: 15px; }
+    .k-event-list time { color: var(--k-muted); font: 12px ui-monospace,monospace; }
+    .k-event-list .k-dot { width: 5px; height: 5px; color: var(--k-blue); }
+    .k-preview-content { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; min-height: 0; }
+    .k-preview-content h3 { color: var(--k-muted); font-size: 13px; font-weight: 500; margin-bottom: 12px; }
+    .k-scenarios { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .k-scenarios .k-button { padding: 10px 12px; font-size: 14px; }
+    .k-scenarios button[aria-pressed="true"] { border-color: var(--k-blue); color: var(--k-blue); background: var(--k-blue-soft); }
+    .k-preview-content label { display: block; color: var(--k-muted); font-size: 13px; margin-bottom: 12px; }
+    .k-preview-content select { width: 100%; min-height: 72px; padding: 10px 12px; border: 1px solid var(--k-border-strong); border-radius: 6px; background: var(--k-raised); color: var(--k-text); font-size: 15px; }
+    .k-preview-content p { margin-top: 15px; color: var(--k-muted); font-size: 13px; line-height: 1.6; }
+    .k-preview-note { padding: 13px; border: 1px solid var(--k-border); border-radius: 6px; }
+    .k-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    @media (min-aspect-ratio: 5/3) { .kiosk-preview { aspect-ratio: 16 / 9; } }
+  </style>
+</head>
+<body>
+<div class="kiosk-preview" id="kiosk-preview">
+  <div class="kiosk" id="kiosk">
+    <svg class="k-symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+      <symbol id="k-i-house" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7M5 9v12h14V9M9 21v-7h6v7M3 21h18"/></symbol>
+      <symbol id="k-i-up" viewBox="0 0 24 24"><path d="M12 20V4m-7 7 7-7 7 7"/></symbol>
+      <symbol id="k-i-down" viewBox="0 0 24 24"><path d="M12 4v16m-7-7 7 7 7-7"/></symbol>
+      <symbol id="k-i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+      <symbol id="k-i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4-5 8-8 9-3-1-8-5-8-9V6Z"/><path d="m8 12 3 3 5-6"/></symbol>
+      <symbol id="k-i-pulse" viewBox="0 0 24 24"><path d="M2 12h5l3-8 4 16 3-8h5"/></symbol>
+      <symbol id="k-i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+    </defs></svg>
+
+    <header class="k-header">
+      <div class="k-brand"><svg class="k-icon" aria-hidden="true"><use href="#k-i-house"/></svg><div><h1>HVO RoofController</h1><p>Hualapai Valley Observatory</p></div></div>
+      <div class="k-header-right"><span class="k-chip live" id="k-live"><span class="k-dot"></span><span id="k-live-text">Status live</span></span><span class="k-chip" id="k-lease" hidden>Lease renewing</span><span class="k-operator" id="k-operator">Operator · unlocked</span><button class="k-button k-lock" id="k-lock" type="button"><svg class="k-icon" aria-hidden="true"><use href="#k-i-lock"/></svg><span id="k-lock-text">Lock</span></button></div>
+    </header>
+
+    <div class="k-banner" id="k-banner" data-tone="normal"><svg class="k-icon" aria-hidden="true"><use href="#k-i-shield"/></svg><p id="k-banner-text">Controller ready. Limit inputs and relay read-back are healthy.</p></div>
+
+    <main class="k-main">
+      <div class="k-left">
+        <section class="k-panel k-position" aria-labelledby="k-position-label"><p class="k-eyebrow" id="k-position-label">Roof position</p><div class="k-position-value"><strong id="k-position">Closed</strong><svg class="k-icon" aria-hidden="true"><use href="#k-i-house"/></svg></div><div class="k-position-bottom"><dl><dt id="k-commanded-label">Commanded</dt><dd id="k-commanded">None</dd></dl><p id="k-status-time">Closed limit confirmed<br>Sample status · just now</p></div></section>
+        <section class="k-panel k-sensors" aria-labelledby="k-readings-title"><div class="k-panel-title"><svg class="k-icon" aria-hidden="true"><use href="#k-i-pulse"/></svg><h2 id="k-readings-title">Controller readings</h2></div><dl class="k-facts">
+          <div><dt id="k-open-label">Open limit</dt><dd id="k-open-limit">Inactive</dd></div><div><dt id="k-closed-label">Closed limit</dt><dd id="k-closed-limit" class="k-positive"><span class="k-dot"></span>Active</dd></div>
+          <div><dt>Drive running</dt><dd id="k-drive">No</dd></div><div><dt>Drive fault</dt><dd id="k-drive-fault">Clear</dd></div>
+          <div><dt>Safety inputs</dt><dd id="k-inputs">Healthy</dd></div><div><dt>Relay read-back</dt><dd id="k-relays">Verified</dd></div>
+        </dl></section>
+      </div>
+
+      <section class="k-panel k-controls" aria-labelledby="k-controls-title"><div class="k-panel-title"><svg class="k-icon" aria-hidden="true"><use href="#k-i-up"/></svg><h2 id="k-controls-title">Motion controls</h2></div><div class="k-controls-body" id="k-controls-body">
+        <button class="k-button k-command primary" id="k-open" type="button"><svg class="k-icon" aria-hidden="true"><use href="#k-i-up"/></svg><span><strong>Open roof</strong><small id="k-open-detail">Begin opening</small></span></button>
+        <button class="k-button k-command secondary" id="k-close" type="button" disabled><svg class="k-icon" aria-hidden="true"><use href="#k-i-down"/></svg><span><strong>Close roof</strong><small id="k-close-detail">Already closed</small></span></button>
+        <button class="k-button k-clear" id="k-clear" type="button" disabled>Clear fault</button>
+        <p class="k-controls-hint" id="k-controls-hint"><svg class="k-icon" aria-hidden="true"><use href="#k-i-shield"/></svg>Limits and watchdog enabled</p>
+        <div class="k-locked" id="k-locked" hidden><svg class="k-icon" aria-hidden="true"><use href="#k-i-lock"/></svg><h3>Kiosk locked</h3><p>Unlock with your PIN to operate the roof.</p><p>Stop remains available.</p></div>
+      </div></section>
+
+      <aside class="k-panel k-stop-panel" aria-label="Persistent Stop control"><p class="k-stop-label">Always available</p><button class="k-button k-stop" id="k-stop" type="button"><svg class="k-icon" aria-hidden="true"><use href="#k-i-stop"/></svg><strong>Stop roof</strong></button><p class="k-stop-answer" id="k-stop-answer">Stops motion.<br>No unlock required.</p></aside>
+
+      <section class="k-drawer" id="k-notices" aria-labelledby="k-notices-title" hidden><div class="k-drawer-header"><div><h2 id="k-notices-title">Recent notices</h2><p>Latest five events · safety alerts stay above</p></div><button class="k-button" type="button" data-dismiss>Back to roof</button></div><ol class="k-event-list" id="k-events"></ol></section>
+
+      <section class="k-drawer" id="k-preview-settings" aria-labelledby="k-preview-title" hidden><div class="k-drawer-header"><div><h2 id="k-preview-title">Design preview</h2><p>All actions and readings are simulated.</p></div><button class="k-button" type="button" data-dismiss>Back to roof</button></div><div class="k-preview-content"><div><h3>Preview a state</h3><div class="k-scenarios" role="group" aria-label="Preview state"><button class="k-button" type="button" data-state="closed" aria-pressed="true">Closed</button><button class="k-button" type="button" data-state="opening" aria-pressed="false">Opening</button><button class="k-button" type="button" data-state="fault" aria-pressed="false">Fault</button><button class="k-button" type="button" data-state="stale" aria-pressed="false">Stale</button><button class="k-button" type="button" data-state="offline" aria-pressed="false">Offline</button><button class="k-button" type="button" data-state="locked" aria-pressed="false">Locked</button></div></div><div><label for="k-display">Display proportions</label><select id="k-display"><option value="800">1920 × 1200 · assumed 10″ panel</option><option value="720">1280 × 720 · shorter layout</option></select><p class="k-preview-note">A fixed grid keeps the complete screen visible. Buttons are sized for the native kiosk’s 12 mm touch target on the assumed 10″ panel.</p><p>This HTML illustrates the Avalonia design. It does not connect to the controller or implement PIN authentication.</p></div></div></section>
+    </main>
+
+    <footer class="k-footer"><div class="k-latest"><small>Latest notice</small><p id="k-latest">Closed limit confirmed. Motor stopped.</p></div><button class="k-button" id="k-show-notices" type="button" aria-controls="k-notices" aria-expanded="false">Notices</button><span class="k-demo-label">Native kiosk concept<br>Simulated data</span><button class="k-button" id="k-show-preview" type="button" aria-controls="k-preview-settings" aria-expanded="false">Preview</button></footer>
+    <p class="k-sr" id="k-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
+  </div>
+</div>
+<script>
+(() => {
+  'use strict';
+  const screen = document.getElementById('kiosk-preview');
+  const app = document.getElementById('kiosk');
+  const get = name => document.getElementById('k-' + name);
+  let state = 'closed';
+  let unlocked = true;
+  let motionTimer = null;
+  let lastFocus = null;
+  let events = [
+    ['Closed limit confirmed. Motor stopped.', '20:41:08'],
+    ['Close command accepted.', '20:40:44'],
+    ['Operator unlocked the kiosk.', '20:38:18'],
+    ['Safety inputs healthy. Relay read-back verified.', '20:38:13'],
+    ['Controller initialized.', '20:38:12']
+  ];
+  function fit() {
+    const bounds = screen.getBoundingClientRect();
+    app.style.setProperty('--preview-scale', bounds.width / 1280);
+    const height = Math.round(bounds.height / bounds.width * 1280);
+    app.style.height = height + 'px';
+    get('display').value = height === 720 ? '720' : '800';
+  }
+  function setDisplay(height) {
+    screen.style.aspectRatio = '1280 / ' + height;
+    fit();
+  }
+  new ResizeObserver(fit).observe(screen);
+  fit();
+  function drawEvents() {
+    const list = get('events'); list.replaceChildren();
+    events.forEach(([message, at]) => {
+      const item = document.createElement('li');
+      const dot = document.createElement('span'); dot.className = 'k-dot';
+      const text = document.createElement('p'); text.textContent = message;
+      const time = document.createElement('time'); time.textContent = at;
+      item.append(dot, text, time); list.append(item);
+    });
+    get('latest').textContent = events[0][0];
+  }
+  function log(message) {
+    events.unshift([message, new Date().toLocaleTimeString('en-GB', {hour12:false})]);
+    events = events.slice(0,5); drawEvents();
+  }
+  function stopTimer() { clearTimeout(motionTimer); motionTimer = null; }
+  function render() {
+    const moving = state === 'opening' || state === 'closing';
+    const stale = state === 'stale' || state === 'offline';
+    const fault = state === 'fault';
+    const blocked = stale || fault || moving || !unlocked;
+    const label = {closed:'Closed',open:'Open',opening:'Opening',closing:'Closing',stopped:'Between limits',fault:'Fault',stale:'Closed',offline:'Closed'}[state];
+    get('position').textContent = label;
+    get('position').style.color = fault ? 'var(--k-red)' : stale ? 'var(--k-muted)' : moving ? 'var(--k-blue)' : state === 'stopped' ? 'var(--k-amber)' : 'var(--k-text)';
+    get('position-label').textContent = stale ? 'Position · last known' : 'Roof position';
+    get('commanded-label').textContent = stale ? 'Commanded · last known' : 'Commanded';
+    get('commanded').textContent = moving ? (state === 'opening' ? 'Opening' : 'Closing') : 'None';
+    get('status-time').textContent = stale ? 'Last known sample · not current' : state === 'closed' ? 'Closed limit confirmed · just now' : state === 'open' ? 'Open limit confirmed · just now' : moving ? 'Motion monitored · just now' : 'Sample status · just now';
+    get('live').className = 'k-chip ' + (stale ? 'warning' : 'live');
+    get('live-text').textContent = state === 'offline' ? 'Unreachable' : stale ? 'Status stale' : 'Status live';
+    get('lease').hidden = !moving || !unlocked;
+    get('operator').textContent = unlocked ? 'Operator · unlocked' : 'Kiosk locked';
+    get('lock-text').textContent = unlocked ? 'Lock' : 'Unlock';
+    get('open').disabled = blocked || state === 'open';
+    get('close').disabled = blocked || state === 'closed';
+    get('clear').disabled = !unlocked || !fault;
+    get('open-detail').textContent = stale ? 'Live status required' : fault ? 'Fault must be cleared' : moving ? 'Stop before reversing' : state === 'open' ? 'Already open' : 'Begin opening';
+    get('close-detail').textContent = stale ? 'Live status required' : fault ? 'Fault must be cleared' : moving ? 'Stop before reversing' : state === 'closed' ? 'Already closed' : 'Begin closing';
+    ['open','close','clear','controls-hint'].forEach(name => { get(name).hidden = !unlocked; });
+    get('locked').hidden = unlocked;
+    get('controls-body').dataset.locked = String(!unlocked);
+    get('banner').dataset.tone = fault ? 'danger' : stale ? 'warning' : 'normal';
+    get('banner-text').textContent = state === 'offline' ? 'Controller unreachable. Showing last known state. Stop is still attempted; its answer confirms delivery.' : stale ? 'Status is stale. Showing last known state. Open and Close are unavailable; Stop remains available.' : fault ? 'Motion timeout latched. Open and Close are blocked. Inspect the roof before clearing the fault.' : moving && !unlocked ? 'Kiosk locked. Lease renewal ended; motion stops when the lease expires. Stop remains available.' : moving ? 'Motion monitored. Operator lease is renewing; limits and watchdog remain active.' : !unlocked ? 'Kiosk locked. Unlock with your PIN to operate the roof. Stop is always available.' : 'Controller ready. Limit inputs and relay read-back are healthy.';
+    get('open-label').textContent = stale ? 'Open limit · last known' : 'Open limit';
+    get('closed-label').textContent = stale ? 'Closed limit · last known' : 'Closed limit';
+    get('open-limit').textContent = state === 'open' ? 'Active' : 'Inactive';
+    get('closed-limit').textContent = state === 'closed' || stale ? 'Active' : 'Inactive';
+    get('open-limit').className = !stale && state === 'open' ? 'k-positive' : '';
+    get('closed-limit').className = !stale && state === 'closed' ? 'k-positive' : '';
+    get('drive').textContent = stale ? 'Unknown' : moving ? 'Yes' : 'No';
+    get('drive-fault').textContent = stale ? 'Unknown' : 'Clear';
+    get('inputs').textContent = stale ? 'Unknown' : 'Healthy';
+    get('relays').textContent = stale ? 'Unknown' : 'Verified';
+    app.dataset.state = state; app.dataset.unlocked = String(unlocked);
+    document.querySelectorAll('[data-state]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.state === (!unlocked ? 'locked' : state))));
+    get('announcement').textContent = (stale ? 'Last known roof state: ' : 'Roof state: ') + label + '. ' + get('banner-text').textContent;
+  }
+  function clearStopAnswer() { get('stop-answer').textContent = 'Stops motion. No unlock required.'; get('stop-answer').dataset.error = 'false'; }
+  function move(direction) {
+    stopTimer(); state = direction; clearStopAnswer(); log(direction === 'opening' ? 'Open command accepted. Operator lease active.' : 'Close command accepted. Operator lease active.'); render();
+    motionTimer = setTimeout(() => { state = direction === 'opening' ? 'open' : 'closed'; log(state === 'open' ? 'Open limit reached. Motor stopped.' : 'Closed limit reached. Motor stopped.'); render(); motionTimer = null; }, 6500);
+  }
+  function dismiss() {
+    get('notices').hidden = true; get('preview-settings').hidden = true;
+    document.querySelector('.k-left').inert = false; document.querySelector('.k-controls').inert = false;
+    get('show-notices').setAttribute('aria-expanded','false'); get('show-preview').setAttribute('aria-expanded','false');
+    if (lastFocus && !lastFocus.disabled) lastFocus.focus();
+  }
+  function show(which, trigger) {
+    const wasOpen = !get(which).hidden; dismiss(); if (wasOpen) return;
+    get(which).hidden = false; trigger.setAttribute('aria-expanded','true'); lastFocus = trigger;
+    document.querySelector('.k-left').inert = true; document.querySelector('.k-controls').inert = true;
+    get(which).querySelector('button').focus();
+  }
+  get('open').addEventListener('click', () => move('opening'));
+  get('close').addEventListener('click', () => move('closing'));
+  get('stop').addEventListener('click', () => {
+    stopTimer();
+    if (state === 'offline') {
+      get('stop-answer').textContent = 'No acknowledgement. Stop delivery could not be confirmed.'; get('stop-answer').dataset.error = 'true'; log('Stop attempted. Controller unreachable; no acknowledgement.');
+    } else {
+      if (state === 'opening' || state === 'closing') state = 'stopped';
+      get('stop-answer').textContent = 'Stop acknowledged by the controller.'; get('stop-answer').dataset.error = 'false'; log('Stop acknowledged by the controller.');
+    }
+    render(); get('announcement').textContent = get('stop-answer').textContent;
+  });
+  get('clear').addEventListener('click', () => { state = 'stopped'; clearStopAnswer(); log('Fault cleared. Motor remains stopped.'); render(); });
+  get('lock').addEventListener('click', () => {
+    // Preview only: illustrate the unlocked state without collecting a PIN.
+    // A native implementation retains KioskPinPage and its existing authentication.
+    unlocked = !unlocked;
+    if (!unlocked && (state === 'opening' || state === 'closing')) {
+      stopTimer(); log('Kiosk locked. Lease renewal ended; awaiting lease expiry.');
+      motionTimer = setTimeout(() => { state = 'stopped'; log('Operator lease expired. Controller stopped the roof.'); render(); motionTimer = null; }, 3000);
+    }
+    else log(unlocked ? 'Preview: Operator unlocked the kiosk.' : 'Kiosk locked. Stop remains available.');
+    render();
+  });
+  get('show-notices').addEventListener('click', () => show('notices',get('show-notices')));
+  get('show-preview').addEventListener('click', () => show('preview-settings',get('show-preview')));
+  document.querySelectorAll('[data-dismiss]').forEach(button => button.addEventListener('click',dismiss));
+  document.addEventListener('keydown', event => { if(event.key === 'Escape') dismiss(); });
+  document.querySelectorAll('[data-state]').forEach(button => button.addEventListener('click', () => {
+    stopTimer(); const chosen = button.dataset.state; unlocked = chosen !== 'locked'; state = chosen === 'locked' ? 'closed' : chosen; clearStopAnswer(); dismiss();
+    if(state === 'opening') { move('opening'); return; }
+    log('Preview state: ' + chosen + '.'); render();
+  }));
+  get('display').addEventListener('change', () => setDisplay(Number(get('display').value)));
+  drawEvents(); render();
+})();
+</script>
+</body>
+</html>
