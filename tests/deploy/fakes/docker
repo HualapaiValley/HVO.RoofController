@@ -5,8 +5,11 @@ Keeps containers in $FAKE_STATE_DIR/state.json (keyed by name, each with a 64-he
 (as JSON) to $FAKE_STATE_DIR/calls.log. Commands take a container name or an ID prefix, as docker does. A container's
 docker state is "running" or "exited" from its "running" flag, or its optional "state" (paused, restarting, created);
 stop and start clear "state". `ps` supports -a, --no-trunc, --filter name=<regex>|id=<prefix> and Go-style --format
-({{.Label "<key>"}} reads the container's optional "labels", as a Compose-created container has).
-`inspect` supports two --format templates: '{{range .Config.Env}}{{println .}}{{end}}', the --env/-e values the
+({{.Label "<key>"}} reads the container's optional "labels", as a Compose-created container has, and
+{{json (.Label "<key>")}} the same as JSON). A template's {{json ...}} writes JSON as Docker's does (Go's encoding/json,
+without HTML escapes), {{println}} a newline.
+`inspect` supports these --format templates: '{{range .Config.Env}}{{println .}}{{end}}' (and the same with each value
+as JSON, '{{range .Config.Env}}{{json .}}{{println}}{{end}}'), the --env/-e values the
 container was run with (its "options"), and '{{.State.Status}} {{.RestartCount}}', its docker state and optional
 "restart_count". Starting a stopped container resets the count to 0, as docker start does; starting a running or
 restarting one changes nothing, and starting a paused one fails. The deploy script's HostConfig template reports the
@@ -30,7 +33,11 @@ Container behaviour is chosen per container "kind" (old, current, new, ...) with
                                    running, each started once): absent (no such file, as in an image from before the
                                    supervisor), restarting (the controller waits to start again), crash-loop (the
                                    controller is left stopped), restarted (each read finds the controller started once
-                                   more), ui-restarting, or ui-restarted (the same for the web UI)
+                                   more), first-start (the first read finds the controller not started yet, starting
+                                   with 0 starts, as the supervisor writes it while it turns the relays off, and
+                                   /health/ready fails until a later read; each later read finds it running, started
+                                   once), first-start-restarted (the same, but started
+                                   twice after the first read), ui-restarting, or ui-restarted (the same for the web UI)
 Other switches:
   FAKE_PREFLIGHT_EXIT=<code>       exit code of `run --rm ... --validate-deployment`
   FAKE_RUN_FAIL=true               `run -d` fails before creating the container
@@ -59,8 +66,18 @@ Other switches:
   FAKE_LOADED_ID=sha256:<hex>      the ID `load -i <archive>` gives the image (default: its config's digest, as Docker's
                                    classic image store does, or its index's with FAKE_IMAGE_STORE=containerd)
   FAKE_INFO_<FIELD>=<value>        what `info --format` reports for MemoryLimit, CPUCfsQuota, PidsLimit and SwapLimit
-                                   (default true each), NCPU (default 4) and MemTotal (default 8 GiB), as
-                                   FAKE_INFO_MEMORYLIMIT=false
+                                   (default true each), NCPU (default 4), MemTotal (default 8 GiB), CgroupVersion
+                                   (default 2) and Name (Docker's host name, default pi-test-host), as
+                                   FAKE_INFO_MEMORYLIMIT=false; an empty value is a field Docker does not report
+  FAKE_INFO_WARNINGS=<w>[;<w>...]  the warnings `info --format '{{range .Warnings}}{{println .}}{{end}}'` lists (none by
+                                   default)
+  `volume ls/inspect/rm/create`    the deploy script's desired-limits records, volumes kept in the state's "volumes"
+                                   with their labels (seed_desired_limits seeds one)
+  FAKE_VOLUME_HIDDEN=<name>        `volume ls` does not list that volume (another run creates it after this one lists)
+  FAKE_CONTAINER_LOG_FAIL=true     `exec -i <c> sh -c 'cat > /proc/1/fd/2'` (a line for the container's log, which the
+                                   fake keeps in the container's "log") fails
+  FAKE_CONTEXT_HOST=<endpoint>     what `context inspect --format '{{.Endpoints.docker.Host}}' <context>` reports
+                                   (default ssh://roof@pi.test: Docker on another machine)
   FAKE_DROPPED_LIMIT=memory|cpus|pids
                                    `run -d` drops that limit, as Docker does with only a warning when the kernel cannot
                                    enforce it
@@ -241,6 +258,21 @@ def host_config(c):
         json.dumps(option_values(options, "--security-opt") or None, separators=(",", ":"))])
 
 
+def go_json(value):
+    """A value as Docker's template function json writes it (Go's encoding/json, HTML characters not escaped)."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
+def render_labels(fmt, labels):
+    """A template's {{index .Labels "k"}} (the value as it is) and {{json (index .Labels "k")}} (JSON) of the labels."""
+    fmt = re.sub(r'\{\{json \(index \.(?:Config\.)?Labels "([^"]+)"\)\}\}', lambda m: go_json(labels.get(m.group(1), "")), fmt)
+    fmt = re.sub(r'\{\{index \.(?:Config\.)?Labels "([^"]+)"\}\}', lambda m: labels.get(m.group(1), ""), fmt)
+    return fmt.replace("{{println}}", "\n")
+
+
+ENV_FORMATS = ("{{json .Config.Env}}", "{{range .Config.Env}}{{println .}}{{end}}", "{{range .Config.Env}}{{json .}}{{println}}{{end}}")
+
+
 def inspect(state, args):
     fmt, refs, i = None, [], 0
     while i < len(args):
@@ -249,7 +281,7 @@ def inspect(state, args):
         else:
             refs.append(args[i])
             i += 1
-    if fmt not in ("{{json .Config.Env}}", "{{range .Config.Env}}{{println .}}{{end}}", "{{.State.Status}} {{.RestartCount}}", "{{.Image}}", "{{.HostConfig.RestartPolicy.Name}}", HOST_CONFIG_FORMAT):
+    if fmt not in (*ENV_FORMATS, "{{.State.Status}} {{.RestartCount}}", "{{.Image}}", "{{.HostConfig.RestartPolicy.Name}}", HOST_CONFIG_FORMAT):
         die(f"fake docker: unsupported inspect format: {fmt}")
     for ref in refs:
         _, c = container(state, ref)
@@ -272,6 +304,8 @@ def inspect(state, args):
                 values.append("RoofControllerSecurity__Identity__StorePath=/var/lib/hvo-roof/identity/identity.json")
             if fmt == "{{json .Config.Env}}":
                 out(json.dumps(values))
+            elif fmt == "{{range .Config.Env}}{{json .}}{{println}}{{end}}":
+                out("".join(f"{go_json(e)}\n" for e in values))
             else:
                 out("".join(f"{e}\n" for e in values))
 
@@ -281,6 +315,8 @@ IMAGE_FORMATS = {
     "{{.Os}}/{{.Architecture}}": "platform",
     '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} '
     '{{index .Labels "org.opencontainers.image.revision"}}{{end}}': "labels",
+    '{{with .Config}}{{json (index .Labels "org.opencontainers.image.version")}}{{println}}'
+    '{{json (index .Labels "org.opencontainers.image.revision")}}{{end}}': "json-labels",
     "{{.Id}}": "id",
 }
 
@@ -377,14 +413,15 @@ def image_inspect(state, args):
         else:
             refs.append(args[i])
             i += 1
-    if fmt == '{{index .Config.Labels "io.hvo.roof.identity-schema"}}':
+    if fmt in ('{{index .Config.Labels "io.hvo.roof.identity-schema"}}', '{{json (index .Config.Labels "io.hvo.roof.identity-schema")}}'):
         for ref in refs:
             matches = [c for c in state["containers"].values()
                        if ref == "sha256:" + hashlib.sha256(c["kind"].encode()).hexdigest()]
             if not matches:
                 die("Unknown immutable image ID")
             c = matches[0]
-            out(os.environ.get("FAKE_" + c["kind"].upper() + "_IDENTITY_CAPABILITY", ""))
+            value = os.environ.get("FAKE_" + c["kind"].upper() + "_IDENTITY_CAPABILITY", "")
+            out(render_labels(fmt, {"io.hvo.roof.identity-schema": value}))
         return
     field = IMAGE_FORMATS.get(fmt)
     if field is None:
@@ -399,7 +436,7 @@ def image_inspect(state, args):
                     f"wanted {platform}, actual: {image['platform']}")
             # The image's own record (its digests) is still there; the platform's fields are empty.
             if field != "digests":
-                out({"platform": "/", "labels": ""}[field])
+                out({"platform": "/", "labels": "", "json-labels": '""\n""'}[field])
                 continue
         if field == "digests":
             out("".join(f"{d}\n" for d in image["repo_digests"]))
@@ -407,6 +444,8 @@ def image_inspect(state, args):
             out(platform or image["platform"])
         elif field == "id":
             out(image.get("id", ref))
+        elif field == "json-labels":
+            out(f"{go_json(image['version'])}\n{go_json(image['revision'])}")
         else:
             out(f"{image['version']} {image['revision']}")
 
@@ -540,6 +579,12 @@ def supervisor_json(state, c):
         c[key] = c.get(key, 1) + 1
         save(state)
         processes[name][1] = c[key]
+    elif view in ("first-start", "first-start-restarted"):
+        key = f"supervised_{name}_reads"
+        c[key] = c.get(key, 0) + 1
+        save(state)
+        processes[name] = (["starting", 0] if c[key] == 1
+                           else ["running", 1 if view == "first-start" else 2])
     with open(SUPERVISOR_SAMPLE, encoding="utf-8") as sample:
         document = json.load(sample)
     document["lastForcedRestart"] = None
@@ -562,10 +607,20 @@ def exec_curl(state, ref, curl_args, stdin_text):
     if curl_args == ["cat", "/run/hvo-roof/supervisor.json"]:
         supervisor_json(state, c)
         return
+    if curl_args == ["sh", "-c", "cat > /proc/1/fd/2"]:
+        # A line for the container's log (docker logs): its first process's standard error.
+        if os.environ.get("FAKE_CONTAINER_LOG_FAIL") == "true":
+            die("sh: 1: cannot create /proc/1/fd/2: Permission denied")
+        c.setdefault("log", []).extend(stdin_text.splitlines())
+        save(state)
+        return
     url = curl_args[-1]
     method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"
 
     if url.endswith("/health/ready"):
+        # A controller the supervisor has not started yet (the first-start views' first read) is not ready.
+        if behaviour(kind, "SUPERVISOR", "").startswith("first-start") and c.get("supervised_controller_reads", 0) < 2:
+            sys.exit(22)
         sys.exit(0 if behaviour(kind, "READY", "true") == "true" else 22)
     if url.endswith("/health/live"):
         sys.exit(0 if behaviour(kind, "WEB_LIVE", "true") == "true" else 22)
@@ -655,7 +710,8 @@ def ps(state, args):
                     return c.get("labels", {}).get(m.group(2), "")
                 return fields[m.group(1)]
 
-            out(re.sub(r'\{\{\.(\w+)(?: "([^"]*)")?\}\}', field, fmt))
+            line = re.sub(r'\{\{json \(\.Label "([^"]*)"\)\}\}', lambda m: go_json(c.get("labels", {}).get(m.group(1), "")), fmt)
+            out(re.sub(r'\{\{\.(\w+)(?: "([^"]*)")?\}\}', field, line))
 
 
 def run(state, args, image):
@@ -759,8 +815,49 @@ def main():
     if command == "info" and "--format" in args:
         fmt = args[args.index("--format") + 1]
         values = {"MemoryLimit": "true", "CPUCfsQuota": "true", "PidsLimit": "true", "SwapLimit": "true",
-                  "NCPU": "4", "MemTotal": str(8 * 1024 ** 3)}
-        out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: os.environ.get("FAKE_INFO_" + m.group(1).upper(), values[m.group(1)]), fmt))
+                  "NCPU": "4", "MemTotal": str(8 * 1024 ** 3), "CgroupVersion": "2", "Name": "pi-test-host"}
+        warnings = [w for w in os.environ.get("FAKE_INFO_WARNINGS", "").split(";") if w]
+        fmt = fmt.replace("{{range .Warnings}}{{println .}}{{end}}", "".join(w + "\n" for w in warnings))
+        out(re.sub(r"\{\{\.(\w+)\}\}", lambda m: os.environ.get("FAKE_INFO_" + m.group(1).upper(), values[m.group(1)]), fmt),
+            end="" if fmt.endswith("\n") else "\n")
+        return
+    if command == "volume":
+        # The desired limits' records (the deploy script's volumes): ls --quiet --filter name=<text> (Docker's partial
+        # match), inspect --format with their labels, rm --force, and create --label k=v... <name>. Kept in the state's
+        # "volumes".
+        volumes = state.setdefault("volumes", {})
+        sub, rest = args[0], args[1:]
+        if sub == "ls":
+            text = rest[rest.index("--filter") + 1].removeprefix("name=") if "--filter" in rest else ""
+            hidden = os.environ.get("FAKE_VOLUME_HIDDEN", "")
+            for name in sorted(volumes):
+                if text in name and name != hidden:
+                    out(name)
+            return
+        if sub == "inspect":
+            fmt, name = rest[rest.index("--format") + 1], rest[-1]
+            if name not in volumes:
+                die(f"Error response from daemon: get {name}: no such volume")
+            labels = volumes[name].get("labels", {})
+            out(render_labels(fmt, labels))
+            return
+        if sub == "rm":
+            name = rest[-1]
+            if name not in volumes and "--force" not in rest and "-f" not in rest:
+                die(f"Error response from daemon: get {name}: no such volume")
+            volumes.pop(name, None)
+            save(state)
+            return
+        if sub == "create":
+            # Docker answers a create for a name it has with that volume, as it is.
+            labels = dict(value.split("=", 1) for value in option_values(rest, "--label"))
+            volumes.setdefault(rest[-1], {"labels": labels})
+            save(state)
+            out(rest[-1])
+            return
+        die(f"fake docker: unexpected volume command {args}")
+    if command == "context" and args[:1] == ["inspect"]:
+        out(os.environ.get("FAKE_CONTEXT_HOST", "ssh://roof@pi.test"))
         return
     if command in ("info", "buildx"):
         return

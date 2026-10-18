@@ -205,11 +205,17 @@ nothing until every check has passed: then it installs Docker, or turns I2C on, 
   missing Compose v2, which the installer does not need. With `--from DIR`, ghcr.io is never asked: the release's
   offline image archives for this machine must be in `DIR` instead (the controller's, and for a rig the HAT
   emulator's too; [The release it installs](#the-release-it-installs)). A rollback needs none.
-- **For the controller and a rig, on Linux:** Docker enforces process limits (`docker info`), which the
-  controller's container runs with ([The controller's limits](#the-controllers-limits)). CPU and memory enforcement
-  are advisory at bootstrap and required by the installer only when those limits are set. On a Pi it names the boot
-  setting to change. It notes a Docker that cannot limit swap, and a machine below the 1 vCPU floor; a memory cap
-  above host RAM only warns. The installer checks the limits it is given.
+- **For the controller and a rig, on Linux:** Docker enforces memory limits with no swap beyond them, CPU limits and
+  process limits (one `docker info`: `MemoryLimit`, `SwapLimit`, `CPUCfsQuota` and `PidsLimit`), which the controller's
+  container always runs with ([The controller's limits](#the-controllers-limits)). Each one it does not fails the check,
+  with the cgroup version, the kernel's cgroup v2 controllers and Docker's warnings, and the remedy: on a Pi, append
+  ` cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt` and reboot. There is no override.
+  `SwapLimit` `false` alone is a finding of its own (`docker-swap-limit-unsupported`). For `rollback`, a recovery path,
+  each one is a loud warning instead, and the installer's rollback starts (review ROOF-151-R1 F1); Docker must still
+  answer. Docker must also report at least the CPUs of the controller's CPU limit, resolved as the installer resolves it
+  (the one given, the deploy script's record's, the running controller's, else `1`); a desired-limits record that is not
+  valid fails the check unless both limits are given, and records that cannot be read fail it (review ROOF-151-R2 F5). A
+  memory limit above the machine's memory only warns; the installer checks the limits again.
 - **For the controller on the Pi:** I2C is on (`/dev/i2c-1`).
 - **For a first install of the controller or a rig, without an answers file:** ports 8443, 8088 and 8080 (a first
   install: the record for the run, root's or yours, names no controller or rig). A port in use is only noted: the
@@ -651,8 +657,8 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
-| `controller.resources.cpus` | A CPU limit for the controller container, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | None: no CPU limit, until a follow-up turns RoofController's default on ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6) |
-| `controller.resources.memory` | A memory limit for it, at least `1g`: a whole number of MiB or GiB, such as `1024m` or `1g`; the container gets no swap beyond it | None: no memory limit, until that follow-up |
+| `controller.resources.cpus` | The controller container's CPU limit, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | Left out of the record: the deploy script's last one, else the running controller's, else `1`, RoofController's default |
+| `controller.resources.memory` | Its memory limit, at least `1g`: a whole number of MiB or GiB, such as `1024m` or `2g`; the container gets no swap beyond it | As for `cpus`, else `2g` |
 | `controller.resources.pidsLimit` | The most processes and threads it runs at once, from 256 to 32768 | `512` |
 | `controller.rig.timeScale` | A rig only: how many times as fast as real time the emulated roof runs, from `0.1` to `100` | `1` (the wizard offers the running emulator's) |
 | `controller.rig.cameraFramesPerSecond` | A rig only: the emulated camera's frame rate, from `0.1` to `30` | `5` (the wizard offers the running emulator's) |
@@ -680,39 +686,79 @@ saves `rigConfirmation` or `httpConfirmation`, so each machine is confirmed on i
 
 ### The controller's limits
 
-The controller's container (a rig's too) runs with at most 512 processes and threads, and, for now, with no CPU or
-memory limit. A limit is one more way for the kernel to end the controller; the container's supervisor then turns the
-relays off at once, and starts the controller again only once they are verified off
-([deployment.md](deployment.md#the-relays-when-the-controller-exits)). RoofController's future default of 1 vCPU and
-2 GiB is turned on by a follow-up ([#138](https://github.com/HualapaiValley/HVO.RoofController/issues/138) item 6;
-[deployment.md](deployment.md#the-containers-privileges-and-limits)). Until then, give a CPU or memory limit in the
-answers' `controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
+The controller's container (a rig's too) always runs with a CPU, a memory and a process limit: by default
+RoofController's 1 vCPU, 2 GiB (with no swap) and 512 processes and threads (owner decision on #149). A limit is one
+more way for the kernel to end the controller; the container's supervisor then turns the relays off at once, and
+starts the controller again only once they are verified off
+([deployment.md](deployment.md#the-relays-when-the-controller-exits)). Give others in the answers'
+`controller.resources`, or on the command line, where each one given replaces the answers' (or the record's):
 
 ```bash
-sudo hvo-roof-install --answers controller.json --cpus 1 --memory 2g --pids-limit 1024
+sudo hvo-roof-install --answers controller.json --cpus 1.5 --memory 3g --pids-limit 1024
 ```
 
 | Option | What it sets |
 |--------|--------------|
-| `--cpus CPUS` | `controller.resources.cpus` |
-| `--memory SIZE` | `controller.resources.memory` |
-| `--pids-limit N` | `controller.resources.pidsLimit` |
+| `--cpus CPUS` | `controller.resources.cpus` (else the last deploy's, else `1`) |
+| `--memory SIZE` | `controller.resources.memory` (else the last deploy's, else `2g`) |
+| `--pids-limit N` | `controller.resources.pidsLimit` (default `512`) |
 
-A CPU limit below 1 vCPU, or a memory limit below `1g`, RoofController's floor, is refused, with no exception: exit code 2
-when the command line or an answers file gives it, 3 when the install record holds it (an `upgrade`). Leave it out for
-no limit. The install record keeps the limits, so `upgrade` and `rollback` give the container the same, and a run with
-other limits redeploys the controller with them (the plan says `redeployed with its limits: ...`); answers that leave a
-limit out redeploy it without one. The wizard asks nothing about them: it keeps what the record says, or what the
-command line gives.
+A CPU limit below 1 vCPU, or a memory limit below `1g`, RoofController's floor, is refused, with no exception: exit code
+2 when the command line or an answers file gives it, 3 when the install record holds it (an `upgrade`). More than the
+default is accepted. There is no setting for no limit. The install record keeps the limits given, so `upgrade` and
+`rollback` give the container the same, never the default in their place, as SkyMonitor's instance manifest keeps its
+own. A CPU or memory limit left out is not recorded, and is resolved as the deploy script resolves it (review
+ROOF-151-R2 F5): the deploy script's desired-limits record's, then the running controller's, then the default. A limit
+nobody set is recorded there as the default, so an upgrade gives the installer's default; one given to the deploy script
+by hand is kept. To go back to the default, give it (`--memory 2g`). A run with other limits redeploys the controller
+with them (the plan says `redeployed with its limits: ...`, and where a limit not given comes from). The wizard asks
+nothing about them: it keeps what the record says, or what the command line gives.
 
-Before it changes anything, the installer checks that this machine's Docker can enforce the limits it gives, and
-refuses (exit code 3) when `docker info` says it does not enforce process limits, or memory or CPU limits when one is
-given, or reports fewer CPUs than a CPU limit. Raspberry Pi OS boots with the memory controller off: that matters only
-for a memory limit, and then add `cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt` and reboot.
-A memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs) is kept, with a
-warning: a limit is a cap, not a reservation. On a Mac, Docker Desktop's resources (Settings, Resources) must have the
-CPUs. What the limits do, and what a controller ended at its memory limit leaves the relays in, is in
-[deployment.md](deployment.md#the-containers-privileges-and-limits).
+Before it changes anything, at an install and an upgrade alike, the installer checks that this machine's Docker enforces
+the limits, as the deploy script does again, and refuses (exit code 3) when one `docker info` does not report
+`MemoryLimit` and `SwapLimit`, `CPUCfsQuota` or `PidsLimit` as `true` (a field it does not report counts as `false`), or
+reports fewer CPUs than the CPU limit. The refusal lists every finding, with the cgroup version, the kernel's cgroup v2
+controllers (`/sys/fs/cgroup/cgroup.controllers`, when Docker runs on this machine) and Docker's warnings about limits,
+and the remedy; there is no override. A stock Raspberry Pi OS is refused so: its firmware adds `cgroup_disable=memory`
+to the kernel's command line itself (it is not in `/boot/firmware/cmdline.txt`). Append ` cgroup_enable=memory` to the
+end of that file's single line (on that line, not a new one: the later argument wins), reboot the Pi with the roof idle,
+and check that `docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'` prints `true`
+four times. A memory limit above the machine's memory (a Pi with 4 GB has a little less than 4 GiB for programs, and one
+with 1 GB less than the default) is kept, with a warning: a limit is a cap, not a reservation.
+
+An upgrade to another release checks the recorded limits, and that Docker here enforces them, before it hands over:
+before the backup it takes and the release's installer it puts in place, so a refusal leaves the installed installer,
+the backups and the record as they were. A `restore` that installs checks the backup's limits the same way before it
+puts the first file back (review ROOF-151-R1 F4).
+
+The deploy script records the limits each deploy or rollback gives as the controller's desired limits, whether or not
+the host could enforce them: each record a Docker volume of its own, `roof-controller-limits-g<generation>`, which an
+update replaces whole and which every read validates
+([deployment.md](deployment.md#the-containers-privileges-and-limits)). The installer reads the same records, with the
+same precedence: a limit given (the record's, the answers', the command line's), then the deploy script's record's, then
+the running controller's, then the default. It warns when a limit given differs from the deploy script's record
+(`Warning: The controller's memory limit is given as 2g ...`: the one given comes first, and the deploy records it), and
+when that record was written for another container than the running controller. A record that is not valid is never
+applied: a run that needs a limit from it is refused (exit code 3), and one given both limits warns. `install.sh`
+resolves the CPU limit it checks the same way, and fails on a record that is not valid as the installer refuses it.
+`rollback` and `rollback --plan` say these warnings before anything changes, and the rollback logs them (review
+ROOF-151-R2 F7; a plan writes no log). `uninstall` and `uninstall --purge` of a record that owns the controller (its
+controller or rig role, or the controller settings it keeps after an uninstall) remove every record, whether or not the
+controller's container is there (reviews ROOF-151-R2 F6, R3 F9); uninstalling only a client leaves another install's
+records alone. One that cannot list the records, because Docker does not answer, is refused before it removes anything,
+the install record included (review ROOF-151-R3 F11): start Docker and run it again. One that cannot remove a record
+fails before the install record says it is uninstalled, so running it again removes it, and a reinstall starts from the
+default.
+
+A `rollback` is a recovery path, so a limit Docker cannot enforce does not refuse it (the owner's decision on #149):
+should a Pi lose its memory controller after an upgrade, the way back still works. It goes ahead, the deploy script
+giving the version it brings back the limits Docker can still enforce, with a loud warning that names each limit it
+cannot and the fix, here (`Warning: THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS ...`), in the
+install log, in the deploy script's output and in the controller's log. It is still refused (exit code 3) when the
+recorded CPU limit is beyond the CPUs Docker reports and Docker enforces CPU limits, or when Docker does not answer.
+Fix the host, then upgrade again. On a Mac, Docker Desktop's
+resources (Settings, Resources) must have the CPUs. What the limits do, and what a controller ended at its memory limit
+leaves the relays in, is in [deployment.md](deployment.md#the-containers-privileges-and-limits).
 
 ### Passwords and PINs
 
@@ -793,7 +839,7 @@ Packages
   info       bash, curl, setsid or perl, jq or python3     what the deploy script runs (found bash, curl, setsid, jq)
 Containers
   create     hat-emulator                                  the HAT emulator: the roof, drive and limit switches the rig drives (release 4.0.0's image by digest, on the hvo-emulator network, its control API on 127.0.0.1:5290)
-  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script, with no CPU or memory limit, at most 512 processes and threads)
+  create     roof-controller                               the controller, against the HAT emulator (release 4.0.0 by digest, through the deploy script, with 1 CPU, 2g of memory and no swap, at most 512 processes and threads)
 Ports
   info       8443                                          the controller's API (HTTPS) (free; roof-controller will listen on it)
   info       8088                                          the web UI (free; roof-controller will listen on it)

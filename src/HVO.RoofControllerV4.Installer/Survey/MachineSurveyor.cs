@@ -30,6 +30,9 @@ public static partial class MachineSurveyor
     /// <summary>Where the kernel lists the display outputs.</summary>
     public const string DrmFolder = "/sys/class/drm";
 
+    /// <summary>The kernel's cgroup v2 controllers, which Docker needs memory, cpu and pids among.</summary>
+    public const string CgroupControllersFile = "/sys/fs/cgroup/cgroup.controllers";
+
     /// <summary>A desktop's login screen (lightdm on Raspberry Pi OS with a desktop).</summary>
     public const string DisplayManagerUnit = "display-manager.service";
 
@@ -244,12 +247,66 @@ public static partial class MachineSurveyor
 
         var compose = await machine.Commands.RunAsync(new CommandLine("docker", "compose", "version", "--short"), cancellationToken).ConfigureAwait(false);
         var limits = await machine.Commands.RunAsync(new CommandLine("docker", "info", "--format", DockerLimits.Format), cancellationToken).ConfigureAwait(false);
+        var parsed = limits.Succeeded ? DockerLimits.Parse(limits.Output) : null;
+
+        // This machine's cgroup v2 controllers are Docker's host's only when Docker runs here: it names this machine.
+        if (parsed is { HostName: { } host } && string.Equals(host, machine.HostName, StringComparison.Ordinal)
+            && ReadCgroupControllers(machine) is { } controllers)
+        {
+            parsed = parsed with { CgroupControllers = controllers };
+        }
+
+        var (volumes, desired, desiredProblem) = await SurveyDesiredLimitsAsync(machine, cancellationToken).ConfigureAwait(false);
         return new DockerSurvey
         {
             Version = server.Output.Trim(),
             ComposeVersion = compose.Succeeded ? compose.Output.Trim() : null,
-            Limits = limits.Succeeded ? DockerLimits.Parse(limits.Output) : null
+            Limits = parsed,
+            DesiredLimits = desired,
+            DesiredLimitVolumes = volumes,
+            DesiredLimitsProblem = desiredProblem
         };
+    }
+
+    /// <summary>
+    /// The controller's desired-limits records here, as the deploy script reads them (<see cref="DesiredLimits"/>): every
+    /// record volume, the newest one read and validated, or why they could not be read.
+    /// </summary>
+    public static async Task<(IReadOnlyList<string> Volumes, DesiredLimits? Newest, string? Problem)> SurveyDesiredLimitsAsync(InstallerMachine machine, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        var listed = await machine.Commands.RunAsync(
+            new CommandLine("docker", "volume", "ls", "--quiet", "--filter", $"name={DesiredLimits.LegacyVolume(ControllerContainer)}"), cancellationToken).ConfigureAwait(false);
+        if (!listed.Succeeded)
+        {
+            return ([], null, $"docker volume ls failed: {FirstLine(listed.Reason)}");
+        }
+
+        var (volumes, newest, generation) = DesiredLimits.Records(ControllerContainer, listed.Output.Split('\n'));
+        if (newest is null)
+        {
+            return (volumes, null, null);
+        }
+
+        var read = await machine.Commands.RunAsync(new CommandLine("docker", "volume", "inspect", "--format", DesiredLimits.Format, newest), cancellationToken).ConfigureAwait(false);
+        return read.Succeeded
+            ? (volumes, DesiredLimits.Parse(newest, generation, read.Output), null)
+            : (volumes, null, $"docker volume inspect {newest} failed: {FirstLine(read.Reason)}");
+    }
+
+    /// <summary>The kernel's cgroup v2 controllers (at most 512 characters), or null when they cannot be read.</summary>
+    private static string? ReadCgroupControllers(InstallerMachine machine)
+    {
+        try
+        {
+            return machine.ReadText(CgroupControllersFile)?.Trim() is { } controllers
+                ? controllers.Length <= 512 ? controllers : controllers[..512]
+                : null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -339,6 +396,7 @@ public static partial class MachineSurveyor
             return new ContainerSurvey
             {
                 Name = name,
+                Id = container.TryGetProperty("Id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() ?? string.Empty : string.Empty,
                 PublishedPorts = published,
                 ServesHttps = urls is null ? null : urls.Contains("https://", StringComparison.OrdinalIgnoreCase),
                 AllowedHosts = environment.GetValueOrDefault("AllowedHosts") is { Length: > 0 } allowed && allowed != "*" ? allowed : null,

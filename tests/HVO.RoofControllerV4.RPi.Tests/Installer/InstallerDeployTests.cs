@@ -104,7 +104,7 @@ public sealed class InstallerDeployTests
             PublishAddress = "127.0.0.1",
             Digest = FakeMachine.EmulatorDigest,
             Settings = new Dictionary<string, string> { [MachineSurveyor.EmulatorTimeScaleSetting] = "10", [MachineSurveyor.EmulatorCameraFramesSetting] = "2" }
-        });
+        }, options => options.Excluding(container => container.Id));
         bench.Deploys.Should().ContainSingle().Which.Should().Contain(new Dictionary<string, string>
         {
             ["BUILD_PLATFORM"] = "linux/amd64",

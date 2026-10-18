@@ -78,8 +78,8 @@ public sealed record ControllerSettings
 
     /// <summary>
     /// The controller container's resource limits (docs/deployment.md, "The container's privileges and limits"): the
-    /// process limit, and a CPU and a memory limit only when given (none by default until a follow-up, #138 item 6).
-    /// Kept in the install record, so an upgrade and a rollback give the container the same.
+    /// process, CPU and memory limits, RoofController's default for each one not given. Kept in the install record, so an
+    /// upgrade and a rollback give the container the same.
     /// </summary>
     public ContainerResources Resources { get; init; } = new();
 
@@ -190,16 +190,26 @@ public sealed record ControllerSettings
 
 /// <summary>
 /// The controller container's resource limits, as the deploy script gives them (CONTAINER_CPUS, CONTAINER_MEMORY and
-/// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"). The process limit is always given.
-/// The CPU and memory limits are given only when set: none is by default until a follow-up turns RoofController's
-/// default on (#138 item 6), as a limit is one more way for the kernel to end the controller mid-motion. One
-/// that is set is at least the RoofController floor of 1 vCPU and 1 GiB (owner decision on #129, 2026-10-16); less is
-/// refused, with no exception.
-/// The future default is 1 vCPU / 2 GiB, turned on by that follow-up. The container gets no swap beyond its memory.
+/// CONTAINER_PIDS_LIMIT; docs/deployment.md, "The container's privileges and limits"), always. A CPU or memory limit an
+/// operator set is recorded and kept, as SkyMonitor's instance manifest keeps its own; one not set is recorded as none,
+/// and the deploy script resolves it (<see cref="Roles.ResolvedResources"/>; review ROOF-151-R2 F5): the desired-limits
+/// record's, then the running controller's, then RoofController's default, 1 vCPU and 2 GiB (owner decision on #149). A
+/// record that keeps the default follows it, so an upgrade moves a limit nobody set to a new default; to go back to the
+/// default from one that was set, give the default. The process limit is 512 unless set. One that is set is at least
+/// the RoofController floor of 1 vCPU and 1 GiB (owner decision on #129, 2026-10-16); less is refused, with no
+/// exception, and there is no setting for no limit. The container gets no swap beyond its memory. The kernel ends a
+/// controller that reaches its memory limit, and the container's supervisor then turns the relays off
+/// (docs/deployment.md, "The relays when the controller exits").
 /// </summary>
 public sealed partial record ContainerResources
 {
     public const int DefaultPidsLimit = 512;
+
+    /// <summary>RoofController's default CPU limit, for one not set: 1 vCPU.</summary>
+    public const decimal DefaultCpus = 1;
+
+    /// <summary>RoofController's default memory limit, for one not set: 2 GiB.</summary>
+    public const string DefaultMemory = "2g";
 
     /// <summary>RoofController's minimum CPUs, for a CPU limit that is set.</summary>
     public const decimal MinimumCpus = 1;
@@ -210,43 +220,44 @@ public sealed partial record ContainerResources
     public const int MinimumPidsLimit = 256;
     public const int MaximumPidsLimit = 32768;
 
-    /// <summary>CPUs, as <c>docker run --cpus</c> takes them (2, 2.5), with at most two decimals; none (the default) for no CPU limit.</summary>
+    /// <summary>CPUs, as <c>docker run --cpus</c> takes them (2, 2.5), with at most two decimals; none for the default (<see cref="DefaultCpus"/>).</summary>
     public decimal? Cpus { get; init; }
 
-    /// <summary>Memory, as a whole number of MiB or GiB (1024m, 1g); none (the default) for no memory limit.</summary>
+    /// <summary>Memory, as a whole number of MiB or GiB (1024m, 1g); none for the default (<see cref="DefaultMemory"/>).</summary>
     public string? Memory { get; init; }
 
     /// <summary>The most processes and threads the container runs at once (<c>docker run --pids-limit</c>).</summary>
     public int PidsLimit { get; init; } = DefaultPidsLimit;
 
-    /// <summary>The memory in bytes; null when there is no memory limit, or <see cref="Memory"/> is not a whole number of MiB or GiB.</summary>
+    /// <summary>The CPU limit the container is given: the one set, or the default.</summary>
+    [JsonIgnore]
+    public decimal CpusOrDefault => Cpus ?? DefaultCpus;
+
+    /// <summary>The memory limit the container is given: the one set, or the default.</summary>
+    [JsonIgnore]
+    public string MemoryOrDefault => Memory ?? DefaultMemory;
+
+    /// <summary>The memory limit the container is given, in bytes; null when <see cref="Memory"/> is not a whole number of MiB or GiB.</summary>
     [JsonIgnore]
     public long? MemoryBytes
-        => MemoryPattern().Match(Memory ?? string.Empty) is { Success: true } match
+        => MemoryPattern().Match(MemoryOrDefault) is { Success: true } match
             && long.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
                 ? number * (char.ToLowerInvariant(match.Groups[2].Value[0]) == 'g' ? 1024L * 1024 * 1024 : 1024L * 1024)
                 : null;
 
-    /// <summary>The CPUs as Docker counts them (HostConfig.NanoCpus); 0 for no CPU limit.</summary>
+    /// <summary>The CPU limit the container is given, as Docker counts it (HostConfig.NanoCpus).</summary>
     [JsonIgnore]
-    public long NanoCpus => Cpus is { } cpus ? (long)(cpus * 1_000_000_000m) : 0;
+    public long NanoCpus => (long)(CpusOrDefault * 1_000_000_000m);
 
-    /// <summary>The CPUs as the deploy script and Docker write them (2, 2.5); null for no CPU limit.</summary>
+    /// <summary>The CPU limit the container is given, as the deploy script and Docker write it (1, 2.5).</summary>
     [JsonIgnore]
-    public string? CpusText => Cpus?.ToString("0.##", CultureInfo.InvariantCulture);
+    public string CpusText => CpusOrDefault.ToString("0.##", CultureInfo.InvariantCulture);
 
     /// <summary>The limits, as the plan and the deploy script say them.</summary>
     public string Describe()
-    {
-        var limits = (Cpus, Memory) switch
-        {
-            (not null, not null) => $"{CpusText} CPUs, {Memory} of memory and no swap",
-            (not null, null) => $"{CpusText} CPUs and no memory limit",
-            (null, not null) => $"no CPU limit, {Memory} of memory and no swap",
-            _ => "no CPU or memory limit"
-        };
-        return string.Create(CultureInfo.InvariantCulture, $"{limits}, at most {PidsLimit} processes and threads");
-    }
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{(CpusOrDefault == 1 ? "1 CPU" : $"{CpusText} CPUs")}, {MemoryOrDefault} of memory and no swap, at most {PidsLimit} processes and threads");
 
     public IEnumerable<string> Problems()
     {
@@ -258,7 +269,7 @@ public sealed partial record ContainerResources
             }
             else if (cpus < MinimumCpus)
             {
-                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1, or leave it out for no CPU limit.";
+                yield return $"The controller's CPU limit of {CpusText} (controller.resources.cpus, or --cpus) is less than 1 vCPU, the minimum (RoofController's): give at least 1 (the default is 1).";
             }
         }
 
@@ -270,7 +281,7 @@ public sealed partial record ContainerResources
             }
             else if (memory < MinimumMemoryBytes)
             {
-                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g, or leave it out for no memory limit.";
+                yield return $"The controller's memory limit of {Memory} (controller.resources.memory, or --memory) is less than 1g, the minimum (RoofController's): give at least 1g (the default is {DefaultMemory}).";
             }
         }
 
@@ -286,7 +297,7 @@ public sealed partial record ContainerResources
     /// </summary>
     public ContainerResources Normalised() => this with
     {
-        Cpus = Cpus is { } cpus && decimal.Round(cpus, 2) == cpus ? decimal.Parse(CpusText!, NumberStyles.Number, CultureInfo.InvariantCulture) : Cpus,
+        Cpus = Cpus is { } cpus && decimal.Round(cpus, 2) == cpus ? decimal.Parse(CpusText, NumberStyles.Number, CultureInfo.InvariantCulture) : Cpus,
         Memory = string.IsNullOrWhiteSpace(Memory)
             ? null
             : MemoryPattern().Match(Memory) is { Success: true } match

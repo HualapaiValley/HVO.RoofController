@@ -378,6 +378,51 @@ public sealed class NetworkRemovalStep : PlanStep
         => ContainerRemovalStep.DockerAsync(context, $"remove the {HatEmulatorStep.Network} network", cancellationToken, "network", "rm", HatEmulatorStep.Network);
 }
 
+/// <summary>
+/// The controller's desired-limits records (<see cref="DesiredLimits"/>), which the deploy script writes for its next
+/// deploy, removed by the uninstall and the purge of a record that owns the controller, whether or not the controller's
+/// container is there (reviews ROOF-151-R2 F6, R3 F9 and F11), so that a reinstall starts from RoofController's defaults:
+/// every record volume, the earlier format's included. One that cannot list them (Docker does not answer) is blocked, so
+/// nothing is removed and the install record stays for a run that can; a run that stops part way, or cannot remove one,
+/// fails before the record says it is uninstalled, so running it again removes the ones left.
+/// </summary>
+public sealed class DesiredLimitsRemovalStep : PlanStep
+{
+    public override StepKind Kind => StepKind.Container;
+
+    public override string Target => $"volumes {DesiredLimits.Prefix(MachineSurveyor.ControllerContainer)}<generation>";
+
+    public override string Purpose => "the controller's desired limits, which the deploy script records for its next deploy";
+
+    public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var (volumes, _, problem) = await MachineSurveyor.SurveyDesiredLimitsAsync(context.Machine, cancellationToken).ConfigureAwait(false);
+        if (problem is not null)
+        {
+            return new StepCheck(StepChange.Blocked, $"the installer could not list them ({problem}), and the controller installed here may have left some: nothing is removed, the install record included, until it can. Start Docker, then run it again");
+        }
+
+        return volumes.Count == 0 ? StepCheck.Unchanged("none here") : new StepCheck(StepChange.Remove, $"removed: {string.Join(", ", volumes)}");
+    }
+
+    public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var (volumes, _, problem) = await MachineSurveyor.SurveyDesiredLimitsAsync(context.Machine, cancellationToken).ConfigureAwait(false);
+        if (problem is not null)
+        {
+            throw new InstallerException($"The installer could not list the controller's desired-limits records ({problem}). Run the uninstall again once Docker answers.");
+        }
+
+        foreach (var volume in volumes)
+        {
+            await ContainerRemovalStep.DockerAsync(context, $"remove the desired-limits record {volume}", cancellationToken, "volume", "rm", "--force", volume).ConfigureAwait(false);
+            context.Log.Write($"Removed the desired-limits record {volume}.");
+        }
+    }
+}
+
 /// <summary>The kiosk's service, stopped and disabled, and its unit removed (<c>hvo-roof-install uninstall</c>).</summary>
 public sealed class KioskServiceRemovalStep : PlanStep
 {

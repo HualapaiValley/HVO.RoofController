@@ -16,12 +16,15 @@
 # Each controller container runs two processes under a supervisor (docs/deployment.md, "The container's two
 # processes"): the controller and the web UI. docker stop stops the controller first, so its shutdown stops the roof.
 # Every controller container, and each deployment check, has the deploy script's privileges and limits (x-hardening;
-# docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_PIDS_LIMIT (default 512) always, and a CPU and
-# a memory limit only when HVO_ROOF_CPUS and HVO_ROOF_MEMORY are set (none by default, until a follow-up turns
-# RoofController's default on, #138 item 6). One that is set must be at least 1 vCPU and 1g, RoofController's
-# floor (owner decision on #129, 2026-10-16). The supervisor checks that floor before starting either process or the
-# deployment check. Compose does not check Docker's cgroup support; check docker info first. The future default is
-# 1 vCPU / 2 GiB, turned on by that follow-up.
+# docs/deployment.md, "The container's privileges and limits"): HVO_ROOF_PIDS_LIMIT (default 512), HVO_ROOF_CPUS
+# (default 1) and HVO_ROOF_MEMORY (default 2g, with no swap beyond it), always: RoofController's default (owner decision
+# on #149). One that is set must be at least 1 vCPU and 1g, RoofController's floor; there is no setting for no limit.
+# The supervisor checks that floor before starting either process or the deployment check. Compose keeps no record of
+# the values: set them again for each `up`. Unlike the deploy script and the installer, which refuse a host whose Docker
+# cannot enforce the limits, Compose does not check: Docker drops a limit it cannot enforce with only a warning (a
+# Raspberry Pi's firmware turns the memory controller off). Check first that
+#   docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}'
+# prints true four times.
 #
 # A third profile runs the controller against the HAT emulator instead of the HAT. It maps no devices and uses its own
 # container and image names and its own network, so it does not collide with either profile above:
@@ -48,8 +51,8 @@
 #   docker compose --profile pi build && docker compose --profile pi run --rm roof-controller-check
 
 x-resource-environment: &resource-environment
-  HVO_ROOF_CPUS: ${HVO_ROOF_CPUS:-}
-  HVO_ROOF_MEMORY: ${HVO_ROOF_MEMORY:-}
+  HVO_ROOF_CPUS: ${HVO_ROOF_CPUS:-1}
+  HVO_ROOF_MEMORY: ${HVO_ROOF_MEMORY:-2g}
 
 x-roof-environment: &roof-environment
   <<: *resource-environment
@@ -167,8 +170,8 @@ x-logging: &logging
 # The container's privileges and limits, as the deploy script gives them: a read-only root filesystem, with tmpfs for
 # what the container writes outside its mounts (the supervisor's run directory, /tmp and the controller's ASP.NET Core
 # key ring); only the supervisor's capabilities (CHOWN, KILL, SETGID and SETUID, to run the web UI as its own user);
-# no-new-privileges; and the limits, with the memory limit for memswap_limit too, so the container never swaps. 0, the
-# default for the CPUs and the memory, is no limit.
+# no-new-privileges; and the limits, with the memory limit for memswap_limit too, so the container never swaps: by
+# default RoofController's 1 vCPU and 2g, and 512 processes.
 x-hardening: &hardening
   read_only: true
   tmpfs:
@@ -184,9 +187,9 @@ x-hardening: &hardening
     - SETUID
   security_opt:
     - no-new-privileges
-  cpus: ${HVO_ROOF_CPUS:-0}
-  mem_limit: ${HVO_ROOF_MEMORY:-0}
-  memswap_limit: ${HVO_ROOF_MEMORY:-0}
+  cpus: ${HVO_ROOF_CPUS:-1}
+  mem_limit: ${HVO_ROOF_MEMORY:-2g}
+  memswap_limit: ${HVO_ROOF_MEMORY:-2g}
   pids_limit: ${HVO_ROOF_PIDS_LIMIT:-512}
 
 # The web UI's sign-in keys (/var/lib/hvo-roof-web): a volume of the container's own beside the read-only root

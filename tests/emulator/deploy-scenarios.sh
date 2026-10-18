@@ -36,8 +36,9 @@
 #              version and back.
 #
 # The controller runs as the deploy script runs it (docs/deployment.md, "The container's privileges and limits"): a
-# read-only root filesystem, only the supervisor's capabilities and the default limits (512 processes, and no CPU or
-# memory limit until the follow-up, #138 item 6; c12 gives one to a rollback). Without CAP_DAC_OVERRIDE, root in
+# read-only root filesystem, only the supervisor's capabilities and the default limits (1 vCPU, 2g of memory with no
+# swap, and 512 processes, #149; c12 gives a rollback others, which persist, then the default again). Each group reports
+# the container's memory use against its limit; supervisor measures it under load. Without CAP_DAC_OVERRIDE, root in
 # the container reaches its mounts only where root owns them, as the installer and the deployment docs make them, so the
 # fixtures (secrets, certificate, identity and settings directories) are given to root with sudo -n.
 #
@@ -157,11 +158,22 @@ write_results() {
   } > "${SCN_RESULTS_DIR}/deploy-scenarios.md"
 }
 
+# desired_records: the deploy script's desired-limits records for this run's controller (<name>-limits-g<generation>,
+# and the earlier format's <name>-limits), one a line.
+desired_records() {
+  docker volume ls --quiet --filter "name=${controller}-limits" 2>/dev/null | grep -E "^${controller}-limits(-g[0-9]+)?\$" || true
+}
+
 remove_controllers() {
+  local record
   docker compose -f "${compose_file}" -f "${work}/compose.override.yaml" -p "${compose_project}" --profile pi \
     down --volumes --remove-orphans >/dev/null 2>&1 || true
-  # With their volumes: each controller keeps the web UI's sign-in keys on one of its own.
+  # With their volumes: each controller keeps the web UI's sign-in keys on one of its own. And the deploy script's desired
+  # limits' records, each a volume of its own.
   docker rm -f -v "${controller}" "${previous}" "${controller}-swap" >/dev/null 2>&1 || true
+  for record in $(desired_records); do
+    docker volume rm -f "${record}" >/dev/null 2>&1 || true
+  done
 }
 
 cleanup() {
@@ -579,6 +591,86 @@ container_running() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == true ]]
 }
 
+# The memory limit the scenarios run with: RoofController's default (#149).
+default_memory_bytes=2147483648
+
+# memory_report <container>: its memory against its limit, from its cgroup (cgroup v2): the most it has used since it
+# started (memory.peak; memory.current on a kernel without it, before 5.19), its limit (memory.max) and the times the
+# kernel ended a process at that limit (memory.events oom_kill), with each supervised process's peak resident memory
+# (VmHWM: the controller's and the web UI's). Sets MEMORY_TEXT, MEMORY_PEAK and MEMORY_OOM_KILLS; empty text where the
+# host has cgroup v1.
+MEMORY_TEXT="" MEMORY_PEAK=0 MEMORY_OOM_KILLS=0
+memory_report() {
+  local name=$1 cgroup peak max kills controller_pid ui_pid controller_hwm ui_hwm controller_text="?" ui_text="?"
+  MEMORY_TEXT="" MEMORY_PEAK=0 MEMORY_OOM_KILLS=0
+  docker exec "${name}" test -e /sys/fs/cgroup/cgroup.controllers || return 0
+  cgroup=$(docker exec "${name}" sh -c 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.max; sed -n "s/^oom_kill //p" /sys/fs/cgroup/memory.events') \
+    || fail "could not read the memory of ${name}'s cgroup"
+  { read -r peak; read -r max; read -r kills; } <<<"${cgroup}"
+  [[ "${peak}" =~ ^[0-9]+$ ]] || fail "${name}'s cgroup reports no memory use: ${cgroup}"
+  controller_pid=$(supervised_value '.controller.pid')
+  ui_pid=$(supervised_value '.ui.pid')
+  controller_hwm=$(docker exec "${name}" sed -n 's/^VmHWM:[[:space:]]*\([0-9]*\) kB/\1/p' "/proc/${controller_pid}/status" 2>/dev/null || true)
+  ui_hwm=$(docker exec "${name}" sed -n 's/^VmHWM:[[:space:]]*\([0-9]*\) kB/\1/p' "/proc/${ui_pid}/status" 2>/dev/null || true)
+  MEMORY_PEAK=${peak}
+  MEMORY_OOM_KILLS=${kills:-0}
+  MEMORY_TEXT="container peak $(( peak / 1048576 )) MiB of its ${max} limit"
+  if [[ "${max}" =~ ^[0-9]+$ ]]; then
+    MEMORY_TEXT="container peak $(( peak / 1048576 )) MiB of its $(( max / 1048576 )) MiB limit ($(( (max - peak) / 1048576 )) MiB headroom, $(( max / (peak > 0 ? peak : 1) ))x)"
+  fi
+  [[ ! "${controller_hwm}" =~ ^[0-9]+$ ]] || controller_text="$(( controller_hwm / 1024 )) MiB"
+  [[ ! "${ui_hwm}" =~ ^[0-9]+$ ]] || ui_text="$(( ui_hwm / 1024 )) MiB"
+  # Resident memory counts the pages the two share (the .NET runtime's) in each.
+  MEMORY_TEXT+="; peak resident: controller ${controller_text}, web UI ${ui_text}; OOM kills ${MEMORY_OOM_KILLS}"
+}
+
+# memory_check <container> <what>: memory_report as a check of its own, with the container at the default memory limit
+# and no process ended at it.
+memory_check() {
+  local name=$1 what=$2 max
+  current_check="Memory at the default limit: ${what}"
+  max=$(docker inspect --format '{{.HostConfig.Memory}}' "${name}") || fail "could not inspect ${name}"
+  (( max == default_memory_bytes )) || fail "${name} runs with a memory limit of ${max}, not the default ${default_memory_bytes}"
+  memory_report "${name}"
+  [[ -n "${MEMORY_TEXT}" ]] || { pass "the host has cgroup v1: not measured"; return 0; }
+  (( MEMORY_OOM_KILLS == 0 )) || fail "the kernel ended ${MEMORY_OOM_KILLS} process(es) at the memory limit: ${MEMORY_TEXT}"
+  (( MEMORY_PEAK < default_memory_bytes )) || fail "the container reached its memory limit: ${MEMORY_TEXT}"
+  pass "${MEMORY_TEXT}"
+}
+
+# load_for <seconds>: 24 clients calling Status, 6 reading the web UI's home page and 2 camera streams at once, through
+# the published ports, until the time is up. Each client is a loop of the scenario's own that ends by itself, and is
+# waited for by its recorded PID.
+load_for() {
+  local deadline client pids=()
+  deadline=$(( $(date +%s) + $1 ))
+  for client in $(seq 24); do
+    (
+      while (( $(date +%s) < deadline )); do
+        printf 'X-Api-Key: %s\n' "${operator_key}" \
+          | curl -fsS --max-time 5 --cacert "${work}/ca.pem" -H @- -o /dev/null "${roof_api}/Status" 2>/dev/null || true
+      done
+    ) &
+    pids+=($!)
+  done
+  for client in $(seq 6); do
+    (
+      while (( $(date +%s) < deadline )); do
+        curl -fsS --max-time 5 --cacert "${work}/ca.pem" -o /dev/null "${web}/" 2>/dev/null || true
+      done
+    ) &
+    pids+=($!)
+  done
+  for client in 1 2; do
+    printf 'X-Api-Key: %s\n' "${operator_key}" \
+      | curl -sS -N --max-time "$1" --cacert "${work}/ca.pem" -H @- -o /dev/null "${roof}/api/v1.0/Camera/2/mjpeg" 2>/dev/null &
+    pids+=($!)
+  done
+  for client in "${pids[@]}"; do
+    wait "${client}" || true
+  done
+}
+
 # container_stopped <name>: Docker says the container is not running. A docker error is neither running nor stopped.
 container_stopped() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == false ]]
@@ -695,6 +787,9 @@ setup() {
   docker compose version >/dev/null 2>&1 || fail "docker compose is required"
   if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap)?$")" ]]; then
     fail "a ${controller} container exists on this Docker host; these scenarios deploy their own under that name. Remove it first."
+  fi
+  if [[ -n "$(desired_records)" ]]; then
+    fail "a ${controller}-limits volume exists on this Docker host ($(desired_records | tr '\n' ' ')): the deploy script's desired-limits records, which these scenarios' deploys write their own in. Remove them first."
   fi
   if [[ -n "$(docker ps -aq --filter "name=^/(${emulator_name}|${registry_name})$")" ]] \
       || docker network inspect "${network}" >/dev/null 2>&1; then
@@ -1034,6 +1129,8 @@ scenario_lifecycle() {
   wait_for "the controller ready" 120 controller_ready
   assert_relays_off
   pass "the controller logged the failed stop and exited ${exit_code} in ${stop_seconds} s with the relays held (register ${held}), and the supervisor reported them unverified; once the writes worked, the new supervisor turned them off ${off_seconds} s after docker start, before the controller started"
+
+  memory_check "${controller}" "the lifecycle group's container, since its last start"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1079,7 +1176,7 @@ scenario_supervisor() {
   jq -e '.ReadonlyRootfs == true and .CapDrop == ["ALL"]
     and ([.CapAdd[] | ltrimstr("CAP_")] == ["CHOWN", "KILL", "SETGID", "SETUID"])
     and (.SecurityOpt | index("no-new-privileges") != null)
-    and .NanoCpus == 0 and .Memory == 0 and .MemorySwap == 0 and .PidsLimit == 512
+    and .NanoCpus == 1000000000 and .Memory == 2147483648 and .MemorySwap == 2147483648 and .PidsLimit == 512
     and .Tmpfs == {"/tmp": "size=64m", "/run/hvo-roof": "size=4m,mode=0755", "/root/.aspnet": "size=4m,mode=0700"}' <<<"${config}" >/dev/null \
     || fail "${controller} does not have the deploy script's privileges and limits: $(jq -c '{ReadonlyRootfs, CapDrop, CapAdd, SecurityOpt, NanoCpus, Memory, MemorySwap, PidsLimit, Tmpfs}' <<<"${config}")"
   docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/hvo-roof-web"}}{{.Type}}{{end}}{{end}}' "${controller}" \
@@ -1102,11 +1199,23 @@ scenario_supervisor() {
   [[ "${copies}" == "app:app 400 app:app 400" ]] || fail "the web UI's certificate copies are ${copies}, not app:app 400"
   control=$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/control) || fail "no /run/hvo-roof/control"
   [[ "${control}" == "root:app 770" ]] || fail "/run/hvo-roof/control is ${control}, not root:app 770"
-  # The kernel enforces the process limit, and no CPU or memory limit by default: the container's own cgroup (cgroup v2).
+  # The kernel enforces the default limits (#149): 1 vCPU, 2g with no swap and 512 processes, in the container's own
+  # cgroup (cgroup v2).
   cgroup=$(container_cgroup "${controller}")
-  [[ -z "${cgroup}" || "${cgroup}" == "max 100000 max max 512" ]] \
+  [[ -z "${cgroup}" || "${cgroup}" == "100000 100000 2147483648 0 512" ]] \
     || fail "the container's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
-  pass "read-only root filesystem (tmpfs /tmp, /run/hvo-roof, /root/.aspnet; a volume for the web UI's keys); the controller has only CHOWN, KILL, SETGID and SETUID, the web UI none, both no-new-privileges; the web UI's copies are app:app 400 and the control directory root:app 770; by default 512 processes and no CPU or memory limit${cgroup:+ (cgroup: ${cgroup})}"
+  pass "read-only root filesystem (tmpfs /tmp, /run/hvo-roof, /root/.aspnet; a volume for the web UI's keys); the controller has only CHOWN, KILL, SETGID and SETUID, the web UI none, both no-new-privileges; the web UI's copies are app:app 400 and the control directory root:app 770; by default 1 vCPU, 2g with no swap and 512 processes${cgroup:+ (cgroup: ${cgroup})}"
+
+  # The headroom the 2g default leaves the controller and its web UI together (#149): the API, the web UI and camera
+  # streams from 32 clients at once for 30 s, with a move.
+  local load_pid
+  load_for 30 &
+  load_pid=$!
+  start_travel Open
+  wait "${load_pid}" || true
+  wait_for "the roof still" 60 roof_is '.isMoving == false'
+  close_roof
+  memory_check "${controller}" "the controller and the web UI under 32 clients for 30 s (API, web UI, camera streams) with a move"
 
   container=$(container_id "${controller}")
   restarts=$(docker inspect --format '{{.RestartCount}}' "${controller}")
@@ -1600,8 +1709,9 @@ scenario_c12() {
   assert_relays_off
   pass "refused while the roof moved; ${previous} kept its limits (${limits})"
 
-  # The limits a rollback is given go to the version it brings back (docker update), and the next ones to the other.
-  current_check="C12 step 6: a rollback gives the version it brings back the limits"
+  # The limits a rollback is given go to the version it brings back (docker update); the next rollback, given none,
+  # keeps them from the controller it replaces (an override persists, #149); and the default given again ends them.
+  current_check="C12 step 6: a rollback gives the version it brings back the limits, and they persist"
   deploy CONTAINER_CPUS=2.5 CONTAINER_MEMORY=4g -- --rollback
   (( DEPLOY_STATUS == 0 )) || fail "the rollback with CPU and memory limits failed (exit ${DEPLOY_STATUS})"
   expect_deploy_log "[rollback] Giving ${previous} the limits: 2.5 CPUs, 4g of memory and no swap, at most 512 processes and threads"
@@ -1612,12 +1722,75 @@ scenario_c12() {
   [[ -z "${cgroup}" || "${cgroup}" == "250000 100000 4294967296 0 512" ]] \
     || fail "the rolled-back controller's cgroup has cpu.max, memory.max, memory.swap.max and pids.max ${cgroup}"
   deploy -- --rollback
-  (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits failed (exit ${DEPLOY_STATUS})"
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback with no limits given failed (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[deploy] The container's limits: 2.5 CPUs (kept from the last deploy), 4g of memory (kept from the last deploy) and no swap"
   limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${controller}")
-  [[ "$(container_id "${controller}")" == "${current_id}" && "${limits}" == "0 0 0 512" ]] \
-    || fail "the controller swapped back runs with ${limits}, not the default limits"
+  [[ "$(container_id "${controller}")" == "${current_id}" && "${limits}" == "2500000000 4294967296 4294967296 512" ]] \
+    || fail "the controller swapped back runs with ${limits}, not the 2.5 CPUs and 4g kept from the one it replaced"
+  deploy CONTAINER_CPUS=1 CONTAINER_MEMORY=2g -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits given failed (exit ${DEPLOY_STATUS})"
+  limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${controller}")
+  [[ "$(container_id "${controller}")" == "${previous_id}" && "${limits}" == "1000000000 2147483648 2147483648 512" ]] \
+    || fail "the controller rolled back with the default runs with ${limits}, not 1 vCPU and 2g"
   assert_relays_off
-  pass "a rollback with 2.5 CPUs and 4g brought back ${previous} with them${cgroup:+ (cgroup: ${cgroup})}, and the next, with the defaults, swapped back with no CPU or memory limit; relays off"
+  pass "a rollback with 2.5 CPUs and 4g brought back ${previous} with them${cgroup:+ (cgroup: ${cgroup})}; the next, given none, kept them for the version swapped back; the default given again brought back the first with 1 vCPU and 2g; relays off"
+
+  # A rollback on a host whose Docker cannot enforce the memory limit, as on a Pi whose firmware turned the memory
+  # controller off after an upgrade: a wrapper of the run's own in front of Docker makes the deploy script's docker info
+  # say so, and everything else is real Docker. The rollback is a recovery path, so it goes ahead with the limits Docker
+  # still enforces (the CPU and process limits) and warns, in its output and in the controller's log (#149). Then the
+  # default given again, on Docker as it is.
+  current_check="C12 step 6: a rollback on a host that cannot enforce the memory limit goes ahead and warns"
+  local real_docker no_memory="${work}/no-memory-cgroup"
+  real_docker=$(command -v docker)
+  mkdir -p "${no_memory}"
+  cat > "${no_memory}/docker" <<WRAPPER
+#!/usr/bin/env bash
+# Docker, except that the deploy script's docker info template reports MemoryLimit and SwapLimit false.
+if [[ " \$* " == *" info "* && "\$*" == *"{{.MemoryLimit}},"* ]]; then
+  "${real_docker}" "\$@" | awk -F, -v OFS=, 'NR == 1 { \$1 = "false"; \$4 = "false" } { print }'
+  exit "\${PIPESTATUS[0]}"
+fi
+exec "${real_docker}" "\$@"
+WRAPPER
+  chmod 0755 "${no_memory}/docker"
+  local swapped_limits rollback_start
+  rollback_start=$(now)
+  deploy "PATH=${no_memory}:${PATH}" -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback on a host that cannot enforce the memory limit was refused (exit ${DEPLOY_STATUS})"
+  expect_deploy_log "[rollback] WARNING: THE ROLLBACK GOES AHEAD, BUT DOCKER ON 127.0.0.1 CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them."
+  expect_deploy_log "[rollback] WARNING:   - docker-memory-limit-unsupported: docker info reports MemoryLimit false and SwapLimit false"
+  if deploy_log_has "docker-cpu-quota-unsupported" || deploy_log_has "docker-pids-limit-unsupported"; then
+    fail "the rollback warned of a limit Docker enforces"
+  fi
+  expect_deploy_log "enforces only these limits, which the rollback gives: 1 CPU, no memory limit (Docker here cannot enforce one), at most 512 processes and threads"
+  expect_deploy_log "[rollback] The warning is in the controller's log too (docker logs ${controller})."
+  swapped_limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.PidsLimit}}' "${controller}")
+  # The version brought back had 2.5 CPUs and 4g: the CPU limit is given, the memory limit is left as it was.
+  [[ "$(container_id "${controller}")" == "${current_id}" && "${swapped_limits}" == "1000000000 4294967296 512" ]] \
+    || fail "the rollback gave the version it brought back ${swapped_limits}, not the CPU and process limits alone"
+  container_log_has "${controller}" "[rollback] WARNING: from deploy-roofcontroller-rpi.sh --rollback," "${rollback_start}" \
+    || fail "the warning is not in ${controller}'s log"
+  container_log_has "${controller}" "[rollback] WARNING:   - docker-memory-limit-unsupported:" "${rollback_start}" \
+    || fail "${controller}'s log does not name the memory limit"
+  container_log_has "${controller}" 'Append " cgroup_enable=memory" to the end of the single line in /boot/firmware/cmdline.txt' "${rollback_start}" \
+    || fail "${controller}'s log does not name the fix"
+  # The desired limits outlive the rollback that could not enforce them (reviews ROOF-151-R1 F2, R2 F5): one record, the
+  # rollback's, written for the version it brought back.
+  local desired records
+  records=$(desired_records)
+  [[ -n "${records}" && "${records}" != *$'\n'* && "${records}" == "${controller}-limits-g"* ]] \
+    || fail "the desired limits' records are '${records}', not one ${controller}-limits-g<generation>"
+  desired=$(docker volume inspect --format '{{index .Labels "io.hvo.roof.limits"}} {{index .Labels "io.hvo.roof.limits.cpus"}} {{index .Labels "io.hvo.roof.limits.memory"}} {{index .Labels "io.hvo.roof.limits.written-by"}} {{index .Labels "io.hvo.roof.limits.controller"}}' "${records}") \
+    || fail "the desired limits' record ${records} cannot be read"
+  [[ "${desired}" == "1 1 2g rollback ${current_id:0:12}" ]] \
+    || fail "the rollback on a host that cannot enforce the memory limit recorded '${desired}', not 1 CPU and 2g by the rollback for ${current_id:0:12}"
+  deploy CONTAINER_CPUS=1 CONTAINER_MEMORY=2g -- --rollback
+  (( DEPLOY_STATUS == 0 )) || fail "the rollback with the default limits, on Docker as it is, failed (exit ${DEPLOY_STATUS})"
+  ! deploy_log_has "WARNING: THE ROLLBACK GOES AHEAD" || fail "a rollback on Docker as it is warned of a limit"
+  [[ "$(container_id "${controller}")" == "${previous_id}" ]] || fail "the last rollback did not swap back"
+  assert_relays_off
+  pass "a rollback whose Docker reported no memory limit support went ahead in ${DEPLOY_SECONDS} s with 1 CPU and 512 processes (the memory limit left as it was), and warned in its output and in ${controller}'s log, naming the memory limit and the fix; the next, on Docker as it is, swapped back with no warning; relays off"
 
   # CommissioningCheck("C12", "3")
   current_check="C12 step 3: an operator key that is not configured"
@@ -1746,6 +1919,8 @@ scenario_c12() {
   current_check="C12 step 10: the roof de-energized throughout steps 3-9"
   no_violations
   pass "every relay-register sample in steps 3-9 was 0 (in step 7, until the monitor stopped before ClearFault), and the emulator recorded no violations"
+
+  memory_check "${controller}" "the controller C12 leaves running, since it started"
 }
 
 # The deploy runs in a process group of its own (job control on for the fork), so a failed run can stop all of it.
@@ -1933,6 +2108,17 @@ scenario_migration() {
   default_camera_is scenario-camera || fail "the changed setting is not in effect on the Compose version again"
   assert_relays_off
   pass "a verified Stop (--verify-remote), docker stop and rm, the Compose version tagged back, then the check, compose up and --verify-remote: the Compose version runs again, the person still signs in, and the changed setting is still in effect"
+
+  # Compose gives the default limits too (#149), to Docker and to the supervisor, which checks their floor.
+  current_check="Migration: the Compose controller runs with the default limits"
+  local compose_limits
+  compose_limits=$(docker inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.PidsLimit}}' "${controller}") \
+    || fail "could not inspect the Compose controller"
+  [[ "${compose_limits}" == "1000000000 2147483648 2147483648 512" ]] || fail "the Compose controller runs with ${compose_limits}, not 1 vCPU and 2g"
+  docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${controller}" | grep -qx 'HVO_ROOF_MEMORY=2g' \
+    || fail "the Compose controller's supervisor was not given HVO_ROOF_MEMORY=2g"
+  memory_report "${controller}"
+  pass "NanoCpus, Memory, MemorySwap and PidsLimit ${compose_limits}, the supervisor given HVO_ROOF_CPUS and HVO_ROOF_MEMORY${MEMORY_TEXT:+; ${MEMORY_TEXT}}"
 
   compose down --volumes >/dev/null 2>&1
   docker rmi "${image}-compose" >/dev/null 2>&1 || true

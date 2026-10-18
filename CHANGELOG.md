@@ -24,14 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   refuse another before anything changes; each removes only the folders it made, and only what it put there. The installer trusts a container's release
   label only for an image with one of those IDs. See
   [The release it installs](docs/install.md#the-release-it-installs) (#127).
-- Resource limits for the controller's container: at most 512 processes by default, and a CPU and a memory limit (no
-  swap) only when given, with `hvo-roof-install`'s `controller.resources` answers or `--cpus`, `--memory` and
-  `--pids-limit`, or the deploy script's `CONTAINER_CPUS`, `CONTAINER_MEMORY` and `CONTAINER_PIDS_LIMIT`. A CPU limit
-  below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused, with no exception (also before
-  Compose starts either process or its deployment check). The install
-  record keeps them, and upgrade and rollback give them again. **No CPU or memory limit is given by default yet:** the
-  RoofController default of 1 vCPU and 2 GiB (owner decision on #129, 2026-10-16) is turned on by a follow-up (#138
-  item 6).
+- Resource limits for the controller's container: a CPU, a memory (no swap) and a process limit, by default 1 vCPU,
+  2 GiB and 512 processes (#149, under Changed), set with `hvo-roof-install`'s `controller.resources` answers or
+  `--cpus`, `--memory` and `--pids-limit`, or the deploy script's `CONTAINER_CPUS`, `CONTAINER_MEMORY` and
+  `CONTAINER_PIDS_LIMIT`. A CPU limit below 1 vCPU or a memory limit below 1 GiB, RoofController's floor, is refused,
+  with no exception (also before Compose starts either process or its deployment check). The install record keeps
+  them, and upgrade and rollback give them again (#129).
 - State contracts (#130): each image declares, in its `io.hvo.roof.state-contracts` label and in `release.json`'s
   `stateContracts`, the schema it writes and those it reads of each store the controller keeps (the identity store and
   the settings files). `upgrade` and `rollback` refuse (exit 3, nothing changed) a release that cannot read the stores
@@ -64,11 +62,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `install.sh --from DIR` no longer checks that ghcr.io answers: it checks that `DIR` holds the release's offline
   image archives for this machine instead (#127).
-- **The installer, `install.sh` and the deploy script refuse a host whose Docker does not enforce process limits, or
-  memory or CPU limits when one is given, or that has fewer CPUs than a CPU limit, with nothing changed.** Raspberry Pi
-  OS boots with the memory controller off: that refuses only a memory limit, and then add `cgroup_enable=memory` to the
-  single line in `/boot/firmware/cmdline.txt` and reboot. A memory limit above the machine's memory is kept, with a
-  warning: a limit is a cap, not a reservation (#129).
+- **The controller's container runs with CPU and memory limits by default: 1 vCPU and 2 GiB, with no swap beyond it,
+  RoofController's default (owner decision on #149), now that the supervisor turns the relays off whenever the
+  controller exits, an OOM kill included (#138).** A fresh install and an upgrade both give them, the upgrade to a
+  controller that had none. A value set persists, also through a rollback on a host that cannot enforce it: the install
+  record keeps it for upgrade and rollback, and the deploy script records the limits each deploy or rollback gives as
+  the desired ones (each record a Docker volume of its own, `roof-controller-limits-g<generation>`, replaced whole, so a
+  failed or interrupted update keeps the last good one, and validated on every read: each label read on its own, as
+  JSON, and its whole value checked). Given no `CONTAINER_CPUS` or `CONTAINER_MEMORY`, it keeps those (the running
+  controller's without a record, the default for a controller without one), and the installer and `install.sh` resolve a
+  limit not given the same way; the installer's uninstall and purge of the controller remove the records whether or not
+  the container is there. Compose's `HVO_ROOF_CPUS` and `HVO_ROOF_MEMORY` default to `1` and `2g`. A value below the 1
+  vCPU / 1 GiB floor is refused before anything changes; more is accepted. There is no longer a setting for no limit: an
+  empty `CONTAINER_CPUS` or `CONTAINER_MEMORY` is the default, not none (#149).
+- **The installer, `install.sh` and the deploy script refuse a host whose Docker does not enforce the container's
+  limits, with nothing changed and no override, as SkyMonitor does (#1285), on every install, upgrade and deploy**
+  (SkyMonitor checks only at install). One `docker info` must report `MemoryLimit` and `SwapLimit`, `CPUCfsQuota` and
+  `PidsLimit` as `true` (one it does not report counts as unsupported), and at least the CPUs of the CPU limit. The
+  refusal lists every finding, with the cgroup version, the kernel's cgroup v2 controllers and Docker's warnings about
+  limits, and the remedy. **A stock Raspberry Pi OS is refused**: its firmware adds `cgroup_disable=memory` to the
+  kernel's command line, so append ` cgroup_enable=memory` to the end of the single line in `/boot/firmware/cmdline.txt`
+  (the later argument wins) and reboot the Pi with the roof idle before the first deploy. The deploy script's
+  `--dry-run` reports the refusal (exit 1); `--stop` is not refused. A **rollback**, a recovery path, is not refused for
+  a limit Docker cannot enforce: it goes ahead with the ones it can, and warns loudly, naming each limit and the fix, in
+  its output and in the controller's log (`docker logs`); its other refusals (the floor, the CPUs, a Docker that does
+  not answer, the verified stop) stand; `install.sh rollback` warns and starts it too. Memory and swap are separate:
+  `SwapLimit` false alone is `docker-swap-limit-unsupported`, and a rollback there keeps the memory limit. An upgrade to
+  another release and a restore check the limits before their first change (the hand-over's backup and installer, the
+  restored files). A memory limit above the machine's memory is kept, with a warning: a limit is a cap, not a
+  reservation (#129, #149).
 - The mounted secrets, certificate, identity and settings directories must be root's, as the installer and
   [deployment.md](docs/deployment.md#one-time-preparation-on-the-pi) make them: the controller no longer has
   `CAP_DAC_OVERRIDE`, and the deployment check refuses a directory it cannot reach (#129).

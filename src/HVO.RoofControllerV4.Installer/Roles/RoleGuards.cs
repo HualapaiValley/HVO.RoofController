@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Record;
@@ -181,7 +182,10 @@ public static class RoleGuards
         }
         else if (InstallRoles.RunsController(roles))
         {
-            problems.AddRange(ContainerLimitProblems(survey.Docker.Limits, (answers.Controller ?? new ControllerSettings()).Normalised().Resources));
+            // The limits the deploy gives: the ones given, then the desired-limits record's, the running controller's, the default.
+            var resolved = ResolvedResources.Resolve((answers.Controller ?? new ControllerSettings()).Normalised().Resources, survey);
+            problems.AddRange(resolved.Problems);
+            problems.AddRange(ContainerLimitProblems(survey.Docker.Limits, resolved.Resources));
         }
 
         if (!planOnly && NeedsRigConfirmation(survey, roles) && !string.Equals(answers.RigConfirmation?.Trim(), survey.HostName, StringComparison.Ordinal))
@@ -204,44 +208,188 @@ public static class RoleGuards
     }
 
     /// <summary>
-    /// Why Docker here cannot give the controller its limits (docs/deployment.md, "The container's privileges and
-    /// limits"): it does not say it enforces the ones the controller is given (the process limit always, a CPU or memory
-    /// limit when one is set; it would drop one with only a warning), or the machine has fewer CPUs than a CPU limit. A
-    /// memory limit above the machine's memory is only a warning (<see cref="ContainerLimitWarnings"/>). The deploy script
-    /// checks the same before it changes anything.
+    /// How to let Docker enforce the controller's limits, as the deploy script says it: on a Raspberry Pi the firmware
+    /// adds cgroup_disable=memory to the kernel's command line itself, so cgroup_enable=memory goes at the end of
+    /// cmdline.txt's single line, where the later argument wins.
     /// </summary>
-    public static IEnumerable<string> ContainerLimitProblems(DockerLimits? docker, ContainerResources resources)
+    public const string ContainerLimitRemedy =
+        "To fix it on a Raspberry Pi: its firmware adds cgroup_disable=memory to the kernel's command line itself (it is not in the file). "
+        + "Append \" cgroup_enable=memory\" to the end of the single line in /boot/firmware/cmdline.txt (on that line, not a new one; the later argument wins), "
+        + "reboot the Pi with the roof idle, and check that docker info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsQuota}} {{.PidsLimit}}' prints true four times. "
+        + "On another machine, give the Docker daemon the memory, cpu and pids cgroup controllers. "
+        + "There is no override (docs/deployment.md, \"The container's privileges and limits\").";
+
+    /// <summary>
+    /// Why Docker here cannot give the controller its limits (docs/deployment.md, "The container's privileges and
+    /// limits"), which the deploy script refuses the same way before it changes anything (#149; as SkyMonitor's host
+    /// prerequisites, #1285). Docker must say it enforces the memory limit with no swap beyond it (MemoryLimit and
+    /// SwapLimit), the CPU quota (CPUCfsQuota) and the process limit (PidsLimit), since the controller always runs with
+    /// all three: Docker would drop one it cannot enforce with only a warning. One it does not report counts as
+    /// unsupported, and there is no override. The machine must also have the CPUs of the CPU limit. Every finding comes
+    /// in one problem, with the cgroup version, the kernel's cgroup v2 controllers when Docker runs here, Docker's
+    /// warnings about limits, and the remedy. A memory limit above the machine's memory is only a warning
+    /// (<see cref="ContainerLimitWarnings"/>).
+    /// A <paramref name="rollback"/> is a recovery path, so a limit Docker cannot enforce does not refuse it (the owner's
+    /// decision on #149): it is <see cref="ContainerLimitRollbackWarnings"/>' warning instead. The CPUs still count then,
+    /// for a CPU limit Docker enforces.
+    /// </summary>
+    public static IEnumerable<string> ContainerLimitProblems(DockerLimits? docker, ContainerResources resources, bool rollback = false)
     {
         ArgumentNullException.ThrowIfNull(resources);
         if (docker is null)
         {
-            yield return "Docker did not say which limits it enforces (docker info), and the controller runs with a process limit: check that docker info works, then run the installer again.";
+            yield return "Docker did not say which limits it enforces (docker info), and the controller runs with a CPU, a memory and a process limit: check that docker info works, then run the installer again.";
             yield break;
         }
 
-        var missing = new[] { ("memory", docker.Memory, resources.Memory is not null), ("CPU", docker.Cpu, resources.Cpus is not null), ("process", docker.Pids, true) }
-            .Where(limit => limit.Item3 && limit.Item2 != true)
-            .Select(limit => limit.Item1)
-            .ToArray();
-        if (missing.Length > 0)
+        var capabilities = UnenforcedLimits(docker, resources, "so Docker would run the controller without");
+        List<string> findings = rollback ? [] : [.. capabilities];
+        if (!rollback || docker.Cpu == true)
         {
-            static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
-            var guidance = missing.Contains("memory")
-                ? "On Raspberry Pi OS, add cgroup_enable=memory to the single line in /boot/firmware/cmdline.txt and reboot, or leave out controller.resources.memory (--memory) for no memory limit; "
-                    + "elsewhere, give the Docker daemon the memory, cpu and pids cgroup controllers."
-                : "Give the Docker daemon the memory, cpu and pids cgroup controllers.";
-            yield return $"Docker here does not enforce {string.Join(", ", missing)} limits (docker info: MemoryLimit {Flag(docker.Memory)}, CPUCfsQuota {Flag(docker.Cpu)}, PidsLimit {Flag(docker.Pids)}), "
-                + $"so the controller would run without them. {guidance} Then run the installer again (docs/deployment.md, \"The container's privileges and limits\").";
+            if (docker.Cpus is not { } cpus)
+            {
+                findings.Add($"docker-host-cpus-unreported: docker info does not report the CPUs (NCPU), so the CPU limit of {resources.CpusText} cannot be checked against them.");
+            }
+            else if (resources.CpusOrDefault > cpus)
+            {
+                findings.Add(string.Create(CultureInfo.InvariantCulture, $"docker-host-cpus-insufficient: docker info reports {cpus} CPUs, fewer than the CPU limit of {resources.CpusText}: ")
+                    + (cpus >= ContainerResources.MinimumCpus
+                        ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from {ContainerResources.MinimumCpus} to {cpus}.")
+                        : "the CPU limit is at least 1."));
+            }
         }
 
-        if (resources.Cpus is { } limit && docker.Cpus is { } cpus && limit > cpus)
+        if (findings.Count == 0)
         {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's limit of {resources.CpusText} CPUs is more than the {cpus} Docker reports here: ")
-                + (cpus >= ContainerResources.MinimumCpus
-                    ? string.Create(CultureInfo.InvariantCulture, $"give controller.resources.cpus (or --cpus) from {ContainerResources.MinimumCpus} to {cpus}, or leave it out for no CPU limit.")
-                    : "leave out controller.resources.cpus (--cpus) for no CPU limit (one is at least 1).");
+            yield break;
         }
+
+        var problem = new StringBuilder($"Docker here cannot give the controller its limits ({resources.Describe()}), so the {(rollback ? "rollback" : "install")} is refused. Every finding:");
+        foreach (var finding in findings)
+        {
+            problem.Append(Environment.NewLine).Append("  - ").Append(finding);
+        }
+
+        if (!rollback && capabilities.Count > 0)
+        {
+            problem.Append(Environment.NewLine).Append("  Docker's host: ").Append(HostDetails(docker)).Append('.');
+            problem.Append(Environment.NewLine).Append("  ").Append(ContainerLimitRemedy).Append(" Then run the installer again.");
+        }
+
+        yield return problem.ToString();
     }
+
+    /// <summary>
+    /// The loud warning a rollback gives on a machine whose Docker cannot enforce some of the controller's limits, as the
+    /// deploy script's <c>--rollback</c> gives it too, in its output and in the controller's log: the rollback goes ahead
+    /// with the ones Docker can enforce, and the version it brings back runs without the others (the owner's decision on
+    /// #149). Each limit it cannot enforce is named, with the host's details and the remedy. Empty when Docker enforces
+    /// them all (or did not answer: <see cref="ContainerLimitProblems"/> refuses that).
+    /// </summary>
+    public static IEnumerable<string> ContainerLimitRollbackWarnings(DockerLimits? docker, ContainerResources resources)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        if (docker is null || UnenforcedLimits(docker, resources, "so the version the rollback brings back runs without") is not { Count: > 0 } unenforced)
+        {
+            yield break;
+        }
+
+        var warning = new StringBuilder("THE ROLLBACK GOES AHEAD, BUT DOCKER HERE CANNOT ENFORCE THESE LIMITS, so the version it brings back runs WITHOUT them. ")
+            .Append("A rollback is a recovery path, so it is not refused (#149); an install, an upgrade or a deploy is refused here until this is fixed:");
+        foreach (var limit in unenforced)
+        {
+            warning.Append(Environment.NewLine).Append("  - ").Append(limit);
+        }
+
+        warning.Append(Environment.NewLine).Append("  Docker's host: ").Append(HostDetails(docker)).Append('.');
+        warning.Append(Environment.NewLine).Append("  ").Append(ContainerLimitRemedy).Append(" Then upgrade again.");
+        yield return warning.ToString();
+    }
+
+    // Each limit Docker does not say it enforces, as a finding with its code. Memory and swap are separate controls
+    // (review ROOF-151-R1 F3): without swap control, the memory limit still holds and only the swap beyond it does not.
+    private static List<string> UnenforcedLimits(DockerLimits docker, ContainerResources resources, string without)
+    {
+        static string Flag(bool? flag) => flag switch { true => "true", false => "false", null => "not reported" };
+        var limits = new List<string>();
+        if (docker.Memory != true)
+        {
+            limits.Add($"docker-memory-limit-unsupported: docker info reports MemoryLimit {Flag(docker.Memory)} and SwapLimit {Flag(docker.Swap)}, {without} its memory limit ({resources.MemoryOrDefault}, and no swap beyond it).");
+        }
+        else if (docker.Swap != true)
+        {
+            limits.Add(without.Contains("rollback", StringComparison.Ordinal)
+                ? $"docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit {Flag(docker.Swap)}, so the version the rollback brings back keeps its memory limit ({resources.MemoryOrDefault}) but may swap beyond it."
+                : $"docker-swap-limit-unsupported: docker info reports MemoryLimit true and SwapLimit {Flag(docker.Swap)}, so Docker would let the controller swap beyond its memory limit ({resources.MemoryOrDefault}).");
+        }
+
+        if (docker.Cpu != true)
+        {
+            limits.Add($"docker-cpu-quota-unsupported: docker info reports CPUCfsQuota {Flag(docker.Cpu)}, {without} its CPU limit ({resources.CpusText}).");
+        }
+
+        if (docker.Pids != true)
+        {
+            limits.Add(string.Create(CultureInfo.InvariantCulture, $"docker-pids-limit-unsupported: docker info reports PidsLimit {Flag(docker.Pids)}, {without} its process limit ({resources.PidsLimit})."));
+        }
+
+        return limits;
+    }
+
+    // The cgroup version, the kernel's cgroup v2 controllers when Docker runs here, and Docker's warnings about limits.
+    private static string HostDetails(DockerLimits docker)
+    {
+        var host = new StringBuilder(docker.CgroupVersion is { } version ? $"cgroup v{version}" : "cgroup version not reported");
+        host.Append(docker.CgroupControllers is { } controllers
+            ? $"; {MachineSurveyor.CgroupControllersFile}: \"{controllers}\""
+            : $"; {MachineSurveyor.CgroupControllersFile} on Docker's machine lists the kernel's cgroup v2 controllers (Docker needs memory, cpu and pids)");
+        foreach (var warning in docker.Warnings.Where(warning =>
+                     warning.Contains("limit", StringComparison.OrdinalIgnoreCase)
+                     || warning.Contains("cfs", StringComparison.OrdinalIgnoreCase)
+                     || warning.Contains("cgroup", StringComparison.OrdinalIgnoreCase)))
+        {
+            host.Append($"; Docker warns \"{warning}\"");
+        }
+
+        return host.ToString();
+    }
+
+    /// <summary>
+    /// What refuses deploying the controller with <paramref name="answers"/>' limits here, checked before anything
+    /// changes: limits below the floor, Docker that is not usable, desired-limits records that cannot be read or are not
+    /// valid when a limit is needed from them (<see cref="ResolvedResources"/>), and a Docker that cannot enforce the
+    /// limits or has fewer CPUs (<see cref="ContainerLimitProblems"/>). Empty when the answers run no controller. For the paths that change
+    /// something before an install's own guards run (review ROOF-151-R1 F4): an upgrade's hand-over to another release's
+    /// installer (its backup, and the installer it puts in place), and a restore (the files it puts back).
+    /// </summary>
+    public static IEnumerable<string> ControllerLimitProblems(MachineSurvey survey, InstallAnswers answers)
+    {
+        ArgumentNullException.ThrowIfNull(survey);
+        ArgumentNullException.ThrowIfNull(answers);
+        if (!InstallRoles.RunsController(answers.Roles))
+        {
+            return [];
+        }
+
+        if (!survey.Docker.IsUsable)
+        {
+            return [$"The controller runs in Docker. {survey.Docker.Problem}"];
+        }
+
+        var given = (answers.Controller ?? new ControllerSettings()).Normalised().Resources;
+        var resolved = ResolvedResources.Resolve(given, survey);
+        return [.. given.Problems(), .. resolved.Problems, .. ContainerLimitProblems(survey.Docker.Limits, resolved.Resources)];
+    }
+
+    /// <summary>
+    /// What the installer warns of in the desired-limits records here (<see cref="DesiredLimits"/>), against the limits
+    /// <paramref name="given"/> (the record's, the answers', --cpus and --memory), as the deploy script warns: a limit given
+    /// that differs from the record's (the one given comes first, and the deploy records it), a record written for another
+    /// container than the running controller (it still comes first for a limit not given), and a record that is not valid
+    /// when every limit is given (it is not applied). <see cref="ResolvedResources.Warnings"/>.
+    /// </summary>
+    public static IReadOnlyList<string> DesiredLimitWarnings(MachineSurvey survey, ContainerResources given)
+        => ResolvedResources.Resolve(given, survey).Warnings;
 
     /// <summary>
     /// What the installer warns of in the controller's limits: a memory limit above the memory Docker reports here. It is
@@ -252,7 +400,7 @@ public static class RoleGuards
         ArgumentNullException.ThrowIfNull(resources);
         if (resources.MemoryBytes is { } limit && docker?.MemoryBytes is { } memory && limit > memory)
         {
-            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's memory limit of {resources.Memory} is more than the {memory / (1024 * 1024)}m Docker reports here. It is kept: a memory limit is a cap, not a reservation, so the machine runs out of memory before the container reaches it.");
+            yield return string.Create(CultureInfo.InvariantCulture, $"The controller's memory limit of {resources.MemoryOrDefault}{(resources.Memory is null ? " (the default)" : string.Empty)} is more than the {memory / (1024 * 1024)}m Docker reports here. It is kept: a memory limit is a cap, not a reservation, so the machine runs out of memory before the container reaches it.");
         }
     }
 
