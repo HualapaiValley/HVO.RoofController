@@ -37,8 +37,9 @@ Coordinate adapter migrations so a palette change does not silently recolour onl
   The `notice_pairs` mapping is normative across all adapters.
 - [RoofUiTheme's Stop feedback](../../src/HVO.RoofControllerV4.TerminalUi/RoofUiTheme.cs) currently uses InfoText,
   SuccessText and WarningText over page Background. During terminal migration, switch standalone feedback to
-  info/success/warning, or use the complete notice pair. Test **Sent, Acknowledged, RelayUnverified and Failed**
-  independently in ANSI-16 as well as truecolour/NO_COLOR. Copying new constants into those old schemes is unsafe.
+  info/success/warning, or use the complete notice pair. Test **Sent, both Acknowledged message cases,
+  RelayUnverified and Failed** independently in ANSI-16 as well as truecolour/NO_COLOR. Copying new constants into
+  those old schemes is unsafe.
 - Aim for at least 4.5:1 for normal text and 3:1 for large text and identifying control/focus boundaries in actual
   rendered combinations. Border tone is a separator, not sufficient by itself to identify keyboard focus. Check
   overlays, opacity/disabled text, selected input values and notice bands against their actual backgrounds. All four exact truecolour notice pairs calculate above 5:1, and text on focus is about 4.90:1; this is arithmetic, not rendered validation. A named
@@ -62,8 +63,18 @@ shown. No new confirmation is imposed on Stop. Ordinary primary actions and sele
 focus and selection also have an outline, marker or current-page text. Web `:focus-visible`, Avalonia keyboard focus,
 and terminal underline/reverse must survive disabled neighbours, overlays and every navigation path.
 
-Sent means only that the request is in progress. Acknowledged means the controller confirmed the verified stop.
-RelayUnverified means a response did not verify all-off; failed/no acknowledgement means delivery is unconfirmed.
+Sent means only that the request is in progress. Preserve the existing
+[RoofStopText.Classify](../../src/HVO.RoofControllerV4.Client/RoofStopText.cs) outcome **and message**, including both
+successful cases that share `RoofStopOutcome.Acknowledged`:
+
+- A successful response with `RelayRegisterState.Verified` selects `RoofStopText.AcknowledgedVerified`, which reports
+  verified de-energized relay-register evidence. Read-back proves the register, never the physical contacts.
+- A successful response with missing or `Unknown` verification selects generic `RoofStopText.Acknowledged`, making
+  no register-verification claim. This includes HTTP 200 with an unreadable body. The enum alone cannot distinguish
+  these acknowledgement cases; do not infer verification from it or invent a new outcome.
+
+`RelayUnverified` retains its shared acknowledged-but-unverified or sent-but-unverified wording, as classified from
+the response/error. `Failed` retains the failure/no-acknowledgement wording. Neither can be promoted to verified success.
 A good-looking button, camera frame, animation or feed reconnect is never proof of successful roof control.
 
 ## Geometry and information hierarchy

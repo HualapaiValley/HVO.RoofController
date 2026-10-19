@@ -57,7 +57,7 @@ loading spinners or empty states for a purely local button.
 | `motion` | Closed/open/between-limits/unknown/opening/closing, blocked direction, starting departure phase, latch, watchdog and optional lease enabled/disabled/renewing/lost/expired; controller-backed values only. |
 | `feed` | No first snapshot, connecting/live, stale heartbeat/last-known timestamp, disconnected, refused/expired feed, reconnect and recovery; separate page circuit from controller feed. |
 | `camera` | No configured IDs, initialization/waiting first frame, live, paused, stalled/stale retained frame, offline/error/refused/expired, retry/reconnect, unsupported browser operation and disposal. |
-| `stop` | Sending, acknowledged verified stop, `RelayUnverified`, failed/no acknowledgement; retry and concurrent result ordering. Never imply the relay contacts were verified. |
+| `stop` | Sending; `Acknowledged` with verified register evidence (`AcknowledgedVerified` message); generic `Acknowledged` with missing/Unknown verification, including unreadable HTTP 200 body; `RelayUnverified`; failed/no acknowledgement; retry and concurrent result ordering. Preserve the shared outcome and message: the Acknowledged enum alone proves no register verification, and read-back never proves physical contacts. |
 | `long` | Long names, paths, messages, unbounded rows, multiline errors, Unicode cell width; bounded content and reachable actions. |
 | explicit states | `loading`, `empty`, `invalid`, `denied`, `expired`, `fault`, `offline`, `recovery` emphasize that case. `fault` includes plant latch versus communication/IO failure; `recovery` must never silently resume motion. |
 
@@ -110,5 +110,7 @@ Production [interface rights](../authentication-interfaces.md), [security](../se
   work is not absorbed into #158. Source dependencies alone do not prove what a published single-file executable ships.
 
 Foundation validation is documented in [validation.md](validation.md). No runtime layout/palette was changed, no .NET
-suite or hardware/container operation was run, and no new screenshot is claimed. This contributor-only inventory has
-no CHANGELOG entry; platform behavior and theme-removal PRs need their own entries and regenerated documentation images.
+suite or hardware/container operation was run, and no new screenshot is claimed. The contributor-only inventory needs
+no CHANGELOG entry. The operator-facing kiosk PIN guidance correction has a narrow Unreleased Fixed entry for #171;
+it describes existing policy, with no authentication behavior change. Platform behavior and theme-removal PRs need
+their own entries and regenerated documentation images.
