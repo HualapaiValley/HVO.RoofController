@@ -1,0 +1,2 @@
+# Preserve imported upstream licence/notice whitespace verbatim.
+src/HVO.RoofControllerV4.TerminalUi/Notices/THIRD-PARTY-NOTICES.txt -whitespace

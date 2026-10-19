@@ -108,6 +108,7 @@ public static partial class RoofCli
             options.Controller,
             options.CredentialsFile
         };
+        root.Options.Add(ThirdPartyNotices.CreateOption(host.Out));
 
         var builder = new CommandBuilder(host, options);
         foreach (var command in builder.CreateCommands())

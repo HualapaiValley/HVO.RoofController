@@ -1,5 +1,8 @@
 # hvo-roof: the command line and the terminal interface
 
+Read the embedded third-party notices offline with `hvo-roof --third-party-notices`.
+See [terminal distributions and notices](terminal-distributions.md) for the payload policy and verification.
+
 `hvo-roof` is the roof controller's command-line client (#45). It runs on the Pi next to the controller, or on any Linux
 machine or Apple silicon Mac that can reach it. Like every UI client, it talks to the controller only over its REST API
 and status hub, using the client library
