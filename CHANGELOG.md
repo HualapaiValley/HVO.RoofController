@@ -117,7 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Pull-mode deploy logs read version and commit labels independently, so whitespace in a version cannot forge the
-  displayed commit. Labels containing control characters, quotes or backslashes are suppressed independently (#157).
+  displayed commit. Pull and archive deploy logs show only printable ASCII labels without JSON escapes; other labels,
+  including ordinary Unicode, control characters, quotes and backslashes, are suppressed independently without
+  refusing deployment (#157).
 - Deploys and first installs keep a safely stopped controller with a classified drive or limit fault, with a warning
   naming the fault and requiring repair and explicit `ClearFault`, instead of removing it or rolling back. Docker
   uses software availability; operational `/health` and `/health/ready` still fail on latched faults. Input/relay,

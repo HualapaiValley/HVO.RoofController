@@ -474,10 +474,11 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   or an image with nothing for that platform, fails the pull. The script then checks what Docker reports for the image:
   its platform, and the digest among its repository digests, which also covers an image that was already on the Pi or
   came through a mirror. It prints the version and commit from the image's labels:
-  `[pull] sha256:... for linux/arm64: version 4.0.0, commit 0123abcd4567`. Each label is read independently; a label
-  containing control characters, quotes or backslashes is suppressed. A missing or suppressed version is shown as
-  `unknown`; a missing or suppressed commit is omitted. A failed platform or digest check stops the deploy before the
-  pre-flight, with the running controller untouched.
+  `[pull] sha256:... for linux/arm64: version 4.0.0, commit 0123abcd4567`. For pulled and loaded images, each label is
+  read independently. Only printable ASCII (`U+0020` through `U+007E`) without JSON escapes is shown: other values,
+  including ordinary Unicode, control characters, quotes and backslashes, are suppressed without refusing deployment.
+  A missing or suppressed version is shown as `unknown`; a missing or suppressed commit is omitted. A failed platform
+  or digest check stops the deploy before the pre-flight, with the running controller untouched.
 - From the pre-flight on, the deploy is the same as for a built image, and the pre-flight and the new controller run
   the checked platform's image. `--dry-run` shows the pull in its plan and pulls nothing.
 - `--rollback`, `--stop` and `--verify-remote` ignore `IMAGE_REF`, and do not check it. A rollback uses the exact image
@@ -571,6 +572,7 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   before; it points no other name at anything. The image is used only when Docker then holds it by one of the IDs the
   archive's digests give it, the index's (the containerd image store) or the platform's manifest's or config's (the
   classic store), for `BUILD_PLATFORM`: `[load] sha256:... for linux/arm64, image sha256:...: version 4.0.0, commit ...`.
+  Version and commit use the same printable-ASCII display policy as [pulled images](#deploying-a-released-image).
 - The pre-flight and the new controller run that image by its ID, with `docker run --pull never`, and the controller
   carries the label `io.hvo.roof.release-image=<IMAGE_REF>`, which the installer reads to know the release it runs. The
   label only claims it: the installer believes it only when Docker's ID for the image the container runs is one
