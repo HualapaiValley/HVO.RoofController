@@ -132,6 +132,25 @@ The earlier build/test/publish/capture evidence therefore remains applicable; br
 Normal new CI validates the merged head. No hardware, Docker, publication or host-service operation was performed;
 #158 remains open and all unowned rows/S01 status are preserved.
 
+## Reviewed fixture and shared CI budget integration
+
+Reviewed main `5f07a43b52303da784e8a469216402a2ca004011` (#185 / PR #186) adds only three eager
+`CliRig` test-host bootstrap lines after `c25f07e`. The conflict-free merge `994bdb016b75389f100649dfaefd5017cdf64c4b`
+imports that exact blob; every other tracked mode/blob, including Web source/tests/assets/captures and the complete
+matrix, is unchanged. Proof is `/tmp/hvo-174/integration186-proof.json`.
+
+The shared `build-and-test` budget copies only the reviewed **20 → 30 minute** YAML hunk and rationale from
+[PR #184, commit d784d2f](https://github.com/HualapaiValley/HVO.RoofController/commit/d784d2f61fdd9ecfe088805587128238567ba9b3).
+[Run 39201562307/job 117895607620](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39201562307/job/117895607620)
+was cancelled at 20m23s during artifact upload after 3,879 tests/four skips/zero failures and serial publishes passed.
+This records cumulative job-budget exhaustion, not a Web assertion failure or completed platform gate. The same job
+also runs Web's two Linux RID publishes. Whole-workflow normalization changes only this job's timeout; all other
+jobs, steps, timeouts, assertions, Web guards, final signatures/native/notice/byte checks remain unchanged.
+
+Integration uses exact blob/YAML normalization, documentation links, whitespace and trusted-secret checks; no broad
+local build/test/publish/capture or manual CI rerun is repeated. Historical provider-fallback attribution remains
+inferred. New hosted CI on the combined head remains the root-owned gate; #158 stays open.
+
 ## Reproducible captures and scope
 
 [Operator guide](../web.md#tests) documents `WebScreenshotTests` and `WEB_SCREENS_OUT`. They run the actual Web process
