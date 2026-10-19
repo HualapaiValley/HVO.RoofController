@@ -8,8 +8,8 @@ namespace HVO.RoofControllerV4.TerminalUi;
 
 /// <summary>
 /// The terminal programs (<c>hvo-roof ui</c> and the installer) in HVO Dark, the web UI's theme
-/// (<see cref="RoofUiPalette"/>): text on the page's dark background, the focused control in the accent blue, Stop yellow,
-/// Open green and Close red, and a stale status or an error in the theme's warning and danger colours. Terminal.Gui draws
+/// (<see cref="RoofUiPalette"/>): text on the page's dark background, the focused control in the accent blue, Stop red,
+/// Open and Close on raised surfaces, and a stale status or an error in the theme's warning and danger colours. Terminal.Gui draws
 /// the colours as the terminal allows: true colour, or the nearest of 256 or 16 colours. With <c>NO_COLOR</c> set
 /// (https://no-color.org) the interface is drawn in the terminal's own colours instead (<see cref="NoColour"/>);
 /// Terminal.Gui alone would still draw 16 colours.
@@ -56,10 +56,10 @@ public sealed class RoofUiTheme
         };
         PanelFrame = new(Panel) { Normal = Of(RoofUiPalette.Accent, RoofUiPalette.Surface, plain: TextStyle.Bold) };
         PanelError = new(Panel) { Normal = Of(RoofUiPalette.Danger, RoofUiPalette.Surface, TextStyle.Bold, TextStyle.Bold) };
-        _stopSent = new(Base) { Normal = Of(RoofUiPalette.InfoText, RoofUiPalette.Background) };
-        _stopAcknowledged = new(Base) { Normal = Of(RoofUiPalette.SuccessText, RoofUiPalette.Background) };
-        _stopUnverified = new(Base) { Normal = Of(RoofUiPalette.WarningText, RoofUiPalette.Background, TextStyle.Bold, TextStyle.Bold) };
-        _stopFailed = new(Base) { Normal = Of(RoofUiPalette.DangerText, RoofUiPalette.Background, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
+        _stopSent = new(Base) { Normal = Of(RoofUiPalette.Info, RoofUiPalette.Background) };
+        _stopAcknowledged = new(Base) { Normal = Of(RoofUiPalette.Success, RoofUiPalette.Background) };
+        _stopUnverified = new(Base) { Normal = Of(RoofUiPalette.Warning, RoofUiPalette.Background, TextStyle.Bold, TextStyle.Bold) };
+        _stopFailed = new(Base) { Normal = Of(RoofUiPalette.Danger, RoofUiPalette.Background, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
     }
 
     /// <summary>HVO Dark, in colour.</summary>
@@ -94,7 +94,7 @@ public sealed class RoofUiTheme
     /// <summary>What a key in the key bar does.</summary>
     public Scheme KeyName { get; }
 
-    /// <summary>The Stop button: yellow, as on the web UI, in every state; focus underlines it.</summary>
+    /// <summary>The Stop button: red, as in the shared design contract, in every state; focus underlines it.</summary>
     public Scheme Stop { get; }
 
     /// <summary>The Open button.</summary>
@@ -175,7 +175,7 @@ public sealed class RoofUiTheme
         return button;
     }
 
-    // A coloured button keeps its colour when focused, so Stop is always the yellow button: focus underlines the text.
+    // A coloured button keeps its colour when focused, so Stop is always the red button: focus underlines the text.
     // Without colour, Stop is always in reverse video (filled) and the others are bold, in reverse video when focused.
     private Scheme ButtonScheme(string text, string background, bool filled)
     {

@@ -14,19 +14,19 @@ observatory's web theme, sized for a mouse and a keyboard. It is built on Linux,
 
 The installer installs it and makes its device key ([With the installer](#with-the-installer)).
 
-![The Mac app signed in: the rail of pages, the badges (live status, who signed in), the position and the controls, the notices, and Stop at the right](images/mac/roof-1280x800.png)
+![The Mac app signed in: bounded native panels, the badges (live status, who signed in), the position and controls, with red Stop at the right](images/mac/roof-1280x800.png)
 
 ## The window
 
 The window opens at 1280x800 points, and can be made as small as 960x600: Stop, the pages and the status still fit.
 
-- **The rail** at the left: Roof, and Sign in. Once a person is signed in: Roof, Settings, System and Sign out.
+- **Navigation** along the bottom: Roof, Readings, Notices, About and Sign in. Password sessions also expose Settings, System and Sign out, with controller role checks intact.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the app renews it, and who is signed in
   (`olga (Operator)`), or `Signed out`.
-- **Banners** under the header, as on the kiosk: the mode banner, a stale or unreachable status, a latched fault,
-  relays that could not be verified, and safety inputs that could not be read.
-- **Stop roof** at the right of every page ([Stop](#stop)), with its answer under it.
+- **Safety summary** under the header, as on the kiosk. Readings keeps every complete mode/fault/feed/I/O warning
+  before the status values; Notices keeps complete recent messages on bounded pages.
+- **Stop roof** in permanent red at the right of every page ([Stop](#stop)), including questions and errors. A long response has a **Full result** document; acknowledgement alone does not claim register verification.
 
 The window never blanks: the controller's `KioskScreenTimeout` is for the kiosk, and the app does not read it.
 
@@ -332,7 +332,11 @@ artifact. To refresh them, from `src/`:
 ```bash
 HVO_KIOSK_RENDERS_DIR=/tmp/mac-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
   --filter "FullyQualifiedName~Mac"
-for f in ../docs/images/mac/*-*x*.png; do cp "/tmp/mac-renders/mac-$(basename "$f")" "$f"; done
+for f in ../docs/images/mac/*-*x*.png; do
+  source="/tmp/mac-renders/mac-$(basename "$f")"
+  [ ! -f "/tmp/mac-renders/$(basename "$f")" ] || source="/tmp/mac-renders/$(basename "$f")"
+  cp "$source" "$f"
+done
 ```
 
 To change the icon, change `MacIcon`, then draw it at each size and pack them:
@@ -349,3 +353,20 @@ cp /tmp/mac-icon/icon-256.png ../docs/images/mac/icon-256.png
 Choose **About** for this app's installed build and commit. After an administrator reads **System**, About shows the separately labelled controller build as last read. A stale connection or sign-out removes that value; the local version remains available.
 
 ![App and controller build identification](images/mac/mac-about-960x600.png)
+
+## Native redesign validation
+
+The desktop keeps its resizable window (minimum 960×600 points), Tab/Return/Escape sign-in and editing, masked
+password clearing, and password-session role boundaries. Administrative lists and questions scroll inside the shell;
+Stop stays outside them. Escape dismisses a focused question. Startup refusal groups the reason and settings path
+with recovery instructions and keeps Quit/Return/Escape outside the scrolling document. Closing the application
+continues to end its session and drop any held operator lease; it does not turn a PIN into desktop privileges.
+
+Compact limit and drive readings say **last read** with the successful-read time when input reads fail or the feed
+is stale, and **unavailable** before a successful read. A live status timestamp alone does not make inputs current.
+Readings and Full result retain complete multiline or no-space text across bounded pages, with full-size text and Stop.
+
+[Native redesign evidence](ui-redesign/native-evidence.md) records headless catalogue/editor/question coverage,
+reproducible images, the palette source pin and platform checks still owned by CI.
+
+![Safety-critical settings review in the minimum desktop window, with Stop outside the question](images/mac/safety-question-960x600.png)

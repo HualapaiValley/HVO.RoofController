@@ -1,4 +1,6 @@
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using HVO.RoofControllerV4.Client;
@@ -45,6 +47,10 @@ internal static class KioskPageParts
 
         answers.Children.Add(KioskTheme.TouchButton("Cancel", "question-cancel", metrics, cancel));
         panel.Children.Add(answers);
+        panel.AddHandler(InputElement.KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Key.Escape) { e.Handled = true; cancel(); }
+        }, RoutingStrategies.Tunnel);
         return KioskTheme.Card(panel, metrics);
     }
 
