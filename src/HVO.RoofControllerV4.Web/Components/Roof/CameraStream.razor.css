@@ -23,3 +23,6 @@
 .player-frame:fullscreen { padding-bottom: var(--web-stop-bar-space); }
 .player-frame:fullscreen .camera-stream__canvas { height: 100%; max-height: none; aspect-ratio: auto; }
 @media (max-width: 680px) { .camera-stream__overlay { inset-block-end: 112px; } .status-chip { flex-basis: 100%; margin: 0; } }
+
+.camera-control-message { margin: 0; padding: 12px 16px; border-top: 1px solid var(--roof-warning); background: var(--roof-warning-background); color: var(--roof-warning-text); font-size: 12px; }
+.player-frame:fullscreen .camera-control-message { position: absolute; top: 12px; left: 12px; right: 12px; border: 1px solid var(--roof-warning); border-radius: 6px; }

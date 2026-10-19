@@ -165,8 +165,10 @@ jobs:
       # #174: check the actual published Web assets, including the fingerprinted serving manifest and notices.
       - name: Publish and verify Web assets
         run: |
-          dotnet publish HVO.RoofControllerV4.Web -c Release -r linux-x64 --self-contained false -v minimal -o web-publish
-          python3 ../build/check-web-publish.py web-publish
+          for rid in linux-x64 linux-arm64; do
+            dotnet publish HVO.RoofControllerV4.Web -c Release -r "$rid" --self-contained false -v minimal -o "web-publish/$rid"
+            python3 ../build/check-web-publish.py "web-publish/$rid"
+          done
 
       # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof and hvo-roof-install for osx-arm64, and HVO
       # Roof.app. A Mac with Apple silicon runs no program that is not signed, ad hoc at least. Its release

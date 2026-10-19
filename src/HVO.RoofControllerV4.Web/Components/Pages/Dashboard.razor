@@ -181,10 +181,6 @@
                 @* A camera that fails takes only its own view with it: the roof controls, and Stop, are unaffected. *@
                 <ErrorBoundary @ref="_cameraErrorBoundary">
                     <ChildContent>
-                        @if (Cameras.Count == 0)
-                        {
-                            <p class="rc-camera-empty web-muted">No camera is configured.</p>
-                        }
                         @foreach (var camera in Cameras)
                         {
                             <CameraStream @key="camera" CameraId="camera" Label="@(Cameras.Count == 1 ? "Roof camera stream" : $"Camera {camera} stream")" />

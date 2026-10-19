@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'src/HVO.RoofControllerV4.Web'
 REQUIRED = (
     'css/hvo-dark.css', 'css/app.css', 'js/stop.js', 'js/ui.js',
+    'Components/Roof/CameraStream.razor.js',
     'lib/bootstrap/css/bootstrap.min.css', 'lib/bootstrap/LICENSE',
     'lib/bootstrap-icons/bootstrap-icons.min.css', 'lib/bootstrap-icons/LICENSE',
     'lib/bootstrap-icons/fonts/bootstrap-icons.woff', 'lib/bootstrap-icons/fonts/bootstrap-icons.woff2',
@@ -29,7 +30,8 @@ def check(publish, source=WEB, contract=ROOT / 'docs/ui-redesign/tokens.json'):
     """Check shipped bytes, dependencies, every local CSS reference and the SDK's serving manifest."""
     static = publish / 'wwwroot'
     for relative in REQUIRED:
-        actual, expected = static / relative, source / 'wwwroot' / relative
+        actual = static / relative
+        expected = source / relative if relative.startswith('Components/') else source / 'wwwroot' / relative
         require(actual.is_file() and actual.stat().st_size > 0, f'Missing published asset: {relative}')
         require(hashlib.sha256(actual.read_bytes()).digest() == hashlib.sha256(expected.read_bytes()).digest(),
                 f'Published asset differs from source: {relative}')
@@ -98,6 +100,12 @@ def check_http(publish, base_url):
             require(response.read() == (publish / 'wwwroot' / mapping).read_bytes(), 'Served bytes differ from publish output')
             if route.endswith('.css'):
                 require(response.headers.get_content_type() == 'text/css', 'Incorrect served stylesheet MIME')
+            elif route.endswith('.js'):
+                require(response.headers.get_content_type() in ('text/javascript', 'application/javascript'), 'Incorrect served JavaScript MIME')
+            elif route.endswith('.woff2'):
+                require(response.headers.get_content_type() == 'font/woff2', 'Incorrect served WOFF2 MIME')
+            elif route.endswith('.woff'):
+                require(response.headers.get_content_type() in ('font/woff', 'application/font-woff'), 'Incorrect served WOFF MIME')
     try:
         urlopen(urljoin(base_url, '/_content/HVO.WebSite.Themes/css/themes/hvo-dark.css'), timeout=5)
     except HTTPError as error:

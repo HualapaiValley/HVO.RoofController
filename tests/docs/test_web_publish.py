@@ -19,6 +19,9 @@ class WebPublishTests(unittest.TestCase):
         self.publish = Path(self.temp.name)
         self.static = self.publish / 'wwwroot'
         shutil.copytree(CHECKER.WEB / 'wwwroot', self.static)
+        module = Path('Components/Roof/CameraStream.razor.js')
+        (self.static / module).parent.mkdir(parents=True)
+        shutil.copyfile(CHECKER.WEB / module, self.static / module)
         (self.static / 'HVO.RoofControllerV4.Web.styles.css').write_text('/* scoped components */')
         self.manifest = self.publish / 'HVO.RoofControllerV4.Web.staticwebassets.endpoints.json'
         endpoints = []
@@ -67,6 +70,9 @@ class WebPublishTests(unittest.TestCase):
     def test_canonical_role_drift_fails_even_if_published_bytes_match_source(self):
         source = self.publish / 'source'
         shutil.copytree(CHECKER.WEB / 'wwwroot', source / 'wwwroot')
+        module = Path('Components/Roof/CameraStream.razor.js')
+        (source / module).parent.mkdir(parents=True)
+        shutil.copyfile(CHECKER.WEB / module, source / module)
         for path in (self.static / 'css/hvo-dark.css', source / 'wwwroot/css/hvo-dark.css'):
             path.write_text(path.read_text().replace('--roof-background: #05070d;', '--roof-background: #ffffff;'))
         with self.assertRaisesRegex(ValueError, 'Canonical CSS role differs: background'):
@@ -76,3 +82,8 @@ class WebPublishTests(unittest.TestCase):
         (self.static / 'extra.css').write_text('@import url("nested.css");')
         (self.static / 'nested.css').write_text('/* imported */')
         self.assertGreater(CHECKER.check(self.publish), 0)
+
+    def test_missing_camera_module_fails_even_when_bootstrap_exists(self):
+        (self.static / 'Components/Roof/CameraStream.razor.js').unlink()
+        with self.assertRaisesRegex(ValueError, 'Missing published asset'):
+            CHECKER.check(self.publish)

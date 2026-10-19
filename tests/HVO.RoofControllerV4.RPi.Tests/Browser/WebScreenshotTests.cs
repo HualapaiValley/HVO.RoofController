@@ -64,6 +64,16 @@ public sealed class WebScreenshotTests
         await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
         await Expect(browser.Position).ToHaveTextAsync("Closed");
         await shots.TakeAsync("02-roof");
+        if (name == "desktop")
+        {
+            await page.EvaluateAsync("() => { window.MediaRecorder = undefined; }");
+            await page.GetByRole(Microsoft.Playwright.AriaRole.Button, new() { Name = "Start recording", Exact = true }).ClickAsync();
+            await Expect(page.GetByTestId("camera-control-message")).ToContainTextAsync("Recording could not start");
+            await shots.TakeAsync("14-camera-control-error");
+            await page.ReloadAsync();
+            await browser.ExpectLiveAsync();
+            await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
+        }
 
         // A move shows the lease the page renews and the travel; Stop ends it before the images that follow.
         await browser.Open.ClickAsync();

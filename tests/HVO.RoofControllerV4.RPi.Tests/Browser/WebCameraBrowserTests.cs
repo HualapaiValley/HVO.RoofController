@@ -106,6 +106,12 @@ public sealed class WebCameraBrowserTests
         await page.GetByRole(AriaRole.Button, new() { Name = "Reconnect stream", Exact = true }).ClickAsync();
         await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
         await Expect(browser.Stop).ToBeEnabledAsync();
+        // A browser without MediaRecorder still has live video and an independent roof Stop.
+        await page.EvaluateAsync("() => { window.MediaRecorder = undefined; }");
+        await page.GetByRole(AriaRole.Button, new() { Name = "Start recording", Exact = true }).ClickAsync();
+        await Expect(page.GetByTestId("camera-control-message")).ToContainTextAsync("Recording could not start");
+        await Expect(browser.CameraStatus).ToHaveTextAsync("Live");
+        await Expect(browser.Stop).ToBeEnabledAsync();
     }
 
     /// <summary>

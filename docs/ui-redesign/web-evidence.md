@@ -14,11 +14,14 @@ Bootstrap/Icon assets. The dashboard follows the approved hierarchy: overview; r
 readings and command feedback. Every route uses the same typography, panel, field, notice and action vocabulary.
 People tables become labelled records on narrow screens; inline target editors remain in their record. Settings
 retain their catalogue groups, private repeated fields and explicit reviews. My Keys groups creation beside its list.
-No camera, position, authentication or encryption feature is added.
+No camera, position, authentication or encryption feature is added. An empty configured camera-ID list selects camera 2
+in the existing `RoofWebOptions.Cameras` contract, so a zero-tile camera state cannot occur in valid configuration;
+waiting/offline/refused player states cover unavailable video without inventing a no-camera setting.
 
 Stop uses the canonical danger notice pair with a danger edge and a visible outline/underline on keyboard focus.
 The form remains outside the live circuit, posts through the existing Web/client REST path and is never disabled.
-Native fullscreen moves **that same form** inside the fullscreen element and restores it on exit. The existing
+Native fullscreen moves **that same form** inside the fullscreen element and restores it on exit. Escape explicitly
+exits even after focus moves to Stop and returns focus to the camera fullscreen button. The existing
 outcome/message remains authoritative, including both `Acknowledged` messages. `ui.js` only adds focus/return,
 Escape cancellation and field error association to existing inline editors. Controller authorization, settings
 versions/safety confirmations, watchdog and optional lease behavior remain unchanged.
@@ -36,9 +39,10 @@ Web uses the system sans-serif stack with no remote font request. No required di
 outside the publish output, and there is no replacement theme package.
 
 [check-web-publish.py](../../build/check-web-publish.py) inspects a **real publish directory**: exact source bytes,
-all canonical roles, every local CSS URL/import, scoped component CSS, plain/fingerprinted serving routes, both notices
-and fonts, dependency manifest and absence of obsolete theme files. Nine regression cases cover missing fonts,
-notices, stale bytes, missing fingerprints, obsolete dependencies, broken URLs, valid URL imports and canonical-role drift.
+all canonical roles, every local CSS URL/import, scoped component CSS, the exact collocated camera module, plain/fingerprinted serving routes, both notices
+and fonts, dependency manifest and absence of obsolete theme files. Ten regression cases cover missing fonts,
+notices, stale bytes, missing fingerprints, obsolete dependencies, broken URLs, valid URL imports, canonical-role drift and a missing collocated camera module.
+CI inspects both supported Linux Web RIDs (`linux-x64`, `linux-arm64`).
 The optional `--base-url http://127.0.0.1:<controlled-port>` follows the published HTML's actual fingerprint URLs,
 compares HTTP-served bytes/MIME and checks the old URL returns 404. Image CI's existing
 [asset check](../../build/check-web-assets.sh) additionally checks the Dockerfile's actual published process; it has
@@ -63,6 +67,9 @@ Evidence is being collected under `/tmp/hvo-174`; the final matrix and this reco
   three-case personal-key/media run passes, including actual JPEG/WebM downloads, pause/resume and camera reconnect.
 - Actual Release Web publish and anonymous loopback HTTP checks: PASS, 108 serving routes; canonical values,
   exact shipped/served bytes, fingerprinted HTML CSS links, correct CSS MIME, icon fonts/notices, scoped CSS and old URL 404.
+- Long-content cases: two PASS with unbroken 59-character signed-in Admin names and 54-character managed-key names,
+  all routes and editors at 320/1440px; rendered main actions, text/password/number inputs, selects and checkbox labels retain at least 48px in both dimensions.
+- Fullscreen moving-roof Stop, actual Escape exit and camera-button focus restoration: PASS on the controlled emulator.
 - Python docs/asset-check tests: 26 PASS; 52 Markdown files, no broken links; shell asset checker passes ShellCheck.
 
 ## Reproducible captures and scope

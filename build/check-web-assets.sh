@@ -47,9 +47,14 @@ done < "$work/styles.txt"
 # Inspect exactly the Dockerfile publish output, not a source build's asset cache.
 docker cp "$container:/app/web" "$work/publish" >/dev/null
 python3 "$(dirname "$0")/check-web-publish.py" "$work/publish"
-for path in css/hvo-dark.css css/app.css lib/bootstrap-icons/bootstrap-icons.min.css lib/bootstrap-icons/fonts/bootstrap-icons.woff2 lib/bootstrap-icons/fonts/bootstrap-icons.woff lib/bootstrap/LICENSE lib/bootstrap-icons/LICENSE; do
+for path in css/hvo-dark.css css/app.css js/stop.js js/ui.js Components/Roof/CameraStream.razor.js lib/bootstrap-icons/bootstrap-icons.min.css lib/bootstrap-icons/fonts/bootstrap-icons.woff2 lib/bootstrap-icons/fonts/bootstrap-icons.woff lib/bootstrap/LICENSE lib/bootstrap-icons/LICENSE; do
   docker exec "$container" curl -fsS --max-time 5 "http://127.0.0.1:8088/$path" > "$work/asset"
   cmp "$work/asset" "$work/publish/wwwroot/$path"
+  mime=$(docker exec "$container" curl -fsS --max-time 5 -o /dev/null -w '%{content_type}' "http://127.0.0.1:8088/$path")
+  case "$path:$mime" in
+    *.css:text/css*|*.js:text/javascript*|*.js:application/javascript*|*.woff:application/font-woff*|*.woff:font/woff*|*.woff2:font/woff2*|*/LICENSE:*) ;;
+    *) echo 'Published asset returned incorrect MIME' >&2; exit 1 ;;
+  esac
 done
 legacy=$(docker exec "$container" curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/_content/HVO.WebSite.Themes/css/themes/hvo-dark.css)
 [[ "$legacy" == 404 ]] || { echo 'Legacy theme URL still resolves' >&2; exit 1; }

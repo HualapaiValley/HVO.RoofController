@@ -16,7 +16,7 @@ and present on every page, inline confirmation, reconnect and error. Keep the co
 and error association for existing inline editors; it never sends a motion command.
 
 From `src/`, publish Web normally and run `python3 ../build/check-web-publish.py <publish-directory>` against the
-result. CI verifies canonical CSS bytes, every local CSS reference, scoped styles, fingerprint routes, font/icon
+result. CI checks both Linux publish RIDs and verifies canonical CSS bytes, every local CSS reference, scoped styles, fingerprint routes, font/icon
 notices and runtime dependency removal. The image asset check also fetches the real published HTML/styles/fonts.
 Use installed headless Chromium and the controlled test rig to validate layouts; never use a real controller for UI
 motion or a screenshot containing a usable credential.

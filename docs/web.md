@@ -122,7 +122,12 @@ controller or the camera. A stream ends when the person's session ends.
 - **Live** only while frames arrive. With no new frame it shows **Stalled**, and **Reconnecting** or **Offline** when
   the stream fails; the last frame stays, greyed, under `No live video — last frame hh:mm:ss`, and the player tries
   again by itself.
-- Pause, reconnect, snapshot, record (in the browser) and full screen.
+- Pause, reconnect, snapshot, record (in the browser) and full screen. Snapshot and completed recording expose an
+  explicit download link. Unsupported or failed controls show their own warning while live video remains Live;
+  a failed recording stop keeps Stop recording available to retry. Escape exits fullscreen and returns focus to
+  its camera control; the permanent roof Stop remains direct and enabled throughout.
+
+![A browser without recording support reports the control failure while video remains live](images/web/14-camera-control-error-desktop.jpg)
 - The camera is in the web UI only: the terminal interface has none.
 
 ### Health

@@ -33,12 +33,13 @@ public sealed class WebRedesignBrowserTests
         var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(), WebDevices.Desktop);
         var page = browser.Page;
         using var admin = browser.AdminClient();
-        await admin.Identity.AddApiKeyAsync(new RoofApiKeyCreateRequest { Name = "design-device", Role = RoofControllerApiContract.ViewerRole });
-        await admin.Identity.AddUserAsync(new RoofUserCreateRequest { Name = "design-person", Role = RoofControllerApiContract.OperatorRole, Password = TestSecrets.Password, Pin = TestSecrets.Pin });
+        var longName = "design-person-" + new string('x', 45);
+        await admin.Identity.AddApiKeyAsync(new RoofApiKeyCreateRequest { Name = "design-device-" + new string('k', 40), Role = RoofControllerApiContract.ViewerRole });
+        await admin.Identity.AddUserAsync(new RoofUserCreateRequest { Name = longName, Role = RoofControllerApiContract.AdminRole, Password = TestSecrets.Password, Pin = TestSecrets.Pin });
         await page.SetViewportSizeAsync(width, 900);
         await page.GotoAsync("/signin");
         await FitAndStopAsync();
-        await browser.SignInAsync(WebBrowser.Admin);
+        await browser.SignInAsync(longName);
         foreach (var route in new[] { "/", "/health", "/settings", "/people", "/system", "/account/keys", "/account/password", "/denied", "/missing-redesign-address" })
         {
             await page.GotoAsync(route);
@@ -109,19 +110,23 @@ public sealed class WebRedesignBrowserTests
     [TestMethod]
     public async Task FullscreenCamera_KeepsTheSameDirectStop_AndRestoresItOnExit()
     {
-        var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production() with { Camera = true }, WebDevices.Desktop);
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(travelMeters: 2.0) with { Camera = true }, WebDevices.Desktop);
         var page = browser.Page;
         await browser.SignInAsync(WebBrowser.Operator);
         await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
+        await browser.Open.ClickAsync();
+        await browser.Rig.WaitForControllerAsync(status => status.IsMoving, "the emulated roof to move before fullscreen Stop");
         await page.GetByRole(AriaRole.Button, new() { Name = "Fullscreen", Exact = true }).ClickAsync();
         await Expect(page.Locator(":fullscreen [data-testid=stop]")).ToBeVisibleAsync();
         await FitAndStopAsync();
         await browser.Stop.ClickAsync();
         await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
         browser.Rig.Controller.GetCurrentStatusSnapshot().ShouldBeDeenergized(browser.Rig);
-        await page.EvaluateAsync("() => document.exitFullscreen()");
+        await page.Keyboard.PressAsync("Escape");
+        await Expect(page.Locator(":fullscreen")).ToHaveCountAsync(0);
         await Expect(page.Locator("body > .web-stop-bar [data-testid=stop]")).ToBeVisibleAsync();
         await Expect(page.GetByTestId("stop")).ToHaveCountAsync(1);
+        await Expect(page.GetByRole(AriaRole.Button, new() { Name = "Fullscreen", Exact = true })).ToBeFocusedAsync();
     }
 
     [TestMethod]
@@ -168,6 +173,12 @@ public sealed class WebRedesignBrowserTests
         await browser.NextFrameAsync();
         (await page.EvaluateAsync<bool>("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"))
             .Should().BeTrue("the page and inline editor must fit without horizontal scrolling");
+        var undersized = await page.EvaluateAsync<string[]>("""
+            () => [...document.querySelectorAll('main button, main input:not([type=hidden],[type=checkbox],[type=radio]), main select, main .form-check-label, main label:has(input[type=checkbox])')]
+              .filter(e => { const r=e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && (r.width < 48 || r.height < 48); })
+              .map(e => e.tagName + '#' + e.id)
+            """);
+        undersized.Should().BeEmpty("actions and fields retain the 48px touch floor in every editor");
         await Expect(browser.Stop).ToBeEnabledAsync();
         await page.Keyboard.PressAsync("Tab");
         await browser.Stop.FocusAsync();

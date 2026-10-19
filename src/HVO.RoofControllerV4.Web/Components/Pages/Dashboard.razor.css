@@ -36,7 +36,7 @@
 .rc2-card-body { padding: 20px; }
 .rc2-camera .rc2-card-body { padding: 0; }
 .rc2-camera-body { display: grid; gap: 1px; }
-.rc2-camera-error, .rc-camera-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 240px; padding: 20px; margin: 0; text-align: center; color: var(--roof-muted); }
+.rc2-camera-error { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 240px; padding: 20px; margin: 0; text-align: center; color: var(--roof-muted); }
 .rc-position-line { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; }
 .rc-position-line > .bi { display: grid; place-items: center; flex: 0 0 48px; height: 48px; background: var(--roof-info-background); color: var(--roof-accent); border-radius: 8px; font-size: 24px; }
 .rc-position-line strong { display: block; font-size: 24px; font-weight: 600; }

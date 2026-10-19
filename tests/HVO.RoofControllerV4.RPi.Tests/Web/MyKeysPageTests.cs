@@ -45,7 +45,7 @@ public sealed class MyKeysPageTests
         cut.FindAll("button").Single(b => b.TextContent == "Done").Click();
         await cut.WaitForAssertionAsync(() =>
         {
-            cut.FindAll("#owned-secret").Should().BeEmpty();
+            cut.FindAll("#owned-secret").Count.Should().Be(0);
             cut.Markup.Contains(secret!, StringComparison.Ordinal).Should().BeFalse("Done removes the one-time value");
         });
         cut.FindAll("button").Single(b => b.TextContent == "Revoke").Click();

@@ -40,7 +40,7 @@ code { color: var(--roof-accent); overflow-wrap: anywhere; }
 .navbar-brand .bi { color: var(--roof-accent); }
 .web-brand-caption { display: block; margin: 3px 0 0 28px; color: var(--roof-muted); font-size: 11px; font-weight: 400; }
 .web-nav-links { flex-wrap: wrap; gap: 4px 12px; margin-right: auto; }
-.navbar-nav .nav-link { color: var(--roof-muted); min-height: 48px; padding: 12px 4px; font-size: 13px; border-bottom: 2px solid transparent; }
+.navbar-nav .nav-link { color: var(--roof-muted); min-height: 48px; min-width: 48px; text-align: center; padding: 12px 4px; font-size: 13px; border-bottom: 2px solid transparent; }
 .navbar-nav .nav-link.active { color: var(--roof-text); border-color: var(--roof-accent); }
 .navbar-nav .nav-link:hover { color: var(--roof-text); }
 .web-user { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; min-width: 0; }
@@ -221,3 +221,5 @@ input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-
 .web-key-workspace > .web-card { margin: 0; }
 .web-owned-key { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-bottom: 1px solid var(--roof-border); padding: 16px 0; }
 @media (max-width: 760px) { .web-key-workspace { grid-template-columns: minmax(0, 1fr); } }
+
+.form-check-label { display: inline-flex; align-items: center; min-height: 48px; flex: 1; }
